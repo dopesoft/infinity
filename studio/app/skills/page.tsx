@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 import { fetchSkills, reloadSkills, type SkillSummaryDTO } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 const STATUS_FILTERS = ["all", "active", "candidate", "archived"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
@@ -51,6 +52,8 @@ export default function SkillsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useRealtime(["mem_skills", "mem_skill_runs"], load);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

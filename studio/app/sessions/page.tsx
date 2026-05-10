@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/c
 import { Badge } from "@/components/ui/badge";
 import { PageSectionHeader, HeaderAction } from "@/components/ui/page-tabs";
 import { fetchSessions, type SessionDTO } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<SessionDTO[]>([]);
@@ -26,6 +27,8 @@ export default function SessionsPage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  useRealtime("mem_sessions", refresh);
 
   return (
     <TabFrame>

@@ -24,6 +24,7 @@ import {
   type CronJobDTO,
   type SentinelDTO,
 } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 export default function CronPage() {
   return (
@@ -62,6 +63,7 @@ function CronSection() {
   useEffect(() => {
     load();
   }, []);
+  useRealtime("mem_crons", load);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -257,6 +259,7 @@ function SentinelSection() {
     setItems(r ?? []);
     setLoading(false);
   }
+  useRealtime("mem_sentinels", load);
   useEffect(() => {
     load();
   }, []);

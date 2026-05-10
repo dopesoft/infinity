@@ -19,6 +19,7 @@ import {
   fetchTrustContracts,
   type TrustContractDTO,
 } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 const STATUS_FILTERS = ["pending", "approved", "denied", "snoozed", "all"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
@@ -41,6 +42,8 @@ export default function TrustPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  useRealtime("mem_trust_contracts", load);
 
   async function decide(id: string, decision: "approved" | "denied" | "snoozed") {
     await decideTrust(id, decision);

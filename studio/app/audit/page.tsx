@@ -12,6 +12,7 @@ import {
   HeaderAction,
 } from "@/components/ui/page-tabs";
 import { fetchAuditLog, type AuditRowDTO } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 const OPS = ["all", "create", "update", "delete", "supersede"] as const;
 
@@ -32,6 +33,8 @@ export default function AuditPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [op]);
+
+  useRealtime("mem_audit", load);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

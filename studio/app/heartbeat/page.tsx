@@ -15,6 +15,7 @@ import {
   type HeartbeatRunDTO,
   type HeartbeatRunSummaryDTO,
 } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 function relTime(iso?: string | null): string {
   if (!iso) return "—";
@@ -64,6 +65,8 @@ export default function HeartbeatPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useRealtime(["mem_heartbeats", "mem_heartbeat_findings", "mem_intent_decisions"], load);
 
   async function fireNow() {
     setRunning(true);

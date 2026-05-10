@@ -19,6 +19,7 @@ import { MemoryDetail } from "@/components/MemoryDetail";
 import { BossProfilePanel } from "@/components/BossProfilePanel";
 import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
 import { KnowledgeGraphPanel } from "@/components/KnowledgeGraphPanel";
+import { useRealtime } from "@/lib/realtime/provider";
 import { cn } from "@/lib/utils";
 import {
   fetchMemories,
@@ -72,6 +73,14 @@ export default function MemoryPage() {
     loadDefault();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Live updates: re-run the active list query whenever observations or
+  // memories change, but only when the user isn't actively searching (a
+  // realtime push during search would clobber their results).
+  useRealtime(["mem_observations", "mem_memories"], () => {
+    if (query.trim()) return;
+    loadDefault();
+  });
 
   async function runSearch(q: string) {
     if (!q.trim()) {
