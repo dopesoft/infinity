@@ -3,7 +3,20 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import {
+  Activity,
+  ClipboardList,
+  Clock,
+  Brain,
+  type LucideIcon,
+  MessageSquare,
+  Menu,
+  ScrollText,
+  Settings,
+  ShieldCheck,
+  Wrench,
+  X,
+} from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -17,16 +30,16 @@ import { cn } from "@/lib/utils";
  * bottom-sheet drawer on phones. Drawer contains the full nav list +
  * theme toggle. Auto-dismisses when a nav link is tapped. */
 
-const tabs = [
-  { href: "/live", label: "Live", emoji: "💬" },
-  { href: "/sessions", label: "Sessions", emoji: "📜" },
-  { href: "/memory", label: "Memory", emoji: "🧠" },
-  { href: "/skills", label: "Skills", emoji: "🛠" },
-  { href: "/heartbeat", label: "Heartbeat", emoji: "💓" },
-  { href: "/trust", label: "Trust", emoji: "🤝" },
-  { href: "/cron", label: "Cron", emoji: "⏰" },
-  { href: "/audit", label: "Audit", emoji: "🧾" },
-  { href: "/settings", label: "Settings", emoji: "⚙️" },
+const tabs: { href: string; label: string; Icon: LucideIcon }[] = [
+  { href: "/live", label: "Live", Icon: MessageSquare },
+  { href: "/sessions", label: "Sessions", Icon: ScrollText },
+  { href: "/memory", label: "Memory", Icon: Brain },
+  { href: "/skills", label: "Skills", Icon: Wrench },
+  { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
+  { href: "/trust", label: "Trust", Icon: ShieldCheck },
+  { href: "/cron", label: "Cron", Icon: Clock },
+  { href: "/audit", label: "Audit", Icon: ClipboardList },
+  { href: "/settings", label: "Settings", Icon: Settings },
 ];
 
 export function MobileNav() {
@@ -49,22 +62,23 @@ export function MobileNav() {
         <nav className="flex flex-col gap-1 px-3 pb-4 pt-2">
           {tabs.map((t) => {
             const active = pathname === t.href || pathname?.startsWith(t.href + "/");
+            const Icon = t.Icon;
             return (
               <Link
                 key={t.href}
                 href={t.href}
                 onClick={() => setOpen(false)}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-3 text-base transition-colors",
-                  "min-h-12",
+                  "flex min-h-12 items-center gap-3 rounded-lg px-3 py-3 text-base transition-colors",
                   active
                     ? "bg-accent text-accent-foreground"
-                    : "hover:bg-accent/60",
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                 )}
               >
-                <span className="text-lg" aria-hidden>
-                  {t.emoji}
-                </span>
+                <Icon
+                  className={cn("size-5 shrink-0", active ? "text-foreground" : "text-muted-foreground")}
+                  aria-hidden
+                />
                 <span className="flex-1 font-medium">{t.label}</span>
                 {active && (
                   <span className="size-1.5 rounded-full bg-foreground" aria-hidden />
@@ -73,11 +87,8 @@ export function MobileNav() {
             );
           })}
 
-          <div className="mt-2 flex items-center justify-between gap-2 border-t pt-3">
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              theme
-            </span>
-            <ThemeToggle />
+          <div className="mt-3 border-t pt-3">
+            <ThemeToggle className="w-full" />
           </div>
         </nav>
       </DrawerContent>
