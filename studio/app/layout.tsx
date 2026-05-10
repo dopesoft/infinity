@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Mulish, JetBrains_Mono } from "next/font/google";
 import { WebSocketProvider } from "@/lib/ws/provider";
 import "./globals.css";
 
@@ -10,10 +10,11 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const inter = Inter({
+const mulish = Mulish({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-mulish",
   display: "swap",
+  weight: ["300", "400", "500", "600", "700", "800"],
 });
 
 const jetbrains = JetBrains_Mono({
@@ -54,7 +55,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${jetbrains.variable} font-sans`}>
+      <body className={`${mulish.variable} ${jetbrains.variable} font-sans`}>
         <WebSocketProvider>{children}</WebSocketProvider>
       </body>
     </html>

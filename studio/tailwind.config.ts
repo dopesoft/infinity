@@ -12,7 +12,7 @@ const config: Config = {
     },
     extend: {
       fontFamily: {
-        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui"],
+        sans: ["var(--font-mulish)", "ui-sans-serif", "system-ui"],
         mono: ["var(--font-jetbrains)", "ui-monospace", "SFMono-Regular"],
       },
       height: { dvh: "100dvh", svh: "100svh", lvh: "100lvh" },
