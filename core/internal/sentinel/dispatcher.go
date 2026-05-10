@@ -6,9 +6,9 @@ import (
 	"fmt"
 )
 
-// LogDispatcher is a no-op dispatcher used as the v1 cut. It simply prints
-// the action chain to stderr — once Phase 6 wires the skills runner /
-// memory store / notifier, swap this with a richer dispatcher.
+// LogDispatcher is a no-op dispatcher used as a fallback. It simply prints
+// the action chain to stderr. Swap with a richer dispatcher (skills runner /
+// memory store / notifier) when those integrations land.
 type LogDispatcher struct{}
 
 func (LogDispatcher) Dispatch(ctx context.Context, s Sentinel, payload map[string]any) error {

@@ -5,7 +5,14 @@ import { RefreshCw, Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabs,
+  PageTabsList,
+  PageTabsTrigger,
+  HScrollRow,
+  FilterPill,
+  PageSectionHeader,
+} from "@/components/ui/page-tabs";
 import { MetricCard } from "@/components/MetricCard";
 import { MemoryCard } from "@/components/MemoryCard";
 import { MemoryDetail } from "@/components/MemoryDetail";
@@ -160,7 +167,7 @@ export default function MemoryPage() {
           </form>
 
           <div className="space-y-3">
-            <Tabs
+            <PageTabs
               value={view}
               onValueChange={(v) => {
                 const next = v as View;
@@ -169,39 +176,30 @@ export default function MemoryPage() {
               }}
               className="w-full"
             >
-              <TabsList className="grid h-9 w-full grid-cols-3 sm:inline-flex sm:w-auto">
+              <PageTabsList columns={3}>
                 {VIEWS.map((v) => (
-                  <TabsTrigger
-                    key={v}
-                    value={v}
-                    className="font-mono text-[11px] uppercase tracking-wider"
-                  >
+                  <PageTabsTrigger key={v} value={v}>
                     {v}
-                  </TabsTrigger>
+                  </PageTabsTrigger>
                 ))}
-              </TabsList>
-            </Tabs>
+              </PageTabsList>
+            </PageTabs>
 
             {view === "memories" && (
-              <div className="no-scrollbar -mx-3 flex gap-2 overflow-x-auto scroll-touch px-3 py-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
+              <HScrollRow>
                 {TIERS.map((t) => (
-                  <button
+                  <FilterPill
                     key={t}
+                    active={tier === t}
                     onClick={() => {
                       setTier(t);
                       loadDefault("memories", t);
                     }}
-                    className={cn(
-                      "inline-flex h-8 shrink-0 items-center rounded-full border px-3.5 font-mono text-[11px] uppercase tracking-wider transition-colors",
-                      tier === t
-                        ? "border-info bg-info/10 text-info"
-                        : "border-border bg-muted text-muted-foreground hover:bg-accent",
-                    )}
                   >
                     {t}
-                  </button>
+                  </FilterPill>
                 ))}
-              </div>
+              </HScrollRow>
             )}
           </div>
         </div>
@@ -235,10 +233,11 @@ export default function MemoryPage() {
               showDetail ? "hidden lg:flex" : "flex",
             )}
           >
-            <div className="flex items-center justify-between gap-2 px-3 pb-1 pt-3 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <span>{query ? "results" : view}</span>
-              <span>{filteredCount}</span>
-            </div>
+            <PageSectionHeader
+              title={query ? "results" : view}
+              count={filteredCount}
+              className="px-3 pb-1 pt-3"
+            />
             <div className="flex flex-col gap-2 px-3 pb-4">
               {items.length === 0 ? (
                 <p className="px-1 text-sm text-muted-foreground">
@@ -247,7 +246,7 @@ export default function MemoryPage() {
                     : query
                       ? "No results."
                       : view === "memories"
-                        ? "No memories yet. Set INFINITY_AUTO_COMPRESS=true on Core, or use the remember tool, to create some."
+                        ? "No memories yet."
                         : "No observations yet — open Live and chat with Infinity."}
                 </p>
               ) : (

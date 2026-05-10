@@ -1,4 +1,4 @@
-// Package skills implements Phase 4 (Skills system) of Infinity.
+// Package skills implements the Infinity skills system.
 //
 // A "skill" is a packaged capability the agent can invoke at runtime. Skills
 // live as `<name>/SKILL.md` directories under a configurable root (default
@@ -29,7 +29,7 @@ func (r RiskLevel) Valid() bool {
 	return false
 }
 
-// Source records where the skill came from. Phase 6 introduces auto_evolved.
+// Source records where the skill came from. auto_evolved is set by the Voyager loop.
 type Source string
 
 const (
@@ -41,7 +41,7 @@ const (
 )
 
 // Status tracks the agent-facing lifecycle. Active skills are invocable;
-// candidates require Trust-Contract approval (Phase 5+); archived skills are
+// candidates require Trust-Contract approval (gated by Trust Contract); archived skills are
 // kept for history but never invoked.
 type Status string
 

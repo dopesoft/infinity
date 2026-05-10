@@ -68,7 +68,11 @@ export function ThemeToggle({ className }: { className?: string }) {
             aria-checked={active}
             onClick={() => pick(value)}
             className={cn(
-              "flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors lg:min-h-7",
+              // min-h-9 on desktop matches TabNav's link height so the two
+              // segmented controls in the header sit on the same baseline.
+              // Mobile keeps min-h-8 because the toggle ships inside the
+              // bottom drawer where the row gets more breathing room.
+              "flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors lg:min-h-9",
               active
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",

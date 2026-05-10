@@ -1,4 +1,4 @@
--- 006_voyager.sql — Phase 6 (Voyager + Cron + Sentinels).
+-- 006_voyager.sql — Voyager + Cron + Sentinels.
 --
 -- Adds:
 --   • mem_crons        — scheduled jobs (cron expressions)

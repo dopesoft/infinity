@@ -6,6 +6,13 @@ import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { RiskBadge } from "@/components/RiskBadge";
+import {
+  PageTabs,
+  PageTabsList,
+  PageTabsTrigger,
+  PageSectionHeader,
+  HeaderAction,
+} from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 import {
   decideTrust,
@@ -52,39 +59,28 @@ export default function TrustPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold">Trust Contracts</h2>
-            <Badge variant="secondary" className="font-mono">
-              {contracts.length}
-            </Badge>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
+          <PageSectionHeader title="trust contracts" count={contracts.length}>
+            <HeaderAction
+              icon={<RefreshCw className="size-4" />}
+              label="Refresh"
               onClick={load}
-              aria-label="Refresh"
-              className="ml-auto"
               disabled={loading}
-            >
-              <RefreshCw className="size-4" />
-            </Button>
-          </div>
-          <div className="flex flex-wrap items-center gap-1 text-xs">
-            {STATUS_FILTERS.map((s) => (
-              <button
-                key={s}
-                onClick={() => setStatusFilter(s)}
-                className={cn(
-                  "rounded-md border px-2 py-1 font-mono uppercase tracking-wide",
-                  statusFilter === s
-                    ? "border-info bg-info/10 text-info"
-                    : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
-                )}
-              >
-                {s} {counts[s] ? `(${counts[s]})` : ""}
-              </button>
-            ))}
-          </div>
+            />
+          </PageSectionHeader>
+          <PageTabs
+            value={statusFilter}
+            onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+            className="w-full"
+          >
+            <PageTabsList columns={5}>
+              {STATUS_FILTERS.map((s) => (
+                <PageTabsTrigger key={s} value={s}>
+                  {s}
+                  {counts[s] ? ` (${counts[s]})` : ""}
+                </PageTabsTrigger>
+              ))}
+            </PageTabsList>
+          </PageTabs>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">

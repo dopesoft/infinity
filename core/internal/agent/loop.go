@@ -2,8 +2,8 @@
 // Inspired by nanobot's design: receive prompt → build context → call LLM →
 // dispatch tools → repeat until the model returns text.
 //
-// Phase 3 wires in the memory subsystem via MemoryProvider (search) and the
-// hooks pipeline via HookEmitter (capture).
+// The memory subsystem attaches via MemoryProvider (search) and the hooks
+// pipeline via HookEmitter (capture).
 package agent
 
 import (

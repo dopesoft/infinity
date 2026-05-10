@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchCoreStatus, type CoreStatus } from "@/lib/api";
+import { formatUptime, getBootedAt } from "@/lib/uptime";
 
 const dotClass = {
   connected: "bg-success",
@@ -20,8 +21,14 @@ const labelClass = {
 export function FooterStatus() {
   const ws = useWebSocket();
   const [status, setStatus] = useState<CoreStatus | null>(null);
-  const [uptime, setUptime] = useState("0s");
-  const [bootTs] = useState(() => Date.now());
+  const [uptime, setUptime] = useState("");
+  // Resolve the persisted boot timestamp client-side only, otherwise
+  // SSR renders one value and the client re-renders another → hydration
+  // mismatch. The footer just shows nothing for the first frame instead.
+  const [bootTs, setBootTs] = useState<number | null>(null);
+  useEffect(() => {
+    setBootTs(getBootedAt());
+  }, []);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -38,10 +45,10 @@ export function FooterStatus() {
   }, []);
 
   useEffect(() => {
-    const t = setInterval(() => {
-      const s = Math.floor((Date.now() - bootTs) / 1000);
-      setUptime(s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`);
-    }, 1000);
+    if (bootTs == null) return;
+    const tick = () => setUptime(formatUptime(Date.now() - bootTs));
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [bootTs]);
 
@@ -80,7 +87,9 @@ export function FooterStatus() {
         <span>tools</span>
       </span>
       {sep}
-      <span className="tabular-nums">{uptime}</span>
+      <span className="tabular-nums" suppressHydrationWarning>
+        {uptime}
+      </span>
       <span className="ml-auto hidden items-center gap-2.5 truncate sm:flex">
         {sep}
         <span className="truncate">{provider} · {model}</span>

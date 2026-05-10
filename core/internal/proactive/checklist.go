@@ -15,7 +15,7 @@ import (
 //   • patterns recently observed (mem_patterns.status = 'open')
 //   • skills with falling success rates
 //
-// Phase 6 will layer in LLM-driven items (curiosity, surprise, security scan).
+// Future iterations will layer in LLM-driven items (curiosity, surprise, security scan).
 func DefaultChecklist(pool *pgxpool.Pool) Checklist {
 	return func(ctx context.Context, h *Heartbeat) ([]Finding, error) {
 		if pool == nil {
@@ -48,7 +48,7 @@ func DefaultChecklist(pool *pgxpool.Pool) Checklist {
 			rows.Close()
 		}
 
-		// Open patterns (Phase 6 promotes; Phase 5 just surfaces)
+		// Open patterns (promoted later; surfaced here)
 		rows, err = pool.Query(ctx, `
 			SELECT id::text, description, occurrences
 			  FROM mem_patterns

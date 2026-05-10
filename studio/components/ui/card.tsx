@@ -50,4 +50,40 @@ const CardFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDiv
 );
 CardFooter.displayName = "CardFooter";
 
-export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter };
+/**
+ * SectionCard — the standard card shell for any panel that leads with a
+ * <PageSectionHeader>. Bakes in the canonical padding the design system
+ * uses across Heartbeat, Trust panels, future feature cards: tight top,
+ * normal sides + bottom, 8px gap between children.
+ *
+ *   <SectionCard>
+ *     <PageSectionHeader title="heartbeat" meta=… >…actions</PageSectionHeader>
+ *     <div>…body</div>
+ *   </SectionCard>
+ *
+ * Don't reach for raw <Card><CardContent className="p-4">…</CardContent></Card>
+ * for header-led cards — use this so spacing stays consistent everywhere.
+ */
+const SectionCard = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & { contentClassName?: string }
+>(({ className, contentClassName, children, ...props }, ref) => (
+  <Card ref={ref} className={className} {...props}>
+    <div
+      className={cn("space-y-2 px-4 pb-4 pt-2.5", contentClassName)}
+    >
+      {children}
+    </div>
+  </Card>
+));
+SectionCard.displayName = "SectionCard";
+
+export {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+  SectionCard,
+};

@@ -3,15 +3,31 @@
 import { useEffect, useState } from "react";
 import { Activity, RefreshCw, Play } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { SectionCard } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  PageSectionHeader,
+  HeaderAction,
+} from "@/components/ui/page-tabs";
 import {
   fetchHeartbeats,
   runHeartbeatNow,
   type HeartbeatRunDTO,
   type HeartbeatRunSummaryDTO,
 } from "@/lib/api";
+
+function relTime(iso?: string | null): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "—";
+  const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
 const findingTone: Record<string, string> = {
   outcome: "border-warning/40 bg-warning/10 text-warning",
@@ -61,37 +77,48 @@ export default function HeartbeatPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="border-b px-3 py-3 sm:px-4">
-          <Card>
-            <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="space-y-1">
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                  heartbeat
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline" className="font-mono">
+          <SectionCard>
+            <PageSectionHeader
+                title="heartbeat"
+                meta={
+                  <Badge variant="outline" className="font-mono text-[10px]">
                     every {interval ? formatInterval(interval) : "—"}
                   </Badge>
-                  <Badge variant="secondary" className="font-mono">
-                    {runs.length} runs
-                  </Badge>
-                  {runs[0] && (
-                    <Badge variant="outline" className="font-mono" suppressHydrationWarning>
-                      last {new Date(runs[0].started_at).toLocaleString()}
-                    </Badge>
-                  )}
-                </div>
+                }
+              >
+                <HeaderAction
+                  icon={<Play className="size-4" />}
+                  label={running ? "Running…" : "Run now"}
+                  primary
+                  onClick={fireNow}
+                  disabled={running}
+                  loading={running}
+                />
+                <HeaderAction
+                  icon={<RefreshCw className="size-4" />}
+                  label="Refresh"
+                  onClick={load}
+                  disabled={loading}
+                />
+              </PageSectionHeader>
+
+              <div className="flex items-baseline gap-2">
+                <span className="font-sans text-5xl font-semibold leading-none tabular-nums tracking-tight text-foreground">
+                  {runs.length}
+                </span>
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                  {runs.length === 1 ? "run" : "runs"}
+                </span>
+                {runs[0] ? (
+                  <span
+                    className="ml-auto text-[11px] text-muted-foreground"
+                    suppressHydrationWarning
+                  >
+                    last {relTime(runs[0].started_at)}
+                  </span>
+                ) : null}
               </div>
-              <div className="flex items-center gap-2">
-                <Button onClick={fireNow} disabled={running}>
-                  <Play className="mr-1 size-4" />
-                  {running ? "running…" : "Run heartbeat now"}
-                </Button>
-                <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-                  <RefreshCw className="size-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          </SectionCard>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3 scroll-touch sm:px-4">

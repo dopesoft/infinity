@@ -18,8 +18,8 @@ type ConsolidateReport struct {
 //  1. Decay all memory strengths by 0.95
 //  2. Reset hot memories (last_accessed_at within 7 days) to 1.0
 //  3. Cluster episodic memories with cosine similarity > 0.85; clusters of
-//     ≥3 are merged into semantic memories. (LLM-based merge happens in a
-//     follow-up Phase 4 pass — for now, identification only.)
+//     ≥3 are merged into semantic memories. (LLM-based merge is a follow-up
+//     pass — for now, identification only.)
 //  4. Run auto-forget.
 func ConsolidateNightly(ctx context.Context, pool *pgxpool.Pool) (ConsolidateReport, error) {
 	report := ConsolidateReport{}
@@ -42,7 +42,7 @@ func ConsolidateNightly(ctx context.Context, pool *pgxpool.Pool) (ConsolidateRep
 	report.HotReset = int(hot.RowsAffected())
 
 	// 3. Identify clusters (cosine > 0.85, size ≥ 3 in episodic tier).
-	//    Real merge requires an LLM call — that lives in a Phase 4 worker.
+	//    Real merge requires an LLM call — that lives in a separate worker.
 	const clusterQuery = `
 		WITH pairs AS (
 			SELECT a.id AS a_id, b.id AS b_id, 1 - (a.embedding <=> b.embedding) AS sim

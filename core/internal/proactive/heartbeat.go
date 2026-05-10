@@ -22,8 +22,8 @@ import (
 //   • Memory: context %% — trigger danger zone if >60%
 //   • Surprise: what could I build right now that would delight my human?
 //
-// Phase 5 ships a *substrate*: the ticker, the persistence, and a hookable
-// runner that calls a user-supplied Checklist. Phase 6 plugs in the curriculum
+// Initial cut ships a *substrate*: the ticker, the persistence, and a hookable
+// runner that calls a user-supplied Checklist. A future pass plugs in the curriculum
 // generator + AutoSkill loop into the same pipeline.
 type Heartbeat struct {
 	pool      *pgxpool.Pool

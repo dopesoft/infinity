@@ -86,8 +86,8 @@ func (m *Manager) List() []Sentinel {
 }
 
 // Trigger is the entrypoint for a sentinel firing. Webhook handlers call this
-// directly. Memory-event/file-change/threshold watchers (Phase 6b) will call
-// this from their respective goroutines.
+// directly. Memory-event/file-change/threshold watchers will call this from
+// their respective goroutines once those runtimes are wired.
 func (m *Manager) Trigger(ctx context.Context, id string, payload map[string]any) error {
 	s, ok := m.Get(id)
 	if !ok {

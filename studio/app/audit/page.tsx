@@ -4,8 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  HScrollRow,
+  FilterPill,
+  PageSectionHeader,
+  HeaderAction,
+} from "@/components/ui/page-tabs";
 import { fetchAuditLog, type AuditRowDTO } from "@/lib/api";
 
 const OPS = ["all", "create", "update", "delete", "supersede"] as const;
@@ -40,41 +45,34 @@ export default function AuditPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold">Audit log</h2>
-            <Badge variant="secondary" className="font-mono">{filtered.length}</Badge>
-            <div className="relative ml-2 flex-1">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Filter rows…"
-                className="pl-9"
-                inputMode="search"
-              />
-            </div>
-            <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-              <RefreshCw className="size-4" />
-            </Button>
+          <PageSectionHeader title="audit log" count={filtered.length}>
+            <HeaderAction
+              icon={<RefreshCw className="size-4" />}
+              label="Refresh"
+              onClick={load}
+              disabled={loading}
+            />
+          </PageSectionHeader>
+          <div className="relative flex-1">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter rows…"
+              className="pl-9"
+              inputMode="search"
+            />
           </div>
-          <div className="flex flex-wrap items-center gap-1 text-xs">
+          <HScrollRow>
             {OPS.map((o) => (
-              <button
-                key={o}
-                onClick={() => setOp(o)}
-                className={`rounded-md border px-2 py-1 font-mono uppercase tracking-wide ${
-                  op === o
-                    ? "border-info bg-info/10 text-info"
-                    : "border-transparent bg-muted text-muted-foreground hover:bg-accent"
-                }`}
-              >
+              <FilterPill key={o} active={op === o} onClick={() => setOp(o)}>
                 {o}
-              </button>
+              </FilterPill>
             ))}
-          </div>
+          </HScrollRow>
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">

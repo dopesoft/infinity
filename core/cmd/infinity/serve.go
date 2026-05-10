@@ -96,7 +96,7 @@ func serveCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "  memory: disabled (no DATABASE_URL)\n")
 			}
 
-			// Skills system (Phase 4): filesystem-backed registry, optional
+			// Skills system: filesystem-backed registry, optional
 			// store-backed persistence, agent tools + HTTP API.
 			skillsRoot := os.Getenv("INFINITY_SKILLS_ROOT")
 			if skillsRoot == "" {
@@ -137,9 +137,9 @@ func serveCmd() *cobra.Command {
 				loop = agent.New(cfg)
 			}
 
-			// Phase 5: Proactive engine. IntentFlow + WAL + Working Buffer +
-			// Heartbeat + Trust Contracts. Each component degrades gracefully
-			// when its dependency (LLM provider, DB pool) is missing.
+			// Proactive engine: IntentFlow + WAL + Working Buffer + Heartbeat +
+			// Trust Contracts. Each component degrades gracefully when its
+			// dependency (LLM provider, DB pool) is missing.
 			var (
 				intentDetector *intent.Detector
 				intentDB       *intent.Store
@@ -163,12 +163,12 @@ func serveCmd() *cobra.Command {
 				fmt.Printf("  proactive: heartbeat every %s, intent=%v, trust=ready\n",
 					heartbeat.Interval(), intentDetector != nil)
 			}
-			_ = intentDetector // wired into the agent loop in Phase 5b once
-			// the WS handler emits per-turn observations; the detector is
-			// already invocable for Studio's intent-stream panel via API.
+			_ = intentDetector // TODO: wire into the agent loop once the WS
+			// handler emits per-turn observations; the detector is already
+			// invocable for Studio's intent-stream panel via API.
 
-			// Phase 6: Cron scheduler + Sentinel manager. Both degrade
-			// gracefully when no DB pool is configured.
+			// Cron scheduler + Sentinel manager. Both degrade gracefully when
+			// no DB pool is configured.
 			var (
 				cronScheduler *cron.Scheduler
 				sentinelMgr   *sentinel.Manager
@@ -197,9 +197,9 @@ func serveCmd() *cobra.Command {
 					cronScheduler != nil, len(sentinelMgr.List()))
 			}
 
-			// Phase 6: Voyager auto-skill loop. Wires hooks for SessionEnd
-			// (extractor) and PostToolUse (real-time discovery). Off by default;
-			// flip INFINITY_VOYAGER=true on the core service to enable.
+			// Voyager auto-skill loop. Wires hooks for SessionEnd (extractor)
+			// and PostToolUse (real-time discovery). Off by default; flip
+			// INFINITY_VOYAGER=true on the core service to enable.
 			var voyagerAPI *voyager.API
 			if pool != nil {
 				vAnthropic, _ := provider.(*llm.Anthropic)

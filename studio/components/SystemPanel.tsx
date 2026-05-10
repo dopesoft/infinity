@@ -10,33 +10,12 @@ import {
   type SkillSummaryDTO,
 } from "@/lib/api";
 import { SidePanelCard } from "@/components/SidePanelCard";
+import { formatUptime, getBootedAt } from "@/lib/uptime";
 
 function compactNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`;
   return String(n);
-}
-
-function bootedAtKey(): string {
-  return "infinity:studio:bootedAt";
-}
-
-function getBootedAt(): number {
-  if (typeof window === "undefined") return Date.now();
-  const existing = window.sessionStorage.getItem(bootedAtKey());
-  if (existing) return Number(existing);
-  const now = Date.now();
-  window.sessionStorage.setItem(bootedAtKey(), String(now));
-  return now;
-}
-
-function uptime(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 export function SystemPanel({ wsConnected }: { wsConnected: boolean }) {
@@ -109,7 +88,7 @@ export function SystemPanel({ wsConnected }: { wsConnected: boolean }) {
 
         <dt className="text-muted-foreground">Uptime</dt>
         <dd className="font-mono tabular-nums" suppressHydrationWarning>
-          {bootedAt && now ? uptime(now - bootedAt) : "—"}
+          {bootedAt && now ? formatUptime(now - bootedAt) : "—"}
         </dd>
       </dl>
     </SidePanelCard>

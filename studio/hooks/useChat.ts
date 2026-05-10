@@ -26,6 +26,12 @@ export type ChatMessage = {
 type Usage = { input: number; output: number };
 
 const SESSION_KEY = "infinity:sessionId";
+// Optimistic per-session message cache. Core (Postgres-backed) remains the
+// source of truth — this cache only exists so a refresh while Core is
+// offline doesn't blank out the visible conversation. Whenever Core
+// returns rows for the session, those overwrite the cache entirely.
+const MESSAGES_KEY_PREFIX = "infinity:messages:";
+const MESSAGES_CACHE_LIMIT = 200;
 // If the agent goes silent for this long after a send, surface a timeout
 // so the UI can never get stuck on "thinking" forever.
 const TURN_WATCHDOG_MS = 90_000;
@@ -55,6 +61,44 @@ function writeStoredSessionId(id: string) {
     else window.localStorage.removeItem(SESSION_KEY);
   } catch {
     /* private mode / quota */
+  }
+}
+
+// Pending / in-flight messages aren't worth caching — they'd hydrate as
+// orphaned spinners. We also drop the optimistic "thinking" placeholder.
+function isCacheable(m: ChatMessage): boolean {
+  if (m.role === "thinking") return false;
+  if (m.pending) return false;
+  if (m.error) return false;
+  return true;
+}
+
+function readCachedMessages(sessionId: string): ChatMessage[] {
+  if (typeof window === "undefined" || !sessionId) return [];
+  try {
+    const raw = window.localStorage.getItem(MESSAGES_KEY_PREFIX + sessionId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ChatMessage[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedMessages(sessionId: string, messages: ChatMessage[]) {
+  if (typeof window === "undefined" || !sessionId) return;
+  try {
+    const trimmed = messages.filter(isCacheable).slice(-MESSAGES_CACHE_LIMIT);
+    if (trimmed.length === 0) {
+      window.localStorage.removeItem(MESSAGES_KEY_PREFIX + sessionId);
+      return;
+    }
+    window.localStorage.setItem(
+      MESSAGES_KEY_PREFIX + sessionId,
+      JSON.stringify(trimmed),
+    );
+  } catch {
+    /* private mode / quota — caller can ignore */
   }
 }
 
@@ -121,15 +165,25 @@ export function useChat() {
   }, [clearWatchdog]);
 
   // Restore session id from localStorage on mount; mint a fresh one if none.
-  // Then rehydrate the visible transcript from the core, so a refresh keeps
-  // the conversation the user could see before reload.
+  // Hydrate from the optimistic local cache *immediately* so a refresh —
+  // even one while Core is offline — keeps the visible conversation. Then
+  // ask Core for the canonical transcript and overwrite the local cache
+  // with whatever Core returns. Core wins; local cache only fills the
+  // gap when Core is unreachable. Will be replaced by Supabase Realtime
+  // once auth is wired so multiple tabs / devices stay in sync.
   useEffect(() => {
     const stored = readStoredSessionId();
     const id = stored || newSessionId();
     setSessionId(id);
     if (!stored) writeStoredSessionId(id);
 
-    if (!stored) return; // brand new session, nothing to fetch
+    if (!stored) return;
+
+    const cached = readCachedMessages(id);
+    if (cached.length > 0) {
+      setMessages((prev) => (prev.length === 0 ? cached : prev));
+    }
+
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows || rows.length === 0) return;
@@ -139,10 +193,20 @@ export function useChat() {
         text: r.text,
         createdAt: new Date(r.created_at).getTime() || Date.now(),
       }));
-      setMessages((prev) => (prev.length === 0 ? restored : prev));
+      // Core is authoritative — overwrite both state and cache.
+      setMessages(restored);
+      writeCachedMessages(id, restored);
     });
     return () => ac.abort();
   }, []);
+
+  // Mirror the visible transcript into localStorage whenever it changes.
+  // Pending / thinking messages are filtered out by writeCachedMessages
+  // so the cache only contains finalized turns.
+  useEffect(() => {
+    if (!sessionId) return;
+    writeCachedMessages(sessionId, messages);
+  }, [sessionId, messages]);
 
   useEffect(() => () => clearWatchdog(), [clearWatchdog]);
 
@@ -303,6 +367,12 @@ export function useChat() {
 
   const newSession = useCallback(() => {
     clearWatchdog();
+    // Drop the previous session's cache too — `/new` is a deliberate
+    // reset, the user doesn't want it lingering in storage.
+    setSessionId((prev) => {
+      if (prev) writeCachedMessages(prev, []);
+      return prev;
+    });
     const id = newSessionId();
     setSessionId(id);
     writeStoredSessionId(id);
@@ -315,6 +385,7 @@ export function useChat() {
     clearWatchdog();
     ws.send({ type: "clear", session_id: sessionId });
     setMessages([]);
+    if (sessionId) writeCachedMessages(sessionId, []);
   }, [ws, sessionId, clearWatchdog]);
 
   const status = ws.status;

@@ -13,11 +13,11 @@ import (
 // Runner executes skills. It dispatches by risk_level to a sandbox tier:
 //
 //   - low / medium → in-process jail (rlimits, env filter)
-//   - high          → container (TODO Phase 6 — for now we refuse to run)
-//   - critical      → container + Trust Contract gate (Phase 5+)
+//   - high          → container (TODO: container runtime not yet wired)
+//   - critical      → container + Trust Contract gate (gated by Trust Contract)
 //
-// For Phase 4 we ship the in-process tier and hard-fail on high/critical until
-// Phase 6 wires the Docker client. The frontend surfaces this clearly.
+// We ship the in-process tier and hard-fail on high/critical until
+// the Docker client lands. The frontend surfaces this clearly.
 type Runner struct {
 	registry *Registry
 	store    *Store
@@ -48,7 +48,7 @@ func (r *Runner) Invoke(ctx context.Context, sessionID, name string, args map[st
 		return r.runInProcess(ctx, skill, args, sessionID, triggerSource)
 	case RiskHigh, RiskCritical:
 		return Result{Stderr: "container sandbox not yet wired"}, nil,
-			errors.New("high/critical-risk skills require the container sandbox (Phase 6)")
+			errors.New("high/critical-risk skills require the container sandbox (container sandbox)")
 	default:
 		return Result{}, nil, fmt.Errorf("invalid risk_level: %s", skill.RiskLevel)
 	}

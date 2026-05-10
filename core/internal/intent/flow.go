@@ -1,4 +1,4 @@
-// Package intent implements Phase 5 IntentFlow — streaming demand detection.
+// Package intent implements IntentFlow — streaming demand detection.
 //
 // Every user observation runs through Classify which returns one of three
 // control tokens:
@@ -7,9 +7,9 @@
 //   • fast_intervention  — low-latency understanding help (<1s response)
 //   • full_assistance    — invoke memory + skills + take action
 //
-// Phase 5 starts with a prompt-engineered Claude Haiku classifier. We can
-// migrate to a fine-tuned model later once we have labelled data; the
-// Provider/Decision surface stays stable across that migration.
+// The classifier is a prompt-engineered Claude Haiku call. It can be migrated
+// to a fine-tuned model later once labelled data exists; the Provider/Decision
+// surface stays stable across that migration.
 package intent
 
 import (

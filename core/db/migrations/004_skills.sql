@@ -1,6 +1,6 @@
--- 004_skills.sql — Phase 4 (Skills system) + Phase 6 (Voyager) skill state.
--- The Phase 4 build provides: registry, version history, active pointer, runs.
--- Phase 6 extends mem_skill_versions with test_pass_rate / source / parent_version
+-- 004_skills.sql — Skills system + Voyager skill state.
+-- Provides: registry, version history, active pointer, runs.
+-- Voyager extends mem_skill_versions with test_pass_rate / source / parent_version
 -- so the schema lands once.
 
 BEGIN;

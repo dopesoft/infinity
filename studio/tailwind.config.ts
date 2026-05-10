@@ -12,8 +12,13 @@ const config: Config = {
     },
     extend: {
       fontFamily: {
+        // App-wide: everything is Mulish. The `mono` family is mapped to
+        // Mulish too so existing `font-mono` classes (tabs, pills, badges,
+        // labels) keep working but render in the brand font. For tabular
+        // alignment of digits use the Tailwind `tabular-nums` utility — it's
+        // CSS-level (font-variant-numeric) and works on any font.
         sans: ["var(--font-mulish)", "ui-sans-serif", "system-ui"],
-        mono: ["var(--font-jetbrains)", "ui-monospace", "SFMono-Regular"],
+        mono: ["var(--font-mulish)", "ui-sans-serif", "system-ui"],
       },
       height: { dvh: "100dvh", svh: "100svh", lvh: "100lvh" },
       minHeight: { dvh: "100dvh", svh: "100svh" },

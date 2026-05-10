@@ -268,7 +268,7 @@ export async function decideSkillProposal(id: string, decision: "promoted" | "re
   }
 }
 
-// ---- Skills (Phase 4) ------------------------------------------------------
+// ---- Skills ----------------------------------------------------------------
 
 export type SkillRiskLevel = "low" | "medium" | "high" | "critical";
 export type SkillStatus = "active" | "candidate" | "archived";
@@ -355,7 +355,7 @@ export async function reloadSkills(): Promise<{ count: number; errors: unknown[]
   }
 }
 
-// ---- Phase 7: Audit log ----------------------------------------------------
+// ---- Audit log -------------------------------------------------------------
 
 export type AuditRowDTO = {
   id: string;
@@ -373,7 +373,7 @@ export const fetchAuditLog = (limit = 100, op = "", signal?: AbortSignal) => {
   return getJSON<AuditRowDTO[]>(`/api/memory/audit?${qs.toString()}`, signal);
 };
 
-// ---- Phase 5: Heartbeat / Trust / IntentFlow -------------------------------
+// ---- Heartbeat / Trust / IntentFlow ----------------------------------------
 
 export type HeartbeatRunDTO = {
   id: string;
@@ -466,7 +466,7 @@ export type IntentRecordDTO = {
 export const fetchIntentRecent = (limit = 50, signal?: AbortSignal) =>
   getJSON<IntentRecordDTO[]>(`/api/intent/recent?limit=${limit}`, signal);
 
-// ---- Phase 6: Cron + Sentinels --------------------------------------------
+// ---- Cron + Sentinels ------------------------------------------------------
 
 export type CronJobDTO = {
   id: string;

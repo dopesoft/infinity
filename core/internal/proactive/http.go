@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// API exposes Phase 5 endpoints to the Studio Heartbeat / Trust Contracts /
-// Live tabs.
+// API exposes proactive-engine endpoints to the Studio Heartbeat /
+// Trust Contracts / Live tabs.
 type API struct {
 	pool      *pgxpool.Pool
 	heartbeat *Heartbeat

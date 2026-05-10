@@ -6,7 +6,13 @@ import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import {
+  PageTabsList,
+  PageTabsTrigger,
+  PageSectionHeader,
+  HeaderAction,
+} from "@/components/ui/page-tabs";
 import {
   fetchCrons,
   fetchSentinels,
@@ -25,10 +31,10 @@ export default function CronPage() {
       <div className="flex min-h-0 flex-1 flex-col">
         <Tabs defaultValue="cron" className="flex min-h-0 flex-1 flex-col">
           <div className="border-b px-3 py-3 sm:px-4">
-            <TabsList>
-              <TabsTrigger value="cron">Cron</TabsTrigger>
-              <TabsTrigger value="sentinel">Sentinels</TabsTrigger>
-            </TabsList>
+            <PageTabsList columns={2}>
+              <PageTabsTrigger value="cron">Cron</PageTabsTrigger>
+              <PageTabsTrigger value="sentinel">Sentinels</PageTabsTrigger>
+            </PageTabsList>
           </div>
           <TabsContent value="cron" className="flex min-h-0 flex-1 flex-col px-3 py-3 sm:px-4">
             <CronSection />
@@ -59,17 +65,20 @@ function CronSection() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold">Scheduled jobs</h2>
-        <Badge variant="secondary" className="font-mono">{items.length}</Badge>
-        <Button size="sm" onClick={() => setShowCreate((s) => !s)} className="ml-auto">
-          <Plus className="mr-1 size-4" />
-          {showCreate ? "Cancel" : "New cron"}
-        </Button>
-        <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-          <RefreshCw className="size-4" />
-        </Button>
-      </div>
+      <PageSectionHeader title="scheduled jobs" count={items.length}>
+        <HeaderAction
+          icon={<Plus className="size-4" />}
+          label={showCreate ? "Cancel" : "New cron"}
+          primary
+          onClick={() => setShowCreate((s) => !s)}
+        />
+        <HeaderAction
+          icon={<RefreshCw className="size-4" />}
+          label="Refresh"
+          onClick={load}
+          disabled={loading}
+        />
+      </PageSectionHeader>
 
       {showCreate && (
         <CronCreateCard
@@ -254,17 +263,20 @@ function SentinelSection() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold">Sentinels</h2>
-        <Badge variant="secondary" className="font-mono">{items.length}</Badge>
-        <Button size="sm" onClick={() => setShowCreate((s) => !s)} className="ml-auto">
-          <Plus className="mr-1 size-4" />
-          {showCreate ? "Cancel" : "New sentinel"}
-        </Button>
-        <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-          <RefreshCw className="size-4" />
-        </Button>
-      </div>
+      <PageSectionHeader title="sentinels" count={items.length}>
+        <HeaderAction
+          icon={<Plus className="size-4" />}
+          label={showCreate ? "Cancel" : "New sentinel"}
+          primary
+          onClick={() => setShowCreate((s) => !s)}
+        />
+        <HeaderAction
+          icon={<RefreshCw className="size-4" />}
+          label="Refresh"
+          onClick={load}
+          disabled={loading}
+        />
+      </PageSectionHeader>
       {showCreate && (
         <SentinelCreateCard
           onCreated={() => {

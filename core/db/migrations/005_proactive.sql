@@ -1,4 +1,4 @@
--- 005_proactive.sql — Phase 5 (Proactive engine).
+-- 005_proactive.sql — Proactive engine.
 --
 -- Adds tables for:
 --   • mem_session_state    — durable WAL output (SESSION-STATE.md replacement)

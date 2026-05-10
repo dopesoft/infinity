@@ -1,4 +1,4 @@
-// Package cron implements Phase 6 — scheduled jobs backed by robfig/cron/v3.
+// Package cron implements scheduled jobs backed by robfig/cron/v3.
 //
 // A "cron" is a row in mem_crons that maps a schedule expression to either:
 //   • system_event       — sends a prompt into a live session

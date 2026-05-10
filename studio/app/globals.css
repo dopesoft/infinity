@@ -132,8 +132,22 @@
     overscroll-behavior: contain;
   }
 
-  /* ≥16px on form fields keeps iOS Safari from auto-zooming on focus,
-   * which blocks the URL-bar collapse and breaks dvh layout math. */
+  /* Force native form controls + buttons to inherit the body font;
+   * browsers default them to user-agent fonts (often serif), so without
+   * this the brand font leaks out of any <input>/<textarea>/<select>/
+   * <button> that doesn't carry an explicit font-* class. */
+  input,
+  textarea,
+  select,
+  button {
+    font-family: inherit;
+  }
+
+  /* ≥16px on text-entry fields keeps iOS Safari from auto-zooming on
+   * focus, which blocks the URL-bar collapse and breaks dvh layout math.
+   * Buttons are intentionally excluded — they don't trigger keyboard
+   * zoom and forcing 16px there would override every text-xs / text-sm
+   * label across the app (footer status, header actions, etc.). */
   input,
   textarea,
   select {

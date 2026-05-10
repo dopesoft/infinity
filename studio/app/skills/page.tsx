@@ -4,9 +4,17 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { SkillCard } from "@/components/SkillCard";
 import { SkillDetail } from "@/components/SkillDetail";
+import {
+  PageTabs,
+  PageTabsList,
+  PageTabsTrigger,
+  HScrollRow,
+  FilterPill,
+  PageSectionHeader,
+  HeaderAction,
+} from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 import { fetchSkills, reloadSkills, type SkillSummaryDTO } from "@/lib/api";
 
@@ -61,66 +69,56 @@ export default function SkillsPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search skills (name, description, trigger)…"
-                className="pl-9"
-                inputMode="search"
-              />
-            </div>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
+          <PageSectionHeader title="skills" count={skills.length}>
+            <HeaderAction
+              icon={<RefreshCw className="size-4" />}
+              label="Reload"
               onClick={onReload}
-              aria-label="Reload skills from filesystem"
               disabled={reloading || loading}
+              loading={reloading}
               title="Re-walk ./skills/ on Core"
-            >
-              <RefreshCw className={cn("size-4", reloading && "animate-spin")} />
-            </Button>
+            />
+          </PageSectionHeader>
+          <div className="relative flex-1">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search your skill library…"
+              className="pl-9"
+              inputMode="search"
+            />
           </div>
 
-          <div className="flex flex-wrap items-center gap-1 text-xs">
-            <div className="flex items-center gap-1">
-              {STATUS_FILTERS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setStatusFilter(s)}
-                  className={cn(
-                    "rounded-md border px-2 py-1 font-mono uppercase tracking-wide",
-                    statusFilter === s
-                      ? "border-info bg-info/10 text-info"
-                      : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
-                  )}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
+          <div className="space-y-3">
+            <PageTabs
+              value={statusFilter}
+              onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+              className="w-full"
+            >
+              <PageTabsList columns={4}>
+                {STATUS_FILTERS.map((s) => (
+                  <PageTabsTrigger key={s} value={s}>
+                    {s}
+                  </PageTabsTrigger>
+                ))}
+              </PageTabsList>
+            </PageTabs>
+
+            <HScrollRow>
               {RISK_FILTERS.map((r) => (
-                <button
+                <FilterPill
                   key={r}
+                  active={riskFilter === r}
                   onClick={() => setRiskFilter(r)}
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 font-mono uppercase tracking-wide",
-                    riskFilter === r
-                      ? "border-info bg-info/10 text-info"
-                      : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
-                  )}
                 >
                   {r}
-                </button>
+                </FilterPill>
               ))}
-            </div>
+            </HScrollRow>
           </div>
         </div>
 
@@ -131,10 +129,11 @@ export default function SkillsPage() {
               showDetail ? "hidden lg:flex" : "flex",
             )}
           >
-            <div className="flex items-center justify-between gap-2 px-3 pb-1 pt-3 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <span>skills</span>
-              <span>{filtered.length}</span>
-            </div>
+            <PageSectionHeader
+              title="results"
+              count={filtered.length}
+              className="px-3 pb-1 pt-3"
+            />
             <div className="flex flex-col gap-2 px-3 pb-4">
               {filtered.length === 0 ? (
                 <p className="px-1 text-sm text-muted-foreground">

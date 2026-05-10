@@ -1,5 +1,5 @@
-// Package proactive implements Phase 5 — IntentFlow + Heartbeat + WAL +
-// Working Buffer.
+// Package proactive implements the proactive engine — IntentFlow + Heartbeat
+// + WAL + Working Buffer.
 //
 // This file holds the WAL Protocol: every user message is scanned for
 // "load-bearing" patterns (corrections, preferences, decisions, dates, URLs,

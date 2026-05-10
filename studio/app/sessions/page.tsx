@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, History, Clock } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageSectionHeader, HeaderAction } from "@/components/ui/page-tabs";
 import { fetchSessions, type SessionDTO } from "@/lib/api";
 
 export default function SessionsPage() {
@@ -31,20 +31,21 @@ export default function SessionsPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside className="flex min-h-0 flex-col border-b bg-background lg:w-80 lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between gap-2 px-3 py-3">
-            <h2 className="text-xs uppercase tracking-wide text-muted-foreground">
-              In-memory sessions
-            </h2>
-            <Button size="icon" variant="ghost" onClick={refresh} aria-label="Refresh sessions">
-              <RefreshCw className="size-4" />
-            </Button>
-          </div>
+          <PageSectionHeader
+            title="in-memory sessions"
+            count={sessions.length}
+            className="px-3 py-3"
+          >
+            <HeaderAction
+              icon={<RefreshCw className="size-4" />}
+              label="Refresh"
+              onClick={refresh}
+            />
+          </PageSectionHeader>
           <div className="flex max-h-72 flex-col gap-2 overflow-y-auto px-3 pb-3 scroll-touch lg:max-h-none lg:flex-1">
             {sessions.length === 0 ? (
               <p className="px-1 text-sm text-muted-foreground">
-                {loading
-                  ? "Loading…"
-                  : "No active sessions. Phase 4 will surface persisted sessions from the database."}
+                {loading ? "Loading…" : "No active sessions."}
               </p>
             ) : (
               sessions.map((s) => (
@@ -79,8 +80,7 @@ export default function SessionsPage() {
               <CardContent className="space-y-2 p-6 text-center">
                 <CardTitle>Sessions</CardTitle>
                 <CardDescription>
-                  Pick a session to view metadata. Full transcript / observations / memories-created
-                  sub-tabs land in Phase 4 once persistence is wired through every layer.
+                  Pick a session to view its transcript, observations, and the memories it produced.
                 </CardDescription>
               </CardContent>
             </Card>
@@ -99,9 +99,7 @@ export default function SessionsPage() {
               <Card>
                 <CardContent className="space-y-2 p-4 text-sm text-muted-foreground">
                   <p>
-                    The transcript replay and observations log will be wired here once we persist
-                    every turn into <code className="font-mono">mem_observations</code>. The Memory tab
-                    already shows the rolling capture for any DB-backed deployment.
+                    Open the Memory tab to see every observation captured during this session.
                   </p>
                 </CardContent>
               </Card>

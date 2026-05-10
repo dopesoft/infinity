@@ -3,20 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Activity,
-  ClipboardList,
-  Clock,
-  Brain,
-  type LucideIcon,
-  MessageSquare,
-  Menu,
-  ScrollText,
-  Settings,
-  ShieldCheck,
-  Wrench,
-  X,
-} from "lucide-react";
+import { Menu, Settings, X } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -24,21 +11,18 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { NAV_TABS } from "@/lib/nav-tabs";
 import { cn } from "@/lib/utils";
 
 /* MobileNav is the right-hand hamburger that opens a draggable
  * bottom-sheet drawer on phones. Drawer contains the full nav list +
  * theme toggle. Auto-dismisses when a nav link is tapped. */
 
-const tabs: { href: string; label: string; Icon: LucideIcon }[] = [
-  { href: "/live", label: "Live", Icon: MessageSquare },
-  { href: "/sessions", label: "Sessions", Icon: ScrollText },
-  { href: "/memory", label: "Memory", Icon: Brain },
-  { href: "/skills", label: "Skills", Icon: Wrench },
-  { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
-  { href: "/trust", label: "Trust", Icon: ShieldCheck },
-  { href: "/cron", label: "Cron", Icon: Clock },
-  { href: "/audit", label: "Audit", Icon: ClipboardList },
+// Append Settings here — it's not a primary tab on desktop (it lives
+// elsewhere in the header), but on mobile we surface it inside the same
+// drawer for one-tap reach.
+const tabs = [
+  ...NAV_TABS,
   { href: "/settings", label: "Settings", Icon: Settings },
 ];
 

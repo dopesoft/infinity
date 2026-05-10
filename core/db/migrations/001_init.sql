@@ -1,5 +1,5 @@
 -- 001_init.sql — base extensions and connection sanity for Infinity Phase 0.
--- Memory schema (mem_*) lands in 002_memory.sql during Phase 3.
+-- Memory schema (mem_*) lands in 002_memory.sql.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;

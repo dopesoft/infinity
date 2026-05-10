@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Mulish, JetBrains_Mono } from "next/font/google";
+import { Mulish } from "next/font/google";
 import { WebSocketProvider } from "@/lib/ws/provider";
 import "./globals.css";
 
@@ -15,12 +15,6 @@ const mulish = Mulish({
   variable: "--font-mulish",
   display: "swap",
   weight: ["300", "400", "500", "600", "700", "800"],
-});
-
-const jetbrains = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains",
-  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -55,7 +49,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${mulish.variable} ${jetbrains.variable} font-sans`}>
+      <body className={`${mulish.variable} font-sans`}>
         <WebSocketProvider>{children}</WebSocketProvider>
       </body>
     </html>
