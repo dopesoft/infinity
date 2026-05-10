@@ -1,14 +1,27 @@
-# Railway multi-service config for Infinity.
-# Each service maps to its own Dockerfile in this repo.
+# Railway monorepo config for Infinity.
+# In the Railway dashboard, set each service's root directory to match — that
+# way Railway's auto-detection finds the per-service Dockerfile cleanly.
+#
+#   core service    → root directory = core/
+#   studio service  → root directory = studio/
+#   embed sidecar   → root directory = . (uses docker/embed.Dockerfile)
+#
+# Postgres: use Supabase or Neon for the database — both have pgvector
+# enabled. Set DATABASE_URL on the core service to the pooler URL with
+# sslmode=require.
 
 [build]
 builder = "DOCKERFILE"
 
-# Service: Core (Go binary)
 [[services]]
 name = "core"
+
+[services.source]
+rootDirectory = "core"
+
 [services.build]
-dockerfilePath = "docker/core.Dockerfile"
+dockerfilePath = "Dockerfile"
+
 [services.deploy]
 startCommand = "infinity serve"
 healthcheckPath = "/health"
@@ -16,11 +29,15 @@ healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-# Service: Studio (Next.js)
 [[services]]
 name = "studio"
+
+[services.source]
+rootDirectory = "studio"
+
 [services.build]
-dockerfilePath = "docker/studio.Dockerfile"
+dockerfilePath = "Dockerfile"
+
 [services.deploy]
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3

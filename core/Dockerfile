@@ -1,17 +1,17 @@
 # syntax=docker/dockerfile:1.7
+# Self-contained Dockerfile for the Core Go service.
+# Build context = core/. Migrations are embedded into the binary via
+# core/db/migrations.go so no parent-directory files are needed.
+
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 RUN apk add --no-cache git ca-certificates
-COPY core/go.mod core/go.sum ./core/
-WORKDIR /src/core
+COPY go.mod go.sum ./
 RUN go mod download
 
-WORKDIR /src
-COPY core ./core
-COPY db ./db
+COPY . .
 
-WORKDIR /src/core
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
@@ -26,7 +26,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/infinity /usr/local/bin/infinity
-COPY --from=build /src/db/migrations /app/db/migrations
 
 ENV PORT=8080
 EXPOSE 8080
