@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/dopesoft/infinity/core/config"
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -112,15 +113,30 @@ func LoadMCPConfig(path string) (*MCPConfig, error) {
 	if path == "" {
 		path = os.Getenv("MCP_CONFIG")
 	}
-	if path == "" {
-		path = "core/config/mcp.yaml"
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return &MCPConfig{}, nil
+	// Explicit path? Use it strictly. Empty? Try the on-disk well-known
+	// location for local-dev, then fall back to the embedded copy that
+	// ships in the binary so Railway (distroless, no source tree) still
+	// gets the canonical config.
+	var data []byte
+	if path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		data = raw
+	} else {
+		raw, err := os.ReadFile("core/config/mcp.yaml")
+		switch {
+		case err == nil:
+			data = raw
+		case errors.Is(err, os.ErrNotExist):
+			data = config.MCPYAML // embedded fallback
+		default:
+			return nil, err
+		}
+	}
+	if len(data) == 0 {
+		return &MCPConfig{}, nil
 	}
 	var cfg MCPConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
