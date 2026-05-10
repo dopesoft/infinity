@@ -25,7 +25,7 @@ servers:
   # then flip enabled to true.
   - name: claude_code
     transport: sse
-    enabled: false
+    enabled: true
     url_env: CLAUDE_CODE_TUNNEL_URL
     auth: cloudflare_access
     cf_client_id_env: CF_ACCESS_CLIENT_ID
