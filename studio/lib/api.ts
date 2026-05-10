@@ -130,3 +130,106 @@ export const searchMemory = (q: string, signal?: AbortSignal) =>
 
 export const fetchProvenance = (memoryId: string, signal?: AbortSignal) =>
   getJSON<ProvenanceChain>(`/api/memory/cite/${memoryId}`, signal);
+
+// ---- Skills (Phase 4) ------------------------------------------------------
+
+export type SkillRiskLevel = "low" | "medium" | "high" | "critical";
+export type SkillStatus = "active" | "candidate" | "archived";
+export type SkillSource =
+  | "manual"
+  | "openclaw_imported"
+  | "hermes_imported"
+  | "auto_evolved"
+  | "curriculum_proposed";
+
+export type SkillSummaryDTO = {
+  name: string;
+  version: string;
+  description: string;
+  risk_level: SkillRiskLevel;
+  confidence: number;
+  source: SkillSource;
+  status: SkillStatus;
+  network_egress: string[];
+  last_run_at?: string | null;
+  success_rate: number;
+};
+
+export type SkillIODef = {
+  name: string;
+  type: string;
+  default?: unknown;
+  required?: boolean;
+  doc?: string;
+};
+
+export type SkillDTO = {
+  name: string;
+  version: string;
+  description: string;
+  trigger_phrases: string[];
+  inputs: SkillIODef[];
+  outputs: SkillIODef[];
+  risk_level: SkillRiskLevel;
+  network_egress: string[];
+  confidence: number;
+  last_evolved?: string;
+  body: string;
+  impl_path?: string;
+  impl_language?: string;
+  source: SkillSource;
+  status: SkillStatus;
+  path?: string;
+};
+
+export type SkillRunDTO = {
+  id: string;
+  skill_name: string;
+  version?: string;
+  session_id?: string;
+  trigger_source: string;
+  input: Record<string, unknown>;
+  output: string;
+  success: boolean;
+  duration_ms: number;
+  started_at: string;
+  ended_at?: string | null;
+};
+
+export const fetchSkills = (signal?: AbortSignal) =>
+  getJSON<SkillSummaryDTO[]>("/api/skills", signal);
+
+export const fetchSkill = (name: string, signal?: AbortSignal) =>
+  getJSON<SkillDTO>(`/api/skills/${encodeURIComponent(name)}`, signal);
+
+export const fetchSkillRuns = (name: string, limit = 25, signal?: AbortSignal) =>
+  getJSON<SkillRunDTO[]>(
+    `/api/skills/${encodeURIComponent(name)}/runs?limit=${limit}`,
+    signal,
+  );
+
+export async function reloadSkills(): Promise<{ count: number; errors: unknown[] } | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/skills/reload`, { method: "POST" });
+    if (!res.ok) return null;
+    return (await res.json()) as { count: number; errors: unknown[] };
+  } catch {
+    return null;
+  }
+}
+
+export async function invokeSkill(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ result?: { stdout?: string; success?: boolean }; error?: string } | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/skills/${encodeURIComponent(name)}/invoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ args }),
+    });
+    return (await res.json()) as { result?: { stdout?: string; success?: boolean }; error?: string };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}

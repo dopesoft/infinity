@@ -11,9 +11,12 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/hooks"
+	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/server"
+	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -89,9 +92,35 @@ func serveCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "  memory: disabled (no DATABASE_URL)\n")
 			}
 
+			// Skills system (Phase 4): filesystem-backed registry, optional
+			// store-backed persistence, agent tools + HTTP API.
+			skillsRoot := os.Getenv("INFINITY_SKILLS_ROOT")
+			if skillsRoot == "" {
+				skillsRoot = "./skills"
+			}
+			skillRegistry := skills.NewRegistry(skillsRoot)
+			var skillStore *skills.Store
+			if pool != nil {
+				skillStore = skills.NewStore(pool)
+				skillRegistry.AttachStore(skillStore)
+			}
+			loadCtx, loadCancel := context.WithTimeout(cmd.Context(), 15*time.Second)
+			if errs, err := skillRegistry.Reload(loadCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: skills reload: %v\n", err)
+			} else if len(errs) > 0 {
+				for _, e := range errs {
+					fmt.Fprintf(os.Stderr, "warning: skill load error %s: %s\n", e.Path, e.Err)
+				}
+			}
+			loadCancel()
+			skillRunner := skills.NewRunner(skillRegistry, skillStore)
+			skills.RegisterTools(registry, skillRegistry, skillRunner)
+			skillsAPI := skills.NewAPI(skillRegistry, skillRunner, skillStore)
+			fmt.Printf("  skills: %d loaded from %s\n", len(skillRegistry.All()), skillsRoot)
+
 			var loop *agent.Loop
 			if provider != nil {
-				cfg := agent.Config{LLM: provider, Tools: registry}
+				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry}
 				if searcher != nil {
 					cfg.Memory = searcher
 				}
@@ -101,14 +130,46 @@ func serveCmd() *cobra.Command {
 				loop = agent.New(cfg)
 			}
 
+			// Phase 5: Proactive engine. IntentFlow + WAL + Working Buffer +
+			// Heartbeat + Trust Contracts. Each component degrades gracefully
+			// when its dependency (LLM provider, DB pool) is missing.
+			var (
+				intentDetector *intent.Detector
+				intentDB       *intent.Store
+				heartbeat      *proactive.Heartbeat
+				trustStore     *proactive.TrustStore
+				proactiveAPI   *proactive.API
+			)
+			if pool != nil {
+				intentDB = intent.NewStore(pool)
+				trustStore = proactive.NewTrustStore(pool)
+				heartbeat = proactive.NewHeartbeat(pool, heartbeatInterval(),
+					proactive.DefaultChecklist(pool))
+				heartbeat.Start(cmd.Context())
+				if a, ok := provider.(*llm.Anthropic); ok {
+					intentDetector = intent.New(intent.Config{
+						Provider: a,
+						Model:    os.Getenv("INFINITY_INTENT_MODEL"),
+					})
+				}
+				proactiveAPI = proactive.NewAPI(pool, heartbeat, trustStore, intentDB)
+				fmt.Printf("  proactive: heartbeat every %s, intent=%v, trust=ready\n",
+					heartbeat.Interval(), intentDetector != nil)
+			}
+			_ = intentDetector // wired into the agent loop in Phase 5b once
+			// the WS handler emits per-turn observations; the detector is
+			// already invocable for Studio's intent-stream panel via API.
+
 			srv := server.New(server.Config{
-				Addr:     addr,
-				Version:  version,
-				Loop:     loop,
-				MCP:      mcp,
-				Pool:     pool,
-				Store:    store,
-				Searcher: searcher,
+				Addr:         addr,
+				Version:      version,
+				Loop:         loop,
+				MCP:          mcp,
+				Pool:         pool,
+				Store:        store,
+				Searcher:     searcher,
+				SkillsAPI:    skillsAPI,
+				ProactiveAPI: proactiveAPI,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -148,4 +209,18 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address (or use $PORT)")
 	cmd.Flags().StringVar(&mcpConfig, "mcp-config", "", "path to MCP server registry (default: $MCP_CONFIG or core/config/mcp.yaml)")
 	return cmd
+}
+
+// heartbeatInterval reads $INFINITY_HEARTBEAT_INTERVAL (Go duration form,
+// e.g. "30m"). Defaults to 30 minutes.
+func heartbeatInterval() time.Duration {
+	v := os.Getenv("INFINITY_HEARTBEAT_INTERVAL")
+	if v == "" {
+		return 30 * time.Minute
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 30 * time.Minute
+	}
+	return d
 }

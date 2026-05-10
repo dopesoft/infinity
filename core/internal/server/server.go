@@ -7,29 +7,34 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Config struct {
-	Addr     string
-	Version  string
-	Loop     *agent.Loop
-	MCP      *tools.MCPManager
-	Pool     *pgxpool.Pool
-	Store    *memory.Store
-	Searcher *memory.Searcher
+	Addr         string
+	Version      string
+	Loop         *agent.Loop
+	MCP          *tools.MCPManager
+	Pool         *pgxpool.Pool
+	Store        *memory.Store
+	Searcher     *memory.Searcher
+	SkillsAPI    *skills.API
+	ProactiveAPI *proactive.API
 }
 
 type Server struct {
-	cfg      Config
-	http     *http.Server
-	loop     *agent.Loop
-	mcp      *tools.MCPManager
-	pool     *pgxpool.Pool
-	store    *memory.Store
-	searcher *memory.Searcher
-	started  time.Time
+	cfg       Config
+	http      *http.Server
+	loop      *agent.Loop
+	mcp       *tools.MCPManager
+	pool      *pgxpool.Pool
+	store     *memory.Store
+	searcher  *memory.Searcher
+	skillsAPI *skills.API
+	started   time.Time
 }
 
 func New(cfg Config) *Server {
@@ -37,17 +42,24 @@ func New(cfg Config) *Server {
 		cfg.Addr = ":8080"
 	}
 	s := &Server{
-		cfg:      cfg,
-		loop:     cfg.Loop,
-		mcp:      cfg.MCP,
-		pool:     cfg.Pool,
-		store:    cfg.Store,
-		searcher: cfg.Searcher,
-		started:  time.Now(),
+		cfg:       cfg,
+		loop:      cfg.Loop,
+		mcp:       cfg.MCP,
+		pool:      cfg.Pool,
+		store:     cfg.Store,
+		searcher:  cfg.Searcher,
+		skillsAPI: cfg.SkillsAPI,
+		started:   time.Now(),
 	}
 
 	mux := http.NewServeMux()
 	s.routes(mux)
+	if s.skillsAPI != nil {
+		s.skillsAPI.Routes(mux)
+	}
+	if cfg.ProactiveAPI != nil {
+		cfg.ProactiveAPI.Routes(mux)
+	}
 
 	s.http = &http.Server{
 		Addr:              cfg.Addr,

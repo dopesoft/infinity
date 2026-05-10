@@ -81,7 +81,9 @@ export function MemoryCard({
         </div>
         <div className="flex items-center gap-1">
           <IconClock className="size-3" aria-hidden />
-          <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time>
+          <time dateTime={item.createdAt} suppressHydrationWarning>
+            {new Date(item.createdAt).toLocaleString()}
+          </time>
         </div>
       </div>
       {item.title && <p className="mt-1 line-clamp-1 font-semibold">{item.title}</p>}

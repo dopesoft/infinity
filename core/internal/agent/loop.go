@@ -18,6 +18,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// SkillMatcher is implemented by skills.Registry. Decoupled to keep the agent
+// package free of skill-package dependencies.
+type SkillMatcher interface {
+	MatchAndPrefix(message string, limit int) string
+}
+
 const defaultSystemPrompt = `You are Infinity, a single-user AI agent with persistent memory.
 
 You have access to tools. When a tool call is appropriate, call it directly without asking permission. After tool results return, integrate them into your reply naturally — never narrate the call to the user.
@@ -64,6 +70,7 @@ type Loop struct {
 	tools       *tools.Registry
 	memory      MemoryProvider
 	hooks       HookEmitter
+	skills      SkillMatcher
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -77,6 +84,7 @@ type Config struct {
 	Tools             *tools.Registry
 	Memory            MemoryProvider
 	Hooks             HookEmitter
+	Skills            SkillMatcher
 	SystemPrompt      string
 	MaxToolIterations int
 }
@@ -96,6 +104,7 @@ func New(cfg Config) *Loop {
 		tools:             cfg.Tools,
 		memory:            cfg.Memory,
 		hooks:             cfg.Hooks,
+		skills:            cfg.Skills,
 		systemPrompt:      cfg.SystemPrompt,
 		maxToolIterations: cfg.MaxToolIterations,
 		sessions:          make(map[string]*Session),
@@ -186,6 +195,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 		prefix, err := l.memory.BuildSystemPrefix(ctx, s.ID, userMsg)
 		if err == nil && prefix != "" {
 			systemPrompt = prefix + "\n\n" + systemPrompt
+		}
+	}
+	if l.skills != nil {
+		if skillsPrefix := l.skills.MatchAndPrefix(userMsg, 5); skillsPrefix != "" {
+			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
 

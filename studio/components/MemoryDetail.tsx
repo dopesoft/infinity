@@ -127,7 +127,9 @@ export function MemoryDetail({
 
         <Section title="Metadata">
           <Row icon={<IconCalendar className="size-3.5" aria-hidden />} label="created">
-            <time className="font-mono">{new Date(item.createdAt).toLocaleString()}</time>
+            <time className="font-mono" suppressHydrationWarning>
+              {new Date(item.createdAt).toLocaleString()}
+            </time>
           </Row>
           {item.sessionId && (
             <Row icon={<IconHistory className="size-3.5" aria-hidden />} label="session">

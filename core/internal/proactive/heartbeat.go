@@ -1,0 +1,198 @@
+package proactive
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Heartbeat runs an isolated checklist on a tunable interval. It's fired by a
+// goroutine started in cmd/infinity/serve.go.
+//
+// The checklist (lifted from Hal):
+//   • Proactive tracker: any overdue behaviours?
+//   • Pattern check: any repeated user requests to automate?
+//   • Outcome check: decisions older than 7 days needing follow-up?
+//   • Security: any error / injection signal in recent logs?
+//   • Self-healing: errors in the run log → diagnose
+//   • Memory: context %% — trigger danger zone if >60%
+//   • Surprise: what could I build right now that would delight my human?
+//
+// Phase 5 ships a *substrate*: the ticker, the persistence, and a hookable
+// runner that calls a user-supplied Checklist. Phase 6 plugs in the curriculum
+// generator + AutoSkill loop into the same pipeline.
+type Heartbeat struct {
+	pool      *pgxpool.Pool
+	interval  time.Duration
+	checklist Checklist
+	clock     func() time.Time
+
+	mu      sync.Mutex
+	running bool
+	stop    chan struct{}
+}
+
+// Checklist is the function the heartbeat invokes each tick. It's expected to
+// run as an isolated agent turn (own session, own context window) and return
+// the findings produced.
+type Checklist func(ctx context.Context, h *Heartbeat) ([]Finding, error)
+
+// Finding represents a single diagnostic / suggestion / surprise produced by
+// the heartbeat.
+type Finding struct {
+	Kind        string `json:"kind"` // pattern | outcome | curiosity | surprise | security | self_heal
+	Title       string `json:"title"`
+	Detail      string `json:"detail,omitempty"`
+	PreApproved bool   `json:"pre_approved"`
+}
+
+func NewHeartbeat(p *pgxpool.Pool, interval time.Duration, checklist Checklist) *Heartbeat {
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	return &Heartbeat{
+		pool:      p,
+		interval:  interval,
+		checklist: checklist,
+		clock:     time.Now,
+		stop:      make(chan struct{}),
+	}
+}
+
+func (h *Heartbeat) Interval() time.Duration { return h.interval }
+
+// Start kicks off the ticker goroutine. Safe to call once. Use Stop to halt.
+func (h *Heartbeat) Start(ctx context.Context) {
+	h.mu.Lock()
+	if h.running {
+		h.mu.Unlock()
+		return
+	}
+	h.running = true
+	h.mu.Unlock()
+
+	go h.loop(ctx)
+}
+
+func (h *Heartbeat) Stop() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.running {
+		return
+	}
+	close(h.stop)
+	h.running = false
+}
+
+func (h *Heartbeat) loop(ctx context.Context) {
+	ticker := time.NewTicker(h.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.stop:
+			return
+		case <-ticker.C:
+			h.RunOnce(ctx)
+		}
+	}
+}
+
+// RunOnce executes a single tick synchronously. Useful for the "Run heartbeat
+// now" button in Studio.
+func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
+	if h == nil || h.checklist == nil {
+		return RunSummary{}, nil
+	}
+	start := h.clock()
+	hbID, _ := h.startRun(ctx, start)
+
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	findings, err := h.checklist(cctx, h)
+	end := h.clock()
+	dur := end.Sub(start)
+
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+
+	summary := summariseFindings(findings)
+
+	if hbID != "" && h.pool != nil {
+		_, _ = h.pool.Exec(ctx, `
+			UPDATE mem_heartbeats
+			   SET ended_at = $2, duration_ms = $3, findings = $4, summary = $5, status = $6
+			 WHERE id = $1::uuid
+		`, hbID, end, dur.Milliseconds(), len(findings), summary, status)
+		for _, f := range findings {
+			_, _ = h.pool.Exec(ctx, `
+				INSERT INTO mem_heartbeat_findings
+				  (heartbeat_id, kind, title, detail, pre_approved)
+				VALUES ($1::uuid, $2, $3, $4, $5)
+			`, hbID, f.Kind, f.Title, f.Detail, f.PreApproved)
+		}
+	}
+
+	return RunSummary{
+		ID:         hbID,
+		StartedAt:  start,
+		EndedAt:    end,
+		DurationMS: dur.Milliseconds(),
+		Findings:   findings,
+		Status:     status,
+		Error:      stringErr(err),
+	}, err
+}
+
+// RunSummary is the result returned from RunOnce. Suitable for a JSON payload
+// over /api/heartbeat/run.
+type RunSummary struct {
+	ID         string    `json:"id,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	EndedAt    time.Time `json:"ended_at"`
+	DurationMS int64     `json:"duration_ms"`
+	Findings   []Finding `json:"findings"`
+	Status     string    `json:"status"`
+	Error      string    `json:"error,omitempty"`
+}
+
+func (h *Heartbeat) startRun(ctx context.Context, started time.Time) (string, error) {
+	if h.pool == nil {
+		return "", nil
+	}
+	var id string
+	err := h.pool.QueryRow(ctx, `
+		INSERT INTO mem_heartbeats (started_at, status)
+		VALUES ($1, 'running') RETURNING id::text
+	`, started).Scan(&id)
+	return id, err
+}
+
+func summariseFindings(fs []Finding) string {
+	if len(fs) == 0 {
+		return "no findings"
+	}
+	var b strings.Builder
+	for i, f := range fs {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "- [%s] %s", f.Kind, f.Title)
+	}
+	return b.String()
+}
+
+func stringErr(e error) string {
+	if e == nil {
+		return ""
+	}
+	return e.Error()
+}

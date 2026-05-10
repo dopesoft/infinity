@@ -57,7 +57,7 @@ export function ProvenanceChain({ memoryId }: { memoryId: string }) {
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1">
                   <IconClock className="size-3" aria-hidden />
-                  <time>{new Date(src.created_at).toLocaleString()}</time>
+                  <time suppressHydrationWarning>{new Date(src.created_at).toLocaleString()}</time>
                 </span>
                 <span className="flex items-center gap-1">
                   <IconHash className="size-3" aria-hidden />

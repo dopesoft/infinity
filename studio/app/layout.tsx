@@ -19,11 +19,13 @@ export const metadata: Metadata = {
   title: "Infinity",
   description: "Single-user AI agent with persistent memory.",
   applicationName: "Infinity",
-  manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     title: "Infinity",
     statusBarStyle: "default",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
   },
 };
 

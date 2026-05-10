@@ -60,7 +60,7 @@ export default function SessionsPage() {
                     <span className="font-mono">{s.id.slice(0, 12)}…</span>
                     <span className="flex items-center gap-1">
                       <IconClock className="size-3" aria-hidden />
-                      <time>{new Date(s.started_at).toLocaleString()}</time>
+                      <time suppressHydrationWarning>{new Date(s.started_at).toLocaleString()}</time>
                     </span>
                   </div>
                   <div className="mt-1 flex items-center gap-2 text-sm">
@@ -92,7 +92,7 @@ export default function SessionsPage() {
                 </div>
                 <code className="mt-1 block break-all font-mono text-sm">{selected.id}</code>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge variant="outline">started {new Date(selected.started_at).toLocaleString()}</Badge>
+                  <Badge variant="outline" suppressHydrationWarning>started {new Date(selected.started_at).toLocaleString()}</Badge>
                   <Badge variant="secondary">{selected.message_count} messages</Badge>
                 </div>
               </div>

@@ -27,14 +27,18 @@ function makeId() {
 }
 
 function newSessionId() {
-  return crypto.randomUUID
-    ? crypto.randomUUID()
-    : `sess_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return `sess_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 export function useChat() {
   const ws = useWebSocket();
-  const [sessionId, setSessionId] = useState<string>(() => newSessionId());
+  // Empty on first server render; assigned client-side in useEffect to avoid
+  // hydration mismatches from non-deterministic UUID generation.
+  const [sessionId, setSessionId] = useState<string>("");
+  useEffect(() => {
+    setSessionId((prev) => prev || newSessionId());
+  }, []);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [usage, setUsage] = useState<Usage>({ input: 0, output: 0 });
   const [isStreaming, setIsStreaming] = useState(false);

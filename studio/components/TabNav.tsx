@@ -8,6 +8,7 @@ const tabs = [
   { href: "/live", label: "Live" },
   { href: "/sessions", label: "Sessions" },
   { href: "/memory", label: "Memory" },
+  { href: "/skills", label: "Skills" },
 ];
 
 export function TabNav() {

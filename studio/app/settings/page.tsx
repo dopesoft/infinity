@@ -116,7 +116,7 @@ export default function SettingsPage() {
                       <IconCircleDashed className="size-4 text-muted-foreground" aria-hidden />
                     )}
                     <span className="font-mono text-sm">{s.name}</span>
-                    <span className="ml-auto text-[11px] text-muted-foreground">
+                    <span className="ml-auto text-[11px] text-muted-foreground" suppressHydrationWarning>
                       {new Date(s.tested).toLocaleString()}
                     </span>
                   </div>
