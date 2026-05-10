@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
 type Anthropic struct {
-	client anthropic.Client
-	model  string
+	client          anthropic.Client
+	model           string
+	thinkingBudget  int64 // 0 = disabled. ≥1024 enables extended thinking with that token budget.
 }
 
 func NewAnthropic(apiKey, model string) *Anthropic {
@@ -19,7 +22,22 @@ func NewAnthropic(apiKey, model string) *Anthropic {
 		model = "claude-sonnet-4-5-20250929"
 	}
 	c := anthropic.NewClient(option.WithAPIKey(apiKey))
-	return &Anthropic{client: c, model: model}
+	return &Anthropic{client: c, model: model, thinkingBudget: thinkingBudgetFromEnv()}
+}
+
+// thinkingBudgetFromEnv reads ANTHROPIC_THINKING_BUDGET. Anthropic requires
+// a budget ≥1024 tokens; values below that disable extended thinking entirely
+// so the user doesn't accidentally pay for a feature that won't activate.
+func thinkingBudgetFromEnv() int64 {
+	raw := os.Getenv("ANTHROPIC_THINKING_BUDGET")
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1024 {
+		return 0
+	}
+	return n
 }
 
 func (a *Anthropic) Name() string  { return "anthropic" }
@@ -102,9 +120,13 @@ func (a *Anthropic) Stream(
 		})
 	}
 
+	maxTokens := int64(4096)
+	if a.thinkingBudget > 0 && a.thinkingBudget+1024 > maxTokens {
+		maxTokens = a.thinkingBudget + 1024
+	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.model),
-		MaxTokens: 4096,
+		MaxTokens: maxTokens,
 		Messages:  apiMessages,
 	}
 	if system != "" {
@@ -112,6 +134,9 @@ func (a *Anthropic) Stream(
 	}
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
+	}
+	if a.thinkingBudget > 0 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(a.thinkingBudget)
 	}
 
 	stream := a.client.Messages.NewStreaming(ctx, params)
@@ -128,8 +153,15 @@ func (a *Anthropic) Stream(
 
 		switch ev := event.AsAny().(type) {
 		case anthropic.ContentBlockDeltaEvent:
-			if d, ok := ev.Delta.AsAny().(anthropic.TextDelta); ok && d.Text != "" {
-				emit(out, StreamEvent{Kind: StreamText, TextDelta: d.Text})
+			switch d := ev.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				if d.Text != "" {
+					emit(out, StreamEvent{Kind: StreamText, TextDelta: d.Text})
+				}
+			case anthropic.ThinkingDelta:
+				if d.Thinking != "" {
+					emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: d.Thinking})
+				}
 			}
 		}
 	}

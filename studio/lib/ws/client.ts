@@ -13,6 +13,7 @@
 
 export type WSEvent =
   | { type: "delta"; session_id: string; text: string }
+  | { type: "thinking"; session_id: string; text: string }
   | { type: "tool_call"; session_id: string; tool_call: WSToolEvent }
   | { type: "tool_result"; session_id: string; tool_result: WSToolEvent }
   | {

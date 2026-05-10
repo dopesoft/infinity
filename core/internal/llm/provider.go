@@ -50,21 +50,23 @@ type Response struct {
 }
 
 type StreamEvent struct {
-	Kind       StreamEventKind `json:"kind"`
-	TextDelta  string          `json:"text_delta,omitempty"`
-	ToolCall   *ToolCall       `json:"tool_call,omitempty"`
-	StopReason string          `json:"stop_reason,omitempty"`
-	Usage      *TokenUsage     `json:"usage,omitempty"`
-	Err        string          `json:"err,omitempty"`
+	Kind          StreamEventKind `json:"kind"`
+	TextDelta     string          `json:"text_delta,omitempty"`
+	ThinkingDelta string          `json:"thinking_delta,omitempty"`
+	ToolCall      *ToolCall       `json:"tool_call,omitempty"`
+	StopReason    string          `json:"stop_reason,omitempty"`
+	Usage         *TokenUsage     `json:"usage,omitempty"`
+	Err           string          `json:"err,omitempty"`
 }
 
 type StreamEventKind string
 
 const (
-	StreamText      StreamEventKind = "text"
-	StreamToolCall  StreamEventKind = "tool_call"
-	StreamComplete  StreamEventKind = "complete"
-	StreamError     StreamEventKind = "error"
+	StreamText     StreamEventKind = "text"
+	StreamThinking StreamEventKind = "thinking"
+	StreamToolCall StreamEventKind = "tool_call"
+	StreamComplete StreamEventKind = "complete"
+	StreamError    StreamEventKind = "error"
 )
 
 type Provider interface {

@@ -186,6 +186,55 @@
   .keyboard-safe-bottom {
     padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
   }
+
+  /* "Jarvis is thinking" header: shimmer animation that sweeps a lighter
+   * highlight across the text. Falls back gracefully on browsers that don't
+   * support background-clip:text (the text is just visible without shimmer).
+   */
+  .thinking-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      hsl(var(--muted-foreground)) 0%,
+      hsl(var(--foreground)) 50%,
+      hsl(var(--muted-foreground)) 100%
+    );
+    background-size: 200% 100%;
+    background-position: 200% 0;
+    color: hsl(var(--muted-foreground));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: thinking-shimmer 2.4s linear infinite;
+  }
+
+  @keyframes thinking-shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  /* Top + bottom fade mask on the thinking preview while streaming. Uses
+   * mask-image so it works against any background (light/dark) without
+   * needing a separate overlay element. */
+  .thinking-fade-mask {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      black 18%,
+      black 82%,
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      black 18%,
+      black 82%,
+      transparent 100%
+    );
+  }
 }
 
 /* -----------------------------------------------------------------------

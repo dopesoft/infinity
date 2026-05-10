@@ -140,6 +140,8 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content string, send fu
 		switch ev.Kind {
 		case agent.EventDelta:
 			send(wsServerEvent{Type: "delta", SessionID: ev.SessionID, Text: ev.TextDelta})
+		case agent.EventThinking:
+			send(wsServerEvent{Type: "thinking", SessionID: ev.SessionID, Text: ev.ThinkingDelta})
 		case agent.EventToolCall:
 			if ev.ToolCall != nil {
 				send(wsServerEvent{

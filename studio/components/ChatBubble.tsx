@@ -8,7 +8,7 @@ function formatMs(ms?: number) {
 }
 
 export function ChatBubble({ message }: { message: ChatMessage }) {
-  if (message.role === "tool") return null; // ToolCallCard renders these
+  if (message.role === "tool" || message.role === "thinking") return null; // ToolCallCard / ThinkingBlock render these
   const isUser = message.role === "user";
 
   if (message.error) {

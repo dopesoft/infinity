@@ -153,14 +153,15 @@ func (l *Loop) Sessions() []*Session {
 
 // RunEvent is what we surface to transports (WebSocket/etc).
 type RunEvent struct {
-	Kind       EventKind       `json:"kind"`
-	SessionID  string          `json:"session_id"`
-	TextDelta  string          `json:"text_delta,omitempty"`
-	ToolCall   *ToolEvent      `json:"tool_call,omitempty"`
-	ToolResult *ToolEvent      `json:"tool_result,omitempty"`
-	Usage      *llm.TokenUsage `json:"usage,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	StopReason string          `json:"stop_reason,omitempty"`
+	Kind          EventKind       `json:"kind"`
+	SessionID     string          `json:"session_id"`
+	TextDelta     string          `json:"text_delta,omitempty"`
+	ThinkingDelta string          `json:"thinking_delta,omitempty"`
+	ToolCall      *ToolEvent      `json:"tool_call,omitempty"`
+	ToolResult    *ToolEvent      `json:"tool_result,omitempty"`
+	Usage         *llm.TokenUsage `json:"usage,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	StopReason    string          `json:"stop_reason,omitempty"`
 }
 
 type ToolEvent struct {
@@ -177,6 +178,7 @@ type EventKind string
 
 const (
 	EventDelta      EventKind = "delta"
+	EventThinking   EventKind = "thinking"
 	EventToolCall   EventKind = "tool_call"
 	EventToolResult EventKind = "tool_result"
 	EventComplete   EventKind = "complete"
@@ -228,6 +230,8 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 			switch ev.Kind {
 			case llm.StreamText:
 				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
+			case llm.StreamThinking:
+				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: ev.ThinkingDelta})
 			case llm.StreamError:
 				emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: ev.Err})
 			}

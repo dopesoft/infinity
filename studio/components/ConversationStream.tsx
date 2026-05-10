@@ -5,6 +5,7 @@ import { IconArrowDown, IconMessageOff } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
+import { ThinkingBlock } from "@/components/ThinkingBlock";
 import type { ChatMessage } from "@/hooks/useChat";
 
 export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
@@ -58,7 +59,13 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
       >
         {messages.map((m) => (
           <div key={m.id}>
-            {m.role === "tool" ? <ToolCallCard message={m} /> : <ChatBubble message={m} />}
+            {m.role === "tool" ? (
+              <ToolCallCard message={m} />
+            ) : m.role === "thinking" ? (
+              <ThinkingBlock message={m} />
+            ) : (
+              <ChatBubble message={m} />
+            )}
           </div>
         ))}
       </div>

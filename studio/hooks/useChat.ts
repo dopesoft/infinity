@@ -5,7 +5,7 @@ import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchSessionMessages } from "@/lib/api";
 
-export type ChatRole = "user" | "assistant" | "tool";
+export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
 export type ChatMessage = {
   id: string;
@@ -19,6 +19,8 @@ export type ChatMessage = {
   latencyMs?: number;
   error?: string;
   createdAt: number;
+  // Only set on `thinking` messages once the agent moves on to text/tool/complete.
+  endedAt?: number;
 };
 
 type Usage = { input: number; output: number };
@@ -56,6 +58,20 @@ function writeStoredSessionId(id: string) {
   }
 }
 
+// Mark the most recent pending `thinking` message as complete. Called whenever
+// the agent transitions out of "thinking" — first text delta, first tool call,
+// or stream complete. Returns a new array (never mutates).
+function closePendingThinking(messages: ChatMessage[]): ChatMessage[] {
+  const next = [...messages];
+  for (let i = next.length - 1; i >= 0; i--) {
+    if (next[i].role === "thinking" && next[i].pending) {
+      next[i] = { ...next[i], pending: false, endedAt: Date.now() };
+      break;
+    }
+  }
+  return next;
+}
+
 export function useChat() {
   const ws = useWebSocket();
   // Empty on first server render; assigned client-side in useEffect to avoid
@@ -79,7 +95,7 @@ export function useChat() {
     watchdogRef.current = setTimeout(() => {
       watchdogRef.current = null;
       setMessages((prev) => {
-        const next = [...prev];
+        const next = closePendingThinking(prev);
         for (let i = next.length - 1; i >= 0; i--) {
           if (next[i].role === "assistant" && next[i].pending) {
             next[i] = {
@@ -135,10 +151,30 @@ export function useChat() {
       if ("session_id" in ev && ev.session_id && ev.session_id !== sessionId) return;
 
       switch (ev.type) {
-        case "delta": {
+        case "thinking": {
           armWatchdog();
           setMessages((prev) => {
             const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === "thinking" && last.pending) {
+              next[next.length - 1] = { ...last, text: last.text + ev.text };
+            } else {
+              next.push({
+                id: makeId(),
+                role: "thinking",
+                text: ev.text,
+                pending: true,
+                createdAt: Date.now(),
+              });
+            }
+            return next;
+          });
+          break;
+        }
+        case "delta": {
+          armWatchdog();
+          setMessages((prev) => {
+            const next = closePendingThinking(prev);
             const last = next[next.length - 1];
             if (!last || last.role !== "assistant" || !last.pending) {
               next.push({
@@ -158,7 +194,7 @@ export function useChat() {
         case "tool_call": {
           armWatchdog();
           setMessages((prev) => [
-            ...prev,
+            ...closePendingThinking(prev),
             {
               id: makeId(),
               role: "tool",
@@ -188,7 +224,7 @@ export function useChat() {
           setUsage((u) => ({ input: u.input + inputT, output: u.output + outputT }));
           const latency = turnStartRef.current ? Date.now() - turnStartRef.current : undefined;
           setMessages((prev) => {
-            const next = [...prev];
+            const next = closePendingThinking(prev);
             for (let i = next.length - 1; i >= 0; i--) {
               if (next[i].role === "assistant" && next[i].pending) {
                 next[i] = {
@@ -210,7 +246,7 @@ export function useChat() {
         case "error": {
           clearWatchdog();
           setMessages((prev) => [
-            ...prev,
+            ...closePendingThinking(prev),
             {
               id: makeId(),
               role: "assistant",
@@ -238,6 +274,9 @@ export function useChat() {
       setMessages((prev) => [
         ...prev,
         { id: makeId(), role: "user", text: trimmed, createdAt: Date.now() },
+        // Optimistic "Jarvis is thinking" indicator. Closes on first delta /
+        // tool_call / complete. Hidden in the renderer if it ends up empty.
+        { id: makeId(), role: "thinking", text: "", pending: true, createdAt: Date.now() },
       ]);
       turnStartRef.current = Date.now();
       setIsStreaming(true);
