@@ -100,6 +100,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
 	mux.HandleFunc("/api/memory/profile", s.handleProfile)
+	mux.HandleFunc("/api/memory/graph", s.handleGraph)
 }
 
 func (s *Server) Start() error {

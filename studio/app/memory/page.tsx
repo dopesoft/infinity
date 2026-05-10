@@ -10,6 +10,7 @@ import { MemoryCard } from "@/components/MemoryCard";
 import { MemoryDetail } from "@/components/MemoryDetail";
 import { BossProfilePanel } from "@/components/BossProfilePanel";
 import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
+import { KnowledgeGraphPanel } from "@/components/KnowledgeGraphPanel";
 import { cn } from "@/lib/utils";
 import {
   fetchMemories,
@@ -27,7 +28,7 @@ type ListItem = ObservationDTO | SearchResult | MemoryDTO;
 const TIERS = ["all", "working", "episodic", "semantic", "procedural"] as const;
 type TierFilter = (typeof TIERS)[number];
 
-const VIEWS = ["memories", "observations"] as const;
+const VIEWS = ["memories", "observations", "graph"] as const;
 type View = (typeof VIEWS)[number];
 
 export default function MemoryPage() {
@@ -46,7 +47,10 @@ export default function MemoryPage() {
     setQuery("");
     const c = await fetchMemoryCounts();
     setCounts(c);
-    if (viewArg === "memories") {
+    if (viewArg === "graph") {
+      // Graph view manages its own data fetch in KnowledgeGraphPanel.
+      setItems([]);
+    } else if (viewArg === "memories") {
       const mems = await fetchMemories(tierArg !== "all" ? { tier: tierArg } : {});
       setItems(mems ?? []);
     } else {
@@ -173,17 +177,26 @@ export default function MemoryPage() {
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           {/* Left column: brain panels (boss profile + voyager candidates).
               Hidden on small screens unless detail is closed; collapses into
-              the list view on mobile. */}
-          <aside
-            className={cn(
-              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto border-b bg-background px-3 py-3 scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
-              showDetail ? "hidden lg:block" : "block",
-            )}
-          >
-            <BossProfilePanel />
-            <CandidateSkillsPanel />
-          </aside>
+              the list view on mobile. Hidden entirely in graph view to give
+              the canvas more room. */}
+          {view !== "graph" && (
+            <aside
+              className={cn(
+                "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto border-b bg-background px-3 py-3 scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
+                showDetail ? "hidden lg:block" : "block",
+              )}
+            >
+              <BossProfilePanel />
+              <CandidateSkillsPanel />
+            </aside>
+          )}
 
+          {view === "graph" && (
+            <KnowledgeGraphPanel />
+          )}
+
+          {view !== "graph" && (
+          <>
           <aside
             className={cn(
               "min-h-0 flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
@@ -237,6 +250,8 @@ export default function MemoryPage() {
             )}
             <MemoryDetail source={selected} onClose={() => setShowDetail(false)} />
           </section>
+          </>
+          )}
         </div>
       </div>
     </TabFrame>

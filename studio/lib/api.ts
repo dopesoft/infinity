@@ -141,6 +141,45 @@ export const searchMemory = (q: string, signal?: AbortSignal) =>
 export const fetchProvenance = (memoryId: string, signal?: AbortSignal) =>
   getJSON<ProvenanceChain>(`/api/memory/cite/${memoryId}`, signal);
 
+// ---- Knowledge graph -------------------------------------------------------
+
+export type GraphNodeDTO = {
+  id: string;
+  type: string;
+  name: string;
+  degree: number;
+  stale: boolean;
+  metadata?: unknown;
+};
+
+export type GraphEdgeDTO = {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  confidence: number;
+};
+
+export type GraphResponse = {
+  nodes: GraphNodeDTO[];
+  edges: GraphEdgeDTO[];
+  total_nodes: number;
+  total_edges: number;
+  node_types: string[];
+};
+
+export const fetchGraph = (
+  opts: { limit?: number; type?: string; includeStale?: boolean } = {},
+  signal?: AbortSignal,
+) => {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.type) params.set("type", opts.type);
+  if (opts.includeStale) params.set("include_stale", "1");
+  const qs = params.toString();
+  return getJSON<GraphResponse>(`/api/memory/graph${qs ? "?" + qs : ""}`, signal);
+};
+
 // ---- Boss profile (always-on identity primer) ------------------------------
 
 export type ProfileFactDTO = {
