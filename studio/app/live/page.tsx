@@ -54,10 +54,10 @@ export default function LivePage() {
           <LeftPanels messages={chat.messages} usedTokens={usedTokens} />
         </aside>
 
-        {/* Center — chat. overflow-hidden is required so child borders/bgs
-            (SessionHeader, Composer) clip to the rounded corners — without it
-            the rounded card visibly breaks at the four corners. */}
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-card">
+        {/* Center — chat. Uses the same tint as the side rails so we have
+            one grey, not many. overflow-hidden is required so child borders
+            (SessionHeader, Composer) clip to the rounded corners. */}
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-muted/60 dark:bg-zinc-800/60">
           <SessionHeader
             sessionId={chat.sessionId}
             startedAt={startedAt}
@@ -75,7 +75,7 @@ export default function LivePage() {
           {/* Mobile-only Status trigger pinned just above the composer.
               Opens a bottom drawer with the full panel stack so the panels
               stay reachable on touch devices without crowding the chat. */}
-          <div className="border-t bg-background/60 px-3 py-1.5 md:hidden">
+          <div className="border-t px-3 py-1.5 md:hidden">
             <Drawer open={statusOpen} onOpenChange={setStatusOpen}>
               <DrawerTrigger asChild>
                 <Button

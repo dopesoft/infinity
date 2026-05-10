@@ -42,7 +42,7 @@ export function SessionHeader({
   }, []);
 
   return (
-    <div className="flex items-center justify-between gap-2 border-b bg-background/95 px-3 py-2 sm:px-4">
+    <div className="flex items-center justify-between gap-2 border-b px-3 py-2 sm:px-4">
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
           Session
