@@ -218,6 +218,215 @@ export async function reloadSkills(): Promise<{ count: number; errors: unknown[]
   }
 }
 
+// ---- Phase 7: Audit log ----------------------------------------------------
+
+export type AuditRowDTO = {
+  id: string;
+  operation: string;
+  actor: string;
+  target: string;
+  diff?: Record<string, unknown>;
+  created_at: string;
+};
+
+export const fetchAuditLog = (limit = 100, op = "", signal?: AbortSignal) => {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(limit));
+  if (op) qs.set("op", op);
+  return getJSON<AuditRowDTO[]>(`/api/memory/audit?${qs.toString()}`, signal);
+};
+
+// ---- Phase 5: Heartbeat / Trust / IntentFlow -------------------------------
+
+export type HeartbeatRunDTO = {
+  id: string;
+  started_at: string;
+  ended_at?: string | null;
+  duration_ms: number;
+  findings: number;
+  status: string;
+  summary: string;
+};
+
+export type HeartbeatListDTO = {
+  interval_seconds: number;
+  runs: HeartbeatRunDTO[];
+};
+
+export type FindingDTO = {
+  kind: string;
+  title: string;
+  detail?: string;
+  pre_approved: boolean;
+};
+
+export type HeartbeatRunSummaryDTO = {
+  id?: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  findings: FindingDTO[];
+  status: string;
+  error?: string;
+};
+
+export const fetchHeartbeats = (signal?: AbortSignal) =>
+  getJSON<HeartbeatListDTO>("/api/heartbeat", signal);
+
+export async function runHeartbeatNow(): Promise<HeartbeatRunSummaryDTO | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/heartbeat/run`, { method: "POST" });
+    if (!res.ok) return null;
+    return (await res.json()) as HeartbeatRunSummaryDTO;
+  } catch {
+    return null;
+  }
+}
+
+export type TrustContractDTO = {
+  id: string;
+  title: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  source: string;
+  action_spec: Record<string, unknown>;
+  reasoning: string;
+  cited_memory_ids: string[];
+  risk_assessment: Record<string, unknown>;
+  preview: string;
+  status: "pending" | "approved" | "denied" | "snoozed";
+  decided_at?: string | null;
+  decision_note?: string;
+  created_at: string;
+};
+
+export const fetchTrustContracts = (status = "pending", signal?: AbortSignal) =>
+  getJSON<TrustContractDTO[]>(`/api/trust-contracts?status=${encodeURIComponent(status)}`, signal);
+
+export async function decideTrust(id: string, decision: string, note = ""): Promise<boolean> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/trust-contracts/${id}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, note }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type IntentRecordDTO = {
+  id: string;
+  session_id?: string;
+  user_msg: string;
+  token: "silent" | "fast_intervention" | "full_assistance";
+  confidence: number;
+  reason: string;
+  suggested_action?: string;
+  created_at: string;
+};
+
+export const fetchIntentRecent = (limit = 50, signal?: AbortSignal) =>
+  getJSON<IntentRecordDTO[]>(`/api/intent/recent?limit=${limit}`, signal);
+
+// ---- Phase 6: Cron + Sentinels --------------------------------------------
+
+export type CronJobDTO = {
+  id: string;
+  name: string;
+  schedule: string;
+  schedule_natural?: string;
+  job_kind: "system_event" | "isolated_agent_turn";
+  target: string;
+  enabled: boolean;
+  max_retries: number;
+  backoff_seconds: number;
+  last_run_at?: string | null;
+  last_run_status?: string;
+  last_run_duration_ms?: number;
+  next_run_at?: string | null;
+  failure_count: number;
+  created_at: string;
+};
+
+export const fetchCrons = (signal?: AbortSignal) =>
+  getJSON<CronJobDTO[]>("/api/crons", signal);
+
+export async function previewCron(schedule: string, count = 3): Promise<{ next: string[] } | { error: string } | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/crons/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schedule, count }),
+    });
+    return (await res.json()) as { next: string[] } | { error: string };
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertCron(j: Partial<CronJobDTO>): Promise<{ id: string } | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/crons`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(j),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { id: string };
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteCron(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/crons/${id}`, { method: "DELETE" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type SentinelDTO = {
+  id: string;
+  name: string;
+  watch_type: "webhook" | "file_change" | "memory_event" | "external_api_poll" | "threshold";
+  watch_config: Record<string, unknown>;
+  action_chain: Array<Record<string, unknown>>;
+  cooldown_seconds: number;
+  last_triggered_at?: string | null;
+  fire_count: number;
+  enabled: boolean;
+  created_at: string;
+};
+
+export const fetchSentinels = (signal?: AbortSignal) =>
+  getJSON<SentinelDTO[]>("/api/sentinels", signal);
+
+export async function upsertSentinel(s: Partial<SentinelDTO>): Promise<{ id: string } | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/sentinels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { id: string };
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteSentinel(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/sentinels/${id}`, { method: "DELETE" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function invokeSkill(
   name: string,
   args: Record<string, unknown>,

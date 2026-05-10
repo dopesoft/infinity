@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/hooks"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -160,6 +162,36 @@ func serveCmd() *cobra.Command {
 			// the WS handler emits per-turn observations; the detector is
 			// already invocable for Studio's intent-stream panel via API.
 
+			// Phase 6: Cron scheduler + Sentinel manager. Both degrade
+			// gracefully when no DB pool is configured.
+			var (
+				cronScheduler *cron.Scheduler
+				sentinelMgr   *sentinel.Manager
+				cronAPI       *cron.API
+				sentinelAPI   *sentinel.API
+			)
+			if pool != nil {
+				if loop != nil {
+					cronScheduler = cron.New(pool, cron.NewAgentExecutor(loop))
+				} else {
+					cronScheduler = cron.New(pool, nil)
+				}
+				if err := cronScheduler.Start(cmd.Context()); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: cron start: %v\n", err)
+				}
+				cronAPI = cron.NewAPI(cronScheduler)
+
+				dispatcher := sentinel.SkillDispatcher{
+					Inner:   sentinel.LogDispatcher{},
+					Invoker: skillInvoker{runner: skillRunner},
+				}
+				sentinelMgr = sentinel.NewManager(pool, dispatcher)
+				_ = sentinelMgr.Reload(cmd.Context())
+				sentinelAPI = sentinel.NewAPI(sentinelMgr)
+				fmt.Printf("  cron+sentinel: ready (cron=%v, sentinels=%d)\n",
+					cronScheduler != nil, len(sentinelMgr.List()))
+			}
+
 			srv := server.New(server.Config{
 				Addr:         addr,
 				Version:      version,
@@ -170,6 +202,8 @@ func serveCmd() *cobra.Command {
 				Searcher:     searcher,
 				SkillsAPI:    skillsAPI,
 				ProactiveAPI: proactiveAPI,
+				CronAPI:      cronAPI,
+				SentinelAPI:  sentinelAPI,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -209,6 +243,20 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address (or use $PORT)")
 	cmd.Flags().StringVar(&mcpConfig, "mcp-config", "", "path to MCP server registry (default: $MCP_CONFIG or core/config/mcp.yaml)")
 	return cmd
+}
+
+// skillInvoker bridges sentinel.SkillInvoker → skills.Runner. Tiny shim so
+// the sentinel package doesn't depend on skills.
+type skillInvoker struct {
+	runner *skills.Runner
+}
+
+func (s skillInvoker) InvokeSkill(ctx context.Context, name string, args map[string]any) (string, error) {
+	if s.runner == nil {
+		return "", fmt.Errorf("no skills runner configured")
+	}
+	res, _, err := s.runner.Invoke(ctx, "", name, args, "sentinel")
+	return res.Stdout, err
 }
 
 // heartbeatInterval reads $INFINITY_HEARTBEAT_INTERVAL (Go duration form,

@@ -9,6 +9,10 @@ const tabs = [
   { href: "/sessions", label: "Sessions" },
   { href: "/memory", label: "Memory" },
   { href: "/skills", label: "Skills" },
+  { href: "/heartbeat", label: "Heartbeat" },
+  { href: "/trust", label: "Trust" },
+  { href: "/cron", label: "Cron" },
+  { href: "/audit", label: "Audit" },
 ];
 
 export function TabNav() {

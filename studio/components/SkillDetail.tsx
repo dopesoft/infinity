@@ -38,6 +38,7 @@ export function SkillDetail({
     fetchSkill(selected.name, ctrl.signal).then((s) => s && setSkill(s));
     fetchSkillRuns(selected.name, 25, ctrl.signal).then((r) => r && setRuns(r));
     return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.name]);
 
   if (!selected) {
@@ -126,7 +127,7 @@ export function SkillDetail({
                   {skill.trigger_phrases?.length ? (
                     <ul className="ml-4 list-disc text-sm">
                       {skill.trigger_phrases.map((p) => (
-                        <li key={p} className="font-mono">"{p}"</li>
+                        <li key={p} className="font-mono">&ldquo;{p}&rdquo;</li>
                       ))}
                     </ul>
                   ) : (

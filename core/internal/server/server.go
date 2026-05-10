@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,6 +25,8 @@ type Config struct {
 	Searcher     *memory.Searcher
 	SkillsAPI    *skills.API
 	ProactiveAPI *proactive.API
+	CronAPI      *cron.API
+	SentinelAPI  *sentinel.API
 }
 
 type Server struct {
@@ -60,6 +64,12 @@ func New(cfg Config) *Server {
 	if cfg.ProactiveAPI != nil {
 		cfg.ProactiveAPI.Routes(mux)
 	}
+	if cfg.CronAPI != nil {
+		cfg.CronAPI.Routes(mux)
+	}
+	if cfg.SentinelAPI != nil {
+		cfg.SentinelAPI.Routes(mux)
+	}
 
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
@@ -82,6 +92,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/observations", s.handleObservations)
 	mux.HandleFunc("/api/memory/memories", s.handleMemoryList)
 	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
+	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
 }
 
 func (s *Server) Start() error {
