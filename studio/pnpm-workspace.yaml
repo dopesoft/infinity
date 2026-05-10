@@ -1,0 +1,7 @@
+autoInstallPeers: true
+nodeLinker: hoisted
+onlyBuiltDependencies: []
+ignoredBuiltDependencies:
+  - unrs-resolver
+allowBuilds:
+  unrs-resolver: false

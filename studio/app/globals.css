@@ -1,0 +1,156 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 215 20.2% 65.1%;
+    --radius: 0.75rem;
+
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --danger: 0 84% 60%;
+    --danger-foreground: 0 0% 100%;
+
+    --tier-working: 215 16% 47%;
+    --tier-episodic: 199 89% 64%;
+    --tier-semantic: 217 91% 55%;
+    --tier-procedural: 271 70% 60%;
+    --tier-stale: 38 92% 50%;
+
+    --app-height: 100dvh;
+  }
+
+  .dark {
+    --background: 222.2 47% 7%;
+    --foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 14%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --popover: 222.2 47% 9%;
+    --popover-foreground: 210 40% 98%;
+
+    --card: 222.2 47% 9%;
+    --card-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 14%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 217.2 32.6% 14%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 217.2 32.6% 28%;
+
+    --info: 217 91% 65%;
+    --success: 142 71% 50%;
+    --warning: 38 92% 55%;
+    --danger: 0 84% 65%;
+
+    --tier-working: 215 16% 60%;
+    --tier-episodic: 199 89% 70%;
+    --tier-semantic: 217 91% 65%;
+    --tier-procedural: 271 70% 70%;
+    --tier-stale: 38 92% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body {
+    @apply bg-background text-foreground antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    height: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    overscroll-behavior: contain;
+  }
+
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1rem);
+  }
+
+  button,
+  [role="button"],
+  a {
+    touch-action: manipulation;
+  }
+}
+
+@layer utilities {
+  .h-app {
+    height: var(--app-height);
+  }
+  .min-h-app {
+    min-height: var(--app-height);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .px-safe {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}

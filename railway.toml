@@ -1,0 +1,26 @@
+# Railway multi-service config for Infinity.
+# Each service maps to its own Dockerfile in this repo.
+
+[build]
+builder = "DOCKERFILE"
+
+# Service: Core (Go binary)
+[[services]]
+name = "core"
+[services.build]
+dockerfilePath = "docker/core.Dockerfile"
+[services.deploy]
+startCommand = "infinity serve"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Service: Studio (Next.js)
+[[services]]
+name = "studio"
+[services.build]
+dockerfilePath = "docker/studio.Dockerfile"
+[services.deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

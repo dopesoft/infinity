@@ -1,0 +1,33 @@
+# Go
+core/bin/
+core/dist/
+*.test
+*.out
+core/coverage.*
+
+# Node / Next.js
+studio/node_modules/
+studio/.next/
+studio/out/
+studio/.vercel/
+studio/.turbo/
+studio/next-env.d.ts
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Docker
+.docker/
