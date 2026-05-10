@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Gauge, ChevronUp } from "lucide-react";
+import { Gauge } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { SessionHeader } from "@/components/SessionHeader";
 import { ConversationStream } from "@/components/ConversationStream";
@@ -64,6 +64,33 @@ export default function LivePage() {
             onNew={chat.newSession}
             onClear={chat.clear}
             onRewind={undefined}
+            extraActions={
+              <Drawer open={statusOpen} onOpenChange={setStatusOpen}>
+                <DrawerTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Open live status"
+                    title="Status"
+                    className="md:hidden"
+                  >
+                    <Gauge className="size-4" />
+                  </Button>
+                </DrawerTrigger>
+                <DrawerContent>
+                  <DrawerHeader className="text-left">
+                    <DrawerTitle>Live status</DrawerTitle>
+                  </DrawerHeader>
+                  <div className="max-h-[70dvh] overflow-y-auto scroll-touch">
+                    <MobileStatusStack
+                      messages={chat.messages}
+                      usedTokens={usedTokens}
+                      wsConnected={chat.status === "connected"}
+                    />
+                  </div>
+                </DrawerContent>
+              </Drawer>
+            }
           />
           <ConversationStream messages={chat.messages} />
           <Composer
@@ -71,38 +98,6 @@ export default function LivePage() {
             onSlash={(cmd) => (cmd === "new" ? chat.newSession() : chat.clear())}
             disabled={chat.isStreaming || chat.status !== "connected"}
           />
-
-          {/* Mobile-only Status trigger pinned just above the composer.
-              Opens a bottom drawer with the full panel stack so the panels
-              stay reachable on touch devices without crowding the chat. */}
-          <div className="border-t bg-background/60 px-3 py-2 md:hidden">
-            <Drawer open={statusOpen} onOpenChange={setStatusOpen}>
-              <DrawerTrigger asChild>
-                <Button
-                  variant="secondary"
-                  className="h-12 w-full justify-between gap-2 text-sm font-semibold"
-                >
-                  <span className="flex items-center gap-2">
-                    <Gauge className="size-5" aria-hidden />
-                    Status
-                  </span>
-                  <ChevronUp className="size-5 text-muted-foreground" aria-hidden />
-                </Button>
-              </DrawerTrigger>
-              <DrawerContent>
-                <DrawerHeader className="text-left">
-                  <DrawerTitle>Live status</DrawerTitle>
-                </DrawerHeader>
-                <div className="max-h-[70dvh] overflow-y-auto scroll-touch">
-                  <MobileStatusStack
-                    messages={chat.messages}
-                    usedTokens={usedTokens}
-                    wsConnected={chat.status === "connected"}
-                  />
-                </div>
-              </DrawerContent>
-            </Drawer>
-          </div>
         </section>
 
         {/* Right rail — md and up */}

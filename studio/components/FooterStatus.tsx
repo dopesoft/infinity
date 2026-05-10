@@ -60,23 +60,25 @@ export function FooterStatus() {
 
   return (
     <footer
-      className="flex h-9 items-center gap-2.5 border-t bg-background px-4 pb-safe text-xs text-muted-foreground sm:h-10"
+      className="flex h-10 items-center gap-2 whitespace-nowrap border-t bg-background px-3 pb-safe text-xs text-muted-foreground sm:gap-2.5 sm:px-4"
       role="contentinfo"
     >
       <button
         type="button"
         onClick={ws.reconnect}
-        className="flex min-h-9 items-center gap-2 font-medium"
+        className="flex min-h-9 items-center gap-1.5 font-medium sm:gap-2"
         title="Click to reconnect"
       >
         <span className={cn("inline-block size-2 rounded-full", dotClass[ws.status])} />
-        <span className={cn("truncate", labelClass[ws.status])}>{connLabel}</span>
+        <span className={cn(labelClass[ws.status])}>{connLabel}</span>
       </button>
       {sep}
-      <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 tabular-nums">
-        {toolCount}
+      <span className="flex items-center gap-1.5">
+        <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 tabular-nums">
+          {toolCount}
+        </span>
+        <span>tools</span>
       </span>
-      <span>tools</span>
       {sep}
       <span className="tabular-nums">{uptime}</span>
       <span className="ml-auto hidden items-center gap-2.5 truncate sm:flex">

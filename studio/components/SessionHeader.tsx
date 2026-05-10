@@ -27,12 +27,14 @@ export function SessionHeader({
   onNew,
   onClear,
   onRewind,
+  extraActions,
 }: {
   sessionId: string;
   startedAt?: number | null;
   onNew: () => void;
   onClear: () => void;
   onRewind?: () => void;
+  extraActions?: React.ReactNode;
 }) {
   const [now, setNow] = useState(0);
   useEffect(() => {
@@ -96,6 +98,7 @@ export function SessionHeader({
           <Plus className="size-4" />
           <span className="hidden sm:inline">/new</span>
         </Button>
+        {extraActions}
       </div>
     </div>
   );
