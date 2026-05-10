@@ -1,6 +1,6 @@
 "use client";
 
-import { IconChevronRight, IconWorld, IconSparkles } from "@tabler/icons-react";
+import { ChevronRight, Globe, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RiskBadge } from "@/components/RiskBadge";
 import type { SkillSummaryDTO } from "@/lib/api";
@@ -44,7 +44,7 @@ export function SkillCard({
           <span className="font-mono">v{skill.version || "—"}</span>
         </div>
         {skill.source === "auto_evolved" && (
-          <IconSparkles className="size-3 text-info" aria-hidden />
+          <Sparkles className="size-3 text-info" aria-hidden />
         )}
       </div>
       <p className="mt-1 line-clamp-2 break-words text-sm">
@@ -53,7 +53,7 @@ export function SkillCard({
       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
         <RiskBadge level={skill.risk_level} />
         <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 font-mono uppercase text-muted-foreground">
-          <IconWorld className="size-2.5" aria-hidden />
+          <Globe className="size-2.5" aria-hidden />
           {networkEgress}
         </span>
         {skill.success_rate > 0 && (
@@ -61,7 +61,7 @@ export function SkillCard({
             {Math.round(skill.success_rate * 100)}%
           </span>
         )}
-        <IconChevronRight className="size-3 text-muted-foreground" aria-hidden />
+        <ChevronRight className="size-3 text-muted-foreground" aria-hidden />
       </div>
     </button>
   );

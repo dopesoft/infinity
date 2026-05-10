@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconArrowDown, IconMessageOff } from "@tabler/icons-react";
+import { ArrowDown, MessageSquareOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
@@ -44,7 +44,7 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
         ref={scrollRef}
         className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-muted-foreground"
       >
-        <IconMessageOff className="size-8 opacity-60" aria-hidden />
+        <MessageSquareOff className="size-8 opacity-60" aria-hidden />
         <p className="text-sm">Send a message to wake the agent.</p>
       </div>
     );
@@ -77,7 +77,7 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
             className="pointer-events-auto shadow-sm"
             onClick={jumpToBottom}
           >
-            <IconArrowDown className="size-4" /> Jump to latest
+            <ArrowDown className="size-4" /> Jump to latest
           </Button>
         </div>
       )}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { IconLayoutSidebarRightExpand } from "@tabler/icons-react";
+import { Gauge, ChevronUp } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { SessionHeader } from "@/components/SessionHeader";
 import { ConversationStream } from "@/components/ConversationStream";
@@ -75,16 +75,18 @@ export default function LivePage() {
           {/* Mobile-only Status trigger pinned just above the composer.
               Opens a bottom drawer with the full panel stack so the panels
               stay reachable on touch devices without crowding the chat. */}
-          <div className="border-t bg-background/60 px-3 py-1.5 md:hidden">
+          <div className="border-t bg-background/60 px-3 py-2 md:hidden">
             <Drawer open={statusOpen} onOpenChange={setStatusOpen}>
               <DrawerTrigger asChild>
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-full justify-between text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+                  variant="secondary"
+                  className="h-12 w-full justify-between gap-2 text-sm font-semibold"
                 >
-                  Status
-                  <IconLayoutSidebarRightExpand className="size-4" aria-hidden />
+                  <span className="flex items-center gap-2">
+                    <Gauge className="size-5" aria-hidden />
+                    Status
+                  </span>
+                  <ChevronUp className="size-5 text-muted-foreground" aria-hidden />
                 </Button>
               </DrawerTrigger>
               <DrawerContent>

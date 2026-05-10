@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 import {
-  IconCheck,
-  IconCircleDashed,
-  IconRefresh,
-  IconTool,
-  IconX,
-} from "@tabler/icons-react";
+  Check,
+  CircleDashed,
+  RefreshCw,
+  Wrench,
+  X,
+} from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,7 +46,7 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
           <Button size="sm" variant="ghost" onClick={refresh} disabled={loading}>
-            <IconRefresh className="size-4" />
+            <RefreshCw className="size-4" />
             {loading ? "loading…" : "refresh"}
           </Button>
         </div>
@@ -79,7 +79,7 @@ export default function SettingsPage() {
             ) : (
               tools.map((t) => (
                 <div key={t.name} className="flex items-start gap-2 rounded-md border bg-background p-3">
-                  <IconTool className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <Wrench className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="font-mono text-sm">{t.name}</code>
@@ -109,11 +109,11 @@ export default function SettingsPage() {
                 <div key={s.name} className="rounded-md border bg-background p-3">
                   <div className="flex items-center gap-2">
                     {s.connected ? (
-                      <IconCheck className="size-4 text-success" aria-hidden />
+                      <Check className="size-4 text-success" aria-hidden />
                     ) : s.error ? (
-                      <IconX className="size-4 text-danger" aria-hidden />
+                      <X className="size-4 text-danger" aria-hidden />
                     ) : (
-                      <IconCircleDashed className="size-4 text-muted-foreground" aria-hidden />
+                      <CircleDashed className="size-4 text-muted-foreground" aria-hidden />
                     )}
                     <span className="font-mono text-sm">{s.name}</span>
                     <span className="ml-auto text-[11px] text-muted-foreground" suppressHydrationWarning>

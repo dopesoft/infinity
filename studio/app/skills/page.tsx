@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { IconRefresh, IconSearch } from "@tabler/icons-react";
+import { RefreshCw, Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -63,7 +63,7 @@ export default function SkillsPage() {
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
-              <IconSearch
+              <Search
                 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
               />
@@ -84,7 +84,7 @@ export default function SkillsPage() {
               disabled={reloading || loading}
               title="Re-walk ./skills/ on Core"
             >
-              <IconRefresh className={cn("size-4", reloading && "animate-spin")} />
+              <RefreshCw className={cn("size-4", reloading && "animate-spin")} />
             </Button>
           </div>
 

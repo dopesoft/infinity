@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconActivity, IconRefresh, IconPlayerPlay } from "@tabler/icons-react";
+import { Activity, RefreshCw, Play } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -83,11 +83,11 @@ export default function HeartbeatPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Button onClick={fireNow} disabled={running}>
-                  <IconPlayerPlay className="mr-1 size-4" />
+                  <Play className="mr-1 size-4" />
                   {running ? "running…" : "Run heartbeat now"}
                 </Button>
                 <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-                  <IconRefresh className="size-4" />
+                  <RefreshCw className="size-4" />
                 </Button>
               </div>
             </CardContent>
@@ -137,7 +137,7 @@ export default function HeartbeatPage() {
                   <li key={r.id} className="rounded-xl border bg-card px-3 py-2">
                     <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                       <span className="flex items-center gap-1.5">
-                        <IconActivity className="size-3" aria-hidden />
+                        <Activity className="size-3" aria-hidden />
                         <time suppressHydrationWarning>
                           {new Date(r.started_at).toLocaleString()}
                         </time>

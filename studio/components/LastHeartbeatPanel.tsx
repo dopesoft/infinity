@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { IconArrowRight } from "@tabler/icons-react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fetchHeartbeats, type HeartbeatRunDTO } from "@/lib/api";
@@ -93,7 +93,7 @@ export function LastHeartbeatPanel() {
           <Button asChild variant="ghost" size="sm" className="mt-2 h-8 w-full justify-between">
             <Link href="/heartbeat">
               View all
-              <IconArrowRight className="size-3.5" aria-hidden />
+              <ArrowRight className="size-3.5" aria-hidden />
             </Link>
           </Button>
         </>

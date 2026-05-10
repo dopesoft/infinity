@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  IconBrain,
-  IconChevronDown,
-  IconChevronRight,
-} from "@tabler/icons-react";
+  Brain,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/hooks/useChat";
 
@@ -75,7 +75,7 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
         aria-expanded={open}
       >
-        <IconBrain
+        <Brain
           className={cn(
             "size-4 shrink-0",
             isPending ? "text-info animate-pulse" : "text-muted-foreground",
@@ -94,9 +94,9 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
           <span suppressHydrationWarning>{formatElapsed(elapsedMs)}</span>
           {hasContent ? (
             open ? (
-              <IconChevronDown className="size-4" aria-hidden />
+              <ChevronDown className="size-4" aria-hidden />
             ) : (
-              <IconChevronRight className="size-4" aria-hidden />
+              <ChevronRight className="size-4" aria-hidden />
             )
           ) : null}
         </span>

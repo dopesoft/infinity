@@ -1,14 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  IconBolt,
-  IconCheck,
-  IconChevronDown,
-  IconRefresh,
-  IconSparkles,
-  IconX,
-} from "@tabler/icons-react";
+import { Zap, Check, ChevronDown, RefreshCw, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -71,7 +64,7 @@ export function CandidateSkillsPanel() {
           className="flex min-h-12 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
           aria-expanded={!collapsed}
         >
-          <IconSparkles className="size-4 text-muted-foreground" aria-hidden />
+          <Sparkles className="size-4 text-muted-foreground" aria-hidden />
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Candidate skills
           </span>
@@ -90,7 +83,7 @@ export function CandidateSkillsPanel() {
               {status.status}
             </span>
           )}
-          <IconChevronDown
+          <ChevronDown
             className={cn(
               "ml-auto size-4 text-muted-foreground transition-transform lg:hidden",
               !collapsed && "rotate-180",
@@ -107,7 +100,7 @@ export function CandidateSkillsPanel() {
           disabled={loading}
           className="size-11 lg:size-8"
         >
-          <IconRefresh className="size-4" />
+          <RefreshCw className="size-4" />
         </Button>
       </header>
 
@@ -178,7 +171,7 @@ export function CandidateSkillsPanel() {
                       disabled={!!busy[p.id]}
                       aria-label="Promote"
                     >
-                      <IconCheck className="size-5 lg:size-4" />
+                      <Check className="size-5 lg:size-4" />
                     </Button>
                     <Button
                       size="icon"
@@ -188,14 +181,14 @@ export function CandidateSkillsPanel() {
                       disabled={!!busy[p.id]}
                       aria-label="Reject"
                     >
-                      <IconX className="size-5 lg:size-4" />
+                      <X className="size-5 lg:size-4" />
                     </Button>
                   </div>
                 </div>
 
                 {p.reasoning && (
                   <div className="mt-1.5 flex items-start gap-1 text-[11px] text-muted-foreground">
-                    <IconBolt className="mt-0.5 size-3 shrink-0" aria-hidden />
+                    <Zap className="mt-0.5 size-3 shrink-0" aria-hidden />
                     <span className="italic">{p.reasoning}</span>
                   </div>
                 )}

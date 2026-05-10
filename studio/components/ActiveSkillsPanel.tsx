@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { IconLoader2, IconCheck, IconAlertTriangle } from "@tabler/icons-react";
+import { Loader2, Check, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SidePanelCard } from "@/components/SidePanelCard";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -54,11 +54,11 @@ export function ActiveSkillsPanel({ messages }: { messages: ChatMessage[] }) {
                   )}
                 >
                   {running ? (
-                    <IconLoader2 className="size-3 animate-spin" aria-hidden />
+                    <Loader2 className="size-3 animate-spin" aria-hidden />
                   ) : isError ? (
-                    <IconAlertTriangle className="size-3" aria-hidden />
+                    <AlertTriangle className="size-3" aria-hidden />
                   ) : (
-                    <IconCheck className="size-3" aria-hidden />
+                    <Check className="size-3" aria-hidden />
                   )}
                 </span>
                 <span className="truncate font-mono text-[12px]">

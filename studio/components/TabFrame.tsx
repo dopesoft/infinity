@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { IconInfinity } from "@tabler/icons-react";
+import { Infinity as InfinityIcon } from "lucide-react";
 import { TabNav } from "@/components/TabNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusPill, type AgentState } from "@/components/StatusPill";
@@ -24,7 +24,7 @@ export function TabFrame({
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b bg-background/95 px-3 pt-safe backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
           <Link href="/live" className="flex items-center gap-2 text-foreground">
-            <IconInfinity className="size-6 shrink-0" aria-hidden />
+            <InfinityIcon className="size-6 shrink-0" aria-hidden />
             <span className="hidden text-sm font-semibold tracking-tight sm:inline">
               infinity
             </span>

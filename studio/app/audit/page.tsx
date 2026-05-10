@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { IconRefresh, IconSearch } from "@tabler/icons-react";
+import { RefreshCw, Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ export default function AuditPage() {
             <h2 className="text-sm font-semibold">Audit log</h2>
             <Badge variant="secondary" className="font-mono">{filtered.length}</Badge>
             <div className="relative ml-2 flex-1">
-              <IconSearch
+              <Search
                 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
               />
@@ -57,7 +57,7 @@ export default function AuditPage() {
               />
             </div>
             <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-              <IconRefresh className="size-4" />
+              <RefreshCw className="size-4" />
             </Button>
           </div>
           <div className="flex flex-wrap items-center gap-1 text-xs">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { IconCheck, IconRefresh, IconX, IconClock } from "@tabler/icons-react";
+import { Check, RefreshCw, X, Clock } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -66,7 +66,7 @@ export default function TrustPage() {
               className="ml-auto"
               disabled={loading}
             >
-              <IconRefresh className="size-4" />
+              <RefreshCw className="size-4" />
             </Button>
           </div>
           <div className="flex flex-wrap items-center gap-1 text-xs">
@@ -115,7 +115,7 @@ export default function TrustPage() {
                   >
                     <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                       <span className="flex items-center gap-1.5">
-                        <IconClock className="size-3" aria-hidden />
+                        <Clock className="size-3" aria-hidden />
                         <time suppressHydrationWarning>
                           {new Date(c.created_at).toLocaleString()}
                         </time>
@@ -187,13 +187,13 @@ export default function TrustPage() {
                 {selected.status === "pending" && (
                   <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t bg-background pt-3">
                     <Button onClick={() => decide(selected.id, "approved")}>
-                      <IconCheck className="mr-1 size-4" /> Approve
+                      <Check className="mr-1 size-4" /> Approve
                     </Button>
                     <Button variant="ghost" onClick={() => decide(selected.id, "snoozed")}>
                       Snooze
                     </Button>
                     <Button variant="ghost" onClick={() => decide(selected.id, "denied")}>
-                      <IconX className="mr-1 size-4" /> Deny
+                      <X className="mr-1 size-4" /> Deny
                     </Button>
                   </div>
                 )}

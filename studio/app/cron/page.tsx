@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconClock, IconPlus, IconRefresh, IconTrash, IconBolt } from "@tabler/icons-react";
+import { Clock, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,11 +63,11 @@ function CronSection() {
         <h2 className="text-sm font-semibold">Scheduled jobs</h2>
         <Badge variant="secondary" className="font-mono">{items.length}</Badge>
         <Button size="sm" onClick={() => setShowCreate((s) => !s)} className="ml-auto">
-          <IconPlus className="mr-1 size-4" />
+          <Plus className="mr-1 size-4" />
           {showCreate ? "Cancel" : "New cron"}
         </Button>
         <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-          <IconRefresh className="size-4" />
+          <RefreshCw className="size-4" />
         </Button>
       </div>
 
@@ -91,7 +91,7 @@ function CronSection() {
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <code className="truncate font-mono text-foreground">{j.name}</code>
                 <span className="flex items-center gap-1 font-mono">
-                  <IconClock className="size-3" aria-hidden />
+                  <Clock className="size-3" aria-hidden />
                   {j.schedule}
                 </span>
               </div>
@@ -123,7 +123,7 @@ function CronSection() {
                   }}
                   aria-label="Delete"
                 >
-                  <IconTrash className="size-4" />
+                  <Trash2 className="size-4" />
                 </Button>
               </div>
             </li>
@@ -219,7 +219,7 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
           Preview next 3 fires
         </Button>
         <Button size="sm" onClick={save} disabled={!name.trim() || !schedule.trim() || saving}>
-          <IconBolt className="mr-1 size-4" />
+          <Zap className="mr-1 size-4" />
           {saving ? "saving…" : "Save"}
         </Button>
       </div>
@@ -258,11 +258,11 @@ function SentinelSection() {
         <h2 className="text-sm font-semibold">Sentinels</h2>
         <Badge variant="secondary" className="font-mono">{items.length}</Badge>
         <Button size="sm" onClick={() => setShowCreate((s) => !s)} className="ml-auto">
-          <IconPlus className="mr-1 size-4" />
+          <Plus className="mr-1 size-4" />
           {showCreate ? "Cancel" : "New sentinel"}
         </Button>
         <Button size="icon" variant="ghost" onClick={load} aria-label="Refresh" disabled={loading}>
-          <IconRefresh className="size-4" />
+          <RefreshCw className="size-4" />
         </Button>
       </div>
       {showCreate && (
@@ -311,7 +311,7 @@ function SentinelSection() {
                   }}
                   aria-label="Delete"
                 >
-                  <IconTrash className="size-4" />
+                  <Trash2 className="size-4" />
                 </Button>
               </div>
             </li>
@@ -396,7 +396,7 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
       </div>
       <div className="flex items-center gap-2">
         <Button size="sm" onClick={save} disabled={!name.trim() || saving}>
-          <IconBolt className="mr-1 size-4" />
+          <Zap className="mr-1 size-4" />
           {saving ? "saving…" : "Save"}
         </Button>
         {error && <p className="text-xs text-danger">{error}</p>}

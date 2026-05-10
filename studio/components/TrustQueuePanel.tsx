@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { IconArrowRight } from "@tabler/icons-react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
@@ -74,7 +74,7 @@ export function TrustQueuePanel() {
         <Button asChild variant="ghost" size="sm" className="mt-2 h-8 w-full justify-between">
           <Link href="/trust">
             Review all {count}
-            <IconArrowRight className="size-3.5" aria-hidden />
+            <ArrowRight className="size-3.5" aria-hidden />
           </Link>
         </Button>
       ) : null}

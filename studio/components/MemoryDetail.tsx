@@ -1,6 +1,6 @@
 "use client";
 
-import { IconCalendar, IconHash, IconHistory, IconX } from "@tabler/icons-react";
+import { Calendar, Hash, History, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TierBadge } from "@/components/TierBadge";
@@ -84,7 +84,7 @@ export function MemoryDetail({
       <header className="flex items-start justify-between gap-2 border-b px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <IconHash className="size-3" aria-hidden />
+            <Hash className="size-3" aria-hidden />
             <code className="truncate font-mono">{item.id}</code>
           </div>
           {item.title && <h3 className="mt-1 truncate text-sm font-semibold">{item.title}</h3>}
@@ -114,7 +114,7 @@ export function MemoryDetail({
           </div>
         </div>
         <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close detail">
-          <IconX className="size-4" />
+          <X className="size-4" />
         </Button>
       </header>
 
@@ -126,13 +126,13 @@ export function MemoryDetail({
         </Section>
 
         <Section title="Metadata">
-          <Row icon={<IconCalendar className="size-3.5" aria-hidden />} label="created">
+          <Row icon={<Calendar className="size-3.5" aria-hidden />} label="created">
             <time className="font-mono" suppressHydrationWarning>
               {new Date(item.createdAt).toLocaleString()}
             </time>
           </Row>
           {item.sessionId && (
-            <Row icon={<IconHistory className="size-3.5" aria-hidden />} label="session">
+            <Row icon={<History className="size-3.5" aria-hidden />} label="session">
               <code className="truncate font-mono">{item.sessionId}</code>
             </Row>
           )}

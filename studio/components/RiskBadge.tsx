@@ -1,6 +1,6 @@
 "use client";
 
-import { IconShield } from "@tabler/icons-react";
+import { Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SkillRiskLevel } from "@/lib/api";
 
@@ -21,7 +21,7 @@ export function RiskBadge({ level, className }: { level: SkillRiskLevel; classNa
       )}
       title={`risk: ${level}`}
     >
-      <IconShield className="size-3" aria-hidden />
+      <Shield className="size-3" aria-hidden />
       {level}
     </span>
   );

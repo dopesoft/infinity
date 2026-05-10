@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconSend } from "@tabler/icons-react";
+import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -84,7 +84,7 @@ export function Composer({
           aria-label="Send"
           className="h-11 w-11 shrink-0"
         >
-          <IconSend className="size-5" />
+          <Send className="size-5" />
         </Button>
       </div>
     </form>

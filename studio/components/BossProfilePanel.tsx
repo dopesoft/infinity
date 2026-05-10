@@ -1,13 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  IconChevronDown,
-  IconPlus,
-  IconRefresh,
-  IconTrash,
-  IconUserCircle,
-} from "@tabler/icons-react";
+import { ChevronDown, Plus, RefreshCw, Trash2, UserCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -74,7 +68,7 @@ export function BossProfilePanel() {
           className="flex min-h-12 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
           aria-expanded={!collapsed}
         >
-          <IconUserCircle className="size-4 text-muted-foreground" aria-hidden />
+          <UserCircle className="size-4 text-muted-foreground" aria-hidden />
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Boss profile
           </span>
@@ -86,7 +80,7 @@ export function BossProfilePanel() {
               {facts.length}
             </span>
           )}
-          <IconChevronDown
+          <ChevronDown
             className={cn(
               "ml-auto size-4 text-muted-foreground transition-transform lg:hidden",
               !collapsed && "rotate-180",
@@ -104,7 +98,7 @@ export function BossProfilePanel() {
             disabled={loading}
             className="size-11 lg:size-8"
           >
-            <IconRefresh className="size-4" />
+            <RefreshCw className="size-4" />
           </Button>
           <Button
             type="button"
@@ -116,7 +110,7 @@ export function BossProfilePanel() {
             }}
             className="h-11 px-3 lg:h-8 lg:px-2"
           >
-            <IconPlus className="size-4" />
+            <Plus className="size-4" />
             <span className="ml-1">{adding ? "Cancel" : "Add"}</span>
           </Button>
         </div>
@@ -194,7 +188,7 @@ export function BossProfilePanel() {
                   onClick={() => remove(f.id)}
                   aria-label={`Delete ${f.title}`}
                 >
-                  <IconTrash className="size-4" />
+                  <Trash2 className="size-4" />
                 </Button>
               </li>
             ))}

@@ -1,13 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  IconRefresh,
-  IconSearch,
-  IconTopologyComplex,
-  IconX,
-  IconZoomReset,
-} from "@tabler/icons-react";
+import { RefreshCw, Search, Network, X, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -306,7 +300,7 @@ export function KnowledgeGraphPanel() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-1.5">
-          <IconTopologyComplex className="size-4 text-muted-foreground" aria-hidden />
+          <Network className="size-4 text-muted-foreground" aria-hidden />
           <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
             graph
           </span>
@@ -322,7 +316,7 @@ export function KnowledgeGraphPanel() {
         </div>
         <div className="ml-auto flex items-center gap-1">
           <div className="relative">
-            <IconSearch
+            <Search
               className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
               aria-hidden
             />
@@ -343,7 +337,7 @@ export function KnowledgeGraphPanel() {
             className="size-11 lg:size-9"
             title="Reset zoom & pan"
           >
-            <IconZoomReset className="size-5 lg:size-4" />
+            <Maximize2 className="size-5 lg:size-4" />
           </Button>
           <Button
             type="button"
@@ -354,7 +348,7 @@ export function KnowledgeGraphPanel() {
             disabled={loading}
             className="size-11 lg:size-9"
           >
-            <IconRefresh className="size-5 lg:size-4" />
+            <RefreshCw className="size-5 lg:size-4" />
           </Button>
         </div>
       </div>
@@ -530,7 +524,7 @@ export function KnowledgeGraphPanel() {
                 aria-label="Close"
                 className="size-11 lg:size-8"
               >
-                <IconX className="size-5 lg:size-4" />
+                <X className="size-5 lg:size-4" />
               </Button>
             </div>
             <dl className="mt-2 grid grid-cols-2 gap-y-1 text-xs lg:text-[11px]">

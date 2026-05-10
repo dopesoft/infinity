@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconPlus, IconArrowBackUp, IconArchive } from "@tabler/icons-react";
+import { Plus, Undo2, Archive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 function shortId(id: string): string {
@@ -72,7 +72,7 @@ export function SessionHeader({
             title="Rewind (coming soon)"
             disabled
           >
-            <IconArrowBackUp className="size-4" />
+            <Undo2 className="size-4" />
             <span className="hidden sm:inline">rewind</span>
           </Button>
         ) : null}
@@ -83,7 +83,7 @@ export function SessionHeader({
           aria-label="Compact session — fold into memory and clear visible context"
           title="Compact session"
         >
-          <IconArchive className="size-4" />
+          <Archive className="size-4" />
           <span className="hidden sm:inline">/compact</span>
         </Button>
         <Button
@@ -93,7 +93,7 @@ export function SessionHeader({
           aria-label="Start a new session"
           title="New session"
         >
-          <IconPlus className="size-4" />
+          <Plus className="size-4" />
           <span className="hidden sm:inline">/new</span>
         </Button>
       </div>

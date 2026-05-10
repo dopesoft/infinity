@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconRefresh, IconHistory, IconClock } from "@tabler/icons-react";
+import { RefreshCw, History, Clock } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
@@ -36,7 +36,7 @@ export default function SessionsPage() {
               In-memory sessions
             </h2>
             <Button size="icon" variant="ghost" onClick={refresh} aria-label="Refresh sessions">
-              <IconRefresh className="size-4" />
+              <RefreshCw className="size-4" />
             </Button>
           </div>
           <div className="flex max-h-72 flex-col gap-2 overflow-y-auto px-3 pb-3 scroll-touch lg:max-h-none lg:flex-1">
@@ -59,12 +59,12 @@ export default function SessionsPage() {
                   <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                     <span className="font-mono">{s.id.slice(0, 12)}…</span>
                     <span className="flex items-center gap-1">
-                      <IconClock className="size-3" aria-hidden />
+                      <Clock className="size-3" aria-hidden />
                       <time suppressHydrationWarning>{new Date(s.started_at).toLocaleString()}</time>
                     </span>
                   </div>
                   <div className="mt-1 flex items-center gap-2 text-sm">
-                    <IconHistory className="size-4 text-muted-foreground" aria-hidden />
+                    <History className="size-4 text-muted-foreground" aria-hidden />
                     <span>{s.message_count} messages</span>
                   </div>
                 </button>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconClock, IconHash, IconLink } from "@tabler/icons-react";
+import { Clock, Hash, Link as LinkIcon } from "lucide-react";
 import { fetchProvenance, type ProvenanceChain as Chain } from "@/lib/api";
 
 export function ProvenanceChain({ memoryId }: { memoryId: string }) {
@@ -56,18 +56,18 @@ export function ProvenanceChain({ memoryId }: { memoryId: string }) {
             >
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1">
-                  <IconClock className="size-3" aria-hidden />
+                  <Clock className="size-3" aria-hidden />
                   <time suppressHydrationWarning>{new Date(src.created_at).toLocaleString()}</time>
                 </span>
                 <span className="flex items-center gap-1">
-                  <IconHash className="size-3" aria-hidden />
+                  <Hash className="size-3" aria-hidden />
                   <code className="font-mono">{src.observation_id.slice(0, 8)}</code>
                 </span>
               </div>
               <p className="mt-1 break-words">{src.excerpt || "—"}</p>
               {src.session_id && (
                 <p className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <IconLink className="size-2.5" aria-hidden />
+                  <LinkIcon className="size-2.5" aria-hidden />
                   <code className="font-mono">{src.session_id}</code>
                 </p>
               )}

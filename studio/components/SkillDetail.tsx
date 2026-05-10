@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconClock, IconHash, IconPlayerPlay, IconRefresh, IconX } from "@tabler/icons-react";
+import { Clock, Hash, Play, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -85,7 +85,7 @@ export function SkillDetail({
       <header className="flex items-start justify-between gap-2 border-b px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <IconHash className="size-3" aria-hidden />
+            <Hash className="size-3" aria-hidden />
             <code className="truncate font-mono">{selected.name}</code>
           </div>
           <h3 className="mt-1 truncate text-sm font-semibold">
@@ -105,7 +105,7 @@ export function SkillDetail({
           </div>
         </div>
         <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close detail">
-          <IconX className="size-4" />
+          <X className="size-4" />
         </Button>
       </header>
 
@@ -180,7 +180,7 @@ export function SkillDetail({
               />
             </Section>
             <Button onClick={run} disabled={running}>
-              <IconPlayerPlay className="mr-1 size-4" />
+              <Play className="mr-1 size-4" />
               {running ? "running…" : "Run skill"}
             </Button>
             {runResult !== null && (
@@ -196,7 +196,7 @@ export function SkillDetail({
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">{runs.length} runs</p>
               <Button size="sm" variant="ghost" onClick={refreshRuns}>
-                <IconRefresh className="size-4" />
+                <RefreshCw className="size-4" />
               </Button>
             </div>
             {runs.length === 0 ? (
@@ -207,7 +207,7 @@ export function SkillDetail({
                   <li key={r.id} className="rounded-md border bg-card p-2 text-xs">
                     <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                       <span className="flex items-center gap-1">
-                        <IconClock className="size-3" aria-hidden />
+                        <Clock className="size-3" aria-hidden />
                         <time suppressHydrationWarning>
                           {new Date(r.started_at).toLocaleString()}
                         </time>

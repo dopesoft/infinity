@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconMenu2, IconX } from "@tabler/icons-react";
+import { Menu, X } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -41,7 +41,7 @@ export function MobileNav() {
           aria-label="Open navigation"
           className="inline-flex size-11 items-center justify-center rounded-md text-foreground hover:bg-accent active:scale-95"
         >
-          {open ? <IconX className="size-5" /> : <IconMenu2 className="size-5" />}
+          {open ? <X className="size-5" /> : <Menu className="size-5" />}
         </button>
       </DrawerTrigger>
       <DrawerContent>

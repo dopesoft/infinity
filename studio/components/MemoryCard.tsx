@@ -1,6 +1,6 @@
 "use client";
 
-import { IconChevronRight, IconClock, IconLink, IconSearch } from "@tabler/icons-react";
+import { ChevronRight, Clock, Link as LinkIcon, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TierBadge } from "@/components/TierBadge";
 import type { SearchResult, ObservationDTO, MemoryDTO } from "@/lib/api";
@@ -80,7 +80,7 @@ export function MemoryCard({
           {item.hookName && <code className="truncate font-mono">{item.hookName}</code>}
         </div>
         <div className="flex items-center gap-1">
-          <IconClock className="size-3" aria-hidden />
+          <Clock className="size-3" aria-hidden />
           <time dateTime={item.createdAt} suppressHydrationWarning>
             {new Date(item.createdAt).toLocaleString()}
           </time>
@@ -94,7 +94,7 @@ export function MemoryCard({
             key={s}
             className="inline-flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 font-mono uppercase text-info"
           >
-            <IconSearch className="size-2.5" aria-hidden />
+            <Search className="size-2.5" aria-hidden />
             {s}
           </span>
         ))}
@@ -103,11 +103,11 @@ export function MemoryCard({
         )}
         {item.sessionId && (
           <span className="ml-auto inline-flex items-center gap-0.5 truncate font-mono text-muted-foreground">
-            <IconLink className="size-2.5" aria-hidden />
+            <LinkIcon className="size-2.5" aria-hidden />
             {item.sessionId.slice(0, 8)}
           </span>
         )}
-        <IconChevronRight className="size-3 text-muted-foreground" aria-hidden />
+        <ChevronRight className="size-3 text-muted-foreground" aria-hidden />
       </div>
     </button>
   );
