@@ -50,7 +50,7 @@ export default function LivePage() {
           dark: outer = subtle dark grey over true black, chat = lifted card. */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 py-3 sm:px-4 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-4 lg:grid-cols-[16rem_minmax(0,1fr)_18rem] xl:grid-cols-[17rem_minmax(0,1fr)_19rem]">
         {/* Left rail — desktop only */}
-        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 lg:block lg:overflow-y-auto dark:bg-muted/30">
+        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 lg:block lg:overflow-y-auto dark:bg-zinc-800/60">
           <LeftPanels messages={chat.messages} usedTokens={usedTokens} />
         </aside>
 
@@ -104,7 +104,7 @@ export default function LivePage() {
         </section>
 
         {/* Right rail — md and up */}
-        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 md:block md:overflow-y-auto dark:bg-muted/30">
+        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 md:block md:overflow-y-auto dark:bg-zinc-800/60">
           <RightPanels wsConnected={chat.status === "connected"} />
         </aside>
       </div>
