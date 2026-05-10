@@ -65,6 +65,7 @@ export function SessionHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1">
+        {extraActions}
         {onRewind ? (
           <Button
             variant="ghost"
@@ -98,7 +99,6 @@ export function SessionHeader({
           <Plus className="size-4" />
           <span className="hidden sm:inline">/new</span>
         </Button>
-        {extraActions}
       </div>
     </div>
   );
