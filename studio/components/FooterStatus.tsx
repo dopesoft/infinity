@@ -22,7 +22,6 @@ export function FooterStatus() {
   const [status, setStatus] = useState<CoreStatus | null>(null);
   const [uptime, setUptime] = useState("0s");
   const [bootTs] = useState(() => Date.now());
-  const version = process.env.NEXT_PUBLIC_BUILD || "dev";
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -56,31 +55,29 @@ export function FooterStatus() {
   const provider = status?.provider ?? "—";
   const model = status?.model ?? "—";
 
-  const buildLabel = status?.version || version;
-  const showVersion = buildLabel && buildLabel !== "dev";
+  const toolCount = status?.tools?.length ?? 0;
 
   return (
     <footer
-      className="flex h-9 items-center justify-between gap-3 border-t bg-background px-4 pb-safe text-xs text-muted-foreground sm:h-10"
+      className="flex h-9 items-center gap-2 border-t bg-background px-4 pb-safe text-xs text-muted-foreground sm:h-10"
       role="contentinfo"
     >
       <button
         type="button"
         onClick={ws.reconnect}
-        className="flex min-h-9 min-w-0 items-center gap-2 font-medium"
+        className="flex min-h-9 items-center gap-2 font-medium"
         title="Click to reconnect"
       >
         <span className={cn("inline-block size-2 rounded-full", dotClass[ws.status])} />
         <span className={cn("truncate", labelClass[ws.status])}>{connLabel}</span>
       </button>
-      <div className="hidden truncate sm:block">
+      <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 font-mono tabular-nums">
+        {toolCount} tools
+      </span>
+      <span className="font-mono tabular-nums">{uptime}</span>
+      <span className="ml-auto hidden truncate sm:block">
         {provider} · {model}
-      </div>
-      <div className="hidden truncate md:block">{status?.tools?.length ?? 0} tools</div>
-      <div className="truncate font-mono tabular-nums">
-        {showVersion ? `${buildLabel} · ` : ""}
-        {uptime}
-      </div>
+      </span>
     </footer>
   );
 }
