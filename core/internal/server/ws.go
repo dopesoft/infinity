@@ -109,6 +109,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if sessionID == "" {
 				sessionID = uuid.NewString()
 			}
+			// If this WS connection is the first time we're seeing this
+			// session_id since startup (e.g. after a browser refresh or core
+			// restart), preload prior turns from mem_observations so the
+			// model sees the same conversation the user does.
+			s.hydrateLoopSession(r, sessionID)
 			s.runTurn(r.Context(), sessionID, msg.Content, send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})

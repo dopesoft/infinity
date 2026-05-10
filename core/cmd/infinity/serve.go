@@ -19,6 +19,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
 	"github.com/dopesoft/infinity/core/internal/skills"
+	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -120,9 +121,12 @@ func serveCmd() *cobra.Command {
 			skillsAPI := skills.NewAPI(skillRegistry, skillRunner, skillStore)
 			fmt.Printf("  skills: %d loaded from %s\n", len(skillRegistry.All()), skillsRoot)
 
+			soulPrompt, soulSource := soul.Load()
+			fmt.Printf("  soul: %s (%d chars)\n", soulSource, len(soulPrompt))
+
 			var loop *agent.Loop
 			if provider != nil {
-				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry}
+				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt}
 				if searcher != nil {
 					cfg.Memory = searcher
 				}

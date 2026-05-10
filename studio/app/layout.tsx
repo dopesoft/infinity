@@ -3,6 +3,13 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import { WebSocketProvider } from "@/lib/ws/provider";
 import "./globals.css";
 
+// Bust edge HTML cache on every request. Without this, Railway/Next caches the
+// page HTML for ~1y while emitting new immutable chunk hashes on each deploy,
+// so a stale browser sticks to dead chunks (root cause of the "thinking forever"
+// bug after a redeploy). HTML must always reflect the latest chunk URLs.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
+import { fetchSessionMessages } from "@/lib/api";
 
 export type ChatRole = "user" | "assistant" | "tool";
 
@@ -22,6 +23,11 @@ export type ChatMessage = {
 
 type Usage = { input: number; output: number };
 
+const SESSION_KEY = "infinity:sessionId";
+// If the agent goes silent for this long after a send, surface a timeout
+// so the UI can never get stuck on "thinking" forever.
+const TURN_WATCHDOG_MS = 90_000;
+
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -31,18 +37,98 @@ function newSessionId() {
   return `sess_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function readStoredSessionId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(SESSION_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredSessionId(id: string) {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) window.localStorage.setItem(SESSION_KEY, id);
+    else window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* private mode / quota */
+  }
+}
+
 export function useChat() {
   const ws = useWebSocket();
   // Empty on first server render; assigned client-side in useEffect to avoid
   // hydration mismatches from non-deterministic UUID generation.
   const [sessionId, setSessionId] = useState<string>("");
-  useEffect(() => {
-    setSessionId((prev) => prev || newSessionId());
-  }, []);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [usage, setUsage] = useState<Usage>({ input: 0, output: 0 });
   const [isStreaming, setIsStreaming] = useState(false);
   const turnStartRef = useRef<number | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearWatchdog = useCallback(() => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
+
+  const armWatchdog = useCallback(() => {
+    clearWatchdog();
+    watchdogRef.current = setTimeout(() => {
+      watchdogRef.current = null;
+      setMessages((prev) => {
+        const next = [...prev];
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === "assistant" && next[i].pending) {
+            next[i] = {
+              ...next[i],
+              pending: false,
+              error: "Agent went silent. Tap reconnect or try again.",
+            };
+            return next;
+          }
+        }
+        next.push({
+          id: makeId(),
+          role: "assistant",
+          text: "",
+          error: "Agent went silent. Tap reconnect or try again.",
+          createdAt: Date.now(),
+        });
+        return next;
+      });
+      turnStartRef.current = null;
+      setIsStreaming(false);
+    }, TURN_WATCHDOG_MS);
+  }, [clearWatchdog]);
+
+  // Restore session id from localStorage on mount; mint a fresh one if none.
+  // Then rehydrate the visible transcript from the core, so a refresh keeps
+  // the conversation the user could see before reload.
+  useEffect(() => {
+    const stored = readStoredSessionId();
+    const id = stored || newSessionId();
+    setSessionId(id);
+    if (!stored) writeStoredSessionId(id);
+
+    if (!stored) return; // brand new session, nothing to fetch
+    const ac = new AbortController();
+    fetchSessionMessages(id, ac.signal).then((rows) => {
+      if (!rows || rows.length === 0) return;
+      const restored: ChatMessage[] = rows.map((r) => ({
+        id: makeId(),
+        role: r.role,
+        text: r.text,
+        createdAt: new Date(r.created_at).getTime() || Date.now(),
+      }));
+      setMessages((prev) => (prev.length === 0 ? restored : prev));
+    });
+    return () => ac.abort();
+  }, []);
+
+  useEffect(() => () => clearWatchdog(), [clearWatchdog]);
 
   useEffect(() => {
     return ws.subscribe((ev: WSEvent) => {
@@ -50,6 +136,7 @@ export function useChat() {
 
       switch (ev.type) {
         case "delta": {
+          armWatchdog();
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
@@ -69,6 +156,7 @@ export function useChat() {
           break;
         }
         case "tool_call": {
+          armWatchdog();
           setMessages((prev) => [
             ...prev,
             {
@@ -83,6 +171,7 @@ export function useChat() {
           break;
         }
         case "tool_result": {
+          armWatchdog();
           setMessages((prev) =>
             prev.map((m) =>
               m.role === "tool" && m.toolCall?.id === ev.tool_result.id
@@ -93,6 +182,7 @@ export function useChat() {
           break;
         }
         case "complete": {
+          clearWatchdog();
           const inputT = ev.usage?.input ?? 0;
           const outputT = ev.usage?.output ?? 0;
           setUsage((u) => ({ input: u.input + inputT, output: u.output + outputT }));
@@ -118,6 +208,7 @@ export function useChat() {
           break;
         }
         case "error": {
+          clearWatchdog();
           setMessages((prev) => [
             ...prev,
             {
@@ -138,20 +229,22 @@ export function useChat() {
           break;
       }
     });
-  }, [ws, sessionId]);
+  }, [ws, sessionId, armWatchdog, clearWatchdog]);
 
   const send = useCallback(
     (content: string) => {
       const trimmed = content.trim();
-      if (!trimmed || isStreaming) return false;
+      if (!trimmed || isStreaming || !sessionId) return false;
       setMessages((prev) => [
         ...prev,
         { id: makeId(), role: "user", text: trimmed, createdAt: Date.now() },
       ]);
       turnStartRef.current = Date.now();
       setIsStreaming(true);
+      armWatchdog();
       const ok = ws.send({ type: "message", session_id: sessionId, content: trimmed });
       if (!ok) {
+        clearWatchdog();
         setIsStreaming(false);
         setMessages((prev) => [
           ...prev,
@@ -166,20 +259,24 @@ export function useChat() {
       }
       return ok;
     },
-    [ws, sessionId, isStreaming],
+    [ws, sessionId, isStreaming, armWatchdog, clearWatchdog],
   );
 
   const newSession = useCallback(() => {
-    setSessionId(newSessionId());
+    clearWatchdog();
+    const id = newSessionId();
+    setSessionId(id);
+    writeStoredSessionId(id);
     setMessages([]);
     turnStartRef.current = null;
     setIsStreaming(false);
-  }, []);
+  }, [clearWatchdog]);
 
   const clear = useCallback(() => {
+    clearWatchdog();
     ws.send({ type: "clear", session_id: sessionId });
     setMessages([]);
-  }, [ws, sessionId]);
+  }, [ws, sessionId, clearWatchdog]);
 
   const status = ws.status;
 

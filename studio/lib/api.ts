@@ -108,6 +108,15 @@ export const fetchMCP = (signal?: AbortSignal) => getJSON<MCPStatus[]>("/api/mcp
 export const fetchSessions = (signal?: AbortSignal) =>
   getJSON<SessionDTO[]>("/api/sessions", signal);
 
+export type SessionMessageDTO = {
+  role: "user" | "assistant";
+  text: string;
+  created_at: string;
+};
+
+export const fetchSessionMessages = (id: string, signal?: AbortSignal) =>
+  getJSON<SessionMessageDTO[]>(`/api/sessions/${encodeURIComponent(id)}/messages`, signal);
+
 export const fetchMemoryCounts = (signal?: AbortSignal) =>
   getJSON<MemoryCounts>("/api/memory/counts", signal);
 

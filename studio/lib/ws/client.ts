@@ -3,6 +3,12 @@
  *
  * iOS Safari kills WebSocket connections when the tab moves to the background.
  * We listen for `visibilitychange` and `pageshow` to reconnect on foreground.
+ *
+ * We also run an application-level ping/pong heartbeat: every PING_INTERVAL_MS
+ * we send `{type:"ping"}` (the core replies `{type:"pong"}`). If no message
+ * arrives for STALE_TIMEOUT_MS, we treat the socket as dead and force-reconnect
+ * even though `readyState` may still claim OPEN — this is the half-dead socket
+ * pattern (mobile sleep, NAT timeout, captive proxy) that silently breaks chat.
  */
 
 export type WSEvent =
@@ -39,6 +45,8 @@ export type WSClientOptions = {
 
 const MIN_BACKOFF = 500;
 const MAX_BACKOFF = 15_000;
+const PING_INTERVAL_MS = 25_000;
+const STALE_TIMEOUT_MS = 60_000;
 
 export class WSClient {
   private url: string;
@@ -46,6 +54,8 @@ export class WSClient {
   private status: WSStatus = "disconnected";
   private backoff = MIN_BACKOFF;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastActivityAt = 0;
   private closedByUser = false;
   private listeners: WSClientOptions;
 
@@ -69,9 +79,12 @@ export class WSClient {
 
     this.socket.onopen = () => {
       this.backoff = MIN_BACKOFF;
+      this.lastActivityAt = Date.now();
       this.setStatus("connected");
+      this.startHeartbeat();
     };
     this.socket.onclose = () => {
+      this.stopHeartbeat();
       this.setStatus("disconnected");
       if (!this.closedByUser) this.scheduleReconnect();
     };
@@ -79,6 +92,7 @@ export class WSClient {
       // onclose follows; reconnect logic lives there
     };
     this.socket.onmessage = (raw) => {
+      this.lastActivityAt = Date.now();
       try {
         const ev = JSON.parse(raw.data) as WSEvent;
         this.listeners.onEvent(ev);
@@ -90,8 +104,15 @@ export class WSClient {
 
   send(data: Record<string, unknown>) {
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
-    this.socket.send(JSON.stringify(data));
-    return true;
+    try {
+      this.socket.send(JSON.stringify(data));
+      return true;
+    } catch {
+      // Broken pipe / half-dead socket. Force reconnect so the next attempt
+      // gets a fresh connection.
+      this.forceReconnect();
+      return false;
+    }
   }
 
   close() {
@@ -100,13 +121,49 @@ export class WSClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHeartbeat();
     this.socket?.close();
     this.socket = null;
     this.setStatus("disconnected");
   }
 
   forceReconnect() {
-    this.socket?.close();
+    this.stopHeartbeat();
+    try {
+      this.socket?.close();
+    } catch {
+      /* ignore */
+    }
+    this.socket = null;
+    // Reset backoff so the user-initiated reconnect tries immediately.
+    this.backoff = MIN_BACKOFF;
+    this.connect();
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+      // Stale detection: if we haven't heard anything in STALE_TIMEOUT_MS
+      // even though readyState says OPEN, treat the socket as dead. This
+      // catches the half-dead pattern mobile networks and proxies create.
+      if (Date.now() - this.lastActivityAt > STALE_TIMEOUT_MS) {
+        this.forceReconnect();
+        return;
+      }
+      try {
+        this.socket.send(JSON.stringify({ type: "ping", session_id: "" }));
+      } catch {
+        this.forceReconnect();
+      }
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   private scheduleReconnect() {

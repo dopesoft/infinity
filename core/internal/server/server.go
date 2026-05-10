@@ -84,6 +84,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/sessions", s.handleSessions)
+	mux.HandleFunc("/api/sessions/", s.handleSessionMessages)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/mcp", s.handleMCP)

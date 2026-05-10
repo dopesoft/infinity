@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-const MAX_LINES_PX = 220; // ~10 lines on phones
+const MAX_LINES_PX = 112; // ~4 lines (text-base 16px × line-height 1.5 × 4 + py-2)
 
 export function Composer({
   onSend,
@@ -68,7 +68,7 @@ export function Composer({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Message Infinity… (Enter to send, Shift+Enter for newline)"
+          placeholder="ask me anything..."
           rows={1}
           inputMode="text"
           autoCapitalize="sentences"
