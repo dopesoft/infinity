@@ -73,8 +73,8 @@ export function FooterStatus() {
         <span className={cn("truncate", labelClass[ws.status])}>{connLabel}</span>
       </button>
       {sep}
-      <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 tabular-nums">
-        {toolCount}
+      <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5">
+        <span className="tabular-nums">{toolCount}</span> tools
       </span>
       {sep}
       <span className="tabular-nums">{uptime}</span>
