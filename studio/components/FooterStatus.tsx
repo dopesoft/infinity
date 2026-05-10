@@ -56,10 +56,11 @@ export function FooterStatus() {
   const model = status?.model ?? "—";
 
   const toolCount = status?.tools?.length ?? 0;
+  const sep = <span aria-hidden className="text-border">|</span>;
 
   return (
     <footer
-      className="flex h-9 items-center gap-2 border-t bg-background px-4 pb-safe text-xs text-muted-foreground sm:h-10"
+      className="flex h-9 items-center gap-2.5 border-t bg-background px-4 pb-safe text-xs text-muted-foreground sm:h-10"
       role="contentinfo"
     >
       <button
@@ -71,12 +72,15 @@ export function FooterStatus() {
         <span className={cn("inline-block size-2 rounded-full", dotClass[ws.status])} />
         <span className={cn("truncate", labelClass[ws.status])}>{connLabel}</span>
       </button>
-      <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 font-mono tabular-nums">
-        {toolCount} tools
+      {sep}
+      <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 tabular-nums">
+        {toolCount}
       </span>
-      <span className="font-mono tabular-nums">{uptime}</span>
-      <span className="ml-auto hidden truncate sm:block">
-        {provider} · {model}
+      {sep}
+      <span className="tabular-nums">{uptime}</span>
+      <span className="ml-auto hidden items-center gap-2.5 truncate sm:flex">
+        {sep}
+        <span className="truncate">{provider} · {model}</span>
       </span>
     </footer>
   );
