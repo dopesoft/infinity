@@ -124,12 +124,16 @@ export default function MemoryPage() {
             </div>
           </div>
 
+          {/* Search row centered on desktop with a sane max width — full
+              page-width search input reads as wasted real estate on a
+              25"+ monitor and pushes the result list way down. Mobile
+              stays full-width since there's no space to spare. */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               runSearch(query);
             }}
-            className="flex items-center gap-2"
+            className="mx-auto flex w-full items-center gap-2 sm:max-w-2xl sm:pt-4"
           >
             <div className="relative flex-1">
               <Search
@@ -151,8 +155,23 @@ export default function MemoryPage() {
                 enterKeyHint="search"
               />
             </div>
-            <Button type="submit" disabled={searching}>
-              {searching ? "…" : "search"}
+            {/* Submit button mirrors the HeaderAction pattern: square
+                icon on mobile (no label), icon + label on sm+. Keeps the
+                "no text labels on mobile buttons" rule consistent across
+                the app. */}
+            {/* Mobile: square ghost icon, no background.
+                sm+: filled primary button restores the default look. */}
+            <Button
+              type="submit"
+              disabled={searching}
+              aria-label="Search"
+              title="Search"
+              className="h-9 w-9 shrink-0 bg-transparent px-0 text-foreground hover:bg-accent hover:text-foreground sm:w-auto sm:gap-1.5 sm:bg-primary sm:px-4 sm:text-primary-foreground sm:hover:bg-primary/90"
+            >
+              <Search className="size-4 sm:hidden" aria-hidden />
+              <span className="hidden sm:inline">
+                {searching ? "…" : "search"}
+              </span>
             </Button>
             <Button
               type="button"

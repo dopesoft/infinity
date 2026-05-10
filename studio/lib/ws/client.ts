@@ -40,6 +40,10 @@ export type WSStatus = "connected" | "connecting" | "disconnected";
 
 export type WSClientOptions = {
   url: string;
+  // tokenProvider is awaited on every connect attempt so a refreshed JWT is
+  // always sent to the server. Returning null aborts the connect (caller
+  // hasn't authenticated yet) — the client retries via scheduleReconnect.
+  tokenProvider?: () => Promise<string | null>;
   onEvent: (ev: WSEvent) => void;
   onStatusChange?: (status: WSStatus) => void;
 };
@@ -65,14 +69,30 @@ export class WSClient {
     this.listeners = opts;
   }
 
-  connect() {
+  async connect() {
     if (this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) {
       return;
     }
     this.closedByUser = false;
     this.setStatus("connecting");
+
+    let url = this.url;
+    if (this.listeners.tokenProvider) {
+      const token = await this.listeners.tokenProvider();
+      if (!token) {
+        // Not authenticated yet — back off and try again.
+        this.setStatus("disconnected");
+        this.scheduleReconnect();
+        return;
+      }
+      // Browsers can't set headers on WebSocket; pass JWT as query param.
+      // Core auth middleware accepts ?token= as a fallback to Authorization.
+      const sep = url.includes("?") ? "&" : "?";
+      url = `${url}${sep}token=${encodeURIComponent(token)}`;
+    }
+
     try {
-      this.socket = new WebSocket(this.url);
+      this.socket = new WebSocket(url);
     } catch {
       this.scheduleReconnect();
       return;
@@ -138,7 +158,7 @@ export class WSClient {
     this.socket = null;
     // Reset backoff so the user-initiated reconnect tries immediately.
     this.backoff = MIN_BACKOFF;
-    this.connect();
+    void this.connect();
   }
 
   private startHeartbeat() {
@@ -173,7 +193,7 @@ export class WSClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF);
-      this.connect();
+      void this.connect();
     }, delay);
   }
 

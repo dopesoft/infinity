@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Mulish } from "next/font/google";
+import { AuthProvider } from "@/lib/auth/session";
 import { WebSocketProvider } from "@/lib/ws/provider";
 import "./globals.css";
 
@@ -50,7 +51,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${mulish.variable} font-sans`}>
-        <WebSocketProvider>{children}</WebSocketProvider>
+        <AuthProvider>
+          <WebSocketProvider>{children}</WebSocketProvider>
+        </AuthProvider>
       </body>
     </html>
   );

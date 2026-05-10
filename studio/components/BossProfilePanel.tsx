@@ -61,14 +61,15 @@ export function BossProfilePanel() {
 
   return (
     <section className="rounded-xl border bg-card/60 backdrop-blur-sm">
-      <header className="flex items-center justify-between gap-2 border-b">
+      <header className="flex items-center gap-1 border-b pr-1">
+        {/* Title region: clickable to toggle on mobile, no-op on desktop. */}
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          className="flex min-h-12 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
+          className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
           aria-expanded={!collapsed}
         >
-          <UserCircle className="size-4 text-muted-foreground" aria-hidden />
+          <UserCircle className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Boss profile
           </span>
@@ -80,40 +81,56 @@ export function BossProfilePanel() {
               {facts.length}
             </span>
           )}
+        </button>
+
+        {/* Action buttons. Icon-only on mobile (no labels, no bg), expand
+            on sm+ where there's room for text. Sit between the title and
+            the rightmost chevron toggle. */}
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          onClick={() => load()}
+          aria-label="Refresh"
+          disabled={loading}
+          className="size-11 lg:size-8"
+        >
+          <RefreshCw className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setAdding((v) => !v);
+            setCollapsed(false);
+          }}
+          aria-label={adding ? "Cancel" : "Add fact"}
+          title={adding ? "Cancel" : "Add fact"}
+          className={cn(
+            "h-11 w-11 shrink-0 px-0 lg:h-8 lg:w-auto lg:gap-1.5 lg:px-2",
+            adding && "text-foreground",
+          )}
+        >
+          <Plus className={cn("size-4 transition-transform", adding && "rotate-45")} />
+          <span className="hidden lg:inline">{adding ? "Cancel" : "Add"}</span>
+        </Button>
+
+        {/* Chevron — rightmost. Mobile-only; doubles as the toggle button. */}
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex size-11 items-center justify-center lg:hidden"
+          aria-label={collapsed ? "Expand" : "Collapse"}
+        >
           <ChevronDown
             className={cn(
-              "ml-auto size-4 text-muted-foreground transition-transform lg:hidden",
+              "size-4 text-muted-foreground transition-transform",
               !collapsed && "rotate-180",
             )}
             aria-hidden
           />
         </button>
-        <div className="flex items-center gap-1 px-2">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => load()}
-            aria-label="Refresh"
-            disabled={loading}
-            className="size-11 lg:size-8"
-          >
-            <RefreshCw className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={adding ? "secondary" : "ghost"}
-            onClick={() => {
-              setAdding((v) => !v);
-              setCollapsed(false);
-            }}
-            className="h-11 px-3 lg:h-8 lg:px-2"
-          >
-            <Plus className="size-4" />
-            <span className="ml-1">{adding ? "Cancel" : "Add"}</span>
-          </Button>
-        </div>
       </header>
 
       <div className={cn("space-y-2 p-3", collapsed && "hidden lg:block")}>

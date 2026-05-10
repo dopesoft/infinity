@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useAuth } from "@/lib/auth/session";
 import { WSClient, type WSEvent, type WSStatus } from "@/lib/ws/client";
 
 type Subscriber = (ev: WSEvent) => void;
@@ -34,25 +35,35 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<WSStatus>("disconnected");
   const subscribers = useRef<Set<Subscriber>>(new Set());
   const clientRef = useRef<WSClient | null>(null);
+  const { user, getAccessToken } = useAuth();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!user) {
+      // Not signed in yet — tear down any prior client (e.g. after sign-out)
+      // and skip connect. The next auth state change re-runs this effect.
+      clientRef.current?.close();
+      clientRef.current = null;
+      setStatus("disconnected");
+      return;
+    }
     const url = getDefaultURL();
     if (!url) return;
 
     const client = new WSClient({
       url,
+      tokenProvider: getAccessToken,
       onStatusChange: setStatus,
       onEvent: (ev) => {
         for (const fn of subscribers.current) fn(ev);
       },
     });
     clientRef.current = client;
-    client.connect();
+    void client.connect();
 
     const onVisibilityOrShow = () => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        client.connect();
+        void client.connect();
       }
     };
 
@@ -67,7 +78,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       client.close();
       clientRef.current = null;
     };
-  }, []);
+  }, [user, getAccessToken]);
 
   const send = useCallback((msg: Record<string, unknown>) => {
     return clientRef.current?.send(msg) ?? false;

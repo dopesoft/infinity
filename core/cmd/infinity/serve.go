@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/hooks"
@@ -217,6 +218,23 @@ func serveCmd() *cobra.Command {
 				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
 			}
 
+			authVerifier, err := auth.FromEnv(cmd.Context(), pool)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: auth: %v\n", err)
+			}
+			if authVerifier != nil {
+				if authVerifier.Enabled() {
+					owner := authVerifier.Owner()
+					if owner == "" {
+						fmt.Printf("  auth: enabled (JWKS) — no owner claimed yet, first signup wins\n")
+					} else {
+						fmt.Printf("  auth: enabled (JWKS) — owner=%s\n", owner)
+					}
+				} else {
+					fmt.Printf("  auth: DISABLED (set SUPABASE_URL to enable)\n")
+				}
+			}
+
 			srv := server.New(server.Config{
 				Addr:         addr,
 				Version:      version,
@@ -230,6 +248,7 @@ func serveCmd() *cobra.Command {
 				CronAPI:      cronAPI,
 				SentinelAPI:  sentinelAPI,
 				VoyagerAPI:   voyagerAPI,
+				Auth:         authVerifier,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

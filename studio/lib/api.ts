@@ -1,3 +1,5 @@
+import { getAccessToken } from "@/lib/auth/session";
+
 export type CoreStatus = {
   version: string;
   provider: string;
@@ -91,9 +93,19 @@ function coreBaseURL(): string {
   return "";
 }
 
+// authedFetch wraps fetch() so every Core call carries the latest Supabase
+// JWT in the Authorization header. The session module refreshes when a
+// token is within 30s of expiry, so long-lived tabs don't 401.
+export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = await getAccessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(`${coreBaseURL()}${path}`, { ...init, headers });
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}${path}`, { signal });
+    const res = await authedFetch(path, { signal });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -198,7 +210,7 @@ export async function upsertProfileFact(input: {
   importance?: number;
 }): Promise<{ id: string } | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/memory/profile`, {
+    const res = await authedFetch(`/api/memory/profile`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
@@ -212,8 +224,8 @@ export async function upsertProfileFact(input: {
 
 export async function deleteProfileFact(id: string): Promise<boolean> {
   try {
-    const res = await fetch(
-      `${coreBaseURL()}/api/memory/profile?id=${encodeURIComponent(id)}`,
+    const res = await authedFetch(
+      `/api/memory/profile?id=${encodeURIComponent(id)}`,
       { method: "DELETE" },
     );
     return res.ok;
@@ -257,7 +269,7 @@ export const fetchSkillProposals = (status = "candidate", signal?: AbortSignal) 
 
 export async function decideSkillProposal(id: string, decision: "promoted" | "rejected"): Promise<boolean> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/voyager/proposals/${id}/decide`, {
+    const res = await authedFetch(`/api/voyager/proposals/${id}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ decision }),
@@ -347,7 +359,7 @@ export const fetchSkillRuns = (name: string, limit = 25, signal?: AbortSignal) =
 
 export async function reloadSkills(): Promise<{ count: number; errors: unknown[] } | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/skills/reload`, { method: "POST" });
+    const res = await authedFetch(`/api/skills/reload`, { method: "POST" });
     if (!res.ok) return null;
     return (await res.json()) as { count: number; errors: unknown[] };
   } catch {
@@ -412,7 +424,7 @@ export const fetchHeartbeats = (signal?: AbortSignal) =>
 
 export async function runHeartbeatNow(): Promise<HeartbeatRunSummaryDTO | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/heartbeat/run`, { method: "POST" });
+    const res = await authedFetch(`/api/heartbeat/run`, { method: "POST" });
     if (!res.ok) return null;
     return (await res.json()) as HeartbeatRunSummaryDTO;
   } catch {
@@ -441,7 +453,7 @@ export const fetchTrustContracts = (status = "pending", signal?: AbortSignal) =>
 
 export async function decideTrust(id: string, decision: string, note = ""): Promise<boolean> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/trust-contracts/${id}/decide`, {
+    const res = await authedFetch(`/api/trust-contracts/${id}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ decision, note }),
@@ -491,7 +503,7 @@ export const fetchCrons = (signal?: AbortSignal) =>
 
 export async function previewCron(schedule: string, count = 3): Promise<{ next: string[] } | { error: string } | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/crons/preview`, {
+    const res = await authedFetch(`/api/crons/preview`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ schedule, count }),
@@ -504,7 +516,7 @@ export async function previewCron(schedule: string, count = 3): Promise<{ next: 
 
 export async function upsertCron(j: Partial<CronJobDTO>): Promise<{ id: string } | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/crons`, {
+    const res = await authedFetch(`/api/crons`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(j),
@@ -518,7 +530,7 @@ export async function upsertCron(j: Partial<CronJobDTO>): Promise<{ id: string }
 
 export async function deleteCron(id: string): Promise<boolean> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/crons/${id}`, { method: "DELETE" });
+    const res = await authedFetch(`/api/crons/${id}`, { method: "DELETE" });
     return res.ok;
   } catch {
     return false;
@@ -543,7 +555,7 @@ export const fetchSentinels = (signal?: AbortSignal) =>
 
 export async function upsertSentinel(s: Partial<SentinelDTO>): Promise<{ id: string } | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/sentinels`, {
+    const res = await authedFetch(`/api/sentinels`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
@@ -557,7 +569,7 @@ export async function upsertSentinel(s: Partial<SentinelDTO>): Promise<{ id: str
 
 export async function deleteSentinel(id: string): Promise<boolean> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/sentinels/${id}`, { method: "DELETE" });
+    const res = await authedFetch(`/api/sentinels/${id}`, { method: "DELETE" });
     return res.ok;
   } catch {
     return false;
@@ -569,7 +581,7 @@ export async function invokeSkill(
   args: Record<string, unknown>,
 ): Promise<{ result?: { stdout?: string; success?: boolean }; error?: string } | null> {
   try {
-    const res = await fetch(`${coreBaseURL()}/api/skills/${encodeURIComponent(name)}/invoke`, {
+    const res = await authedFetch(`/api/skills/${encodeURIComponent(name)}/invoke`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ args }),

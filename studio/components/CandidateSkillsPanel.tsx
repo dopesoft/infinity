@@ -57,14 +57,14 @@ export function CandidateSkillsPanel() {
 
   return (
     <section className="rounded-xl border bg-card/60 backdrop-blur-sm">
-      <header className="flex items-center justify-between gap-1 border-b">
+      <header className="flex items-center gap-1 border-b pr-1">
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          className="flex min-h-12 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
+          className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
           aria-expanded={!collapsed}
         >
-          <Sparkles className="size-4 text-muted-foreground" aria-hidden />
+          <Sparkles className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Candidate skills
           </span>
@@ -83,14 +83,8 @@ export function CandidateSkillsPanel() {
               {status.status}
             </span>
           )}
-          <ChevronDown
-            className={cn(
-              "ml-auto size-4 text-muted-foreground transition-transform lg:hidden",
-              !collapsed && "rotate-180",
-            )}
-            aria-hidden
-          />
         </button>
+
         <Button
           type="button"
           size="icon"
@@ -102,6 +96,22 @@ export function CandidateSkillsPanel() {
         >
           <RefreshCw className="size-4" />
         </Button>
+
+        {/* Chevron — rightmost. Mobile-only toggle. */}
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex size-11 items-center justify-center lg:hidden"
+          aria-label={collapsed ? "Expand" : "Collapse"}
+        >
+          <ChevronDown
+            className={cn(
+              "size-4 text-muted-foreground transition-transform",
+              !collapsed && "rotate-180",
+            )}
+            aria-hidden
+          />
+        </button>
       </header>
 
       <div className={cn(collapsed && "hidden lg:block")}>

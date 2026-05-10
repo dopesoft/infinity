@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
@@ -29,6 +30,7 @@ type Config struct {
 	CronAPI      *cron.API
 	SentinelAPI  *sentinel.API
 	VoyagerAPI   *voyager.API
+	Auth         *auth.Verifier
 }
 
 type Server struct {
@@ -40,6 +42,7 @@ type Server struct {
 	store     *memory.Store
 	searcher  *memory.Searcher
 	skillsAPI *skills.API
+	auth      *auth.Verifier
 	started   time.Time
 }
 
@@ -55,6 +58,7 @@ func New(cfg Config) *Server {
 		store:     cfg.Store,
 		searcher:  cfg.Searcher,
 		skillsAPI: cfg.SkillsAPI,
+		auth:      cfg.Auth,
 		started:   time.Now(),
 	}
 
@@ -76,9 +80,18 @@ func New(cfg Config) *Server {
 		cfg.VoyagerAPI.Routes(mux)
 	}
 
+	// Auth middleware. /health and /auth/* stay open so the studio can
+	// probe liveness and complete the signup handshake before holding a
+	// token. WS authorizes inside handleWebSocket (it needs to send a
+	// 401 on the upgrade response, which middleware-401s break).
+	var handler http.Handler = mux
+	if cfg.Auth != nil {
+		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/auth/", "/ws"})(handler)
+	}
+
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           withCORS(mux),
+		Handler:           withCORS(handler),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -87,6 +100,7 @@ func New(cfg Config) *Server {
 
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/sessions/", s.handleSessionMessages)

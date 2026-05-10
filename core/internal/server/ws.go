@@ -4,13 +4,26 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
+
+func splitProto(h string) []string {
+	parts := strings.Split(h, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, strings.TrimSpace(p))
+	}
+	return out
+}
+
+func hasBearerPrefix(p string) bool { return strings.HasPrefix(p, "bearer.") }
 
 type wsClientMessage struct {
 	Type      string `json:"type"`
@@ -43,6 +56,10 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin:     func(r *http.Request) bool { return true },
+	// Echo the bearer subprotocol back so browsers that opted into it
+	// don't fail the handshake (browsers reject upgrades whose response
+	// drops the requested subprotocol entirely).
+	Subprotocols: []string{},
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -51,12 +68,35 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	// Authorize before upgrade so we can return a real 401 to the browser.
+	// (After upgrade, the response is hijacked and any HTTP status we'd write
+	// would never reach the client.)
+	userID, err := s.auth.AuthorizeRequest(r)
+	if err != nil {
+		log.Printf("ws auth: %v", err)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Mirror back any bearer.<jwt> subprotocol the client sent so the
+	// browser accepts the upgrade. Other subprotocols are ignored.
+	var responseHeader http.Header
+	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		for _, p := range splitProto(proto) {
+			if hasBearerPrefix(p) {
+				responseHeader = http.Header{"Sec-WebSocket-Protocol": []string{p}}
+				break
+			}
+		}
+	}
+
+	conn, err := upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
 		log.Printf("ws upgrade: %v", err)
 		return
 	}
 	defer conn.Close()
+	_ = userID // available for future per-message authz; carried via context below
 
 	conn.SetReadLimit(1 << 20)
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -114,7 +154,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// restart), preload prior turns from mem_observations so the
 			// model sees the same conversation the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.runTurn(r.Context(), sessionID, msg.Content, send)
+			turnCtx := context.WithValue(r.Context(), auth.ContextKey{}, userID)
+			s.runTurn(turnCtx, sessionID, msg.Content, send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
