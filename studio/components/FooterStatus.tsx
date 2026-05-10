@@ -56,26 +56,30 @@ export function FooterStatus() {
   const provider = status?.provider ?? "—";
   const model = status?.model ?? "—";
 
+  const buildLabel = status?.version || version;
+  const showVersion = buildLabel && buildLabel !== "dev";
+
   return (
     <footer
-      className="flex h-6 items-center justify-between gap-2 border-t bg-background px-3 text-[11px] text-muted-foreground pb-safe"
+      className="flex h-9 items-center justify-between gap-3 border-t bg-background px-4 pb-safe text-xs text-muted-foreground sm:h-10"
       role="contentinfo"
     >
       <button
         type="button"
         onClick={ws.reconnect}
-        className="flex min-w-0 items-center gap-1.5"
+        className="flex min-h-9 min-w-0 items-center gap-2 font-medium"
         title="Click to reconnect"
       >
-        <span className={cn("inline-block size-1.5 rounded-full", dotClass[ws.status])} />
+        <span className={cn("inline-block size-2 rounded-full", dotClass[ws.status])} />
         <span className={cn("truncate", labelClass[ws.status])}>{connLabel}</span>
       </button>
       <div className="hidden truncate sm:block">
         {provider} · {model}
       </div>
-      <div className="hidden truncate md:block">{(status?.tools?.length ?? 0)} tools</div>
-      <div className="truncate">
-        v{status?.version || version} · {uptime}
+      <div className="hidden truncate md:block">{status?.tools?.length ?? 0} tools</div>
+      <div className="truncate font-mono tabular-nums">
+        {showVersion ? `${buildLabel} · ` : ""}
+        {uptime}
       </div>
     </footer>
   );
