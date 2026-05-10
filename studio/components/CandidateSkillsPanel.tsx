@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconBolt, IconCheck, IconRefresh, IconSparkles, IconX } from "@tabler/icons-react";
+import {
+  IconBolt,
+  IconCheck,
+  IconChevronDown,
+  IconRefresh,
+  IconSparkles,
+  IconX,
+} from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -28,6 +35,11 @@ export function CandidateSkillsPanel() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [collapsed, setCollapsed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setCollapsed(window.matchMedia("(min-width: 1024px)").matches ? false : true);
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -52,25 +64,40 @@ export function CandidateSkillsPanel() {
 
   return (
     <section className="rounded-xl border bg-card/60 backdrop-blur-sm">
-      <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <div className="flex items-center gap-2">
+      <header className="flex items-center justify-between gap-1 border-b">
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex min-h-12 flex-1 items-center gap-2 px-3 py-2 text-left lg:min-h-0 lg:py-2 lg:cursor-default"
+          aria-expanded={!collapsed}
+        >
           <IconSparkles className="size-4 text-muted-foreground" aria-hidden />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Candidate skills
           </span>
+          {proposals.length > 0 && (
+            <span className="rounded-full bg-info/15 px-1.5 py-0.5 font-mono text-[10px] text-info">
+              {proposals.length}
+            </span>
+          )}
           {status && (
             <span
               className={cn(
-                "rounded-full px-1.5 py-0.5 text-[9px] font-mono uppercase",
-                offline
-                  ? "bg-muted text-muted-foreground"
-                  : "bg-info/10 text-info",
+                "hidden truncate rounded-full px-1.5 py-0.5 text-[10px] font-mono uppercase sm:inline",
+                offline ? "bg-muted text-muted-foreground" : "bg-info/10 text-info",
               )}
             >
               {status.status}
             </span>
           )}
-        </div>
+          <IconChevronDown
+            className={cn(
+              "ml-auto size-4 text-muted-foreground transition-transform lg:hidden",
+              !collapsed && "rotate-180",
+            )}
+            aria-hidden
+          />
+        </button>
         <Button
           type="button"
           size="icon"
@@ -78,11 +105,13 @@ export function CandidateSkillsPanel() {
           onClick={() => load()}
           aria-label="Refresh"
           disabled={loading}
-          className="h-7 w-7"
+          className="size-11 lg:size-8"
         >
-          <IconRefresh className="size-3.5" />
+          <IconRefresh className="size-4" />
         </Button>
       </header>
+
+      <div className={cn(collapsed && "hidden lg:block")}>
 
       {status && !offline && (
         <div className="grid grid-cols-2 gap-2 border-b px-3 py-2 text-[11px]">
@@ -124,19 +153,19 @@ export function CandidateSkillsPanel() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <code className="font-mono text-xs font-semibold text-foreground">
+                      <code className="break-all font-mono text-sm font-semibold text-foreground lg:text-xs">
                         {p.name}
                       </code>
                       <span
                         className={cn(
-                          "rounded-full border px-1.5 py-0 text-[9px] font-mono uppercase",
+                          "rounded-full border px-1.5 py-0.5 text-[10px] font-mono uppercase",
                           RISK_STYLES[p.risk_level] ?? RISK_STYLES.low,
                         )}
                       >
                         {p.risk_level}
                       </span>
                     </div>
-                    <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+                    <p className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground lg:line-clamp-2 lg:text-[11px]">
                       {p.description}
                     </p>
                   </div>
@@ -144,22 +173,22 @@ export function CandidateSkillsPanel() {
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="size-7 text-success hover:bg-success/10"
+                      className="size-11 text-success hover:bg-success/10 lg:size-9"
                       onClick={() => decide(p.id, "promoted")}
                       disabled={!!busy[p.id]}
                       aria-label="Promote"
                     >
-                      <IconCheck className="size-4" />
+                      <IconCheck className="size-5 lg:size-4" />
                     </Button>
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      className="size-11 text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:size-9"
                       onClick={() => decide(p.id, "rejected")}
                       disabled={!!busy[p.id]}
                       aria-label="Reject"
                     >
-                      <IconX className="size-4" />
+                      <IconX className="size-5 lg:size-4" />
                     </Button>
                   </div>
                 </div>
@@ -175,7 +204,7 @@ export function CandidateSkillsPanel() {
                   <button
                     type="button"
                     onClick={() => setOpen((o) => ({ ...o, [p.id]: !o[p.id] }))}
-                    className="mt-1.5 text-[11px] font-medium text-info hover:underline"
+                    className="mt-2 inline-flex min-h-11 items-center text-xs font-medium text-info hover:underline lg:min-h-0 lg:text-[11px]"
                   >
                     {isOpen ? "Hide draft" : "Show drafted SKILL.md"}
                   </button>
@@ -188,6 +217,7 @@ export function CandidateSkillsPanel() {
               </div>
             );
           })}
+      </div>
       </div>
     </section>
   );

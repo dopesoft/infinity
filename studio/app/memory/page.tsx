@@ -130,7 +130,7 @@ export default function MemoryPage() {
             </Button>
           </form>
 
-          <div className="flex flex-wrap items-center gap-1 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
             <div className="flex items-center gap-1">
               {VIEWS.map((v) => (
                 <button
@@ -140,7 +140,7 @@ export default function MemoryPage() {
                     loadDefault(v, tier);
                   }}
                   className={cn(
-                    "rounded-md border px-2 py-1 font-mono uppercase tracking-wide",
+                    "inline-flex min-h-9 items-center rounded-md border px-3 font-mono text-xs uppercase tracking-wide lg:min-h-7 lg:px-2",
                     view === v
                       ? "border-info bg-info/10 text-info"
                       : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
@@ -160,7 +160,7 @@ export default function MemoryPage() {
                       loadDefault("memories", t);
                     }}
                     className={cn(
-                      "rounded-full border px-2 py-0.5 font-mono uppercase tracking-wide",
+                      "inline-flex min-h-9 items-center rounded-full border px-3 font-mono text-[11px] uppercase tracking-wide lg:min-h-6 lg:px-2 lg:text-[10px]",
                       tier === t
                         ? "border-info bg-info/10 text-info"
                         : "border-transparent bg-muted text-muted-foreground hover:bg-accent",

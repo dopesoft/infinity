@@ -307,31 +307,30 @@ export function KnowledgeGraphPanel() {
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-1.5">
           <IconTopologyComplex className="size-4 text-muted-foreground" aria-hidden />
-          <span className="text-[11px] font-mono uppercase tracking-wide text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
             graph
           </span>
         </div>
         <div className="text-[11px] text-muted-foreground">
           {data ? (
             <>
-              {visibleNodes.length}/{data.total_nodes} nodes · {visibleEdges.length}/{data.total_edges}{" "}
-              edges
+              {visibleNodes.length}/{data.total_nodes}n · {visibleEdges.length}/{data.total_edges}e
             </>
           ) : (
             "loading"
           )}
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1">
           <div className="relative">
             <IconSearch
-              className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
               aria-hidden
             />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="filter"
-              className="h-8 w-32 pl-7 text-xs sm:w-40"
+              className="w-36 pl-9 lg:w-44"
               inputMode="search"
             />
           </div>
@@ -341,10 +340,10 @@ export function KnowledgeGraphPanel() {
             variant="ghost"
             onClick={resetView}
             aria-label="Reset view"
-            className="h-8 w-8"
+            className="size-11 lg:size-9"
             title="Reset zoom & pan"
           >
-            <IconZoomReset className="size-4" />
+            <IconZoomReset className="size-5 lg:size-4" />
           </Button>
           <Button
             type="button"
@@ -353,20 +352,20 @@ export function KnowledgeGraphPanel() {
             onClick={() => load()}
             aria-label="Refresh"
             disabled={loading}
-            className="h-8 w-8"
+            className="size-11 lg:size-9"
           >
-            <IconRefresh className="size-4" />
+            <IconRefresh className="size-5 lg:size-4" />
           </Button>
         </div>
       </div>
 
       {/* Type filter chips */}
       {data && data.node_types.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1 border-b px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2">
           <button
             onClick={() => setFilterType("")}
             className={cn(
-              "rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide",
+              "inline-flex min-h-9 items-center rounded-full border px-3 font-mono text-[11px] uppercase tracking-wide lg:min-h-7 lg:px-2 lg:text-[10px]",
               filterType === ""
                 ? "border-info bg-info/10 text-info"
                 : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
@@ -379,7 +378,7 @@ export function KnowledgeGraphPanel() {
               key={t}
               onClick={() => setFilterType(t)}
               className={cn(
-                "flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide",
+                "inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 font-mono text-[11px] uppercase tracking-wide lg:min-h-7 lg:px-2 lg:text-[10px]",
                 filterType === t
                   ? "border-info bg-info/10 text-info"
                   : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
@@ -396,8 +395,12 @@ export function KnowledgeGraphPanel() {
         </div>
       )}
 
-      {/* Canvas */}
-      <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-background">
+      {/* Canvas — explicit min-height keeps the SVG visible even when the
+          parent flex container is short on mobile. */}
+      <div
+        ref={containerRef}
+        className="relative min-h-[60dvh] flex-1 overflow-hidden bg-background lg:min-h-0"
+      >
         {!data ? (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             loading…
@@ -448,11 +451,21 @@ export function KnowledgeGraphPanel() {
                   />
                 </g>
               ))}
-              {/* Nodes */}
+              {/* Nodes — visible circle + invisible larger hit-target so
+                  small nodes are still tappable on a phone (44px guideline). */}
               {visibleNodes.map((n) => {
                 const isSelected = selected?.id === n.id;
+                const hitR = Math.max(n.radius * 2.2, 22 / transform.k);
                 return (
                   <g key={n.id}>
+                    <circle
+                      cx={n.x}
+                      cy={n.y}
+                      r={hitR}
+                      fill="transparent"
+                      className="cursor-pointer"
+                      onPointerDown={(e) => onPointerDownNode(e, n)}
+                    />
                     <circle
                       cx={n.x}
                       cy={n.y}
@@ -461,8 +474,7 @@ export function KnowledgeGraphPanel() {
                       fillOpacity={n.stale ? 0.3 : 0.9}
                       stroke={isSelected ? "currentColor" : "var(--background)"}
                       strokeWidth={isSelected ? 2.5 : 1.5}
-                      className={cn(isSelected ? "text-info" : "text-background", "cursor-pointer")}
-                      onPointerDown={(e) => onPointerDownNode(e, n)}
+                      className={cn(isSelected ? "text-info" : "text-background", "pointer-events-none")}
                     />
                     {(transform.k > 0.7 || isSelected) && (
                       <text
@@ -481,9 +493,15 @@ export function KnowledgeGraphPanel() {
           </svg>
         )}
 
-        {/* Inspector overlay */}
+        {/* Inspector overlay — pinned bottom on mobile (above safe-area),
+            top-right on desktop. */}
         {selected && (
-          <div className="absolute right-3 top-3 z-10 w-64 max-w-[calc(100%-1.5rem)] rounded-xl border bg-card/95 p-3 shadow-lg backdrop-blur">
+          <div
+            className={cn(
+              "absolute z-10 rounded-xl border bg-card/95 p-3 shadow-lg backdrop-blur",
+              "inset-x-3 bottom-3 pb-safe lg:inset-x-auto lg:bottom-auto lg:right-3 lg:top-3 lg:w-64 lg:pb-3",
+            )}
+          >
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
@@ -496,7 +514,7 @@ export function KnowledgeGraphPanel() {
                     {selected.type}
                   </span>
                   {selected.stale && (
-                    <span className="rounded-full bg-warning/10 px-1.5 py-0 font-mono text-[9px] uppercase text-warning">
+                    <span className="rounded-full bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase text-warning">
                       stale
                     </span>
                   )}
@@ -510,12 +528,12 @@ export function KnowledgeGraphPanel() {
                 variant="ghost"
                 onClick={() => setSelected(null)}
                 aria-label="Close"
-                className="size-6"
+                className="size-11 lg:size-8"
               >
-                <IconX className="size-3.5" />
+                <IconX className="size-5 lg:size-4" />
               </Button>
             </div>
-            <dl className="mt-2 grid grid-cols-2 gap-y-1 text-[11px]">
+            <dl className="mt-2 grid grid-cols-2 gap-y-1 text-xs lg:text-[11px]">
               <dt className="text-muted-foreground">degree</dt>
               <dd className="text-right font-mono tabular-nums">{selected.degree}</dd>
               <dt className="text-muted-foreground">id</dt>
