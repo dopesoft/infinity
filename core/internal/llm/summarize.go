@@ -14,17 +14,29 @@ import (
 // package has no dependency on memory. The Anthropic Summarizer adapter
 // converts between the two.
 type CompressedFacts struct {
-	Type     string         `json:"type"`
-	Title    string         `json:"title"`
-	Summary  string         `json:"summary"`
-	Concepts []string       `json:"concepts"`
-	Entities []FactEntity   `json:"entities"`
-	Files    []string       `json:"files"`
+	Type      string         `json:"type"`
+	Title     string         `json:"title"`
+	Summary   string         `json:"summary"`
+	Concepts  []string       `json:"concepts"`
+	Entities  []FactEntity   `json:"entities"`
+	Relations []FactRelation `json:"relations"`
+	Files     []string       `json:"files"`
 }
 
 type FactEntity struct {
 	Type string `json:"type"`
 	Name string `json:"name"`
+}
+
+// FactRelation is a directed, typed edge between two extracted entities.
+// Both endpoints must reference an entity present in the same Entities slice
+// (matched by name+type) — the compressor ignores dangling references.
+type FactRelation struct {
+	FromType string `json:"from_type"`
+	FromName string `json:"from_name"`
+	ToType   string `json:"to_type"`
+	ToName   string `json:"to_name"`
+	Type     string `json:"type"` // uses | depends_on | works_on | mentions | causes | etc
 }
 
 // AnthropicSummarizer uses Claude Haiku for cheap, fast structured extraction.
@@ -42,7 +54,7 @@ func NewAnthropicSummarizer(a *Anthropic, model string) *AnthropicSummarizer {
 	return &AnthropicSummarizer{a: a, model: model}
 }
 
-const summarizeSystem = `You are an extractor that converts agent observations into structured memory facts.
+const summarizeSystem = `You are an extractor that converts agent observations into structured memory facts and a knowledge graph.
 
 Return ONLY valid JSON in this exact shape (no commentary, no code fences):
 
@@ -52,8 +64,16 @@ Return ONLY valid JSON in this exact shape (no commentary, no code fences):
   "summary": "1-3 sentences capturing what's worth remembering",
   "concepts": ["concept1", "concept2"],
   "entities": [{"type": "person|project|file|concept|decision|error|skill", "name": "..."}],
+  "relations": [
+    {"from_type":"person","from_name":"boss","to_type":"project","to_name":"Infinity","type":"works_on"}
+  ],
   "files": ["path/one.go", "path/two.tsx"]
 }
+
+Relation guidelines:
+- Both endpoints MUST appear in the entities array.
+- Use lowercase verb-like types: works_on, uses, depends_on, owns, mentions, causes, prefers, supersedes, contradicts, related.
+- Only emit relations you can defend from the observation text. Skip the field if uncertain.
 
 If the observation is empty, boilerplate, or low-value, return:
 {"type":"event","title":"","summary":""}

@@ -94,6 +94,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/memories", s.handleMemoryList)
 	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
+	mux.HandleFunc("/api/memory/profile", s.handleProfile)
 }
 
 func (s *Server) Start() error {

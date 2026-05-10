@@ -37,5 +37,14 @@ func (a *llmSummarizerAdapter) SummarizeObservation(ctx context.Context, hookNam
 	for _, e := range facts.Entities {
 		out.Entities = append(out.Entities, Entity{Type: e.Type, Name: e.Name})
 	}
+	for _, r := range facts.Relations {
+		out.Relations = append(out.Relations, RelationFact{
+			FromType: r.FromType,
+			FromName: r.FromName,
+			ToType:   r.ToType,
+			ToName:   r.ToName,
+			Type:     r.Type,
+		})
+	}
 	return out, nil
 }

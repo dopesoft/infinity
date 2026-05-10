@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -263,22 +264,79 @@ func intervalArg(d time.Duration) any {
 
 // BuildSystemPrefix implements agent.MemoryProvider, so memory plugs into the
 // agent loop without coupling.
+//
+// Composes two layers:
+//  1. The boss-profile primer — semantic-tier memories under project='_self'.
+//     Always prepended so generic queries (where retrieval finds nothing) still
+//     have identity context: who the user is, persistent preferences, projects
+//     in flight.
+//  2. Query-relevant retrieval — the standard triple-stream RRF search.
 func (s *Searcher) BuildSystemPrefix(ctx context.Context, sessionID, query string) (string, error) {
+	var b stringBuilder
+
+	if profile, _ := s.fetchBossProfile(ctx); profile != "" {
+		b.WriteString("About the boss (always-on context):\n")
+		b.WriteString(profile)
+		b.WriteString("\n")
+	}
+
 	results, err := s.Search(ctx, query, SearchOpts{Limit: 10})
+	if err != nil {
+		// Even if the search fails, return any profile we already wrote so
+		// the agent doesn't lose identity context to a transient pgvector hiccup.
+		if got := b.String(); got != "" {
+			return got, nil
+		}
+		return "", err
+	}
+	if len(results) > 0 {
+		b.WriteString("Relevant memory (cite when used):\n")
+		for i, r := range results {
+			fmt.Fprintf(&b, "  [%d] (%s · %s) %s\n",
+				i+1, r.HookName, r.CreatedAt.Format("2006-01-02"), trim(r.RawText, 200))
+		}
+	}
+	return b.String(), nil
+}
+
+// fetchBossProfile pulls the always-on identity primer. Lives in mem_memories
+// at tier='semantic' AND project='_self'. Cap at 8 rows / ~1.5k chars so we
+// don't balloon the system prompt — if you need more, write fewer/denser facts.
+func (s *Searcher) fetchBossProfile(ctx context.Context) (string, error) {
+	if s.pool == nil {
+		return "", nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(title, ''), COALESCE(content, '')
+		FROM mem_memories
+		WHERE tier = 'semantic'
+		  AND status = 'active'
+		  AND project = '_self'
+		ORDER BY importance DESC, updated_at DESC
+		LIMIT 8
+	`)
 	if err != nil {
 		return "", err
 	}
-	if len(results) == 0 {
-		return "", nil
+	defer rows.Close()
+	var out stringBuilder
+	totalLen := 0
+	for rows.Next() {
+		var title, content string
+		if err := rows.Scan(&title, &content); err != nil {
+			return "", err
+		}
+		line := strings.TrimSpace(content)
+		if line == "" {
+			continue
+		}
+		if totalLen+len(line) > 1500 {
+			break
+		}
+		fmt.Fprintf(&out, "  - %s\n", line)
+		totalLen += len(line)
 	}
-
-	var b stringBuilder
-	b.WriteString("Relevant memory (cite when used):\n")
-	for i, r := range results {
-		fmt.Fprintf(&b, "  [%d] (%s · %s) %s\n",
-			i+1, r.HookName, r.CreatedAt.Format("2006-01-02"), trim(r.RawText, 200))
-	}
-	return b.String(), nil
+	return out.String(), rows.Err()
 }
 
 // stringBuilder mirrors strings.Builder but adds Fprintf via fmt's Write.

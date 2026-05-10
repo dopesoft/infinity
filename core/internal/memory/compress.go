@@ -39,17 +39,32 @@ type Summarizer interface {
 
 // CompressedFacts is the structured shape we expect the LLM to return.
 type CompressedFacts struct {
-	Type     string   `json:"type"`     // decision | fact | error | preference | event
-	Title    string   `json:"title"`    // ≤80 chars
-	Summary  string   `json:"summary"`  // 1-3 sentences
-	Concepts []string `json:"concepts"` // free-text concepts
-	Entities []Entity `json:"entities"` // typed entities
-	Files    []string `json:"files"`
+	Type      string         `json:"type"`     // decision | fact | error | preference | event
+	Title     string         `json:"title"`    // ≤80 chars
+	Summary   string         `json:"summary"`  // 1-3 sentences
+	Concepts  []string       `json:"concepts"` // free-text concepts
+	Entities  []Entity       `json:"entities"` // typed entities → mem_graph_nodes
+	Relations []RelationFact `json:"relations"` // typed edges → mem_graph_edges
+	Files     []string       `json:"files"`
 }
 
 type Entity struct {
 	Type string `json:"type"` // person, project, file, concept, decision, error, skill
 	Name string `json:"name"`
+}
+
+// RelationFact is a directed, typed edge between two extracted entities.
+// Both endpoints reference an entity in the same Entities slice (matched by
+// type+name); dangling references are silently dropped during write.
+//
+// Distinct from memory.Relation, which represents a memory-to-memory edge in
+// mem_relations.
+type RelationFact struct {
+	FromType string `json:"from_type"`
+	FromName string `json:"from_name"`
+	ToType   string `json:"to_type"`
+	ToName   string `json:"to_name"`
+	Type     string `json:"type"`
 }
 
 func NewCompressor(pool *pgxpool.Pool, embedder embed.Embedder, llm Summarizer) *Compressor {
@@ -146,6 +161,9 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 		return fmt.Errorf("link source: %w", err)
 	}
 
+	// Track node IDs by "type|name" so relations below can resolve endpoints
+	// without a second roundtrip per edge.
+	nodeIDs := make(map[string]string, len(facts.Entities))
 	for _, ent := range facts.Entities {
 		entType := strings.ToLower(strings.TrimSpace(ent.Type))
 		entName := strings.TrimSpace(ent.Name)
@@ -161,11 +179,32 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 		`, entType, entName).Scan(&nodeID); err != nil {
 			continue
 		}
+		nodeIDs[entType+"|"+strings.ToLower(entName)] = nodeID
 		_, _ = tx.Exec(ctx, `
 			INSERT INTO mem_graph_node_observations (node_id, observation_id)
 			VALUES ($1, $2)
 			ON CONFLICT DO NOTHING
 		`, nodeID, observationID)
+	}
+
+	// Edges: only persist when both endpoints exist as nodes from this same
+	// extraction. Dangling refs (the model hallucinating an entity) are dropped.
+	for _, rel := range facts.Relations {
+		relType := strings.ToLower(strings.TrimSpace(rel.Type))
+		fromKey := strings.ToLower(strings.TrimSpace(rel.FromType)) + "|" + strings.ToLower(strings.TrimSpace(rel.FromName))
+		toKey := strings.ToLower(strings.TrimSpace(rel.ToType)) + "|" + strings.ToLower(strings.TrimSpace(rel.ToName))
+		if relType == "" || fromKey == "|" || toKey == "|" {
+			continue
+		}
+		fromID, okFrom := nodeIDs[fromKey]
+		toID, okTo := nodeIDs[toKey]
+		if !okFrom || !okTo || fromID == toID {
+			continue
+		}
+		_, _ = tx.Exec(ctx, `
+			INSERT INTO mem_graph_edges (source_id, target_id, edge_type, confidence)
+			VALUES ($1, $2, $3, $4)
+		`, fromID, toID, relType, 0.9)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
