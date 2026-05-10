@@ -1,0 +1,17 @@
+# MCP server registry. Set MCP_CONFIG to a different path to override.
+# Each entry connects on Core startup; tools register under namespace
+# "<server>.<tool>" (e.g. "filesystem.read_file").
+
+servers:
+  - name: filesystem
+    transport: stdio
+    enabled: true
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+
+  # Tavily MCP (uncomment + set TAVILY_API_KEY)
+  # - name: tavily
+  #   transport: sse
+  #   enabled: true
+  #   url: https://mcp.tavily.com/sse
+  #   auth: bearer
+  #   auth_token_env: TAVILY_API_KEY

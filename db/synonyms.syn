@@ -1,0 +1,10 @@
+db database
+perf performance
+auth authentication
+config configuration
+ws websocket
+mcp model-context-protocol
+llm language-model
+ui interface
+fs filesystem
+api endpoint

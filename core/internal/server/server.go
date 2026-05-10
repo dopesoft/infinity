@@ -4,24 +4,47 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Config struct {
-	Addr    string
-	Version string
+	Addr     string
+	Version  string
+	Loop     *agent.Loop
+	MCP      *tools.MCPManager
+	Pool     *pgxpool.Pool
+	Store    *memory.Store
+	Searcher *memory.Searcher
 }
 
 type Server struct {
-	cfg     Config
-	http    *http.Server
-	started time.Time
+	cfg      Config
+	http     *http.Server
+	loop     *agent.Loop
+	mcp      *tools.MCPManager
+	pool     *pgxpool.Pool
+	store    *memory.Store
+	searcher *memory.Searcher
+	started  time.Time
 }
 
 func New(cfg Config) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	s := &Server{cfg: cfg, started: time.Now()}
+	s := &Server{
+		cfg:      cfg,
+		loop:     cfg.Loop,
+		mcp:      cfg.MCP,
+		pool:     cfg.Pool,
+		store:    cfg.Store,
+		searcher: cfg.Searcher,
+		started:  time.Now(),
+	}
 
 	mux := http.NewServeMux()
 	s.routes(mux)
@@ -37,6 +60,14 @@ func New(cfg Config) *Server {
 
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.HandleFunc("/api/sessions", s.handleSessions)
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/tools", s.handleTools)
+	mux.HandleFunc("/api/mcp", s.handleMCP)
+	mux.HandleFunc("/api/memory/counts", s.handleMemoryCounts)
+	mux.HandleFunc("/api/memory/search", s.handleMemorySearch)
+	mux.HandleFunc("/api/memory/observations", s.handleObservations)
 }
 
 func (s *Server) Start() error {

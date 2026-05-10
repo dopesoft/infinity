@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { WebSocketProvider } from "@/lib/ws/provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -41,7 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} ${jetbrains.variable} font-sans`}>
-        {children}
+        <WebSocketProvider>{children}</WebSocketProvider>
       </body>
     </html>
   );
