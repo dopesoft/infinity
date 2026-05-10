@@ -87,7 +87,7 @@ export function SessionHeader({
           title="Compact session"
         >
           <Archive className="size-4" />
-          <span className="hidden sm:inline">/compact</span>
+          <span className="hidden sm:inline">compact</span>
         </Button>
         <Button
           variant="ghost"
@@ -97,7 +97,7 @@ export function SessionHeader({
           title="New session"
         >
           <Plus className="size-4" />
-          <span className="hidden sm:inline">/new</span>
+          <span className="hidden sm:inline">new</span>
         </Button>
       </div>
     </div>

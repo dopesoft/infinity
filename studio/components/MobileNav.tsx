@@ -11,6 +11,7 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { SignOutButton } from "@/components/SignOutButton";
 import { NAV_TABS } from "@/lib/nav-tabs";
 import { cn } from "@/lib/utils";
 
@@ -71,8 +72,9 @@ export function MobileNav() {
             );
           })}
 
-          <div className="mt-3 border-t pt-3">
-            <ThemeToggle className="w-full" />
+          <div className="mt-3 flex items-stretch gap-1 border-t pt-3">
+            <ThemeToggle variant="cycle-row" className="flex-1" />
+            <SignOutButton variant="row" onAfterSignOut={() => setOpen(false)} className="flex-1" />
           </div>
         </nav>
       </DrawerContent>

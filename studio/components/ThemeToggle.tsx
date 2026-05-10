@@ -2,9 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { Monitor, Moon, Sun } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 type Theme = "light" | "dark" | "system";
+type Variant = "dropdown" | "cycle-row";
 
 function applyTheme(theme: Theme) {
   const root = document.documentElement;
@@ -17,15 +25,22 @@ function applyTheme(theme: Theme) {
 }
 
 const OPTIONS: { value: Theme; label: string; Icon: typeof Sun }[] = [
-  { value: "light", label: "Light", Icon: Sun },
-  { value: "dark", label: "Dark", Icon: Moon },
+  { value: "light", label: "Light Mode", Icon: Sun },
+  { value: "dark", label: "Dark Mode", Icon: Moon },
   { value: "system", label: "Auto", Icon: Monitor },
 ];
 
-// ThemeToggle is a segmented control. Three options: Light / Dark / Auto
-// (Auto follows the OS prefers-color-scheme). Stored in localStorage; rehydrates
-// on mount. The same component renders inline anywhere — drawer, header, etc.
-export function ThemeToggle({ className }: { className?: string }) {
+// Two render modes:
+//   - "dropdown" (desktop header): icon-only trigger with a radio dropdown.
+//   - "cycle-row" (mobile drawer): full-width row, icon + label, tap to
+//     advance to the next theme. Matches the nav row styling above it.
+export function ThemeToggle({
+  variant = "dropdown",
+  className,
+}: {
+  variant?: Variant;
+  className?: string;
+}) {
   const [theme, setTheme] = useState<Theme>("system");
   const [mounted, setMounted] = useState(false);
 
@@ -43,46 +58,65 @@ export function ThemeToggle({ className }: { className?: string }) {
     }
   }, []);
 
-  function pick(next: Theme) {
+  function set(next: Theme) {
     setTheme(next);
     applyTheme(next);
     localStorage.setItem("theme", next);
   }
 
+  // Default to the system icon during SSR / pre-mount so hydration matches
+  // before localStorage is read.
+  const activeOption = mounted
+    ? OPTIONS.find((o) => o.value === theme) ?? OPTIONS[2]
+    : OPTIONS[2];
+  const ActiveIcon = activeOption.Icon;
+
+  if (variant === "cycle-row") {
+    function cycle() {
+      const idx = OPTIONS.findIndex((o) => o.value === theme);
+      const next = OPTIONS[(idx + 1) % OPTIONS.length];
+      set(next.value);
+    }
+    return (
+      <button
+        type="button"
+        onClick={cycle}
+        aria-label={`Theme: ${activeOption.label}. Tap to change.`}
+        className={cn(
+          "flex min-h-12 w-full items-center justify-center gap-2 rounded-lg px-3 py-3 text-base text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground",
+          className,
+        )}
+      >
+        <ActiveIcon className="size-5 shrink-0" aria-hidden />
+        <span className="font-medium">{activeOption.label}</span>
+      </button>
+    );
+  }
+
   return (
-    <div
-      role="radiogroup"
-      aria-label="Theme"
-      className={cn(
-        "inline-flex items-center gap-1 rounded-lg bg-muted p-1",
-        className,
-      )}
-    >
-      {OPTIONS.map(({ value, label, Icon }) => {
-        const active = mounted && theme === value;
-        return (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => pick(value)}
-            className={cn(
-              // min-h-9 on desktop matches TabNav's link height so the two
-              // segmented controls in the header sit on the same baseline.
-              // Mobile keeps min-h-8 because the toggle ships inside the
-              // bottom drawer where the row gets more breathing room.
-              "flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors lg:min-h-9",
-              active
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="size-4" aria-hidden />
-            <span>{label}</span>
-          </button>
-        );
-      })}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Theme"
+          className={cn(
+            "inline-flex size-9 items-center justify-center rounded-md text-foreground hover:bg-accent active:scale-95 lg:size-10",
+            className,
+          )}
+        >
+          <ActiveIcon className="size-4" aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[10rem]">
+        <DropdownMenuRadioGroup value={mounted ? theme : "system"} onValueChange={(v) => set(v as Theme)}>
+          {OPTIONS.map(({ value, label, Icon }) => (
+            <DropdownMenuRadioItem key={value} value={value}>
+              <Icon className="size-4 text-muted-foreground" aria-hidden />
+              {label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

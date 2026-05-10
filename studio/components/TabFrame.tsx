@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Infinity as InfinityIcon } from "lucide-react";
 import { TabNav } from "@/components/TabNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { SignOutButton } from "@/components/SignOutButton";
 import { StatusPill, type AgentState } from "@/components/StatusPill";
 import { FooterStatus } from "@/components/FooterStatus";
 import { MobileNav } from "@/components/MobileNav";
@@ -37,10 +38,11 @@ export function TabFrame({
           <TabNav />
         </div>
 
-        {/* Right cluster: theme toggle on desktop, hamburger on mobile. */}
+        {/* Right cluster: theme + sign out on desktop, hamburger on mobile. */}
         <div className="flex items-center gap-1">
-          <span className="hidden lg:inline">
+          <span className="hidden items-center gap-1 lg:inline-flex">
             <ThemeToggle />
+            <SignOutButton />
           </span>
           <span className="lg:hidden">
             <MobileNav />
