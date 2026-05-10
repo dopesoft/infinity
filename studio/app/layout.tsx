@@ -34,9 +34,13 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 5,
   viewportFit: "cover",
+  // resizes-content makes the layout viewport (and 100dvh math) shrink
+  // when the iOS keyboard opens, keeping the sticky composer above the
+  // keyboard without manual scroll-into-view.
+  interactiveWidget: "resizes-content",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0f1a" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
   ],
 };
 

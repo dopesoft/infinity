@@ -138,7 +138,10 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 
 	toolNames := make([]string, 0, len(listed.Tools))
 	for _, t := range listed.Tools {
-		name := s.Name + "." + t.Name
+		// Anthropic's tool name regex is ^[a-zA-Z0-9_-]{1,128}$ — no dots.
+		// Use a double underscore as the namespace separator and sanitise
+		// each side so MCP servers with hyphenated/dotted names still work.
+		name := sanitiseToolName(s.Name) + "__" + sanitiseToolName(t.Name)
 		desc := t.Description
 		schema := mapFromAny(t.InputSchema)
 		registry.Register(&mcpTool{
@@ -207,6 +210,38 @@ func collectText(content []mcp.Content) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// sanitiseToolName forces a string to match Anthropic's tool name regex
+// `^[a-zA-Z0-9_-]{1,128}$`. Anything outside that set is collapsed to `_`,
+// runs of `_` are coalesced, and the result is truncated to 128 chars.
+func sanitiseToolName(s string) string {
+	if s == "" {
+		return "_"
+	}
+	out := make([]byte, 0, len(s))
+	prevUnderscore := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '-'
+		if !ok {
+			if !prevUnderscore {
+				out = append(out, '_')
+				prevUnderscore = true
+			}
+			continue
+		}
+		out = append(out, c)
+		prevUnderscore = c == '_'
+	}
+	if len(out) > 128 {
+		out = out[:128]
+	}
+	if len(out) == 0 {
+		return "_"
+	}
+	return string(out)
 }
 
 func mapFromAny(v any) map[string]any {

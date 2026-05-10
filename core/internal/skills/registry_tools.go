@@ -28,7 +28,7 @@ func RegisterTools(reg *tools.Registry, registry *Registry, runner *Runner) {
 
 type listTool struct{ r *Registry }
 
-func (t *listTool) Name() string        { return "skills.list" }
+func (t *listTool) Name() string        { return "skills_list" }
 func (t *listTool) Description() string { return "List every installed skill with risk level + confidence." }
 func (t *listTool) Schema() map[string]any {
 	return map[string]any{
@@ -60,7 +60,7 @@ type invokeTool struct {
 	runner *Runner
 }
 
-func (t *invokeTool) Name() string        { return "skills.invoke" }
+func (t *invokeTool) Name() string        { return "skills_invoke" }
 func (t *invokeTool) Description() string { return "Execute a skill by name with the given args." }
 func (t *invokeTool) Schema() map[string]any {
 	return map[string]any{
@@ -106,7 +106,7 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 
 type discoverTool struct{ r *Registry }
 
-func (t *discoverTool) Name() string { return "skills.discover" }
+func (t *discoverTool) Name() string { return "skills_discover" }
 func (t *discoverTool) Description() string {
 	return "Semantic / phrase search over installed skills. Returns ranked matches."
 }
@@ -149,7 +149,7 @@ func (t *discoverTool) Execute(ctx context.Context, in map[string]any) (string, 
 
 type historyTool struct{ r *Registry }
 
-func (t *historyTool) Name() string        { return "skills.history" }
+func (t *historyTool) Name() string        { return "skills_history" }
 func (t *historyTool) Description() string { return "Recent runs of a skill (success/duration/output)." }
 func (t *historyTool) Schema() map[string]any {
 	return map[string]any{

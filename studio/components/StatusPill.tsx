@@ -1,11 +1,26 @@
 import { cn } from "@/lib/utils";
 
-export type AgentState = "awake" | "thinking" | "idle";
+export type AgentState =
+  | "awake"
+  | "listening"
+  | "thinking"
+  | "idle"
+  | "offline";
 
-const stateConfig: Record<AgentState, { label: string; dot: string; bg: string; fg: string }> = {
+const stateConfig: Record<
+  AgentState,
+  { label: string; sub?: string; dot: string; bg: string; fg: string }
+> = {
   awake: {
     label: "Awake",
     dot: "bg-success",
+    bg: "bg-success/10",
+    fg: "text-success",
+  },
+  listening: {
+    label: "Awake",
+    sub: "listening",
+    dot: "bg-success animate-pulse",
     bg: "bg-success/10",
     fg: "text-success",
   },
@@ -21,9 +36,21 @@ const stateConfig: Record<AgentState, { label: string; dot: string; bg: string; 
     bg: "bg-muted",
     fg: "text-muted-foreground",
   },
+  offline: {
+    label: "Offline",
+    dot: "bg-destructive",
+    bg: "bg-destructive/10",
+    fg: "text-destructive",
+  },
 };
 
-export function StatusPill({ state = "idle", className }: { state?: AgentState; className?: string }) {
+export function StatusPill({
+  state = "idle",
+  className,
+}: {
+  state?: AgentState;
+  className?: string;
+}) {
   const cfg = stateConfig[state];
   return (
     <span
@@ -35,7 +62,13 @@ export function StatusPill({ state = "idle", className }: { state?: AgentState; 
       )}
     >
       <span className={cn("size-1.5 rounded-full", cfg.dot)} />
-      {cfg.label}
+      <span>{cfg.label}</span>
+      {cfg.sub ? (
+        <>
+          <span className="opacity-50">·</span>
+          <span className="opacity-80">{cfg.sub}</span>
+        </>
+      ) : null}
     </span>
   );
 }

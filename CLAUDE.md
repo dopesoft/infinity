@@ -21,23 +21,32 @@ Phases 0-3 are done. Phases 4-8 (Skills system, Proactive Engine, Voyager self-e
 
 ## Architecture at a glance
 
+The full wiring (boot sequence, package layout, HTTP API map, write/read paths,
+phase-by-phase status with explicit gaps) lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Read it before any non-trivial change. The summary:
+
 ```
 infinity/
-  core/              # Go 1.22+ binary — agent loop, MCP client, memory, hooks, server
+  core/              # Go 1.26 binary — agent loop, MCP client, memory, hooks, server
     cmd/infinity/      # cobra CLI: serve, migrate, doctor, consolidate
-    db/migrations/     # 001_init, 002_memory, 003_search — embedded into binary
+    db/migrations/     # 001..006 — embedded via go:embed
     internal/
-      agent/loop.go    # the intentionally-small loop (nanobot-inspired)
-      llm/             # Provider interface + Anthropic, OpenAI, Google
+      agent/loop.go    # intentionally-small loop (nanobot-inspired)
+      llm/             # Provider interface + Anthropic, OpenAI, Google + Haiku summarizer
       tools/           # Registry, MCP client, native tools, memory tools
       memory/          # store, search (BM25+pgvector+graph), RRF, compress, forget, staleness, provenance
       hooks/           # 12-event pipeline + capture chain
-      embed/           # Embedder interface (stub | http | onnx)
-      server/          # HTTP + WebSocket + JSON API
+      embed/           # Embedder interface (stub | http)
+      skills/          # Phase 4 — registry, sandbox, runner, store, agent tools, HTTP
+      intent/          # Phase 5 — IntentFlow detector (Haiku) + decision store
+      proactive/       # Phase 5 — WAL, Working Buffer, Heartbeat, Trust queue, HTTP
+      cron/            # Phase 6 — robfig scheduler + agent executor + HTTP
+      sentinel/        # Phase 6 — manager + dispatcher (skill / log) + HTTP
+      server/          # HTTP + WebSocket + JSON API + audit
   studio/            # Next.js 14 app router
-    app/{live,sessions,memory,settings}/
-    components/        # TabFrame, ToolCallCard, MemoryCard, ProvenanceChain, …
-    components/ui/     # shadcn primitives
+    app/{live,sessions,memory,skills,heartbeat,trust,cron,audit,settings}/
+    components/        # TabFrame, MobileNav, Drawer, ToolCallCard, MemoryCard, SkillCard, …
+    components/ui/     # shadcn primitives + drawer (vaul)
     lib/               # ws client, api client, utils
   docker/            # codeexec + embed sidecar Dockerfiles (optional services)
   railway.toml
@@ -52,9 +61,10 @@ Two Dockerfiles at service roots (`core/Dockerfile`, `studio/Dockerfile`) — Ra
 The user lives on their phone. Every UI change must be designed for mobile first and verified at 375px. These rules are non-negotiable:
 
 - **`100dvh` everywhere, never `100vh`.** iOS Safari's address bar makes `vh` unreliable. Use `min-h-app` / `h-app` / `dvh` / `svh` Tailwind utilities defined in `studio/app/globals.css`.
-- **`viewport-fit=cover` + `env(safe-area-inset-*)`** on every fixed/sticky surface. Use the `pt-safe` / `pb-safe` / `px-safe` utilities. Composer footer, top bar, and any modal pinned to an edge needs them.
-- **16px minimum font on form fields.** Already enforced globally via `font-size: max(16px, 1rem)` in `globals.css`. Do not override with smaller sizes — iOS Safari will zoom on focus and break the layout.
-- **44×44 minimum touch targets.** Every `<Button>` defaults to `h-11`. Don't shrink interactive elements below this.
+- **`viewport-fit=cover` + `interactiveWidget: "resizes-content"`** on every page. Both are set in `studio/app/layout.tsx`. The `resizes-content` hint is what makes iOS Safari shrink the layout viewport when the keyboard opens, so a sticky composer stays above the keyboard automatically.
+- **`env(safe-area-inset-*)`** on every fixed/sticky surface. Use `pt-safe` / `pb-safe` / `px-safe`. Composer, top bar, and bottom drawers all need it.
+- **16px minimum font on form fields.** Enforced globally via `font-size: max(16px, 1rem)` in `globals.css`. Do not override — iOS Safari auto-zooms below 16px and breaks the layout.
+- **44×44 minimum touch targets.** Every `<Button>` defaults to `h-11`. The mobile drawer nav uses `min-h-12` rows. Don't shrink interactive elements below this.
 - **`overscroll-behavior: contain`** on body and every scroll region. Already global; preserve it on new scrollers (`scroll-touch` utility wraps both that and `-webkit-overflow-scrolling: touch`).
 - **WebSocket auto-reconnect on `pageshow` + `focus` + `visibilitychange`.** iOS Safari kills sockets when the tab is backgrounded. The reconnect logic lives in `studio/lib/ws/provider.tsx` — never strip those listeners.
 - **Composer pattern: `position: sticky`, never `position: fixed` with keyboard open.** iOS Safari has a known bug where `fixed` elements jump on keyboard open. Use sticky inside a flex column. See `studio/components/Composer.tsx`.
@@ -62,7 +72,19 @@ The user lives on their phone. Every UI change must be designed for mobile first
 - **`inputMode` set on every Input/Textarea.** `text` for free-form, `search` on search boxes, `numeric` for amounts.
 - **Test at 375px / 768px / 1280px.** Chrome DevTools mobile emulator with real iPhone UA covers most cases; verify on a real iPhone Safari before declaring a UI change shipped.
 - **Tabler Icons via `@tabler/icons-react`.** No Heroicons, no Material Icons. Stay consistent.
-- **Tailwind utility classes only — zero `style={}` props.** Already in the global rules; restating because it's especially load-bearing here. The tier palette / semantic colors / safe-area utilities are all Tailwind-native.
+- **Tailwind utility classes only — zero `style={}` props.** Already in the global rules; restating because it's especially load-bearing here. The tier palette / semantic colors / safe-area utilities are all Tailwind-native. The Composer's imperative `el.style.height` for textarea auto-resize is the only sanctioned exception (it sets a calculated value, not a styling concern).
+- **Hydration discipline.** Never call `Math.random()` / `crypto.randomUUID()` / `Date.now()` inside a `useState` initializer — defer to `useEffect`. Every locale-dependent `<time>` or `<Badge>` rendering a date must use `suppressHydrationWarning` because UTC server vs client locale produces divergent text.
+
+### Navigation pattern (mobile vs desktop)
+
+- **Desktop (`lg:`+):** centered `<TabNav>` in the sticky header + `<ThemeToggle>` on the right.
+- **Mobile (`<lg`):** logo on the left, right-hand hamburger that opens `<MobileNav>` — a draggable bottom-sheet drawer (vaul) with the full nav list and theme toggle. Tap a row to navigate; the drawer auto-dismisses.
+- **Modals follow the same convention.** Anything that would be a desktop `<Dialog>` opens as a `<Drawer>` from the bottom on mobile. Use the `<Drawer>` primitive in `studio/components/ui/drawer.tsx` — it's a vaul wrapper that already wires `pb-safe`, max-height `92dvh`, the drag handle, and the popover token theming.
+- **Don't add scrolling tab strips.** When you need more navigation than fits on a phone, grow the drawer — never put scrollable horizontal tabs in the header.
+
+### Theme: true black, no slate undertones
+
+The dark theme uses pure black (`hsl(0 0% 0%)`) backgrounds with neutral grays (no blue/slate hue rotation). When defining new tokens or components, keep that constraint — accent colors stay desaturated unless they're carrying meaning (info / success / warning / danger / tier palette). Don't reintroduce the shadcn-default `222 47%` slate.
 
 ### Memory + capture invariants
 
@@ -97,9 +119,14 @@ When asked to add a feature, read these files in this order to understand the re
 - Memory write path: `core/internal/hooks/capture.go` → `core/internal/memory/store.go` → `core/internal/memory/compress.go`
 - Memory read path: `core/internal/memory/search.go` → `core/internal/memory/rrf.go` → `core/internal/server/memory_api.go` → `studio/app/memory/page.tsx`
 - LLM provider boundary: `core/internal/llm/provider.go` → `core/internal/llm/anthropic.go` (reference impl)
-- Mobile UI conventions: `studio/app/globals.css` → `studio/components/TabFrame.tsx` → `studio/components/Composer.tsx`
+- Mobile UI conventions: `studio/app/globals.css` → `studio/components/TabFrame.tsx` → `studio/components/MobileNav.tsx` → `studio/components/ui/drawer.tsx` → `studio/components/Composer.tsx`
+- Skills end-to-end: `core/internal/skills/loader.go` → `registry.go` → `runner.go` → `registry_tools.go` → `studio/app/skills/page.tsx`
+- Proactive engine: `core/internal/intent/flow.go` → `core/internal/proactive/{wal,buffer,heartbeat,trust}.go` → `studio/app/{heartbeat,trust}/page.tsx`
+- Cron + Sentinels: `core/internal/cron/{scheduler,executor_agent}.go` → `core/internal/sentinel/{manager,dispatcher}.go` → `studio/app/cron/page.tsx`
 
 ## Phase status
+
+See `ARCHITECTURE.md` § 12 for the granular gap list. Summary:
 
 | Phase | Status | What |
 |---|---|---|
@@ -107,8 +134,11 @@ When asked to add a feature, read these files in this order to understand the re
 | 1 | ✅ | Working text bot: agent loop, LLM provider, WebSocket, Live tab |
 | 2 | ✅ | Tools and MCP: registry, websearch, filesystem, codeexec, httpfetch, Settings tab |
 | 3 | ✅ | Memory: agentmemory port, triple-stream retrieval, 12-hook pipeline, compression, Memory tab, provenance |
-| 4 | — | Skills system (procedural memories the agent writes for itself) |
-| 5 | — | Proactive Engine (agent initiates instead of only responding) |
+| 4 | ✅ substrate | Skills system: schema, registry, process-jail sandbox, agent tools, HTTP, Studio Skills tab. **Gaps:** container sandbox for high/critical, Tests sub-tab, "+ New skill" / Import buttons. |
+| 5 | ✅ substrate | Proactive Engine: IntentFlow detector (Haiku), WAL, Working Buffer, Heartbeat ticker, Trust queue, full schema, all HTTP APIs, Heartbeat + Trust tabs. **Gaps:** WS-handler integration of IntentFlow/WAL/Buffer (currently API-only), Compaction Recovery flow, Curiosity/Pattern/Surprise loops, 3-column Live, sub-tabs in Heartbeat. |
+| 6 | ✅ substrate | Cron + Sentinels: robfig scheduler with agent executor, sentinel manager + skill dispatcher, schemas, HTTP APIs, combined Cron+Sentinels tab. **Gaps:** Voyager curriculum/skill-generator/verifier/AutoSkill loops, skill discovery hooks, sentinel runtimes for non-webhook watch types. |
+| 7 | ⚠️ partial | Audit log endpoint + viewer. **Gaps:** command palette (cmd+K), sessions rewind, settings depth, knowledge graph viewer, backup/export, full doctor suite. |
+| 8 | — | Voice (skipped per direction) |
 | 6 | — | Voyager Self-Evolution (skill curriculum, automated improvement) |
 | 7 | — | Polish (token budgets, multi-provider failover, full benchmarks) |
 | 8 | — | Voice (always-on phone-first interface) |

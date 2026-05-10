@@ -2,93 +2,104 @@
 @tailwind components;
 @tailwind utilities;
 
+/* -----------------------------------------------------------------------
+ * Theme tokens (HSL).
+ *
+ * Light: clean neutral white-on-near-black surfaces, no blue tint.
+ * Dark:  TRUE black backgrounds (#000) with neutral gray surfaces; no
+ *        blue/slate undertone — "OLED-friendly" look.
+ *
+ * NOTE: Dark mode foreground deliberately keeps a touch of warmth via
+ * higher lightness; pure white on pure black is harsh, so we use 0 0% 96%.
+ * --------------------------------------------------------------------- */
+
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 222.2 47.4% 11.2%;
+    --foreground: 0 0% 8%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 47.4% 11.2%;
+    --popover-foreground: 0 0% 8%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 47.4% 11.2%;
+    --card-foreground: 0 0% 8%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 0 0% 8%;
+    --primary-foreground: 0 0% 98%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 8%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 0 0% 94%;
+    --accent-foreground: 0 0% 8%;
 
     --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 100%;
 
-    --ring: 215 20.2% 65.1%;
+    --ring: 0 0% 70%;
     --radius: 0.75rem;
 
-    --info: 217 91% 60%;
+    --info: 217 91% 55%;
     --info-foreground: 0 0% 100%;
-    --success: 142 71% 45%;
+    --success: 142 71% 38%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
+    --warning: 38 92% 48%;
     --warning-foreground: 0 0% 100%;
-    --danger: 0 84% 60%;
+    --danger: 0 84% 55%;
     --danger-foreground: 0 0% 100%;
 
-    --tier-working: 215 16% 47%;
-    --tier-episodic: 199 89% 64%;
+    --tier-working: 0 0% 50%;
+    --tier-episodic: 199 89% 50%;
     --tier-semantic: 217 91% 55%;
-    --tier-procedural: 271 70% 60%;
+    --tier-procedural: 271 70% 55%;
     --tier-stale: 38 92% 50%;
 
     --app-height: 100dvh;
   }
 
   .dark {
-    --background: 222.2 47% 7%;
-    --foreground: 210 40% 98%;
+    --background: 0 0% 0%;          /* TRUE black */
+    --foreground: 0 0% 96%;
 
-    --muted: 217.2 32.6% 14%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 65%;
 
-    --popover: 222.2 47% 9%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 96%;
 
-    --card: 222.2 47% 9%;
-    --card-foreground: 210 40% 98%;
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 96%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 0 0% 96%;
+    --primary-foreground: 0 0% 4%;
 
-    --secondary: 217.2 32.6% 14%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 0 0% 10%;
+    --secondary-foreground: 0 0% 96%;
 
-    --accent: 217.2 32.6% 14%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 96%;
 
-    --destructive: 0 62.8% 50%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
 
-    --ring: 217.2 32.6% 28%;
+    --ring: 0 0% 30%;
 
     --info: 217 91% 65%;
     --success: 142 71% 50%;
     --warning: 38 92% 55%;
     --danger: 0 84% 65%;
 
-    --tier-working: 215 16% 60%;
-    --tier-episodic: 199 89% 70%;
+    --tier-working: 0 0% 65%;
+    --tier-episodic: 199 89% 65%;
     --tier-semantic: 217 91% 65%;
     --tier-procedural: 271 70% 70%;
     --tier-stale: 38 92% 60%;
@@ -116,9 +127,13 @@
 
   body {
     min-height: 100dvh;
+    /* Lock the body so iOS Safari doesn't bounce when the keyboard opens
+     * or the URL bar transitions. Scrollers inside use scroll-touch. */
     overscroll-behavior: contain;
   }
 
+  /* ≥16px on form fields keeps iOS Safari from auto-zooming on focus,
+   * which blocks the URL-bar collapse and breaks dvh layout math. */
   input,
   textarea,
   select {
@@ -133,24 +148,58 @@
 }
 
 @layer utilities {
+  /* Use --app-height (100dvh) so the viewport math is correct as iOS
+   * Safari's URL bar collapses/expands. Avoid 100vh — it locks to the
+   * "expanded" height and produces overflow under the home indicator. */
   .h-app {
     height: var(--app-height);
   }
   .min-h-app {
     min-height: var(--app-height);
   }
+
+  /* Safe-area utilities. Use these on every fixed/sticky surface. */
   .pb-safe {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(env(safe-area-inset-bottom), 0px);
   }
   .pt-safe {
-    padding-top: env(safe-area-inset-top);
+    padding-top: max(env(safe-area-inset-top), 0px);
   }
   .px-safe {
-    padding-left: env(safe-area-inset-left);
-    padding-right: env(safe-area-inset-right);
+    padding-left: max(env(safe-area-inset-left), 0px);
+    padding-right: max(env(safe-area-inset-right), 0px);
   }
+
+  /* iOS-Safari-friendly momentum scrolling + contained overscroll. */
   .scroll-touch {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+  }
+
+  /* Handles the "sticky composer" pattern on iOS Safari: when the
+   * keyboard opens, modern Safari fires `interactive-widget=resizes-content`
+   * and shrinks the visual viewport. The dvh-based layout absorbs that
+   * automatically. The .keyboard-safe-bottom utility adds the safe-area
+   * inset only when the keyboard is closed; modern iOS handles this at
+   * the OS level via env(safe-area-inset-bottom) collapsing to 0 when the
+   * keyboard is up, so this is functionally equivalent to pb-safe. */
+  .keyboard-safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+  }
+}
+
+/* -----------------------------------------------------------------------
+ * vaul (Drawer) tokens — overrides so the bottom-drawer surface uses our
+ * popover token instead of the library's default theme.
+ * --------------------------------------------------------------------- */
+@layer components {
+  [data-vaul-drawer] {
+    @apply bg-popover text-popover-foreground;
+  }
+  [data-vaul-overlay] {
+    @apply bg-black/60;
+  }
+  [data-vaul-handle] {
+    @apply mx-auto mt-2 h-1.5 w-12 rounded-full bg-muted-foreground/40;
   }
 }
