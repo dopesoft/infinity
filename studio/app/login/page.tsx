@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { Infinity as InfinityIcon, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
@@ -84,19 +84,10 @@ export default function LoginPage() {
   const ownerLocked = authStatus?.enabled && authStatus.owner_set;
 
   return (
-    <div className="flex min-h-app w-full items-center justify-center bg-background p-4 pt-safe pb-safe">
+    <div className="flex min-h-app w-full flex-col items-center justify-center gap-6 bg-background p-4 pt-safe pb-safe">
+      <InfinityIcon className="size-10" aria-hidden />
       <Card className="w-full max-w-sm">
-        <CardHeader className="space-y-1.5">
-          <CardTitle className="text-2xl tracking-tight">Infinity</CardTitle>
-          <CardDescription>
-            {ownerLocked
-              ? "Sign in to continue."
-              : authStatus?.enabled === false
-                ? "Auth disabled — running in dev mode."
-                : "First sign-up claims this instance."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           <Tabs value={tab} onValueChange={(v) => setTab(v as "signin" | "signup")}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="signin">Sign in</TabsTrigger>
@@ -144,12 +135,6 @@ export default function LoginPage() {
                   {tab === "signin" ? "Sign in" : "Create account"}
                 </Button>
               </form>
-              {tab === "signup" && !ownerLocked && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  This account becomes the owner. Existing memories, sessions, and settings carry
-                  over.
-                </p>
-              )}
             </TabsContent>
           </Tabs>
         </CardContent>

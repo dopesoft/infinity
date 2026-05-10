@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Session, User } from "@supabase/supabase-js";
+import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type AuthState = {
@@ -41,7 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const supabase = getSupabaseBrowserClient();
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
       if (!mounted) return;
       setSession(data.session ?? null);
       setUser(data.session?.user ?? null);
@@ -50,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, sess) => {
+    } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, sess: Session | null) => {
       setSession(sess ?? null);
       setUser(sess?.user ?? null);
       setLoading(false);
