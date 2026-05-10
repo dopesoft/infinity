@@ -20,24 +20,28 @@ the optimizer in its own container so:
 
 ### Railway (recommended)
 
+The repo's `railway.toml` already registers a `gepa` service that builds
+from `docker/gepa/Dockerfile`. To provision it:
+
 ```sh
-railway service create gepa
-railway variables --service gepa \
-  --set ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
-# Build context = repo root, Dockerfile = docker/gepa.Dockerfile
+railway add --service gepa --repo dopesoft/infinity
+railway variables --service gepa --set ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+railway up --service gepa  # or push to main and let auto-deploy run
 ```
 
-Wire the URL into core:
+In the Railway dashboard, confirm the service's **Root Directory** is set
+to `docker/gepa` (the toml does this; double-check on first deploy).
+
+Wire the URL into core (Railway internal networking — no public ingress):
 
 ```sh
-railway variables --service core \
-  --set GEPA_URL=https://gepa.up.railway.app
+railway variables --service core --set GEPA_URL=http://gepa.railway.internal:8090
 ```
 
 ### Local
 
 ```sh
-docker build -t infinity-gepa -f docker/gepa.Dockerfile .
+docker build -t infinity-gepa docker/gepa/
 docker run -p 8090:8090 -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY infinity-gepa
 GEPA_URL=http://localhost:8090 go run ./cmd/infinity serve
 ```

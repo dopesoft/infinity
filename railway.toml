@@ -4,11 +4,12 @@
 #
 #   core service    → root directory = core/
 #   studio service  → root directory = studio/
-#   embed sidecar   → root directory = . (uses docker/embed.Dockerfile)
+#   gepa service    → root directory = docker/gepa/   (Phase-6 skill optimizer)
+#   embed sidecar   → root directory = .              (uses docker/embed.Dockerfile)
 #
 # Postgres: use Supabase or Neon for the database — both have pgvector
 # enabled. Set DATABASE_URL on the core service to the pooler URL with
-# sslmode=require.
+# sslmode=require. Honcho uses a separate schema on the same DB.
 
 [build]
 builder = "DOCKERFILE"
@@ -41,3 +42,18 @@ dockerfilePath = "Dockerfile"
 [services.deploy]
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+
+[[services]]
+name = "gepa"
+
+[services.source]
+rootDirectory = "docker/gepa"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+
+[services.deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/health"
+healthcheckTimeout = 30
