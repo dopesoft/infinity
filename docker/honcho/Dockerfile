@@ -44,4 +44,19 @@ EXPOSE 8000
 # Run uvicorn directly via python -m so we don't depend on the fastapi
 # shell-script wrapper having +x. Honcho's app object is src.main:app.
 ENV PORT=8000
-CMD ["sh", "-c", "exec python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
+# Honcho expects an async SQLAlchemy URL (postgresql+psycopg://) but
+# Railway/Supabase emit plain postgresql:// URLs. We rewrite the prefix
+# at container startup so the secret never has to be edited by hand and
+# Railway reference variables (${{core.DATABASE_URL}}) keep working.
+CMD ["sh", "-c", "\
+  if [ -n \"$DB_CONNECTION_URI\" ]; then \
+    case \"$DB_CONNECTION_URI\" in \
+      postgresql+*) ;; \
+      postgresql://*) DB_CONNECTION_URI=\"postgresql+psycopg://${DB_CONNECTION_URI#postgresql://}\" ;; \
+      postgres://*)   DB_CONNECTION_URI=\"postgresql+psycopg://${DB_CONNECTION_URI#postgres://}\" ;; \
+    esac; \
+    export DB_CONNECTION_URI; \
+  fi; \
+  exec python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000} \
+"]
