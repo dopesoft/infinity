@@ -1,52 +1,47 @@
 # Honcho FastAPI server — built from upstream plastic-labs/honcho.
 #
-# We pin to a specific commit so a future plastic-labs change can't break
-# Infinity unexpectedly. Bump the ARG when you intentionally upgrade after
-# verifying Honcho's schema migrations against Supabase.
+# We pin to a branch and rebuild from source on each image push. The
+# upstream repo's own Dockerfile assumes its source layout is at the build
+# context root; we don't have that locally so we clone it during the build
+# and run the equivalent steps single-stage.
 #
 # Build context = docker/honcho/  (Railway service root)
-# This Dockerfile clones the upstream repo at build time and reuses their
-# tooling, so we don't copy/maintain Honcho source in our tree.
 
-FROM python:3.13-slim-bookworm AS build
+FROM python:3.13-slim-bookworm
 
-# Pin Honcho to a known-good commit. Update intentionally.
 ARG HONCHO_REF=main
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_COMPILE_BYTECODE=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:/root/.local/bin:$PATH"
 
-# git is needed for the clone; ca-certificates so https works.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
-# uv is Honcho's package manager.
+# Install uv (Honcho's package manager).
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 
 WORKDIR /app
 RUN git clone --depth 1 --branch "$HONCHO_REF" https://github.com/plastic-labs/honcho.git /app
+
+# Install runtime deps into the venv.
 RUN uv sync --frozen --no-group dev
 
-FROM python:3.13-slim-bookworm
+# Make sure all installed scripts are executable. uv occasionally leaves
+# entry-points without the exec bit on multi-arch builds; this is cheap
+# insurance.
+RUN chmod -R a+rX /app /app/.venv && find /app/.venv/bin -type f -exec chmod a+x {} \;
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
-
-# Non-root user — match Honcho's upstream convention.
-RUN useradd --no-create-home --shell /usr/sbin/nologin --uid 10001 app
-
-COPY --from=build /app /app
-RUN chown -R app:app /app
-WORKDIR /app
-USER app
-
-# Railway injects PORT; default to 8000 for local parity.
-ENV PORT=8000
+# Run as root inside the container — Railway already sandboxes per-service
+# and the container has no persistent volumes, so the non-root pattern
+# isn't load-bearing here. (Upstream uses a non-root user; we drop that
+# only so installed venv binaries stay executable without further work.)
 EXPOSE 8000
 
-# fastapi-cli ships with Honcho's deps, hosts src/main.py at the configured
-# port. The --host flag is required so Railway's healthcheck reaches it.
-CMD ["sh", "-c", "fastapi run --host 0.0.0.0 --port ${PORT:-8000} src/main.py"]
+# Run uvicorn directly via python -m so we don't depend on the fastapi
+# shell-script wrapper having +x. Honcho's app object is src.main:app.
+ENV PORT=8000
+CMD ["sh", "-c", "exec python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
