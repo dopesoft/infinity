@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Check, RefreshCw, X, Clock } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,8 @@ const STATUS_FILTERS = ["pending", "approved", "denied", "snoozed", "all"] as co
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 export default function TrustPage() {
+  const searchParams = useSearchParams();
+  const focusId = searchParams.get("focus") ?? "";
   const [contracts, setContracts] = useState<TrustContractDTO[]>([]);
   const [selected, setSelected] = useState<TrustContractDTO | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
@@ -44,6 +47,20 @@ export default function TrustPage() {
   }, [statusFilter]);
 
   useRealtime("mem_trust_contracts", load);
+
+  // When the page is opened with ?focus=<contract-id> (e.g. from a gated
+  // ToolCallCard's "Approve in Trust tab" link), pre-select that contract
+  // and switch to the detail view as soon as the list lands. Match by
+  // prefix so callers don't need to copy the full UUID.
+  useEffect(() => {
+    if (!focusId || contracts.length === 0) return;
+    const match = contracts.find((c) => c.id === focusId || c.id.startsWith(focusId));
+    if (match && match.id !== selected?.id) {
+      setSelected(match);
+      setShowDetail(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, contracts]);
 
   async function decide(id: string, decision: "approved" | "denied" | "snoozed") {
     await decideTrust(id, decision);

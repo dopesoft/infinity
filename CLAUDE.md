@@ -94,9 +94,30 @@ The dark theme uses pure black (`hsl(0 0% 0%)`) backgrounds with neutral grays (
 - **Provenance link is mandatory for every promoted memory.** `mem_memory_sources` rows must be written when an observation becomes a memory. Don't skip the bookkeeping.
 - **No service-role secrets in the codebase.** Infinity Core connects to Postgres directly via `pgx`. We don't use Supabase's PostgREST — service_role and anon JWTs stay in the Supabase dashboard.
 
+### Coding via Claude Code (Max-subscription, ToS-clean)
+
+- **Coding tools are wired through MCP, not raw shell-out.** The `claude_code` server in `core/config/mcp.yaml` connects over SSE to a home-Mac bridge (Cloudflare Tunnel → mcp-proxy → `claude mcp serve`). Bash/Read/Write/Edit/Grep/Glob/LS register as `claude_code__bash`, `claude_code__edit`, etc. See `docs/claude-code/SETUP.md`.
+- **OAuth tokens never leave the Mac.** Anthropic's Feb 2026 ToS forbids using subscription OAuth tokens in any other product. Infinity's compliance posture is: invoke `claude` as a subprocess on the Mac via MCP — that's the supported path. Don't ever copy `~/.claude/.credentials.json` anywhere.
+- **High-risk tool calls route through the Trust queue.** `core/internal/proactive/gate.go` (`ClaudeCodeGate`) intercepts `claude_code__bash`, `claude_code__write`, `claude_code__edit` by default and inserts a `mem_trust_contracts` row. The synthetic tool result tells the model to ask the boss to approve in Studio's Trust tab. Override the verb list with `INFINITY_CLAUDE_CODE_BLOCK` and `INFINITY_CLAUDE_CODE_AUTOAPPROVE`.
+- **Non-coding chat keeps using the Anthropic API.** The agent's brain is whatever `LLM_PROVIDER` resolves to (default: Anthropic Sonnet 4.5 via API key). Claude Code on the Mac only wakes up when the model decides to call a `claude_code__*` tool. API key billing for chat, subscription billing for coding — no leakage either direction.
+- **`claude mcp serve` runs with `--dangerously-skip-permissions`.** Infinity's gate is the actual approval mechanism; the CLI's interactive prompts can't be answered remotely. The launchd plists in `docs/claude-code/launchd/` set the flag; don't strip it.
+
+### Honcho (dialectic peer modelling)
+
+- **Honcho complements `mem_*`, doesn't replace it.** Set `HONCHO_BASE_URL` to enable. The `agent.CompositeMemory` chains Infinity's `Searcher` (RRF retrieval, primary) with `honcho.MemoryProvider` (peer representation). Hooks mirror user/assistant messages into Honcho async; the representation is cached for 60s and folded into the system prompt under "About the boss (Honcho dialectic)".
+- **Privacy holds.** `memory.StripSecrets` runs *before* the hook fires, so Honcho only ever sees redacted text — same redaction Infinity stores in `mem_observations`.
+- See `docs/honcho/SETUP.md` for deploy options (Railway service, Docker Compose, Honcho Cloud).
+
+### GEPA (Hermes-style skill self-evolution)
+
+- **Phase 1 only — SKILL.md optimization.** No code mutation, no full DSPy compilation. Same scope Hermes ships today.
+- **Sidecar at `docker/gepa.Dockerfile`** runs DSPy + a Genetic-Pareto loop over Anthropic Haiku. POST `/api/voyager/optimize` with `{ "skill": "<name>" }` to trigger.
+- **Hard gates in `core/internal/voyager/optimizer.go`**: ≤15KB, valid frontmatter, non-empty, non-identical, ≥1 candidate scored. Winners land in `mem_skill_proposals` and route through the existing Trust/decide flow.
+- **Triggered manually for now**, not auto on failure rate. See `docs/gepa/README.md` for cost (~$0.05–$0.20 per run) and usage.
+
 ### Deployment + operations
 
-- **Two services on Railway: `core` and `studio`.** Their root directories in Railway are `core/` and `studio/` respectively. Auto-detected Dockerfiles.
+- **Three Railway services: `core`, `studio`, optional `honcho` + `gepa`.** Each has its own root directory and auto-detected Dockerfile.
 - **Postgres lives on Supabase.** Connection string is the **session pooler** at `aws-1-us-west-1.pooler.supabase.com:5432` (IPv4) — direct connection is IPv6-only on free tier and unreachable from Railway.
 - **`infinity migrate` reads embedded migrations by default.** Pass `--dir core/db/migrations` only when iterating on schema locally.
 - **Never commit `.env`.** Already gitignored. Set production vars via `railway variables --service <name> --set KEY=VALUE`.
@@ -123,6 +144,9 @@ When asked to add a feature, read these files in this order to understand the re
 - Skills end-to-end: `core/internal/skills/loader.go` → `registry.go` → `runner.go` → `registry_tools.go` → `studio/app/skills/page.tsx`
 - Proactive engine: `core/internal/intent/flow.go` → `core/internal/proactive/{wal,buffer,heartbeat,trust}.go` → `studio/app/{heartbeat,trust}/page.tsx`
 - Cron + Sentinels: `core/internal/cron/{scheduler,executor_agent}.go` → `core/internal/sentinel/{manager,dispatcher}.go` → `studio/app/cron/page.tsx`
+- Claude Code coding bridge: `core/config/mcp.yaml` → `core/internal/tools/mcp.go` (bearer auth) → `core/internal/agent/{gate,loop}.go` → `core/internal/proactive/gate.go` → `docs/claude-code/SETUP.md`
+- Honcho user modelling: `core/internal/honcho/{client,provider}.go` → `core/internal/agent/composite_memory.go` → `core/cmd/infinity/serve.go` → `docs/honcho/SETUP.md`
+- GEPA skill optimizer: `docker/gepa.Dockerfile` + `docker/gepa/server.py` → `core/internal/voyager/optimizer.go` → `core/internal/voyager/api.go` (`POST /api/voyager/optimize`) → `docs/gepa/README.md`
 
 ## Phase status
 

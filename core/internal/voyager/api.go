@@ -16,6 +16,7 @@ func NewAPI(m *Manager) *API { return &API{m: m} }
 //	GET  /api/voyager/status                — manager status + counters
 //	GET  /api/voyager/proposals?status=X    — list proposals
 //	POST /api/voyager/proposals/{id}/decide — { "decision": "promoted" | "rejected" }
+//	POST /api/voyager/optimize              — { "skill": "<name>" } GEPA evolve
 func (api *API) Routes(mux *http.ServeMux) {
 	if api == nil {
 		return
@@ -23,6 +24,51 @@ func (api *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/voyager/status", api.handleStatus)
 	mux.HandleFunc("/api/voyager/proposals", api.handleProposals)
 	mux.HandleFunc("/api/voyager/proposals/", api.handleProposalDecide)
+	mux.HandleFunc("/api/voyager/optimize", api.handleOptimize)
+}
+
+func (api *API) handleOptimize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if api.m == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "voyager disabled"})
+		return
+	}
+	var body struct {
+		Skill      string `json:"skill"`
+		TraceLimit int    `json:"trace_limit,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	skillName := strings.TrimSpace(body.Skill)
+	if skillName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "skill is required"})
+		return
+	}
+	opt := NewOptimizer()
+	if !opt.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "GEPA sidecar not configured; set GEPA_URL on core",
+		})
+		return
+	}
+	winner, calls, err := api.m.RunOptimizer(r.Context(), opt, skillName, body.TraceLimit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skill":      skillName,
+		"calls":      calls,
+		"score":      winner.Score,
+		"size_chars": winner.SizeChars,
+		"rationale":  winner.Rationale,
+	})
 }
 
 type statusDTO struct {

@@ -1,0 +1,205 @@
+// Package honcho is a thin client for plastic-labs/honcho — an open-source
+// dialectic peer-modelling system Infinity treats as a complement to its own
+// memory store. Honcho derives "who the boss is" from interaction traces.
+// Infinity's mem_* tables remain the source of truth for facts, provenance
+// and audit; Honcho contributes a continually-updated peer representation
+// the agent injects into the system prompt as user-context.
+//
+// Wire this in only when HONCHO_BASE_URL is set. Without it, the package
+// returns a no-op client and the agent loop runs unchanged.
+package honcho
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	defaultTimeout    = 6 * time.Second
+	defaultPeerName   = "boss"
+	defaultWorkspace  = "infinity"
+)
+
+// Client talks to a Honcho deployment via its REST API. Configure with
+// HONCHO_BASE_URL (e.g. https://honcho.your-domain.com) and HONCHO_API_KEY.
+// HONCHO_WORKSPACE / HONCHO_PEER override the default identifiers.
+type Client struct {
+	base       string
+	apiKey     string
+	workspace  string
+	peer       string
+	httpClient *http.Client
+
+	cacheMu sync.RWMutex
+	repCache string
+	repAt    time.Time
+}
+
+// FromEnv returns a Client when HONCHO_BASE_URL is set, otherwise nil. Callers
+// should treat a nil return as "Honcho disabled" and not call any methods on
+// it — every method already nil-guards but skipping the call avoids the
+// allocations.
+func FromEnv() *Client {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("HONCHO_BASE_URL")), "/")
+	if base == "" {
+		return nil
+	}
+	c := &Client{
+		base:      base,
+		apiKey:    strings.TrimSpace(os.Getenv("HONCHO_API_KEY")),
+		workspace: envOr("HONCHO_WORKSPACE", defaultWorkspace),
+		peer:      envOr("HONCHO_PEER", defaultPeerName),
+		httpClient: &http.Client{
+			Timeout: defaultTimeout,
+		},
+	}
+	return c
+}
+
+// Enabled reports whether the client has a base URL.
+func (c *Client) Enabled() bool { return c != nil && c.base != "" }
+
+// Workspace, Peer expose the resolved identifiers for diagnostics.
+func (c *Client) Workspace() string { if c == nil { return "" }; return c.workspace }
+func (c *Client) Peer() string      { if c == nil { return "" }; return c.peer }
+
+func envOr(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// Message is a single observation pushed to Honcho. The peer-id identifies
+// the speaker. session_id ties messages together so Honcho's reasoning
+// pipeline can summarise per session as well as across.
+type Message struct {
+	PeerID    string `json:"peer_id"`
+	SessionID string `json:"session_id,omitempty"`
+	Content   string `json:"content"`
+	Role      string `json:"role,omitempty"` // "user" | "assistant"
+}
+
+// PostMessage is a fire-and-forget write of a single observation. Errors are
+// returned but the agent loop should not block on them — call this from a
+// hook goroutine.
+func (c *Client) PostMessage(ctx context.Context, m Message) error {
+	if !c.Enabled() {
+		return nil
+	}
+	if m.PeerID == "" {
+		m.PeerID = c.peer
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/v1/workspaces/%s/messages", c.base, c.workspace)
+	return c.do(ctx, http.MethodPost, url, body, nil)
+}
+
+// DialecticQuery asks Honcho's reasoning endpoint a natural-language
+// question about the peer ("what does the boss prefer when X?") and returns
+// the LLM-generated answer. Used by the memory provider to fold a peer
+// snapshot into the system prompt.
+type DialecticQuery struct {
+	Question string `json:"question"`
+}
+
+type DialecticResponse struct {
+	Answer string `json:"answer"`
+}
+
+// Ask runs a dialectic query. Honcho's exact endpoint shape has shifted
+// across versions; we POST to /v1/workspaces/<ws>/peers/<peer>/chat which
+// matches the current main branch. If the deployment exposes a different
+// path, override via HONCHO_DIALECTIC_PATH.
+func (c *Client) Ask(ctx context.Context, q string) (string, error) {
+	if !c.Enabled() {
+		return "", nil
+	}
+	path := envOr("HONCHO_DIALECTIC_PATH",
+		fmt.Sprintf("/v1/workspaces/%s/peers/%s/chat", c.workspace, c.peer))
+	url := c.base + path
+	body, _ := json.Marshal(DialecticQuery{Question: q})
+	var resp DialecticResponse
+	if err := c.do(ctx, http.MethodPost, url, body, &resp); err != nil {
+		return "", err
+	}
+	return resp.Answer, nil
+}
+
+// Representation returns the cached peer representation, refreshing it from
+// Honcho if older than ttl. Used by the memory provider on every system
+// prefix build — keeps the representation hot while bounding traffic.
+func (c *Client) Representation(ctx context.Context, ttl time.Duration) (string, error) {
+	if !c.Enabled() {
+		return "", nil
+	}
+	if ttl <= 0 {
+		ttl = 60 * time.Second
+	}
+	c.cacheMu.RLock()
+	cached, at := c.repCache, c.repAt
+	c.cacheMu.RUnlock()
+	if cached != "" && time.Since(at) < ttl {
+		return cached, nil
+	}
+
+	path := envOr("HONCHO_REPRESENTATION_PATH",
+		fmt.Sprintf("/v1/workspaces/%s/peers/%s/representation", c.workspace, c.peer))
+	url := c.base + path
+	var raw struct {
+		Content string `json:"content"`
+	}
+	if err := c.do(ctx, http.MethodGet, url, nil, &raw); err != nil {
+		return cached, err // return last good if refresh fails
+	}
+	c.cacheMu.Lock()
+	c.repCache = raw.Content
+	c.repAt = time.Now()
+	c.cacheMu.Unlock()
+	return raw.Content, nil
+}
+
+func (c *Client) do(ctx context.Context, method, url string, body []byte, decodeInto any) error {
+	if !c.Enabled() {
+		return errors.New("honcho: client disabled")
+	}
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("honcho %s %s: %d %s", method, url, resp.StatusCode, string(raw))
+	}
+	if decodeInto == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(decodeInto)
+}

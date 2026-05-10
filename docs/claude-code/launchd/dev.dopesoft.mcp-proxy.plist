@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mcp-proxy bridges Claude Code's stdio MCP transport to SSE on 127.0.0.1:8765.
+  cloudflared exposes :8765 publicly behind Cloudflare Access.
+
+  The `--` separates mcp-proxy flags from the inner `claude mcp serve` invocation.
+  --dangerously-skip-permissions is intentional: Infinity's Trust queue is the
+  authorization gate, not the CLI prompt.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.dopesoft.mcp-proxy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>exec mcp-proxy --sse-port 8765 --sse-host 127.0.0.1 -- claude mcp serve --dangerously-skip-permissions</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__/Dev</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/mcp-proxy.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/mcp-proxy.err</string>
+</dict>
+</plist>

@@ -1,12 +1,33 @@
 # MCP server registry. Set MCP_CONFIG to a different path to override.
 # Each entry connects on Core startup; tools register under namespace
-# "<server>.<tool>" (e.g. "filesystem.read_file").
+# "<server>__<tool>" (e.g. "filesystem__read_file"). Anthropic tool-name
+# regex disallows dots, so a double underscore is the namespace separator.
 
 servers:
   - name: filesystem
     transport: stdio
     enabled: true
     command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+
+  # Claude Code via the home-Mac coder bridge.
+  #
+  # Brings Bash, Read, Write, Edit, LS, Grep, Glob into Infinity using the
+  # boss's Max subscription (no API key billed). The Mac runs `claude mcp serve`
+  # under launchd, mcp-proxy bridges stdio→SSE, Cloudflare Tunnel exposes the
+  # SSE endpoint with a static bearer token at the edge. End-to-end:
+  #
+  #   Railway Core ── HTTPS+SSE ──▶ Cloudflare ──▶ tunnel ──▶ Mac
+  #                                                            ├─ mcp-proxy (stdio↔SSE)
+  #                                                            └─ claude mcp serve
+  #
+  # Disabled by default. Set CLAUDE_CODE_TUNNEL_URL + CLAUDE_CODE_TUNNEL_SECRET
+  # and flip enabled to true once docs/claude-code/SETUP.md has been completed.
+  - name: claude_code
+    transport: sse
+    enabled: false
+    url_env: CLAUDE_CODE_TUNNEL_URL
+    auth: bearer
+    auth_token_env: CLAUDE_CODE_TUNNEL_SECRET
 
   # Tavily MCP (uncomment + set TAVILY_API_KEY)
   # - name: tavily

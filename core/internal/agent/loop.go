@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,6 +75,7 @@ type Loop struct {
 	memory      MemoryProvider
 	hooks       HookEmitter
 	skills      SkillMatcher
+	gate        ToolGate
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -88,6 +90,7 @@ type Config struct {
 	Memory            MemoryProvider
 	Hooks             HookEmitter
 	Skills            SkillMatcher
+	Gate              ToolGate
 	SystemPrompt      string
 	MaxToolIterations int
 }
@@ -102,12 +105,16 @@ func New(cfg Config) *Loop {
 	if cfg.Tools == nil {
 		cfg.Tools = tools.NewRegistry()
 	}
+	if cfg.Gate == nil {
+		cfg.Gate = AllowAll{}
+	}
 	return &Loop{
 		llmProvider:       cfg.LLM,
 		tools:             cfg.Tools,
 		memory:            cfg.Memory,
 		hooks:             cfg.Hooks,
 		skills:            cfg.Skills,
+		gate:              cfg.Gate,
 		systemPrompt:      cfg.SystemPrompt,
 		maxToolIterations: cfg.MaxToolIterations,
 		sessions:          make(map[string]*Session),
@@ -270,8 +277,25 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 			})
 			l.fireHook("PreToolUse", s.ID, s.Project, tc.Name, map[string]any{"name": tc.Name, "input": tc.Input})
 
-			output, execErr := l.tools.Execute(ctx, tc)
-			endedAt := time.Now().UTC()
+			var (
+				output  string
+				execErr error
+				endedAt time.Time
+			)
+			decision := l.gate.Authorize(ctx, s.ID, s.Project, tc.Name, tc.Input)
+			if !decision.Allow {
+				endedAt = time.Now().UTC()
+				output = formatGatedOutput(tc.Name, decision)
+				l.fireHook("ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
+					"name":        tc.Name,
+					"input":       tc.Input,
+					"reason":      decision.Reason,
+					"contract_id": decision.ContractID,
+				})
+			} else {
+				output, execErr = l.tools.Execute(ctx, tc)
+				endedAt = time.Now().UTC()
+			}
 
 			isErr := execErr != nil
 			if isErr {
@@ -330,4 +354,27 @@ func emit(ch chan<- RunEvent, ev RunEvent) {
 	case ch <- ev:
 	default:
 	}
+}
+
+// formatGatedOutput is the synthetic tool result shown to the LLM when a
+// gate blocks execution. It tells the model the action is queued for human
+// approval and includes the contract id so the model can reference it in a
+// reply ("I queued the migration for your approval — see Trust tab").
+func formatGatedOutput(toolName string, d GateDecision) string {
+	var b strings.Builder
+	b.WriteString("BLOCKED: tool ")
+	b.WriteString(toolName)
+	b.WriteString(" requires the boss's approval before running.\n")
+	if d.Reason != "" {
+		b.WriteString("Reason: ")
+		b.WriteString(d.Reason)
+		b.WriteString("\n")
+	}
+	if d.ContractID != "" {
+		b.WriteString("Trust contract: ")
+		b.WriteString(d.ContractID)
+		b.WriteString("\n")
+	}
+	b.WriteString("Tell the boss it is queued in the Trust tab and wait for approval before retrying.")
+	return b.String()
 }

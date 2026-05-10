@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,8 +25,39 @@ type MCPServerConfig struct {
 	Enabled      bool     `yaml:"enabled"`
 	Command      []string `yaml:"command"`
 	URL          string   `yaml:"url"`
+	URLEnv       string   `yaml:"url_env"`
 	Auth         string   `yaml:"auth"`
 	AuthTokenEnv string   `yaml:"auth_token_env"`
+}
+
+// resolveURL prefers an explicit url; otherwise reads from $url_env. Returns
+// empty if neither is set so the caller can fail with a clear message.
+func (s MCPServerConfig) resolveURL() string {
+	if v := strings.TrimSpace(s.URL); v != "" {
+		return v
+	}
+	if s.URLEnv != "" {
+		return strings.TrimSpace(os.Getenv(s.URLEnv))
+	}
+	return ""
+}
+
+// bearerRoundTripper injects an Authorization: Bearer <token> header on every
+// outbound request. Used to authenticate to MCP servers that sit behind a
+// reverse proxy (Cloudflare Tunnel, etc.).
+type bearerRoundTripper struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (b *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	rt := b.base
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	return rt.RoundTrip(r)
 }
 
 type MCPConfig struct {
@@ -115,10 +147,22 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 		}
 		transport = &mcp.CommandTransport{Command: exec.Command(s.Command[0], s.Command[1:]...)}
 	case "sse":
-		if s.URL == "" {
-			return fmt.Errorf("sse transport needs url")
+		url := s.resolveURL()
+		if url == "" {
+			return fmt.Errorf("sse transport needs url or url_env")
 		}
-		transport = &mcp.SSEClientTransport{Endpoint: s.URL}
+		sse := &mcp.SSEClientTransport{Endpoint: url}
+		if strings.EqualFold(s.Auth, "bearer") && s.AuthTokenEnv != "" {
+			token := strings.TrimSpace(os.Getenv(s.AuthTokenEnv))
+			if token == "" {
+				return fmt.Errorf("auth=bearer but $%s is empty", s.AuthTokenEnv)
+			}
+			sse.HTTPClient = &http.Client{
+				Timeout:   60 * time.Second,
+				Transport: &bearerRoundTripper{token: token},
+			}
+		}
+		transport = sse
 	default:
 		return fmt.Errorf("unknown transport: %s", s.Transport)
 	}

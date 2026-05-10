@@ -12,6 +12,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/embed"
+	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
@@ -126,14 +127,65 @@ func serveCmd() *cobra.Command {
 			soulPrompt, soulSource := soul.Load()
 			fmt.Printf("  soul: %s (%d chars)\n", soulSource, len(soulPrompt))
 
+			// trustStore is created below with the rest of the proactive
+			// stack, but the agent gate needs it now. Build it eagerly so the
+			// gate can route claude_code__* calls through the Trust queue.
+			var earlyTrust *proactive.TrustStore
+			if pool != nil {
+				earlyTrust = proactive.NewTrustStore(pool)
+			}
+
+			// Honcho — optional dialectic peer-modelling sidecar. When
+			// HONCHO_BASE_URL is set we register a memory provider that folds
+			// the boss's peer representation into the system prefix, plus a
+			// hook that mirrors user/assistant turns into Honcho so its
+			// reasoning pipeline keeps the representation fresh.
+			honchoClient := honcho.FromEnv()
+			if honchoClient.Enabled() {
+				fmt.Printf("  honcho: enabled (workspace=%s peer=%s)\n",
+					honchoClient.Workspace(), honchoClient.Peer())
+				if pipeline != nil {
+					honchoMirror := func(ctx context.Context, ev hooks.Event) error {
+						role := "user"
+						if ev.Name == hooks.TaskCompleted {
+							role = "assistant"
+						}
+						return honchoClient.PostMessage(ctx, honcho.Message{
+							SessionID: ev.SessionID,
+							Content:   ev.Text,
+							Role:      role,
+						})
+					}
+					pipeline.RegisterFunc("honcho.user", honchoMirror, hooks.UserPromptSubmit)
+					pipeline.RegisterFunc("honcho.assistant", honchoMirror, hooks.TaskCompleted)
+				}
+			} else {
+				fmt.Printf("  honcho: disabled (set HONCHO_BASE_URL to enable)\n")
+			}
+
 			var loop *agent.Loop
 			if provider != nil {
 				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt}
+				// Compose memory providers: Infinity's RRF searcher always
+				// runs first, Honcho's peer representation folds in second
+				// when configured. Order matters — searcher emits the boss
+				// profile primer + relevant memory; Honcho's reasoning sits
+				// below it in the system prompt for clear separation.
+				memProviders := []agent.MemoryProvider{}
 				if searcher != nil {
-					cfg.Memory = searcher
+					memProviders = append(memProviders, searcher)
+				}
+				if honchoClient.Enabled() {
+					memProviders = append(memProviders, honcho.NewMemoryProvider(honchoClient))
+				}
+				if len(memProviders) > 0 {
+					cfg.Memory = agent.NewCompositeMemory(memProviders...)
 				}
 				if pipeline != nil {
 					cfg.Hooks = &hooks.PipelineAdapter{P: pipeline}
+				}
+				if earlyTrust != nil {
+					cfg.Gate = proactive.NewClaudeCodeGate(earlyTrust)
 				}
 				loop = agent.New(cfg)
 			}
@@ -150,7 +202,14 @@ func serveCmd() *cobra.Command {
 			)
 			if pool != nil {
 				intentDB = intent.NewStore(pool)
-				trustStore = proactive.NewTrustStore(pool)
+				// Reuse the early trust store so gate + API see the same
+				// instance. NewTrustStore is stateless (just a pool wrapper)
+				// so this is safe even if earlyTrust wasn't built.
+				if earlyTrust != nil {
+					trustStore = earlyTrust
+				} else {
+					trustStore = proactive.NewTrustStore(pool)
+				}
 				heartbeat = proactive.NewHeartbeat(pool, heartbeatInterval(),
 					proactive.DefaultChecklist(pool))
 				heartbeat.Start(cmd.Context())

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs `claude mcp serve` under stdio. mcp-proxy attaches to this process'
+  stdin/stdout via the bridge plist. We use the wrapper script to avoid
+  hard-coding /opt/homebrew vs /usr/local PATHs.
+
+  This LaunchAgent does NOT expose a network port. mcp-proxy is the bridge.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.dopesoft.claude-mcp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <!-- mcp-proxy starts claude mcp serve as a subprocess (see mcp-proxy
+             plist). This LaunchAgent only exists as a placeholder so the
+             label can be referenced for log rotation. The actual claude
+             process lives inside mcp-proxy's child tree. -->
+        <string>echo "claude mcp serve runs as mcp-proxy child; see dev.dopesoft.mcp-proxy"; exec sleep 86400</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__/Dev</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/claude-mcp.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/claude-mcp.err</string>
+</dict>
+</plist>

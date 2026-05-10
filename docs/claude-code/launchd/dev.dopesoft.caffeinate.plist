@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hold the system + display + disk awake whenever the user is logged in.
+  Burn power. Don't run on a laptop on battery. Recommended: a desk Mac
+  plugged in.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.dopesoft.caffeinate</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-dimsu</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/caffeinate.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/caffeinate.err</string>
+</dict>
+</plist>

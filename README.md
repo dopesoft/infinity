@@ -142,6 +142,35 @@ Built for the phone. `100dvh`, safe-area insets, 44×44 touch targets, 16px form
 
 ---
 
+## Coding via Claude Code (Max-subscription, ToS-clean)
+
+Infinity codes by orchestrating the official `claude` CLI on a home Mac, not by leaking OAuth tokens off the machine. The agent's brain stays on Anthropic's API; only when the model decides to invoke a `claude_code__*` tool does the call hop through Cloudflare Tunnel to the Mac's `claude mcp serve`. Subscription billing applies for coding work; API billing for chat. No tokens move.
+
+```
+[iPhone Safari]      [Cloudflare Tunnel]      [Mac at home]
+     │                       │                  caffeinated, plugged in
+     ▼ WSS                   ▼ SSE+bearer            │
+infinity-core ──────────────► coder.<dom>.dev ──────► mcp-proxy (8765)
+  • LLM brain                  Access ZTNA               │ stdio
+  • mcp.yaml: claude_code      • IDP for humans          ▼
+  • ClaudeCodeGate             • bearer for Railway   claude mcp serve
+  • Trust queue                                       Bash/Read/Write/Edit
+                                                     /Grep/Glob/LS
+```
+
+Setup runbook: [`docs/claude-code/SETUP.md`](docs/claude-code/SETUP.md).
+Trust queue gating defaults: `INFINITY_CLAUDE_CODE_BLOCK=bash,write,edit`.
+
+## Honcho (dialectic peer modelling)
+
+Optional sidecar from [plastic-labs/honcho](https://github.com/plastic-labs/honcho) that derives a continually-updated peer representation from interaction traces. Infinity treats it as a complement: the 12 `mem_*` tables remain the source of truth for facts and provenance; Honcho contributes the *who*-layer to the system prompt via `agent.CompositeMemory`. Set `HONCHO_BASE_URL` to enable. Setup: [`docs/honcho/SETUP.md`](docs/honcho/SETUP.md).
+
+## GEPA (skill self-evolution, Hermes-class)
+
+A Python sidecar ([`docker/gepa.Dockerfile`](docker/gepa.Dockerfile)) that runs a Genetic-Pareto loop over Anthropic Haiku to evolve `SKILL.md` files from execution traces. Phase 1 — instructions only, same scope Hermes Phase 1 ships. Hard-gated on size, frontmatter validity, and Trust-queue approval. Trigger via `POST /api/voyager/optimize`. Cost ~$0.05-0.20 per run. See [`docs/gepa/README.md`](docs/gepa/README.md).
+
+---
+
 ## Phase status
 
 | Phase | What | Status |
