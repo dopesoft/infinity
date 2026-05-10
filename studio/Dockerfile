@@ -13,7 +13,14 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1 CI=true
+ARG NEXT_PUBLIC_CORE_URL
+ARG NEXT_PUBLIC_CORE_WS_URL
+ARG NEXT_PUBLIC_BUILD=dev
+ENV NEXT_PUBLIC_CORE_URL=$NEXT_PUBLIC_CORE_URL \
+    NEXT_PUBLIC_CORE_WS_URL=$NEXT_PUBLIC_CORE_WS_URL \
+    NEXT_PUBLIC_BUILD=$NEXT_PUBLIC_BUILD \
+    NEXT_TELEMETRY_DISABLED=1 \
+    CI=true
 RUN pnpm build
 
 FROM node:22-alpine AS runner
