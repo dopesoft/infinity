@@ -60,7 +60,7 @@ export function Composer({
         e.preventDefault();
         submit();
       }}
-      className="sticky bottom-0 z-10 border-t px-3 pt-2 keyboard-safe-bottom sm:px-4"
+      className="sticky bottom-0 z-10 border-t bg-background/95 px-3 pt-2 backdrop-blur keyboard-safe-bottom supports-[backdrop-filter]:bg-background/80 sm:px-4"
     >
       <div className={cn("flex items-end gap-2", disabled && "opacity-60")}>
         <Textarea

@@ -75,7 +75,7 @@ export default function LivePage() {
           {/* Mobile-only Status trigger pinned just above the composer.
               Opens a bottom drawer with the full panel stack so the panels
               stay reachable on touch devices without crowding the chat. */}
-          <div className="border-t px-3 py-1.5 md:hidden">
+          <div className="border-t bg-background/60 px-3 py-1.5 md:hidden">
             <Drawer open={statusOpen} onOpenChange={setStatusOpen}>
               <DrawerTrigger asChild>
                 <Button
