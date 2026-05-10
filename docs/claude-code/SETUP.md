@@ -20,98 +20,118 @@ them from another machine, that's the violation. Don't.
 
 ## Pieces
 
-| Component | Path | Purpose |
+| Component | How it runs | Purpose |
 |---|---|---|
-| `claude mcp serve` | bundled with Claude Code | exposes Bash/Read/Write/Edit/Grep/Glob via stdio MCP |
-| `mcp-proxy` | npm | bridges stdio → SSE so the tunnel can carry it |
-| `cloudflared` | brew | tunnels SSE to a public hostname behind Cloudflare Access |
-| launchd LaunchAgents | `~/Library/LaunchAgents/` | autostart on login, restart on crash |
-| `caffeinate -dimsu` | system | keeps Mac awake when plugged in |
+| `claude mcp serve` | mcp-proxy child process | exposes Bash/Read/Write/Edit/Grep/Glob via stdio MCP |
+| `mcp-proxy` | user `LaunchAgent` (this repo) | bridges stdio → SSE on `127.0.0.1:8765` |
+| `cloudflared` | **existing** system `LaunchDaemon` | tunnels SSE through Cloudflare to `coder.dopesoft.io` |
+| Cloudflare Access | Zero Trust policy | enforces bearer auth at the edge |
+| `caffeinate -dimsu` | user `LaunchAgent` | keeps Mac awake when plugged in |
 | `core/config/mcp.yaml` | this repo | registers `claude_code` server (already added; flip `enabled: true`) |
+
+We re-use the existing `jarvis-mac` tunnel (UUID `8e5bd68f-e416-...`) — the
+one already serving `secr3t.dopesoft.io` (SSH) and `vnc.dopesoft.io` (VNC).
+We just add a third ingress rule for `coder.dopesoft.io`. One tunnel,
+one daemon, no duplication.
 
 ## Prereqs
 
 - macOS 14+, on a desk Mac (or Mac mini) plugged in 24/7.
+- Existing cloudflared system daemon already up — `launchctl list | grep cloudflared`
+  should show `com.cloudflare.cloudflared`.
 - Logged in to your `claude` CLI with a **Max** plan: `claude /login` interactive.
-  Verify: `claude /status` shows `oauth subscription` and a non-empty
-  `CLAUDE_CODE_OAUTH_TOKEN` line.
-- Homebrew + Node 20+ installed.
-- A Cloudflare account with a domain you control (e.g. `dopesoft.dev`).
+  Verify: `claude /status` shows `oauth subscription`.
+- Homebrew + Node 20+.
 
 ---
 
-## 0. One-time install
+## 0. Install the user-scope agents
 
 ```sh
-# This script is idempotent. Re-run after upgrades.
 bash docs/claude-code/install.sh
 ```
 
-It does:
+Idempotent. It does:
 
-1. `brew install cloudflared`
-2. `npm install -g mcp-proxy`
-3. Generates a 32-byte random bearer token in `~/.config/infinity/coder.env`
-4. Writes the three LaunchAgent plists to `~/Library/LaunchAgents/`
-5. Loads them with `launchctl bootstrap gui/$UID`
+1. Verifies `cloudflared`, `mcp-proxy`, `claude` are on `PATH` (installs `mcp-proxy` if missing).
+2. Generates a 32-byte bearer token in `~/.config/infinity/coder.env` (reused on re-run).
+3. Removes any legacy `dev.dopesoft.cloudflared` user-LaunchAgent (avoids clashing with the system daemon).
+4. Installs three LaunchAgents to `~/Library/LaunchAgents/`:
+   - `dev.dopesoft.claude-mcp` — log namespace placeholder
+   - `dev.dopesoft.mcp-proxy` — runs `mcp-proxy --sse-port 8765 -- claude mcp serve --dangerously-skip-permissions`
+   - `dev.dopesoft.caffeinate` — `caffeinate -dimsu`
+5. Bootstraps them with `launchctl`.
 
-After that, the three daemons are running. Keep them.
-
-## 1. Cloudflare Tunnel
-
-One-time:
-
-```sh
-cloudflared login                                # browser OAuth — pick the right zone
-cloudflared tunnel create infinity-coder
-cloudflared tunnel route dns infinity-coder coder.dopesoft.dev
-```
-
-Edit `~/.cloudflared/config.yml`:
-
-```yaml
-tunnel: infinity-coder
-credentials-file: /Users/n0m4d/.cloudflared/<UUID>.json
-
-ingress:
-  - hostname: coder.dopesoft.dev
-    service: http://127.0.0.1:8765
-    originRequest:
-      noTLSVerify: false
-      # Token check is enforced at the edge (Access policy). cloudflared
-      # forwards Authorization: Bearer <CLAUDE_CODE_TUNNEL_SECRET> straight
-      # through to mcp-proxy, which doesn't re-verify it (Access already did).
-  - service: http_status:404
-```
-
-Reload:
+Verify:
 
 ```sh
-launchctl kickstart -k gui/$UID/dev.dopesoft.cloudflared
+launchctl list | grep dopesoft
+# expect: claude-mcp, caffeinate, mcp-proxy
 ```
 
-## 2. Cloudflare Access policy (Zero Trust)
+## 1. Add `coder.dopesoft.io` ingress to the existing tunnel
 
-In the Cloudflare dashboard → Zero Trust → Access → Applications → Add:
+The repo already wrote the new ingress into `~/.cloudflared/config.yml`. The
+system daemon reads `/etc/cloudflared/config.yml` instead, so promote it:
+
+```sh
+sudo cp ~/.cloudflared/config.yml /etc/cloudflared/config.yml
+sudo launchctl kickstart -k system/com.cloudflare.cloudflared
+```
+
+After kickstart you should see four routes registered (in cloudflared logs at
+`/Library/Logs/com.cloudflare.cloudflared.err.log`):
+
+- `coder.dopesoft.io → http://127.0.0.1:8765`
+- `secr3t.dopesoft.io → ssh://localhost:22`
+- `vnc.dopesoft.io → http://localhost:6901`
+- `http_status:404` (catch-all)
+
+## 2. Route DNS
+
+```sh
+cloudflared tunnel route dns 8e5bd68f-e416-42c8-a0f2-0a8fce21d976 coder.dopesoft.io
+```
+
+This adds a CNAME `coder` → `<tunnel-uuid>.cfargotunnel.com` in the Cloudflare
+DNS table for `dopesoft.io`. Check it appeared next to `secr3t` / `vnc` /
+`agents` in the dashboard.
+
+## 3. Cloudflare Access policy (Zero Trust)
+
+In the **Zero Trust dashboard** at <https://one.dash.cloudflare.com/> (not the
+regular DNS dashboard) → **Access** → **Applications** → **Add an application**:
 
 - **Type**: Self-hosted
-- **App domain**: `coder.dopesoft.dev`
+- **Application name**: `Infinity Coder`
+- **Application domain**: subdomain `coder`, domain `dopesoft.io`
 - **Identity providers**: Google Workspace (or whatever you use)
-- **Policy 1**: Allow if `email == khaya@malabieindustries.com`
-- **Policy 2 (Service Auth)**: Allow if header `Authorization` equals
-  `Bearer ${CLAUDE_CODE_TUNNEL_SECRET}` — paste the token from
-  `~/.config/infinity/coder.env`. This is what Railway Core uses.
+- **Policy 1 — Boss email allow**:
+  - Action: `Allow`
+  - Include: `Emails == kai@dopesoft.io`
+- **Policy 2 — Railway core service-token**:
+  - First, create the token: **Access** → **Service Auth** → **Service Tokens**
+    → **Create Service Token**. Name it `infinity-railway-core`. Cloudflare
+    shows the `Client ID` and `Client Secret` exactly once — copy both now.
+  - Back on the application's Policies tab, add a second policy:
+    - Action: `Service Auth`
+    - Include: `Service Token == infinity-railway-core`
 
-Two policies because: humans browsing get IDP auth; Railway core sends a static
-bearer. Both routes hit the same backend.
+Two policies because: humans browsing get IDP auth; Railway core sends the
+Service Token headers (`CF-Access-Client-Id` + `CF-Access-Client-Secret`).
+Both routes hit the same backend. **Do not** add a Service Auth policy to
+`secr3t` or `vnc` — those are already covered by their own existing policies.
 
-## 3. Set Railway env vars
+## 4. Set Railway env vars
 
 ```sh
 railway variables --service core \
-  --set CLAUDE_CODE_TUNNEL_URL=https://coder.dopesoft.dev/sse \
-  --set CLAUDE_CODE_TUNNEL_SECRET="$(grep TOKEN ~/.config/infinity/coder.env | cut -d= -f2)"
+  --set CLAUDE_CODE_TUNNEL_URL=https://coder.dopesoft.io/sse \
+  --set CF_ACCESS_CLIENT_ID="<paste client id>.access" \
+  --set CF_ACCESS_CLIENT_SECRET="<paste client secret>"
 ```
+
+(Cloudflare Service Token client IDs come with a `.access` suffix — keep it.)
 
 Then in `core/config/mcp.yaml` flip `claude_code.enabled: true` and redeploy
 core. On boot you should see:
@@ -120,78 +140,77 @@ core. On boot you should see:
 mcp: claude_code connected (7 tools)
 ```
 
-## 4. Verify end-to-end
+## 5. Verify end-to-end
 
 From your laptop (away from the home Mac):
 
 ```sh
-# Direct hit, with the bearer:
-curl -N -H "Authorization: Bearer $TOKEN" https://coder.dopesoft.dev/sse | head -5
+curl -N \
+  -H "CF-Access-Client-Id: <client id>.access" \
+  -H "CF-Access-Client-Secret: <client secret>" \
+  https://coder.dopesoft.io/sse | head -3
 # Expect: text/event-stream chatter from mcp-proxy.
 ```
 
 Then in Studio:
 
-> ask "list the files in ~/Dev/infinity"
+> "list the files in ~/Dev/infinity"
 
-The agent should call `claude_code__bash` (read-only — auto-allowed by the
-default `INFINITY_CLAUDE_CODE_BLOCK=bash,write,edit` policy → wait, bash IS in
-the block list). It will queue a Trust contract; check the Trust tab on iOS,
-approve, the call fires.
+The agent calls `claude_code__bash` (in the default block list → queues a Trust
+contract). Approve in the Trust tab. The call fires, output streams back.
 
-For genuinely read-only ops (grep, ls, glob) the gate auto-allows.
+For genuinely read-only ops (`grep`, `ls`, `glob`) the gate auto-allows.
 
-## 5. Trust gating policy
+## 6. Trust gating policy
 
-Configured via env on **core** (not the Mac):
+Configured via env on **core**:
 
 | Var | Default | Meaning |
 |---|---|---|
 | `INFINITY_CLAUDE_CODE_BLOCK` | `bash,write,edit` | tool suffixes that always queue |
-| `INFINITY_CLAUDE_CODE_AUTOAPPROVE` | _empty_ | tool suffixes that always allow even if in BLOCK |
+| `INFINITY_CLAUDE_CODE_AUTOAPPROVE` | _empty_ | tool suffixes that always allow even if blocked |
 
-Read tools (`read`, `ls`, `grep`, `glob`) are not in the default block list, so
-they pass through. If you want zero gating (YOLO mode while iterating):
+To go YOLO while iterating (don't ship):
 
 ```sh
 railway variables --service core \
   --set INFINITY_CLAUDE_CODE_AUTOAPPROVE=bash,write,edit,read,ls,grep,glob
 ```
 
-Don't ship that to prod.
+## 7. Permission prompts
 
-## 6. Dealing with `claude` permission prompts
+In `claude mcp serve` mode, Claude Code does **not** prompt for permission —
+the parent MCP client (Infinity) is the authority. The CLI just exposes its
+tools and lets the client decide. That's why no `--dangerously-skip-permissions`
+flag is needed (and it isn't accepted on this subcommand).
 
-`claude mcp serve` defaults to interactively prompting for risky tool calls.
-Since nobody can answer those prompts remotely, run with
-`--dangerously-skip-permissions` — Infinity's gate is the actual approval.
+Infinity's `ClaudeCodeGate` (`core/internal/proactive/gate.go`) is the
+real gate: anything in `INFINITY_CLAUDE_CODE_BLOCK` (default `bash,write,edit`)
+gets queued in `mem_trust_contracts` for the boss to approve in Studio.
 
-The plist (`dev.dopesoft.claude-mcp.plist`) sets that flag. Don't strip it.
-
-## 7. Failure modes & recovery
+## 8. Failure modes & recovery
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `mcp: claude_code failed: dial: timeout` | Mac asleep / Wi-Fi hiccup | `caffeinate` daemon should hold it awake; verify with `pmset -g`. cloudflared auto-reconnects. |
-| `mcp: claude_code failed: 401` | Bearer mismatch | Re-paste from `~/.config/infinity/coder.env` to Railway env vars. |
+| `mcp: claude_code failed: dial: timeout` | Mac asleep / Wi-Fi hiccup | `caffeinate` daemon should keep it awake. cloudflared auto-reconnects. |
+| `mcp: claude_code failed: 401` | Service Token mismatch | Rotate it: Zero Trust → Access → Service Auth → Service Tokens → Refresh. Paste the new client-id + secret into Railway core env. |
 | `claude /status` shows expired | OAuth lapsed (rare) | `claude /login` once interactively on the Mac. |
-| `Tool exited with status 1` | Real Claude Code failure | Check `~/Library/Logs/infinity-coder/claude-mcp.log`. |
-| Mac reboot, daemons don't start | LaunchAgent only runs at user login. | Enable auto-login for the user (System Settings → Users & Groups → Auto-login). |
+| `Tool exited with status 1` | Real Claude Code failure | Check `~/Library/Logs/infinity-coder/mcp-proxy.log` and `mcp-proxy.err`. |
+| Mac reboot, agents don't start | LaunchAgents need user login. | System Settings → Users & Groups → enable Auto-login. |
+| `coder.dopesoft.io` 404s | Ingress not picked up | `sudo launchctl kickstart -k system/com.cloudflare.cloudflared` and re-check `/etc/cloudflared/config.yml`. |
 
-## 8. Working directory
+## 9. Working directory
 
-`claude mcp serve` runs in the dir where it was started. The plist sets it to
-`$HOME/Dev` so the agent can `cd` into any project under there. To swap dirs
-without restarting, the agent issues `claude_code__bash` with `cd /elsewhere`
-inline — Claude Code handles cwd internally per call.
+`mcp-proxy` starts `claude mcp serve` with cwd = `$HOME/Dev`. The agent can
+`cd` into any project under there per call. To swap dirs without restarting,
+use `claude_code__bash` with `cd /elsewhere && ...`.
 
 ## Files in this directory
 
-- `install.sh` — idempotent setup
+- `install.sh` — idempotent setup (excludes cloudflared — system daemon owns it)
 - `launchd/dev.dopesoft.claude-mcp.plist`
 - `launchd/dev.dopesoft.mcp-proxy.plist`
-- `launchd/dev.dopesoft.cloudflared.plist`
 - `launchd/dev.dopesoft.caffeinate.plist`
 
-Read each plist before loading. They reference $HOME paths via `<string>`
-literals — adjust if your home isn't `/Users/n0m4d`.
+Read each plist before loading. They reference `__HOME__` which `install.sh`
+substitutes with `$HOME`.

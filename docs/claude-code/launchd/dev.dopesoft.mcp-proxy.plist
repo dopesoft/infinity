@@ -4,8 +4,10 @@
   cloudflared exposes :8765 publicly behind Cloudflare Access.
 
   The `--` separates mcp-proxy flags from the inner `claude mcp serve` invocation.
-  --dangerously-skip-permissions is intentional: Infinity's Trust queue is the
-  authorization gate, not the CLI prompt.
+  In MCP-serve mode the parent MCP client (Infinity) is the permission
+  authority — Claude Code just exposes tools — so no `--dangerously-skip-permissions`
+  is needed (the flag doesn't exist on `claude mcp serve` anyway). Infinity's
+  ClaudeCodeGate routes risky calls through mem_trust_contracts.
 -->
 <plist version="1.0">
 <dict>
@@ -16,13 +18,16 @@
     <array>
         <string>/bin/bash</string>
         <string>-lc</string>
-        <string>exec mcp-proxy --sse-port 8765 --sse-host 127.0.0.1 -- claude mcp serve --dangerously-skip-permissions</string>
+        <string>exec mcp-proxy --port 8765 --host 127.0.0.1 --server sse -- claude mcp serve</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- __NPM_BIN__ is the npm global prefix (e.g. ~/.npm-global/bin)
+             where mcp-proxy and claude actually live. install.sh resolves it
+             via `npm prefix -g`/bin so the LaunchAgent finds both binaries. -->
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__NPM_BIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>

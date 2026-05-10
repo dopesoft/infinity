@@ -26,8 +26,13 @@ type MCPServerConfig struct {
 	Command      []string `yaml:"command"`
 	URL          string   `yaml:"url"`
 	URLEnv       string   `yaml:"url_env"`
-	Auth         string   `yaml:"auth"`
-	AuthTokenEnv string   `yaml:"auth_token_env"`
+	// Auth: "bearer" | "cloudflare_access" | "" (none).
+	Auth string `yaml:"auth"`
+	// For auth=bearer: name of the env var holding the token.
+	AuthTokenEnv string `yaml:"auth_token_env"`
+	// For auth=cloudflare_access: env var names for the Service Token pair.
+	CFClientIDEnv     string `yaml:"cf_client_id_env"`
+	CFClientSecretEnv string `yaml:"cf_client_secret_env"`
 }
 
 // resolveURL prefers an explicit url; otherwise reads from $url_env. Returns
@@ -42,18 +47,57 @@ func (s MCPServerConfig) resolveURL() string {
 	return ""
 }
 
-// bearerRoundTripper injects an Authorization: Bearer <token> header on every
-// outbound request. Used to authenticate to MCP servers that sit behind a
-// reverse proxy (Cloudflare Tunnel, etc.).
-type bearerRoundTripper struct {
-	token string
-	base  http.RoundTripper
+// resolveAuthHeaders builds the headers map to attach to outbound MCP HTTP
+// requests, based on the configured auth mode. Returns nil headers and nil
+// error when no auth is configured.
+func (s MCPServerConfig) resolveAuthHeaders() (map[string]string, error) {
+	mode := strings.ToLower(strings.TrimSpace(s.Auth))
+	if mode == "" || mode == "none" {
+		return nil, nil
+	}
+	switch mode {
+	case "bearer":
+		if s.AuthTokenEnv == "" {
+			return nil, fmt.Errorf("auth=bearer requires auth_token_env")
+		}
+		tok := strings.TrimSpace(os.Getenv(s.AuthTokenEnv))
+		if tok == "" {
+			return nil, fmt.Errorf("auth=bearer but $%s is empty", s.AuthTokenEnv)
+		}
+		return map[string]string{"Authorization": "Bearer " + tok}, nil
+	case "cloudflare_access":
+		if s.CFClientIDEnv == "" || s.CFClientSecretEnv == "" {
+			return nil, fmt.Errorf("auth=cloudflare_access requires cf_client_id_env and cf_client_secret_env")
+		}
+		id := strings.TrimSpace(os.Getenv(s.CFClientIDEnv))
+		secret := strings.TrimSpace(os.Getenv(s.CFClientSecretEnv))
+		if id == "" || secret == "" {
+			return nil, fmt.Errorf("auth=cloudflare_access but $%s or $%s is empty", s.CFClientIDEnv, s.CFClientSecretEnv)
+		}
+		return map[string]string{
+			"CF-Access-Client-Id":     id,
+			"CF-Access-Client-Secret": secret,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown auth mode %q (want bearer | cloudflare_access)", s.Auth)
+	}
 }
 
-func (b *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+// headerRoundTripper injects a static set of headers on every outbound
+// request. Used to authenticate to MCP servers behind a reverse proxy:
+//   - auth=bearer            sets Authorization: Bearer <token>
+//   - auth=cloudflare_access sets CF-Access-Client-Id + CF-Access-Client-Secret
+type headerRoundTripper struct {
+	headers map[string]string
+	base    http.RoundTripper
+}
+
+func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	r := req.Clone(req.Context())
-	r.Header.Set("Authorization", "Bearer "+b.token)
-	rt := b.base
+	for k, v := range h.headers {
+		r.Header.Set(k, v)
+	}
+	rt := h.base
 	if rt == nil {
 		rt = http.DefaultTransport
 	}
@@ -152,14 +196,14 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 			return fmt.Errorf("sse transport needs url or url_env")
 		}
 		sse := &mcp.SSEClientTransport{Endpoint: url}
-		if strings.EqualFold(s.Auth, "bearer") && s.AuthTokenEnv != "" {
-			token := strings.TrimSpace(os.Getenv(s.AuthTokenEnv))
-			if token == "" {
-				return fmt.Errorf("auth=bearer but $%s is empty", s.AuthTokenEnv)
-			}
+		headers, err := s.resolveAuthHeaders()
+		if err != nil {
+			return err
+		}
+		if len(headers) > 0 {
 			sse.HTTPClient = &http.Client{
 				Timeout:   60 * time.Second,
-				Transport: &bearerRoundTripper{token: token},
+				Transport: &headerRoundTripper{headers: headers},
 			}
 		}
 		transport = sse

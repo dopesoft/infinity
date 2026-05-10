@@ -150,7 +150,7 @@ Infinity codes by orchestrating the official `claude` CLI on a home Mac, not by 
 [iPhone Safari]      [Cloudflare Tunnel]      [Mac at home]
      │                       │                  caffeinated, plugged in
      ▼ WSS                   ▼ SSE+bearer            │
-infinity-core ──────────────► coder.<dom>.dev ──────► mcp-proxy (8765)
+infinity-core ──────────────► coder.dopesoft.io ────► mcp-proxy (8765)
   • LLM brain                  Access ZTNA               │ stdio
   • mcp.yaml: claude_code      • IDP for humans          ▼
   • ClaudeCodeGate             • bearer for Railway   claude mcp serve
