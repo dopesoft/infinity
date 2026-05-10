@@ -5,6 +5,7 @@ import { RefreshCw, Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MetricCard } from "@/components/MetricCard";
 import { MemoryCard } from "@/components/MemoryCard";
 import { MemoryDetail } from "@/components/MemoryDetail";
@@ -82,16 +83,38 @@ export default function MemoryPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            <MetricCard label="observations" value={counts?.observations ?? "—"} />
-            <MetricCard label="memories" value={counts?.memories ?? "—"} />
-            <MetricCard label="graph nodes" value={counts?.graph_nodes ?? "—"} />
-            <MetricCard label="graph edges" value={counts?.graph_edges ?? "—"} />
-            <MetricCard
-              label="stale"
-              value={counts?.stale ?? 0}
-              highlight={(counts?.stale ?? 0) > 0}
-            />
+          {/* Mobile: horizontal snap-scroll row. sm+: grid. The negative
+              margins + edge padding let cards scroll flush to the screen
+              edge on mobile while keeping a clean inset on tablet/desktop. */}
+          <div className="-mx-3 sm:mx-0">
+            <div className="no-scrollbar flex snap-x snap-mandatory gap-2 overflow-x-auto scroll-touch px-3 pb-1 sm:grid sm:grid-cols-3 sm:gap-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-5">
+              <MetricCard
+                label="observations"
+                value={counts?.observations ?? "—"}
+                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
+              />
+              <MetricCard
+                label="memories"
+                value={counts?.memories ?? "—"}
+                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
+              />
+              <MetricCard
+                label="graph nodes"
+                value={counts?.graph_nodes ?? "—"}
+                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
+              />
+              <MetricCard
+                label="graph edges"
+                value={counts?.graph_edges ?? "—"}
+                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
+              />
+              <MetricCard
+                label="stale"
+                value={counts?.stale ?? 0}
+                highlight={(counts?.stale ?? 0) > 0}
+                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
+              />
+            </div>
           </div>
 
           <form
@@ -109,7 +132,13 @@ export default function MemoryPage() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search (BM25 + vector + graph, RRF k=60)"
+                placeholder={
+                  view === "memories"
+                    ? "Ask your memory anything…"
+                    : view === "observations"
+                      ? "Search what Infinity has noticed…"
+                      : "Find an entity in the graph…"
+                }
                 className="pl-9"
                 inputMode="search"
                 enterKeyHint="search"
@@ -130,28 +159,31 @@ export default function MemoryPage() {
             </Button>
           </form>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            <div className="flex items-center gap-1">
-              {VIEWS.map((v) => (
-                <button
-                  key={v}
-                  onClick={() => {
-                    setView(v);
-                    loadDefault(v, tier);
-                  }}
-                  className={cn(
-                    "inline-flex min-h-9 items-center rounded-md border px-3 font-mono text-xs uppercase tracking-wide lg:min-h-7 lg:px-2",
-                    view === v
-                      ? "border-info bg-info/10 text-info"
-                      : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
-                  )}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
+          <div className="space-y-3">
+            <Tabs
+              value={view}
+              onValueChange={(v) => {
+                const next = v as View;
+                setView(next);
+                loadDefault(next, tier);
+              }}
+              className="w-full"
+            >
+              <TabsList className="grid h-9 w-full grid-cols-3 sm:inline-flex sm:w-auto">
+                {VIEWS.map((v) => (
+                  <TabsTrigger
+                    key={v}
+                    value={v}
+                    className="font-mono text-[11px] uppercase tracking-wider"
+                  >
+                    {v}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+
             {view === "memories" && (
-              <div className="flex flex-wrap items-center gap-1">
+              <div className="no-scrollbar -mx-3 flex gap-2 overflow-x-auto scroll-touch px-3 py-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
                 {TIERS.map((t) => (
                   <button
                     key={t}
@@ -160,10 +192,10 @@ export default function MemoryPage() {
                       loadDefault("memories", t);
                     }}
                     className={cn(
-                      "inline-flex min-h-9 items-center rounded-full border px-3 font-mono text-[11px] uppercase tracking-wide lg:min-h-6 lg:px-2 lg:text-[10px]",
+                      "inline-flex h-8 shrink-0 items-center rounded-full border px-3.5 font-mono text-[11px] uppercase tracking-wider transition-colors",
                       tier === t
                         ? "border-info bg-info/10 text-info"
-                        : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
+                        : "border-border bg-muted text-muted-foreground hover:bg-accent",
                     )}
                   >
                     {t}

@@ -176,6 +176,17 @@
     overscroll-behavior: contain;
   }
 
+  /* Hide scrollbar chrome on horizontally-scrolling rails (snap rows of
+   * cards, chip ribbons). Pointers still scroll on desktop, fingers still
+   * scroll on touch — we just don't render the bar. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Handles the "sticky composer" pattern on iOS Safari: when the
    * keyboard opens, modern Safari fires `interactive-widget=resizes-content`
    * and shrinks the visual viewport. The dvh-based layout absorbs that
