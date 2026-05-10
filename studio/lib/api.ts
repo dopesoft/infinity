@@ -29,6 +29,7 @@ export type MemoryCounts = {
   observations: number;
   memories: number;
   graph_nodes: number;
+  graph_edges: number;
   stale: number;
   sessions: number;
 };
@@ -139,6 +140,94 @@ export const searchMemory = (q: string, signal?: AbortSignal) =>
 
 export const fetchProvenance = (memoryId: string, signal?: AbortSignal) =>
   getJSON<ProvenanceChain>(`/api/memory/cite/${memoryId}`, signal);
+
+// ---- Boss profile (always-on identity primer) ------------------------------
+
+export type ProfileFactDTO = {
+  id: string;
+  title: string;
+  content: string;
+  importance: number;
+};
+
+export const fetchProfile = (signal?: AbortSignal) =>
+  getJSON<ProfileFactDTO[]>("/api/memory/profile", signal);
+
+export async function upsertProfileFact(input: {
+  title: string;
+  content: string;
+  importance?: number;
+}): Promise<{ id: string } | null> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/memory/profile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { id: string };
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteProfileFact(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${coreBaseURL()}/api/memory/profile?id=${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---- Voyager (auto-skill loop) ---------------------------------------------
+
+export type VoyagerStatusDTO = {
+  enabled: boolean;
+  status: string;
+  open_sessions: number;
+  tracked_triplets: number;
+};
+
+export type SkillProposalDTO = {
+  id: string;
+  name: string;
+  description: string;
+  reasoning: string;
+  skill_md: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  test_pass_rate: number;
+  status: "candidate" | "promoted" | "rejected";
+  parent_skill?: string;
+  parent_version?: string;
+  created_at: string;
+  decided_at?: string | null;
+};
+
+export const fetchVoyagerStatus = (signal?: AbortSignal) =>
+  getJSON<VoyagerStatusDTO>("/api/voyager/status", signal);
+
+export const fetchSkillProposals = (status = "candidate", signal?: AbortSignal) =>
+  getJSON<SkillProposalDTO[]>(
+    `/api/voyager/proposals?status=${encodeURIComponent(status)}`,
+    signal,
+  );
+
+export async function decideSkillProposal(id: string, decision: "promoted" | "rejected"): Promise<boolean> {
+  try {
+    const res = await fetch(`${coreBaseURL()}/api/voyager/proposals/${id}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 // ---- Skills (Phase 4) ------------------------------------------------------
 

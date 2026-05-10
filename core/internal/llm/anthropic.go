@@ -25,6 +25,38 @@ func NewAnthropic(apiKey, model string) *Anthropic {
 func (a *Anthropic) Name() string  { return "anthropic" }
 func (a *Anthropic) Model() string { return a.model }
 
+// Draft is a one-shot, non-streaming completion used by helper subsystems
+// (e.g. the Voyager skill extractor) that need a quick JSON-shaped reply
+// without setting up the full streaming loop. Returns the concatenated text
+// of the response.
+func (a *Anthropic) Draft(ctx context.Context, model, system, userPrompt string, maxTokens int64) (string, error) {
+	if model == "" {
+		model = a.model
+	}
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(model),
+		MaxTokens: maxTokens,
+		System:    []anthropic.TextBlockParam{{Text: system}},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(userPrompt)),
+		},
+	}
+	msg, err := a.client.Messages.New(ctx, params)
+	if err != nil {
+		return "", err
+	}
+	var b []byte
+	for _, c := range msg.Content {
+		if t, ok := c.AsAny().(anthropic.TextBlock); ok {
+			b = append(b, t.Text...)
+		}
+	}
+	return string(b), nil
+}
+
 func (a *Anthropic) Stream(
 	ctx context.Context,
 	system string,

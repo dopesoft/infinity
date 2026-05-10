@@ -111,6 +111,7 @@ func (s *Store) Counts(ctx context.Context) (map[string]int, error) {
 		"observations": `SELECT COUNT(*) FROM mem_observations`,
 		"memories":     `SELECT COUNT(*) FROM mem_memories WHERE status = 'active'`,
 		"graph_nodes":  `SELECT COUNT(*) FROM mem_graph_nodes`,
+		"graph_edges":  `SELECT COUNT(*) FROM mem_graph_edges`,
 		"stale":        `SELECT COUNT(*) FROM mem_graph_nodes WHERE stale_flag = TRUE`,
 		"sessions":     `SELECT COUNT(*) FROM mem_sessions`,
 	}

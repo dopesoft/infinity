@@ -21,6 +21,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
@@ -196,6 +197,26 @@ func serveCmd() *cobra.Command {
 					cronScheduler != nil, len(sentinelMgr.List()))
 			}
 
+			// Phase 6: Voyager auto-skill loop. Wires hooks for SessionEnd
+			// (extractor) and PostToolUse (real-time discovery). Off by default;
+			// flip INFINITY_VOYAGER=true on the core service to enable.
+			var voyagerAPI *voyager.API
+			if pool != nil {
+				vAnthropic, _ := provider.(*llm.Anthropic)
+				voyagerMgr := voyager.New(voyager.Config{
+					Pool:       pool,
+					LLM:        vAnthropic,
+					Skills:     skillRegistry,
+					SkillsRoot: skillsRoot,
+				})
+				if pipeline != nil {
+					pipeline.RegisterFunc("voyager.extract", voyagerMgr.OnSessionEnd, hooks.SessionEnd)
+					pipeline.RegisterFunc("voyager.discover", voyagerMgr.OnPostToolUse, hooks.PostToolUse)
+				}
+				voyagerAPI = voyager.NewAPI(voyagerMgr)
+				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
+			}
+
 			srv := server.New(server.Config{
 				Addr:         addr,
 				Version:      version,
@@ -208,6 +229,7 @@ func serveCmd() *cobra.Command {
 				ProactiveAPI: proactiveAPI,
 				CronAPI:      cronAPI,
 				SentinelAPI:  sentinelAPI,
+				VoyagerAPI:   voyagerAPI,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

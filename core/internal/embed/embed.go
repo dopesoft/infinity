@@ -7,7 +7,11 @@
 //     stub package compiles without it on dev machines that don't have
 //     libonnxruntime installed). Wire under build tag `onnx` if needed.
 //
-// Picked at runtime via INFINITY_EMBED env: "stub" (default), "http", "onnx".
+// Picked at runtime via INFINITY_EMBED env:
+//   - "stub"   (default; deterministic hash, dev-only)
+//   - "http"   (sidecar; INFINITY_EMBED_URL points at docker/embed.Dockerfile)
+//   - "openai" (OpenAI text-embedding-3-small with dim=384; needs OPENAI_API_KEY)
+//   - "onnx"   (in-process MiniLM; build-tag gated)
 package embed
 
 import (
@@ -34,6 +38,11 @@ func FromEnv() Embedder {
 			return NewStub()
 		}
 		return NewHTTP(url)
+	case "openai":
+		if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) == "" {
+			return NewStub()
+		}
+		return NewOpenAI()
 	case "stub", "":
 		return NewStub()
 	default:

@@ -12,6 +12,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -27,6 +28,7 @@ type Config struct {
 	ProactiveAPI *proactive.API
 	CronAPI      *cron.API
 	SentinelAPI  *sentinel.API
+	VoyagerAPI   *voyager.API
 }
 
 type Server struct {
@@ -69,6 +71,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.SentinelAPI != nil {
 		cfg.SentinelAPI.Routes(mux)
+	}
+	if cfg.VoyagerAPI != nil {
+		cfg.VoyagerAPI.Routes(mux)
 	}
 
 	s.http = &http.Server{

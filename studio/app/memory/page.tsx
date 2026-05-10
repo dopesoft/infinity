@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { MetricCard } from "@/components/MetricCard";
 import { MemoryCard } from "@/components/MemoryCard";
 import { MemoryDetail } from "@/components/MemoryDetail";
+import { BossProfilePanel } from "@/components/BossProfilePanel";
+import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
 import { cn } from "@/lib/utils";
 import {
   fetchMemories,
@@ -76,10 +78,11 @@ export default function MemoryPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
             <MetricCard label="observations" value={counts?.observations ?? "—"} />
             <MetricCard label="memories" value={counts?.memories ?? "—"} />
             <MetricCard label="graph nodes" value={counts?.graph_nodes ?? "—"} />
+            <MetricCard label="graph edges" value={counts?.graph_edges ?? "—"} />
             <MetricCard
               label="stale"
               value={counts?.stale ?? 0}
@@ -168,6 +171,19 @@ export default function MemoryPage() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          {/* Left column: brain panels (boss profile + voyager candidates).
+              Hidden on small screens unless detail is closed; collapses into
+              the list view on mobile. */}
+          <aside
+            className={cn(
+              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto border-b bg-background px-3 py-3 scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
+              showDetail ? "hidden lg:block" : "block",
+            )}
+          >
+            <BossProfilePanel />
+            <CandidateSkillsPanel />
+          </aside>
+
           <aside
             className={cn(
               "min-h-0 flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
