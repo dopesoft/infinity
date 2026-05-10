@@ -43,15 +43,21 @@ export default function LivePage() {
       {/* Three-column responsive grid:
           mobile  → 1 col (chat only, status via bottom drawer)
           md      → 2 col (chat + right rail)
-          lg+     → 3 col (left rail + chat + right rail) */}
+          lg+     → 3 col (left rail + chat + right rail)
+
+          Side rails get a subtle muted background so the chat card pops as the
+          focal surface. On light: outer = very light grey, chat = white. On
+          dark: outer = subtle dark grey over true black, chat = lifted card. */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 py-3 sm:px-4 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-4 lg:grid-cols-[16rem_minmax(0,1fr)_18rem] xl:grid-cols-[17rem_minmax(0,1fr)_19rem]">
         {/* Left rail — desktop only */}
-        <aside className="hidden lg:block lg:overflow-y-auto scroll-touch">
+        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 lg:block lg:overflow-y-auto dark:bg-muted/30">
           <LeftPanels messages={chat.messages} usedTokens={usedTokens} />
         </aside>
 
-        {/* Center — chat */}
-        <section className="flex min-h-0 min-w-0 flex-col rounded-xl border bg-card/40">
+        {/* Center — chat. overflow-hidden is required so child borders/bgs
+            (SessionHeader, Composer) clip to the rounded corners — without it
+            the rounded card visibly breaks at the four corners. */}
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-card">
           <SessionHeader
             sessionId={chat.sessionId}
             startedAt={startedAt}
@@ -98,7 +104,7 @@ export default function LivePage() {
         </section>
 
         {/* Right rail — md and up */}
-        <aside className="hidden md:block md:overflow-y-auto scroll-touch">
+        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 md:block md:overflow-y-auto dark:bg-muted/30">
           <RightPanels wsConnected={chat.status === "connected"} />
         </aside>
       </div>
