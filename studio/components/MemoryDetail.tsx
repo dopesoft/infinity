@@ -3,22 +3,33 @@
 import { IconCalendar, IconHash, IconHistory, IconX } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { SearchResult, ObservationDTO } from "@/lib/api";
+import { TierBadge } from "@/components/TierBadge";
+import { ProvenanceChain } from "@/components/ProvenanceChain";
+import type { MemoryDTO, ObservationDTO, SearchResult } from "@/lib/api";
+
+type ItemKind = "memory" | "observation" | "search";
 
 type Item = {
+  kind: ItemKind;
   id: string;
-  hookName: string;
+  title?: string;
+  hookName?: string;
   text: string;
   createdAt: string;
   sessionId?: string;
   score?: number;
   streams?: string[];
   importance?: number;
+  tier?: string;
+  status?: string;
+  version?: number;
+  project?: string;
 };
 
-function fromAny(s: SearchResult | ObservationDTO): Item {
+function fromAny(s: SearchResult | ObservationDTO | MemoryDTO): Item {
   if ("observation_id" in s) {
     return {
+      kind: "search",
       id: s.observation_id,
       hookName: s.hook_name,
       text: s.raw_text,
@@ -28,13 +39,28 @@ function fromAny(s: SearchResult | ObservationDTO): Item {
       streams: s.streams,
     };
   }
+  if ("hook_name" in s) {
+    return {
+      kind: "observation",
+      id: s.id,
+      hookName: s.hook_name,
+      text: s.raw_text,
+      createdAt: s.created_at,
+      sessionId: s.session_id,
+      importance: s.importance,
+    };
+  }
   return {
+    kind: "memory",
     id: s.id,
-    hookName: s.hook_name,
-    text: s.raw_text,
+    title: s.title,
+    text: s.content,
     createdAt: s.created_at,
-    sessionId: s.session_id,
+    tier: s.tier,
+    status: s.status,
+    version: s.version,
     importance: s.importance,
+    project: s.project,
   };
 }
 
@@ -42,13 +68,13 @@ export function MemoryDetail({
   source,
   onClose,
 }: {
-  source: SearchResult | ObservationDTO | null;
+  source: SearchResult | ObservationDTO | MemoryDTO | null;
   onClose: () => void;
 }) {
   if (!source) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select an observation to inspect it.
+        Select an item to inspect it.
       </div>
     );
   }
@@ -61,10 +87,14 @@ export function MemoryDetail({
             <IconHash className="size-3" aria-hidden />
             <code className="truncate font-mono">{item.id}</code>
           </div>
+          {item.title && <h3 className="mt-1 truncate text-sm font-semibold">{item.title}</h3>}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className="font-mono">
-              {item.hookName}
-            </Badge>
+            {item.tier && <TierBadge tier={item.tier} stale={item.status === "superseded"} />}
+            {item.hookName && (
+              <Badge variant="outline" className="font-mono">
+                {item.hookName}
+              </Badge>
+            )}
             {item.streams?.map((s) => (
               <Badge key={s} variant="info" className="font-mono uppercase">
                 {s}
@@ -75,6 +105,12 @@ export function MemoryDetail({
                 importance {item.importance}
               </Badge>
             )}
+            {typeof item.version === "number" && (
+              <Badge variant="outline" className="font-mono">v{item.version}</Badge>
+            )}
+            {item.project && (
+              <Badge variant="outline" className="font-mono">{item.project}</Badge>
+            )}
           </div>
         </div>
         <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close detail">
@@ -83,7 +119,7 @@ export function MemoryDetail({
       </header>
 
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-3 scroll-touch">
-        <Section title="Observation">
+        <Section title={item.kind === "memory" ? "Memory" : "Observation"}>
           <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/60 p-3 font-mono text-xs leading-relaxed scroll-touch">
             {item.text || "—"}
           </pre>
@@ -105,12 +141,11 @@ export function MemoryDetail({
           )}
         </Section>
 
-        <Section title="Provenance chain">
-          <p className="text-xs text-muted-foreground">
-            JIT verification chain renders here once the memory subsystem promotes this observation
-            to a long-term memory record.
-          </p>
-        </Section>
+        {item.kind === "memory" && (
+          <Section title="Provenance chain">
+            <ProvenanceChain memoryId={item.id} />
+          </Section>
+        )}
       </div>
     </div>
   );

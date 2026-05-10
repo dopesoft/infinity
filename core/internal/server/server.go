@@ -68,6 +68,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/counts", s.handleMemoryCounts)
 	mux.HandleFunc("/api/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/api/memory/observations", s.handleObservations)
+	mux.HandleFunc("/api/memory/memories", s.handleMemoryList)
+	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
 }
 
 func (s *Server) Start() error {

@@ -8,16 +8,25 @@ import { Button } from "@/components/ui/button";
 import { MetricCard } from "@/components/MetricCard";
 import { MemoryCard } from "@/components/MemoryCard";
 import { MemoryDetail } from "@/components/MemoryDetail";
+import { cn } from "@/lib/utils";
 import {
+  fetchMemories,
   fetchMemoryCounts,
   fetchObservations,
   searchMemory,
   type MemoryCounts,
+  type MemoryDTO,
   type ObservationDTO,
   type SearchResult,
 } from "@/lib/api";
 
-type ListItem = ObservationDTO | SearchResult;
+type ListItem = ObservationDTO | SearchResult | MemoryDTO;
+
+const TIERS = ["all", "working", "episodic", "semantic", "procedural"] as const;
+type TierFilter = (typeof TIERS)[number];
+
+const VIEWS = ["memories", "observations"] as const;
+type View = (typeof VIEWS)[number];
 
 export default function MemoryPage() {
   const [counts, setCounts] = useState<MemoryCounts | null>(null);
@@ -26,18 +35,28 @@ export default function MemoryPage() {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [showDetail, setShowDetail] = useState(false); // mobile drill-in
+  const [showDetail, setShowDetail] = useState(false);
+  const [view, setView] = useState<View>("memories");
+  const [tier, setTier] = useState<TierFilter>("all");
 
-  async function loadDefault() {
+  async function loadDefault(viewArg: View = view, tierArg: TierFilter = tier) {
     setLoading(true);
-    const [c, obs] = await Promise.all([fetchMemoryCounts(), fetchObservations()]);
+    setQuery("");
+    const c = await fetchMemoryCounts();
     setCounts(c);
-    setItems(obs ?? []);
+    if (viewArg === "memories") {
+      const mems = await fetchMemories(tierArg !== "all" ? { tier: tierArg } : {});
+      setItems(mems ?? []);
+    } else {
+      const obs = await fetchObservations();
+      setItems(obs ?? []);
+    }
     setLoading(false);
   }
 
   useEffect(() => {
     loadDefault();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function runSearch(q: string) {
@@ -83,36 +102,80 @@ export default function MemoryPage() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search memory (BM25 + vector + graph, RRF k=60)"
+                placeholder="Search (BM25 + vector + graph, RRF k=60)"
                 className="pl-9"
                 inputMode="search"
                 enterKeyHint="search"
               />
             </div>
-            <Button type="submit" size="default" disabled={searching}>
+            <Button type="submit" disabled={searching}>
               {searching ? "…" : "search"}
             </Button>
             <Button
               type="button"
               size="icon"
               variant="ghost"
-              onClick={loadDefault}
-              aria-label="Refresh recent observations"
+              onClick={() => loadDefault()}
+              aria-label="Refresh"
               disabled={loading}
             >
               <IconRefresh className="size-4" />
             </Button>
           </form>
+
+          <div className="flex flex-wrap items-center gap-1 text-xs">
+            <div className="flex items-center gap-1">
+              {VIEWS.map((v) => (
+                <button
+                  key={v}
+                  onClick={() => {
+                    setView(v);
+                    loadDefault(v, tier);
+                  }}
+                  className={cn(
+                    "rounded-md border px-2 py-1 font-mono uppercase tracking-wide",
+                    view === v
+                      ? "border-info bg-info/10 text-info"
+                      : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+            {view === "memories" && (
+              <div className="flex flex-wrap items-center gap-1">
+                {TIERS.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      setTier(t);
+                      loadDefault("memories", t);
+                    }}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 font-mono uppercase tracking-wide",
+                      tier === t
+                        ? "border-info bg-info/10 text-info"
+                        : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
+                    )}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           <aside
-            className={`min-h-0 ${
-              showDetail ? "hidden lg:flex" : "flex"
-            } flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r`}
+            className={cn(
+              "min-h-0 flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
+              showDetail ? "hidden lg:flex" : "flex",
+            )}
           >
             <div className="flex items-center justify-between gap-2 px-3 pb-1 pt-3 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <span>{query ? "results" : "recent observations"}</span>
+              <span>{query ? "results" : view}</span>
               <span>{filteredCount}</span>
             </div>
             <div className="flex flex-col gap-2 px-3 pb-4">
@@ -121,32 +184,32 @@ export default function MemoryPage() {
                   {loading
                     ? "Loading…"
                     : query
-                      ? "No results. Try a different query."
-                      : "No observations yet — open Live and chat with Infinity to populate memory."}
+                      ? "No results."
+                      : view === "memories"
+                        ? "No memories yet. Set INFINITY_AUTO_COMPRESS=true on Core, or use the remember tool, to create some."
+                        : "No observations yet — open Live and chat with Infinity."}
                 </p>
               ) : (
-                items.map((it, i) => {
-                  const id = "observation_id" in it ? it.observation_id : it.id;
-                  return (
-                    <MemoryCard
-                      key={id + i}
-                      source={it}
-                      active={selectedId(selected) === id}
-                      onClick={() => {
-                        setSelected(it);
-                        setShowDetail(true);
-                      }}
-                    />
-                  );
-                })
+                items.map((it, i) => (
+                  <MemoryCard
+                    key={selectedId(it) + ":" + i}
+                    source={it}
+                    active={selectedId(selected) === selectedId(it)}
+                    onClick={() => {
+                      setSelected(it);
+                      setShowDetail(true);
+                    }}
+                  />
+                ))
               )}
             </div>
           </aside>
 
           <section
-            className={`min-h-0 flex-1 ${
-              showDetail ? "flex" : "hidden lg:flex"
-            } flex-col bg-background`}
+            className={cn(
+              "min-h-0 flex-1 flex-col bg-background",
+              showDetail ? "flex" : "hidden lg:flex",
+            )}
           >
             {showDetail && (
               <button
@@ -166,5 +229,6 @@ export default function MemoryPage() {
 
 function selectedId(item: ListItem | null): string | null {
   if (!item) return null;
-  return "observation_id" in item ? item.observation_id : item.id;
+  if ("observation_id" in item) return item.observation_id;
+  return item.id;
 }

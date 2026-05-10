@@ -2,37 +2,54 @@
 
 import { IconChevronRight, IconClock, IconLink, IconSearch } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
-import type { SearchResult, ObservationDTO } from "@/lib/api";
+import { TierBadge } from "@/components/TierBadge";
+import type { SearchResult, ObservationDTO, MemoryDTO } from "@/lib/api";
 
-type Item = {
+type CardItem = {
+  kind: "memory" | "observation" | "search";
   id: string;
-  hookName: string;
+  title?: string;
+  hookName?: string;
   text: string;
   createdAt: string;
   sessionId?: string;
   score?: number;
   streams?: string[];
+  tier?: string;
+  status?: string;
 };
 
-function fromSearchResult(r: SearchResult): Item {
+function fromAny(s: SearchResult | ObservationDTO | MemoryDTO): CardItem {
+  if ("observation_id" in s) {
+    return {
+      kind: "search",
+      id: s.observation_id,
+      hookName: s.hook_name,
+      text: s.raw_text,
+      createdAt: s.created_at,
+      sessionId: s.session_id,
+      score: s.score,
+      streams: s.streams,
+    };
+  }
+  if ("hook_name" in s) {
+    return {
+      kind: "observation",
+      id: s.id,
+      hookName: s.hook_name,
+      text: s.raw_text,
+      createdAt: s.created_at,
+      sessionId: s.session_id,
+    };
+  }
   return {
-    id: r.observation_id,
-    hookName: r.hook_name,
-    text: r.raw_text,
-    createdAt: r.created_at,
-    sessionId: r.session_id,
-    score: r.score,
-    streams: r.streams,
-  };
-}
-
-function fromObservation(o: ObservationDTO): Item {
-  return {
-    id: o.id,
-    hookName: o.hook_name,
-    text: o.raw_text,
-    createdAt: o.created_at,
-    sessionId: o.session_id,
+    kind: "memory",
+    id: s.id,
+    title: s.title,
+    text: s.content,
+    createdAt: s.created_at,
+    tier: s.tier,
+    status: s.status,
   };
 }
 
@@ -41,12 +58,11 @@ export function MemoryCard({
   active,
   onClick,
 }: {
-  source: SearchResult | ObservationDTO;
+  source: SearchResult | ObservationDTO | MemoryDTO;
   active?: boolean;
   onClick?: () => void;
 }) {
-  const item: Item =
-    "observation_id" in source ? fromSearchResult(source) : fromObservation(source);
+  const item = fromAny(source);
 
   return (
     <button
@@ -59,12 +75,16 @@ export function MemoryCard({
       )}
     >
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <code className="font-mono">{item.hookName}</code>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {item.tier && <TierBadge tier={item.tier} stale={item.status === "superseded"} />}
+          {item.hookName && <code className="truncate font-mono">{item.hookName}</code>}
+        </div>
         <div className="flex items-center gap-1">
           <IconClock className="size-3" aria-hidden />
           <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time>
         </div>
       </div>
+      {item.title && <p className="mt-1 line-clamp-1 font-semibold">{item.title}</p>}
       <p className="mt-1 line-clamp-2 break-words text-sm">{item.text || "—"}</p>
       <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
         {item.streams?.map((s) => (

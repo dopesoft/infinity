@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,43 +16,54 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// CaptureHook implements the privacy-first capture pipeline from the spec
-// (PDF p.20):
+// CaptureHook implements the privacy-first capture pipeline (PDF p.20):
 //
 //  1. SHA-256 dedup with 5-minute window
 //  2. privacy.StripSecrets (regex + <private> tags)
 //  3. Insert raw observation
-//  4. (LLM-compress + JSON validate happens in a Phase 4 background worker —
-//     for now we record the raw observation and let consolidate.go promote
-//     it later.)
+//  4. (Optional) compress to mem_memories via Claude Haiku — gated by
+//     INFINITY_AUTO_COMPRESS=true. Async; never blocks the agent loop.
 //  5. Generate vector embedding (best-effort)
 //  6. Audit
 type CaptureHook struct {
-	pool     *pgxpool.Pool
-	store    *memory.Store
-	embedder embed.Embedder
-	auditor  *memory.Auditor
-	dedup    *dedupCache
+	pool       *pgxpool.Pool
+	store      *memory.Store
+	embedder   embed.Embedder
+	auditor    *memory.Auditor
+	compressor *memory.Compressor
+	dedup      *dedupCache
+	autoCompress bool
 }
 
-func NewCaptureHook(pool *pgxpool.Pool, store *memory.Store, embedder embed.Embedder) *CaptureHook {
+// CaptureOptions wires the optional pieces in. Compressor may be nil.
+type CaptureOptions struct {
+	Compressor *memory.Compressor
+}
+
+func NewCaptureHook(pool *pgxpool.Pool, store *memory.Store, embedder embed.Embedder, opts CaptureOptions) *CaptureHook {
 	return &CaptureHook{
-		pool:     pool,
-		store:    store,
-		embedder: embedder,
-		auditor:  memory.NewAuditor(pool),
-		dedup:    newDedupCache(5 * time.Minute),
+		pool:         pool,
+		store:        store,
+		embedder:     embedder,
+		auditor:      memory.NewAuditor(pool),
+		compressor:   opts.Compressor,
+		dedup:        newDedupCache(5 * time.Minute),
+		autoCompress: opts.Compressor != nil && envTrue("INFINITY_AUTO_COMPRESS"),
 	}
+}
+
+func envTrue(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
 func (c *CaptureHook) Name() string { return "capture" }
 
 func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 	if c.pool == nil || c.store == nil {
-		return nil // memory disabled — silently skip
+		return nil
 	}
 
-	// Build raw text from text + payload preview
 	raw := strings.TrimSpace(ev.Text)
 	if raw == "" {
 		raw = previewPayload(ev.Payload)
@@ -60,16 +72,13 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 		return nil
 	}
 
-	// 1. Dedup
 	hash := sha256Hex(string(ev.Name) + "|" + ev.SessionID + "|" + raw)
 	if c.dedup.seen(hash) {
 		return nil
 	}
 
-	// 2. Privacy
 	cleaned, _ := memory.StripSecrets(raw)
 
-	// 3. Ensure session
 	sessionID := ev.SessionID
 	if sessionID == "" {
 		return errors.New("capture: session id required")
@@ -78,13 +87,11 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 		return err
 	}
 
-	// 5. Embedding (best-effort)
 	var emb []float32
 	if c.embedder != nil {
 		emb, _ = c.embedder.Embed(ctx, cleaned)
 	}
 
-	// 4. Insert observation
 	obsID, err := c.store.InsertObservation(ctx, memory.ObservationInput{
 		SessionID:  sessionID,
 		HookName:   string(ev.Name),
@@ -97,10 +104,32 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 		return fmt.Errorf("insert observation: %w", err)
 	}
 
-	// 6. Audit
 	_ = c.auditor.Log(ctx, "create", "mem_observations", obsID, "hook:"+string(ev.Name),
 		map[string]any{"hook": ev.Name, "session": sessionID})
+
+	// Async compression. Never blocks; failures log and drop.
+	if c.autoCompress && c.compressor != nil && shouldCompress(ev.Name) {
+		go func(id, project string) {
+			cctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := c.compressor.Compress(cctx, id, project); err != nil {
+				fmt.Printf("[capture] compress %s: %v\n", id, err)
+			}
+		}(obsID, ev.Project)
+	}
+
 	return nil
+}
+
+// shouldCompress filters out high-volume, low-value events to keep Haiku
+// costs reasonable. Only events that carry user intent or model output go through.
+func shouldCompress(name EventName) bool {
+	switch name {
+	case UserPromptSubmit, TaskCompleted, PostToolUseFailure:
+		return true
+	default:
+		return false
+	}
 }
 
 func importanceFor(name EventName) int {

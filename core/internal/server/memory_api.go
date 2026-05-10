@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/memory"
 )
@@ -48,4 +49,42 @@ func (s *Server) handleObservations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, obs)
+}
+
+// /api/memory/cite/<memoryID>
+func (s *Server) handleMemoryCite(w http.ResponseWriter, r *http.Request) {
+	if s.pool == nil {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/memory/cite/")
+	id = strings.TrimSpace(id)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "memory id required"})
+		return
+	}
+	chain, err := memory.Cite(r.Context(), s.pool, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, chain)
+}
+
+// /api/memory/memories — list memories (filtered by tier/project/q)
+func (s *Server) handleMemoryList(w http.ResponseWriter, r *http.Request) {
+	if s.pool == nil {
+		writeJSON(w, http.StatusOK, []memory.Memory{})
+		return
+	}
+	mems, err := memory.ListMemories(r.Context(), s.pool, memory.ListOpts{
+		Tier:    r.URL.Query().Get("tier"),
+		Project: r.URL.Query().Get("project"),
+		Limit:   50,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, mems)
 }

@@ -6,13 +6,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// RegisterDefaults wires the capture hook into all 12 events. Each event
-// type gets the same capture so no observation slips by — the importance and
-// payload shape varies, but the pipeline is uniform.
-func RegisterDefaults(p *Pipeline, pool *pgxpool.Pool, store *memory.Store, embedder embed.Embedder) {
+// RegisterDefaults wires the capture hook into all 12 events. Compressor may
+// be nil — if so, capture still records observations but doesn't promote them.
+func RegisterDefaults(p *Pipeline, pool *pgxpool.Pool, store *memory.Store, embedder embed.Embedder, compressor *memory.Compressor) {
 	if pool == nil || store == nil {
 		return
 	}
-	capture := NewCaptureHook(pool, store, embedder)
+	capture := NewCaptureHook(pool, store, embedder, CaptureOptions{Compressor: compressor})
 	p.Register(capture, AllEvents...)
 }

@@ -48,11 +48,15 @@ func serveCmd() *cobra.Command {
 				cancel()
 			}
 
-			// Memory + hooks pipeline (best-effort: chat still works without DB)
-			var pool *pgxpool.Pool
-			var store *memory.Store
-			var searcher *memory.Searcher
-			var pipeline *hooks.Pipeline
+			// Memory + hooks + tools wiring (best-effort).
+			var (
+				pool       *pgxpool.Pool
+				store      *memory.Store
+				searcher   *memory.Searcher
+				compressor *memory.Compressor
+				pipeline   *hooks.Pipeline
+				embedder   embed.Embedder
+			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 				pctx, pcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
@@ -62,12 +66,24 @@ func serveCmd() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "warning: db pool: %v\n", err)
 				} else {
 					pool = p
-					embedder := embed.FromEnv()
+					embedder = embed.FromEnv()
 					store = memory.NewStore(p)
 					searcher = memory.NewSearcher(p, embedder)
+
+					// Compressor needs an Anthropic client; wire only if the
+					// active provider is Anthropic so we don't pin a 2nd key.
+					if a, ok := provider.(*llm.Anthropic); ok {
+						summarizerModel := os.Getenv("LLM_SUMMARIZE_MODEL")
+						summarizer := llm.NewAnthropicSummarizer(a, summarizerModel)
+						compressor = memory.NewCompressor(p, embedder, memory.NewSummarizer(summarizer))
+					}
+
 					pipeline = hooks.NewPipeline()
-					hooks.RegisterDefaults(pipeline, p, store, embedder)
-					fmt.Printf("  memory: enabled (embedder=%s)\n", embedder.Name())
+					hooks.RegisterDefaults(pipeline, p, store, embedder, compressor)
+
+					tools.RegisterMemoryTools(registry, p, embedder, searcher)
+
+					fmt.Printf("  memory: enabled (embedder=%s, compressor=%v)\n", embedder.Name(), compressor != nil)
 				}
 			} else {
 				fmt.Fprintf(os.Stderr, "  memory: disabled (no DATABASE_URL)\n")
@@ -86,12 +102,12 @@ func serveCmd() *cobra.Command {
 			}
 
 			srv := server.New(server.Config{
-				Addr:    addr,
-				Version: version,
-				Loop:    loop,
-				MCP:     mcp,
-				Pool:    pool,
-				Store:   store,
+				Addr:     addr,
+				Version:  version,
+				Loop:     loop,
+				MCP:      mcp,
+				Pool:     pool,
+				Store:    store,
 				Searcher: searcher,
 			})
 

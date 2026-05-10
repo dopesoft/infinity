@@ -52,6 +52,37 @@ export type ObservationDTO = {
   created_at: string;
 };
 
+export type MemoryDTO = {
+  id: string;
+  title: string;
+  content: string;
+  tier: "working" | "episodic" | "semantic" | "procedural";
+  version: number;
+  superseded_by?: string | null;
+  status: string;
+  strength: number;
+  importance: number;
+  project?: string;
+  forget_after?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_accessed_at: string;
+};
+
+export type ProvenanceSource = {
+  observation_id: string;
+  session_id: string;
+  excerpt: string;
+  created_at: string;
+  confidence: number;
+};
+
+export type ProvenanceChain = {
+  memory: MemoryDTO;
+  sources: ProvenanceSource[];
+  confidence: number;
+};
+
 function coreBaseURL(): string {
   if (typeof window === "undefined") return "";
   const explicit = process.env.NEXT_PUBLIC_CORE_URL;
@@ -83,5 +114,19 @@ export const fetchMemoryCounts = (signal?: AbortSignal) =>
 export const fetchObservations = (signal?: AbortSignal) =>
   getJSON<ObservationDTO[]>("/api/memory/observations", signal);
 
+export const fetchMemories = (
+  params: { tier?: string; project?: string } = {},
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams();
+  if (params.tier) qs.set("tier", params.tier);
+  if (params.project) qs.set("project", params.project);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return getJSON<MemoryDTO[]>(`/api/memory/memories${suffix}`, signal);
+};
+
 export const searchMemory = (q: string, signal?: AbortSignal) =>
   getJSON<SearchResult[]>(`/api/memory/search?q=${encodeURIComponent(q)}`, signal);
+
+export const fetchProvenance = (memoryId: string, signal?: AbortSignal) =>
+  getJSON<ProvenanceChain>(`/api/memory/cite/${memoryId}`, signal);
