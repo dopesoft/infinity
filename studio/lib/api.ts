@@ -94,13 +94,18 @@ function coreBaseURL(): string {
 }
 
 // authedFetch wraps fetch() so every Core call carries the latest Supabase
-// JWT in the Authorization header. The session module refreshes when a
-// token is within 30s of expiry, so long-lived tabs don't 401.
+// JWT. On a 401 (token raced an inflight refresh, server clock skew, etc.)
+// retry once with a freshly-fetched token before surfacing the error.
 export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = await getAccessToken();
-  const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(`${coreBaseURL()}${path}`, { ...init, headers });
+  async function send(): Promise<Response> {
+    const token = await getAccessToken();
+    const headers = new Headers(init.headers);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    return fetch(`${coreBaseURL()}${path}`, { ...init, headers });
+  }
+  const first = await send();
+  if (first.status !== 401) return first;
+  return send();
 }
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null> {

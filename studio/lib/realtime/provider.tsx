@@ -29,6 +29,7 @@ const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 // detach handlers without churning the websocket.
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const userId = user?.id ?? null;
   const listenersRef = useRef<Set<Listener>>(new Set());
   const channelRef = useRef<RealtimeChannel | null>(null);
 
@@ -46,7 +47,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!user) {
+    if (!userId) {
       // Tear down on sign-out.
       if (channelRef.current) {
         getSupabaseBrowserClient().removeChannel(channelRef.current);
@@ -114,7 +115,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       supabase.removeChannel(channel);
       channelRef.current = null;
     };
-  }, [user]);
+  }, [userId]);
 
   return (
     <RealtimeContext.Provider value={{ register }}>{children}</RealtimeContext.Provider>

@@ -81,12 +81,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await getSupabaseBrowserClient().auth.signOut();
   }, []);
 
-  // Publish the accessor so non-React code paths (api.ts, WS client) can
-  // read the JWT without prop-drilling through the provider tree.
-  useEffect(() => {
-    publishAccessTokenAccessor(getAccessToken);
-  }, [getAccessToken]);
-
   const value = useMemo<AuthState>(
     () => ({
       user,
@@ -108,17 +102,20 @@ export function useAuth() {
   return ctx;
 }
 
-// Token holder pattern: lib/api.ts and lib/ws/client.ts run outside the
-// React tree, so they can't call useAuth(). Instead the AuthProvider
-// publishes the latest accessor here on every render and the modules
-// read it via getCurrentAccessTokenAccessor().
-let currentAccessor: (() => Promise<string | null>) | null = null;
-
-export function publishAccessTokenAccessor(fn: () => Promise<string | null>) {
-  currentAccessor = fn;
-}
-
+// Standalone JWT accessor for non-React code (api.ts, WS client). Reads
+// directly from the Supabase singleton so it works the moment the module
+// loads — no waiting for AuthProvider's first useEffect to publish itself.
+//
+// supabase.auth.getSession() is cheap after the first call (results are
+// cached in memory); on the very first call it hydrates from the cookie.
+// Returns null when there's no session or it's expired beyond refresh.
 export async function getAccessToken(): Promise<string | null> {
-  if (!currentAccessor) return null;
-  return currentAccessor();
+  if (typeof window === "undefined") return null;
+  try {
+    const { data, error } = await getSupabaseBrowserClient().auth.getSession();
+    if (error || !data.session) return null;
+    return data.session.access_token;
+  } catch {
+    return null;
+  }
 }

@@ -36,10 +36,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const subscribers = useRef<Set<Subscriber>>(new Set());
   const clientRef = useRef<WSClient | null>(null);
   const { user, getAccessToken } = useAuth();
+  const userId = user?.id ?? null;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!user) {
+    if (!userId) {
       // Not signed in yet — tear down any prior client (e.g. after sign-out)
       // and skip connect. The next auth state change re-runs this effect.
       clientRef.current?.close();
@@ -78,7 +79,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       client.close();
       clientRef.current = null;
     };
-  }, [user, getAccessToken]);
+    // Intentional: getAccessToken is module-level and always returns the
+    // freshest token, so re-binding the WS on its identity is unnecessary.
+    // userId is the only thing that should rebuild the socket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const send = useCallback((msg: Record<string, unknown>) => {
     return clientRef.current?.send(msg) ?? false;
