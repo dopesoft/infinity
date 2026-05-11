@@ -2,31 +2,30 @@
 
 import { Hash, Loader2 } from "lucide-react";
 import { Composer } from "@/components/Composer";
+import { ConversationStream } from "@/components/ConversationStream";
 import { Button } from "@/components/ui/button";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { cn } from "@/lib/utils";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * CanvasComposer — thin wrapper around the existing Composer.
+ * CanvasComposer — the bottom panel in the Canvas left column.
  *
- * The actual chat input is unchanged; we just frame it with a header that
- * shows the active session id and how many files have been touched. The
- * composer's send/clear/new-session controls all route through useChat()
- * exactly the same way Live does, so a new prompt typed here streams back
- * into both surfaces in real time.
+ * Layout: tiny session-info bar at the top, ConversationStream (scrolling)
+ * in the middle, Composer pinned at the bottom. Same flex pattern Live uses
+ * — header / stream (flex-1, scrollable) / sticky composer — so the input
+ * never floats and there's no whitespace below it.
  */
 export function CanvasComposer({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const shortId = chat.sessionId ? chat.sessionId.slice(0, 8) : "—";
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex items-center gap-2 border-b px-2 py-1.5 text-[11px] text-muted-foreground">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div className="flex shrink-0 items-center gap-2 border-b px-2 py-1.5 text-[11px] text-muted-foreground">
         <Hash className="size-3 shrink-0" />
-        <span className="font-mono truncate" title={chat.sessionId}>
+        <span className="truncate font-mono" title={chat.sessionId}>
           {shortId}
         </span>
         <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
@@ -51,21 +50,12 @@ export function CanvasComposer({ chat }: { chat: ChatHook }) {
           </Button>
         </span>
       </div>
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col",
-          // Wrap the Composer so the textarea grows up to the panel ceiling
-          // when the user resizes the divider — instead of overflowing the
-          // panel. The Composer itself caps at ~4 lines internally; everything
-          // beyond that scrolls.
-        )}
-      >
-        <Composer
-          onSend={chat.send}
-          onSlash={(cmd) => (cmd === "new" ? chat.newSession() : chat.clear())}
-          disabled={chat.isStreaming || chat.status !== "connected"}
-        />
-      </div>
+      <ConversationStream messages={chat.messages} />
+      <Composer
+        onSend={chat.send}
+        onSlash={(cmd) => (cmd === "new" ? chat.newSession() : chat.clear())}
+        disabled={chat.isStreaming || chat.status !== "connected"}
+      />
     </div>
   );
 }

@@ -32,8 +32,8 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col border-r bg-muted/30 dark:bg-zinc-900/40">
-      <ResizablePanelGroup direction="vertical" autoSaveId="canvas:left">
-        <ResizablePanel defaultSize={65} minSize={30}>
+      <ResizablePanelGroup direction="vertical" autoSaveId="canvas:left:v2">
+        <ResizablePanel defaultSize={38} minSize={15} maxSize={75}>
           <div className="flex h-full min-h-0 flex-col">
             <Tabs value={tab} onValueChange={(v) => setTab(v as "files" | "git")} className="flex h-full min-h-0 flex-col">
               <div className="border-b px-2 py-1.5">
@@ -69,7 +69,7 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
           </div>
         </ResizablePanel>
         <ResizableHandle withHandle />
-        <ResizablePanel defaultSize={35} minSize={20} maxSize={70}>
+        <ResizablePanel defaultSize={62} minSize={25}>
           <CanvasComposer chat={chat} />
         </ResizablePanel>
       </ResizablePanelGroup>
