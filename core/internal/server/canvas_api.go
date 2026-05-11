@@ -113,9 +113,20 @@ func (s *Server) macBridgeAvailable() bool {
 	return ok
 }
 
-// listViaMCP tries claude_code__LS under each registered name spelling.
-// Returns (entries, true) on a parse hit, otherwise (nil, false).
+// listViaMCP tries to list directory entries through the Mac MCP bridge.
+// Three strategies, first one with non-empty output wins:
+//
+//  1. claude_code__LS  — returns an indented bullet tree we parse.
+//  2. claude_code__Bash — runs `ls -1Fp <dir>` directly, getting the most
+//     reliable directory listing UNIX has. Trailing "/" marks directories,
+//     "@" marks symlinks. We invoke the registry tool directly (not via
+//     the agent loop) so the gate doesn't queue this internal canvas
+//     read — every path has already been validated against
+//     INFINITY_CANVAS_ROOT in the caller.
+//  3. claude_code__Glob — last-ditch, returns matching paths; less rich
+//     because we lose dir/file distinction, but better than empty.
 func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
+	// Strategy 1: dedicated LS tool.
 	for _, name := range []string{"claude_code__LS", "claude_code__ls", "claude_code__List"} {
 		t, terr := s.canvasMCP(name)
 		if terr != nil {
@@ -131,7 +142,119 @@ func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
 		}
 		return entries, true
 	}
+
+	// Strategy 2: Bash `ls -1Fp`. This is the workhorse — works on every
+	// Mac and Linux, output is one name per line with clear type markers.
+	if t, err := s.canvasMCP("claude_code__Bash"); err == nil {
+		cmd := "ls -1Fp " + shellQuote(dir)
+		raw, execErr := t.Execute(ctx, map[string]any{"command": cmd})
+		if execErr == nil && strings.TrimSpace(raw) != "" {
+			entries := parseLsDashOneFOutput(raw)
+			if len(entries) > 0 {
+				return entries, true
+			}
+		}
+	}
+
+	// Strategy 3: Glob the immediate children.
+	for _, name := range []string{"claude_code__Glob", "claude_code__glob"} {
+		t, terr := s.canvasMCP(name)
+		if terr != nil {
+			continue
+		}
+		raw, execErr := t.Execute(ctx, map[string]any{
+			"pattern": "*",
+			"path":    dir,
+		})
+		if execErr != nil || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		entries := parseGlobOutput(raw, dir)
+		if len(entries) > 0 {
+			return entries, true
+		}
+	}
+
 	return nil, false
+}
+
+// parseLsDashOneFOutput parses `ls -1Fp` output: one name per line, with
+// trailing "/" for directories and "@" for symlinks. Trailing "*" for
+// executables is ignored (we still call it a file).
+func parseLsDashOneFOutput(raw string) []fsEntry {
+	out := []fsEntry{}
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		ln := strings.TrimRight(line, " \t")
+		if ln == "" || strings.HasPrefix(strings.TrimSpace(ln), "NOTE:") {
+			continue
+		}
+		// Strip trailing type markers.
+		typ := "file"
+		switch {
+		case strings.HasSuffix(ln, "/"):
+			typ = "dir"
+			ln = strings.TrimSuffix(ln, "/")
+		case strings.HasSuffix(ln, "@"):
+			typ = "symlink"
+			ln = strings.TrimSuffix(ln, "@")
+		case strings.HasSuffix(ln, "*"):
+			ln = strings.TrimSuffix(ln, "*")
+		case strings.HasSuffix(ln, "="):
+			ln = strings.TrimSuffix(ln, "=")
+		}
+		name := strings.TrimSpace(ln)
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+		if strings.HasPrefix(name, ".") && name != ".gitignore" && name != ".env.example" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, fsEntry{Name: name, Type: typ})
+	}
+	return out
+}
+
+// parseGlobOutput handles Glob's output: one path per line, absolute or
+// relative to `dir`. We collapse to direct children only.
+func parseGlobOutput(raw, dir string) []fsEntry {
+	out := []fsEntry{}
+	seen := map[string]struct{}{}
+	prefix := strings.TrimRight(dir, "/") + "/"
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		p := strings.TrimSpace(line)
+		if p == "" || strings.HasPrefix(p, "#") || strings.HasPrefix(p, "NOTE:") {
+			continue
+		}
+		// Strip the dir prefix if absolute.
+		rel := strings.TrimPrefix(p, prefix)
+		if rel == "" || rel == p && strings.HasPrefix(p, "/") {
+			// Path didn't start with our prefix → not a child of dir.
+			continue
+		}
+		// Only direct children — no '/' inside.
+		if idx := strings.Index(rel, "/"); idx >= 0 {
+			rel = rel[:idx]
+		}
+		if rel == "" || rel == "." || rel == ".." {
+			continue
+		}
+		if strings.HasPrefix(rel, ".") && rel != ".gitignore" && rel != ".env.example" {
+			continue
+		}
+		if _, dup := seen[rel]; dup {
+			continue
+		}
+		seen[rel] = struct{}{}
+		// We can't tell dir vs file from Glob output alone. Mark as file;
+		// the studio will still render and the user can click in.
+		out = append(out, fsEntry{Name: rel, Type: "file"})
+	}
+	return out
 }
 
 // readViaMCP tries claude_code__Read under each registered name spelling.

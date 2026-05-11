@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Files, GitBranch, MonitorPlay } from "lucide-react";
+import { Files, GitBranch, Loader2, MonitorPlay } from "lucide-react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -41,6 +41,14 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const ws = useWebSocket();
   const [mobileTab, setMobileTab] = useState<"files" | "git" | "editor">("files");
+  // Mount gate — react-resizable-panels reads layout from localStorage on
+  // first paint (via autoSaveId). The server has no localStorage and
+  // renders defaultSize, while the client renders the saved size → React
+  // logs hydration error #418/#423/#425 every visit. Deferring the entire
+  // layout to a useEffect tick makes the server output a stable skeleton
+  // and the client take over cleanly, no mismatch.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Subscribe to WS tool_call events to mark files dirty as the agent works.
   // Filtered by sessionId so a stale tab from a previous session doesn't
@@ -57,6 +65,14 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
       if (path) store.markDirty(path);
     });
   }, [ws, chat.sessionId, store]);
+
+  if (!mounted) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center" suppressHydrationWarning>
+        <Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden />
+      </div>
+    );
+  }
 
   return (
     <>
