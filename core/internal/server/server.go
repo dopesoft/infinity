@@ -31,6 +31,10 @@ type Config struct {
 	SentinelAPI  *sentinel.API
 	VoyagerAPI   *voyager.API
 	Auth         *auth.Verifier
+	// Trust is the durable approval store. Canvas's git mutations and
+	// file saves queue contracts here and block on user approval before
+	// touching the home Mac. Same store the agent gate uses.
+	Trust *proactive.TrustStore
 }
 
 type Server struct {
@@ -42,6 +46,7 @@ type Server struct {
 	store     *memory.Store
 	searcher  *memory.Searcher
 	skillsAPI *skills.API
+	trust     *proactive.TrustStore
 	auth      *auth.Verifier
 	started   time.Time
 }
@@ -58,6 +63,7 @@ func New(cfg Config) *Server {
 		store:     cfg.Store,
 		searcher:  cfg.Searcher,
 		skillsAPI: cfg.SkillsAPI,
+		trust:     cfg.Trust,
 		auth:      cfg.Auth,
 		started:   time.Now(),
 	}
@@ -115,6 +121,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
 	mux.HandleFunc("/api/memory/profile", s.handleProfile)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
+	mux.HandleFunc("/api/canvas/fs/ls", s.handleCanvasFSList)
+	mux.HandleFunc("/api/canvas/fs/read", s.handleCanvasFSRead)
+	mux.HandleFunc("/api/canvas/fs/save", s.handleCanvasFSSave)
+	mux.HandleFunc("/api/canvas/git/status", s.handleCanvasGitStatus)
+	mux.HandleFunc("/api/canvas/git/diff", s.handleCanvasGitDiff)
+	mux.HandleFunc("/api/canvas/git/stage", s.handleCanvasGitStage)
+	mux.HandleFunc("/api/canvas/git/commit", s.handleCanvasGitCommit)
+	mux.HandleFunc("/api/canvas/git/push", s.handleCanvasGitPush)
+	mux.HandleFunc("/api/canvas/git/pull", s.handleCanvasGitPull)
+	mux.HandleFunc("/api/canvas/config", s.handleCanvasConfig)
 }
 
 func (s *Server) Start() error {

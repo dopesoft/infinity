@@ -51,16 +51,54 @@ type ClaudeCodeGate struct {
 	trust      *TrustStore
 	autoAllow  map[string]struct{}
 	alwaysGate map[string]struct{}
+	gitReadOK  map[string]struct{} // git subcommands that bypass bash-gating
 	ttl        time.Duration
 }
 
 func NewClaudeCodeGate(trust *TrustStore) *ClaudeCodeGate {
+	gitRead := parseToolSet(envOr("INFINITY_CANVAS_GIT_READ_AUTOAPPROVE",
+		"status,diff,log,show,branch,remote,fetch,rev-parse,ls-files,ls-tree,blame,config"))
 	return &ClaudeCodeGate{
 		trust:      trust,
 		autoAllow:  parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_AUTOAPPROVE")),
 		alwaysGate: parseToolSet(envOr("INFINITY_CLAUDE_CODE_BLOCK", "bash,write,edit")),
+		gitReadOK:  gitRead,
 		ttl:        loadApprovalTTL(),
 	}
+}
+
+// isReadOnlyGit reports whether a bash invocation is a safe, read-only git
+// query (`git status`, `git diff`, `git log`…). Canvas's IDE-style left pane
+// polls these constantly; gating every call would drown the boss in Trust
+// prompts for actions that can't change disk or remote state.
+//
+// Rules to qualify:
+//   - input has a "command" string starting with "git "
+//   - the subcommand is in gitReadOK
+//   - no shell metacharacters that could append a write (`;`, `&&`, `||`,
+//     `|`, backticks, `$(`). The check is conservative; in particular it
+//     rejects any redirection (`>`, `<`) and any newline.
+func (g *ClaudeCodeGate) isReadOnlyGit(input map[string]any) bool {
+	if g == nil || len(g.gitReadOK) == 0 {
+		return false
+	}
+	raw, _ := input["command"].(string)
+	cmd := strings.TrimSpace(raw)
+	if cmd == "" {
+		return false
+	}
+	for _, bad := range []string{";", "&&", "||", "|", "`", "$(", ">", "<", "\n", "\r"} {
+		if strings.Contains(cmd, bad) {
+			return false
+		}
+	}
+	fields := strings.Fields(cmd)
+	if len(fields) < 2 || fields[0] != "git" {
+		return false
+	}
+	sub := strings.ToLower(fields[1])
+	_, ok := g.gitReadOK[sub]
+	return ok
 }
 
 func parseToolSet(raw string) map[string]struct{} {
@@ -95,6 +133,15 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 	}
 	if _, ok := g.alwaysGate[suffix]; !ok {
 		// Not in the block list and not explicitly auto-allowed: default allow.
+		return agent.GateDecision{Allow: true}
+	}
+
+	// Canvas surface: claude_code__bash gets a narrow read-only git allow-list.
+	// Read-only verbs cannot change disk or remote state, so gating them just
+	// blocks the IDE-style status polling and frustrates the boss without any
+	// safety win. Mutations (commit/push/pull/reset/checkout) still fall
+	// through to the normal Trust queue below.
+	if suffix == "bash" && g.isReadOnlyGit(input) {
 		return agent.GateDecision{Allow: true}
 	}
 

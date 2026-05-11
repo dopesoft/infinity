@@ -12,6 +12,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import {
   fetchCoreStatus,
   fetchMCP,
@@ -137,6 +138,8 @@ export default function SettingsPage() {
             )}
           </CardContent>
         </Card>
+
+        <CanvasSettings />
       </div>
     </TabFrame>
   );

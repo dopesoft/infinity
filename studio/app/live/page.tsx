@@ -6,6 +6,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { SessionHeader } from "@/components/SessionHeader";
 import { ConversationStream } from "@/components/ConversationStream";
 import { Composer } from "@/components/Composer";
+import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
@@ -92,6 +93,7 @@ export default function LivePage() {
               </Drawer>
             }
           />
+          <CodingSessionBanner sessionId={chat.sessionId} />
           <ConversationStream messages={chat.messages} />
           <Composer
             onSend={chat.send}

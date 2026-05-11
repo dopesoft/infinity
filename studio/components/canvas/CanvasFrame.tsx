@@ -1,0 +1,140 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Files, GitBranch, MonitorPlay } from "lucide-react";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import { CanvasLeftPane } from "@/components/canvas/CanvasLeftPane";
+import { CanvasRightPane } from "@/components/canvas/CanvasRightPane";
+import { CanvasMobileShell } from "@/components/canvas/CanvasMobileShell";
+import { useCanvasStore } from "@/lib/canvas/store";
+import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
+import { useWebSocket } from "@/lib/ws/provider";
+import type { useChat } from "@/hooks/useChat";
+
+type ChatHook = ReturnType<typeof useChat>;
+
+/**
+ * CanvasFrame — the responsive shell that hosts the IDE layout.
+ *
+ *   Desktop (lg+):   [ left pane (resizable) | divider | right pane ]
+ *                    Left pane is itself vertically split:
+ *                      [ Files / Git tabs (resizable) | divider | Composer ]
+ *
+ *   Mobile (<lg):    Full-screen with a 3-tab strip: Files / Git / Editor.
+ *                    Editor = the mobile incarnation of the right pane.
+ *                    Composer is sticky-bottom regardless of which tab.
+ *
+ * The WS subscription here is one of two consumers of tool_call events:
+ *   1. useChat (in the composer) — to display messages in conversation form.
+ *   2. CanvasFrame — to update the dirty-file set so the file tree and
+ *      Monaco tabs reflect agent activity in real time.
+ *
+ * Both consumers ride the same multi-subscriber WebSocketProvider, so no
+ * extra socket is opened.
+ */
+export function CanvasFrame({ chat }: { chat: ChatHook }) {
+  const store = useCanvasStore();
+  const ws = useWebSocket();
+  const [mobileTab, setMobileTab] = useState<"files" | "git" | "editor">("files");
+
+  // Subscribe to WS tool_call events to mark files dirty as the agent works.
+  // Filtered by sessionId so a stale tab from a previous session doesn't
+  // light up files this session never touched.
+  useEffect(() => {
+    return ws.subscribe((ev) => {
+      if ("session_id" in ev && ev.session_id && chat.sessionId && ev.session_id !== chat.sessionId) {
+        return;
+      }
+      if (ev.type !== "tool_call") return;
+      const name = ev.tool_call.name;
+      if (!isCodeChangeTool(name)) return;
+      const path = extractToolFilePath(ev.tool_call.input);
+      if (path) store.markDirty(path);
+    });
+  }, [ws, chat.sessionId, store]);
+
+  return (
+    <>
+      {/* Desktop layout */}
+      <div className="hidden min-h-0 flex-1 lg:flex">
+        <ResizablePanelGroup direction="horizontal" autoSaveId="canvas:h">
+          <ResizablePanel defaultSize={32} minSize={20} maxSize={50}>
+            <CanvasLeftPane chat={chat} />
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel defaultSize={68} minSize={40}>
+            <CanvasRightPane chat={chat} />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </div>
+
+      {/* Mobile layout */}
+      <div className="flex min-h-0 flex-1 flex-col lg:hidden">
+        <div className="sticky top-0 z-10 border-b bg-background/95 px-2 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <div className="flex items-center gap-1 overflow-x-auto scroll-touch">
+            <MobileTabButton
+              active={mobileTab === "files"}
+              onClick={() => setMobileTab("files")}
+              icon={<Files className="size-4" />}
+              label="Files"
+            />
+            <MobileTabButton
+              active={mobileTab === "git"}
+              onClick={() => setMobileTab("git")}
+              icon={<GitBranch className="size-4" />}
+              label="Git"
+              badge={store.dirtyPaths.size > 0 ? store.dirtyPaths.size : undefined}
+            />
+            <MobileTabButton
+              active={mobileTab === "editor"}
+              onClick={() => setMobileTab("editor")}
+              icon={<MonitorPlay className="size-4" />}
+              label="Editor"
+            />
+          </div>
+        </div>
+        <CanvasMobileShell chat={chat} mobileTab={mobileTab} onMobileTabChange={setMobileTab} />
+      </div>
+    </>
+  );
+}
+
+function MobileTabButton({
+  active,
+  onClick,
+  icon,
+  label,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  badge?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "relative inline-flex h-11 min-w-[88px] items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium transition-colors " +
+        (active
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground")
+      }
+      aria-pressed={active}
+    >
+      {icon}
+      <span>{label}</span>
+      {typeof badge === "number" && badge > 0 && (
+        <span className="ml-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning/20 px-1 font-mono text-[10px] font-semibold leading-none text-warning">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+    </button>
+  );
+}

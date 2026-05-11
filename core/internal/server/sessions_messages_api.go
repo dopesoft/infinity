@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
 )
@@ -62,7 +63,8 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 
 	out := []sessionMessageDTO{}
 	for rows.Next() {
-		var hook, text, createdAt string
+		var hook, text string
+		var createdAt time.Time
 		if err := rows.Scan(&hook, &text, &createdAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -75,7 +77,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		if hook == "UserPromptSubmit" {
 			role = "user"
 		}
-		out = append(out, sessionMessageDTO{Role: role, Text: text, CreatedAt: createdAt})
+		out = append(out, sessionMessageDTO{Role: role, Text: text, CreatedAt: createdAt.UTC().Format(time.RFC3339)})
 	}
 	if err := rows.Err(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -115,10 +117,12 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var hook, text, createdAt string
+		var hook, text string
+		var createdAt time.Time
 		if err := rows.Scan(&hook, &text, &createdAt); err != nil {
 			return
 		}
+		_ = createdAt
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue

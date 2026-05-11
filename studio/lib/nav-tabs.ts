@@ -3,6 +3,7 @@ import {
   ClipboardList,
   Clock,
   Brain,
+  LayoutPanelLeft,
   type LucideIcon,
   MessageSquare,
   ScrollText,
@@ -28,6 +29,7 @@ export type NavTab = {
 
 export const NAV_TABS: NavTab[] = [
   { href: "/live", label: "Live", Icon: MessageSquare },
+  { href: "/canvas", label: "Canvas", Icon: LayoutPanelLeft },
   { href: "/sessions", label: "Sessions", Icon: ScrollText },
   { href: "/memory", label: "Memory", Icon: Brain },
   { href: "/skills", label: "Skills", Icon: Wrench },

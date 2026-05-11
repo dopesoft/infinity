@@ -322,6 +322,7 @@ func serveCmd() *cobra.Command {
 				SentinelAPI:  sentinelAPI,
 				VoyagerAPI:   voyagerAPI,
 				Auth:         authVerifier,
+				Trust:        trustStore,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
