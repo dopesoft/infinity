@@ -233,9 +233,22 @@ func (m *MCPManager) dialSession(ctx context.Context, s MCPServerConfig) (*mcp.C
 			return nil, err
 		}
 		if len(headers) > 0 {
+			// CRITICAL: do NOT set http.Client.Timeout for SSE. That
+			// timeout covers the *entire* request including reading the
+			// response body — for SSE the body is a long-lived stream,
+			// so any Timeout > 0 will kill the connection after N seconds
+			// and surface as "client is closing: EOF" on the next call.
+			// Connection establishment is bounded by the underlying
+			// Transport (DialContext, TLS handshake, response headers).
+			// Per-call deadlines are enforced via context.WithTimeout in
+			// callers like keepAlive and CallTool.
+			httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+			httpTransport.ResponseHeaderTimeout = 30 * time.Second
 			sse.HTTPClient = &http.Client{
-				Timeout:   60 * time.Second,
-				Transport: &headerRoundTripper{headers: headers},
+				Transport: &headerRoundTripper{
+					headers: headers,
+					base:    httpTransport,
+				},
 			}
 		}
 		transport = sse
