@@ -109,6 +109,20 @@ func serveCmd() *cobra.Command {
 			if pool != nil {
 				skillStore = skills.NewStore(pool)
 				skillRegistry.AttachStore(skillStore)
+
+				// Re-hydrate auto-evolved skills from Postgres BEFORE the
+				// filesystem walk. Voyager writes promoted skills to both
+				// disk and mem_skill_versions; this materializer re-creates
+				// the disk file from the DB whenever the file is missing
+				// or drifted, so Railway's ephemeral container filesystem
+				// never causes skill loss between deploys.
+				mctx, mcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+				if written, err := skills.MaterializeActiveSkills(mctx, pool, skillsRoot); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: materialize skills: %v\n", err)
+				} else if written > 0 {
+					fmt.Printf("  skills: re-materialized %d auto-evolved skill(s) from Postgres\n", written)
+				}
+				mcancel()
 			}
 			loadCtx, loadCancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 			if errs, err := skillRegistry.Reload(loadCtx); err != nil {

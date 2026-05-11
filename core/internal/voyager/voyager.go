@@ -25,6 +25,7 @@ package voyager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -183,11 +184,26 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 	}
 
 	if decision == "promoted" {
-		var name, skillMD string
+		var name, skillMD, description, riskLevel string
 		err := m.pool.QueryRow(ctx, `
-			SELECT name, skill_md FROM mem_skill_proposals WHERE id = $1
-		`, id).Scan(&name, &skillMD)
+			SELECT name,
+			       COALESCE(skill_md, ''),
+			       COALESCE(description, ''),
+			       COALESCE(risk_level, 'low')
+			  FROM mem_skill_proposals WHERE id = $1
+		`, id).Scan(&name, &skillMD, &description, &riskLevel)
 		if err != nil {
+			return err
+		}
+		// Persist to Postgres FIRST so the skill survives any container
+		// restart (Railway redeploys wipe the ephemeral filesystem).
+		// Disk write is then a derivative — used by the loader to
+		// populate the in-memory registry. On every boot the
+		// MaterializeFromDB hook (see skills.MaterializeActiveSkills)
+		// re-syncs disk to match active rows in Postgres, so even if
+		// the disk write is lost we recover automatically.
+		version := nextVersionStamp()
+		if err := m.persistSkillToDB(ctx, name, version, skillMD, description, riskLevel); err != nil {
 			return err
 		}
 		if err := m.writeSkillToDisk(name, skillMD); err != nil {
@@ -216,6 +232,76 @@ func (m *Manager) writeSkillToDisk(name, skillMD string) error {
 		return err
 	}
 	return os.WriteFile(dir+"/SKILL.md", []byte(skillMD), 0o644)
+}
+
+// persistSkillToDB upserts the auto-evolved skill into the three durable
+// tables (mem_skills + mem_skill_versions + mem_skill_active) inside a
+// single transaction. This is the deploy-survival guarantee for skills
+// generated at runtime — Railway's ephemeral container filesystem can
+// disappear on every push, but these Postgres rows persist forever and
+// are re-materialized to disk on the next boot.
+func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, description, riskLevel string) error {
+	if m == nil || m.pool == nil {
+		return errors.New("voyager: no database pool")
+	}
+	if riskLevel == "" {
+		riskLevel = "low"
+	}
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// 1. Upsert the catalog row. Source = auto_evolved so we can filter
+	//    in Studio (e.g. "show me everything Voyager built me").
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO mem_skills (name, description, risk_level, status, source, last_evolved, updated_at)
+		VALUES ($1, $2, $3, 'active', 'auto_evolved', NOW(), NOW())
+		ON CONFLICT (name) DO UPDATE
+		   SET description  = EXCLUDED.description,
+		       risk_level   = EXCLUDED.risk_level,
+		       status       = 'active',
+		       source       = CASE
+		                        WHEN mem_skills.source = 'manual' THEN 'manual'
+		                        ELSE 'auto_evolved'
+		                      END,
+		       last_evolved = NOW(),
+		       updated_at   = NOW()
+	`, name, description, riskLevel); err != nil {
+		return fmt.Errorf("upsert mem_skills: %w", err)
+	}
+
+	// 2. Insert the new version row (immutable history — every evolution
+	//    leaves a trail).
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO mem_skill_versions (skill_name, version, skill_md, source, promoted_at)
+		VALUES ($1, $2, $3, 'auto_evolved', NOW())
+		ON CONFLICT DO NOTHING
+	`, name, version, skillMD); err != nil {
+		return fmt.Errorf("insert mem_skill_versions: %w", err)
+	}
+
+	// 3. Point the active pointer at the new version so MaterializeActiveSkills
+	//    knows which body to write to disk on boot.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO mem_skill_active (skill_name, active_version, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (skill_name) DO UPDATE
+		   SET active_version = EXCLUDED.active_version,
+		       updated_at     = NOW()
+	`, name, version); err != nil {
+		return fmt.Errorf("upsert mem_skill_active: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// nextVersionStamp returns a YYYYMMDDhhmmss-style version label. Lexically
+// sortable, human-readable, and unique enough for the auto-evolution path
+// where the boss only promotes one variant per (skill, second).
+func nextVersionStamp() string {
+	return time.Now().UTC().Format("20060102-150405")
 }
 
 func safeName(s string) string {
