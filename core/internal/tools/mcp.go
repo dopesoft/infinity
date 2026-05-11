@@ -453,22 +453,46 @@ func (t *mcpTool) Description() string    { return t.desc }
 func (t *mcpTool) Schema() map[string]any { return t.schema }
 
 func (t *mcpTool) Execute(ctx context.Context, input map[string]any) (string, error) {
-	res, err := t.callOnce(ctx, input)
-	if err != nil && isTransportDeadErr(err) {
-		// The SSE/stdio stream is dead (Cloudflare Tunnel idle drop, mac
-		// bridge restart, etc). Reconnect once and retry — without this
-		// the first call after a silent disconnect always fails with
-		// "client is closing: EOF" and we never recover until the next
-		// core restart.
-		log.Printf("mcp: %s.%s transport dead (%v) — reconnecting", t.server, t.remote, err)
-		if rerr := t.mgr.Reconnect(ctx, t.server); rerr != nil {
-			return "", fmt.Errorf("reconnect %s: %w (orig: %v)", t.server, rerr, err)
-		}
+	// Up to maxAttempts total. The Cloudflare Tunnel → mcp-proxy → claude
+	// mcp serve stack is chatty: SSE sessions die silently and `tools/call`
+	// hands back "EOF" before the keepalive has finished reconnecting.
+	// One retry isn't enough — sometimes the reconnect itself races and
+	// the second call also EOFs while the new session is still spinning
+	// up. Three attempts with brief backoff catches the vast majority of
+	// these without the boss seeing anything.
+	const maxAttempts = 3
+	var (
+		res *mcp.CallToolResult
+		err error
+	)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		res, err = t.callOnce(ctx, input)
-		if err != nil {
+		if err == nil {
+			break
+		}
+		if !isTransportDeadErr(err) {
 			return "", err
 		}
-	} else if err != nil {
+		log.Printf("mcp: %s.%s transport dead attempt %d/%d (%v) — reconnecting",
+			t.server, t.remote, attempt, maxAttempts, err)
+		if rerr := t.mgr.Reconnect(ctx, t.server); rerr != nil {
+			// Reconnect itself failed. Bubble up only on the last
+			// attempt; otherwise wait a beat and try again.
+			if attempt == maxAttempts {
+				return "", fmt.Errorf("reconnect %s: %w (orig: %v)", t.server, rerr, err)
+			}
+		}
+		if attempt < maxAttempts {
+			// Small backoff so the freshly-dialled SSE session has time
+			// to register tools before we hit it again.
+			select {
+			case <-time.After(time.Duration(attempt) * 250 * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+	}
+	if err != nil {
 		return "", err
 	}
 	if res.IsError {
