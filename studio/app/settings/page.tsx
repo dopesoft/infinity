@@ -124,9 +124,9 @@ export default function SettingsPage() {
                   {s.error && (
                     <p className="mt-1 text-xs text-danger break-words">{s.error}</p>
                   )}
-                  {s.tools.length > 0 && (
+                  {(s.tools?.length ?? 0) > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {s.tools.map((t) => (
+                      {(s.tools ?? []).map((t) => (
                         <Badge key={t} variant="secondary">
                           {t}
                         </Badge>

@@ -56,6 +56,14 @@ func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 	if s.mcp != nil {
 		out = s.mcp.Statuses()
 	}
+	// Failed-to-connect servers leave Tools nil, which marshals as JSON
+	// null. The studio crashes on `s.tools.length` if we let that
+	// through — fix the wire format here so every entry has [].
+	for i := range out {
+		if out[i].Tools == nil {
+			out[i].Tools = []string{}
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

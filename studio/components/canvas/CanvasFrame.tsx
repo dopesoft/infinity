@@ -82,8 +82,8 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
         <ResizablePanelGroup direction="vertical" autoSaveId="canvas:mobile:v1">
           <ResizablePanel defaultSize={50} minSize={20}>
             <div className="flex h-full min-h-0 flex-col">
-              <div className="sticky top-0 z-10 shrink-0 border-b bg-background/95 px-2 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-                <div className="flex items-center gap-1 overflow-x-auto scroll-touch">
+              <div className="sticky top-0 z-10 shrink-0 border-b bg-background/95 px-1.5 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                <div className="grid grid-cols-3 gap-1 pb-1">
                   <MobileTabButton
                     active={mobileTab === "files"}
                     onClick={() => setMobileTab("files")}
@@ -138,7 +138,7 @@ function MobileTabButton({
       type="button"
       onClick={onClick}
       className={
-        "relative inline-flex h-11 min-w-[88px] items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium transition-colors " +
+        "relative inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium transition-colors " +
         (active
           ? "bg-accent text-accent-foreground"
           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground")
