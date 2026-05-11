@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { fetchCanvasFSList, type FSEntry } from "@/lib/canvas/api";
+import { fetchCanvasFSList, fetchCanvasDebug, type FSEntry } from "@/lib/canvas/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -147,17 +147,39 @@ export function CanvasFileTree() {
           className="h-8 flex-1 text-sm"
         />
         {root && (
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="h-8 w-8 shrink-0"
-            onClick={() => onRefresh(root.path)}
-            aria-label="Refresh tree"
-            title="Refresh"
-          >
-            <RefreshCw className="size-3.5" />
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 shrink-0"
+              onClick={() => onRefresh(root.path)}
+              aria-label="Refresh tree"
+              title="Refresh"
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 shrink-0"
+              onClick={async () => {
+                const out = await fetchCanvasDebug(root.path);
+                console.log("[canvas debug]", out);
+                // Also dump to clipboard so the boss can paste it.
+                try {
+                  await navigator.clipboard.writeText(JSON.stringify(out, null, 2));
+                } catch {
+                  /* clipboard may be unavailable in some sandboxes */
+                }
+              }}
+              aria-label="Diagnose file tree"
+              title="Run file-tree diagnostic (output in console + clipboard)"
+            >
+              <AlertCircle className="size-3.5" />
+            </Button>
+          </>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto scroll-touch py-1 text-sm">

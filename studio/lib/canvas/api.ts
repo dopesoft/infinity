@@ -98,6 +98,15 @@ async function postJSON<T>(path: string, body: unknown): Promise<T | null> {
 export const fetchCanvasConfig = (signal?: AbortSignal) =>
   getJSON<CanvasConfig>("/api/canvas/config", signal);
 
+// Diagnostic — dumps tool registration + each LS strategy's raw output.
+// Surfaced via a button in the Files tab's empty state so the boss can
+// trigger it without futzing with auth tokens in DevTools.
+export const fetchCanvasDebug = (path: string, signal?: AbortSignal) =>
+  getJSON<unknown>(
+    `/api/canvas/debug?path=${encodeURIComponent(path)}`,
+    signal,
+  );
+
 export const fetchCanvasFSList = (path = "", signal?: AbortSignal) =>
   getJSON<FSListResponse>(
     `/api/canvas/fs/ls${path ? `?path=${encodeURIComponent(path)}` : ""}`,
