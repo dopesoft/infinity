@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MonitorPlay, MonitorX } from "lucide-react";
 import { CanvasPreviewToolbar } from "@/components/canvas/CanvasPreviewToolbar";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
@@ -74,23 +74,34 @@ export function CanvasPreview() {
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>(() => ({ w: 0, h: 0 }));
 
-  const remeasure = (el: HTMLDivElement | null) => {
+  // Stable measurer. State setters from useState are guaranteed stable
+  // by React, so we can use empty deps and still call setStageSize.
+  // setStageSize uses a functional update so we never re-render when
+  // the size hasn't actually changed (defends against ResizeObserver
+  // firing on subpixel jitter, which would otherwise loop with the
+  // CSS transform also rounding).
+  const remeasure = useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
-    setStageSize({ w: el.clientWidth, h: el.clientHeight });
-  };
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    setStageSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+  }, []);
 
-  // Callback ref: fires synchronously on attach/detach. We measure
-  // immediately so the first render after the element exists has the
-  // right scale.
-  const stageRefCb = (el: HTMLDivElement | null) => {
-    setStageEl(el);
-    remeasure(el);
-  };
+  // Stable ref callback. If we let this be a new function each render,
+  // React detaches/reattaches the ref every cycle → setStageEl fires →
+  // re-render → new function reference → infinite loop (React #185).
+  const stageRefCb = useCallback(
+    (el: HTMLDivElement | null) => {
+      setStageEl(el);
+      remeasure(el);
+    },
+    [remeasure],
+  );
 
   useEffect(() => {
     if (!stageEl) return;
+    const onResize = () => remeasure(stageEl);
     if (typeof ResizeObserver === "undefined") {
-      const onResize = () => remeasure(stageEl);
       window.addEventListener("resize", onResize);
       remeasure(stageEl);
       return () => window.removeEventListener("resize", onResize);
@@ -99,13 +110,12 @@ export function CanvasPreview() {
     ro.observe(stageEl);
     // Belt-and-braces: also listen to window resize, since some
     // browsers (Safari) don't fire RO on every layout shift.
-    const onResize = () => remeasure(stageEl);
     window.addEventListener("resize", onResize);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", onResize);
     };
-  }, [stageEl]);
+  }, [stageEl, remeasure]);
 
   // Outer pad we want to leave around the device frame. Keeps shadows
   // visible and the device "floating" against the bg gradient.
