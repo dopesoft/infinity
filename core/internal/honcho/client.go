@@ -24,11 +24,12 @@ import (
 )
 
 const (
-	// 30s because Honcho synchronously generates message embeddings on
-	// the POST path; 6s used to time out almost every turn under load.
-	// The hook runs in its own goroutine so this timeout never blocks
-	// the agent loop — it just bounds how long the background mirror
-	// hangs before giving up.
+	// HTTP client timeout = upper-bound on background message mirrors
+	// (PostMessage in a hook goroutine). 30s is generous; the actual
+	// per-call deadline is whatever ctx the caller passes — the
+	// synchronous read path uses a 2s fastRepTimeout via the provider
+	// so the agent loop never waits long. Honcho's deriver runs
+	// asynchronously, so a 30s upper bound on mirror writes is fine.
 	defaultTimeout   = 30 * time.Second
 	defaultPeerName  = "boss"
 	defaultWorkspace = "infinity"
