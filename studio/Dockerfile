@@ -13,16 +13,26 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ARG NEXT_PUBLIC_CORE_URL
-ARG NEXT_PUBLIC_CORE_WS_URL
+# Production defaults for the NEXT_PUBLIC_* baked into the build. Railway
+# is supposed to inject these as build args via service env vars, but it
+# silently no-ops when the variable name doesn't match a build-arg
+# declaration on its end — leaving the ARG empty and the production
+# bundle pointed at nothing. These defaults are the safety net so a
+# vanilla `docker build` (or a Railway build where the env-→-build-arg
+# linkage is misconfigured) still produces a working production bundle.
+# Pass `--build-arg NEXT_PUBLIC_CORE_URL=...` to override.
+ARG NEXT_PUBLIC_CORE_URL=https://core-production-84d4.up.railway.app
+ARG NEXT_PUBLIC_CORE_WS_URL=wss://core-production-84d4.up.railway.app/ws
 ARG NEXT_PUBLIC_BUILD=dev
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_PREVIEW_URL=https://preview.dopesoft.io
 ENV NEXT_PUBLIC_CORE_URL=$NEXT_PUBLIC_CORE_URL \
     NEXT_PUBLIC_CORE_WS_URL=$NEXT_PUBLIC_CORE_WS_URL \
     NEXT_PUBLIC_BUILD=$NEXT_PUBLIC_BUILD \
     NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    NEXT_PUBLIC_PREVIEW_URL=$NEXT_PUBLIC_PREVIEW_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     CI=true
 RUN pnpm build

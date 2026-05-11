@@ -1,0 +1,35 @@
+# Never ship dev-only env files into the production image. Next.js auto-
+# loads `.env.local` during `next build`, so leaving it in the build
+# context bakes localhost URLs into the production bundle — that's how we
+# ended up with NEXT_PUBLIC_CORE_URL=http://localhost:8080 in prod.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+
+# Build artifacts — we rebuild from source inside the container.
+.next
+out
+node_modules
+.turbo
+
+# Editor / OS noise.
+.DS_Store
+.vscode
+.idea
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test + coverage outputs.
+coverage
+.nyc_output
+
+# Git metadata is not needed inside the image.
+.git
+.gitignore
+README.md
