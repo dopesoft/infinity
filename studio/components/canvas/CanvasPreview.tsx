@@ -34,12 +34,23 @@ export function CanvasPreview() {
   const ws = useWebSocket();
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const effectiveUrl = useMemo(() => {
+  // Base URL the boss configured (toolbar URL bar / env). The iframe src
+  // appends a cache-busting query param keyed to previewRefreshKey so
+  // every click of ↻ forces a true reload — without this, Next.js dev's
+  // versioned chunks 404 because the cached HTML references old hashes.
+  const baseUrl = useMemo(() => {
     const explicit = store.previewUrl?.trim();
     if (explicit) return explicit;
     if (store.envPreviewUrl?.trim()) return store.envPreviewUrl.trim();
     return "";
   }, [store.previewUrl, store.envPreviewUrl]);
+
+  const effectiveUrl = useMemo(() => {
+    if (!baseUrl) return "";
+    if (store.previewRefreshKey === 0) return baseUrl;
+    const sep = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${sep}_cv=${store.previewRefreshKey}`;
+  }, [baseUrl, store.previewRefreshKey]);
 
   // Auto-refresh on code-change tool_result events.
   useEffect(() => {
@@ -140,7 +151,7 @@ export function CanvasPreview() {
   // it like a real browser window flush against its container.
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <CanvasPreviewToolbar effectiveUrl={effectiveUrl} />
+      <CanvasPreviewToolbar effectiveUrl={baseUrl} />
       {!effectiveUrl ? (
         <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
           <EmptyPreview />
