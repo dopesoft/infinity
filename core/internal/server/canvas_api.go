@@ -127,30 +127,43 @@ func (s *Server) handleCanvasFSList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try the LS tool first — falls back to local FS read if the MCP
-	// bridge isn't available. The fallback exists so the Canvas surface
-	// still works in local-dev when the user runs core on the same
-	// machine as their workspace (no Mac bridge needed).
 	out := fsListResponse{Path: resolved, Root: canvasRoot(), Entries: []fsEntry{}}
 
-	if t, err := s.canvasMCP("claude_code__LS"); err == nil {
-		raw, execErr := t.Execute(r.Context(), map[string]any{"path": resolved})
-		if execErr == nil && strings.TrimSpace(raw) != "" {
-			out.Entries = parseLsOutput(raw, resolved)
-			sortEntries(out.Entries)
-			writeJSON(w, http.StatusOK, out)
-			return
-		}
-	}
-
-	// Local FS fallback.
-	entries, lerr := localListDir(resolved)
-	if lerr != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lerr.Error()})
+	// Local FS first. When Core runs on the same machine as the boss
+	// (local dev on the Mac) this is fast, lossless, and doesn't need
+	// the tunnel. Falls through to MCP only when local reads fail —
+	// the production case where Core lives on Railway and the boss's
+	// files live on a Mac accessed through the claude_code bridge.
+	if entries, lerr := localListDir(resolved); lerr == nil {
+		out.Entries = entries
+		sortEntries(out.Entries)
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	out.Entries = entries
-	sortEntries(out.Entries)
+
+	// MCP fallback for production. We try the tool under the exact name
+	// Claude Code registers ("claude_code__LS") and then again in
+	// lowercase because different bridges normalize tool names
+	// differently. Whichever returns first wins.
+	for _, name := range []string{"claude_code__LS", "claude_code__ls", "claude_code__List"} {
+		t, terr := s.canvasMCP(name)
+		if terr != nil {
+			continue
+		}
+		raw, execErr := t.Execute(r.Context(), map[string]any{"path": resolved})
+		if execErr != nil || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		entries := parseLsOutput(raw, resolved)
+		if len(entries) == 0 {
+			continue
+		}
+		out.Entries = entries
+		sortEntries(out.Entries)
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -201,24 +214,108 @@ func localListDir(dir string) ([]fsEntry, error) {
 	return out, nil
 }
 
-// parseLsOutput is a forgiving parser for claude_code__LS output, which on
-// most Mac bridges is a newline-separated `name<TAB>size<TAB>type` table
-// but in older builds is just `ls -1`. We accept both. Anything we can't
-// parse becomes a plain file entry — the studio renders it harmlessly.
+// parseLsOutput parses Claude Code's LS output, which is an indented-bullet
+// tree:
+//
+//	- /Users/n0m4d/Dev/
+//	  - infinity/
+//	    - core/
+//	  - other-project/
+//	  - notes.md
+//
+// We extract only the direct children of `dir` (depth-1 entries — bullets
+// indented 2 spaces past the root line). Trailing "/" marks a directory.
+//
+// Also tolerates the older tab-separated `name<TAB>size<TAB>type` shape and
+// raw `ls -1` output where each line is just a name.
 func parseLsOutput(raw, dir string) []fsEntry {
 	out := []fsEntry{}
 	seen := map[string]struct{}{}
+	rootIndent := -1
 	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		rstripped := strings.TrimRight(line, " \t")
+		if rstripped == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		name := strings.TrimSpace(fields[0])
-		// Drop the dir prefix if the LS output included it.
+		trimmed := strings.TrimSpace(rstripped)
+		// Notes / annotations Claude Code occasionally prepends.
+		if strings.HasPrefix(trimmed, "NOTE:") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// Bullet form: "  - name/" — count leading spaces, strip "- ".
+		if strings.HasPrefix(trimmed, "- ") {
+			indent := len(rstripped) - len(strings.TrimLeft(rstripped, " "))
+			content := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+			if rootIndent < 0 {
+				// First bullet is the root being listed — store its
+				// indent so we can pick direct children one level
+				// deeper.
+				rootIndent = indent
+				continue
+			}
+			// Direct children are exactly 2 spaces deeper than the
+			// root bullet. Anything deeper is a grandchild Claude
+			// Code surfaced — skip it; the studio lazy-loads
+			// subdirectories on expand.
+			if indent != rootIndent+2 {
+				continue
+			}
+			isDir := strings.HasSuffix(content, "/")
+			name := strings.TrimSuffix(content, "/")
+			name = strings.TrimPrefix(name, dir+string(filepath.Separator))
+			if name == "" || name == "." || name == ".." {
+				continue
+			}
+			if strings.HasPrefix(name, ".") && name != ".gitignore" && name != ".env.example" {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			e := fsEntry{Name: name, Type: "file"}
+			if isDir {
+				e.Type = "dir"
+			}
+			out = append(out, e)
+			continue
+		}
+
+		// Tab-separated form.
+		if strings.Contains(rstripped, "\t") {
+			fields := strings.Split(rstripped, "\t")
+			name := strings.TrimSpace(fields[0])
+			name = strings.TrimPrefix(name, dir+string(filepath.Separator))
+			isDir := strings.HasSuffix(name, "/")
+			name = strings.TrimSuffix(name, "/")
+			if name == "" || name == "." || name == ".." {
+				continue
+			}
+			if strings.HasPrefix(name, ".") && name != ".gitignore" && name != ".env.example" {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			e := fsEntry{Name: name, Type: "file"}
+			if isDir {
+				e.Type = "dir"
+			}
+			out = append(out, e)
+			continue
+		}
+
+		// Plain `ls -1` form: one name per line.
+		name := strings.TrimSpace(rstripped)
 		name = strings.TrimPrefix(name, dir+string(filepath.Separator))
+		isDir := strings.HasSuffix(name, "/")
 		name = strings.TrimSuffix(name, "/")
 		if name == "" || name == "." || name == ".." {
+			continue
+		}
+		if strings.HasPrefix(name, ".") && name != ".gitignore" && name != ".env.example" {
 			continue
 		}
 		if _, dup := seen[name]; dup {
@@ -226,12 +323,8 @@ func parseLsOutput(raw, dir string) []fsEntry {
 		}
 		seen[name] = struct{}{}
 		e := fsEntry{Name: name, Type: "file"}
-		if strings.HasSuffix(fields[0], "/") {
+		if isDir {
 			e.Type = "dir"
-		}
-		// Skip dotfiles for the same reason localListDir does.
-		if strings.HasPrefix(name, ".") && name != ".gitignore" && name != ".env.example" {
-			continue
 		}
 		out = append(out, e)
 	}
@@ -254,34 +347,41 @@ func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try MCP read first; fall back to local read for local-dev.
-	if t, err := s.canvasMCP("claude_code__Read"); err == nil {
-		out, execErr := t.Execute(r.Context(), map[string]any{"file_path": resolved})
-		if execErr == nil && out != "" {
-			content := stripReadHeader(out)
-			writeJSON(w, http.StatusOK, fsReadResponse{
-				Path:     resolved,
-				Content:  content,
-				Language: detectLanguage(resolved),
-				SHA:      sha256Hex(content),
-				Size:     int64(len(content)),
-			})
-			return
-		}
-	}
-
-	data, lerr := os.ReadFile(resolved)
-	if lerr != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": lerr.Error()})
+	// Local read first — fast and exact. Production (Railway) hits
+	// ENOENT here and falls through to MCP, which routes the read
+	// through the home Mac via claude_code__Read.
+	if data, lerr := os.ReadFile(resolved); lerr == nil {
+		writeJSON(w, http.StatusOK, fsReadResponse{
+			Path:     resolved,
+			Content:  string(data),
+			Language: detectLanguage(resolved),
+			SHA:      sha256Hex(string(data)),
+			Size:     int64(len(data)),
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, fsReadResponse{
-		Path:     resolved,
-		Content:  string(data),
-		Language: detectLanguage(resolved),
-		SHA:      sha256Hex(string(data)),
-		Size:     int64(len(data)),
-	})
+
+	for _, name := range []string{"claude_code__Read", "claude_code__read"} {
+		t, terr := s.canvasMCP(name)
+		if terr != nil {
+			continue
+		}
+		out, execErr := t.Execute(r.Context(), map[string]any{"file_path": resolved})
+		if execErr != nil || out == "" {
+			continue
+		}
+		content := stripReadHeader(out)
+		writeJSON(w, http.StatusOK, fsReadResponse{
+			Path:     resolved,
+			Content:  content,
+			Language: detectLanguage(resolved),
+			SHA:      sha256Hex(content),
+			Size:     int64(len(content)),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not readable"})
 }
 
 // stripReadHeader removes the `cat -n`-style line-number prefix Claude Code's

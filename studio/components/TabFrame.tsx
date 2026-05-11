@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Infinity as InfinityIcon } from "lucide-react";
+import { Infinity as InfinityIcon, Settings as SettingsIcon } from "lucide-react";
 import { TabNav } from "@/components/TabNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SignOutButton } from "@/components/SignOutButton";
@@ -42,6 +42,14 @@ export function TabFrame({
         <div className="flex items-center gap-1">
           <span className="hidden items-center gap-1 lg:inline-flex">
             <ThemeToggle />
+            <Link
+              href="/settings"
+              aria-label="Settings"
+              title="Settings"
+              className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <SettingsIcon className="size-4" />
+            </Link>
             <SignOutButton />
           </span>
           <span className="lg:hidden">

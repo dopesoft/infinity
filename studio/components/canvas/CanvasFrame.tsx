@@ -10,6 +10,7 @@ import {
 import { CanvasLeftPane } from "@/components/canvas/CanvasLeftPane";
 import { CanvasRightPane } from "@/components/canvas/CanvasRightPane";
 import { CanvasMobileShell } from "@/components/canvas/CanvasMobileShell";
+import { CanvasComposer } from "@/components/canvas/CanvasComposer";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
 import { useWebSocket } from "@/lib/ws/provider";
@@ -72,32 +73,48 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
         </ResizablePanelGroup>
       </div>
 
-      {/* Mobile layout */}
+      {/* Mobile layout — vertical 50/50 split. Top half hosts a sub-tab
+          switcher (Files / Git / Editor), each scrollable inside. Bottom
+          half is always the chat (ConversationStream + Composer) so the
+          boss can keep prompting without losing context. The divider is
+          draggable so either half can grow. */}
       <div className="flex min-h-0 flex-1 flex-col lg:hidden">
-        <div className="sticky top-0 z-10 border-b bg-background/95 px-2 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <div className="flex items-center gap-1 overflow-x-auto scroll-touch">
-            <MobileTabButton
-              active={mobileTab === "files"}
-              onClick={() => setMobileTab("files")}
-              icon={<Files className="size-4" />}
-              label="Files"
-            />
-            <MobileTabButton
-              active={mobileTab === "git"}
-              onClick={() => setMobileTab("git")}
-              icon={<GitBranch className="size-4" />}
-              label="Git"
-              badge={store.dirtyPaths.size > 0 ? store.dirtyPaths.size : undefined}
-            />
-            <MobileTabButton
-              active={mobileTab === "editor"}
-              onClick={() => setMobileTab("editor")}
-              icon={<MonitorPlay className="size-4" />}
-              label="Editor"
-            />
-          </div>
-        </div>
-        <CanvasMobileShell chat={chat} mobileTab={mobileTab} onMobileTabChange={setMobileTab} />
+        <ResizablePanelGroup direction="vertical" autoSaveId="canvas:mobile:v1">
+          <ResizablePanel defaultSize={50} minSize={20}>
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="sticky top-0 z-10 shrink-0 border-b bg-background/95 px-2 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                <div className="flex items-center gap-1 overflow-x-auto scroll-touch">
+                  <MobileTabButton
+                    active={mobileTab === "files"}
+                    onClick={() => setMobileTab("files")}
+                    icon={<Files className="size-4" />}
+                    label="Files"
+                  />
+                  <MobileTabButton
+                    active={mobileTab === "git"}
+                    onClick={() => setMobileTab("git")}
+                    icon={<GitBranch className="size-4" />}
+                    label="Git"
+                    badge={store.dirtyPaths.size > 0 ? store.dirtyPaths.size : undefined}
+                  />
+                  <MobileTabButton
+                    active={mobileTab === "editor"}
+                    onClick={() => setMobileTab("editor")}
+                    icon={<MonitorPlay className="size-4" />}
+                    label="Editor"
+                  />
+                </div>
+              </div>
+              <div className="min-h-0 flex-1">
+                <CanvasMobileShell chat={chat} mobileTab={mobileTab} />
+              </div>
+            </div>
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize={50} minSize={30}>
+            <CanvasComposer chat={chat} />
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
     </>
   );
