@@ -24,9 +24,14 @@ import (
 )
 
 const (
-	defaultTimeout    = 6 * time.Second
-	defaultPeerName   = "boss"
-	defaultWorkspace  = "infinity"
+	// 30s because Honcho synchronously generates message embeddings on
+	// the POST path; 6s used to time out almost every turn under load.
+	// The hook runs in its own goroutine so this timeout never blocks
+	// the agent loop — it just bounds how long the background mirror
+	// hangs before giving up.
+	defaultTimeout   = 30 * time.Second
+	defaultPeerName  = "boss"
+	defaultWorkspace = "infinity"
 )
 
 // Client talks to a Honcho deployment via its REST API. Configure with
