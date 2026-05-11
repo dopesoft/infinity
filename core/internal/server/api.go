@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
@@ -109,16 +110,15 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			defer rows.Close()
 			for rows.Next() {
 				var d sessionDTO
-				var started, ended *string
+				var started time.Time
+				var ended *time.Time
 				if err := rows.Scan(&d.ID, &started, &ended, &d.Project, &d.MessageCount); err != nil {
 					log.Printf("handleSessions scan: %v", err)
 					continue
 				}
-				if started != nil {
-					d.StartedAt = *started
-				}
+				d.StartedAt = started.UTC().Format(time.RFC3339)
 				if ended != nil {
-					d.EndedAt = *ended
+					d.EndedAt = ended.UTC().Format(time.RFC3339)
 				}
 				if _, ok := live[d.ID]; ok {
 					d.Live = true
