@@ -1204,6 +1204,39 @@ func (s *Server) handleCanvasDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	strategies["bash_ls_1Fp"] = bashEntry
 
+	// 3b. Probe — bash with the smallest possible command. If THIS fails
+	//     too, the bridge is broken for all bash calls, not just ls
+	//     (i.e. the issue is on the Mac, not in our command).
+	probeEntry := map[string]any{"tool": "claude_code__Bash", "registered": false}
+	if t, terr := s.canvasMCP("claude_code__Bash"); terr == nil {
+		probeEntry["registered"] = true
+		probeEntry["command"] = "echo hi"
+		raw, execErr := t.Execute(r.Context(), map[string]any{"command": "echo hi"})
+		probeEntry["raw"] = raw
+		if execErr != nil {
+			probeEntry["error"] = execErr.Error()
+		}
+	}
+	strategies["bash_echo_probe"] = probeEntry
+
+	// 3c. Read probe — try claude_code__Read on a known file. If Read
+	//     works while Bash doesn't, the bridge has a specific Bash
+	//     issue (probably a tool-handler crash on the Mac).
+	readEntry := map[string]any{"tool": "claude_code__Read", "registered": false}
+	if t, terr := s.canvasMCP("claude_code__Read"); terr == nil {
+		readEntry["registered"] = true
+		// Read CLAUDE.md if it exists under the workspace root; gives a
+		// small, predictable file to probe against.
+		probePath := filepath.Join(canvasRoot(), "infinity", "CLAUDE.md")
+		readEntry["probe_path"] = probePath
+		raw, execErr := t.Execute(r.Context(), map[string]any{"file_path": probePath})
+		readEntry["raw_head"] = head(raw, 600)
+		if execErr != nil {
+			readEntry["error"] = execErr.Error()
+		}
+	}
+	strategies["read_probe"] = readEntry
+
 	// 4. Strategy: Glob.
 	for _, name := range []string{"claude_code__Glob", "claude_code__glob"} {
 		entry := map[string]any{"tool": name, "registered": false}
