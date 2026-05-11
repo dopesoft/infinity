@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
@@ -53,95 +52,15 @@ type ClaudeCodeGate struct {
 	autoAllow  map[string]struct{}
 	alwaysGate map[string]struct{}
 	ttl        time.Duration
-
-	// sessionApprovals maps sessionID → toolName → expiry. Populated when
-	// a Trust approval is consumed; checked on every gate fire so the LLM
-	// can run the same tool repeatedly within one turn (or across turns
-	// in the same session) without re-queueing. Sliding window: each hit
-	// pushes the expiry forward by `ttl`. Lives in memory only — a core
-	// restart clears it, which is the right default (fresh process, fresh
-	// approvals; the boss re-approves on a redeploy).
-	mu               sync.RWMutex
-	sessionApprovals map[string]map[string]time.Time
 }
 
 func NewClaudeCodeGate(trust *TrustStore) *ClaudeCodeGate {
 	return &ClaudeCodeGate{
-		trust:            trust,
-		autoAllow:        parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_AUTOAPPROVE")),
-		alwaysGate:       parseToolSet(envOr("INFINITY_CLAUDE_CODE_BLOCK", "bash,write,edit")),
-		ttl:              loadApprovalTTL(),
-		sessionApprovals: make(map[string]map[string]time.Time),
+		trust:      trust,
+		autoAllow:  parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_AUTOAPPROVE")),
+		alwaysGate: parseToolSet(envOr("INFINITY_CLAUDE_CODE_BLOCK", "bash,write,edit")),
+		ttl:        loadApprovalTTL(),
 	}
-}
-
-// isSessionApproved reports whether a fresh-enough in-memory approval
-// exists for the (session, tool) pair. Expired entries are pruned on
-// read. Successful checks also extend the expiry (sliding window) — as
-// long as the boss is actively using the tool, the approval never lapses.
-func (g *ClaudeCodeGate) isSessionApproved(sessionID, toolName string) bool {
-	if g == nil || sessionID == "" {
-		return false
-	}
-	g.mu.RLock()
-	tools, ok := g.sessionApprovals[sessionID]
-	if !ok {
-		g.mu.RUnlock()
-		return false
-	}
-	exp, ok := tools[toolName]
-	g.mu.RUnlock()
-	if !ok {
-		return false
-	}
-	now := time.Now()
-	if now.After(exp) {
-		// Lazily clean up the expired entry.
-		g.mu.Lock()
-		if t, ok := g.sessionApprovals[sessionID]; ok {
-			delete(t, toolName)
-			if len(t) == 0 {
-				delete(g.sessionApprovals, sessionID)
-			}
-		}
-		g.mu.Unlock()
-		return false
-	}
-	// Sliding window: every successful check pushes the expiry forward.
-	// Cheap relative to the network round-trip we're about to skip.
-	g.mu.Lock()
-	if t, ok := g.sessionApprovals[sessionID]; ok {
-		t[toolName] = now.Add(g.ttl)
-	}
-	g.mu.Unlock()
-	return true
-}
-
-// markSessionApproved adds the (session, tool) → expiry entry so the gate
-// auto-allows further calls without round-tripping the DB.
-func (g *ClaudeCodeGate) markSessionApproved(sessionID, toolName string) {
-	if g == nil || sessionID == "" {
-		return
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	tools, ok := g.sessionApprovals[sessionID]
-	if !ok {
-		tools = make(map[string]time.Time)
-		g.sessionApprovals[sessionID] = tools
-	}
-	tools[toolName] = time.Now().Add(g.ttl)
-}
-
-// RevokeSession drops every cached approval for a session — used when the
-// session ends or when the boss explicitly clears approvals. Defensive.
-func (g *ClaudeCodeGate) RevokeSession(sessionID string) {
-	if g == nil || sessionID == "" {
-		return
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	delete(g.sessionApprovals, sessionID)
 }
 
 func parseToolSet(raw string) map[string]struct{} {
@@ -179,37 +98,42 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		return agent.GateDecision{Allow: true}
 	}
 
-	// Session-wide approval cache: if the boss has already approved THIS
-	// tool in THIS session, allow every subsequent invocation for the TTL
-	// window. Without this the LLM bounces off the gate on every
-	// follow-up call ("now also read X", verification re-runs) and the
-	// boss has to re-approve constantly.
-	if g.isSessionApproved(sessionID, toolName) {
-		return agent.GateDecision{Allow: true}
-	}
-
-	// First call of a tool in this session — consult the durable Trust
-	// store. A pre-existing approved contract (boss tapped Approve while
-	// the previous gate fire was waiting) consumes here and seeds the
-	// in-memory cache so further calls skip the DB hit entirely.
+	// All approval state lives in mem_trust_contracts — no in-memory cache
+	// to lose on a Railway redeploy. Two checks against the durable store:
+	//
+	//   1. HasRecentApprovalForTool — has the boss ever approved THIS
+	//      (session, tool) in the last TTL window? If yes → allow. This
+	//      handles both first-call-after-approval AND every follow-up
+	//      call in the same session for the duration of the window.
+	//
+	//   2. ConsumeApprovedForTool — fold the first 'approved' row over
+	//      to 'consumed' for audit clarity. Subsequent calls hit (1)
+	//      because 'consumed' is also acceptable evidence of approval.
+	//
+	// Deploy semantics: the rows survive in Postgres, so after a deploy
+	// the gate happily allows tools the boss previously approved without
+	// re-prompting. Old in-memory map is gone.
 	if g.trust != nil {
-		consumed, err := g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
+		hasApproval, err := g.trust.HasRecentApprovalForTool(ctx, sessionID, toolName, g.ttl)
 		if err != nil {
-			log.Printf("ClaudeCodeGate: consume lookup error: %v", err)
+			log.Printf("ClaudeCodeGate: approval lookup error: %v", err)
 			// Fall through to queueing — fail closed.
-		} else if consumed {
-			log.Printf("ClaudeCodeGate: %s allowed via prior approval (session-wide for %s, sliding)",
+		} else if hasApproval {
+			// Best-effort fold approved→consumed so the audit view shows
+			// when the approval was first acted on. Idempotent: if the
+			// row is already 'consumed' this no-ops.
+			_, _ = g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
+			log.Printf("ClaudeCodeGate: %s allowed via prior approval (durable, %s window)",
 				toolName, g.ttl)
-			g.markSessionApproved(sessionID, toolName)
 			return agent.GateDecision{Allow: true}
 		}
 	}
 
-	// Queue a fresh contract AND block the loop on its resolution. The
-	// inline Approve/Deny buttons in Studio's tool card POST to
-	// /api/trust-contracts/:id/decide → WaitForDecision returns →
-	// the agent runs the same tool call inline. No tab switch, no
-	// "retry" message from the model.
+	// No standing approval. Queue a fresh contract and block the loop
+	// on its resolution. The inline Approve/Deny buttons in Studio's
+	// tool card POST to /api/trust-contracts/:id/decide →
+	// WaitForDecision returns → the agent runs the same tool call
+	// inline. No tab switch, no "retry" message.
 
 	// Queue for approval.
 	if g.trust == nil {
@@ -297,9 +221,11 @@ func (g *ClaudeCodeGate) WaitForDecision(ctx context.Context, contractID string,
 			switch status {
 			case "approved":
 				log.Printf("ClaudeCodeGate: contract %s approved", contractID)
-				g.markSessionApproved(sessionID, toolName)
-				// Consume it so subsequent gate fires don't double-allow
-				// the same row — the session cache covers further calls.
+				// Flip the row to 'consumed' for audit. The gate's
+				// HasRecentApprovalForTool will continue to see this
+				// row as evidence of approval for the whole TTL
+				// window, so further calls in the same session
+				// auto-allow without re-queueing.
 				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
 				return true, ""
 			case "denied":

@@ -131,6 +131,35 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 	return out, rows.Err()
 }
 
+// HasRecentApprovalForTool returns true when an approval (or already-
+// consumed approval) exists for the (session, tool) pair within `window`.
+// This is the deploy-resilient replacement for the gate's old in-memory
+// session-approval map — every check hits Postgres, so a core restart
+// never loses approvals the boss already granted.
+//
+// Window mirrors the gate's TTL; the gate passes its configured TTL in.
+func (s *TrustStore) HasRecentApprovalForTool(ctx context.Context, sessionID, toolName string, window time.Duration) (bool, error) {
+	if s == nil || s.pool == nil || sessionID == "" || toolName == "" {
+		return false, nil
+	}
+	if window <= 0 {
+		window = 8 * time.Hour
+	}
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1
+		      FROM mem_trust_contracts
+		     WHERE source = 'claude_code_gate'
+		       AND action_spec->>'tool' = $1
+		       AND action_spec->>'session_id' = $2
+		       AND status IN ('approved', 'consumed')
+		       AND COALESCE(decided_at, created_at) > NOW() - $3::interval
+		)
+	`, toolName, sessionID, window.String()).Scan(&exists)
+	return exists, err
+}
+
 // LookupForGate returns the status + tool + session for the named
 // contract, cheap enough to poll from the gate's wait loop. The fields
 // are pulled out of action_spec (where the gate stored them at queue

@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
@@ -56,23 +58,94 @@ func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) handleSessions(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	type sessionDTO struct {
 		ID           string `json:"id"`
 		StartedAt    string `json:"started_at"`
+		EndedAt      string `json:"ended_at,omitempty"`
+		Project      string `json:"project,omitempty"`
 		MessageCount int    `json:"message_count"`
+		Live         bool   `json:"live"`
 	}
-	out := []sessionDTO{}
+
+	// Build a set of session IDs that are alive in this core process's
+	// memory right now so we can tag DB-backed rows as "live" in the UI.
+	live := map[string]int{}
 	if s.loop != nil {
 		for _, sess := range s.loop.Sessions() {
-			snap := sess.Snapshot()
+			live[sess.ID] = len(sess.Snapshot())
+		}
+	}
+
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+
+	out := []sessionDTO{}
+
+	// Postgres is the source of truth — without this the page goes empty
+	// every time core restarts (Railway redeploys, OOM kills, etc.),
+	// even though mem_observations still has all the messages. Sessions
+	// recover when the user reopens them in Studio (`hydrateLoopSession`
+	// repopulates the in-memory map), but the list view should never need
+	// that round-trip.
+	if s.pool != nil {
+		rows, err := s.pool.Query(r.Context(), `
+			SELECT s.id::text,
+			       s.started_at,
+			       s.ended_at,
+			       COALESCE(s.project, ''),
+			       COALESCE((SELECT COUNT(*) FROM mem_observations o WHERE o.session_id = s.id), 0) AS msg_count
+			  FROM mem_sessions s
+			 ORDER BY s.started_at DESC
+			 LIMIT $1
+		`, limit)
+		if err != nil {
+			log.Printf("handleSessions: %v", err)
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var d sessionDTO
+				var started, ended *string
+				if err := rows.Scan(&d.ID, &started, &ended, &d.Project, &d.MessageCount); err != nil {
+					log.Printf("handleSessions scan: %v", err)
+					continue
+				}
+				if started != nil {
+					d.StartedAt = *started
+				}
+				if ended != nil {
+					d.EndedAt = *ended
+				}
+				if _, ok := live[d.ID]; ok {
+					d.Live = true
+				}
+				out = append(out, d)
+				delete(live, d.ID)
+			}
+		}
+	}
+
+	// Any session that's live in RAM but doesn't have a mem_sessions row
+	// yet (extremely early in a brand-new session, race window) — surface
+	// it anyway so the UI never lies about what's running.
+	if s.loop != nil {
+		for _, sess := range s.loop.Sessions() {
+			if _, ok := live[sess.ID]; !ok {
+				continue
+			}
 			out = append(out, sessionDTO{
 				ID:           sess.ID,
 				StartedAt:    sess.StartedAt.UTC().Format("2006-01-02T15:04:05Z"),
-				MessageCount: len(snap),
+				MessageCount: len(sess.Snapshot()),
+				Live:         true,
 			})
 		}
 	}
+
 	writeJSON(w, http.StatusOK, out)
 }
 

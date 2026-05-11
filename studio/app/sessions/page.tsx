@@ -35,7 +35,7 @@ export default function SessionsPage() {
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside className="flex min-h-0 flex-col border-b bg-background lg:w-80 lg:border-b-0 lg:border-r">
           <PageSectionHeader
-            title="in-memory sessions"
+            title="sessions"
             count={sessions.length}
             className="px-3 py-3"
           >
@@ -48,7 +48,7 @@ export default function SessionsPage() {
           <div className="flex max-h-72 flex-col gap-2 overflow-y-auto px-3 pb-3 scroll-touch lg:max-h-none lg:flex-1">
             {sessions.length === 0 ? (
               <p className="px-1 text-sm text-muted-foreground">
-                {loading ? "Loading…" : "No active sessions."}
+                {loading ? "Loading…" : "No sessions yet — start a chat in Live."}
               </p>
             ) : (
               sessions.map((s) => (
