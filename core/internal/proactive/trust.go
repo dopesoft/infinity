@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -51,12 +52,25 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 		cited = []string{}
 	}
 
+	// Pull the authenticated user from ctx so the row is owned by them.
+	// auth.UserID returns "" when the request didn't pass through the auth
+	// middleware (e.g. heartbeat/cron) — we set NULL in that case so the
+	// existing single-user fallback (rows with NULL get claimed by the
+	// owner at first login) keeps working.
+	userID := auth.UserID(ctx)
+	var userIDArg any
+	if userID == "" {
+		userIDArg = nil
+	} else {
+		userIDArg = userID
+	}
+
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_trust_contracts
 		  (id, title, risk_level, source, action_spec, reasoning, cited_memory_ids,
-		   risk_assessment, preview, status)
-		VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::uuid[], $8::jsonb, $9, $10)
-	`, c.ID, c.Title, c.RiskLevel, c.Source, action, c.Reasoning, cited, risk, c.Preview, c.Status)
+		   risk_assessment, preview, status, user_id)
+		VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::uuid[], $8::jsonb, $9, $10, $11::uuid)
+	`, c.ID, c.Title, c.RiskLevel, c.Source, action, c.Reasoning, cited, risk, c.Preview, c.Status, userIDArg)
 	return c.ID, err
 }
 

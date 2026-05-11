@@ -60,9 +60,20 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
         {messages.map((m) => (
           <div key={m.id}>
             {m.role === "tool" ? (
-              <ToolCallCard message={m} />
+              // ToolCallCard wraps to a left-anchored 50% so it doesn't pretend
+              // to be the conversation. Same width as ThinkingBlock for visual
+              // rhythm — both are "system" feedback, not chat.
+              <div className="flex justify-start">
+                <div className="w-full sm:w-1/2">
+                  <ToolCallCard message={m} />
+                </div>
+              </div>
             ) : m.role === "thinking" ? (
-              <ThinkingBlock message={m} />
+              <div className="flex justify-start">
+                <div className="w-full sm:w-1/2">
+                  <ThinkingBlock message={m} />
+                </div>
+              </div>
             ) : (
               <ChatBubble message={m} />
             )}

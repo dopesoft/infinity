@@ -89,21 +89,42 @@ type Message struct {
 	Role      string `json:"role,omitempty"` // "user" | "assistant"
 }
 
-// PostMessage is a fire-and-forget write of a single observation. Errors are
-// returned but the agent loop should not block on them — call this from a
-// hook goroutine.
+// honchoMessageBatch matches Honcho v3's POST messages body shape — an
+// envelope wrapping a list of {peer_id, content, ...}.
+type honchoMessageBatch struct {
+	Messages []honchoMessage `json:"messages"`
+}
+
+type honchoMessage struct {
+	PeerID  string `json:"peer_id"`
+	Content string `json:"content"`
+}
+
+// PostMessage writes a single observation to Honcho. v3 batches messages
+// under sessions, so a session_id is required — when none is supplied we
+// fall back to a default per-peer bucket so messages still land somewhere
+// indexed for the deriver to pick up.
 func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	if !c.Enabled() {
 		return nil
 	}
-	if m.PeerID == "" {
-		m.PeerID = c.peer
+	peerID := m.PeerID
+	if peerID == "" {
+		peerID = c.peer
 	}
-	body, err := json.Marshal(m)
+	sessionID := strings.TrimSpace(m.SessionID)
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	url := fmt.Sprintf("%s/v3/workspaces/%s/sessions/%s/messages",
+		c.base, c.workspace, sessionID)
+	body, err := json.Marshal(honchoMessageBatch{Messages: []honchoMessage{{
+		PeerID:  peerID,
+		Content: m.Content,
+	}}})
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s/v1/workspaces/%s/messages", c.base, c.workspace)
 	return c.do(ctx, http.MethodPost, url, body, nil)
 }
 
@@ -112,35 +133,39 @@ func (c *Client) PostMessage(ctx context.Context, m Message) error {
 // the LLM-generated answer. Used by the memory provider to fold a peer
 // snapshot into the system prompt.
 type DialecticQuery struct {
-	Question string `json:"question"`
+	Queries string `json:"queries"`
 }
 
 type DialecticResponse struct {
-	Answer string `json:"answer"`
+	Content string `json:"content"`
 }
 
-// Ask runs a dialectic query. Honcho's exact endpoint shape has shifted
-// across versions; we POST to /v1/workspaces/<ws>/peers/<peer>/chat which
-// matches the current main branch. If the deployment exposes a different
-// path, override via HONCHO_DIALECTIC_PATH.
+// Ask runs a dialectic chat query against the configured peer. POST to
+// /v3/workspaces/<ws>/peers/<peer>/chat returns the LLM-curated answer
+// over the peer's accumulated representation.
 func (c *Client) Ask(ctx context.Context, q string) (string, error) {
 	if !c.Enabled() {
 		return "", nil
 	}
 	path := envOr("HONCHO_DIALECTIC_PATH",
-		fmt.Sprintf("/v1/workspaces/%s/peers/%s/chat", c.workspace, c.peer))
+		fmt.Sprintf("/v3/workspaces/%s/peers/%s/chat", c.workspace, c.peer))
 	url := c.base + path
-	body, _ := json.Marshal(DialecticQuery{Question: q})
+	body, _ := json.Marshal(DialecticQuery{Queries: q})
 	var resp DialecticResponse
 	if err := c.do(ctx, http.MethodPost, url, body, &resp); err != nil {
 		return "", err
 	}
-	return resp.Answer, nil
+	return resp.Content, nil
 }
 
-// Representation returns the cached peer representation, refreshing it from
+// Representation returns the cached peer context, refreshing it from
 // Honcho if older than ttl. Used by the memory provider on every system
 // prefix build — keeps the representation hot while bounding traffic.
+//
+// Honcho v3 splits this across /representation (POST, curated subset) and
+// /context (GET, peer-card + representation rolled into one). We use
+// /context because it's the lightest fetch and matches the "fold the
+// boss-state into the system prompt" use case best.
 func (c *Client) Representation(ctx context.Context, ttl time.Duration) (string, error) {
 	if !c.Enabled() {
 		return "", nil
@@ -156,19 +181,29 @@ func (c *Client) Representation(ctx context.Context, ttl time.Duration) (string,
 	}
 
 	path := envOr("HONCHO_REPRESENTATION_PATH",
-		fmt.Sprintf("/v1/workspaces/%s/peers/%s/representation", c.workspace, c.peer))
+		fmt.Sprintf("/v3/workspaces/%s/peers/%s/context", c.workspace, c.peer))
 	url := c.base + path
 	var raw struct {
-		Content string `json:"content"`
+		Representation string `json:"representation"`
+		Card           string `json:"card,omitempty"`
+		Summary        string `json:"summary,omitempty"`
+		Content        string `json:"content,omitempty"` // fallback for shape drift
 	}
 	if err := c.do(ctx, http.MethodGet, url, nil, &raw); err != nil {
 		return cached, err // return last good if refresh fails
 	}
+	picked := strings.TrimSpace(raw.Representation)
+	if picked == "" {
+		picked = strings.TrimSpace(raw.Summary)
+	}
+	if picked == "" {
+		picked = strings.TrimSpace(raw.Content)
+	}
 	c.cacheMu.Lock()
-	c.repCache = raw.Content
+	c.repCache = picked
 	c.repAt = time.Now()
 	c.cacheMu.Unlock()
-	return raw.Content, nil
+	return picked, nil
 }
 
 func (c *Client) do(ctx context.Context, method, url string, body []byte, decodeInto any) error {

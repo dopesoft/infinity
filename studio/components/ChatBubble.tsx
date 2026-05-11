@@ -23,10 +23,13 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
     <div className={cn("flex w-full gap-2", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[88%] rounded-2xl px-3 py-2 text-[15px] leading-relaxed sm:max-w-[78%] sm:text-base",
+          "rounded-2xl px-3 py-2 text-[15px] leading-relaxed sm:text-base",
+          // User bubbles stay compact (they read as input). Assistant
+          // replies cap at 75% so the eye has a clear seam between the
+          // boss's words and Jarvis's.
           isUser
-            ? "rounded-tr-sm bg-primary text-primary-foreground"
-            : "rounded-tl-sm bg-muted text-foreground",
+            ? "max-w-[88%] rounded-tr-sm bg-primary text-primary-foreground sm:max-w-[78%]"
+            : "max-w-full rounded-tl-sm bg-muted text-foreground sm:max-w-[75%]",
         )}
       >
         <div className="whitespace-pre-wrap break-words">
