@@ -66,31 +66,60 @@ export function CanvasPreview() {
   // mobile/tablet viewport and its responsive CSS triggers), but a CSS
   // transform shrinks the rendered output. This is how Lovable / v0 / the
   // Chrome devtools device toolbar all do it.
-  const stageRef = useRef<HTMLDivElement>(null);
-  const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  //
+  // We use a callback ref + ResizeObserver + window resize. The callback
+  // ref lets us measure synchronously the very first time the element
+  // mounts, so the first paint already has the correct scale and the
+  // iframe never briefly renders at native size with scrollbars.
+  const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
+  const [stageSize, setStageSize] = useState<{ w: number; h: number }>(() => ({ w: 0, h: 0 }));
+
+  const remeasure = (el: HTMLDivElement | null) => {
+    if (!el) return;
+    setStageSize({ w: el.clientWidth, h: el.clientHeight });
+  };
+
+  // Callback ref: fires synchronously on attach/detach. We measure
+  // immediately so the first render after the element exists has the
+  // right scale.
+  const stageRefCb = (el: HTMLDivElement | null) => {
+    setStageEl(el);
+    remeasure(el);
+  };
+
   useEffect(() => {
-    const el = stageRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      const e = entries[0];
-      if (!e) return;
-      const cr = e.contentRect;
-      setStageSize({ w: cr.width, h: cr.height });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [dims]);
+    if (!stageEl) return;
+    if (typeof ResizeObserver === "undefined") {
+      const onResize = () => remeasure(stageEl);
+      window.addEventListener("resize", onResize);
+      remeasure(stageEl);
+      return () => window.removeEventListener("resize", onResize);
+    }
+    const ro = new ResizeObserver(() => remeasure(stageEl));
+    ro.observe(stageEl);
+    // Belt-and-braces: also listen to window resize, since some
+    // browsers (Safari) don't fire RO on every layout shift.
+    const onResize = () => remeasure(stageEl);
+    window.addEventListener("resize", onResize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onResize);
+    };
+  }, [stageEl]);
 
   // Outer pad we want to leave around the device frame. Keeps shadows
   // visible and the device "floating" against the bg gradient.
-  const STAGE_PAD = 16;
+  const STAGE_PAD = 12;
   const scale = useMemo(() => {
     if (!dims) return 1;
-    if (stageSize.w === 0 || stageSize.h === 0) return 1;
+    // Until we've measured at least once, hide the iframe entirely (see
+    // render below) rather than risk rendering at native size and
+    // briefly overflowing.
+    if (stageSize.w === 0 || stageSize.h === 0) return 0;
     const usableW = Math.max(0, stageSize.w - STAGE_PAD * 2);
     const usableH = Math.max(0, stageSize.h - STAGE_PAD * 2);
     const s = Math.min(usableW / dims.width, usableH / dims.height, 1);
-    return Math.max(s, 0.1);
+    return Math.max(s, 0.05);
   }, [dims, stageSize]);
 
   // Desktop preset = the iframe IS the preview pane, edge-to-edge, no
@@ -108,15 +137,19 @@ export function CanvasPreview() {
         </div>
       ) : dims ? (
         <div
-          ref={stageRef}
+          ref={stageRefCb}
           className="relative min-h-0 flex-1 overflow-hidden bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black"
         >
           {/* The scaled device frame. The iframe is rendered at its NATIVE
               dimensions (so the embedded app's responsive CSS sees a real
               mobile/tablet viewport) and shrunk visually via CSS transform.
               The wrapper takes up the scaled-down footprint so flex centring
-              works against the post-scale size. */}
-          <div className="absolute inset-0 flex items-center justify-center">
+              works against the post-scale size. Hidden until we've measured
+              the stage at least once so we never briefly overflow. */}
+          <div
+            className="absolute inset-0 flex items-center justify-center transition-opacity"
+            style={{ opacity: scale > 0 ? 1 : 0 }}
+          >
             <div
               style={{
                 width: `${dims.width * scale}px`,
@@ -128,7 +161,7 @@ export function CanvasPreview() {
                 style={{
                   width: `${dims.width}px`,
                   height: `${dims.height}px`,
-                  transform: `scale(${scale})`,
+                  transform: `scale(${scale || 1})`,
                   transformOrigin: "top left",
                 }}
               >
