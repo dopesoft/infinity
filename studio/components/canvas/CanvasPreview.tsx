@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MonitorPlay, MonitorX } from "lucide-react";
 import { CanvasPreviewToolbar } from "@/components/canvas/CanvasPreviewToolbar";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
@@ -60,6 +60,39 @@ export function CanvasPreview() {
 
   const dims = devicePresetDimensions(store.device);
 
+  // Measure the available area (the inner pane minus toolbar) so we can
+  // scale phone/tablet previews to fit without scrolling. The iframe
+  // keeps its NATIVE pixel dimensions (so the embedded app sees a real
+  // mobile/tablet viewport and its responsive CSS triggers), but a CSS
+  // transform shrinks the rendered output. This is how Lovable / v0 / the
+  // Chrome devtools device toolbar all do it.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const e = entries[0];
+      if (!e) return;
+      const cr = e.contentRect;
+      setStageSize({ w: cr.width, h: cr.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [dims]);
+
+  // Outer pad we want to leave around the device frame. Keeps shadows
+  // visible and the device "floating" against the bg gradient.
+  const STAGE_PAD = 16;
+  const scale = useMemo(() => {
+    if (!dims) return 1;
+    if (stageSize.w === 0 || stageSize.h === 0) return 1;
+    const usableW = Math.max(0, stageSize.w - STAGE_PAD * 2);
+    const usableH = Math.max(0, stageSize.h - STAGE_PAD * 2);
+    const s = Math.min(usableW / dims.width, usableH / dims.height, 1);
+    return Math.max(s, 0.1);
+  }, [dims, stageSize]);
+
   // Desktop preset = the iframe IS the preview pane, edge-to-edge, no
   // chrome. Phone / tablet presets keep the device-card styling (padding,
   // shadow, rounded corners, gradient bg) because that's the entire point
@@ -74,20 +107,40 @@ export function CanvasPreview() {
           <EmptyPreview />
         </div>
       ) : dims ? (
-        <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
-          <div className="flex min-h-full items-center justify-center p-2 sm:p-4">
+        <div
+          ref={stageRef}
+          className="relative min-h-0 flex-1 overflow-hidden bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black"
+        >
+          {/* The scaled device frame. The iframe is rendered at its NATIVE
+              dimensions (so the embedded app's responsive CSS sees a real
+              mobile/tablet viewport) and shrunk visually via CSS transform.
+              The wrapper takes up the scaled-down footprint so flex centring
+              works against the post-scale size. */}
+          <div className="absolute inset-0 flex items-center justify-center">
             <div
-              className="overflow-hidden rounded-xl border bg-background shadow-2xl ring-1 ring-black/5 dark:ring-white/5"
-              style={{ width: `${dims.width}px`, height: `${dims.height}px`, maxWidth: "100%", maxHeight: "100%" }}
+              style={{
+                width: `${dims.width * scale}px`,
+                height: `${dims.height * scale}px`,
+              }}
             >
-              <iframe
-                key={`preview-${store.previewRefreshKey}`}
-                src={effectiveUrl}
-                title="Preview"
-                className="block size-full border-0"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock allow-downloads"
-                allow="clipboard-write; clipboard-read"
-              />
+              <div
+                className="overflow-hidden rounded-xl border bg-background shadow-2xl ring-1 ring-black/5 dark:ring-white/5"
+                style={{
+                  width: `${dims.width}px`,
+                  height: `${dims.height}px`,
+                  transform: `scale(${scale})`,
+                  transformOrigin: "top left",
+                }}
+              >
+                <iframe
+                  key={`preview-${store.previewRefreshKey}`}
+                  src={effectiveUrl}
+                  title="Preview"
+                  className="block size-full border-0"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock allow-downloads"
+                  allow="clipboard-write; clipboard-read"
+                />
+              </div>
             </div>
           </div>
         </div>
