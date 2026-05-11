@@ -131,6 +131,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/git/push", s.handleCanvasGitPush)
 	mux.HandleFunc("/api/canvas/git/pull", s.handleCanvasGitPull)
 	mux.HandleFunc("/api/canvas/config", s.handleCanvasConfig)
+	mux.HandleFunc("/api/canvas/debug", s.handleCanvasDebug)
 }
 
 func (s *Server) Start() error {

@@ -1133,6 +1133,106 @@ func (s *Server) handleCanvasConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCanvasDebug is a diagnostic endpoint. Returns:
+//   - every claude_code__* tool registered (the actual exact name)
+//   - for the requested path, the raw output and entry count from each
+//     listing strategy (LS, Bash ls -1Fp, Glob)
+//
+// Use it from the browser:
+//
+//	fetch('/api/canvas/debug?path=/Users/you/Dev').then(r=>r.json()).then(console.log)
+//
+// Cheap to call, no Trust queue side effects, no secrets — just the
+// names and a small slice of raw output so we can see what Claude Code
+// is actually returning.
+func (s *Server) handleCanvasDebug(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	resolved, ok := resolveCanvasPath(path)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
+		return
+	}
+
+	out := map[string]any{
+		"resolved":      resolved,
+		"root":          canvasRoot(),
+		"bridge_ok":     s.macBridgeAvailable(),
+		"tools_present": []string{},
+		"strategies":    map[string]any{},
+	}
+
+	// 1. Which claude_code__* tool names are actually registered?
+	tools := []string{}
+	if s.loop != nil && s.loop.Tools() != nil {
+		for _, n := range s.loop.Tools().Names() {
+			if strings.HasPrefix(n, "claude_code__") {
+				tools = append(tools, n)
+			}
+		}
+	}
+	out["tools_present"] = tools
+
+	strategies := map[string]any{}
+
+	// 2. Strategy: LS tool, every spelling we attempt.
+	for _, name := range []string{"claude_code__LS", "claude_code__ls", "claude_code__List"} {
+		entry := map[string]any{"tool": name, "registered": false}
+		if t, terr := s.canvasMCP(name); terr == nil {
+			entry["registered"] = true
+			raw, execErr := t.Execute(r.Context(), map[string]any{"path": resolved})
+			entry["raw_head"] = head(raw, 1500)
+			if execErr != nil {
+				entry["error"] = execErr.Error()
+			}
+			entry["entries"] = len(parseLsOutput(raw, resolved))
+		}
+		strategies[name] = entry
+	}
+
+	// 3. Strategy: Bash `ls -1Fp <dir>`.
+	bashEntry := map[string]any{"tool": "claude_code__Bash", "registered": false}
+	if t, terr := s.canvasMCP("claude_code__Bash"); terr == nil {
+		bashEntry["registered"] = true
+		cmd := "ls -1Fp " + shellQuote(resolved)
+		bashEntry["command"] = cmd
+		raw, execErr := t.Execute(r.Context(), map[string]any{"command": cmd})
+		bashEntry["raw_head"] = head(raw, 1500)
+		if execErr != nil {
+			bashEntry["error"] = execErr.Error()
+		}
+		bashEntry["entries"] = len(parseLsDashOneFOutput(raw))
+	}
+	strategies["bash_ls_1Fp"] = bashEntry
+
+	// 4. Strategy: Glob.
+	for _, name := range []string{"claude_code__Glob", "claude_code__glob"} {
+		entry := map[string]any{"tool": name, "registered": false}
+		if t, terr := s.canvasMCP(name); terr == nil {
+			entry["registered"] = true
+			raw, execErr := t.Execute(r.Context(), map[string]any{
+				"pattern": "*",
+				"path":    resolved,
+			})
+			entry["raw_head"] = head(raw, 1500)
+			if execErr != nil {
+				entry["error"] = execErr.Error()
+			}
+			entry["entries"] = len(parseGlobOutput(raw, resolved))
+		}
+		strategies[name] = entry
+	}
+
+	out["strategies"] = strategies
+	writeJSON(w, http.StatusOK, out)
+}
+
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…(truncated)"
+}
+
 // ---- helpers ---------------------------------------------------------------
 
 // shellQuote wraps a string in single quotes, escaping internal quotes the
