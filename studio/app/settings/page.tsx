@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  Copy,
   LayoutPanelLeft,
   RefreshCw,
   Search,
@@ -242,19 +243,197 @@ function SectionHeader({ title, description }: { title: string; description: str
   );
 }
 
+type ProviderCatalogEntry = {
+  id: string;
+  label: string;
+  keyEnv: string;
+  models: { id: string; label: string; recommended?: boolean }[];
+  docsHint: string;
+};
+
+const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    keyEnv: "ANTHROPIC_API_KEY",
+    docsHint: "Get a key at console.anthropic.com → API keys.",
+    models: [
+      { id: "claude-opus-4-7", label: "Claude Opus 4.7 — most capable" },
+      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — balanced" },
+      { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5 (default)", recommended: true },
+      { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — fastest" },
+    ],
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    keyEnv: "OPENAI_API_KEY",
+    docsHint: "Get a key at platform.openai.com → API keys.",
+    models: [
+      { id: "gpt-5", label: "GPT-5 (default)", recommended: true },
+      { id: "gpt-4o", label: "GPT-4o — multimodal" },
+      { id: "gpt-4o-mini", label: "GPT-4o mini — cheapest" },
+    ],
+  },
+  {
+    id: "google",
+    label: "Google",
+    keyEnv: "GOOGLE_API_KEY",
+    docsHint: "Get a key at aistudio.google.com → Get API key.",
+    models: [
+      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (default)", recommended: true },
+      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash — fast + cheap" },
+      { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+    ],
+  },
+];
+
+function findProvider(id: string | undefined | null): ProviderCatalogEntry {
+  return PROVIDER_CATALOG.find((p) => p.id === id) ?? PROVIDER_CATALOG[0];
+}
+
 function GeneralSection({ status }: { status: CoreStatus | null }) {
+  const liveProvider = (status?.provider ?? "").toLowerCase();
+  const liveModel = status?.model ?? "";
+
+  const [providerId, setProviderId] = useState<string>(liveProvider || "anthropic");
+  const [modelId, setModelId] = useState<string>(liveModel);
+  const [copied, setCopied] = useState(false);
+
+  // Sync local form when /api/status arrives or refreshes.
+  useEffect(() => {
+    if (status?.provider) setProviderId(status.provider.toLowerCase());
+    if (status?.model) setModelId(status.model);
+  }, [status?.provider, status?.model]);
+
+  const provider = findProvider(providerId);
+
+  // Make sure the selected model belongs to the chosen provider; otherwise
+  // fall back to the recommended (or first) model in that catalog.
+  const selectedModel =
+    provider.models.find((m) => m.id === modelId)?.id ??
+    provider.models.find((m) => m.recommended)?.id ??
+    provider.models[0].id;
+
+  function onProviderChange(next: string) {
+    setProviderId(next);
+    const nextProvider = findProvider(next);
+    const recommended = nextProvider.models.find((m) => m.recommended) ?? nextProvider.models[0];
+    setModelId(recommended.id);
+  }
+
+  const envBlock = `LLM_PROVIDER=${provider.id}\nLLM_MODEL=${selectedModel}\n${provider.keyEnv}=<your-key>`;
+
+  async function copyEnv() {
+    try {
+      await navigator.clipboard.writeText(envBlock);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  const dirty =
+    liveProvider !== provider.id || (liveModel && liveModel !== selectedModel);
+
   return (
     <div className="space-y-4">
-      <SectionHeader title="General" description="LLM provider configuration. Set via env on the Core service." />
-      <div className="rounded-md border bg-background">
-        <Row label="provider" value={status?.provider || "—"} />
-        <Row label="model" value={status?.model || "—"} />
-        <Row label="version" value={status?.version || "—"} />
+      <SectionHeader
+        title="General"
+        description="Pick a provider + model — the helper below shows the exact env vars to set on the Core service. Changes take effect after a Core restart."
+      />
+
+      <div className="space-y-3 rounded-md border bg-background p-3">
+        <FieldLabel label="Provider">
+          <NativeSelect value={provider.id} onChange={onProviderChange}>
+            {PROVIDER_CATALOG.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </FieldLabel>
+
+        <FieldLabel label="Model">
+          <NativeSelect value={selectedModel} onChange={setModelId}>
+            {provider.models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </FieldLabel>
+
+        <div className="flex items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
+          <span>Live on Core</span>
+          <code className="truncate font-mono">
+            {liveProvider || "—"} · {liveModel || "—"} · v{status?.version || "—"}
+          </code>
+        </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Set <code className="font-mono">LLM_PROVIDER</code> / <code className="font-mono">LLM_MODEL</code> /{" "}
-        <code className="font-mono">ANTHROPIC_API_KEY</code> on the Core service to change.
-      </p>
+
+      <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-foreground">
+            Set these on the Core service{dirty ? " (current selection differs from live)" : ""}
+          </p>
+          <Button size="sm" variant="ghost" onClick={copyEnv} className="h-7 gap-1 px-2 text-[11px]">
+            {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+            {copied ? "copied" : "copy"}
+          </Button>
+        </div>
+        <pre className="overflow-x-auto rounded-sm border bg-background p-2 font-mono text-[11px] leading-relaxed text-foreground">
+{envBlock}
+        </pre>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {provider.docsHint} Then run on Railway:{" "}
+          <code className="font-mono">
+            railway variables --service core --set LLM_PROVIDER={provider.id} --set LLM_MODEL={selectedModel} --set {provider.keyEnv}=…
+          </code>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="block font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function NativeSelect({
+  value,
+  onChange,
+  children,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          "h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
+          "[&>option]:bg-popover [&>option]:text-popover-foreground",
+        )}
+      >
+        {children}
+      </select>
+      <ChevronDown
+        className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden
+      />
     </div>
   );
 }
@@ -440,7 +619,7 @@ function SearchBar({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         inputMode="search"
-        type="search"
+        type="text"
         autoCapitalize="none"
         autoCorrect="off"
         spellCheck={false}
@@ -582,11 +761,3 @@ function McpCard({ server, highlightTool }: { server: MCPStatus; highlightTool?:
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-sm last:border-0">
-      <span className="text-muted-foreground">{label}</span>
-      <code className="truncate font-mono text-xs">{value}</code>
-    </div>
-  );
-}

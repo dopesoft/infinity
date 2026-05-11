@@ -66,6 +66,7 @@ export type GitMutationResponse = {
 
 export type CanvasConfig = {
   root: string;
+  root_is_set: boolean;
   preview_url?: string;
   mac_bridge_ok: boolean;
 };

@@ -100,6 +100,57 @@ func (s *Server) canvasMCP(name string) (canvasTool, error) {
 	return t, nil
 }
 
+// macBridgeAvailable reports whether the claude_code__Bash tool is registered.
+// We use Bash as the canary because every claude_code build exposes it; if
+// this is present then LS / Read / Write are too. Used by the FS handlers to
+// decide between MCP-first (production: Core on Railway, files on the Mac via
+// the tunnel) and local-first (dev: Core on the same box as the files).
+func (s *Server) macBridgeAvailable() bool {
+	if s.loop == nil || s.loop.Tools() == nil {
+		return false
+	}
+	_, ok := s.loop.Tools().Get("claude_code__Bash")
+	return ok
+}
+
+// listViaMCP tries claude_code__LS under each registered name spelling.
+// Returns (entries, true) on a parse hit, otherwise (nil, false).
+func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
+	for _, name := range []string{"claude_code__LS", "claude_code__ls", "claude_code__List"} {
+		t, terr := s.canvasMCP(name)
+		if terr != nil {
+			continue
+		}
+		raw, execErr := t.Execute(ctx, map[string]any{"path": dir})
+		if execErr != nil || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		entries := parseLsOutput(raw, dir)
+		if len(entries) == 0 {
+			continue
+		}
+		return entries, true
+	}
+	return nil, false
+}
+
+// readViaMCP tries claude_code__Read under each registered name spelling.
+// Returns (content, true) on a non-empty read.
+func (s *Server) readViaMCP(ctx context.Context, path string) (string, bool) {
+	for _, name := range []string{"claude_code__Read", "claude_code__read"} {
+		t, terr := s.canvasMCP(name)
+		if terr != nil {
+			continue
+		}
+		out, execErr := t.Execute(ctx, map[string]any{"file_path": path})
+		if execErr != nil || out == "" {
+			continue
+		}
+		return stripReadHeader(out), true
+	}
+	return "", false
+}
+
 type canvasTool interface {
 	Execute(ctx context.Context, input map[string]any) (string, error)
 }
@@ -129,11 +180,24 @@ func (s *Server) handleCanvasFSList(w http.ResponseWriter, r *http.Request) {
 
 	out := fsListResponse{Path: resolved, Root: canvasRoot(), Entries: []fsEntry{}}
 
-	// Local FS first. When Core runs on the same machine as the boss
-	// (local dev on the Mac) this is fast, lossless, and doesn't need
-	// the tunnel. Falls through to MCP only when local reads fail —
-	// the production case where Core lives on Railway and the boss's
-	// files live on a Mac accessed through the claude_code bridge.
+	// MCP-first when the Mac bridge is connected. The bridge is the boss's
+	// actual workspace; the local filesystem here is whatever the Core
+	// container has mounted (on Railway, that's a distroless rootfs that
+	// doesn't contain `/Users/...`). If we tried local first, an unset
+	// INFINITY_CANVAS_ROOT would fall back to `os.UserHomeDir() ==
+	// /home/nonroot`, succeed listing nothing, and we'd never reach MCP.
+	if s.macBridgeAvailable() {
+		if entries, ok := s.listViaMCP(r.Context(), resolved); ok {
+			out.Entries = entries
+			sortEntries(out.Entries)
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+	}
+
+	// Local FS — used when Core runs on the same machine as the boss
+	// (local dev on the Mac) or as a fallback when the bridge is connected
+	// but didn't return useful output for this path.
 	if entries, lerr := localListDir(resolved); lerr == nil {
 		out.Entries = entries
 		sortEntries(out.Entries)
@@ -141,27 +205,15 @@ func (s *Server) handleCanvasFSList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// MCP fallback for production. We try the tool under the exact name
-	// Claude Code registers ("claude_code__LS") and then again in
-	// lowercase because different bridges normalize tool names
-	// differently. Whichever returns first wins.
-	for _, name := range []string{"claude_code__LS", "claude_code__ls", "claude_code__List"} {
-		t, terr := s.canvasMCP(name)
-		if terr != nil {
-			continue
+	// Last-chance MCP attempt for the bridge-not-yet-detected case (e.g.
+	// the loop wired tools after the first request landed).
+	if !s.macBridgeAvailable() {
+		if entries, ok := s.listViaMCP(r.Context(), resolved); ok {
+			out.Entries = entries
+			sortEntries(out.Entries)
+			writeJSON(w, http.StatusOK, out)
+			return
 		}
-		raw, execErr := t.Execute(r.Context(), map[string]any{"path": resolved})
-		if execErr != nil || strings.TrimSpace(raw) == "" {
-			continue
-		}
-		entries := parseLsOutput(raw, resolved)
-		if len(entries) == 0 {
-			continue
-		}
-		out.Entries = entries
-		sortEntries(out.Entries)
-		writeJSON(w, http.StatusOK, out)
-		return
 	}
 
 	writeJSON(w, http.StatusOK, out)
@@ -347,9 +399,24 @@ func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Local read first — fast and exact. Production (Railway) hits
-	// ENOENT here and falls through to MCP, which routes the read
-	// through the home Mac via claude_code__Read.
+	// MCP-first when the Mac bridge is connected (production). Same reasoning
+	// as handleCanvasFSList: the bridge points at the boss's real files; the
+	// container filesystem doesn't.
+	if s.macBridgeAvailable() {
+		if content, ok := s.readViaMCP(r.Context(), resolved); ok {
+			writeJSON(w, http.StatusOK, fsReadResponse{
+				Path:     resolved,
+				Content:  content,
+				Language: detectLanguage(resolved),
+				SHA:      sha256Hex(content),
+				Size:     int64(len(content)),
+			})
+			return
+		}
+	}
+
+	// Local read — used when Core runs on the same box as the files, or as
+	// a fallback when the bridge is connected but the read came back empty.
 	if data, lerr := os.ReadFile(resolved); lerr == nil {
 		writeJSON(w, http.StatusOK, fsReadResponse{
 			Path:     resolved,
@@ -361,24 +428,17 @@ func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, name := range []string{"claude_code__Read", "claude_code__read"} {
-		t, terr := s.canvasMCP(name)
-		if terr != nil {
-			continue
+	if !s.macBridgeAvailable() {
+		if content, ok := s.readViaMCP(r.Context(), resolved); ok {
+			writeJSON(w, http.StatusOK, fsReadResponse{
+				Path:     resolved,
+				Content:  content,
+				Language: detectLanguage(resolved),
+				SHA:      sha256Hex(content),
+				Size:     int64(len(content)),
+			})
+			return
 		}
-		out, execErr := t.Execute(r.Context(), map[string]any{"file_path": resolved})
-		if execErr != nil || out == "" {
-			continue
-		}
-		content := stripReadHeader(out)
-		writeJSON(w, http.StatusOK, fsReadResponse{
-			Path:     resolved,
-			Content:  content,
-			Language: detectLanguage(resolved),
-			SHA:      sha256Hex(content),
-			Size:     int64(len(content)),
-		})
-		return
 	}
 
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not readable"})
@@ -936,21 +996,17 @@ func (s *Server) waitForTrustDecision(ctx context.Context, id string, timeout ti
 
 type canvasConfigResponse struct {
 	Root        string `json:"root"`
+	RootIsSet   bool   `json:"root_is_set"`
 	PreviewURL  string `json:"preview_url,omitempty"`
 	MacBridgeOK bool   `json:"mac_bridge_ok"`
 }
 
 func (s *Server) handleCanvasConfig(w http.ResponseWriter, r *http.Request) {
-	bridge := false
-	if s.loop != nil && s.loop.Tools() != nil {
-		if _, ok := s.loop.Tools().Get("claude_code__Bash"); ok {
-			bridge = true
-		}
-	}
 	writeJSON(w, http.StatusOK, canvasConfigResponse{
 		Root:        canvasRoot(),
+		RootIsSet:   strings.TrimSpace(os.Getenv("INFINITY_CANVAS_ROOT")) != "",
 		PreviewURL:  strings.TrimSpace(os.Getenv("INFINITY_CANVAS_PREVIEW_URL")),
-		MacBridgeOK: bridge,
+		MacBridgeOK: s.macBridgeAvailable(),
 	})
 }
 

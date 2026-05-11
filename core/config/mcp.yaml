@@ -4,10 +4,15 @@
 # regex disallows dots, so a double underscore is the namespace separator.
 
 servers:
-  - name: filesystem
-    transport: stdio
-    enabled: true
-    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+  # Disabled: this entry tried to spawn `npx -y @modelcontextprotocol/server-filesystem`
+  # over stdio, but the production Core image is distroless (no Node, no npx) so it
+  # could never connect on Railway. Even if it did, it would only see the container's
+  # filesystem — not the boss's Mac. The claude_code bridge below covers the same
+  # surface (Read / Write / Edit / LS / Glob / Grep) over the Cloudflare tunnel.
+  # - name: filesystem
+  #   transport: stdio
+  #   enabled: true
+  #   command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
 
   # Claude Code via the home-Mac coder bridge.
   #
