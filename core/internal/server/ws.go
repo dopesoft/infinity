@@ -50,6 +50,14 @@ type wsToolEvent struct {
 	IsError   bool           `json:"is_error,omitempty"`
 	StartedAt time.Time      `json:"started_at,omitempty"`
 	EndedAt   time.Time      `json:"ended_at,omitempty"`
+	// Set on tool_call events when the gate is parking the call on a
+	// Trust contract. Studio reads these to render the inline Approve/
+	// Deny buttons inside the same tool card — without these fields
+	// reaching the browser the card spins forever and the agent loop
+	// silently times out on WaitForDecision.
+	AwaitingApproval bool   `json:"awaiting_approval,omitempty"`
+	ContractID       string `json:"contract_id,omitempty"`
+	Preview          string `json:"preview,omitempty"`
 }
 
 var upgrader = websocket.Upgrader{
@@ -185,14 +193,22 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content string, send fu
 			send(wsServerEvent{Type: "thinking", SessionID: ev.SessionID, Text: ev.ThinkingDelta})
 		case agent.EventToolCall:
 			if ev.ToolCall != nil {
+				// Forward the full ToolEvent including the gate's
+				// awaiting_approval signal — without these fields the
+				// browser never knows to render the inline Approve /
+				// Deny buttons and the user watches the card spin
+				// while the agent loop is blocked on WaitForDecision.
 				send(wsServerEvent{
 					Type:      "tool_call",
 					SessionID: ev.SessionID,
 					ToolCall: &wsToolEvent{
-						ID:        ev.ToolCall.ID,
-						Name:      ev.ToolCall.Name,
-						Input:     ev.ToolCall.Input,
-						StartedAt: ev.ToolCall.StartedAt,
+						ID:               ev.ToolCall.ID,
+						Name:             ev.ToolCall.Name,
+						Input:            ev.ToolCall.Input,
+						StartedAt:        ev.ToolCall.StartedAt,
+						AwaitingApproval: ev.ToolCall.AwaitingApproval,
+						ContractID:       ev.ToolCall.ContractID,
+						Preview:          ev.ToolCall.Preview,
 					},
 				})
 			}

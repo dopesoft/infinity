@@ -256,7 +256,16 @@ export function useChat() {
           break;
         }
         case "tool_call": {
-          armWatchdog();
+          // When the gate parks a call on a Trust contract, the agent
+          // loop blocks inside WaitForDecision for up to 15 min. The
+          // 90s "agent went silent" watchdog would fire long before
+          // the boss could tap Approve — disarm it here so the card
+          // can sit waiting indefinitely. tool_result re-arms it.
+          if (ev.tool_call.awaiting_approval) {
+            clearWatchdog();
+          } else {
+            armWatchdog();
+          }
           setMessages((prev) => [
             ...closePendingThinking(prev),
             {
