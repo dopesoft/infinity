@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -146,10 +147,20 @@ func LoadMCPConfig(path string) (*MCPConfig, error) {
 }
 
 // MCPManager owns the MCP client sessions and registers their tools.
+//
+// Sessions can die silently — Cloudflare Tunnel idle-timeouts, mac-bridge
+// restarts, or transient network blips drop the long-lived SSE stream and
+// the underlying transport surfaces EOF only on the next call. We keep the
+// original server config around so `Reconnect` can re-dial the same server
+// and swap the session in place. Tools dispatch through the manager rather
+// than holding a direct *mcp.ClientSession pointer, so a reconnect is
+// transparent to callers.
 type MCPManager struct {
-	mu       sync.Mutex
-	sessions map[string]*mcp.ClientSession
-	statuses map[string]MCPStatus
+	mu         sync.Mutex
+	sessions   map[string]*mcp.ClientSession
+	configs    map[string]MCPServerConfig
+	statuses   map[string]MCPStatus
+	reconnects map[string]*sync.Mutex
 }
 
 type MCPStatus struct {
@@ -162,8 +173,10 @@ type MCPStatus struct {
 
 func NewMCPManager() *MCPManager {
 	return &MCPManager{
-		sessions: make(map[string]*mcp.ClientSession),
-		statuses: make(map[string]MCPStatus),
+		sessions:   make(map[string]*mcp.ClientSession),
+		configs:    make(map[string]MCPServerConfig),
+		statuses:   make(map[string]MCPStatus),
+		reconnects: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -196,25 +209,28 @@ func (m *MCPManager) Connect(ctx context.Context, cfg *MCPConfig, registry *Regi
 	return nil
 }
 
-func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry *Registry) error {
+// dialSession opens a fresh MCP session for the given server. It performs
+// the connect handshake only — listing tools and registering them is left
+// to the caller so this can be reused by Reconnect.
+func (m *MCPManager) dialSession(ctx context.Context, s MCPServerConfig) (*mcp.ClientSession, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "infinity-core", Version: "0.1.0"}, nil)
 
 	var transport mcp.Transport
 	switch s.Transport {
 	case "stdio":
 		if len(s.Command) == 0 {
-			return fmt.Errorf("stdio transport needs command")
+			return nil, fmt.Errorf("stdio transport needs command")
 		}
 		transport = &mcp.CommandTransport{Command: exec.Command(s.Command[0], s.Command[1:]...)}
 	case "sse":
 		url := s.resolveURL()
 		if url == "" {
-			return fmt.Errorf("sse transport needs url or url_env")
+			return nil, fmt.Errorf("sse transport needs url or url_env")
 		}
 		sse := &mcp.SSEClientTransport{Endpoint: url}
 		headers, err := s.resolveAuthHeaders()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(headers) > 0 {
 			sse.HTTPClient = &http.Client{
@@ -224,12 +240,20 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 		}
 		transport = sse
 	default:
-		return fmt.Errorf("unknown transport: %s", s.Transport)
+		return nil, fmt.Errorf("unknown transport: %s", s.Transport)
 	}
 
 	sess, err := client.Connect(ctx, transport, nil)
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	return sess, nil
+}
+
+func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry *Registry) error {
+	sess, err := m.dialSession(ctx, s)
+	if err != nil {
+		return err
 	}
 
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -248,22 +272,144 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 		name := sanitiseToolName(s.Name) + "__" + sanitiseToolName(t.Name)
 		desc := t.Description
 		schema := mapFromAny(t.InputSchema)
+		// Tools dispatch through the manager (by server name) rather than
+		// holding a raw session pointer, so Reconnect can swap sessions
+		// without re-registering tools.
 		registry.Register(&mcpTool{
-			name:    name,
-			desc:    desc,
-			schema:  schema,
-			session: sess,
-			remote:  t.Name,
+			name:   name,
+			desc:   desc,
+			schema: schema,
+			mgr:    m,
+			server: s.Name,
+			remote: t.Name,
 		})
 		toolNames = append(toolNames, name)
 	}
 
 	m.mu.Lock()
 	m.sessions[s.Name] = sess
+	m.configs[s.Name] = s
+	if _, ok := m.reconnects[s.Name]; !ok {
+		m.reconnects[s.Name] = &sync.Mutex{}
+	}
 	m.mu.Unlock()
 	m.recordStatus(MCPStatus{Name: s.Name, Connected: true, Tools: toolNames, Tested: time.Now().UTC()})
 	fmt.Printf("mcp: %s connected (%d tools)\n", s.Name, len(toolNames))
+
+	// SSE sessions over a reverse proxy (Cloudflare Tunnel etc) get reaped
+	// after ~100s of idle traffic. A cheap ListTools every 45s keeps the
+	// stream warm so the next user-triggered CallTool doesn't have to pay
+	// for a reconnect. We do this only for SSE; stdio is process-local.
+	if s.Transport == "sse" {
+		go m.keepAlive(s.Name)
+	}
 	return nil
+}
+
+// keepAlive pings the named MCP session every 45s with a lightweight
+// ListTools call. On error we trigger a Reconnect and keep going so the
+// loop is self-healing — without this the first real tool call after an
+// idle stretch always fails with "client is closing: EOF".
+func (m *MCPManager) keepAlive(server string) {
+	ticker := time.NewTicker(45 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		sess := m.getSession(server)
+		if sess == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := sess.ListTools(ctx, nil)
+		cancel()
+		if err != nil && isTransportDeadErr(err) {
+			log.Printf("mcp: %s keepalive failed (%v) — reconnecting", server, err)
+			rctx, rcancel := context.WithTimeout(context.Background(), 20*time.Second)
+			if rerr := m.Reconnect(rctx, server); rerr != nil {
+				log.Printf("mcp: %s keepalive reconnect failed: %v", server, rerr)
+			}
+			rcancel()
+		}
+	}
+}
+
+// getSession returns the current session for a server, or nil if absent.
+func (m *MCPManager) getSession(server string) *mcp.ClientSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[server]
+}
+
+// Reconnect re-dials the given server and swaps in a fresh session. The
+// per-server reconnect mutex prevents thundering-herd: many concurrent
+// tool calls failing on the same dead session will queue here and only
+// the first does the actual reconnect; the rest pick up the new session.
+func (m *MCPManager) Reconnect(ctx context.Context, server string) error {
+	m.mu.Lock()
+	cfg, ok := m.configs[server]
+	rcm := m.reconnects[server]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("mcp: no config for server %q", server)
+	}
+	if rcm == nil {
+		rcm = &sync.Mutex{}
+		m.mu.Lock()
+		m.reconnects[server] = rcm
+		m.mu.Unlock()
+	}
+	rcm.Lock()
+	defer rcm.Unlock()
+
+	// Best-effort close of the old session before re-dialling.
+	m.mu.Lock()
+	old := m.sessions[server]
+	m.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	sess, err := m.dialSession(dialCtx, cfg)
+	if err != nil {
+		m.recordStatus(MCPStatus{Name: server, Connected: false, Error: err.Error(), Tested: time.Now().UTC()})
+		return err
+	}
+	m.mu.Lock()
+	m.sessions[server] = sess
+	m.mu.Unlock()
+	// Preserve the previously-discovered tool list in the status; we don't
+	// re-list because the tool surface should be identical for the same
+	// MCP server and a re-list would just add latency.
+	m.mu.Lock()
+	prev := m.statuses[server]
+	m.mu.Unlock()
+	m.recordStatus(MCPStatus{Name: server, Connected: true, Tools: prev.Tools, Tested: time.Now().UTC()})
+	log.Printf("mcp: %s reconnected", server)
+	return nil
+}
+
+// isTransportDeadErr matches the wrapper messages we see from the MCP SDK
+// when the underlying SSE/stdio stream has died. Includes the literal
+// "client is closing: EOF" produced by the go-sdk on a closed session.
+func isTransportDeadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, needle := range []string{
+		"EOF",
+		"client is closing",
+		"connection closed",
+		"broken pipe",
+		"use of closed network connection",
+		"connection reset",
+	} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MCPManager) recordStatus(s MCPStatus) {
@@ -281,28 +427,52 @@ func (m *MCPManager) Close() {
 }
 
 type mcpTool struct {
-	name    string
-	desc    string
-	schema  map[string]any
-	session *mcp.ClientSession
-	remote  string
+	name   string
+	desc   string
+	schema map[string]any
+	mgr    *MCPManager
+	server string
+	remote string
 }
 
-func (t *mcpTool) Name() string                 { return t.name }
-func (t *mcpTool) Description() string          { return t.desc }
-func (t *mcpTool) Schema() map[string]any       { return t.schema }
+func (t *mcpTool) Name() string           { return t.name }
+func (t *mcpTool) Description() string    { return t.desc }
+func (t *mcpTool) Schema() map[string]any { return t.schema }
+
 func (t *mcpTool) Execute(ctx context.Context, input map[string]any) (string, error) {
-	res, err := t.session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      t.remote,
-		Arguments: input,
-	})
-	if err != nil {
+	res, err := t.callOnce(ctx, input)
+	if err != nil && isTransportDeadErr(err) {
+		// The SSE/stdio stream is dead (Cloudflare Tunnel idle drop, mac
+		// bridge restart, etc). Reconnect once and retry — without this
+		// the first call after a silent disconnect always fails with
+		// "client is closing: EOF" and we never recover until the next
+		// core restart.
+		log.Printf("mcp: %s.%s transport dead (%v) — reconnecting", t.server, t.remote, err)
+		if rerr := t.mgr.Reconnect(ctx, t.server); rerr != nil {
+			return "", fmt.Errorf("reconnect %s: %w (orig: %v)", t.server, rerr, err)
+		}
+		res, err = t.callOnce(ctx, input)
+		if err != nil {
+			return "", err
+		}
+	} else if err != nil {
 		return "", err
 	}
 	if res.IsError {
 		return collectText(res.Content), errors.New(collectText(res.Content))
 	}
 	return collectText(res.Content), nil
+}
+
+func (t *mcpTool) callOnce(ctx context.Context, input map[string]any) (*mcp.CallToolResult, error) {
+	sess := t.mgr.getSession(t.server)
+	if sess == nil {
+		return nil, fmt.Errorf("mcp: no session for %s", t.server)
+	}
+	return sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      t.remote,
+		Arguments: input,
+	})
 }
 
 func collectText(content []mcp.Content) string {
