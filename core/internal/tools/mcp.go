@@ -221,7 +221,18 @@ func (m *MCPManager) Connect(ctx context.Context, cfg *MCPConfig, registry *Regi
 // dialSession opens a fresh MCP session for the given server. It performs
 // the connect handshake only — listing tools and registering them is left
 // to the caller so this can be reused by Reconnect.
-func (m *MCPManager) dialSession(ctx context.Context, s MCPServerConfig) (*mcp.ClientSession, error) {
+//
+// CRITICAL DETAIL: SSE sessions use the connect-time context for the
+// long-lived GET request that streams events back. If the caller passes
+// a context with `defer cancel()` (as both Reconnect and serve.go's
+// boot did), the SSE GET is cancelled as soon as the caller returns,
+// the SDK's stream-reading goroutine sees EOF, calls Close, and the
+// freshly-created session is dead before its first tool call. We work
+// around this by transferring the deadline to a detached background
+// context: a timer fires `cancel` if Connect doesn't complete in time,
+// but on success the timer is stopped and the detached context lives
+// forever, keeping the SSE GET alive.
+func (m *MCPManager) dialSession(_ context.Context, s MCPServerConfig) (*mcp.ClientSession, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "infinity-core", Version: "0.1.0"}, nil)
 
 	var transport mcp.Transport
@@ -265,10 +276,20 @@ func (m *MCPManager) dialSession(ctx context.Context, s MCPServerConfig) (*mcp.C
 		return nil, fmt.Errorf("unknown transport: %s", s.Transport)
 	}
 
-	sess, err := client.Connect(ctx, transport, nil)
+	// Detached context with a connect-only deadline. See the long
+	// comment on dialSession above for why this can't just be the
+	// caller's ctx.
+	dialCtx, dialCancel := context.WithCancel(context.Background())
+	timer := time.AfterFunc(30*time.Second, dialCancel)
+	sess, err := client.Connect(dialCtx, transport, nil)
+	timer.Stop()
 	if err != nil {
+		dialCancel()
 		return nil, fmt.Errorf("connect: %w", err)
 	}
+	// Intentional: do NOT call dialCancel here. The SSE GET's body
+	// reader is tied to dialCtx; if we cancel it, the SDK's stream
+	// goroutine errors out and closes the session.
 	return sess, nil
 }
 
@@ -401,9 +422,10 @@ func (m *MCPManager) Reconnect(ctx context.Context, server string) error {
 		_ = old.Close()
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	sess, err := m.dialSession(dialCtx, cfg)
+	// dialSession internally detaches its connect-time context from the
+	// SSE GET body, so we can pass our ctx through without worrying
+	// about the body being cancelled when Reconnect returns.
+	sess, err := m.dialSession(ctx, cfg)
 	if err != nil {
 		m.recordStatus(MCPStatus{Name: server, Connected: false, Error: err.Error(), Tested: time.Now().UTC()})
 		return err

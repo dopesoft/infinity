@@ -110,6 +110,13 @@ func (b *bridge) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Diagnostic — log enough of the incoming request to tell us why
+	// some clients (Infinity Core via Railway) get their SSE GET closed
+	// within a second while others (curl, Mac-local test programs)
+	// keep it alive indefinitely.
+	log.Printf("session %s: incoming GET from %s proto=%s ua=%q",
+		id, r.RemoteAddr, r.Proto, r.Header.Get("User-Agent"))
+
 	sess, err := b.spawn(id)
 	if err != nil {
 		log.Printf("session %s: spawn failed: %v", id, err)
@@ -181,6 +188,7 @@ func (b *bridge) handleMessages(w http.ResponseWriter, r *http.Request) {
 	sess, ok := b.sessions[id]
 	b.mu.Unlock()
 	if !ok {
+		log.Printf("messages POST: no session for id=%s from %s", id, r.RemoteAddr)
 		http.Error(w, "no active transport", http.StatusNotFound)
 		return
 	}
@@ -190,6 +198,13 @@ func (b *bridge) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Log the first 300 chars of the message so we can see what's being
+	// requested. JSON-RPC payloads, never sensitive (no creds).
+	preview := string(body)
+	if len(preview) > 300 {
+		preview = preview[:300] + "…"
+	}
+	log.Printf("session %s: POST body=%s", id, preview)
 	// Collapse any embedded newlines, then add a trailing newline. MCP
 	// stdio servers parse one JSON-RPC message per line.
 	clean := strings.ReplaceAll(string(body), "\n", "")
