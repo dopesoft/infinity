@@ -60,19 +60,25 @@ export function CanvasPreview() {
 
   const dims = devicePresetDimensions(store.device);
 
+  // Desktop preset = the iframe IS the preview pane, edge-to-edge, no
+  // chrome. Phone / tablet presets keep the device-card styling (padding,
+  // shadow, rounded corners, gradient bg) because that's the entire point
+  // of a device preset — you want to see what the app looks like at that
+  // size, framed against neutral chrome. Desktop is the default; render
+  // it like a real browser window flush against its container.
   return (
     <div className="flex h-full min-h-0 flex-col">
       <CanvasPreviewToolbar effectiveUrl={effectiveUrl} />
-      <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
-        {effectiveUrl ? (
+      {!effectiveUrl ? (
+        <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
+          <EmptyPreview />
+        </div>
+      ) : dims ? (
+        <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
           <div className="flex min-h-full items-center justify-center p-2 sm:p-4">
             <div
               className="overflow-hidden rounded-xl border bg-background shadow-2xl ring-1 ring-black/5 dark:ring-white/5"
-              style={
-                dims
-                  ? { width: `${dims.width}px`, height: `${dims.height}px`, maxWidth: "100%", maxHeight: "100%" }
-                  : { width: "100%", height: "100%" }
-              }
+              style={{ width: `${dims.width}px`, height: `${dims.height}px`, maxWidth: "100%", maxHeight: "100%" }}
             >
               <iframe
                 key={`preview-${store.previewRefreshKey}`}
@@ -84,10 +90,17 @@ export function CanvasPreview() {
               />
             </div>
           </div>
-        ) : (
-          <EmptyPreview />
-        )}
-      </div>
+        </div>
+      ) : (
+        <iframe
+          key={`preview-${store.previewRefreshKey}`}
+          src={effectiveUrl}
+          title="Preview"
+          className="block min-h-0 flex-1 border-0 bg-background"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock allow-downloads"
+          allow="clipboard-write; clipboard-read"
+        />
+      )}
     </div>
   );
 }
