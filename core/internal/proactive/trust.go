@@ -131,6 +131,25 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 	return out, rows.Err()
 }
 
+// LookupForGate returns the status + tool + session for the named
+// contract, cheap enough to poll from the gate's wait loop. The fields
+// are pulled out of action_spec (where the gate stored them at queue
+// time) so a denial returned via the API can be matched back to the
+// session that initiated the call.
+func (s *TrustStore) LookupForGate(ctx context.Context, contractID string) (status, sessionID, toolName string, err error) {
+	if s == nil || s.pool == nil || contractID == "" {
+		return "", "", "", nil
+	}
+	err = s.pool.QueryRow(ctx, `
+		SELECT status,
+		       COALESCE(action_spec->>'session_id', ''),
+		       COALESCE(action_spec->>'tool', '')
+		  FROM mem_trust_contracts
+		 WHERE id = $1::uuid
+	`, contractID).Scan(&status, &sessionID, &toolName)
+	return status, sessionID, toolName, err
+}
+
 // ConsumeApprovedForTool atomically looks for a recently-approved trust
 // contract whose action_spec.tool matches `toolName` and whose
 // action_spec.session_id matches `sessionID`, marks it consumed, and

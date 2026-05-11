@@ -34,6 +34,14 @@ export type WSToolEvent = {
   is_error?: boolean;
   started_at?: string;
   ended_at?: string;
+  // Set on tool_call events when the gate parked the call on a Trust
+  // contract. Studio uses these to render inline Approve / Deny buttons
+  // in the tool card — no tab switch needed. The agent loop is blocked
+  // on the gate; the next decideTrust() call unblocks it and the real
+  // tool result will arrive as a follow-up tool_result event.
+  awaiting_approval?: boolean;
+  contract_id?: string;
+  preview?: string;
 };
 
 export type WSStatus = "connected" | "connecting" | "disconnected";

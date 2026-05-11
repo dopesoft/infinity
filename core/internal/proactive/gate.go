@@ -3,6 +3,7 @@ package proactive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -204,6 +205,12 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		}
 	}
 
+	// Queue a fresh contract AND block the loop on its resolution. The
+	// inline Approve/Deny buttons in Studio's tool card POST to
+	// /api/trust-contracts/:id/decide → WaitForDecision returns →
+	// the agent runs the same tool call inline. No tab switch, no
+	// "retry" message from the model.
+
 	// Queue for approval.
 	if g.trust == nil {
 		log.Printf("ClaudeCodeGate: trust store nil, refusing %s", toolName)
@@ -246,11 +253,67 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 			Reason: "trust store unavailable; row was NOT persisted — do not tell the boss it was queued",
 		}
 	}
-	log.Printf("ClaudeCodeGate: %s queued as contract=%s", toolName, id)
+	log.Printf("ClaudeCodeGate: %s queued as contract=%s (loop will wait)", toolName, id)
 	return agent.GateDecision{
-		Allow:      false,
-		Reason:     "high-risk claude_code call queued for approval",
-		ContractID: id,
+		Allow:           false,
+		Reason:          "awaiting boss approval",
+		ContractID:      id,
+		WaitForApproval: true,
+		WaitTimeout:     15 * time.Minute,
+		Preview:         preview,
+	}
+}
+
+// WaitForDecision implements agent.ToolGate. Polls the contract's status
+// every second until it leaves "pending", or the timeout / ctx fires.
+// Returns (approved, reason). On approval we also seed the session-wide
+// approval cache so follow-up calls in the same turn don't bounce.
+func (g *ClaudeCodeGate) WaitForDecision(ctx context.Context, contractID string, timeout time.Duration) (bool, string) {
+	if g == nil || g.trust == nil || contractID == "" {
+		return false, "trust store not configured"
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Minute
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	tick := time.NewTicker(1 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			// Returns context.DeadlineExceeded on timeout, context.Canceled
+			// when the parent (turn) ctx fires.
+			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return false, "timed out waiting for approval (" + timeout.String() + ")"
+			}
+			return false, "session ended before approval"
+		case <-tick.C:
+			status, sessionID, toolName, err := g.trust.LookupForGate(waitCtx, contractID)
+			if err != nil {
+				continue // transient db error, keep polling
+			}
+			switch status {
+			case "approved":
+				log.Printf("ClaudeCodeGate: contract %s approved", contractID)
+				g.markSessionApproved(sessionID, toolName)
+				// Consume it so subsequent gate fires don't double-allow
+				// the same row — the session cache covers further calls.
+				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
+				return true, ""
+			case "denied":
+				return false, "denied by the boss"
+			case "snoozed":
+				return false, "snoozed by the boss (treat as deny for this run)"
+			case "consumed":
+				// Already used by another flow — accept it.
+				return true, ""
+			default:
+				// "pending" — keep waiting.
+				continue
+			}
+		}
 	}
 }
 

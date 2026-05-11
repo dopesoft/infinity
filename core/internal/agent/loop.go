@@ -179,6 +179,12 @@ type ToolEvent struct {
 	IsError   bool           `json:"is_error,omitempty"`
 	StartedAt time.Time      `json:"started_at,omitempty"`
 	EndedAt   time.Time      `json:"ended_at,omitempty"`
+	// Set on tool_call events when the gate parked the call on a Trust
+	// contract. Studio uses these to render inline Approve/Deny buttons
+	// in the same tool card — no tab-switch required.
+	AwaitingApproval bool   `json:"awaiting_approval,omitempty"`
+	ContractID       string `json:"contract_id,omitempty"`
+	Preview          string `json:"preview,omitempty"`
 }
 
 type EventKind string
@@ -265,25 +271,67 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()
+			l.fireHook("PreToolUse", s.ID, s.Project, tc.Name, map[string]any{"name": tc.Name, "input": tc.Input})
+
+			decision := l.gate.Authorize(ctx, s.ID, s.Project, tc.Name, tc.Input)
+
+			// Surface the tool call to Studio. When the gate parked it on
+			// a contract, Studio renders inline Approve/Deny buttons so
+			// the boss can decide right in the chat. Otherwise the card
+			// shows the spinner / "running" state until the result lands.
 			emit(out, RunEvent{
 				Kind:      EventToolCall,
 				SessionID: s.ID,
 				ToolCall: &ToolEvent{
-					ID:        tc.ID,
-					Name:      tc.Name,
-					Input:     tc.Input,
-					StartedAt: startedAt,
+					ID:               tc.ID,
+					Name:             tc.Name,
+					Input:            tc.Input,
+					StartedAt:        startedAt,
+					AwaitingApproval: !decision.Allow && decision.WaitForApproval && decision.ContractID != "",
+					ContractID:       decision.ContractID,
+					Preview:          decision.Preview,
 				},
 			})
-			l.fireHook("PreToolUse", s.ID, s.Project, tc.Name, map[string]any{"name": tc.Name, "input": tc.Input})
 
 			var (
 				output  string
 				execErr error
 				endedAt time.Time
 			)
-			decision := l.gate.Authorize(ctx, s.ID, s.Project, tc.Name, tc.Input)
-			if !decision.Allow {
+
+			switch {
+			case decision.Allow:
+				output, execErr = l.tools.Execute(ctx, tc)
+				endedAt = time.Now().UTC()
+
+			case decision.WaitForApproval && decision.ContractID != "":
+				// Block on the gate's wait-for-approval channel. The
+				// inline buttons in Studio POST to /api/trust-contracts
+				// to flip the row's status; WaitForDecision returns when
+				// that lands. On approve we run the same tool call we
+				// were going to run — output streams into the SAME card.
+				timeout := decision.WaitTimeout
+				if timeout <= 0 {
+					timeout = 15 * time.Minute
+				}
+				l.fireHook("ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
+					"name":        tc.Name,
+					"input":       tc.Input,
+					"reason":      decision.Reason,
+					"contract_id": decision.ContractID,
+				})
+				approved, reason := l.gate.WaitForDecision(ctx, decision.ContractID, timeout)
+				if approved {
+					output, execErr = l.tools.Execute(ctx, tc)
+				} else {
+					if reason == "" {
+						reason = "denied or expired"
+					}
+					output = "BLOCKED: " + tc.Name + " " + reason + "\nThe boss did not approve this call; do not retry without a fresh request."
+				}
+				endedAt = time.Now().UTC()
+
+			default:
 				endedAt = time.Now().UTC()
 				output = formatGatedOutput(tc.Name, decision)
 				l.fireHook("ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
@@ -292,9 +340,6 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 					"reason":      decision.Reason,
 					"contract_id": decision.ContractID,
 				})
-			} else {
-				output, execErr = l.tools.Execute(ctx, tc)
-				endedAt = time.Now().UTC()
 			}
 
 			isErr := execErr != nil

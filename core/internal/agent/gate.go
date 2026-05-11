@@ -3,29 +3,50 @@ package agent
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 // ToolGate decides whether a tool call may execute. Implementations sit
 // between the loop and the registry — high-risk calls (e.g. Claude-Code
 // shell-outs from a phone in an Uber) divert into the Trust queue instead of
-// running blind. Returning Allow=false leaves the loop free to surface the
-// reason to the model so it can ask the user to approve in Studio.
+// running blind. Returning Allow=false with WaitForApproval=true makes the
+// loop block on `WaitForDecision` so the boss can approve inline from the
+// tool card and the same tool call runs immediately on approval.
 type ToolGate interface {
-	// Authorize is called once per tool call before Execute. Implementations
-	// must return quickly — the agent loop is synchronous on the WS stream.
-	// Use Queue to write a Trust Contract row asynchronously; the contract
-	// id (if any) is surfaced to the model via the gated tool result.
+	// Authorize is called once per tool call before Execute. Returning
+	// quickly is important when WaitForApproval is false — the loop is
+	// synchronous on the WS stream. When WaitForApproval is true, the
+	// loop calls WaitForDecision next and is willing to block there.
 	Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) GateDecision
+
+	// WaitForDecision blocks until the named contract reaches a terminal
+	// status (approved / denied / consumed / timed-out). Returns true if
+	// approved (or already consumed by a previous wait). Honoured only
+	// when Authorize returned WaitForApproval=true with a ContractID.
+	// Implementations may return early on ctx cancel or when `timeout`
+	// elapses; in that case `approved` is false.
+	WaitForDecision(ctx context.Context, contractID string, timeout time.Duration) (approved bool, reason string)
 }
 
-// GateDecision is the outcome of authorize. Allow=true means proceed.
-// Allow=false means short-circuit: synthesize a tool result explaining the
-// block and skip Execute. ContractID is optional — set when a Trust queue
-// row was created.
+// GateDecision is the outcome of authorize.
+//
+//   - Allow=true                                  → run the tool immediately.
+//   - Allow=false, WaitForApproval=true, Contract → loop blocks on
+//     WaitForDecision; on approval the same tool call runs; on denial
+//     the synthesized denied output goes back to the model.
+//   - Allow=false, WaitForApproval=false          → synthesize Reason as
+//     the tool result, never run.
+//
+// Preview is a short human-readable summary of what the gated action is
+// going to do (rendered next to the inline Approve/Deny buttons in
+// Studio). Falls back to the model's input JSON when empty.
 type GateDecision struct {
-	Allow      bool
-	Reason     string
-	ContractID string
+	Allow           bool
+	Reason          string
+	ContractID      string
+	WaitForApproval bool
+	WaitTimeout     time.Duration
+	Preview         string
 }
 
 // AllowAll is the default gate. Used when no Trust store is configured.
@@ -33,6 +54,11 @@ type AllowAll struct{}
 
 func (AllowAll) Authorize(_ context.Context, _, _, _ string, _ map[string]any) GateDecision {
 	return GateDecision{Allow: true}
+}
+
+func (AllowAll) WaitForDecision(_ context.Context, _ string, _ time.Duration) (bool, string) {
+	// No gate, no wait. Should never be called.
+	return true, ""
 }
 
 // IsClaudeCodeTool reports whether the tool name belongs to the claude_code

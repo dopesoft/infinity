@@ -12,7 +12,9 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { decideTrust } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
 
 function formatMs(start?: string, end?: string) {
@@ -52,19 +54,46 @@ function looksLikeDiff(text?: string): boolean {
 export function ToolCallCard({ message }: { message: ChatMessage }) {
   const call = message.toolCall;
   const result = message.toolResult;
-  const status: "running" | "success" | "error" | "gated" = useMemo(() => {
+  // "awaiting" = gate parked it on a contract; agent loop is blocked on
+  // approval. Studio renders inline Approve / Deny buttons. When the
+  // user taps, decideTrust() flips the contract status, the gate unblocks,
+  // and the real tool result arrives as a follow-up tool_result event
+  // (which transitions this same card to success / error / gated).
+  const awaiting = !result && !!call?.awaiting_approval && !!call?.contract_id;
+  const status: "running" | "success" | "error" | "gated" | "awaiting" = useMemo(() => {
+    if (awaiting) return "awaiting";
     if (!result) return "running";
     if (detectGated(result.output).gated) return "gated";
     if (result.is_error) return "error";
     return "success";
-  }, [result]);
+  }, [result, awaiting]);
 
-  // Default collapsed on completion (matches PDF spec). Open while running.
-  const [open, setOpen] = useState<boolean>(status === "running");
+  // Default collapsed on completion (matches PDF spec). Open while running
+  // or while awaiting approval so the boss sees the buttons immediately.
+  const [open, setOpen] = useState<boolean>(status === "running" || status === "awaiting");
+  const [deciding, setDeciding] = useState<"approve" | "deny" | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [decisionMade, setDecisionMade] = useState<"approved" | "denied" | null>(null);
 
   if (!call) return null;
   const gated = detectGated(result?.output);
   const isDiff = looksLikeDiff(result?.output);
+
+  async function decide(action: "approve" | "deny") {
+    if (!call?.contract_id) return;
+    setDeciding(action);
+    setDecisionError(null);
+    const ok = await decideTrust(
+      call.contract_id,
+      action === "approve" ? "approved" : "denied",
+    );
+    setDeciding(null);
+    if (ok) {
+      setDecisionMade(action === "approve" ? "approved" : "denied");
+    } else {
+      setDecisionError("Couldn't reach Core. Try again.");
+    }
+  }
 
   return (
     <div className="rounded-xl border bg-card text-card-foreground">
@@ -94,6 +123,62 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
               {JSON.stringify(call.input ?? {}, null, 2)}
             </pre>
           </Section>
+          {status === "awaiting" && (
+            <Section title="Approval required">
+              <div className="rounded-md border border-warning/40 bg-warning/5 p-2 dark:bg-warning/10">
+                <p className="text-xs leading-relaxed text-foreground">
+                  This call is paused waiting for your approval. Tap{" "}
+                  <span className="font-semibold">Approve</span> and the same
+                  command runs immediately — the output shows up right here.
+                </p>
+                {call.preview ? (
+                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/70 p-2 font-mono text-[11px] text-muted-foreground scroll-touch sm:text-xs">
+                    {call.preview}
+                  </pre>
+                ) : null}
+              </div>
+              {decisionMade ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {decisionMade === "approved"
+                    ? "Approved — running now…"
+                    : "Denied. Tell the agent if you want it to try something else."}
+                </p>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => decide("approve")}
+                    disabled={deciding !== null}
+                    className="h-9"
+                  >
+                    {deciding === "approve" ? (
+                      <Loader2 className="mr-1 size-4 animate-spin" />
+                    ) : (
+                      <Check className="mr-1 size-4" />
+                    )}
+                    Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => decide("deny")}
+                    disabled={deciding !== null}
+                    className="h-9"
+                  >
+                    {deciding === "deny" ? (
+                      <Loader2 className="mr-1 size-4 animate-spin" />
+                    ) : (
+                      <X className="mr-1 size-4" />
+                    )}
+                    Deny
+                  </Button>
+                </div>
+              )}
+              {decisionError ? (
+                <p className="mt-2 text-xs text-danger">{decisionError}</p>
+              ) : null}
+            </Section>
+          )}
           {result && (
             <Section title={status === "gated" ? "Awaiting approval" : result.is_error ? "Error" : "Output"}>
               {isDiff ? (
@@ -132,10 +217,10 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
   );
 }
 
-function StatusIcon({ status }: { status: "running" | "success" | "error" | "gated" }) {
+function StatusIcon({ status }: { status: "running" | "success" | "error" | "gated" | "awaiting" }) {
   if (status === "running") return <Loader2 className="size-4 animate-spin text-info" aria-hidden />;
   if (status === "success") return <Check className="size-4 text-success" aria-hidden />;
-  if (status === "gated") return <Lock className="size-4 text-warning" aria-hidden />;
+  if (status === "gated" || status === "awaiting") return <Lock className="size-4 text-warning" aria-hidden />;
   return <X className="size-4 text-danger" aria-hidden />;
 }
 
