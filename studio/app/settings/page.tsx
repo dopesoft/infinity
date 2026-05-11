@@ -7,6 +7,7 @@ import {
   CircleDashed,
   LayoutPanelLeft,
   RefreshCw,
+  Search,
   Server,
   Sliders,
   Wrench,
@@ -15,6 +16,7 @@ import {
 import { TabFrame } from "@/components/TabFrame";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -257,16 +259,71 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   );
 }
 
+function splitToolName(name: string): { group: string; leaf: string } {
+  const dunder = name.indexOf("__");
+  if (dunder > 0) return { group: name.slice(0, dunder), leaf: name.slice(dunder + 2) };
+  const dot = name.indexOf(".");
+  if (dot > 0) return { group: name.slice(0, dot), leaf: name.slice(dot + 1) };
+  return { group: "native", leaf: name };
+}
+
 function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+
+  const groups = useMemo(() => {
+    const filtered = q
+      ? tools.filter(
+          (t) =>
+            t.name.toLowerCase().includes(q) ||
+            (t.description ?? "").toLowerCase().includes(q),
+        )
+      : tools;
+    const map = new Map<string, ToolDescriptor[]>();
+    for (const t of filtered) {
+      const { group } = splitToolName(t.name);
+      const arr = map.get(group) ?? [];
+      arr.push(t);
+      map.set(group, arr);
+    }
+    return Array.from(map.entries())
+      .map(([name, items]) => ({
+        name,
+        items: items.sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => {
+        if (a.name === "native") return -1;
+        if (b.name === "native") return 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [tools, q]);
+
+  const filteredCount = groups.reduce((sum, g) => sum + g.items.length, 0);
+
   return (
     <div className="space-y-3">
-      <SectionHeader title={`Tools (${tools.length})`} description="Native + MCP tools available to the agent right now. Tap a card to inspect the schema." />
+      <SectionHeader
+        title={`Tools (${tools.length})`}
+        description="Native + MCP tools available to the agent right now. Grouped by source — tap a group to expand, then tap a tool to inspect its schema."
+      />
+      <SearchBar
+        value={query}
+        onChange={setQuery}
+        placeholder="Search tools by name or description…"
+      />
+      {q && (
+        <p className="text-[11px] text-muted-foreground">
+          {filteredCount} match{filteredCount === 1 ? "" : "es"} across {groups.length} group{groups.length === 1 ? "" : "s"}
+        </p>
+      )}
       {tools.length === 0 ? (
         <p className="text-sm text-muted-foreground">No tools registered.</p>
+      ) : groups.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No tools match “{query}”.</p>
       ) : (
-        <ul className="space-y-1.5">
-          {tools.map((t) => (
-            <ToolCard key={t.name} tool={t} />
+        <ul className="space-y-2">
+          {groups.map((g) => (
+            <ToolGroup key={g.name} name={g.name} items={g.items} forceOpen={Boolean(q)} />
           ))}
         </ul>
       )}
@@ -274,33 +331,78 @@ function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
   );
 }
 
-function ToolCard({ tool }: { tool: ToolDescriptor }) {
-  const [open, setOpen] = useState(false);
-  const isMcp = tool.name.includes("__") || tool.name.includes(".");
-  const hasSchema = tool.schema && Object.keys(tool.schema).length > 0;
+function ToolGroup({
+  name,
+  items,
+  forceOpen,
+}: {
+  name: string;
+  items: ToolDescriptor[];
+  forceOpen: boolean;
+}) {
+  // Default collapsed for big groups, open for small ones.
+  const [open, setOpen] = useState(items.length <= 6);
+  const isOpen = forceOpen || open;
+  const isNative = name === "native";
   return (
-    <li className="overflow-hidden rounded-md border bg-background">
+    <li className="overflow-hidden rounded-md border bg-muted/20">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/40"
       >
-        <Wrench className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <code className="truncate font-mono text-xs">{tool.name}</code>
-        {isMcp && (
-          <Badge variant="outline" className="h-4 shrink-0 px-1 font-mono text-[9px]">
-            mcp
-          </Badge>
+        {isNative ? (
+          <Wrench className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        ) : (
+          <Server className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         )}
-        <span className="ml-auto flex items-center gap-2">
-          <ChevronDown
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform",
-              open && "rotate-180",
-            )}
-            aria-hidden
-          />
+        <span className="truncate font-mono text-[11px] font-semibold uppercase tracking-wider">
+          {name}
         </span>
+        <Badge variant="secondary" className="h-4 min-w-[1.1rem] shrink-0 justify-center px-1 font-mono text-[10px]">
+          {items.length}
+        </Badge>
+        <ChevronDown
+          className={cn(
+            "ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform",
+            isOpen && "rotate-180",
+          )}
+          aria-hidden
+        />
+      </button>
+      {isOpen && (
+        <ul className="space-y-1 border-t bg-background p-1.5">
+          {items.map((t) => (
+            <ToolCard key={t.name} tool={t} groupName={name} />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+function ToolCard({ tool, groupName }: { tool: ToolDescriptor; groupName?: string }) {
+  const [open, setOpen] = useState(false);
+  const hasSchema = tool.schema && Object.keys(tool.schema).length > 0;
+  const { leaf } = splitToolName(tool.name);
+  // Inside a group we show just the leaf to avoid duplicating the prefix.
+  const display = groupName && groupName !== "native" ? leaf : tool.name;
+  return (
+    <li className="overflow-hidden rounded-md border bg-background">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/40"
+      >
+        <Wrench className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <code className="truncate font-mono text-xs">{display}</code>
+        <ChevronDown
+          className={cn(
+            "ml-auto size-3 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180",
+          )}
+          aria-hidden
+        />
       </button>
       {open && (
         <div className="space-y-2 border-t bg-muted/30 px-3 py-2.5">
@@ -321,21 +423,82 @@ function ToolCard({ tool }: { tool: ToolDescriptor }) {
   );
 }
 
+function SearchBar({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        inputMode="search"
+        type="search"
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        className="h-9 pl-8 pr-8 text-sm"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          className="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function McpSection({ servers }: { servers: MCPStatus[] }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+
+  const filtered = useMemo(() => {
+    if (!q) return servers;
+    return servers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.tools ?? []).some((t) => t.toLowerCase().includes(q)),
+    );
+  }, [servers, q]);
+
   return (
     <div className="space-y-3">
       <SectionHeader
         title={`MCP servers (${servers.length})`}
         description="Each entry in core/config/mcp.yaml that was attempted at boot. Tap to see exported tools."
       />
+      <SearchBar
+        value={query}
+        onChange={setQuery}
+        placeholder="Search by server or tool name…"
+      />
+      {q && (
+        <p className="text-[11px] text-muted-foreground">
+          {filtered.length} match{filtered.length === 1 ? "" : "es"}
+        </p>
+      )}
       {servers.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No MCP servers configured. Edit <code className="font-mono">core/config/mcp.yaml</code> and restart Core.
         </p>
+      ) : filtered.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No servers match “{query}”.</p>
       ) : (
         <ul className="space-y-1.5">
-          {servers.map((s) => (
-            <McpCard key={s.name} server={s} />
+          {filtered.map((s) => (
+            <McpCard key={s.name} server={s} highlightTool={q} />
           ))}
         </ul>
       )}
@@ -343,8 +506,12 @@ function McpSection({ servers }: { servers: MCPStatus[] }) {
   );
 }
 
-function McpCard({ server }: { server: MCPStatus }) {
+function McpCard({ server, highlightTool }: { server: MCPStatus; highlightTool?: string }) {
+  const matchedTool = Boolean(
+    highlightTool && (server.tools ?? []).some((t) => t.toLowerCase().includes(highlightTool)),
+  );
   const [open, setOpen] = useState(false);
+  const isOpen = open || matchedTool;
   const toolCount = server.tools?.length ?? 0;
   return (
     <li className="overflow-hidden rounded-md border bg-background">
@@ -373,13 +540,13 @@ function McpCard({ server }: { server: MCPStatus }) {
           <ChevronDown
             className={cn(
               "size-3.5 shrink-0 text-muted-foreground transition-transform",
-              open && "rotate-180",
+              isOpen && "rotate-180",
             )}
             aria-hidden
           />
         </span>
       </button>
-      {open && (
+      {isOpen && (
         <div className="space-y-2 border-t bg-muted/30 px-3 py-2.5">
           <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
             <span className="font-mono uppercase tracking-wider">last tested</span>
@@ -390,11 +557,21 @@ function McpCard({ server }: { server: MCPStatus }) {
           )}
           {toolCount > 0 ? (
             <div className="flex flex-wrap gap-1">
-              {(server.tools ?? []).map((t) => (
-                <Badge key={t} variant="secondary" className="font-mono text-[10px]">
-                  {t}
-                </Badge>
-              ))}
+              {(server.tools ?? []).map((t) => {
+                const matches = highlightTool && t.toLowerCase().includes(highlightTool);
+                return (
+                  <Badge
+                    key={t}
+                    variant="secondary"
+                    className={cn(
+                      "font-mono text-[10px]",
+                      matches && "bg-info/15 text-info ring-1 ring-info/40",
+                    )}
+                  >
+                    {t}
+                  </Badge>
+                );
+              })}
             </div>
           ) : (
             !server.error && <p className="text-[11px] text-muted-foreground">No tools exported.</p>
