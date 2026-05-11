@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { fetchTrustContracts, fetchSkillProposals } from "@/lib/api";
+import { useAuth } from "@/lib/auth/session";
 
 /**
  * Single source of truth for "something needs the boss's attention in this
@@ -32,8 +33,20 @@ const BadgeContext = createContext<NavBadges>({});
 export function NavBadgesProvider({ children }: { children: ReactNode }) {
   const [badges, setBadges] = useState<NavBadges>({});
   const inflightRef = useRef(false);
+  // Only poll Core endpoints while signed in. On the /login page the JWT
+  // doesn't exist yet, so the polls were returning 401 every 20s and
+  // littering the console with red errors. Gate the effect on userId.
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
 
   useEffect(() => {
+    if (!userId) {
+      // Signed out → clear any stale badge counts so we don't show a
+      // stale chip after sign-out, and skip polling entirely.
+      setBadges((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      return;
+    }
+
     let cancelled = false;
 
     async function tick() {
@@ -71,7 +84,7 @@ export function NavBadgesProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [userId]);
 
   const value = useMemo(() => badges, [badges]);
   return <BadgeContext.Provider value={value}>{children}</BadgeContext.Provider>;
