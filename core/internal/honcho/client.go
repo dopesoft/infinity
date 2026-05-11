@@ -24,13 +24,24 @@ import (
 )
 
 const (
-	// HTTP client timeout = upper-bound on background message mirrors
-	// (PostMessage in a hook goroutine). 30s is generous; the actual
-	// per-call deadline is whatever ctx the caller passes — the
-	// synchronous read path uses a 2s fastRepTimeout via the provider
-	// so the agent loop never waits long. Honcho's deriver runs
-	// asynchronously, so a 30s upper bound on mirror writes is fine.
-	defaultTimeout   = 30 * time.Second
+	// HTTP client timeout — outer ceiling for any single request. The
+	// per-call deadlines below are tighter; this just prevents a stuck
+	// socket from leaking a goroutine for minutes if Honcho hangs.
+	defaultTimeout = 30 * time.Second
+
+	// postTimeout bounds a single PostMessage. Mirror writes happen on
+	// every user/assistant turn via the hook pipeline; if Honcho is
+	// slow we'd rather skip than queue up 30s-long goroutines that
+	// spam `context deadline exceeded` in the logs and starve the
+	// pipeline. Honcho's deriver runs async on its side, so dropping a
+	// mirror just means the peer representation lags one turn.
+	postTimeout = 4 * time.Second
+
+	// askTimeout bounds a dialectic Ask. Synchronous in the read path
+	// (provider wraps with an even tighter 2s ctx for the on-turn
+	// fetch), but kept loose here for offline/admin callers.
+	askTimeout = 10 * time.Second
+
 	defaultPeerName  = "boss"
 	defaultWorkspace = "infinity"
 )
@@ -131,7 +142,13 @@ func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	if err != nil {
 		return err
 	}
-	return c.do(ctx, http.MethodPost, url, body, nil)
+	// Tight per-call deadline so a slow/dead Honcho can't park hook
+	// goroutines for the full http.Client timeout. The hook pipeline
+	// fires this on every turn — dropping a mirror is preferable to
+	// 30s of log spam and goroutine pileup.
+	postCtx, cancel := context.WithTimeout(ctx, postTimeout)
+	defer cancel()
+	return c.do(postCtx, http.MethodPost, url, body, nil)
 }
 
 // DialecticQuery asks Honcho's reasoning endpoint a natural-language
@@ -158,7 +175,9 @@ func (c *Client) Ask(ctx context.Context, q string) (string, error) {
 	url := c.base + path
 	body, _ := json.Marshal(DialecticQuery{Queries: q})
 	var resp DialecticResponse
-	if err := c.do(ctx, http.MethodPost, url, body, &resp); err != nil {
+	askCtx, cancel := context.WithTimeout(ctx, askTimeout)
+	defer cancel()
+	if err := c.do(askCtx, http.MethodPost, url, body, &resp); err != nil {
 		return "", err
 	}
 	return resp.Content, nil
