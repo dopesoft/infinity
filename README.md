@@ -17,7 +17,7 @@ Three big-deal landings on top of the Phase 1-7 substrate:
 - **🧠 Honcho dialectic peer modelling** — runs alongside the 12-table mem store. Two new Railway services (FastAPI server + deriver worker) reason continuously about *who the boss is* and fold a peer representation into every system prompt. Privacy filter still runs at the capture boundary.
 - **🔁 GEPA skill self-evolution** — a Python sidecar that watches `mem_skill_runs` failures, asks Claude Haiku to reflect on root cause, mutates `SKILL.md`s in a Genetic-Pareto loop, and queues winners through the existing Trust flow. ~$0.05–$0.20 per cycle.
 
-Plus: `infinity.dopesoft.io` is now the production Studio URL.
+Plus: Studio is now reachable on the boss's **private domain** instead of the raw `*.up.railway.app` URL.
 
 ---
 
@@ -30,7 +30,7 @@ Behind the scenes Infinity runs as **six Railway services** plus **Postgres + pg
 | Service | What |
 |---|---|
 | `core` | Go binary — agent loop, MCP client, memory, hooks, Trust gate, proactive engine |
-| `studio` | Next.js 14 PWA — eight tabs, iOS-Safari-hardened (live at `infinity.dopesoft.io`) |
+| `studio` | Next.js 14 PWA — eight tabs, iOS-Safari-hardened, served on the boss's private domain |
 | `gepa` | FastAPI sidecar — Genetic-Pareto SKILL.md optimizer (Hermes-class self-evolution) |
 | `honcho` | FastAPI — dialectic peer modelling (continuous user model) |
 | `honcho-deriver` | Background worker — refreshes peer reps from new traffic |
@@ -48,7 +48,7 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 
 | Capability | **Infinity** | Hermes | OpenClaw | Nanobot |
 |---|:-:|:-:|:-:|:-:|
-| Web/PWA you can open on your phone | ✅ `infinity.dopesoft.io` | ❌ chat via channels | ⚠️ companion apps | ⚠️ localhost web UI |
+| Web/PWA you can open on your phone | ✅ private domain | ❌ chat via channels | ⚠️ companion apps | ⚠️ localhost web UI |
 | Custom domain at *your* address | ✅ | ❌ | ❌ | ❌ |
 | Mobile-first UI hardened for iOS Safari | ✅ 100dvh, safe-area, sticky composer, WS reconnect | ❌ | ❌ | ❌ |
 | Single, always-on installation | ✅ Railway | ✅ VPS / Modal | ✅ daemon | ✅ local |
@@ -140,8 +140,8 @@ If you've already built skills for OpenClaw, **drop them into `./skills/` or sym
 
 ```
                  ┌──────────────────────┐
-   iPhone ─────► │  Studio (Next.js 14) │   infinity.dopesoft.io
-                 └──────────┬───────────┘   (CNAME via Cloudflare DNS)
+   iPhone ─────► │  Studio (Next.js 14) │   <boss's private domain>
+                 └──────────┬───────────┘   (CNAME via your DNS provider)
                             │ HTTPS + WSS
                             ▼
                  ┌──────────────────────────────────────────────────┐
@@ -322,8 +322,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
 
 ### Operations
 - **Six-service Railway deploy** — `core`, `studio`, `gepa`, `honcho`, `honcho-deriver`, `redis`; pinned by `railway.toml`
-- **Custom domain via Cloudflare** — `infinity.dopesoft.io` CNAMEs to studio's Railway URL
-- **Cloudflare Tunnel + Access** — `coder.dopesoft.io` re-uses the existing `jarvis-mac` tunnel with a Service Token policy for Railway-only access
+- **Private custom domain via Cloudflare** — Studio served from your own subdomain (CNAME to studio's Railway URL); zero exposure of the raw `*.up.railway.app`
+- **Cloudflare Tunnel + Access** — coder bridge re-uses an existing tunnel with a Service Token policy for Railway-only access
 - **Embedded migrations** — `//go:embed db/migrations/*.sql`, no `db/` in the runtime container
 - **Embedded `mcp.yaml`** — `core/config/embed.go` so distroless runtimes find the registry
 - **Graceful degradation** — missing `DATABASE_URL` → memory off, missing LLM → server still serves health + memory, missing `HONCHO_BASE_URL` → peer rep skipped, missing `GEPA_URL` → optimize returns 503
@@ -456,7 +456,7 @@ Six services on Railway, plus Postgres on Supabase.
 
 2. **Core service**. Source from this repo. Root Directory: `core`. Wire env: `DATABASE_URL`, `ANTHROPIC_API_KEY`, optional `CLAUDE_CODE_TUNNEL_URL` + `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` for the coding bridge, optional `HONCHO_BASE_URL`, optional `GEPA_URL`.
 
-3. **Studio service**. Same repo. Root Directory: `studio`. Wire env: `NEXT_PUBLIC_CORE_URL=https://core.up.railway.app`, `NEXT_PUBLIC_CORE_WS_URL=wss://core.up.railway.app/ws`. For the custom domain, `railway domain --service studio infinity.dopesoft.io` and CNAME in your DNS.
+3. **Studio service**. Same repo. Root Directory: `studio`. Wire env: `NEXT_PUBLIC_CORE_URL=https://core.up.railway.app`, `NEXT_PUBLIC_CORE_WS_URL=wss://core.up.railway.app/ws`. For a custom domain, `railway domain --service studio <subdomain.example.com>` and add the returned CNAME to your DNS.
 
 4. **GEPA service** (optional). Root Directory: `docker/gepa`. Set `ANTHROPIC_API_KEY=${{core.ANTHROPIC_API_KEY}}`. Set `GEPA_URL=http://gepa.railway.internal:8080` on core.
 

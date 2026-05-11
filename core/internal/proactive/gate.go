@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -76,7 +77,7 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 
 	// Queue for approval.
 	if g.trust == nil {
-		// No store wired — fail closed: block but tell the user we can't queue.
+		log.Printf("ClaudeCodeGate: trust store nil, refusing %s", toolName)
 		return agent.GateDecision{
 			Allow:  false,
 			Reason: "trust store not configured; refusing to run claude_code__" + suffix + " unattended",
@@ -99,11 +100,24 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		Preview: preview,
 	})
 	if err != nil {
+		log.Printf("ClaudeCodeGate: %s queue err=%v", toolName, err)
 		return agent.GateDecision{
 			Allow:  false,
 			Reason: "could not queue trust contract: " + err.Error(),
 		}
 	}
+	if id == "" {
+		// Queue swallows pool=nil with a silent ("", nil). That used to leave
+		// the model telling the user "queued in the Trust tab" while nothing
+		// actually landed. Fail loud instead — the agent's tool output and
+		// the boss's logs both surface the real story.
+		log.Printf("ClaudeCodeGate: %s queue returned empty id (pool unwired?)", toolName)
+		return agent.GateDecision{
+			Allow:  false,
+			Reason: "trust store unavailable; row was NOT persisted — do not tell the boss it was queued",
+		}
+	}
+	log.Printf("ClaudeCodeGate: %s queued as contract=%s", toolName, id)
 	return agent.GateDecision{
 		Allow:      false,
 		Reason:     "high-risk claude_code call queued for approval",

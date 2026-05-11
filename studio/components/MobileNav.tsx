@@ -13,6 +13,7 @@ import {
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SignOutButton } from "@/components/SignOutButton";
 import { NAV_TABS } from "@/lib/nav-tabs";
+import { useNavBadge } from "@/lib/nav-badges";
 import { cn } from "@/lib/utils";
 
 /* MobileNav is the right-hand hamburger that opens a draggable
@@ -65,6 +66,7 @@ export function MobileNav() {
                   aria-hidden
                 />
                 <span className="flex-1 font-medium">{t.label}</span>
+                <MobileNavBadgeChip href={t.href} />
                 {active && (
                   <span className="size-1.5 rounded-full bg-foreground" aria-hidden />
                 )}
@@ -79,5 +81,20 @@ export function MobileNav() {
         </nav>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+// MobileNavBadgeChip — slightly bigger than the desktop chip because the
+// mobile drawer rows are wider and thumbs need a meatier target.
+function MobileNavBadgeChip({ href }: { href: string }) {
+  const count = useNavBadge(href);
+  if (count <= 0) return null;
+  return (
+    <span
+      aria-label={`${count} pending`}
+      className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-warning/20 px-1.5 font-mono text-[11px] font-semibold leading-none text-warning"
+    >
+      {count > 99 ? "99+" : count}
+    </span>
   );
 }

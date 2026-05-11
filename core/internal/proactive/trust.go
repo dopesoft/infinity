@@ -3,6 +3,7 @@ package proactive
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/auth"
@@ -65,12 +66,20 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 		userIDArg = userID
 	}
 
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_trust_contracts
 		  (id, title, risk_level, source, action_spec, reasoning, cited_memory_ids,
 		   risk_assessment, preview, status, user_id)
 		VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::uuid[], $8::jsonb, $9, $10, $11::uuid)
 	`, c.ID, c.Title, c.RiskLevel, c.Source, action, c.Reasoning, cited, risk, c.Preview, c.Status, userIDArg)
+	// Loud logging because this row appearing (or not) is the entire UX:
+	// the Studio Trust queue and the gated tool card both depend on it.
+	if err != nil {
+		log.Printf("trust.queue: INSERT failed id=%s source=%s user_id=%v err=%v", c.ID, c.Source, userIDArg, err)
+	} else {
+		log.Printf("trust.queue: INSERT ok id=%s source=%s status=%s user_id=%v rows=%d",
+			c.ID, c.Source, c.Status, userIDArg, tag.RowsAffected())
+	}
 	return c.ID, err
 }
 

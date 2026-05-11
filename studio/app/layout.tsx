@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Mulish } from "next/font/google";
 import { AuthProvider } from "@/lib/auth/session";
+import { NavBadgesProvider } from "@/lib/nav-badges";
 import { RealtimeProvider } from "@/lib/realtime/provider";
 import { WebSocketProvider } from "@/lib/ws/provider";
 import "./globals.css";
@@ -54,7 +55,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${mulish.variable} font-sans`}>
         <AuthProvider>
           <RealtimeProvider>
-            <WebSocketProvider>{children}</WebSocketProvider>
+            <NavBadgesProvider>
+              <WebSocketProvider>{children}</WebSocketProvider>
+            </NavBadgesProvider>
           </RealtimeProvider>
         </AuthProvider>
       </body>

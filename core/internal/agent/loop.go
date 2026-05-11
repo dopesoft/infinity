@@ -357,9 +357,10 @@ func emit(ch chan<- RunEvent, ev RunEvent) {
 }
 
 // formatGatedOutput is the synthetic tool result shown to the LLM when a
-// gate blocks execution. It tells the model the action is queued for human
-// approval and includes the contract id so the model can reference it in a
-// reply ("I queued the migration for your approval — see Trust tab").
+// gate blocks execution. It tells the model what actually happened —
+// success-or-failure honesty matters here because the model will paraphrase
+// the result to the user, and if we lie ("queued") when the row was never
+// persisted the user gets a phantom Trust contract that never appears.
 func formatGatedOutput(toolName string, d GateDecision) string {
 	var b strings.Builder
 	b.WriteString("BLOCKED: tool ")
@@ -374,7 +375,11 @@ func formatGatedOutput(toolName string, d GateDecision) string {
 		b.WriteString("Trust contract: ")
 		b.WriteString(d.ContractID)
 		b.WriteString("\n")
+		b.WriteString("This call IS queued in the Trust tab. Tell the boss to approve there. Do NOT retry without approval.")
+	} else {
+		b.WriteString("WARNING: this call was NOT persisted to the Trust queue (no contract id). ")
+		b.WriteString("DO NOT tell the boss it was queued — the gate fired but the row failed to land. ")
+		b.WriteString("Tell the boss the Trust store is misconfigured and the action was simply refused.")
 	}
-	b.WriteString("Tell the boss it is queued in the Trust tab and wait for approval before retrying.")
 	return b.String()
 }
