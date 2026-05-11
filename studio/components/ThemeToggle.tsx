@@ -2,13 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { Monitor, Moon, Sun } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 type Theme = "light" | "dark" | "system";
@@ -93,30 +86,27 @@ export function ThemeToggle({
     );
   }
 
+  // Desktop variant: same cycle behaviour as the mobile drawer row — one
+  // tap advances Light → Dark → Auto → Light. No dropdown, no menu state
+  // to hydrate. The aria-label always reflects the *current* theme so
+  // screen readers + tooltips read the active state, not the action.
+  function cycle() {
+    const idx = OPTIONS.findIndex((o) => o.value === theme);
+    const next = OPTIONS[(idx + 1) % OPTIONS.length];
+    set(next.value);
+  }
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Theme"
-          className={cn(
-            "inline-flex size-9 items-center justify-center rounded-md text-foreground hover:bg-accent active:scale-95 lg:size-10",
-            className,
-          )}
-        >
-          <ActiveIcon className="size-4" aria-hidden />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[10rem]">
-        <DropdownMenuRadioGroup value={mounted ? theme : "system"} onValueChange={(v) => set(v as Theme)}>
-          {OPTIONS.map(({ value, label, Icon }) => (
-            <DropdownMenuRadioItem key={value} value={value}>
-              <Icon className="size-4 text-muted-foreground" aria-hidden />
-              {label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <button
+      type="button"
+      onClick={cycle}
+      aria-label={`Theme: ${activeOption.label}. Click to cycle.`}
+      title={`Theme: ${activeOption.label}`}
+      className={cn(
+        "inline-flex size-9 items-center justify-center rounded-md text-foreground hover:bg-accent active:scale-95 lg:size-10",
+        className,
+      )}
+    >
+      <ActiveIcon className="size-4" aria-hidden />
+    </button>
   );
 }

@@ -91,11 +91,18 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 		limit = 50
 	}
 	args := []any{limit}
+	// decision_note is TEXT nullable in the schema; coalesce to '' so the
+	// Go scan into `c.DecisionNote string` doesn't fail with "Scan error:
+	// converting NULL to string is unsupported" — which silently 500'd the
+	// whole list endpoint and showed Studio an empty Trust tab for every
+	// pending row ever inserted. (Found by tracing a confirmed insert that
+	// never surfaced in the panel.)
 	q := `
 		SELECT id::text, title, risk_level, source,
 		       action_spec, reasoning,
 		       COALESCE(array_to_json(cited_memory_ids)::text, '[]'),
-		       risk_assessment, preview, status, decided_at, decision_note, created_at
+		       risk_assessment, preview, status, decided_at,
+		       COALESCE(decision_note, ''), created_at
 		  FROM mem_trust_contracts`
 	if status != "" && status != "all" {
 		q += ` WHERE status = $2`

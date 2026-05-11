@@ -102,7 +102,12 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
                 <pre
                   className={cn(
                     "max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs",
-                    status === "gated" && "bg-warning/10 text-warning-foreground",
+                    // Gated rows: tinted background but TEXT IN FOREGROUND
+                    // (never the all-white warning-foreground which is
+                    // unreadable on the creme bg). The amber accent comes
+                    // from the StatusIcon + the left ring below.
+                    status === "gated" &&
+                      "bg-warning/5 text-foreground ring-1 ring-inset ring-warning/40 dark:bg-warning/10",
                     status === "error" && "bg-danger/10 text-danger",
                     status === "success" && "bg-muted",
                   )}
