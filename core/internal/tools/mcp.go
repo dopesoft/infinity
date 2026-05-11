@@ -161,6 +161,14 @@ type MCPManager struct {
 	configs    map[string]MCPServerConfig
 	statuses   map[string]MCPStatus
 	reconnects map[string]*sync.Mutex
+	// lastReconnect tracks the last time each server was successfully
+	// re-dialled. Used to coalesce concurrent Reconnect calls — if N
+	// goroutines all see EOF on the same dead session, only the first
+	// re-dials; the others see a fresh `lastReconnect` and reuse the
+	// just-created session instead of closing it and re-dialling again
+	// (which is what was happening on canvas's parallel polls and the
+	// agent loop — each was stomping the others' fresh session).
+	lastReconnect map[string]time.Time
 }
 
 type MCPStatus struct {
@@ -173,10 +181,11 @@ type MCPStatus struct {
 
 func NewMCPManager() *MCPManager {
 	return &MCPManager{
-		sessions:   make(map[string]*mcp.ClientSession),
-		configs:    make(map[string]MCPServerConfig),
-		statuses:   make(map[string]MCPStatus),
-		reconnects: make(map[string]*sync.Mutex),
+		sessions:      make(map[string]*mcp.ClientSession),
+		configs:       make(map[string]MCPServerConfig),
+		statuses:      make(map[string]MCPStatus),
+		reconnects:    make(map[string]*sync.Mutex),
+		lastReconnect: make(map[string]time.Time),
 	}
 }
 
@@ -373,6 +382,17 @@ func (m *MCPManager) Reconnect(ctx context.Context, server string) error {
 	rcm.Lock()
 	defer rcm.Unlock()
 
+	// Coalesce: if someone else just reconnected this server within the
+	// last second, the current session is already fresh. Re-dialling
+	// would only close the new session and create yet another one,
+	// poisoning every caller waiting in line behind us.
+	m.mu.Lock()
+	if last, ok := m.lastReconnect[server]; ok && time.Since(last) < time.Second {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
 	// Best-effort close of the old session before re-dialling.
 	m.mu.Lock()
 	old := m.sessions[server]
@@ -390,6 +410,7 @@ func (m *MCPManager) Reconnect(ctx context.Context, server string) error {
 	}
 	m.mu.Lock()
 	m.sessions[server] = sess
+	m.lastReconnect[server] = time.Now()
 	m.mu.Unlock()
 	// Preserve the previously-discovered tool list in the status; we don't
 	// re-list because the tool surface should be identical for the same
