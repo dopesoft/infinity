@@ -131,6 +131,54 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 	return out, rows.Err()
 }
 
+// ConsumeApprovedForTool atomically looks for a recently-approved trust
+// contract whose action_spec.tool matches `toolName` and whose
+// action_spec.session_id matches `sessionID`, marks it consumed, and
+// returns true. The agent loop calls this from the gate so a tool that
+// was previously gated + approved by the boss can run on its next
+// invocation without a fresh queue → approve → retry cycle.
+//
+// "Consumed" is encoded by flipping status from "approved" to
+// "consumed". The row stays in the table for audit (you can still see
+// what got approved-and-run in the Trust tab with status filter "all").
+//
+// Window: 30 minutes. After that the approval expires and the user has
+// to re-confirm. This keeps stale approvals from silently green-lighting
+// destructive calls hours later.
+func (s *TrustStore) ConsumeApprovedForTool(ctx context.Context, sessionID, toolName string) (bool, error) {
+	if s == nil || s.pool == nil || sessionID == "" || toolName == "" {
+		return false, nil
+	}
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE mem_trust_contracts
+		   SET status = 'consumed', decided_at = COALESCE(decided_at, NOW())
+		 WHERE id = (
+		     SELECT id
+		       FROM mem_trust_contracts
+		      WHERE status = 'approved'
+		        AND source = 'claude_code_gate'
+		        AND action_spec->>'tool' = $1
+		        AND action_spec->>'session_id' = $2
+		        AND decided_at > NOW() - INTERVAL '30 minutes'
+		      ORDER BY decided_at DESC
+		      LIMIT 1
+		      FOR UPDATE SKIP LOCKED
+		 )
+		 RETURNING id::text
+	`, toolName, sessionID).Scan(&id)
+	if err != nil {
+		// pgx.ErrNoRows means no approved contract — that's "not approved",
+		// not a failure. Caller treats it as false / no consumption.
+		if err.Error() == "no rows in result set" {
+			return false, nil
+		}
+		return false, err
+	}
+	log.Printf("trust.consume: tool=%s session=%s contract=%s", toolName, sessionID, id)
+	return true, nil
+}
+
 func (s *TrustStore) Decide(ctx context.Context, id, decision, note string) error {
 	if s == nil || s.pool == nil {
 		return nil

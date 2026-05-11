@@ -75,6 +75,25 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		return agent.GateDecision{Allow: true}
 	}
 
+	// Before queueing a brand-new contract, check whether the boss already
+	// approved THIS tool in THIS session within the last 30 minutes. If so,
+	// consume that approval (atomic UPDATE … FOR UPDATE) and pass the call
+	// through. This is the missing link that makes Trust approvals
+	// actually execute the gated tool — without it, "approve" only
+	// changes the row's status and the boss still has to ask the agent to
+	// retry, which results in a hallucinated "running now" response with
+	// no actual tool call attached.
+	if g.trust != nil {
+		consumed, err := g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
+		if err != nil {
+			log.Printf("ClaudeCodeGate: consume lookup error: %v", err)
+			// Fall through to queueing — fail closed.
+		} else if consumed {
+			log.Printf("ClaudeCodeGate: %s allowed via prior approval", toolName)
+			return agent.GateDecision{Allow: true}
+		}
+	}
+
 	// Queue for approval.
 	if g.trust == nil {
 		log.Printf("ClaudeCodeGate: trust store nil, refusing %s", toolName)
