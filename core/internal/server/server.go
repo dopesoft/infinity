@@ -13,6 +13,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/sessions"
+	"github.com/dopesoft/infinity/core/internal/settings"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/voyager"
@@ -66,6 +67,7 @@ type Server struct {
 	trust     *proactive.TrustStore
 	namer     *sessions.Namer
 	auth      *auth.Verifier
+	settings  *settings.Store
 	started   time.Time
 
 	// turnsMu guards the per-session in-flight turn registry. Lookups
@@ -90,6 +92,7 @@ func New(cfg Config) *Server {
 		trust:     cfg.Trust,
 		namer:     cfg.Namer,
 		auth:      cfg.Auth,
+		settings:  settings.New(cfg.Pool),
 		started:   time.Now(),
 		turns:     make(map[string]*turnState),
 	}
@@ -163,6 +166,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/stop", s.handleCanvasProjectStop)
 	mux.HandleFunc("/api/canvas/project/active", s.handleCanvasProjectActive)
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
+	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
 }
 
 func (s *Server) Start() error {

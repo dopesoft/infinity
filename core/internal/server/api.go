@@ -17,7 +17,7 @@ type statusResponse struct {
 	Tools    []string `json:"tools"`
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := statusResponse{Version: s.cfg.Version, Tools: []string{}}
 	if s.loop != nil {
 		if p := s.loop.Provider(); p != nil {
@@ -25,6 +25,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			resp.Model = p.Model()
 		}
 		resp.Tools = s.loop.Tools().Names()
+	}
+	// Effective model — settings store override beats the provider's
+	// boot default so /api/status reflects what the next turn will
+	// actually run against (not the env var). Studio's status footer
+	// and the Settings page both read this.
+	if s.settings != nil {
+		if override := s.settings.GetModel(r.Context()); override != "" {
+			resp.Model = override
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

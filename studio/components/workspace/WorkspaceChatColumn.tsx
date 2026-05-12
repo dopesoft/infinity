@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { MODELS, PromptInputBox } from "@/components/ui/ai-prompt-box";
-import { useSessionModel } from "@/lib/use-model";
+import { resolveModelKey, useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
@@ -14,9 +14,9 @@ type ChatHook = ReturnType<typeof useChat>;
  *
  * Layout: coding-session banner (one-shot dismissable) at the top, conversation
  * stream filling the middle, AI prompt box pinned to the bottom inside a
- * keyboard-safe container. The prompt box owns its own model state via the
- * <ModelChip> — we wire it through the per-session `useSessionModel` hook so
- * the choice persists across sessions and reloads.
+ * keyboard-safe container. The model chip is wired through `useGlobalModel`
+ * so cycling on the chip writes to Core's settings store (single source of
+ * truth) and the Settings page stays synchronized in real time.
  */
 export function WorkspaceChatColumn({
   chat,
@@ -27,7 +27,8 @@ export function WorkspaceChatColumn({
   minimalComposer?: boolean;
   scrollRef?: React.MutableRefObject<HTMLDivElement | null>;
 }) {
-  const { model, setModel } = useSessionModel(chat.sessionId);
+  const { setting, setModel } = useGlobalModel();
+  const modelKey = resolveModelKey(setting?.model ?? "");
   const localRef = useRef<HTMLDivElement | null>(null);
   const ref = scrollRef ?? localRef;
 
@@ -55,18 +56,12 @@ export function WorkspaceChatColumn({
           onSend={(text) => {
             const t = text.trim();
             if (!t) return;
-            // Resolve the chip's ModelKey (e.g. "opus-4-7") to the
-            // Anthropic model id ("claude-opus-4-7") that Core's
-            // provider expects on the wire. Unknown keys fall back to
-            // the empty string so Core uses its boot-configured
-            // default rather than 4xx'ing on a typo.
-            const modelId =
-              MODELS.find((m) => m.key === model)?.id ?? "";
             // `send` itself decides whether to start a new turn or
-            // queue a steer based on chat.isStreaming. The model is
-            // only honored at turn start; mid-turn steers inherit
-            // whatever model the running turn locked in.
-            chat.send(t, { model: modelId });
+            // queue a steer based on chat.isStreaming. The model the
+            // turn runs against is resolved server-side from the
+            // settings store (driven by this chip + the Settings page),
+            // so the WS frame stays a plain {type, session, content}.
+            chat.send(t);
           }}
           onSlash={(cmd) => {
             const c = cmd.toLowerCase();
@@ -84,8 +79,15 @@ export function WorkspaceChatColumn({
           isLoading={chat.isStreaming}
           disabled={chat.status !== "connected"}
           placeholder="ask me anything.."
-          model={model}
-          onModelChange={setModel}
+          model={modelKey}
+          onModelChange={(nextKey) => {
+            // Translate the chip's ModelKey (e.g. "opus-4-7") to the
+            // Anthropic id ("claude-opus-4-7") that Core stores. The
+            // hook broadcasts the change so the Settings page reflects
+            // it instantly without a roundtrip on its end.
+            const id = MODELS.find((m) => m.key === nextKey)?.id ?? "";
+            void setModel(id);
+          }}
           minimal={minimalComposer}
         />
       </div>

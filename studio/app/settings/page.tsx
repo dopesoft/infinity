@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
-  Copy,
   LayoutPanelLeft,
   RefreshCw,
   Search,
@@ -33,6 +32,7 @@ import {
   type MCPStatus,
   type ToolDescriptor,
 } from "@/lib/api";
+import { useGlobalModel } from "@/lib/use-model";
 
 type SectionId = "general" | "tools" | "mcp" | "canvas";
 
@@ -293,105 +293,117 @@ function findProvider(id: string | undefined | null): ProviderCatalogEntry {
 }
 
 function GeneralSection({ status }: { status: CoreStatus | null }) {
-  const liveProvider = (status?.provider ?? "").toLowerCase();
-  const liveModel = status?.model ?? "";
+  // Provider is determined by the env-set LLM_PROVIDER on Core and is
+  // read-only here — swapping providers requires a different API key,
+  // which still lives in env. The model, however, is fully editable
+  // from the UI: changes hit /api/settings/model and the Core agent
+  // loop picks them up on the next turn (no restart needed).
+  const { setting, setModel, saving } = useGlobalModel();
+  const liveProvider = (setting?.provider ?? status?.provider ?? "").toLowerCase();
+  const effectiveModel = setting?.model ?? status?.model ?? "";
+  const defaultModel = setting?.defaultModel ?? "";
 
-  const [providerId, setProviderId] = useState<string>(liveProvider || "anthropic");
-  const [modelId, setModelId] = useState<string>(liveModel);
-  const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState<string>(effectiveModel);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // Sync local form when /api/status arrives or refreshes.
+  // Sync the local form whenever Core/setting state arrives or shifts.
+  // The hook broadcasts on every PUT so this picks up changes the chip
+  // makes in the chat composer too.
   useEffect(() => {
-    if (status?.provider) setProviderId(status.provider.toLowerCase());
-    if (status?.model) setModelId(status.model);
-  }, [status?.provider, status?.model]);
+    if (effectiveModel) setDraft(effectiveModel);
+  }, [effectiveModel]);
 
-  const provider = findProvider(providerId);
+  const provider = findProvider(liveProvider);
+  const knownModelIds = new Set(provider.models.map((m) => m.id));
 
-  // Make sure the selected model belongs to the chosen provider; otherwise
-  // fall back to the recommended (or first) model in that catalog.
-  const selectedModel =
-    provider.models.find((m) => m.id === modelId)?.id ??
-    provider.models.find((m) => m.recommended)?.id ??
-    provider.models[0].id;
+  // Show the live id in the dropdown even when it's not in the static
+  // catalog — Anthropic ships new models faster than we can update the
+  // list, and rendering a blank select would just be confusing.
+  const dropdownOptions = knownModelIds.has(draft)
+    ? provider.models
+    : [{ id: draft, label: `${draft} (custom)` }, ...provider.models];
 
-  function onProviderChange(next: string) {
-    setProviderId(next);
-    const nextProvider = findProvider(next);
-    const recommended = nextProvider.models.find((m) => m.recommended) ?? nextProvider.models[0];
-    setModelId(recommended.id);
+  const dirty = draft !== effectiveModel;
+
+  async function save() {
+    const ok = await setModel(draft);
+    if (ok) setSavedAt(Date.now());
   }
 
-  const envBlock = `LLM_PROVIDER=${provider.id}\nLLM_MODEL=${selectedModel}\n${provider.keyEnv}=<your-key>`;
-
-  async function copyEnv() {
-    try {
-      await navigator.clipboard.writeText(envBlock);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked */
+  async function clearOverride() {
+    const ok = await setModel("");
+    if (ok) {
+      setDraft(defaultModel);
+      setSavedAt(Date.now());
     }
   }
-
-  const dirty =
-    liveProvider !== provider.id || (liveModel && liveModel !== selectedModel);
 
   return (
     <div className="space-y-4">
       <SectionHeader
         title="General"
-        description="Pick a provider + model — the helper below shows the exact env vars to set on the Core service. Changes take effect after a Core restart."
+        description="Pick the model your agent runs on. Changes save to Core's settings store and take effect on the next turn — no restart, no env-var dance."
       />
 
       <div className="space-y-3 rounded-md border bg-background p-3">
-        <FieldLabel label="Provider">
-          <NativeSelect value={provider.id} onChange={onProviderChange}>
+        <FieldLabel label="Provider (env-set)">
+          <NativeSelect value={provider.id} onChange={() => undefined} disabled>
             {PROVIDER_CATALOG.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
               </option>
             ))}
           </NativeSelect>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Provider is wired to <code className="font-mono">LLM_PROVIDER</code> and{" "}
+            <code className="font-mono">{provider.keyEnv}</code> on Core. Swapping
+            providers requires a different API key, so it stays in env for now.
+          </p>
         </FieldLabel>
 
         <FieldLabel label="Model">
-          <NativeSelect value={selectedModel} onChange={setModelId}>
-            {provider.models.map((m) => (
+          <NativeSelect value={draft} onChange={setDraft}>
+            {dropdownOptions.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.label}
+                {m.id === defaultModel ? `${m.label} · default` : m.label}
               </option>
             ))}
           </NativeSelect>
         </FieldLabel>
 
-        <div className="flex items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
-          <span>Live on Core</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
           <code className="truncate font-mono">
-            {liveProvider || "—"} · {liveModel || "—"} · v{status?.version || "—"}
+            live: {liveProvider || "—"} · {effectiveModel || "—"} ·{" "}
+            {setting?.source === "user" ? "user override" : "boot default"} · v
+            {status?.version || "—"}
           </code>
+          <div className="flex items-center gap-1.5">
+            {setting?.source === "user" && defaultModel && draft !== defaultModel && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={clearOverride}
+                disabled={saving}
+                className="h-7 px-2 text-[11px]"
+              >
+                reset to default
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={save}
+              disabled={!dirty || saving}
+              className="h-7 gap-1 px-2 text-[11px]"
+            >
+              {saving ? (
+                <CircleDashed className="size-3.5 animate-spin" />
+              ) : savedAt && Date.now() - savedAt < 2000 ? (
+                <Check className="size-3.5 text-success" />
+              ) : null}
+              {saving ? "saving…" : "save"}
+            </Button>
+          </div>
         </div>
-      </div>
-
-      <div className="space-y-2 rounded-md border bg-muted/30 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-xs font-medium text-foreground">
-            Set these on the Core service{dirty ? " (current selection differs from live)" : ""}
-          </p>
-          <Button size="sm" variant="ghost" onClick={copyEnv} className="h-7 gap-1 px-2 text-[11px]">
-            {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-            {copied ? "copied" : "copy"}
-          </Button>
-        </div>
-        <pre className="overflow-x-auto rounded-sm border bg-background p-2 font-mono text-[11px] leading-relaxed text-foreground">
-{envBlock}
-        </pre>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          {provider.docsHint} Then run on Railway:{" "}
-          <code className="font-mono">
-            railway variables --service core --set LLM_PROVIDER={provider.id} --set LLM_MODEL={selectedModel} --set {provider.keyEnv}=…
-          </code>
-        </p>
       </div>
     </div>
   );
@@ -412,20 +424,24 @@ function NativeSelect({
   value,
   onChange,
   children,
+  disabled,
 }: {
   value: string;
   onChange: (next: string) => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <div className="relative">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
         className={cn(
           "h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
           "[&>option]:bg-popover [&>option]:text-popover-foreground",
+          "disabled:cursor-not-allowed disabled:opacity-60",
         )}
       >
         {children}
