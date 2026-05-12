@@ -10,6 +10,8 @@ import {
   FolderOpen,
   Loader2,
   RefreshCw,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -155,11 +157,23 @@ export function CanvasFileTree({
           <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter…"
+            placeholder="Search for a file…"
             inputMode="search"
-            aria-label="Filter files"
+            aria-label="Search files"
             className="h-7 min-h-7 flex-1 border-0 bg-transparent px-1 text-xs focus-visible:ring-0"
           />
+          {filter && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setFilter("")}
+              aria-label="Clear search"
+              title="Clear"
+              className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          )}
         </div>
         {root && (
           <>
@@ -197,7 +211,11 @@ export function CanvasFileTree({
           </>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto scroll-touch py-1 text-sm">
+      {/* py-0 here — the 4px of vertical padding used to push the empty
+          state ~4px lower than the chat / canvas equivalents. When files
+          ARE populated, the rows have their own row-padding so this top
+          gap isn't load-bearing. */}
+      <div className="min-h-0 flex-1 overflow-y-auto scroll-touch text-sm">
         {!store.root && <EmptyRoot />}
         {store.root && !filtered && (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
@@ -316,13 +334,19 @@ function NodeRow({
 
 function EmptyRoot() {
   return (
-    <div className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
-      <p className="mb-2 font-medium">No app in this session.</p>
-      <p>
-        Head over to <span className="font-medium">Live</span> and tell the agent
-        what to build. Once the scaffold lands, this tree will fill in with the
-        project files — and only those files.
-      </p>
+    // Anchored ~140px from the top of the tree content area. Files column
+    // sits below the tabs (h-10) + filter (h-11), so the on-screen icon
+    // lands at ~224px from the column top, matching Chat + Canvas.
+    <div className="flex h-full flex-col items-center justify-start gap-3 p-6 pt-[8.75rem] text-center">
+      <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Sparkles className="size-5" aria-hidden />
+      </span>
+      <div className="max-w-md space-y-1">
+        <h3 className="text-sm font-semibold">Project files</h3>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Files show up here once something gets scaffolded.
+        </p>
+      </div>
     </div>
   );
 }

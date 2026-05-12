@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, MessageSquareOff } from "lucide-react";
+import { ArrowDown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
@@ -40,12 +40,29 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
 
   if (messages.length === 0) {
     return (
+      // Shared empty-state shape across the workspace columns: icon in a
+      // muted circle, semibold title, soft sub-copy. Centered vertically so
+      // it lines up with the Canvas-preview empty state in the rightmost
+      // column.
+      // Anchored ~224px from the column top so it visually aligns with the
+      // Files / Preview empty states next door. Those columns sit ~84px
+      // below their column edge (tabs + filter / tabs + URL bar); the chat
+      // column has no header above it, so we fake the same offset here.
       <div
         ref={scrollRef}
-        className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-muted-foreground"
+        className="flex h-full flex-col items-center justify-start gap-3 p-6 pt-56 text-center"
       >
-        <MessageSquareOff className="size-8 opacity-60" aria-hidden />
-        <p className="text-sm">Send a message to wake the agent.</p>
+        <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <Sparkles className="size-5" aria-hidden />
+        </span>
+        <div className="max-w-md space-y-1">
+          <h3 className="text-sm font-semibold">A fresh session</h3>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Tell Infinity what you want to build, write, or talk through. An app,
+            a document, a spreadsheet, or just a thought. Anything material shows
+            up in the panels to the right.
+          </p>
+        </div>
       </div>
     );
   }

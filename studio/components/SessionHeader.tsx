@@ -108,7 +108,7 @@ export function SessionHeader({
             className="h-7 gap-1 px-2 text-xs"
           >
             <Undo2 className="size-3.5" />
-            <span className="hidden sm:inline">rewind</span>
+            <span className="hidden sm:inline">Rewind</span>
           </Button>
         ) : null}
         <Button
@@ -120,7 +120,7 @@ export function SessionHeader({
           className="h-7 gap-1 px-2 text-xs"
         >
           <Archive className="size-3.5" />
-          <span className="hidden sm:inline">compact</span>
+          <span className="hidden sm:inline">Compact</span>
         </Button>
         <Button
           variant="ghost"
@@ -131,7 +131,7 @@ export function SessionHeader({
           className="h-7 gap-1 px-2 text-xs"
         >
           <Plus className="size-3.5" />
-          <span className="hidden sm:inline">new</span>
+          <span className="hidden sm:inline">New</span>
         </Button>
       </div>
     </div>

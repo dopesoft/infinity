@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
-import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { Button } from "@/components/ui/button";
 import {
   PageTabs,
@@ -144,14 +144,10 @@ export default function MemoryPage() {
             }}
             className="mx-auto flex w-full items-center gap-2 sm:max-w-2xl sm:pt-4"
           >
-            <div className="relative flex-1">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
+            <div className="flex-1">
+              <SearchInput
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onValueChange={setQuery}
                 placeholder={
                   view === "memories"
                     ? "Ask your memory anything…"
@@ -159,9 +155,6 @@ export default function MemoryPage() {
                       ? "Search what Infinity has noticed…"
                       : "Find an entity in the graph…"
                 }
-                className="pl-9"
-                inputMode="search"
-                enterKeyHint="search"
               />
             </div>
             <Button

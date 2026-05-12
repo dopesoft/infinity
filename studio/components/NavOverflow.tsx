@@ -7,7 +7,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { NAV_OVERFLOW } from "@/lib/nav-tabs";
@@ -33,10 +32,6 @@ export function NavOverflow() {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={6} className="w-52">
-        <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          More
-        </div>
-        <DropdownMenuSeparator />
         {NAV_OVERFLOW.map((t) => {
           const active = pathname === t.href || pathname?.startsWith(t.href + "/");
           const Icon = t.Icon;

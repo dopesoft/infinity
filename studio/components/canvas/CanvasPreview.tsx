@@ -246,15 +246,17 @@ export function CanvasPreview() {
 
 function NoProjectPreview() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-      <Sparkles className="size-10 text-info/70" aria-hidden />
+    // Anchored ~140px from the top of the preview area. Canvas has tab
+    // strip (h-10) + URL bar (h-11) above, so the icon lands ~224px from
+    // the column top, matching Chat + Files.
+    <div className="flex h-full flex-col items-center justify-start gap-3 p-6 pt-[8.75rem] text-center">
+      <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Sparkles className="size-5" aria-hidden />
+      </span>
       <div className="max-w-md space-y-1">
-        <h3 className="text-sm font-semibold">No app in this session yet</h3>
+        <h3 className="text-sm font-semibold">Live preview</h3>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Switch back to <span className="font-semibold">Live</span> and tell the
-          agent what to build — e.g. <em>&ldquo;build me a chat app with vite&rdquo;</em> or{" "}
-          <em>&ldquo;make a static landing page&rdquo;</em>. The preview pops up here once
-          the scaffold lands.
+          A preview shows up here once something is live.
         </p>
       </div>
     </div>

@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
-import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { SkillCard } from "@/components/SkillCard";
 import { SkillDetail } from "@/components/SkillDetail";
 import {
@@ -96,19 +95,11 @@ export default function SkillsPage() {
               full-width because there's no space to spare. Reload sits to the
               right as an icon-only ghost button, matching Memory's refresh. */}
           <div className="mx-auto w-full sm:max-w-2xl sm:pt-1">
-            <div className="relative flex-1">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search your skill library…"
-                className="pl-9"
-                inputMode="search"
-              />
-            </div>
+            <SearchInput
+              value={query}
+              onValueChange={setQuery}
+              placeholder="Search your skill library…"
+            />
           </div>
 
           <div className="space-y-3">
