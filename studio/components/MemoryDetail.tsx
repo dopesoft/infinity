@@ -1,10 +1,11 @@
 "use client";
 
-import { Calendar, Hash, History, X } from "lucide-react";
+import { Calendar, Hash, History, MousePointerSquareDashed, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TierBadge } from "@/components/TierBadge";
 import { ProvenanceChain } from "@/components/ProvenanceChain";
+import { EmptyState } from "@/components/EmptyState";
 import type { MemoryDTO, ObservationDTO, SearchResult } from "@/lib/api";
 
 type ItemKind = "memory" | "observation" | "search";
@@ -73,9 +74,11 @@ export function MemoryDetail({
 }) {
   if (!source) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select an item to inspect it.
-      </div>
+      <EmptyState
+        icon={MousePointerSquareDashed}
+        title="Pick something to inspect"
+        description="Tap a memory or observation in the list to see its full text, metadata, and the provenance chain that produced it."
+      />
     );
   }
   const item = fromAny(source);

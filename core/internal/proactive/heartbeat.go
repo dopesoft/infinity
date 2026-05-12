@@ -34,6 +34,13 @@ type Heartbeat struct {
 	mu      sync.Mutex
 	running bool
 	stop    chan struct{}
+
+	// onFinding fires for every finding emitted by a tick, after it's been
+	// persisted. The server wires this to broadcast notable findings to any
+	// active WS session as an unprompted assistant turn — the wire that
+	// turns the heartbeat from a silent background job into proactive
+	// behaviour. Nil-safe.
+	onFinding func(context.Context, Finding)
 }
 
 // Checklist is the function the heartbeat invokes each tick. It's expected to
@@ -64,6 +71,29 @@ func NewHeartbeat(p *pgxpool.Pool, interval time.Duration, checklist Checklist) 
 }
 
 func (h *Heartbeat) Interval() time.Duration { return h.interval }
+
+// SetOnFinding registers a callback invoked once per finding after the tick
+// persists it. Safe to call before Start.
+func (h *Heartbeat) SetOnFinding(fn func(context.Context, Finding)) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.onFinding = fn
+	h.mu.Unlock()
+}
+
+// callback reads the on-finding callback under the lock so concurrent
+// SetOnFinding calls don't race the tick goroutine.
+func (h *Heartbeat) callback() func(context.Context, Finding) {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	cb := h.onFinding
+	h.mu.Unlock()
+	return cb
+}
 
 // Start kicks off the ticker goroutine. Safe to call once. Use Stop to halt.
 func (h *Heartbeat) Start(ctx context.Context) {
@@ -138,6 +168,9 @@ func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
 				  (heartbeat_id, kind, title, detail, pre_approved)
 				VALUES ($1::uuid, $2, $3, $4, $5)
 			`, hbID, f.Kind, f.Title, f.Detail, f.PreApproved)
+			if cb := h.callback(); cb != nil {
+				cb(ctx, f)
+			}
 		}
 	}
 

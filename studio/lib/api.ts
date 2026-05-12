@@ -336,6 +336,33 @@ export async function deleteProfileFact(id: string): Promise<boolean> {
   }
 }
 
+// ---- Meta (lightweight key/value flags) ------------------------------------
+
+export async function getMeta(key: string): Promise<string | null> {
+  try {
+    const res = await authedFetch(`/api/meta?key=${encodeURIComponent(key)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    const body = (await res.json()) as { value?: string };
+    return body.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setMeta(key: string, value: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/meta`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ---- Voyager (auto-skill loop) ---------------------------------------------
 
 export type VoyagerStatusDTO = {

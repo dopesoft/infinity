@@ -239,6 +239,8 @@ func serveCmd() *cobra.Command {
 				heartbeat      *proactive.Heartbeat
 				trustStore     *proactive.TrustStore
 				proactiveAPI   *proactive.API
+				walStore       *proactive.WAL
+				workingBuf     *proactive.WorkingBuffer
 			)
 			if pool != nil {
 				intentDB = intent.NewStore(pool)
@@ -259,13 +261,21 @@ func serveCmd() *cobra.Command {
 						Model:    os.Getenv("INFINITY_INTENT_MODEL"),
 					})
 				}
+				/* WAL + WorkingBuffer are the durable substrates for
+				 * compaction-recovery and load-bearing-fragment capture.
+				 * Both are stateless pool wrappers — safe to share
+				 * across the WS handler and Studio API readers. */
+				walStore = proactive.NewWAL(pool)
+				workingBuf = proactive.NewWorkingBuffer(pool, 0)
 				proactiveAPI = proactive.NewAPI(pool, heartbeat, trustStore, intentDB)
-				fmt.Printf("  proactive: heartbeat every %s, intent=%v, trust=ready\n",
+				fmt.Printf("  proactive: heartbeat every %s, intent=%v, trust=ready, wal=on, buffer=on\n",
 					heartbeat.Interval(), intentDetector != nil)
 			}
-			_ = intentDetector // TODO: wire into the agent loop once the WS
-			// handler emits per-turn observations; the detector is already
-			// invocable for Studio's intent-stream panel via API.
+			/* IntentFlow is now wired into the WS turn handler — every
+			 * user message is classified async (Haiku JSON call),
+			 * persisted to mem_intent_decisions, and emitted as an
+			 * `intent` WS frame for Studio's IntentStream panel. The
+			 * detector is passed into server.Config below. */
 
 			// Cron scheduler + Sentinel manager. Both degrade gracefully when
 			// no DB pool is configured.
@@ -335,21 +345,26 @@ func serveCmd() *cobra.Command {
 			}
 
 			srv := server.New(server.Config{
-				Addr:         addr,
-				Version:      version,
-				Loop:         loop,
-				MCP:          mcp,
-				Pool:         pool,
-				Store:        store,
-				Searcher:     searcher,
-				SkillsAPI:    skillsAPI,
-				ProactiveAPI: proactiveAPI,
-				CronAPI:      cronAPI,
-				SentinelAPI:  sentinelAPI,
-				VoyagerAPI:   voyagerAPI,
-				Auth:         authVerifier,
-				Trust:        trustStore,
-				Namer:        sessionNamer,
+				Addr:           addr,
+				Version:        version,
+				Loop:           loop,
+				MCP:            mcp,
+				Pool:           pool,
+				Store:          store,
+				Searcher:       searcher,
+				SkillsAPI:      skillsAPI,
+				ProactiveAPI:   proactiveAPI,
+				CronAPI:        cronAPI,
+				SentinelAPI:    sentinelAPI,
+				VoyagerAPI:     voyagerAPI,
+				Auth:           authVerifier,
+				Trust:          trustStore,
+				Namer:          sessionNamer,
+				IntentDetector: intentDetector,
+				IntentStore:    intentDB,
+				WAL:            walStore,
+				WorkingBuffer:  workingBuf,
+				Heartbeat:      heartbeat,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

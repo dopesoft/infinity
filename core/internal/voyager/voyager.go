@@ -77,7 +77,12 @@ type Config struct {
 }
 
 func New(cfg Config) *Manager {
-	enabled := envTrue("INFINITY_VOYAGER")
+	/* Voyager is on by default — the substrate is mature enough that an
+	 * always-running discovery + extraction loop pays for itself in skill
+	 * candidates. Set INFINITY_VOYAGER=false (or 0/off/no) to disable
+	 * explicitly; everything else (unset, empty, anything truthy) treats
+	 * the loop as enabled. */
+	enabled := !envFalse("INFINITY_VOYAGER")
 	root := strings.TrimSpace(cfg.SkillsRoot)
 	if root == "" {
 		root = "./skills"
@@ -104,7 +109,7 @@ func (m *Manager) Status() string {
 		return "off"
 	}
 	if !m.enabled {
-		return "off (set INFINITY_VOYAGER=true to enable)"
+		return "off (INFINITY_VOYAGER=false)"
 	}
 	parts := []string{"on"}
 	if m.llm == nil {
@@ -326,6 +331,13 @@ func safeName(s string) string {
 func envTrue(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+// envFalse is the opt-out twin of envTrue. Used where the default should be
+// on and only an explicit false/0/no/off should disable.
+func envFalse(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "0" || v == "false" || v == "no" || v == "off"
 }
 
 func itoa(i int) string {

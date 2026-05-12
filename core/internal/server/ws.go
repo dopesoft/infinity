@@ -44,6 +44,14 @@ type wsServerEvent struct {
 	// (used by the studio transcript to render the "↳ steered" badge on
 	// reconstructed bubbles). Empty by default.
 	Steered bool `json:"steered,omitempty"`
+	// Intent carries the per-turn IntentFlow classification. Only present
+	// on type="intent" frames. Studio's IntentStream panel reads this
+	// directly; the chat transcript ignores it.
+	Intent *wsIntent `json:"intent,omitempty"`
+	// FindingKind is set on type="proactive_message" frames so Studio can
+	// render an icon + tone consistent with the Heartbeat tab — e.g.
+	// "surprise" gets a lightbulb, "security" gets a shield.
+	FindingKind string `json:"finding_kind,omitempty"`
 }
 
 type wsToolEvent struct {
@@ -145,6 +153,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	/* activeSessionID tracks the last session this connection hydrated, so
+	 * we can unregister the right key on disconnect. Most browsers send the
+	 * same sessionID for the lifetime of the tab; tab-swap pairs an unregister
+	 * with a register on the next message. */
+	var activeSessionID string
+	defer func() {
+		if activeSessionID != "" {
+			s.unregisterSession(activeSessionID, send)
+		}
+	}()
+
 	for {
 		var msg wsClientMessage
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -177,12 +196,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// If no turn is in flight, fall through to start a normal
 			// turn so the client doesn't have to distinguish.
 			if s.steerTurn(msg.SessionID, msg.Content, send) {
+				/* WAL the steer too — corrections often arrive as
+				 * mid-turn nudges and we need them on the durable
+				 * SESSION-STATE log just like a first message. */
+				s.appendWAL(connCtx, msg.SessionID, msg.Content)
 				continue
 			}
 			sessionID := msg.SessionID
 			if sessionID == "" {
 				sessionID = uuid.NewString()
 			}
+			if sessionID != activeSessionID {
+				if activeSessionID != "" {
+					s.unregisterSession(activeSessionID, send)
+				}
+				activeSessionID = sessionID
+				s.registerSession(sessionID, send)
+			}
+			s.appendWAL(connCtx, sessionID, msg.Content)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
 			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
 			continue
@@ -191,6 +223,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if sessionID == "" {
 				sessionID = uuid.NewString()
 			}
+			/* Register this connection under the session so the heartbeat
+			 * broadcaster can target it on a proactive surface. Safe to
+			 * call repeatedly — the latest send func wins. */
+			if sessionID != activeSessionID {
+				if activeSessionID != "" {
+					s.unregisterSession(activeSessionID, send)
+				}
+				activeSessionID = sessionID
+				s.registerSession(sessionID, send)
+			}
+			/* WAL: extract corrections / preferences / dates / decisions
+			 * from the user message and persist to mem_session_state. Runs
+			 * synchronously — regex over the message string only, no LLM. */
+			s.appendWAL(connCtx, sessionID, msg.Content)
+			/* IntentFlow: classify this turn in the background. The agent
+			 * loop always runs regardless of the decision; the decision is
+			 * recorded for analytics and emitted as an `intent` frame so
+			 * Studio's IntentStream panel updates live. */
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types — the
@@ -337,9 +388,17 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 		close(events)
 	}()
 
+	/* Accumulate the assistant's streamed text so on EventComplete we can
+	 * write the full user/assistant pair into the WorkingBuffer when the
+	 * context window is past threshold. We only need text deltas — tool
+	 * calls aren't mirrored into the buffer (they'd churn it on every
+	 * iteration without adding recoverable content). */
+	var assistantText strings.Builder
+
 	for ev := range events {
 		switch ev.Kind {
 		case agent.EventDelta:
+			assistantText.WriteString(ev.TextDelta)
 			send(wsServerEvent{Type: "delta", SessionID: ev.SessionID, Text: ev.TextDelta})
 		case agent.EventThinking:
 			send(wsServerEvent{Type: "thinking", SessionID: ev.SessionID, Text: ev.ThinkingDelta})
@@ -391,6 +450,17 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 				Usage:      usage,
 				StopReason: ev.StopReason,
 			})
+			/* Mirror this exchange into mem_working_buffer iff the
+			 * model's context window crossed the proactive threshold
+			 * (default 0.6 of max). Heuristic ctx_max — provider
+			 * interface doesn't expose context window, so we infer
+			 * from the model id. Fail-open: any error here is silent
+			 * because the turn already succeeded. */
+			usedTokens := 0
+			if ev.Usage != nil {
+				usedTokens = ev.Usage.Input + ev.Usage.Output
+			}
+			s.captureWorkingBuffer(ctx, ev.SessionID, content, assistantText.String(), usedTokens)
 		case agent.EventError:
 			send(wsServerEvent{Type: "error", SessionID: ev.SessionID, Message: ev.Error})
 		}

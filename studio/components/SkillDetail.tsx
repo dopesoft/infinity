@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Hash, Play, RefreshCw, X } from "lucide-react";
+import { Clock, Hash, MousePointerSquareDashed, Play, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RiskBadge } from "@/components/RiskBadge";
+import { EmptyState } from "@/components/EmptyState";
 import {
   fetchSkill,
   fetchSkillRuns,
@@ -43,9 +44,11 @@ export function SkillDetail({
 
   if (!selected) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a skill to inspect it.
-      </div>
+      <EmptyState
+        icon={MousePointerSquareDashed}
+        title="Pick a skill to inspect"
+        description="Select a skill from the list to see its prompt, recent runs, and the trigger arguments it accepts. You can also invoke it from here."
+      />
     );
   }
 

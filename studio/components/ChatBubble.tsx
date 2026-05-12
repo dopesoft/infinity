@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, CornerDownRight, Copy, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
+import { Check, CornerDownRight, Copy, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -159,8 +159,25 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
         </div>
       ) : (
         // Agent bubble — a touch darker than the surrounding muted column
-        // bg so it reads as a distinct surface in both modes.
-        <div className="max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80">
+        // bg so it reads as a distinct surface in both modes. Proactive
+        // bubbles (heartbeat-initiated) get a subtle accent border + an
+        // origin badge so the boss can tell the agent spoke first.
+        <div
+          className={cn(
+            "max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
+            message.proactive && "border border-info/40",
+          )}
+        >
+          {message.proactive && (
+            <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-info">
+              <Sparkles className="size-3" />
+              <span>
+                {message.proactiveKind
+                  ? `heartbeat · ${message.proactiveKind}`
+                  : "heartbeat"}
+              </span>
+            </div>
+          )}
           <div className="whitespace-pre-wrap break-words">
             {message.text}
             {message.pending && (

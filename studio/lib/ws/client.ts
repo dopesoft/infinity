@@ -32,7 +32,24 @@ export type WSEvent =
   // the input that was injected into a running turn is visible everywhere.
   // The originating tab already rendered it optimistically and ignores
   // the echo via a duplicate-id check.
-  | { type: "steer_received"; session_id: string; text: string };
+  | { type: "steer_received"; session_id: string; text: string }
+  // intent carries the per-turn IntentFlow classification. Emitted async
+  // after the WS handler kicks off classification — arrives mid-turn or
+  // after `complete` depending on Haiku latency. The IntentStream panel
+  // consumes it; the chat transcript ignores it.
+  | { type: "intent"; session_id: string; intent: WSIntent }
+  // proactive_message is an unprompted assistant turn — broadcast by the
+  // heartbeat when a finding crosses the surface threshold (surprise,
+  // curiosity, security, or any pre-approved finding). useChat renders
+  // these as regular assistant bubbles with a subtle origin badge.
+  | { type: "proactive_message"; session_id: string; text: string; finding_kind?: string };
+
+export type WSIntent = {
+  token: "silent" | "fast_intervention" | "full_assistance";
+  confidence: number;
+  reason?: string;
+  suggested_action?: string;
+};
 
 export type WSToolEvent = {
   id: string;

@@ -9,6 +9,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
+	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
@@ -53,6 +54,18 @@ type Config struct {
 	// exchange. Nil-safe: the rename endpoint just returns 503 when
 	// unconfigured.
 	Namer *sessions.Namer
+	// Proactive subsystems wired into the live turn lifecycle. All nil-safe:
+	// any nil field disables that capability without breaking chat. Together
+	// these turn the agent from reactive (only replies when spoken to) into
+	// proactive (classifies intent per turn, captures load-bearing fragments
+	// to durable WAL, mirrors high-context conversations into a recoverable
+	// buffer, and broadcasts heartbeat findings as unprompted assistant
+	// turns on any active WS session).
+	IntentDetector *intent.Detector
+	IntentStore    *intent.Store
+	WAL            *proactive.WAL
+	WorkingBuffer  *proactive.WorkingBuffer
+	Heartbeat      *proactive.Heartbeat
 }
 
 type Server struct {
@@ -70,11 +83,25 @@ type Server struct {
 	settings  *settings.Store
 	started   time.Time
 
+	intentDet *intent.Detector
+	intentDB  *intent.Store
+	wal       *proactive.WAL
+	buffer    *proactive.WorkingBuffer
+	heartbeat *proactive.Heartbeat
+
 	// turnsMu guards the per-session in-flight turn registry. Lookups
 	// happen on every WS frame so we keep the critical sections trivial
 	// (map ops only) and never hold the lock across send() or cancel().
 	turnsMu sync.Mutex
 	turns   map[string]*turnState
+
+	// activeMu guards activeSessions. Distinct from turnsMu because a
+	// session can be "active" (WS connected) without a turn in flight —
+	// that's exactly when we want to push unprompted assistant messages
+	// from the heartbeat. Map value is the send func bound to the WS
+	// writer goroutine; calling it pushes a frame to that browser tab.
+	activeMu       sync.Mutex
+	activeSessions map[string]func(wsServerEvent)
 }
 
 func New(cfg Config) *Server {
@@ -82,19 +109,28 @@ func New(cfg Config) *Server {
 		cfg.Addr = ":8080"
 	}
 	s := &Server{
-		cfg:       cfg,
-		loop:      cfg.Loop,
-		mcp:       cfg.MCP,
-		pool:      cfg.Pool,
-		store:     cfg.Store,
-		searcher:  cfg.Searcher,
-		skillsAPI: cfg.SkillsAPI,
-		trust:     cfg.Trust,
-		namer:     cfg.Namer,
-		auth:      cfg.Auth,
-		settings:  settings.New(cfg.Pool),
-		started:   time.Now(),
-		turns:     make(map[string]*turnState),
+		cfg:            cfg,
+		loop:           cfg.Loop,
+		mcp:            cfg.MCP,
+		pool:           cfg.Pool,
+		store:          cfg.Store,
+		searcher:       cfg.Searcher,
+		skillsAPI:      cfg.SkillsAPI,
+		trust:          cfg.Trust,
+		namer:          cfg.Namer,
+		auth:           cfg.Auth,
+		settings:       settings.New(cfg.Pool),
+		started:        time.Now(),
+		turns:          make(map[string]*turnState),
+		intentDet:      cfg.IntentDetector,
+		intentDB:       cfg.IntentStore,
+		wal:            cfg.WAL,
+		buffer:         cfg.WorkingBuffer,
+		heartbeat:      cfg.Heartbeat,
+		activeSessions: make(map[string]func(wsServerEvent)),
+	}
+	if s.heartbeat != nil {
+		s.heartbeat.SetOnFinding(s.onHeartbeatFinding)
 	}
 
 	mux := http.NewServeMux()
@@ -167,6 +203,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/active", s.handleCanvasProjectActive)
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
 	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
+	mux.HandleFunc("/api/meta", s.handleMeta)
 }
 
 func (s *Server) Start() error {

@@ -30,6 +30,12 @@ export type ChatMessage = {
   // user pressed Stop mid-stream. The partial text streamed is preserved;
   // the UI surfaces a "↩ interrupted" hint rather than an error state.
   interrupted?: boolean;
+  // proactive=true marks an assistant bubble that originated from the
+  // heartbeat broadcaster (an unprompted turn), not from a user message.
+  // Studio renders a subtle origin badge so the boss can tell the agent
+  // spoke first.
+  proactive?: boolean;
+  proactiveKind?: string;
 };
 
 type Usage = { input: number; output: number };
@@ -391,6 +397,33 @@ export function useChat() {
           break;
         case "pong":
           break;
+        case "intent": {
+          /* IntentFlow classification — consumed by the IntentStream panel
+           * via its own /api/intent fetch path, not the chat transcript.
+           * Acknowledged here so the WSEvent switch is exhaustive and
+           * future TS strictness doesn't blow up. */
+          break;
+        }
+        case "proactive_message": {
+          /* Unprompted assistant turn pushed by the heartbeat. Render it
+           * as a regular assistant bubble so the transcript reads
+           * naturally — the `proactive` flag lets the bubble surface a
+           * subtle origin badge ("heartbeat: surprise", etc.) without
+           * altering the conversation flow. */
+          clearWatchdog();
+          setMessages((prev) => [
+            ...closePendingThinking(prev),
+            {
+              id: makeId(),
+              role: "assistant",
+              text: ev.text,
+              proactive: true,
+              proactiveKind: ev.finding_kind,
+              createdAt: Date.now(),
+            },
+          ]);
+          break;
+        }
       }
     });
   }, [ws, sessionId, armWatchdog, clearWatchdog]);

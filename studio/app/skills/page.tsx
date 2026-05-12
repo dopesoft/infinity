@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, SearchX, Wand2 } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
 import { SkillCard } from "@/components/SkillCard";
 import { SkillDetail } from "@/components/SkillDetail";
 import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
+import { EmptyState } from "@/components/EmptyState";
 import {
   PageTabs,
   PageTabsList,
@@ -184,15 +185,34 @@ export default function SkillsPage() {
               count={filtered.length}
               className="px-3 pb-1 pt-3"
             />
-            <div className="flex flex-col gap-2 px-3 pb-4">
+            <div className="flex flex-1 flex-col gap-2 px-3 pb-4">
               {filtered.length === 0 ? (
-                <p className="px-1 text-sm text-muted-foreground">
-                  {loading
-                    ? "Loading…"
-                    : query || statusFilter !== "active" || riskFilter !== "all"
-                      ? "No matches."
-                      : "No skills installed. Drop a skill folder into ./skills/ on Core and reload."}
-                </p>
+                loading ? (
+                  <p className="px-1 text-sm text-muted-foreground">Loading…</p>
+                ) : query || statusFilter !== "active" || riskFilter !== "all" ? (
+                  <EmptyState
+                    icon={SearchX}
+                    title="No matching skills"
+                    description={
+                      query
+                        ? "Nothing in your library matches that search under the current filters. Try widening the status or risk."
+                        : "No skills match the current filters. Reset status or risk to see more."
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    icon={Wand2}
+                    title="No skills installed"
+                    description={
+                      <>
+                        Drop a skill folder into{" "}
+                        <code className="rounded bg-muted px-1 font-mono text-[10px]">./skills/</code>{" "}
+                        on Core and reload, or wait for Voyager to propose one from your sessions —
+                        candidates appear in the rail to the left.
+                      </>
+                    }
+                  />
+                )
               ) : (
                 filtered.map((s) => (
                   <SkillCard

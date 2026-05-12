@@ -4,6 +4,7 @@ import { AuthProvider } from "@/lib/auth/session";
 import { NavBadgesProvider } from "@/lib/nav-badges";
 import { RealtimeProvider } from "@/lib/realtime/provider";
 import { WebSocketProvider } from "@/lib/ws/provider";
+import { OnboardingGate } from "@/components/OnboardingGate";
 import { TrustToast } from "@/components/TrustToast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
@@ -61,7 +62,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <WebSocketProvider>
                 <TooltipProvider delayDuration={250}>
                   <TrustToast />
-                  {children}
+                  <OnboardingGate>{children}</OnboardingGate>
                 </TooltipProvider>
               </WebSocketProvider>
             </NavBadgesProvider>

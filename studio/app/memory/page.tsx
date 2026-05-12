@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Brain, Eye, Search, SearchX } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { SearchInput } from "@/components/ui/search-input";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/EmptyState";
 import {
   PageTabs,
   PageTabsList,
@@ -262,17 +263,40 @@ export default function MemoryPage() {
               count={filteredCount}
               className="px-3 pb-1 pt-3"
             />
-            <div className="flex flex-col gap-2 px-3 pb-4">
+            <div className="flex flex-1 flex-col gap-2 px-3 pb-4">
               {items.length === 0 ? (
-                <p className="px-1 text-sm text-muted-foreground">
-                  {loading
-                    ? "Loading…"
-                    : query
-                      ? "No results."
-                      : view === "memories"
-                        ? "No memories yet."
-                        : "No observations yet — open Live and chat with Infinity."}
-                </p>
+                loading ? (
+                  <p className="px-1 text-sm text-muted-foreground">Loading…</p>
+                ) : query ? (
+                  <EmptyState
+                    icon={SearchX}
+                    title="No matches"
+                    description={
+                      <>
+                        Nothing in {view} matches{" "}
+                        <code className="rounded bg-muted px-1 font-mono text-[10px]">{query}</code>.
+                        Try a broader phrase or switch tiers.
+                      </>
+                    }
+                  />
+                ) : view === "memories" ? (
+                  <EmptyState
+                    icon={Brain}
+                    title="No memories yet"
+                    description="Memories form as Infinity compresses what it's observed about you. Keep chatting in Live and they'll start landing here."
+                  />
+                ) : (
+                  <EmptyState
+                    icon={Eye}
+                    title="Nothing observed yet"
+                    description={
+                      <>
+                        Every message, tool call, and decision in <span className="font-medium text-foreground">Live</span>{" "}
+                        is captured here first. Start a conversation to seed the stream.
+                      </>
+                    }
+                  />
+                )
               ) : (
                 items.map((it, i) => (
                   <MemoryCard
