@@ -26,6 +26,9 @@ export function BossProfilePanel() {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState({ title: "", content: "", importance: 8 });
   const [collapsed, setCollapsed] = useState<boolean | null>(null);
+  // Per-row expand state — tap the body to flip line-clamp off and read
+  // the full fact without yanking the user into a separate detail view.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setCollapsed(window.matchMedia("(min-width: 1024px)").matches ? false : true);
@@ -197,36 +200,55 @@ export function BossProfilePanel() {
           </p>
         ) : (
           <ul className="space-y-1.5">
-            {facts.map((f) => (
-              <li
-                key={f.id}
-                className="flex items-start justify-between gap-1 rounded-md border bg-background/40 py-1.5 pl-2.5 pr-1"
-              >
-                <div className="min-w-0 flex-1 py-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-sm font-medium text-foreground lg:text-xs">
-                      {f.title}
-                    </span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      i{f.importance}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 line-clamp-3 text-xs leading-snug text-muted-foreground lg:text-[11px]">
-                    {f.content}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-11 shrink-0 lg:size-8"
-                  onClick={() => remove(f.id)}
-                  aria-label={`Delete ${f.title}`}
+            {facts.map((f) => {
+              const isExpanded = !!expanded[f.id];
+              return (
+                <li
+                  key={f.id}
+                  className="flex items-start justify-between gap-1 rounded-md border bg-background/40 py-1.5 pl-2.5 pr-1"
                 >
-                  <Trash2 className="size-4" />
-                </Button>
-              </li>
-            ))}
+                  <button
+                    type="button"
+                    onClick={() => setExpanded((m) => ({ ...m, [f.id]: !m[f.id] }))}
+                    className="min-w-0 flex-1 cursor-pointer py-1 text-left"
+                    aria-expanded={isExpanded}
+                    aria-label={`${isExpanded ? "Collapse" : "Expand"} ${f.title}`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={cn(
+                          "text-sm font-medium text-foreground lg:text-xs",
+                          isExpanded ? "break-words" : "truncate",
+                        )}
+                      >
+                        {f.title}
+                      </span>
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        i{f.importance}
+                      </span>
+                    </div>
+                    <p
+                      className={cn(
+                        "mt-0.5 text-xs leading-snug text-muted-foreground lg:text-[11px]",
+                        isExpanded ? "whitespace-pre-wrap break-words" : "line-clamp-3",
+                      )}
+                    >
+                      {f.content}
+                    </p>
+                  </button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-11 shrink-0 lg:size-8"
+                    onClick={() => remove(f.id)}
+                    aria-label={`Delete ${f.title}`}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

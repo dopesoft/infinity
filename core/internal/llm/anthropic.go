@@ -77,11 +77,21 @@ func (a *Anthropic) Draft(ctx context.Context, model, system, userPrompt string,
 
 func (a *Anthropic) Stream(
 	ctx context.Context,
+	model string,
 	system string,
 	messages []Message,
 	tools []ToolDef,
 	out chan<- StreamEvent,
 ) (Response, error) {
+	// Per-call model override (studio model chip). Falls back to the
+	// boot-time default when unset. We don't validate the string here —
+	// the Anthropic API surfaces a 404 / invalid-model error if the
+	// client requests something unrecognized, which the WS error path
+	// already plumbs back to the user.
+	effectiveModel := a.model
+	if model != "" {
+		effectiveModel = model
+	}
 	apiMessages := make([]anthropic.MessageParam, 0, len(messages))
 	for _, m := range messages {
 		switch m.Role {
@@ -125,7 +135,7 @@ func (a *Anthropic) Stream(
 		maxTokens = a.thinkingBudget + 1024
 	}
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(a.model),
+		Model:     anthropic.Model(effectiveModel),
 		MaxTokens: maxTokens,
 		Messages:  apiMessages,
 	}

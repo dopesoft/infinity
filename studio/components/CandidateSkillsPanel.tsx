@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Zap, Check, ChevronDown, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useRealtime } from "@/lib/realtime/provider";
 import { cn } from "@/lib/utils";
 import {
   decideSkillProposal,
@@ -28,6 +29,9 @@ export function CandidateSkillsPanel() {
   const [status, setStatus] = useState<VoyagerStatusDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // Per-proposal description expand state. Click the description to read
+  // the full text without it being clamped at 2-3 lines.
+  const [descOpen, setDescOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [collapsed, setCollapsed] = useState<boolean | null>(null);
 
@@ -46,6 +50,11 @@ export function CandidateSkillsPanel() {
   useEffect(() => {
     load();
   }, []);
+
+  // Auto-refresh when Voyager or the agent (via skill_propose / skill_optimize
+  // tools) inserts new candidates. mem_skill_proposals is broadcast on the
+  // Supabase realtime channel set up in migration 008_realtime.
+  useRealtime("mem_skill_proposals", load);
 
   async function decide(id: string, decision: "promoted" | "rejected") {
     setBusy((b) => ({ ...b, [id]: true }));
@@ -190,9 +199,20 @@ export function CandidateSkillsPanel() {
                         {p.risk_level}
                       </span>
                     </div>
-                    <p className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground lg:line-clamp-2 lg:text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setDescOpen((m) => ({ ...m, [p.id]: !m[p.id] }))}
+                      className={cn(
+                        "mt-1 block w-full cursor-pointer text-left text-xs leading-snug text-muted-foreground lg:text-[11px]",
+                        descOpen[p.id]
+                          ? "whitespace-pre-wrap break-words"
+                          : "line-clamp-3 lg:line-clamp-2",
+                      )}
+                      aria-expanded={!!descOpen[p.id]}
+                      aria-label={descOpen[p.id] ? "Collapse description" : "Expand description"}
+                    >
                       {p.description}
-                    </p>
+                    </button>
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <Button

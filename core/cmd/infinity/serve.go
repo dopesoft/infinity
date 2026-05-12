@@ -93,6 +93,7 @@ func serveCmd() *cobra.Command {
 					hooks.RegisterDefaults(pipeline, p, store, embedder, compressor)
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
+					tools.RegisterSkillTools(registry, p)
 
 					fmt.Printf("  memory: enabled (embedder=%s, compressor=%v)\n", embedder.Name(), compressor != nil)
 				}

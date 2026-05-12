@@ -71,8 +71,15 @@ const (
 
 type Provider interface {
 	Name() string
+	// Model returns the provider's default model id (the one configured
+	// at boot via LLM_MODEL). Callers that want a per-call override pass
+	// it as the `model` arg to Stream.
 	Model() string
-	Stream(ctx context.Context, system string, messages []Message, tools []ToolDef, out chan<- StreamEvent) (Response, error)
+	// Stream runs one turn. `model` is an optional per-call override —
+	// empty string falls back to the provider's default. This is how the
+	// studio's model chip switches between Sonnet / Opus / Haiku on a
+	// per-turn basis without restarting Core.
+	Stream(ctx context.Context, model, system string, messages []Message, tools []ToolDef, out chan<- StreamEvent) (Response, error)
 }
 
 var ErrNotImplemented = errors.New("provider not implemented")

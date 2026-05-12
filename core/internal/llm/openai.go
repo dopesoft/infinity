@@ -30,11 +30,16 @@ func (o *OpenAI) Model() string { return o.model }
 
 func (o *OpenAI) Stream(
 	ctx context.Context,
+	model string,
 	system string,
 	messages []Message,
 	tools []ToolDef,
 	out chan<- StreamEvent,
 ) (Response, error) {
+	effectiveModel := o.model
+	if model != "" {
+		effectiveModel = model
+	}
 	apiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1)
 	if system != "" {
 		apiMessages = append(apiMessages, openai.SystemMessage(system))
@@ -80,7 +85,7 @@ func (o *OpenAI) Stream(
 	}
 
 	params := openai.ChatCompletionNewParams{
-		Model:    openai.ChatModel(o.model),
+		Model:    openai.ChatModel(effectiveModel),
 		Messages: apiMessages,
 	}
 	if len(apiTools) > 0 {

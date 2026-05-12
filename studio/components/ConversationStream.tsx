@@ -6,7 +6,10 @@ import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
+import { SkillProposalCard } from "@/components/SkillProposalCard";
 import type { ChatMessage } from "@/hooks/useChat";
+
+const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
 
 export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -77,14 +80,26 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
         {messages.map((m) => (
           <div key={m.id}>
             {m.role === "tool" ? (
-              // ToolCallCard wraps to a left-anchored 50% so it doesn't pretend
-              // to be the conversation. Same width as ThinkingBlock for visual
-              // rhythm — both are "system" feedback, not chat.
-              <div className="flex justify-start">
-                <div className="w-full sm:w-1/2">
-                  <ToolCallCard message={m} />
+              // Skill-pipeline tool calls (skill_propose, skill_optimize)
+              // render as a rich proposal card so "new skill proposed" is
+              // glanceable. Everything else falls back to the generic
+              // tool-call card.
+              SKILL_TOOL_NAMES.has(m.toolCall?.name ?? "") ? (
+                <div className="flex justify-start">
+                  <div className="w-full sm:w-3/4">
+                    <SkillProposalCard message={m} />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                // ToolCallCard wraps to a left-anchored 50% so it doesn't pretend
+                // to be the conversation. Same width as ThinkingBlock for visual
+                // rhythm — both are "system" feedback, not chat.
+                <div className="flex justify-start">
+                  <div className="w-full sm:w-1/2">
+                    <ToolCallCard message={m} />
+                  </div>
+                </div>
+              )
             ) : m.role === "thinking" ? (
               <div className="flex justify-start">
                 <div className="w-full sm:w-1/2">

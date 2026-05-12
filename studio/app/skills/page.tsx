@@ -5,6 +5,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { SearchInput } from "@/components/ui/search-input";
 import { SkillCard } from "@/components/SkillCard";
 import { SkillDetail } from "@/components/SkillDetail";
+import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
 import {
   PageTabs,
   PageTabsList,
@@ -143,6 +144,19 @@ export default function SkillsPage() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          {/* Candidate rail — Voyager-proposed skills awaiting a decision.
+              Lives here (not in /memory) because the mental model is "the
+              skill library and its pipeline" — candidates are upstream
+              registry entries. Hidden on mobile while a skill detail is
+              open so the list/detail switcheroo isn't crowded. */}
+          <aside
+            className={cn(
+              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto border-b bg-background px-3 py-3 scroll-touch lg:w-72 lg:border-b-0 lg:border-r",
+              showDetail ? "hidden lg:block" : "block",
+            )}
+          >
+            <CandidateSkillsPanel />
+          </aside>
           <aside
             className={cn(
               "min-h-0 flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r",

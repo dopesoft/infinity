@@ -17,7 +17,6 @@ import { MetricCard } from "@/components/MetricCard";
 import { MemoryCard } from "@/components/MemoryCard";
 import { MemoryDetail } from "@/components/MemoryDetail";
 import { BossProfilePanel } from "@/components/BossProfilePanel";
-import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
 import { KnowledgeGraphPanel } from "@/components/KnowledgeGraphPanel";
 import { useRealtime } from "@/lib/realtime/provider";
 import { cn } from "@/lib/utils";
@@ -243,7 +242,6 @@ export default function MemoryPage() {
               )}
             >
               <BossProfilePanel />
-              <CandidateSkillsPanel />
             </aside>
           )}
 
