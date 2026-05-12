@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
+import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
 import { SkillCard } from "@/components/SkillCard";
 import { SkillDetail } from "@/components/SkillDetail";
@@ -95,13 +97,27 @@ export default function SkillsPage() {
               the Memory tab so the two read as the same family. Mobile stays
               full-width because there's no space to spare. Reload sits to the
               right as an icon-only ghost button, matching Memory's refresh. */}
-          <div className="mx-auto w-full sm:max-w-2xl sm:pt-1">
-            <SearchInput
-              value={query}
-              onValueChange={setQuery}
-              placeholder="Search your skill library…"
-            />
-          </div>
+          <form
+            onSubmit={(e) => e.preventDefault()}
+            className="mx-auto flex w-full items-center gap-2 sm:max-w-2xl sm:pt-1"
+          >
+            <div className="flex-1">
+              <SearchInput
+                value={query}
+                onValueChange={setQuery}
+                placeholder="Search your skill library…"
+              />
+            </div>
+            <Button
+              type="submit"
+              aria-label="Search"
+              title="Search"
+              className="h-9 w-9 shrink-0 bg-transparent px-0 text-foreground hover:bg-accent hover:text-foreground sm:w-auto sm:gap-1.5 sm:bg-primary sm:px-4 sm:text-primary-foreground sm:hover:bg-primary/90"
+            >
+              <Search className="size-4 sm:hidden" aria-hidden />
+              <span className="hidden sm:inline">Search</span>
+            </Button>
+          </form>
 
           <div className="space-y-3">
             <PageTabs

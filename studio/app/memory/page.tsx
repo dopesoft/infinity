@@ -165,7 +165,7 @@ export default function MemoryPage() {
             >
               <Search className="size-4 sm:hidden" aria-hidden />
               <span className="hidden sm:inline">
-                {searching ? "…" : "search"}
+                {searching ? "…" : "Search"}
               </span>
             </Button>
           </form>
