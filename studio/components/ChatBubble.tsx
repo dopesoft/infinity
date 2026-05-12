@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Copy, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, CornerDownRight, Copy, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -55,9 +55,9 @@ function writeFeedback(map: FeedbackMap) {
 }
 
 export function ChatBubble({ message }: { message: ChatMessage }) {
-  if (message.role === "tool" || message.role === "thinking") return null;
-  const isUser = message.role === "user";
-
+  // All hooks must run on every render, so early returns live below them.
+  // The "tool"/"thinking" branch renders nothing but still pays for hook
+  // setup — that's the cost of holding the rules-of-hooks invariant.
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | undefined>(undefined);
   const [now, setNow] = useState(0);
@@ -74,6 +74,9 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
+
+  if (message.role === "tool" || message.role === "thinking") return null;
+  const isUser = message.role === "user";
 
   if (message.error) {
     return (
@@ -125,12 +128,34 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
       {isUser ? (
         // User messages render as plain right-aligned text (no bubble) so
         // the eye reads them as "input"; the agent's responses get the
-        // visible surface treatment.
-        <div className="max-w-[88%] whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground sm:max-w-[78%]">
-          {message.text}
-          {message.pending && (
-            <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
+        // visible surface treatment. Steered messages get a small left
+        // accent + label so the transcript shows that they were typed
+        // mid-turn (and routed through the steer channel, not as a fresh
+        // top-of-turn prompt).
+        // No-bubble user message: text reads naturally left-to-right but
+        // the whole block hugs the column's right edge. max-w-[85%] gives
+        // long messages more room to breathe than the old 78% (so they
+        // don't wrap prematurely) while keeping the wrap point tight
+        // enough that the left edge of multi-line text doesn't drift far
+        // off-axis from where the eye expects "user content" to live.
+        <div className="max-w-[85%] sm:max-w-[80%]">
+          {message.steered && (
+            <div className="flex items-center justify-end gap-1 pb-0.5 text-[10px] uppercase tracking-wide text-info">
+              <CornerDownRight className="size-3" />
+              <span>steered mid-turn</span>
+            </div>
           )}
+          <div
+            className={cn(
+              "whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground",
+              message.steered && "border-r-2 border-info/60 pr-2",
+            )}
+          >
+            {message.text}
+            {message.pending && (
+              <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
+            )}
+          </div>
         </div>
       ) : (
         // Agent bubble — a touch darker than the surrounding muted column
@@ -142,6 +167,12 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
               <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
             )}
           </div>
+          {message.interrupted && (
+            <div className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-danger/80">
+              <Undo2 className="size-3" />
+              <span>{message.text ? "interrupted" : "stopped before reply"}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -151,8 +182,12 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
       {!message.pending && (
         <div
           className={cn(
-            "flex w-full items-center gap-1 px-1 text-[11px] text-muted-foreground",
-            isUser ? "justify-end" : "justify-start",
+            "flex w-full items-center gap-1 text-[11px] text-muted-foreground",
+            // Right-flush on user rows so the timestamp lines up with the
+            // user's message text (which sits at the column's right edge
+            // because there's no bubble). Agent row keeps its small left
+            // inset since the bubble already provides visual padding.
+            isUser ? "justify-end pl-1 pr-0" : "justify-start pl-1 pr-1",
           )}
         >
           <span suppressHydrationWarning>{formatTime(message.createdAt, now)}</span>

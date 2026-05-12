@@ -40,6 +40,10 @@ type wsServerEvent struct {
 	Message    string         `json:"message,omitempty"`
 	ToolCall   *wsToolEvent   `json:"tool_call,omitempty"`
 	ToolResult *wsToolEvent   `json:"tool_result,omitempty"`
+	// Steered marks a delta/complete that resulted from a mid-turn steer
+	// (used by the studio transcript to render the "↳ steered" badge on
+	// reconstructed bubbles). Empty by default.
+	Steered bool `json:"steered,omitempty"`
 }
 
 type wsToolEvent struct {
@@ -104,7 +108,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	_ = userID // available for future per-message authz; carried via context below
+
+	// connCtx is the lifetime of this WebSocket. Every turn started from
+	// this connection inherits it so a disconnect (browser close, network
+	// flap, reconnect) tears down all in-flight turns from this socket.
+	// The turn loop itself observes ctx.Done() and emits a clean
+	// `complete{stop_reason: "interrupted"}` rather than a bare error.
+	connCtx, cancelConn := context.WithCancel(r.Context())
+	defer cancelConn()
 
 	conn.SetReadLimit(1 << 20)
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -152,34 +163,167 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.loop.ClearSession(msg.SessionID)
 			send(wsServerEvent{Type: "cleared", SessionID: msg.SessionID})
 			continue
+		case "interrupt":
+			// Cancel any in-flight turn for this session. The turn's
+			// runTurn goroutine will emit `complete{stop_reason:
+			// "interrupted"}` once the LLM stream unwinds, so the
+			// client sees a clean turn end (not an error).
+			s.interruptTurn(msg.SessionID)
+			continue
+		case "steer":
+			// Mid-turn user input. If a turn is in flight for this
+			// session, the agent loop drains the steer channel between
+			// iterations and appends the message as a fresh user turn.
+			// If no turn is in flight, fall through to start a normal
+			// turn so the client doesn't have to distinguish.
+			if s.steerTurn(msg.SessionID, msg.Content, send) {
+				continue
+			}
+			sessionID := msg.SessionID
+			if sessionID == "" {
+				sessionID = uuid.NewString()
+			}
+			s.hydrateLoopSession(r, sessionID)
+			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
+			continue
 		case "message":
 			sessionID := msg.SessionID
 			if sessionID == "" {
 				sessionID = uuid.NewString()
 			}
-			// If this WS connection is the first time we're seeing this
-			// session_id since startup (e.g. after a browser refresh or core
-			// restart), preload prior turns from mem_observations so the
-			// model sees the same conversation the user does.
+			// Auto-route to steer when a turn is already running for
+			// this session. This lets the studio compose+send while
+			// streaming without having to switch message types — the
+			// server figures it out.
+			if s.steerTurn(sessionID, msg.Content, send) {
+				continue
+			}
+			// First message for this session since startup (or after
+			// the agent restarted): preload prior turns from
+			// mem_observations so the model sees the same conversation
+			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			turnCtx := context.WithValue(r.Context(), auth.ContextKey{}, userID)
-			s.runTurn(turnCtx, sessionID, msg.Content, send)
+			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
 	}
 }
 
-func (s *Server) runTurn(ctx context.Context, sessionID, content string, send func(wsServerEvent)) {
-	turnCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
+// startTurn spawns a goroutine running one agent turn. It registers a
+// cancel + steer channel in s.turns keyed by sessionID so subsequent WS
+// frames can route to this turn (interrupt or steer) without blocking the
+// reader. The goroutine's cleanup deregisters itself only if it's still
+// the active state, preserving correctness across a cancel-then-new-turn
+// sequence.
+func (s *Server) startTurn(parent context.Context, userID, sessionID, content string, send func(wsServerEvent)) {
+	// Attach the auth identity so any tool calls / hook fires that key
+	// off the request user have it available. Then wrap in a per-turn
+	// timeout so a wedged provider doesn't pin a goroutine forever.
+	ctxWithUser := context.WithValue(parent, auth.ContextKey{}, userID)
+	turnCtx, cancel := context.WithTimeout(ctxWithUser, 5*time.Minute)
+	state := &turnState{
+		cancel: cancel,
+		steer:  make(chan string, 8),
+	}
 
+	s.turnsMu.Lock()
+	if prev, ok := s.turns[sessionID]; ok {
+		// Defensive: a prior turn should have been cleaned up. If it
+		// somehow survived (panic in the goroutine before delete),
+		// cancel it and overwrite — the new turn wins.
+		prev.cancel()
+	}
+	s.turns[sessionID] = state
+	s.turnsMu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			s.turnsMu.Lock()
+			if cur, ok := s.turns[sessionID]; ok && cur == state {
+				delete(s.turns, sessionID)
+			}
+			s.turnsMu.Unlock()
+		}()
+		s.runTurn(turnCtx, sessionID, content, state.steer, send)
+	}()
+}
+
+// interruptTurn cancels the in-flight turn for the given session, if any.
+// We remove the entry from the registry synchronously so a subsequent
+// `message` doesn't race with the goroutine's cleanup and incorrectly
+// route as a steer. The goroutine's deferred cleanup is idempotent.
+func (s *Server) interruptTurn(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	s.turnsMu.Lock()
+	state, ok := s.turns[sessionID]
+	if ok {
+		delete(s.turns, sessionID)
+	}
+	s.turnsMu.Unlock()
+	if state != nil {
+		state.cancel()
+	}
+}
+
+// steerTurn routes a user-typed string into a running turn's steer channel.
+// Returns true when the message was consumed by a turn (either queued or
+// dropped with a soft error reported to the client). Returns false when no
+// turn is in flight — the caller should start a fresh turn instead.
+func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) bool {
+	if sessionID == "" {
+		return false
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	s.turnsMu.Lock()
+	state, ok := s.turns[sessionID]
+	s.turnsMu.Unlock()
+	if !ok || state == nil {
+		return false
+	}
+	select {
+	case state.steer <- content:
+		// Echo the steered message back so other tabs (and the
+		// originating tab's reconnect path) can render it. The
+		// originating tab already inserted it optimistically.
+		send(wsServerEvent{
+			Type:      "steer_received",
+			SessionID: sessionID,
+			Text:      content,
+			Steered:   true,
+		})
+		return true
+	default:
+		// Buffer is sized for human typing cadence; overflow is rare
+		// and recoverable (the user can resend). Surface it cleanly
+		// rather than silently dropping.
+		send(wsServerEvent{
+			Type:      "error",
+			SessionID: sessionID,
+			Message:   "steer buffer full; please wait a moment and resend",
+		})
+		return true
+	}
+}
+
+// runTurn drives one agent turn and pumps RunEvent → WS frames. The caller
+// (startTurn) owns the cancel + steer channel via the turns registry; we
+// receive the steer channel as a receive-only param so the agent loop can
+// drain it between iterations. ctx is already wrapped with the per-turn
+// 5-minute timeout, so we don't re-wrap it here.
+func (s *Server) runTurn(ctx context.Context, sessionID, content string, steer <-chan string, send func(wsServerEvent)) {
 	events := make(chan agent.RunEvent, 128)
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		if err := s.loop.Run(turnCtx, sessionID, content, events); err != nil {
+		if err := s.loop.Run(ctx, sessionID, content, steer, events); err != nil {
 			send(wsServerEvent{Type: "error", SessionID: sessionID, Message: err.Error()})
 		}
 		close(events)

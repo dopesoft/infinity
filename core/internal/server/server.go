@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
@@ -17,6 +18,17 @@ import (
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// turnState tracks one in-flight agent turn keyed by session_id so the WS
+// handler can interrupt it or feed it mid-turn steering messages without
+// blocking the read loop. The cancel func tears the turn down; the steer
+// channel is drained by the agent loop between iterations. Buffer is
+// sized for normal human typing cadence; overflow surfaces a soft error
+// to the client rather than blocking the WS read goroutine.
+type turnState struct {
+	cancel context.CancelFunc
+	steer  chan string
+}
 
 type Config struct {
 	Addr         string
@@ -55,6 +67,12 @@ type Server struct {
 	namer     *sessions.Namer
 	auth      *auth.Verifier
 	started   time.Time
+
+	// turnsMu guards the per-session in-flight turn registry. Lookups
+	// happen on every WS frame so we keep the critical sections trivial
+	// (map ops only) and never hold the lock across send() or cancel().
+	turnsMu sync.Mutex
+	turns   map[string]*turnState
 }
 
 func New(cfg Config) *Server {
@@ -73,6 +91,7 @@ func New(cfg Config) *Server {
 		namer:     cfg.Namer,
 		auth:      cfg.Auth,
 		started:   time.Now(),
+		turns:     make(map[string]*turnState),
 	}
 
 	mux := http.NewServeMux()

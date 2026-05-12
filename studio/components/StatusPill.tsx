@@ -19,7 +19,7 @@ const stateConfig: Record<
   },
   listening: {
     label: "Awake",
-    sub: "listening",
+    sub: "Listening",
     dot: "bg-success animate-pulse",
     bg: "bg-success/10",
     fg: "text-success",

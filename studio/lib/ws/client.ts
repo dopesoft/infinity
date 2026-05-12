@@ -20,11 +20,19 @@ export type WSEvent =
       type: "complete";
       session_id: string;
       usage?: { input?: number; output?: number };
+      // stop_reason="interrupted" signals a user-cancelled turn. The
+      // partial assistant text already streamed is preserved; the UI
+      // should treat this as a clean turn end (no error state).
       stop_reason?: string;
     }
   | { type: "error"; session_id: string; message: string }
   | { type: "cleared"; session_id: string }
-  | { type: "pong"; session_id: string };
+  | { type: "pong"; session_id: string }
+  // steer_received echoes a mid-turn steer back to all connected tabs so
+  // the input that was injected into a running turn is visible everywhere.
+  // The originating tab already rendered it optimistically and ignores
+  // the echo via a duplicate-id check.
+  | { type: "steer_received"; session_id: string; text: string };
 
 export type WSToolEvent = {
   id: string;

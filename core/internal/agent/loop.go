@@ -210,7 +210,20 @@ const (
 	EventError      EventKind = "error"
 )
 
-func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- RunEvent) error {
+// Run drives one turn of the agent loop. steerCh is optional — when non-nil,
+// the loop drains it at each iteration boundary (before the next LLM call)
+// and appends each drained string as a fresh user message. This is what
+// powers mid-turn steering from the Studio composer: a user can keep typing
+// while the agent is mid-stream, and their input lands on the conversation
+// before the next reasoning step. Pass nil from contexts where steering
+// doesn't apply (cron, sentinels).
+//
+// On ctx.Done() the loop treats cancellation as a user-requested interrupt:
+// whatever partial assistant text already streamed is persisted (so reload
+// shows it), a TaskCompleted hook fires with {interrupted: true}, and the
+// loop returns nil with a Complete event tagged stop_reason="interrupted".
+// Real provider errors continue to surface as EventError + a returned error.
+func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, steerCh <-chan string, out chan<- RunEvent) error {
 	if l.llmProvider == nil {
 		return errors.New("agent loop has no LLM provider configured")
 	}
@@ -236,9 +249,16 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 	for iter := 0; iter < l.maxToolIterations; iter++ {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
+			return nil
 		default:
 		}
+
+		// Drain steered messages so the next LLM call sees them as fresh user
+		// input. Each drained message is persisted via the UserPromptSubmit
+		// hook (with steered=true payload) so transcript reload renders them
+		// in order with the rest of the conversation.
+		l.drainSteer(steerCh, s)
 
 		llmEvents := make(chan llm.StreamEvent, 64)
 		var resp llm.Response
@@ -251,9 +271,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 			close(llmEvents)
 		}()
 
+		var partialText strings.Builder
 		for ev := range llmEvents {
 			switch ev.Kind {
 			case llm.StreamText:
+				partialText.WriteString(ev.TextDelta)
 				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
 			case llm.StreamThinking:
 				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: ev.ThinkingDelta})
@@ -265,6 +287,17 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 		<-streamDone
 
 		if streamErr != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				partial := strings.TrimSpace(partialText.String())
+				if partial != "" {
+					s.Append(llm.Message{Role: llm.RoleAssistant, Content: partial})
+					l.fireHook("TaskCompleted", s.ID, s.Project, partial, map[string]any{
+						"interrupted": true,
+					})
+				}
+				emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
+				return nil
+			}
 			emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: streamErr.Error()})
 			return streamErr
 		}
@@ -401,6 +434,35 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 	err := errors.New("agent loop exceeded maximum tool iterations")
 	emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: err.Error()})
 	return err
+}
+
+// drainSteer pulls every queued steer message off the channel non-blockingly
+// and appends each as a User turn on the session, mirroring the same hook
+// the WS path fires for a normal message. Called between iterations so the
+// next LLM call sees the steer input alongside the original prompt and any
+// intermediate tool results. Empty/whitespace strings are dropped.
+func (l *Loop) drainSteer(ch <-chan string, s *Session) {
+	if ch == nil || s == nil {
+		return
+	}
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			text := strings.TrimSpace(msg)
+			if text == "" {
+				continue
+			}
+			s.Append(llm.Message{Role: llm.RoleUser, Content: text})
+			l.fireHook("UserPromptSubmit", s.ID, s.Project, text, map[string]any{
+				"steered": true,
+			})
+		default:
+			return
+		}
+	}
 }
 
 func (l *Loop) fireHook(name, sessionID, project, text string, payload map[string]any) {

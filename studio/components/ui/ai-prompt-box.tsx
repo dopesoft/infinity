@@ -214,6 +214,14 @@ export interface PromptInputBoxProps {
   minimal?: boolean;
   /** Optional slash-command hook (e.g. /new, /clear). Called before onSend. */
   onSlash?: (cmd: string) => boolean;
+  /**
+   * Cancel an in-flight agent turn. When provided AND `isLoading` is true,
+   * the action button morphs into a stop button (red border, Square icon)
+   * so the user can interrupt without waiting for the turn to finish.
+   * Mid-turn typing is still allowed — pressing send while there's text
+   * sends a steer instead of stopping.
+   */
+  onStop?: () => void;
 }
 
 export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxProps>(
@@ -230,6 +238,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       onModelChange,
       minimal = false,
       onSlash,
+      onStop,
     } = props;
 
     const [internalValue, setInternalValue] = React.useState("");
@@ -398,7 +407,10 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
-              disabled={disabled || isLoading || isRecording}
+              // Allow typing while a turn is in flight so the user can
+              // queue a steer mid-stream. Recording still locks the
+              // textarea since the input is audio at that point.
+              disabled={disabled || isRecording}
               autoCapitalize="sentences"
               autoCorrect="on"
               spellCheck
@@ -460,64 +472,115 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
               )}
             </div>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isLoading) return;
-                    if (isRecording) {
-                      setIsRecording(false);
-                      return;
-                    }
-                    if (hasContent) handleSubmit();
-                    else if (!minimal) setIsRecording(true);
-                  }}
-                  disabled={disabled || (isLoading && !hasContent)}
-                  className={cn(
-                    "inline-flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
-                    isLoading
-                      ? "border-2 border-danger bg-transparent text-danger hover:bg-danger/10"
-                      : isRecording
-                        ? "bg-transparent text-danger hover:bg-danger/10"
-                        : hasContent
-                          ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                          : minimal
-                            ? "cursor-not-allowed bg-muted text-muted-foreground"
-                            : "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
-                    "disabled:cursor-not-allowed disabled:opacity-50",
-                  )}
-                  aria-label={
-                    isLoading
-                      ? "Stop generation"
-                      : isRecording
-                        ? "Stop recording"
-                        : hasContent
-                          ? "Send message"
-                          : "Voice message"
-                  }
-                >
-                  {isLoading ? (
-                    <Square className="h-4 w-4 animate-pulse" />
-                  ) : isRecording ? (
-                    <StopCircle className="h-5 w-5" />
-                  ) : hasContent ? (
-                    <ArrowUp className="h-4 w-4" />
-                  ) : (
-                    <Mic className="h-4 w-4" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                {isLoading
+            {(() => {
+              // Mode selection — single source of truth for icon, color,
+              // aria, click behavior, and tooltip. Keeping the matrix in
+              // one place makes the stop-vs-steer-vs-send transitions
+              // easy to reason about.
+              //
+              //   - isLoading + empty input + onStop wired → "stop"
+              //   - isLoading + content typed                → "steer" (send mid-turn)
+              //   - isRecording                              → "stop-recording"
+              //   - hasContent                               → "send"
+              //   - else                                     → "voice" (or noop in minimal)
+              const canStop = isLoading && !!onStop;
+              const mode: "stop" | "steer" | "stop-recording" | "send" | "voice" =
+                canStop && !hasContent
+                  ? "stop"
+                  : isLoading && hasContent
+                    ? "steer"
+                    : isRecording
+                      ? "stop-recording"
+                      : hasContent
+                        ? "send"
+                        : "voice";
+
+              const onClick = () => {
+                if (mode === "stop") {
+                  onStop?.();
+                  return;
+                }
+                if (mode === "stop-recording") {
+                  setIsRecording(false);
+                  return;
+                }
+                if (mode === "send" || mode === "steer") {
+                  handleSubmit();
+                  return;
+                }
+                // mode === "voice"
+                if (!minimal) setIsRecording(true);
+              };
+
+              const disable =
+                disabled ||
+                // No content + loading + no stop callback → nothing to do.
+                (isLoading && !hasContent && !onStop) ||
+                // Minimal layout has no voice affordance; gray out idle state.
+                (mode === "voice" && minimal);
+
+              const aria =
+                mode === "stop"
+                  ? "Stop generation"
+                  : mode === "steer"
+                    ? "Send steer to running turn"
+                    : mode === "stop-recording"
+                      ? "Stop recording"
+                      : mode === "send"
+                        ? "Send message"
+                        : "Voice message";
+
+              const tooltip =
+                mode === "stop"
                   ? "Stop"
-                  : isRecording
-                    ? "Stop recording"
-                    : hasContent
-                      ? "Send"
-                      : "Voice"}
-              </TooltipContent>
-            </Tooltip>
+                  : mode === "steer"
+                    ? "Steer (mid-turn)"
+                    : mode === "stop-recording"
+                      ? "Stop recording"
+                      : mode === "send"
+                        ? "Send"
+                        : "Voice";
+
+              return (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={onClick}
+                      disabled={disable}
+                      className={cn(
+                        "inline-flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
+                        mode === "stop" &&
+                          "border-2 border-danger bg-transparent text-danger hover:bg-danger/10",
+                        mode === "steer" &&
+                          "border-2 border-danger bg-primary text-primary-foreground hover:bg-primary/90",
+                        mode === "stop-recording" &&
+                          "bg-transparent text-danger hover:bg-danger/10",
+                        mode === "send" &&
+                          "bg-primary text-primary-foreground hover:bg-primary/90",
+                        mode === "voice" && !minimal &&
+                          "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                        mode === "voice" && minimal &&
+                          "cursor-not-allowed bg-muted text-muted-foreground",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                      )}
+                      aria-label={aria}
+                    >
+                      {mode === "stop" ? (
+                        <Square className="h-4 w-4 animate-pulse" />
+                      ) : mode === "stop-recording" ? (
+                        <StopCircle className="h-5 w-5" />
+                      ) : mode === "send" || mode === "steer" ? (
+                        <ArrowUp className="h-4 w-4" />
+                      ) : (
+                        <Mic className="h-4 w-4" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{tooltip}</TooltipContent>
+                </Tooltip>
+              );
+            })()}
           </div>
         </div>
 

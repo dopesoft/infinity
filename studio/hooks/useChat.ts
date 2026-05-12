@@ -21,6 +21,15 @@ export type ChatMessage = {
   createdAt: number;
   // Only set on `thinking` messages once the agent moves on to text/tool/complete.
   endedAt?: number;
+  // steered=true on a user message means it was typed and sent mid-turn —
+  // it routes through the WS `steer` channel and gets drained into the
+  // running agent loop on the next iteration boundary. ChatBubble surfaces
+  // a small "↳ steered" affordance so the transcript reads correctly.
+  steered?: boolean;
+  // interrupted=true on the final assistant message of a turn means the
+  // user pressed Stop mid-stream. The partial text streamed is preserved;
+  // the UI surfaces a "↩ interrupted" hint rather than an error state.
+  interrupted?: boolean;
 };
 
 type Usage = { input: number; output: number };
@@ -296,8 +305,14 @@ export function useChat() {
           const outputT = ev.usage?.output ?? 0;
           setUsage((u) => ({ input: u.input + inputT, output: u.output + outputT }));
           const latency = turnStartRef.current ? Date.now() - turnStartRef.current : undefined;
+          const interrupted = ev.stop_reason === "interrupted";
           setMessages((prev) => {
             const next = closePendingThinking(prev);
+            // Find the most recent pending assistant message and finalize
+            // it. When `interrupted`, the partial text already streamed
+            // becomes the canonical reply and we mark the bubble so the
+            // UI can render a subtle "↩ interrupted" hint. No error state.
+            let finalized = false;
             for (let i = next.length - 1; i >= 0; i--) {
               if (next[i].role === "assistant" && next[i].pending) {
                 next[i] = {
@@ -306,14 +321,54 @@ export function useChat() {
                   inputTokens: inputT,
                   outputTokens: outputT,
                   latencyMs: latency,
+                  interrupted: interrupted || undefined,
                 };
+                finalized = true;
                 break;
               }
+            }
+            // If the user interrupted before any assistant text streamed
+            // (stop pressed during pure thinking) there's no pending
+            // assistant bubble to finalize. Insert a small marker so the
+            // transcript still reflects that the turn ended.
+            if (!finalized && interrupted) {
+              next.push({
+                id: makeId(),
+                role: "assistant",
+                text: "",
+                interrupted: true,
+                createdAt: Date.now(),
+              });
             }
             return next;
           });
           turnStartRef.current = null;
           setIsStreaming(false);
+          break;
+        }
+        case "steer_received": {
+          // Echo for steered input. The originating tab already rendered
+          // the bubble optimistically; this exists for multi-tab parity
+          // and reconnect cases. Dedup is best-effort: if the most recent
+          // user message has the same text and was marked steered, drop.
+          setMessages((prev) => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const m = prev[i];
+              if (m.role !== "user") continue;
+              if (m.steered && m.text === ev.text) return prev;
+              break;
+            }
+            return [
+              ...prev,
+              {
+                id: makeId(),
+                role: "user",
+                text: ev.text,
+                steered: true,
+                createdAt: Date.now(),
+              },
+            ];
+          });
           break;
         }
         case "error": {
@@ -343,7 +398,40 @@ export function useChat() {
   const send = useCallback(
     (content: string) => {
       const trimmed = content.trim();
-      if (!trimmed || isStreaming || !sessionId) return false;
+      if (!trimmed || !sessionId) return false;
+
+      // Mid-turn steering. When a turn is already in flight, send the
+      // input as `steer` instead of `message` — the server drops it into
+      // the running agent loop's steer channel and the loop drains it
+      // between iterations. We render the user bubble optimistically
+      // with `steered: true` so the transcript distinguishes it.
+      if (isStreaming) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: makeId(),
+            role: "user",
+            text: trimmed,
+            steered: true,
+            createdAt: Date.now(),
+          },
+        ]);
+        const ok = ws.send({ type: "steer", session_id: sessionId, content: trimmed });
+        if (!ok) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: makeId(),
+              role: "assistant",
+              text: "",
+              error: "Steer dropped — connection is reconnecting. Try again.",
+              createdAt: Date.now(),
+            },
+          ]);
+        }
+        return ok;
+      }
+
       setMessages((prev) => [
         ...prev,
         { id: makeId(), role: "user", text: trimmed, createdAt: Date.now() },
@@ -373,6 +461,16 @@ export function useChat() {
     },
     [ws, sessionId, isStreaming, armWatchdog, clearWatchdog],
   );
+
+  // interrupt cancels the in-flight turn for the current session. The
+  // server cancels the LLM stream context; the agent loop persists
+  // whatever partial assistant text streamed and emits a clean
+  // complete{stop_reason:"interrupted"} that flips isStreaming off and
+  // marks the bubble. Safe to call when nothing is in flight (no-op).
+  const interrupt = useCallback(() => {
+    if (!sessionId || !isStreaming) return false;
+    return ws.send({ type: "interrupt", session_id: sessionId });
+  }, [ws, sessionId, isStreaming]);
 
   const newSession = useCallback(() => {
     clearWatchdog();
@@ -429,7 +527,7 @@ export function useChat() {
   const status = ws.status;
 
   return useMemo(
-    () => ({ sessionId, messages, usage, isStreaming, send, newSession, switchSession, clear, status }),
-    [sessionId, messages, usage, isStreaming, send, newSession, switchSession, clear, status],
+    () => ({ sessionId, messages, usage, isStreaming, send, interrupt, newSession, switchSession, clear, status }),
+    [sessionId, messages, usage, isStreaming, send, interrupt, newSession, switchSession, clear, status],
   );
 }

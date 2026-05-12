@@ -55,6 +55,9 @@ export function WorkspaceChatColumn({
           onSend={(text) => {
             const t = text.trim();
             if (!t) return;
+            // `send` itself decides whether to start a new turn or
+            // queue a steer based on chat.isStreaming. From the
+            // composer's POV, it's still just "send".
             chat.send(t);
           }}
           onSlash={(cmd) => {
@@ -69,9 +72,10 @@ export function WorkspaceChatColumn({
             }
             return false;
           }}
+          onStop={chat.interrupt}
           isLoading={chat.isStreaming}
           disabled={chat.status !== "connected"}
-          placeholder={minimalComposer ? "ask infinity…" : "what should we build, fix, or talk about?"}
+          placeholder="ask me anything.."
           model={model}
           onModelChange={setModel}
           minimal={minimalComposer}
