@@ -149,7 +149,7 @@ func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
 		cmd := "ls -1Fp " + shellQuote(dir)
 		raw, execErr := t.Execute(ctx, map[string]any{"command": cmd})
 		if execErr == nil && strings.TrimSpace(raw) != "" {
-			entries := parseLsDashOneFOutput(raw)
+			entries := parseLsDashOneFOutput(unwrapBashStdout(raw))
 			if len(entries) > 0 {
 				return entries, true
 			}
@@ -176,6 +176,57 @@ func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
 	}
 
 	return nil, false
+}
+
+// unwrapBashStdout extracts the `stdout` string from Claude Code's Bash
+// tool output. The tool returns a JSON object like:
+//
+//	{"stdout":"...","stderr":"","interrupted":false,"isImage":false,...}
+//
+// embedded in the MCP CallToolResult text content. If the input doesn't
+// look like that wrapper (e.g. older Claude Code versions or a totally
+// different MCP server), returns the raw string unchanged.
+func unwrapBashStdout(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "{") {
+		return raw
+	}
+	var wrap struct {
+		Stdout string `json:"stdout"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &wrap); err != nil {
+		return raw
+	}
+	if wrap.Stdout == "" {
+		return raw
+	}
+	return wrap.Stdout
+}
+
+// unwrapReadContent extracts the file `content` from Claude Code's Read
+// tool output:
+//
+//	{"type":"text","file":{"filePath":"...","content":"..."}}
+//
+// Falls back to stripReadHeader on the raw string if the wrapper isn't
+// the expected shape (older Claude Code versions or alternate MCP server).
+func unwrapReadContent(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "{") {
+		return stripReadHeader(raw)
+	}
+	var wrap struct {
+		File struct {
+			Content string `json:"content"`
+		} `json:"file"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &wrap); err != nil {
+		return stripReadHeader(raw)
+	}
+	if wrap.File.Content == "" {
+		return stripReadHeader(raw)
+	}
+	return wrap.File.Content
 }
 
 // parseLsDashOneFOutput parses `ls -1Fp` output: one name per line, with
@@ -269,7 +320,7 @@ func (s *Server) readViaMCP(ctx context.Context, path string) (string, bool) {
 		if execErr != nil || out == "" {
 			continue
 		}
-		return stripReadHeader(out), true
+		return unwrapReadContent(out), true
 	}
 	return "", false
 }
@@ -879,6 +930,7 @@ func (s *Server) handleCanvasGitDiff(w http.ResponseWriter, r *http.Request) {
 
 // runReadOnlyBash invokes claude_code__Bash for a vetted read-only command.
 // The gate's isReadOnlyGit allow-list lets these pass without Trust queueing.
+// Returns the raw stdout — unwraps Claude Code's {"stdout":...} JSON envelope.
 func (s *Server) runReadOnlyBash(ctx context.Context, cmd string) (string, error) {
 	t, err := s.canvasMCP("claude_code__Bash")
 	if err != nil {
@@ -887,7 +939,11 @@ func (s *Server) runReadOnlyBash(ctx context.Context, cmd string) (string, error
 		// their workspace machine.
 		return localShell(ctx, cmd)
 	}
-	return t.Execute(ctx, map[string]any{"command": cmd})
+	raw, execErr := t.Execute(ctx, map[string]any{"command": cmd})
+	if execErr != nil {
+		return raw, execErr
+	}
+	return unwrapBashStdout(raw), nil
 }
 
 func localShell(ctx context.Context, _ string) (string, error) {
@@ -1062,19 +1118,22 @@ func (s *Server) handleCanvasGitMutation(
 		return
 	}
 	out, execErr := t.Execute(r.Context(), map[string]any{"command": cmd})
+	// Unwrap Claude Code's {"stdout":"...","stderr":"...",...} envelope so
+	// the studio toast shows just the command output, not the JSON.
+	clean := unwrapBashStdout(out)
 	if execErr != nil {
 		writeJSON(w, http.StatusOK, gitMutationResponse{
 			ContractID: id,
 			Status:     "denied",
 			Reason:     execErr.Error(),
-			Output:     out,
+			Output:     clean,
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, gitMutationResponse{
 		ContractID: id,
 		Status:     "executed",
-		Output:     out,
+		Output:     clean,
 	})
 }
 
