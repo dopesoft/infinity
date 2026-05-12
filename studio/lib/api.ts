@@ -23,9 +23,106 @@ export type MCPStatus = {
 
 export type SessionDTO = {
   id: string;
+  name?: string;
   started_at: string;
+  ended_at?: string;
+  project?: string;
+  project_path?: string;
+  project_template?: string;
+  dev_port?: number;
+  last_run_at?: string;
   message_count: number;
+  live?: boolean;
 };
+
+export async function renameSession(id: string, name: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/sessions/${encodeURIComponent(id)}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function setSessionProject(
+  id: string,
+  body: { project_path?: string; project_template?: string; dev_port?: number; mark_run?: boolean },
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/sessions/${encodeURIComponent(id)}/project`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type ProjectStatus = "idle" | "booting" | "running" | "crashed";
+
+export type ProjectDTO = {
+  project_path: string;
+  template?: string;
+  dev_port?: number;
+  status: ProjectStatus;
+  started_at?: string;
+  last_ready_at?: string;
+  last_error?: string;
+  last_used?: string;
+};
+
+export async function canvasProjectStart(body: {
+  project_path: string;
+  template?: string;
+  activate?: boolean;
+}): Promise<ProjectDTO | null> {
+  try {
+    const res = await authedFetch(`/api/canvas/project/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ProjectDTO;
+  } catch {
+    return null;
+  }
+}
+
+export async function canvasProjectActivate(body: {
+  project_path: string;
+  template?: string;
+  session_id?: string;
+}): Promise<ProjectDTO | null> {
+  try {
+    const res = await authedFetch(`/api/canvas/project/active`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ProjectDTO;
+  } catch {
+    return null;
+  }
+}
+
+export async function canvasProjectStatus(projectPath?: string): Promise<ProjectDTO | { projects: ProjectDTO[] } | null> {
+  try {
+    const qs = projectPath ? `?project_path=${encodeURIComponent(projectPath)}` : "";
+    const res = await authedFetch(`/api/canvas/project/status${qs}`);
+    if (!res.ok) return null;
+    return (await res.json()) as ProjectDTO | { projects: ProjectDTO[] };
+  } catch {
+    return null;
+  }
+}
 
 export type MemoryCounts = {
   observations: number;

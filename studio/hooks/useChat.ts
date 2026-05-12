@@ -390,6 +390,35 @@ export function useChat() {
     setIsStreaming(false);
   }, [clearWatchdog]);
 
+  // switchSession loads an existing session in place — same view, different
+  // conversation. Used by the Sessions drawer in the Live header. We hydrate
+  // from Core's authoritative transcript and fall back to localStorage only
+  // when Core is unreachable.
+  const switchSession = useCallback((id: string) => {
+    if (!id || id === sessionId) return;
+    clearWatchdog();
+    setSessionId(id);
+    writeStoredSessionId(id);
+    setIsStreaming(false);
+    turnStartRef.current = null;
+
+    const cached = readCachedMessages(id);
+    setMessages(cached);
+
+    const ac = new AbortController();
+    fetchSessionMessages(id, ac.signal).then((rows) => {
+      if (!rows) return;
+      const restored: ChatMessage[] = rows.map((r) => ({
+        id: makeId(),
+        role: r.role,
+        text: r.text,
+        createdAt: new Date(r.created_at).getTime() || Date.now(),
+      }));
+      setMessages(restored);
+      writeCachedMessages(id, restored);
+    });
+  }, [sessionId, clearWatchdog]);
+
   const clear = useCallback(() => {
     clearWatchdog();
     ws.send({ type: "clear", session_id: sessionId });
@@ -400,7 +429,7 @@ export function useChat() {
   const status = ws.status;
 
   return useMemo(
-    () => ({ sessionId, messages, usage, isStreaming, send, newSession, clear, status }),
-    [sessionId, messages, usage, isStreaming, send, newSession, clear, status],
+    () => ({ sessionId, messages, usage, isStreaming, send, newSession, switchSession, clear, status }),
+    [sessionId, messages, usage, isStreaming, send, newSession, switchSession, clear, status],
   );
 }

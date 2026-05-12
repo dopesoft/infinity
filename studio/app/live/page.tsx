@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Gauge } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { SessionHeader } from "@/components/SessionHeader";
@@ -18,10 +18,39 @@ import {
 import { LeftPanels, RightPanels, MobileStatusStack } from "@/components/LiveSidePanels";
 import { useChat } from "@/hooks/useChat";
 import type { AgentState } from "@/components/StatusPill";
+import { fetchSessions } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 export default function LivePage() {
   const chat = useChat();
   const [statusOpen, setStatusOpen] = useState(false);
+  const [sessionName, setSessionName] = useState<string>("");
+
+  // Pull just the current session's name from the listing endpoint, then
+  // keep it fresh via the same realtime channel the drawer uses. Cheap —
+  // the listing already runs whenever the drawer opens, this is just one
+  // extra fetch on mount + name updates.
+  useEffect(() => {
+    if (!chat.sessionId) {
+      setSessionName("");
+      return;
+    }
+    const ac = new AbortController();
+    fetchSessions(ac.signal).then((rows) => {
+      if (!rows) return;
+      const me = rows.find((r) => r.id === chat.sessionId);
+      setSessionName(me?.name ?? "");
+    });
+    return () => ac.abort();
+  }, [chat.sessionId]);
+
+  useRealtime("mem_sessions", async () => {
+    if (!chat.sessionId) return;
+    const rows = await fetchSessions();
+    if (!rows) return;
+    const me = rows.find((r) => r.id === chat.sessionId);
+    setSessionName(me?.name ?? "");
+  });
 
   const startedAt = useMemo(() => {
     const first = chat.messages[0];
@@ -55,15 +84,15 @@ export default function LivePage() {
           <LeftPanels messages={chat.messages} usedTokens={usedTokens} />
         </aside>
 
-        {/* Center — chat. Uses the same tint as the side rails so we have
-            one grey, not many. overflow-hidden is required so child borders
-            (SessionHeader, Composer) clip to the rounded corners. */}
+        {/* Center — chat. */}
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-muted/60 dark:bg-zinc-800/60">
           <SessionHeader
             sessionId={chat.sessionId}
+            sessionName={sessionName}
             startedAt={startedAt}
             onNew={chat.newSession}
             onClear={chat.clear}
+            onSwitch={chat.switchSession}
             onRewind={undefined}
             extraActions={
               <Drawer open={statusOpen} onOpenChange={setStatusOpen}>

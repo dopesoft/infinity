@@ -59,6 +59,8 @@ type bridge struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session
+
+	supervisor *supervisor
 }
 
 func main() {
@@ -72,8 +74,9 @@ func main() {
 	}
 
 	b := &bridge{
-		command:  cmd,
-		sessions: map[string]*session{},
+		command:    cmd,
+		sessions:   map[string]*session{},
+		supervisor: newSupervisor(),
 	}
 
 	mux := http.NewServeMux()
@@ -82,6 +85,10 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/supervisor/start", b.handleSupervisorStart)
+	mux.HandleFunc("/supervisor/stop", b.handleSupervisorStop)
+	mux.HandleFunc("/supervisor/active", b.handleSupervisorActive)
+	mux.HandleFunc("/supervisor/status", b.handleSupervisorStatus)
 	// Direct filesystem + git read endpoints. These bypass MCP entirely
 	// — they shell out via Go's os/exec on the Mac. Used by Studio's
 	// canvas instead of routing `ls` / `cat` through claude_code__Bash,
@@ -93,6 +100,11 @@ func main() {
 	mux.HandleFunc("/fs/read", b.handleFSRead)
 	mux.HandleFunc("/git/status", b.handleGitStatus)
 	mux.HandleFunc("/git/diff", b.handleGitDiff)
+	// Catch-all: every other path is reverse-proxied to the active
+	// project's dev server. This is what makes preview.dopesoft.io a
+	// single permanent tunnel that points at whatever the boss is
+	// currently building.
+	mux.HandleFunc("/", b.handlePreviewProxy)
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("mcp-bridge listening on %s, command: %s", addr, strings.Join(cmd, " "))

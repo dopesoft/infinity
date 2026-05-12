@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dopesoft/infinity/core/config"
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
@@ -20,6 +21,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
+	"github.com/dopesoft/infinity/core/internal/sessions"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -104,6 +106,16 @@ func serveCmd() *cobra.Command {
 			if skillsRoot == "" {
 				skillsRoot = "./skills"
 			}
+			// Seed default scaffold skills (scaffold-nextjs, -vite-react,
+			// -static-html, -ios-swift, -capacitor) into the on-disk root
+			// when they're missing. Never overwrites a file the boss has
+			// touched. On Railway's ephemeral filesystem this means the
+			// canonical agent-facing scaffolds are always present.
+			if planted, err := config.MaterializeScaffoldSkills(skillsRoot); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: materialize scaffold skills: %v\n", err)
+			} else if len(planted) > 0 {
+				fmt.Printf("  skills: seeded scaffolds %v\n", planted)
+			}
 			skillRegistry := skills.NewRegistry(skillsRoot)
 			var skillStore *skills.Store
 			if pool != nil {
@@ -177,9 +189,22 @@ func serveCmd() *cobra.Command {
 				fmt.Printf("  honcho: disabled (set HONCHO_BASE_URL to enable)\n")
 			}
 
+			// Session auto-naming. Uses Haiku to turn the first user/assistant
+			// exchange into a 3-7 word title so the Live sessions drawer
+			// stops showing `chs3-djnc`-style hex slugs. Cheap (~1 Haiku
+			// call per new session, async, idempotent). Requires Anthropic
+			// provider + DB pool; degrades to no-op otherwise.
+			var sessionNamer *sessions.Namer
+			if pool != nil {
+				if a, ok := provider.(*llm.Anthropic); ok {
+					sessionNamer = sessions.NewNamer(pool, a, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
+					fmt.Printf("  sessions: auto-naming via Haiku enabled\n")
+				}
+			}
+
 			var loop *agent.Loop
 			if provider != nil {
-				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt}
+				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt, Namer: sessionNamer}
 				// Compose memory providers: Infinity's RRF searcher always
 				// runs first, Honcho's peer representation folds in second
 				// when configured. Order matters — searcher emits the boss
@@ -323,6 +348,7 @@ func serveCmd() *cobra.Command {
 				VoyagerAPI:   voyagerAPI,
 				Auth:         authVerifier,
 				Trust:        trustStore,
+				Namer:        sessionNamer,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

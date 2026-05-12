@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MonitorPlay, MonitorX } from "lucide-react";
+import { MonitorPlay, MonitorX, Sparkles, Loader2, AlertTriangle } from "lucide-react";
 import { CanvasPreviewToolbar } from "@/components/canvas/CanvasPreviewToolbar";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
 import { useWebSocket } from "@/lib/ws/provider";
 import { isCodeChangeTool } from "@/lib/canvas/detection";
+import { useProjectContext } from "@/lib/canvas/useCurrentProject";
 
 /**
  * CanvasPreview — body of the Preview tab.
@@ -32,7 +33,16 @@ const AUTO_REFRESH_DEBOUNCE_MS = 600;
 export function CanvasPreview() {
   const store = useCanvasStore();
   const ws = useWebSocket();
+  const projectCtx = useProjectContext();
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The session decides the surface. Sessions WITHOUT a project_path are
+  // chat-only — show the "no app yet" empty state and skip the iframe.
+  // Sessions WITH a project_path always point the iframe at the bridge
+  // tunnel (preview.dopesoft.io); the bridge handles booting / crashed /
+  // ready transitions in the response body itself.
+  const hasProject = !!projectCtx?.session?.project_path?.trim();
+  const projectStatus = projectCtx?.project?.status;
 
   // Base URL the boss configured (toolbar URL bar / env). The iframe src
   // appends a cache-busting query param keyed to previewRefreshKey so
@@ -154,9 +164,26 @@ export function CanvasPreview() {
   // of a device preset — you want to see what the app looks like at that
   // size, framed against neutral chrome. Desktop is the default; render
   // it like a real browser window flush against its container.
+  // No project on this session — Canvas is a passive surface. Show a
+  // "tell the agent what to build" empty state instead of trying to
+  // proxy through the bridge. This is the v1 path for new sessions.
+  if (projectCtx && !hasProject && !projectCtx.loading) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <CanvasPreviewToolbar effectiveUrl={baseUrl} />
+        <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
+          <NoProjectPreview />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <CanvasPreviewToolbar effectiveUrl={baseUrl} />
+      {projectStatus && projectStatus !== "running" ? (
+        <ProjectStatusBanner status={projectStatus} error={projectCtx?.project?.last_error} />
+      ) : null}
       {!effectiveUrl ? (
         <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
           <EmptyPreview />
@@ -213,6 +240,52 @@ export function CanvasPreview() {
           allow="clipboard-write; clipboard-read"
         />
       )}
+    </div>
+  );
+}
+
+function NoProjectPreview() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <Sparkles className="size-10 text-info/70" aria-hidden />
+      <div className="max-w-md space-y-1">
+        <h3 className="text-sm font-semibold">No app in this session yet</h3>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Switch back to <span className="font-semibold">Live</span> and tell the
+          agent what to build — e.g. <em>&ldquo;build me a chat app with vite&rdquo;</em> or{" "}
+          <em>&ldquo;make a static landing page&rdquo;</em>. The preview pops up here once
+          the scaffold lands.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ProjectStatusBanner({ status, error }: { status: string; error?: string }) {
+  const tone =
+    status === "booting"
+      ? "bg-info/10 text-info border-info/30"
+      : status === "crashed"
+        ? "bg-danger/10 text-danger border-danger/30"
+        : "bg-muted text-muted-foreground border";
+  const icon =
+    status === "booting" ? (
+      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+    ) : status === "crashed" ? (
+      <AlertTriangle className="size-3.5" aria-hidden />
+    ) : null;
+  const label =
+    status === "booting"
+      ? "Warming up dev server…"
+      : status === "crashed"
+        ? `Dev server crashed${error ? ` — ${error}` : ""}`
+        : status === "idle"
+          ? "Dev server idle — switch sessions to wake it"
+          : status;
+  return (
+    <div className={"flex items-center gap-2 border-b px-3 py-1 text-[11px] " + tone}>
+      {icon}
+      <span className="truncate">{label}</span>
     </div>
   );
 }

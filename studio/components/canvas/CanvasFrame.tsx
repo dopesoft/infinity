@@ -12,6 +12,7 @@ import { CanvasRightPane } from "@/components/canvas/CanvasRightPane";
 import { CanvasMobileShell } from "@/components/canvas/CanvasMobileShell";
 import { CanvasComposer } from "@/components/canvas/CanvasComposer";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useCurrentProject, CurrentProjectProvider } from "@/lib/canvas/useCurrentProject";
 import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
 import { useWebSocket } from "@/lib/ws/provider";
 import type { useChat } from "@/hooks/useChat";
@@ -40,7 +41,24 @@ type ChatHook = ReturnType<typeof useChat>;
 export function CanvasFrame({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const ws = useWebSocket();
+  const current = useCurrentProject();
   const [mobileTab, setMobileTab] = useState<"files" | "git" | "editor">("files");
+
+  // Project = session. When the boss switches sessions the file tree, git
+  // panel, and preview all re-scope to that project's folder. We only push
+  // into the store when there's an actual project_path; otherwise leave
+  // whatever root the boss configured manually in Settings so a non-coding
+  // chat still browses the workspace.
+  const projectPath = current.session?.project_path?.trim();
+  useEffect(() => {
+    if (projectPath && projectPath !== store.root) {
+      store.setRoot(projectPath);
+      // Closing any stale file tabs from a previous project keeps Monaco
+      // from trying to read paths that don't exist in this scope.
+      store.closeAllFiles();
+      store.clearDirty();
+    }
+  }, [projectPath, store]);
   // Mount gate — react-resizable-panels reads layout from localStorage on
   // first paint (via autoSaveId). The server has no localStorage and
   // renders defaultSize, while the client renders the saved size → React
@@ -75,7 +93,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   }
 
   return (
-    <>
+    <CurrentProjectProvider value={current}>
       {/* Desktop layout */}
       <div className="hidden min-h-0 flex-1 lg:flex">
         <ResizablePanelGroup direction="horizontal" autoSaveId="canvas:h">
@@ -132,7 +150,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
-    </>
+    </CurrentProjectProvider>
   );
 }
 

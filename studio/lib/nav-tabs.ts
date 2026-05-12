@@ -6,7 +6,6 @@ import {
   LayoutPanelLeft,
   type LucideIcon,
   MessageSquare,
-  ScrollText,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
@@ -30,7 +29,6 @@ export type NavTab = {
 export const NAV_TABS: NavTab[] = [
   { href: "/live", label: "Live", Icon: MessageSquare },
   { href: "/canvas", label: "Canvas", Icon: LayoutPanelLeft },
-  { href: "/sessions", label: "Sessions", Icon: ScrollText },
   { href: "/memory", label: "Memory", Icon: Brain },
   { href: "/skills", label: "Skills", Icon: Wrench },
   { href: "/heartbeat", label: "Heartbeat", Icon: Activity },

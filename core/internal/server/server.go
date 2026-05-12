@@ -11,6 +11,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
+	"github.com/dopesoft/infinity/core/internal/sessions"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/voyager"
@@ -35,6 +36,10 @@ type Config struct {
 	// file saves queue contracts here and block on user approval before
 	// touching the home Mac. Same store the agent gate uses.
 	Trust *proactive.TrustStore
+	// Namer auto-renames sessions via Haiku after the first complete
+	// exchange. Nil-safe: the rename endpoint just returns 503 when
+	// unconfigured.
+	Namer *sessions.Namer
 }
 
 type Server struct {
@@ -47,6 +52,7 @@ type Server struct {
 	searcher  *memory.Searcher
 	skillsAPI *skills.API
 	trust     *proactive.TrustStore
+	namer     *sessions.Namer
 	auth      *auth.Verifier
 	started   time.Time
 }
@@ -64,6 +70,7 @@ func New(cfg Config) *Server {
 		searcher:  cfg.Searcher,
 		skillsAPI: cfg.SkillsAPI,
 		trust:     cfg.Trust,
+		namer:     cfg.Namer,
 		auth:      cfg.Auth,
 		started:   time.Now(),
 	}
@@ -132,6 +139,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/git/pull", s.handleCanvasGitPull)
 	mux.HandleFunc("/api/canvas/config", s.handleCanvasConfig)
 	mux.HandleFunc("/api/canvas/debug", s.handleCanvasDebug)
+	mux.HandleFunc("/api/canvas/project/start", s.handleCanvasProjectStart)
+	mux.HandleFunc("/api/canvas/project/stop", s.handleCanvasProjectStop)
+	mux.HandleFunc("/api/canvas/project/active", s.handleCanvasProjectActive)
+	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
 }
 
 func (s *Server) Start() error {

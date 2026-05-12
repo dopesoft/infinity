@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Undo2, Archive } from "lucide-react";
+import { ChevronDown, Plus, Undo2, Archive } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SessionsDrawer } from "@/components/SessionsDrawer";
 
 function shortId(id: string): string {
   if (!id) return "—";
@@ -21,18 +22,34 @@ function relStarted(ms: number, now: number): string {
   return `${h}h ${m % 60}m ago`;
 }
 
+/**
+ * SessionHeader — the bar across the top of the Live chat surface.
+ *
+ * The session name is the primary affordance: tap it (or the chevron) to
+ * open a bottom-sheet drawer listing every other session with search.
+ * Picking a session swaps the conversation in place — no /sessions route
+ * to navigate to anymore (we collapsed that surface into this drawer).
+ *
+ * Falls back to a short hex ID when the session hasn't been auto-named
+ * yet (first turn hasn't completed). Once Haiku names it, the title
+ * updates live via the realtime mem_sessions subscription.
+ */
 export function SessionHeader({
   sessionId,
+  sessionName,
   startedAt,
   onNew,
   onClear,
+  onSwitch,
   onRewind,
   extraActions,
 }: {
   sessionId: string;
+  sessionName?: string;
   startedAt?: number | null;
   onNew: () => void;
   onClear: () => void;
+  onSwitch: (id: string) => void;
   onRewind?: () => void;
   extraActions?: React.ReactNode;
 }) {
@@ -43,18 +60,28 @@ export function SessionHeader({
     return () => clearInterval(id);
   }, []);
 
+  const displayName = sessionName?.trim() || shortId(sessionId);
+
   return (
     <div className="flex items-center justify-between gap-2 border-b bg-background/95 px-3 py-2 sm:px-4">
       <div className="flex min-w-0 items-baseline gap-2">
-        <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-          Session
-        </span>
-        <code
-          className="truncate font-mono text-xs font-semibold text-foreground"
-          suppressHydrationWarning
-        >
-          {shortId(sessionId)}
-        </code>
+        <SessionsDrawer
+          currentId={sessionId}
+          onSelect={onSwitch}
+          onNew={onNew}
+          trigger={
+            <button
+              type="button"
+              className="flex min-h-11 min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-left hover:bg-accent"
+              aria-label="Switch session"
+            >
+              <span className="truncate text-sm font-semibold text-foreground" suppressHydrationWarning>
+                {displayName}
+              </span>
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            </button>
+          }
+        />
         {startedAt && now ? (
           <span
             className="hidden text-[11px] text-muted-foreground sm:inline"

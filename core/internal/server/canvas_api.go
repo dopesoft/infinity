@@ -121,6 +121,37 @@ func directBridgeHeaders() http.Header {
 // because these are cheap calls (ls, cat, git status).
 var directBridgeHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// directBridgePost POSTs JSON to the bridge at the given path, attaching
+// Cloudflare Access headers. Returns (body, status, ok). Used for the
+// supervisor endpoints that need to send a JSON body.
+func directBridgePost(ctx context.Context, urlPath string, body any) ([]byte, int, bool) {
+	base := bridgeBaseURL()
+	if base == "" {
+		return nil, 0, false
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, false
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", base+urlPath, strings.NewReader(string(buf)))
+	if err != nil {
+		return nil, 0, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, vs := range directBridgeHeaders() {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	resp, err := directBridgeHTTPClient.Do(req)
+	if err != nil {
+		return nil, 0, false
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return respBody, resp.StatusCode, true
+}
+
 // directBridgeGet fetches `path` (e.g. "/fs/ls?path=...") from the
 // bridge, attaching Cloudflare Access headers. Returns (body, ok).
 // ok=false means the bridge endpoint isn't reachable or returned an
@@ -1497,4 +1528,117 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// ---- Project lifecycle (bridge supervisor) --------------------------------
+//
+// These thin handlers proxy to the bridge's /supervisor/* endpoints so
+// Studio only ever talks to Core. Core attaches Cloudflare Access headers
+// the same way it does for /fs/ls and /git/status — service tokens never
+// touch the browser.
+
+// handleCanvasProjectStart POSTs to the bridge supervisor to bring a
+// project's dev server up. Body shape:
+//
+//	{"project_path": "/abs/path", "template": "nextjs", "activate": true}
+//
+// Returns the bridge's project record (status + port).
+func (s *Server) handleCanvasProjectStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	respBody, status, ok := directBridgePost(r.Context(), "/supervisor/start", body)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(respBody)
+}
+
+func (s *Server) handleCanvasProjectStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	respBody, status, ok := directBridgePost(r.Context(), "/supervisor/stop", body)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(respBody)
+}
+
+// handleCanvasProjectActive serves both GET (current active project) and
+// POST (set active). On POST it also writes mark_run + last_run_at on
+// mem_sessions so the Studio sidebar shows the running project.
+func (s *Server) handleCanvasProjectActive(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		respBody, ok := directBridgeGet(r.Context(), "/supervisor/active")
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(respBody)
+	case http.MethodPost:
+		var body struct {
+			ProjectPath string `json:"project_path"`
+			Template    string `json:"template"`
+			SessionID   string `json:"session_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		respBody, status, ok := directBridgePost(r.Context(), "/supervisor/active", map[string]any{
+			"project_path": body.ProjectPath,
+			"template":     body.Template,
+		})
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
+			return
+		}
+		// Best-effort: stamp last_run_at on the session row when we have one.
+		if s.pool != nil && body.SessionID != "" {
+			_, _ = s.pool.Exec(r.Context(),
+				`UPDATE mem_sessions SET last_run_at = NOW() WHERE id = $1::uuid`,
+				body.SessionID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(respBody)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCanvasProjectStatus(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.RawQuery
+	urlPath := "/supervisor/status"
+	if q != "" {
+		urlPath += "?" + q
+	}
+	respBody, ok := directBridgeGet(r.Context(), urlPath)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(respBody)
 }

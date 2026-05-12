@@ -69,12 +69,17 @@ func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	type sessionDTO struct {
-		ID           string `json:"id"`
-		StartedAt    string `json:"started_at"`
-		EndedAt      string `json:"ended_at,omitempty"`
-		Project      string `json:"project,omitempty"`
-		MessageCount int    `json:"message_count"`
-		Live         bool   `json:"live"`
+		ID              string `json:"id"`
+		Name            string `json:"name,omitempty"`
+		StartedAt       string `json:"started_at"`
+		EndedAt         string `json:"ended_at,omitempty"`
+		Project         string `json:"project,omitempty"`
+		ProjectPath     string `json:"project_path,omitempty"`
+		ProjectTemplate string `json:"project_template,omitempty"`
+		DevPort         int    `json:"dev_port,omitempty"`
+		LastRunAt       string `json:"last_run_at,omitempty"`
+		MessageCount    int    `json:"message_count"`
+		Live            bool   `json:"live"`
 	}
 
 	// Build a set of session IDs that are alive in this core process's
@@ -104,9 +109,14 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if s.pool != nil {
 		rows, err := s.pool.Query(r.Context(), `
 			SELECT s.id::text,
+			       COALESCE(s.name, ''),
 			       s.started_at,
 			       s.ended_at,
 			       COALESCE(s.project, ''),
+			       COALESCE(s.project_path, ''),
+			       COALESCE(s.project_template, ''),
+			       COALESCE(s.dev_port, 0),
+			       s.last_run_at,
 			       COALESCE((SELECT COUNT(*) FROM mem_observations o WHERE o.session_id = s.id), 0) AS msg_count
 			  FROM mem_sessions s
 			 ORDER BY s.started_at DESC
@@ -119,14 +129,19 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			for rows.Next() {
 				var d sessionDTO
 				var started time.Time
-				var ended *time.Time
-				if err := rows.Scan(&d.ID, &started, &ended, &d.Project, &d.MessageCount); err != nil {
+				var ended, lastRun *time.Time
+				if err := rows.Scan(&d.ID, &d.Name, &started, &ended,
+					&d.Project, &d.ProjectPath, &d.ProjectTemplate,
+					&d.DevPort, &lastRun, &d.MessageCount); err != nil {
 					log.Printf("handleSessions scan: %v", err)
 					continue
 				}
 				d.StartedAt = started.UTC().Format(time.RFC3339)
 				if ended != nil {
 					d.EndedAt = ended.UTC().Format(time.RFC3339)
+				}
+				if lastRun != nil {
+					d.LastRunAt = lastRun.UTC().Format(time.RFC3339)
 				}
 				if _, ok := live[d.ID]; ok {
 					d.Live = true

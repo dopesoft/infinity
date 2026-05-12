@@ -69,6 +69,15 @@ type HookEmitter interface {
 	Emit(name string, sessionID, project, text string, payload map[string]any)
 }
 
+// SessionNamer is the optional Haiku-driven auto-namer. The loop notifies it
+// after the first complete assistant turn in a session; the namer decides
+// (cheap DB check) whether the row needs a name and fires Haiku async.
+// Implementation lives in core/internal/sessions to keep the agent package
+// free of llm/pgx dependencies for that subsystem.
+type SessionNamer interface {
+	MaybeName(sessionID, userMsg, assistantMsg string)
+}
+
 type Loop struct {
 	llmProvider llm.Provider
 	tools       *tools.Registry
@@ -76,6 +85,7 @@ type Loop struct {
 	hooks       HookEmitter
 	skills      SkillMatcher
 	gate        ToolGate
+	namer       SessionNamer
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -91,6 +101,7 @@ type Config struct {
 	Hooks             HookEmitter
 	Skills            SkillMatcher
 	Gate              ToolGate
+	Namer             SessionNamer
 	SystemPrompt      string
 	MaxToolIterations int
 }
@@ -115,6 +126,7 @@ func New(cfg Config) *Loop {
 		hooks:             cfg.Hooks,
 		skills:            cfg.Skills,
 		gate:              cfg.Gate,
+		namer:             cfg.Namer,
 		systemPrompt:      cfg.SystemPrompt,
 		maxToolIterations: cfg.MaxToolIterations,
 		sessions:          make(map[string]*Session),
@@ -264,6 +276,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, out chan<- Ru
 				"input_tokens":  resp.Usage.Input,
 				"output_tokens": resp.Usage.Output,
 			})
+			// Auto-name the session after the first complete exchange.
+			// MaybeName is cheap when the session is already named (one
+			// indexed lookup); it runs Haiku async only when we need a
+			// fresh title. Safe to call on every turn.
+			if l.namer != nil {
+				l.namer.MaybeName(s.ID, userMsg, resp.Text)
+			}
 			return nil
 		}
 
