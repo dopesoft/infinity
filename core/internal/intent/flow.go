@@ -156,7 +156,10 @@ func (d *Detector) Classify(ctx context.Context, observation, recentContext stri
 	respCh := make(chan llm.Response, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		resp, err := d.provider.Stream(ctx, systemPrompt,
+		// IntentFlow uses the provider's default model — the boss's per-turn
+		// override only applies to the main agent loop, not internal Haiku-style
+		// classifiers.
+		resp, err := d.provider.Stream(ctx, "", systemPrompt,
 			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
 			nil, out)
 		if err != nil {

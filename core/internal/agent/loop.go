@@ -223,7 +223,7 @@ const (
 // shows it), a TaskCompleted hook fires with {interrupted: true}, and the
 // loop returns nil with a Complete event tagged stop_reason="interrupted".
 // Real provider errors continue to surface as EventError + a returned error.
-func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, steerCh <-chan string, out chan<- RunEvent) error {
+func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerCh <-chan string, out chan<- RunEvent) error {
 	if l.llmProvider == nil {
 		return errors.New("agent loop has no LLM provider configured")
 	}
@@ -267,7 +267,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg string, steerCh <-cha
 
 		go func() {
 			defer close(streamDone)
-			resp, streamErr = l.llmProvider.Stream(ctx, systemPrompt, s.Snapshot(), l.tools.Definitions(), llmEvents)
+			resp, streamErr = l.llmProvider.Stream(ctx, model, systemPrompt, s.Snapshot(), l.tools.Definitions(), llmEvents)
 			close(llmEvents)
 		}()
 

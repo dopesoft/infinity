@@ -29,6 +29,13 @@ type wsClientMessage struct {
 	Type      string `json:"type"`
 	SessionID string `json:"session_id"`
 	Content   string `json:"content"`
+	// Model is an optional per-turn override (e.g. claude-opus-4-7). The
+	// studio's model chip writes this on every `message` frame so the
+	// user's choice locks in for the turn that's about to start. Empty
+	// string = fall back to the provider's boot-configured default.
+	// Steer / interrupt frames ignore this field — the model is fixed
+	// once a turn is in flight.
+	Model string `json:"model,omitempty"`
 }
 
 type wsServerEvent struct {
@@ -175,7 +182,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// session, the agent loop drains the steer channel between
 			// iterations and appends the message as a fresh user turn.
 			// If no turn is in flight, fall through to start a normal
-			// turn so the client doesn't have to distinguish.
+			// turn so the client doesn't have to distinguish. The
+			// model field is ignored on steer frames — the running
+			// turn keeps the model it was started with.
 			if s.steerTurn(msg.SessionID, msg.Content, send) {
 				continue
 			}
@@ -184,7 +193,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				sessionID = uuid.NewString()
 			}
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
+			s.startTurn(connCtx, userID, sessionID, msg.Content, msg.Model, send)
 			continue
 		case "message":
 			sessionID := msg.SessionID
@@ -194,7 +203,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types — the
-			// server figures it out.
+			// server figures it out. The model on a steer frame is
+			// dropped (mid-turn model swaps aren't a thing).
 			if s.steerTurn(sessionID, msg.Content, send) {
 				continue
 			}
@@ -203,7 +213,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
+			s.startTurn(connCtx, userID, sessionID, msg.Content, msg.Model, send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
@@ -216,7 +226,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // reader. The goroutine's cleanup deregisters itself only if it's still
 // the active state, preserving correctness across a cancel-then-new-turn
 // sequence.
-func (s *Server) startTurn(parent context.Context, userID, sessionID, content string, send func(wsServerEvent)) {
+func (s *Server) startTurn(parent context.Context, userID, sessionID, content, model string, send func(wsServerEvent)) {
 	// Attach the auth identity so any tool calls / hook fires that key
 	// off the request user have it available. Then wrap in a per-turn
 	// timeout so a wedged provider doesn't pin a goroutine forever.
@@ -246,7 +256,7 @@ func (s *Server) startTurn(parent context.Context, userID, sessionID, content st
 			}
 			s.turnsMu.Unlock()
 		}()
-		s.runTurn(turnCtx, sessionID, content, state.steer, send)
+		s.runTurn(turnCtx, sessionID, content, model, state.steer, send)
 	}()
 }
 
@@ -317,13 +327,13 @@ func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) 
 // receive the steer channel as a receive-only param so the agent loop can
 // drain it between iterations. ctx is already wrapped with the per-turn
 // 5-minute timeout, so we don't re-wrap it here.
-func (s *Server) runTurn(ctx context.Context, sessionID, content string, steer <-chan string, send func(wsServerEvent)) {
+func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, steer <-chan string, send func(wsServerEvent)) {
 	events := make(chan agent.RunEvent, 128)
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		if err := s.loop.Run(ctx, sessionID, content, steer, events); err != nil {
+		if err := s.loop.Run(ctx, sessionID, content, model, steer, events); err != nil {
 			send(wsServerEvent{Type: "error", SessionID: sessionID, Message: err.Error()})
 		}
 		close(events)

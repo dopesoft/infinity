@@ -49,7 +49,8 @@ func (e *AgentExecutor) ExecuteJob(j Job) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// nil steer channel: cron-driven turns aren't user-steerable.
-	if err := e.Loop.Run(ctx, sessionID, j.Target, nil, out); err != nil {
+	// Empty model string: cron always uses the provider default.
+	if err := e.Loop.Run(ctx, sessionID, j.Target, "", nil, out); err != nil {
 		return fmt.Errorf("cron run failed: %w", err)
 	}
 	return nil

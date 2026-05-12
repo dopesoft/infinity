@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
-import { PromptInputBox } from "@/components/ui/ai-prompt-box";
+import { MODELS, PromptInputBox } from "@/components/ui/ai-prompt-box";
 import { useSessionModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
 
@@ -55,10 +55,18 @@ export function WorkspaceChatColumn({
           onSend={(text) => {
             const t = text.trim();
             if (!t) return;
+            // Resolve the chip's ModelKey (e.g. "opus-4-7") to the
+            // Anthropic model id ("claude-opus-4-7") that Core's
+            // provider expects on the wire. Unknown keys fall back to
+            // the empty string so Core uses its boot-configured
+            // default rather than 4xx'ing on a typo.
+            const modelId =
+              MODELS.find((m) => m.key === model)?.id ?? "";
             // `send` itself decides whether to start a new turn or
-            // queue a steer based on chat.isStreaming. From the
-            // composer's POV, it's still just "send".
-            chat.send(t);
+            // queue a steer based on chat.isStreaming. The model is
+            // only honored at turn start; mid-turn steers inherit
+            // whatever model the running turn locked in.
+            chat.send(t, { model: modelId });
           }}
           onSlash={(cmd) => {
             const c = cmd.toLowerCase();

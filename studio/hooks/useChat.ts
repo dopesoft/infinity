@@ -396,15 +396,21 @@ export function useChat() {
   }, [ws, sessionId, armWatchdog, clearWatchdog]);
 
   const send = useCallback(
-    (content: string) => {
+    (content: string, opts?: { model?: string }) => {
       const trimmed = content.trim();
       if (!trimmed || !sessionId) return false;
+      // Empty model string means "use the provider default" on the
+      // server. We pass it through verbatim so the caller controls the
+      // wire format — Studio resolves the chip's ModelKey to a model id
+      // before calling us.
+      const model = opts?.model ?? "";
 
       // Mid-turn steering. When a turn is already in flight, send the
       // input as `steer` instead of `message` — the server drops it into
       // the running agent loop's steer channel and the loop drains it
       // between iterations. We render the user bubble optimistically
-      // with `steered: true` so the transcript distinguishes it.
+      // with `steered: true` so the transcript distinguishes it. Model
+      // is ignored mid-turn; the running turn keeps its locked-in model.
       if (isStreaming) {
         setMessages((prev) => [
           ...prev,
@@ -442,7 +448,12 @@ export function useChat() {
       turnStartRef.current = Date.now();
       setIsStreaming(true);
       armWatchdog();
-      const ok = ws.send({ type: "message", session_id: sessionId, content: trimmed });
+      const ok = ws.send({
+        type: "message",
+        session_id: sessionId,
+        content: trimmed,
+        model,
+      });
       if (!ok) {
         clearWatchdog();
         setIsStreaming(false);

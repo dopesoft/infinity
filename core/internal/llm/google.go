@@ -17,7 +17,7 @@ func NewGoogle(apiKey, model string) *Google {
 func (g *Google) Name() string  { return "google" }
 func (g *Google) Model() string { return g.model }
 
-func (g *Google) Stream(_ context.Context, _ string, _ []Message, _ []ToolDef, out chan<- StreamEvent) (Response, error) {
+func (g *Google) Stream(_ context.Context, _ string, _ string, _ []Message, _ []ToolDef, out chan<- StreamEvent) (Response, error) {
 	emit(out, StreamEvent{Kind: StreamError, Err: "google provider: " + ErrNotImplemented.Error()})
 	return Response{}, ErrNotImplemented
 }
