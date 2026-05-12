@@ -476,13 +476,15 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                   disabled={disabled || (isLoading && !hasContent)}
                   className={cn(
                     "inline-flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
-                    isRecording
-                      ? "bg-transparent text-danger hover:bg-danger/10"
-                      : hasContent
-                        ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                        : minimal
-                          ? "cursor-not-allowed bg-muted text-muted-foreground"
-                          : "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                    isLoading
+                      ? "border-2 border-danger bg-transparent text-danger hover:bg-danger/10"
+                      : isRecording
+                        ? "bg-transparent text-danger hover:bg-danger/10"
+                        : hasContent
+                          ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                          : minimal
+                            ? "cursor-not-allowed bg-muted text-muted-foreground"
+                            : "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
                     "disabled:cursor-not-allowed disabled:opacity-50",
                   )}
                   aria-label={
