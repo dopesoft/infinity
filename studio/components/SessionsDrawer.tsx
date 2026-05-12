@@ -49,6 +49,29 @@ function templateLabel(t?: string): string {
   return t;
 }
 
+// formatRowDate renders "Today 2:15 PM" / "Yesterday 9:04 PM" / "Mar 7, 4:12 PM"
+// — short enough to fit on one line next to the title, scannable at a
+// glance. Locale-aware: respects the boss's system clock format. SSR
+// guard: when `now` is 0 (pre-mount) we return the raw timestamp without
+// the day prefix.
+function formatRowDate(iso: string, now: number): string {
+  const t = Date.parse(iso);
+  if (!t) return "";
+  const d = new Date(t);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (!now) return time;
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  const today = new Date(now);
+  const yesterday = new Date(now - 86_400_000);
+  if (sameDay(d, today)) return `Today ${time}`;
+  if (sameDay(d, yesterday)) return `Yesterday ${time}`;
+  const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${date}, ${time}`;
+}
+
 export function SessionsDrawer({
   currentId,
   onSelect,
@@ -173,7 +196,7 @@ export function SessionsDrawer({
                           )}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>{s.message_count} msg</span>
+                          <span suppressHydrationWarning>{formatRowDate(s.started_at, now)}</span>
                           {s.live && (
                             <span className="inline-flex items-center gap-1">
                               <span className="size-1.5 rounded-full bg-success" /> live

@@ -21,7 +21,12 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      // Plain fade: opacity goes 0 → 1 over 100ms. No Tailwind animate-in
+      // because tailwindcss-animate sneaks in a slide-from-right default
+      // when only fade-* is specified, which was making every Studio
+      // modal feel like it was creeping in from the side.
+      "fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity duration-100",
+      "data-[state=closed]:opacity-0 data-[state=open]:opacity-100",
       className,
     )}
     {...props}
@@ -38,7 +43,15 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-popover p-0 text-popover-foreground shadow-lg duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+        // Canonical Studio modal:
+        //   • centered, fixed width
+        //   • backdrop dims everything behind it (DialogOverlay)
+        //   • motion = plain opacity fade only. No slide, no zoom, no scale.
+        // The translate-1/2's are *layout*, not animation — they center
+        // the content. Pure opacity transition handles the entrance.
+        "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-popover p-0 text-popover-foreground shadow-lg",
+        "transition-opacity duration-100",
+        "data-[state=closed]:opacity-0 data-[state=open]:opacity-100",
         className,
       )}
       {...props}
