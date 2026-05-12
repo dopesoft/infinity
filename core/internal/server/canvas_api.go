@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -86,6 +87,73 @@ func resolveCanvasPath(raw string) (string, bool) {
 	return clean, true
 }
 
+// directBridge returns the configured tunnel base URL (e.g.
+// https://coder.dopesoft.io) for hitting the bridge's direct
+// filesystem + git endpoints. Strips the trailing /sse since those
+// endpoints live at /fs/ls, /fs/read, /git/status, /git/diff. Returns
+// "" if not configured — callers should fall through to MCP.
+func bridgeBaseURL() string {
+	raw := strings.TrimSpace(os.Getenv("CLAUDE_CODE_TUNNEL_URL"))
+	if raw == "" {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(raw, "/sse"), "/")
+}
+
+// directBridgeHeaders returns the Cloudflare Access service-token headers
+// configured for the claude_code MCP server. Reuses the same env vars
+// (CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET) so we don't need a
+// separate token for the direct endpoints — they live on the same host.
+func directBridgeHeaders() http.Header {
+	h := http.Header{}
+	if id := strings.TrimSpace(os.Getenv("CF_ACCESS_CLIENT_ID")); id != "" {
+		h.Set("CF-Access-Client-Id", id)
+	}
+	if sec := strings.TrimSpace(os.Getenv("CF_ACCESS_CLIENT_SECRET")); sec != "" {
+		h.Set("CF-Access-Client-Secret", sec)
+	}
+	return h
+}
+
+// directBridgeHTTPClient is a small package-level http.Client used by
+// the canvas direct-fs paths. Tunneled through Cloudflare so we honor
+// the same Access policy as the claude_code MCP server. Short timeouts
+// because these are cheap calls (ls, cat, git status).
+var directBridgeHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// directBridgeGet fetches `path` (e.g. "/fs/ls?path=...") from the
+// bridge, attaching Cloudflare Access headers. Returns (body, ok).
+// ok=false means the bridge endpoint isn't reachable or returned an
+// error; callers can fall through to the MCP path.
+func directBridgeGet(ctx context.Context, urlPath string) ([]byte, bool) {
+	base := bridgeBaseURL()
+	if base == "" {
+		return nil, false
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", base+urlPath, nil)
+	if err != nil {
+		return nil, false
+	}
+	for k, vs := range directBridgeHeaders() {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	resp, err := directBridgeHTTPClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, false
+	}
+	return body, true
+}
+
 // canvasMCP returns the named claude_code tool if available. Errors are
 // surfaced inline so the studio can show a connect-your-mac empty state
 // rather than the agent loop having to be wired up.
@@ -113,19 +181,28 @@ func (s *Server) macBridgeAvailable() bool {
 	return ok
 }
 
-// listViaMCP tries to list directory entries through the Mac MCP bridge.
-// Three strategies, first one with non-empty output wins:
+// listViaMCP tries to list directory entries via the Mac bridge.
+// Strategies in order:
 //
-//  1. claude_code__LS  — returns an indented bullet tree we parse.
-//  2. claude_code__Bash — runs `ls -1Fp <dir>` directly, getting the most
-//     reliable directory listing UNIX has. Trailing "/" marks directories,
-//     "@" marks symlinks. We invoke the registry tool directly (not via
-//     the agent loop) so the gate doesn't queue this internal canvas
-//     read — every path has already been validated against
-//     INFINITY_CANVAS_ROOT in the caller.
-//  3. claude_code__Glob — last-ditch, returns matching paths; less rich
-//     because we lose dir/file distinction, but better than empty.
+//  1. Direct bridge GET /fs/ls — plain Go filesystem read on the Mac.
+//     NO MCP. NO Claude Code session spawn. NO per-call subprocess.
+//     The bridge is already running on the Mac with full FS access;
+//     this is the obvious right answer for browsing files.
+//  2. claude_code__LS — older fallback path if the bridge somehow
+//     doesn't expose /fs/ls (older bridge build).
+//  3. claude_code__Bash with `ls -1Fp` — last-ditch fallback.
+//  4. claude_code__Glob — absolute last-ditch.
 func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
+	// Strategy 1: direct bridge.
+	if body, ok := directBridgeGet(ctx, "/fs/ls?path="+url.QueryEscape(dir)); ok {
+		var resp struct {
+			Entries []fsEntry `json:"entries"`
+		}
+		if err := json.Unmarshal(body, &resp); err == nil && len(resp.Entries) > 0 {
+			return resp.Entries, true
+		}
+	}
+
 	// Strategy 1: dedicated LS tool.
 	for _, name := range []string{"claude_code__LS", "claude_code__ls", "claude_code__List"} {
 		t, terr := s.canvasMCP(name)
@@ -321,6 +398,18 @@ func parseGlobOutput(raw, dir string) []fsEntry {
 // readViaMCP tries claude_code__Read under each registered name spelling.
 // Returns (content, true) on a non-empty read.
 func (s *Server) readViaMCP(ctx context.Context, path string) (string, bool) {
+	// Strategy 1: direct bridge /fs/read. Reads the file off the Mac
+	// filesystem via Go's os.ReadFile — no MCP, no Claude Code, no
+	// per-session read cache shenanigans.
+	if body, ok := directBridgeGet(ctx, "/fs/read?path="+url.QueryEscape(path)); ok {
+		var resp struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(body, &resp); err == nil && resp.Content != "" {
+			return resp.Content, true
+		}
+	}
+
 	for _, name := range []string{"claude_code__Read", "claude_code__read"} {
 		t, terr := s.canvasMCP(name)
 		if terr != nil {
@@ -874,6 +963,12 @@ func (s *Server) handleCanvasGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo escapes INFINITY_CANVAS_ROOT"})
 		return
 	}
+	// Try the direct bridge first — runs `git status` natively on the
+	// Mac, no MCP detour.
+	if body, dok := directBridgeGet(r.Context(), "/git/status?repo="+url.QueryEscape(repo)); dok {
+		writeJSON(w, http.StatusOK, parseGitStatusV2(string(body), repo))
+		return
+	}
 	out, err := s.runReadOnlyBash(r.Context(), "git -C "+shellQuote(repo)+" status --porcelain=v2 --branch")
 	if err != nil {
 		writeJSON(w, http.StatusOK, gitStatusResponse{Repo: repo, Entries: []gitStatusEntry{}})
@@ -941,6 +1036,21 @@ func (s *Server) handleCanvasGitDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Query().Get("path")
 	staged := r.URL.Query().Get("staged") == "1" || r.URL.Query().Get("staged") == "true"
+
+	// Direct bridge first.
+	dq := url.Values{}
+	dq.Set("repo", repo)
+	if staged {
+		dq.Set("staged", "1")
+	}
+	if path != "" {
+		dq.Set("path", path)
+	}
+	if body, dok := directBridgeGet(r.Context(), "/git/diff?"+dq.Encode()); dok {
+		writeJSON(w, http.StatusOK, gitDiffResponse{Path: path, Staged: staged, Diff: string(body)})
+		return
+	}
+
 	cmd := "git -C " + shellQuote(repo) + " diff --no-color"
 	if staged {
 		cmd += " --staged"
