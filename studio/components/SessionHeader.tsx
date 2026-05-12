@@ -12,14 +12,15 @@ function shortId(id: string): string {
   return `${tail.slice(0, 4)}-${tail.slice(4)}`;
 }
 
-function relStarted(ms: number, now: number): string {
-  const diff = Math.max(0, now - ms);
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m ago`;
+function formatStarted(ms: number): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /**
@@ -53,12 +54,8 @@ export function SessionHeader({
   onRewind?: () => void;
   extraActions?: React.ReactNode;
 }) {
-  const [now, setNow] = useState(0);
-  useEffect(() => {
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const displayName = sessionName?.trim() || shortId(sessionId);
 
@@ -86,12 +83,12 @@ export function SessionHeader({
             </button>
           }
         />
-        {startedAt && now ? (
+        {startedAt && mounted ? (
           <span
             className="hidden text-[11px] text-muted-foreground sm:inline"
             suppressHydrationWarning
           >
-            · started {relStarted(startedAt, now)}
+            · started {formatStarted(startedAt)}
           </span>
         ) : null}
       </div>

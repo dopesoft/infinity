@@ -103,23 +103,25 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     <CurrentProjectProvider value={current}>
       {/* Desktop — three horizontally-resizable columns */}
       <div className="hidden min-h-0 flex-1 lg:flex">
-        {/* autoSaveId is versioned — bump the suffix to invalidate previously
-            stored column widths in localStorage so a stuck layout snaps back
-            to defaults next paint. v2 = post tab-strip alignment redesign. */}
-        <ResizablePanelGroup direction="horizontal" autoSaveId="workspace:h:v2">
-          <ResizablePanel defaultSize={30} minSize={20} maxSize={50}>
+        {/* No autoSaveId — column widths reset to defaults on every refresh.
+            Dragging the dividers still works in-session, but a reload always
+            returns to the 30 / 22 / 48 layout. The boss explicitly wants the
+            workspace to feel "fresh" on each visit instead of accumulating
+            stuck layouts from random drag sessions. */}
+        <ResizablePanelGroup direction="horizontal">
+          <ResizablePanel defaultSize={20} minSize={15} maxSize={50}>
             <div className="flex h-full min-h-0 flex-col border-r bg-muted/30 dark:bg-zinc-900/40">
               <WorkspaceChatColumn chat={chat} />
             </div>
           </ResizablePanel>
           <ResizableHandle />
-          <ResizablePanel defaultSize={22} minSize={15} maxSize={40}>
+          <ResizablePanel defaultSize={15} minSize={12} maxSize={40}>
             <div className="flex h-full min-h-0 flex-col border-r bg-muted/20 dark:bg-zinc-900/30">
               <WorkspaceFilesColumn sessionId={chat.sessionId} />
             </div>
           </ResizablePanel>
           <ResizableHandle />
-          <ResizablePanel defaultSize={48} minSize={30}>
+          <ResizablePanel defaultSize={65} minSize={30}>
             <div className="flex h-full min-h-0 flex-col">
               <CanvasRightPane chat={chat} />
             </div>

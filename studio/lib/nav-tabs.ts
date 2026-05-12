@@ -5,6 +5,7 @@ import {
   Brain,
   type LucideIcon,
   MessageSquare,
+  Settings,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
@@ -42,4 +43,5 @@ export const NAV_OVERFLOW: NavTab[] = [
   { href: "/trust", label: "Trust", Icon: ShieldCheck },
   { href: "/cron", label: "Cron", Icon: Clock },
   { href: "/audit", label: "Audit", Icon: ClipboardList },
+  { href: "/settings", label: "Settings", Icon: Settings },
 ];

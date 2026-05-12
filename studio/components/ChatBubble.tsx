@@ -1,4 +1,9 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Check, Copy, ThumbsDown, ThumbsUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
 
 function formatMs(ms?: number) {
@@ -7,9 +12,68 @@ function formatMs(ms?: number) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function formatTime(ms: number, now: number): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (!now) return time;
+  const diff = now - ms;
+  const SEC = 1_000;
+  const MIN = 60 * SEC;
+  if (diff < 45 * SEC) return "just now";
+  if (diff < 60 * MIN) return `${Math.floor(diff / MIN)}m ago`;
+  if (diff < 24 * 60 * MIN) return time;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+const FEEDBACK_KEY = "infinity:messages:feedback";
+
+type FeedbackMap = Record<string, "up" | "down">;
+
+function readFeedback(): FeedbackMap {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(FEEDBACK_KEY);
+    return raw ? (JSON.parse(raw) as FeedbackMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeFeedback(map: FeedbackMap) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(FEEDBACK_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function ChatBubble({ message }: { message: ChatMessage }) {
-  if (message.role === "tool" || message.role === "thinking") return null; // ToolCallCard / ThinkingBlock render these
+  if (message.role === "tool" || message.role === "thinking") return null;
   const isUser = message.role === "user";
+
+  const [copied, setCopied] = useState(false);
+  const [vote, setVote] = useState<"up" | "down" | undefined>(undefined);
+  const [now, setNow] = useState(0);
+
+  // Hydrate vote from localStorage after mount (SSR-safe).
+  useEffect(() => {
+    setVote(readFeedback()[message.id]);
+  }, [message.id]);
+
+  // Tick "now" once on mount + every 30s so the relative timestamp updates
+  // without thrashing renders.
+  useEffect(() => {
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   if (message.error) {
     return (
@@ -19,32 +83,140 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
     );
   }
 
+  function doCopy() {
+    if (!message.text) return;
+    void navigator.clipboard.writeText(message.text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      },
+      () => undefined,
+    );
+  }
+
+  function setRating(next: "up" | "down") {
+    const map = readFeedback();
+    const current = map[message.id];
+    if (current === next) {
+      // Toggle off.
+      delete map[next === "up" ? message.id : message.id];
+      delete map[message.id];
+      setVote(undefined);
+      writeFeedback(map);
+      void submitMessageFeedback(message.id, null);
+      return;
+    }
+    map[message.id] = next;
+    writeFeedback(map);
+    setVote(next);
+    void submitMessageFeedback(message.id, next);
+  }
+
   return (
-    <div className={cn("flex w-full gap-2", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "rounded-2xl px-3 py-2 text-sm leading-relaxed",
-          // User bubbles stay compact (they read as input). Assistant
-          // replies cap at 75% so the eye has a clear seam between the
-          // boss's words and Jarvis's.
-          isUser
-            ? "max-w-[88%] rounded-tr-sm bg-primary text-primary-foreground sm:max-w-[78%]"
-            : "max-w-full rounded-tl-sm bg-muted text-foreground sm:max-w-[75%]",
-        )}
-      >
-        <div className="whitespace-pre-wrap break-words">
+    // group → child action row uses group-hover to fade in. On touch
+    // devices (no hover) the row stays visible because the arbitrary
+    // [@media(hover:none)] variant pins opacity to 100.
+    <div
+      className={cn(
+        "group flex w-full flex-col gap-1",
+        isUser ? "items-end" : "items-start",
+      )}
+    >
+      {isUser ? (
+        // User messages render as plain right-aligned text (no bubble) so
+        // the eye reads them as "input"; the agent's responses get the
+        // visible surface treatment.
+        <div className="max-w-[88%] whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground sm:max-w-[78%]">
           {message.text}
           {message.pending && (
             <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
           )}
         </div>
-        {!isUser && !message.pending && (message.outputTokens || message.latencyMs) ? (
-          <div className="mt-1 flex justify-end gap-2 text-[11px] text-muted-foreground">
-            {message.outputTokens ? <span>{message.outputTokens} tok</span> : null}
-            {message.latencyMs ? <span>{formatMs(message.latencyMs)}</span> : null}
+      ) : (
+        // Agent bubble — a touch darker than the surrounding muted column
+        // bg so it reads as a distinct surface in both modes.
+        <div className="max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80">
+          <div className="whitespace-pre-wrap break-words">
+            {message.text}
+            {message.pending && (
+              <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
+            )}
           </div>
-        ) : null}
-      </div>
+        </div>
+      )}
+
+      {/* Metadata row — timestamp stays visible all the time. Action icons
+          (thumbs, copy) live in a child container that fades in on hover
+          (and is always visible on touch devices via hover:none media). */}
+      {!message.pending && (
+        <div
+          className={cn(
+            "flex w-full items-center gap-1 px-1 text-[11px] text-muted-foreground",
+            isUser ? "justify-end" : "justify-start",
+          )}
+        >
+          <span suppressHydrationWarning>{formatTime(message.createdAt, now)}</span>
+          {!isUser && message.outputTokens ? (
+            <>
+              <span className="text-muted-foreground/40">·</span>
+              <span className="font-mono">{message.outputTokens} tok</span>
+            </>
+          ) : null}
+          {!isUser && message.latencyMs ? (
+            <>
+              <span className="text-muted-foreground/40">·</span>
+              <span className="font-mono">{formatMs(message.latencyMs)}</span>
+            </>
+          ) : null}
+          <div
+            className={cn(
+              "ml-1 flex items-center gap-0.5",
+              "opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100",
+              "[@media(hover:none)]:opacity-100",
+            )}
+          >
+            {!isUser && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setRating("up")}
+                  aria-label="Mark as helpful"
+                  aria-pressed={vote === "up"}
+                  title="Helpful"
+                  className={cn(
+                    "inline-flex size-6 items-center justify-center rounded transition-colors hover:bg-accent",
+                    vote === "up" ? "text-success" : "hover:text-foreground",
+                  )}
+                >
+                  <ThumbsUp className="size-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRating("down")}
+                  aria-label="Mark as unhelpful"
+                  aria-pressed={vote === "down"}
+                  title="Not helpful"
+                  className={cn(
+                    "inline-flex size-6 items-center justify-center rounded transition-colors hover:bg-accent",
+                    vote === "down" ? "text-danger" : "hover:text-foreground",
+                  )}
+                >
+                  <ThumbsDown className="size-3" />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={doCopy}
+              aria-label={copied ? "Copied" : "Copy"}
+              title={copied ? "Copied" : "Copy"}
+              className="inline-flex size-6 items-center justify-center rounded transition-colors hover:bg-accent hover:text-foreground"
+            >
+              {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

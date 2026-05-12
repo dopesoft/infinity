@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, Settings, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -16,17 +16,12 @@ import { NAV_TABS, NAV_OVERFLOW } from "@/lib/nav-tabs";
 import { useNavBadge } from "@/lib/nav-badges";
 import { cn } from "@/lib/utils";
 
-/* MobileNav is the right-hand hamburger that opens a draggable
- * bottom-sheet drawer on phones. Drawer is split into two sections:
- *   • Primary  — Live + Memory (and Settings appended for one-tap reach)
- *   • More     — demoted routes (Skills, Heartbeat, Trust, Cron, Audit)
- *     that are mostly observed through the Info modal on /live, but still
- *     deep-linkable for management. */
+/* MobileNav is the right-hand hamburger that opens a draggable bottom-sheet
+ * drawer on phones. The order matches the desktop primary nav + overflow
+ * (Heartbeat / Trust / Cron / Audit / Settings) so the muscle memory is the
+ * same across breakpoints. */
 
-const primaryTabs = [
-  ...NAV_TABS,
-  { href: "/settings", label: "Settings", Icon: Settings },
-];
+const tabs = [...NAV_TABS, ...NAV_OVERFLOW];
 
 export function MobileNav() {
   const pathname = usePathname();
@@ -46,7 +41,7 @@ export function MobileNav() {
       <DrawerContent>
         <DrawerTitle className="sr-only">Navigation</DrawerTitle>
         <nav className="flex flex-col gap-1 px-3 pb-4 pt-2">
-          {primaryTabs.map((t) => {
+          {tabs.map((t) => {
             const active = pathname === t.href || pathname?.startsWith(t.href + "/");
             const Icon = t.Icon;
             return (
@@ -70,34 +65,6 @@ export function MobileNav() {
                 {active && (
                   <span className="size-1.5 rounded-full bg-foreground" aria-hidden />
                 )}
-              </Link>
-            );
-          })}
-
-          <div className="mt-2 px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            More
-          </div>
-          {NAV_OVERFLOW.map((t) => {
-            const active = pathname === t.href || pathname?.startsWith(t.href + "/");
-            const Icon = t.Icon;
-            return (
-              <Link
-                key={t.href}
-                href={t.href}
-                onClick={() => setOpen(false)}
-                className={cn(
-                  "flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
-                  active
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                )}
-              >
-                <Icon
-                  className={cn("size-4 shrink-0", active ? "text-foreground" : "text-muted-foreground")}
-                  aria-hidden
-                />
-                <span className="flex-1">{t.label}</span>
-                <MobileNavBadgeChip href={t.href} />
               </Link>
             );
           })}

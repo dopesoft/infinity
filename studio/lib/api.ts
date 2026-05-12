@@ -693,3 +693,33 @@ export async function invokeSkill(
     return { error: String(e) };
   }
 }
+
+/**
+ * Submit a thumbs-up / thumbs-down on an assistant message. Pass null to
+ * clear the existing rating. Fire-and-forget — UI optimistically updates,
+ * server captures into mem_observations so the memory layer can surface
+ * "the boss tends to like this kind of response" on future turns.
+ */
+export async function submitMessageFeedback(
+  messageId: string,
+  rating: "up" | "down" | null,
+): Promise<boolean> {
+  let sessionId = "";
+  if (typeof window !== "undefined") {
+    try {
+      sessionId = window.localStorage.getItem("infinity:sessionId") ?? "";
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const res = await authedFetch(`/api/messages/${encodeURIComponent(messageId)}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, session_id: sessionId }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
