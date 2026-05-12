@@ -20,7 +20,16 @@ import {
   DrawerFooter,
   DrawerClose,
 } from "@/components/ui/drawer";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { useIsDesktop } from "@/lib/use-media-query";
 import { useCanvasStore } from "@/lib/canvas/store";
 import {
   fetchCanvasGitStatus,
@@ -59,6 +68,7 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [commitOpen, setCommitOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  const isDesktop = useIsDesktop();
 
   const refresh = useCallback(async () => {
     if (!store.root) return;
@@ -269,37 +279,70 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
         {untracked.length > 0 && <GitGroup title="Untracked" entries={untracked} repo={store.root} />}
       </div>
 
-      {/* Commit drawer */}
-      <Drawer open={commitOpen} onOpenChange={setCommitOpen}>
-        <DrawerContent>
-          <DrawerHeader className="text-left">
-            <DrawerTitle>Commit changes</DrawerTitle>
-            <DrawerDescription>
-              {staged.length} file{staged.length === 1 ? "" : "s"} staged.
-              This will queue a Trust contract on your Mac.
-            </DrawerDescription>
-          </DrawerHeader>
-          <div className="px-4">
-            <Textarea
-              value={commitMessage}
-              onChange={(e) => setCommitMessage(e.target.value)}
-              placeholder="Commit message…"
-              rows={4}
-              className="min-h-24 font-mono text-sm"
-              autoFocus
-            />
-          </div>
-          <DrawerFooter className="flex flex-row justify-end gap-2">
-            <DrawerClose asChild>
-              <Button variant="ghost">Cancel</Button>
-            </DrawerClose>
-            <Button onClick={() => void onCommit()} disabled={!commitMessage.trim() || busy === "commit"}>
-              {busy === "commit" ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
-              Commit
-            </Button>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
+      {/* Commit modal — Dialog on desktop, Drawer on mobile per project convention. */}
+      {isDesktop ? (
+        <Dialog open={commitOpen} onOpenChange={setCommitOpen}>
+          <DialogContent className="max-w-lg gap-0 p-0">
+            <DialogHeader>
+              <DialogTitle>Commit changes</DialogTitle>
+              <DialogDescription>
+                {staged.length} file{staged.length === 1 ? "" : "s"} staged.
+                This will queue a Trust contract on your Mac.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="px-4">
+              <Textarea
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                placeholder="Commit message…"
+                rows={4}
+                className="min-h-24 font-mono text-sm"
+                autoFocus
+              />
+            </div>
+            <div className="flex flex-row justify-end gap-2 p-4">
+              <DialogClose asChild>
+                <Button variant="ghost">Cancel</Button>
+              </DialogClose>
+              <Button onClick={() => void onCommit()} disabled={!commitMessage.trim() || busy === "commit"}>
+                {busy === "commit" ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
+                Commit
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : (
+        <Drawer open={commitOpen} onOpenChange={setCommitOpen}>
+          <DrawerContent>
+            <DrawerHeader className="text-left">
+              <DrawerTitle>Commit changes</DrawerTitle>
+              <DrawerDescription>
+                {staged.length} file{staged.length === 1 ? "" : "s"} staged.
+                This will queue a Trust contract on your Mac.
+              </DrawerDescription>
+            </DrawerHeader>
+            <div className="px-4">
+              <Textarea
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                placeholder="Commit message…"
+                rows={4}
+                className="min-h-24 font-mono text-sm"
+                autoFocus
+              />
+            </div>
+            <DrawerFooter className="flex flex-row justify-end gap-2">
+              <DrawerClose asChild>
+                <Button variant="ghost">Cancel</Button>
+              </DrawerClose>
+              <Button onClick={() => void onCommit()} disabled={!commitMessage.trim() || busy === "commit"}>
+                {busy === "commit" ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
+                Commit
+              </Button>
+            </DrawerFooter>
+          </DrawerContent>
+        </Drawer>
+      )}
     </div>
   );
 }

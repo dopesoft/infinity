@@ -302,10 +302,11 @@ function NodeRow({
 function EmptyRoot() {
   return (
     <div className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
-      <p className="mb-2 font-medium">No workspace root.</p>
+      <p className="mb-2 font-medium">No app in this session.</p>
       <p>
-        Set <code className="rounded bg-muted px-1 font-mono text-[10px]">INFINITY_CANVAS_ROOT</code>{" "}
-        on Core or choose a folder in Settings → Canvas.
+        Head over to <span className="font-medium">Live</span> and tell the agent
+        what to build. Once the scaffold lands, this tree will fill in with the
+        project files — and only those files.
       </p>
     </div>
   );

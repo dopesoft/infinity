@@ -9,24 +9,27 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/ui/drawer";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { fetchSessions, type SessionDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useIsDesktop } from "@/lib/use-media-query";
 
 /**
- * SessionsDrawer — bottom-sheet/desktop-modal session switcher.
+ * SessionsDrawer — session switcher. Honors the global pattern:
+ * <Dialog> on lg+ (centered modal), <Drawer> on <lg (bottom sheet).
  *
- * Mounted by SessionHeader; opens when the boss taps the session name
- * (or the chevron next to it). Lists every session grouped by recency,
- * shows a small project chip for sessions that have scaffolded an app,
- * supports search, and pinned at top is a "New session" action.
- *
- * Clicking a session calls onSelect(id); the parent (Live) handles
- * routing/state changes. Switching does NOT spawn a fresh session — it
- * loads the chosen one's transcript via the existing useChat hydration.
+ * Tap a row → onSelect(id). Pressing "+ New" → onNew(). Search filters by
+ * name / template slug / id.
  */
 type Group = "Today" | "Yesterday" | "This week" | "Older";
 
@@ -61,13 +64,12 @@ export function SessionsDrawer({
   const [sessions, setSessions] = useState<SessionDTO[]>([]);
   const [q, setQ] = useState("");
   const [now, setNow] = useState<number>(0);
+  const isDesktop = useIsDesktop();
 
   useEffect(() => {
     setNow(Date.now());
   }, []);
 
-  // Refresh whenever the drawer opens; also stay live via the realtime hook
-  // so a name landing in via the Haiku auto-namer shows up without a re-open.
   async function refresh() {
     const list = await fetchSessions();
     setSessions(list ?? []);
@@ -115,88 +117,108 @@ export function SessionsDrawer({
     setOpen(false);
   }
 
+  const body = (
+    <>
+      <div className="px-4 pb-2 pt-1">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search by name, framework, or id…"
+              inputMode="search"
+              className="pl-8"
+            />
+          </div>
+          <Button onClick={handleNew} className="shrink-0" aria-label="Start a new session">
+            <Plus className="size-4" />
+            <span className="hidden sm:inline">New</span>
+          </Button>
+        </div>
+      </div>
+      <div className="max-h-[70dvh] overflow-y-auto px-2 pb-4 scroll-touch lg:max-h-[60vh]">
+        {grouped.length === 0 ? (
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+            No sessions match. Start a fresh one above.
+          </p>
+        ) : (
+          grouped.map(({ group, rows }) => (
+            <div key={group} className="px-1 py-1">
+              <div className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {group}
+              </div>
+              <ul className="space-y-1">
+                {rows.map((s) => (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(s.id)}
+                      className={cn(
+                        "flex w-full min-h-12 items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
+                        s.id === currentId && "bg-accent/60 ring-1 ring-info",
+                      )}
+                    >
+                      {s.project_path ? (
+                        <FolderGit2 className="size-4 shrink-0 text-info" aria-hidden />
+                      ) : (
+                        <MessageCircle className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">
+                          {s.name?.trim() || (
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {s.id.slice(0, 8)}…
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{s.message_count} msg</span>
+                          {s.live && (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="size-1.5 rounded-full bg-success" /> live
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {s.project_template && (
+                        <Badge variant="outline" className="shrink-0 text-[10px]">
+                          {templateLabel(s.project_template)}
+                        </Badge>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        )}
+      </div>
+    </>
+  );
+
+  if (isDesktop) {
+    return (
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>{trigger}</DialogTrigger>
+        <DialogContent className="max-w-xl gap-0 p-0">
+          <DialogHeader>
+            <DialogTitle>Sessions</DialogTitle>
+          </DialogHeader>
+          {body}
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>{trigger}</DrawerTrigger>
-      <DrawerContent className="lg:mx-auto lg:max-w-2xl">
+      <DrawerContent>
         <DrawerHeader className="text-left">
           <DrawerTitle>Sessions</DrawerTitle>
         </DrawerHeader>
-        <div className="px-4 pb-2">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Search by name, framework, or id…"
-                inputMode="search"
-                className="pl-8"
-              />
-            </div>
-            <Button onClick={handleNew} className="shrink-0" aria-label="Start a new session">
-              <Plus className="size-4" />
-              <span className="hidden sm:inline">New</span>
-            </Button>
-          </div>
-        </div>
-        <div className="max-h-[70dvh] overflow-y-auto px-2 pb-4 scroll-touch">
-          {grouped.length === 0 ? (
-            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No sessions match. Start a fresh one above.
-            </p>
-          ) : (
-            grouped.map(({ group, rows }) => (
-              <div key={group} className="px-1 py-1">
-                <div className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {group}
-                </div>
-                <ul className="space-y-1">
-                  {rows.map((s) => (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        onClick={() => handleSelect(s.id)}
-                        className={cn(
-                          "flex w-full min-h-12 items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
-                          s.id === currentId && "bg-accent/60 ring-1 ring-info",
-                        )}
-                      >
-                        {s.project_path ? (
-                          <FolderGit2 className="size-4 shrink-0 text-info" aria-hidden />
-                        ) : (
-                          <MessageCircle className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium">
-                            {s.name?.trim() || (
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {s.id.slice(0, 8)}…
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                            <span>{s.message_count} msg</span>
-                            {s.live && (
-                              <span className="inline-flex items-center gap-1">
-                                <span className="size-1.5 rounded-full bg-success" /> live
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {s.project_template && (
-                          <Badge variant="outline" className="shrink-0 text-[10px]">
-                            {templateLabel(s.project_template)}
-                          </Badge>
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))
-          )}
-        </div>
+        {body}
       </DrawerContent>
     </Drawer>
   );
