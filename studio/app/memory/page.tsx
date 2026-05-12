@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -164,12 +164,6 @@ export default function MemoryPage() {
                 enterKeyHint="search"
               />
             </div>
-            {/* Submit button mirrors the HeaderAction pattern: square
-                icon on mobile (no label), icon + label on sm+. Keeps the
-                "no text labels on mobile buttons" rule consistent across
-                the app. */}
-            {/* Mobile: square ghost icon, no background.
-                sm+: filled primary button restores the default look. */}
             <Button
               type="submit"
               disabled={searching}
@@ -181,16 +175,6 @@ export default function MemoryPage() {
               <span className="hidden sm:inline">
                 {searching ? "…" : "search"}
               </span>
-            </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              onClick={() => loadDefault()}
-              aria-label="Refresh"
-              disabled={loading}
-            >
-              <RefreshCw className="size-4" />
             </Button>
           </form>
 
@@ -205,11 +189,32 @@ export default function MemoryPage() {
               className="w-full"
             >
               <PageTabsList columns={3}>
-                {VIEWS.map((v) => (
-                  <PageTabsTrigger key={v} value={v}>
-                    {v}
-                  </PageTabsTrigger>
-                ))}
+                {VIEWS.map((v) => {
+                  const count =
+                    v === "memories"
+                      ? (counts?.memories ?? null)
+                      : v === "observations"
+                        ? (counts?.observations ?? null)
+                        : (counts?.graph_nodes ?? null);
+                  return (
+                    <PageTabsTrigger key={v} value={v} className="gap-1.5">
+                      <span>{v}</span>
+                      {typeof count === "number" && (
+                        <span
+                          className={cn(
+                            "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+                            view === v
+                              ? "bg-foreground text-background"
+                              : "bg-muted-foreground/15 text-muted-foreground",
+                          )}
+                          aria-label={`${count} total`}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </PageTabsTrigger>
+                  );
+                })}
               </PageTabsList>
             </PageTabs>
 

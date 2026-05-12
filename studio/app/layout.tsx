@@ -5,6 +5,7 @@ import { NavBadgesProvider } from "@/lib/nav-badges";
 import { RealtimeProvider } from "@/lib/realtime/provider";
 import { WebSocketProvider } from "@/lib/ws/provider";
 import { TrustToast } from "@/components/TrustToast";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 // Bust edge HTML cache on every request. Without this, Railway/Next caches the
@@ -58,8 +59,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <RealtimeProvider>
             <NavBadgesProvider>
               <WebSocketProvider>
-                <TrustToast />
-                {children}
+                <TooltipProvider delayDuration={250}>
+                  <TrustToast />
+                  {children}
+                </TooltipProvider>
               </WebSocketProvider>
             </NavBadgesProvider>
           </RealtimeProvider>

@@ -61,8 +61,15 @@ import { cn } from "@/lib/utils";
 
 const STATUS_POLL_MS = 4_000;
 
-export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
+export function CanvasGitPanel({
+  sessionId,
+  onFileOpen,
+}: {
+  sessionId: string | null;
+  onFileOpen?: (path: string) => void;
+}) {
   const store = useCanvasStore();
+  const openFile = (p: string) => (onFileOpen ? onFileOpen(p) : store.openFile(p));
   const [status, setStatus] = useState<GitStatusResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // "stage" | "commit" | "push" | "pull"
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -86,7 +93,7 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
   const onStageAll = async () => {
     setBusy("stage");
     setToast(null);
-    const res = await canvasGitStage({ repo: store.root, session_id: sessionId });
+    const res = await canvasGitStage({ repo: store.root, session_id: sessionId ?? undefined });
     setBusy(null);
     if (res?.status === "executed") {
       setToast({ kind: "ok", text: "Staged." });
@@ -110,7 +117,7 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
     const res = await canvasGitCommit({
       repo: store.root,
       message: msg,
-      session_id: sessionId,
+      session_id: sessionId ?? undefined,
     });
     setBusy(null);
     if (res?.status === "executed") {
@@ -131,7 +138,7 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
       repo: store.root,
       remote: "origin",
       branch: status?.branch,
-      session_id: sessionId,
+      session_id: sessionId ?? undefined,
     });
     setBusy(null);
     if (res?.status === "executed") {
@@ -151,7 +158,7 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
       repo: store.root,
       remote: "origin",
       branch: status?.branch,
-      session_id: sessionId,
+      session_id: sessionId ?? undefined,
     });
     setBusy(null);
     if (res?.status === "executed") {
@@ -274,9 +281,9 @@ export function CanvasGitPanel({ sessionId }: { sessionId: string }) {
             Working tree clean.
           </div>
         )}
-        {staged.length > 0 && <GitGroup title="Staged" entries={staged} repo={store.root} />}
-        {unstaged.length > 0 && <GitGroup title="Changes" entries={unstaged} repo={store.root} />}
-        {untracked.length > 0 && <GitGroup title="Untracked" entries={untracked} repo={store.root} />}
+        {staged.length > 0 && <GitGroup title="Staged" entries={staged} repo={store.root} onOpen={openFile} />}
+        {unstaged.length > 0 && <GitGroup title="Changes" entries={unstaged} repo={store.root} onOpen={openFile} />}
+        {untracked.length > 0 && <GitGroup title="Untracked" entries={untracked} repo={store.root} onOpen={openFile} />}
       </div>
 
       {/* Commit modal — Dialog on desktop, Drawer on mobile per project convention. */}
@@ -351,10 +358,12 @@ function GitGroup({
   title,
   entries,
   repo,
+  onOpen,
 }: {
   title: string;
   entries: GitStatusEntry[];
   repo: string;
+  onOpen: (p: string) => void;
 }) {
   const store = useCanvasStore();
   return (
@@ -370,7 +379,7 @@ function GitGroup({
           <button
             key={e.path}
             type="button"
-            onClick={() => store.openFile(fullPath)}
+            onClick={() => onOpen(fullPath)}
             className={cn(
               "flex w-full min-h-7 items-center gap-2 px-2 py-1 text-left text-[13px] transition-colors",
               isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",

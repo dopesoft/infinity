@@ -6,6 +6,7 @@ import { SignOutButton } from "@/components/SignOutButton";
 import { StatusPill, type AgentState } from "@/components/StatusPill";
 import { FooterStatus } from "@/components/FooterStatus";
 import { MobileNav } from "@/components/MobileNav";
+import { NavOverflow } from "@/components/NavOverflow";
 
 /* Layout shell. On mobile (<lg) the header shows a logo on the left and a
  * hamburger on the right that opens MobileNav (bottom drawer). On desktop
@@ -41,6 +42,7 @@ export function TabFrame({
         {/* Right cluster: theme + sign out on desktop, hamburger on mobile. */}
         <div className="flex items-center gap-1">
           <span className="hidden items-center gap-1 lg:inline-flex">
+            <NavOverflow />
             <ThemeToggle />
             <Link
               href="/settings"

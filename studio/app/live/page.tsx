@@ -1,35 +1,64 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Gauge } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { SessionHeader } from "@/components/SessionHeader";
-import { ConversationStream } from "@/components/ConversationStream";
-import { Composer } from "@/components/Composer";
-import { CodingSessionBanner } from "@/components/CodingSessionBanner";
-import { Button } from "@/components/ui/button";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@/components/ui/drawer";
-import { LeftPanels, RightPanels, MobileStatusStack } from "@/components/LiveSidePanels";
+import { InfoModal } from "@/components/workspace/InfoModal";
+import { Workspace } from "@/components/workspace/Workspace";
+import { CanvasStoreProvider, useCanvasStore } from "@/lib/canvas/store";
+import { fetchCanvasConfig } from "@/lib/canvas/api";
+import { fetchSessions } from "@/lib/api";
 import { useChat } from "@/hooks/useChat";
 import type { AgentState } from "@/components/StatusPill";
-import { fetchSessions } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 
+/**
+ * /live — the unified workspace.
+ *
+ *   <TabFrame>
+ *     <SessionHeader>    chat-app name + chevron switcher + new + info
+ *     <Workspace>        desktop = 3 cols, mobile = 3 modes (Chat / Files / Canvas)
+ *
+ * The old standalone /canvas route now redirects here. Meta surfaces that
+ * used to be primary tabs (Skills / Heartbeat / Trust / Cron / Audit) are
+ * still deep-linkable but live in the desktop overflow kebab and the
+ * mobile drawer's "More" section. The Info button (next to the session
+ * name) opens a read-only modal with Brain + Activity tabs that summarize
+ * those surfaces inline.
+ */
 export default function LivePage() {
+  // CanvasStoreProvider hosts the workspace's per-session canvas state
+  // (file tabs, dirty paths, preview URL). It used to live only inside
+  // /canvas; now it wraps the unified /live workspace.
+  const envPreviewUrl = process.env.NEXT_PUBLIC_PREVIEW_URL ?? "";
+  return (
+    <CanvasStoreProvider envPreviewUrl={envPreviewUrl}>
+      <LivePageInner />
+    </CanvasStoreProvider>
+  );
+}
+
+function LivePageInner() {
   const chat = useChat();
-  const [statusOpen, setStatusOpen] = useState(false);
+  const store = useCanvasStore();
   const [sessionName, setSessionName] = useState<string>("");
 
-  // Pull just the current session's name from the listing endpoint, then
-  // keep it fresh via the same realtime channel the drawer uses. Cheap —
-  // the listing already runs whenever the drawer opens, this is just one
-  // extra fetch on mount + name updates.
+  // Hydrate workspace defaults (workspace root, preview URL fallback,
+  // bridge reachability) from Core on mount. Once. The per-session
+  // project_path effect in <Workspace> takes over from there.
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchCanvasConfig(ac.signal).then((cfg) => {
+      if (!cfg) return;
+      if (!store.root && cfg.root) store.setRoot(cfg.root);
+      if (!store.previewUrl && cfg.preview_url) store.setPreviewUrl(cfg.preview_url);
+      store.setBridgeOk(cfg.mac_bridge_ok);
+    });
+    return () => ac.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Pull the current session's name and keep it fresh via realtime.
   useEffect(() => {
     if (!chat.sessionId) {
       setSessionName("");
@@ -70,71 +99,24 @@ export default function LivePage() {
 
   return (
     <TabFrame agentState={agentState}>
-      {/* Three-column responsive grid:
-          mobile  → 1 col (chat only, status via bottom drawer)
-          md      → 2 col (chat + right rail)
-          lg+     → 3 col (left rail + chat + right rail)
-
-          Side rails get a subtle muted background so the chat card pops as the
-          focal surface. On light: outer = very light grey, chat = white. On
-          dark: outer = subtle dark grey over true black, chat = lifted card. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 py-3 sm:px-4 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-4 lg:grid-cols-[16rem_minmax(0,1fr)_18rem] xl:grid-cols-[17rem_minmax(0,1fr)_19rem]">
-        {/* Left rail — desktop only */}
-        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 lg:block lg:overflow-y-auto dark:bg-zinc-800/60">
-          <LeftPanels messages={chat.messages} usedTokens={usedTokens} />
-        </aside>
-
-        {/* Center — chat. */}
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-muted/60 dark:bg-zinc-800/60">
-          <SessionHeader
-            sessionId={chat.sessionId}
-            sessionName={sessionName}
-            startedAt={startedAt}
-            onNew={chat.newSession}
-            onClear={chat.clear}
-            onSwitch={chat.switchSession}
-            onRewind={undefined}
-            extraActions={
-              <Drawer open={statusOpen} onOpenChange={setStatusOpen}>
-                <DrawerTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Open live status"
-                    title="Status"
-                    className="md:hidden"
-                  >
-                    <Gauge className="size-4" />
-                  </Button>
-                </DrawerTrigger>
-                <DrawerContent>
-                  <DrawerHeader className="text-left">
-                    <DrawerTitle>Live status</DrawerTitle>
-                  </DrawerHeader>
-                  <div className="max-h-[70dvh] overflow-y-auto scroll-touch">
-                    <MobileStatusStack
-                      messages={chat.messages}
-                      usedTokens={usedTokens}
-                      wsConnected={chat.status === "connected"}
-                    />
-                  </div>
-                </DrawerContent>
-              </Drawer>
-            }
-          />
-          <CodingSessionBanner sessionId={chat.sessionId} />
-          <ConversationStream messages={chat.messages} />
-          <Composer
-            onSend={chat.send}
-            onSlash={(cmd) => (cmd === "new" ? chat.newSession() : chat.clear())}
-            disabled={chat.isStreaming || chat.status !== "connected"}
-          />
-        </section>
-
-        {/* Right rail — md and up */}
-        <aside className="scroll-touch hidden rounded-xl bg-muted/60 p-2 md:block md:overflow-y-auto dark:bg-zinc-800/60">
-          <RightPanels wsConnected={chat.status === "connected"} />
-        </aside>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <SessionHeader
+          sessionId={chat.sessionId}
+          sessionName={sessionName}
+          startedAt={startedAt}
+          onNew={chat.newSession}
+          onClear={chat.clear}
+          onSwitch={chat.switchSession}
+          onRewind={undefined}
+          extraActions={
+            <InfoModal
+              messages={chat.messages}
+              usedTokens={usedTokens}
+              wsConnected={chat.status === "connected"}
+            />
+          }
+        />
+        <Workspace chat={chat} />
       </div>
     </TabFrame>
   );

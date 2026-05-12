@@ -63,8 +63,12 @@ export function SessionHeader({
   const displayName = sessionName?.trim() || shortId(sessionId);
 
   return (
-    <div className="flex items-center justify-between gap-2 border-b bg-background/95 px-3 py-2 sm:px-4">
-      <div className="flex min-w-0 items-baseline gap-2">
+    // Compact bar (h-10): the row sits between the global header (h-14)
+    // and the workspace columns. Buttons drop to h-7 + text-xs because
+    // the contents are dense (name chevron + 2-3 action chips) and the
+    // session name already pulls focus.
+    <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b bg-background/95 px-3 sm:px-4">
+      <div className="flex min-w-0 items-center gap-2">
         <SessionsDrawer
           currentId={sessionId}
           onSelect={onSwitch}
@@ -72,7 +76,7 @@ export function SessionHeader({
           trigger={
             <button
               type="button"
-              className="flex min-h-11 min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-left hover:bg-accent"
+              className="flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-left hover:bg-accent"
               aria-label="Switch session"
             >
               <span className="truncate text-sm font-semibold text-foreground" suppressHydrationWarning>
@@ -91,7 +95,7 @@ export function SessionHeader({
           </span>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-0.5">
         {extraActions}
         {onRewind ? (
           <Button
@@ -101,8 +105,9 @@ export function SessionHeader({
             aria-label="Rewind to a prior turn"
             title="Rewind (coming soon)"
             disabled
+            className="h-7 gap-1 px-2 text-xs"
           >
-            <Undo2 className="size-4" />
+            <Undo2 className="size-3.5" />
             <span className="hidden sm:inline">rewind</span>
           </Button>
         ) : null}
@@ -112,8 +117,9 @@ export function SessionHeader({
           onClick={onClear}
           aria-label="Compact session — fold into memory and clear visible context"
           title="Compact session"
+          className="h-7 gap-1 px-2 text-xs"
         >
-          <Archive className="size-4" />
+          <Archive className="size-3.5" />
           <span className="hidden sm:inline">compact</span>
         </Button>
         <Button
@@ -122,8 +128,9 @@ export function SessionHeader({
           onClick={onNew}
           aria-label="Start a new session"
           title="New session"
+          className="h-7 gap-1 px-2 text-xs"
         >
-          <Plus className="size-4" />
+          <Plus className="size-3.5" />
           <span className="hidden sm:inline">new</span>
         </Button>
       </div>

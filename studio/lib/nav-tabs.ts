@@ -3,7 +3,6 @@ import {
   ClipboardList,
   Clock,
   Brain,
-  LayoutPanelLeft,
   type LucideIcon,
   MessageSquare,
   ShieldCheck,
@@ -11,14 +10,20 @@ import {
 } from "lucide-react";
 
 /**
- * Single source of truth for the primary nav tabs. Imported by both
- * `<TabNav>` (desktop header segmented control) and `<MobileNav>`
- * (bottom-sheet drawer) so the two never drift in shape, label, or icon.
+ * Single source of truth for the primary nav.
  *
- * Settings is intentionally NOT here — it lives in the desktop header's
- * right cluster as its own action and inside the mobile drawer's
- * settings shortcut, since it's an app-level action rather than a
- * primary tab.
+ * Live is now the unified workspace (chat + files/git + canvas in a single
+ * 3-column desktop layout, 3-mode mobile switcher). The old standalone
+ * /canvas page redirects here.
+ *
+ * `NAV_TABS` = primary tabs (top bar on desktop, top of mobile drawer).
+ * `NAV_OVERFLOW` = secondary tabs (mobile drawer "More" section, desktop
+ * header overflow kebab). They're deep-linkable but demoted because their
+ * day-to-day duty (heartbeat, trust history, skill registry, audit) is read
+ * mostly through the workspace's Info modal.
+ *
+ * Settings stays out of NAV_TABS — it's an app-level action surfaced as its
+ * own header button + mobile-drawer footer link.
  */
 export type NavTab = {
   href: string;
@@ -28,9 +33,11 @@ export type NavTab = {
 
 export const NAV_TABS: NavTab[] = [
   { href: "/live", label: "Live", Icon: MessageSquare },
-  { href: "/canvas", label: "Canvas", Icon: LayoutPanelLeft },
   { href: "/memory", label: "Memory", Icon: Brain },
   { href: "/skills", label: "Skills", Icon: Wrench },
+];
+
+export const NAV_OVERFLOW: NavTab[] = [
   { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
   { href: "/trust", label: "Trust", Icon: ShieldCheck },
   { href: "/cron", label: "Cron", Icon: Clock },

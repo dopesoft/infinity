@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Input } from "@/components/ui/input";
 import { SkillCard } from "@/components/SkillCard";
@@ -13,10 +13,9 @@ import {
   HScrollRow,
   FilterPill,
   PageSectionHeader,
-  HeaderAction,
 } from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
-import { fetchSkills, reloadSkills, type SkillSummaryDTO } from "@/lib/api";
+import { fetchSkills, type SkillSummaryDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 
 const STATUS_FILTERS = ["all", "active", "candidate", "archived"] as const;
@@ -29,7 +28,6 @@ export default function SkillsPage() {
   const [skills, setSkills] = useState<SkillSummaryDTO[]>([]);
   const [selected, setSelected] = useState<SkillSummaryDTO | null>(null);
   const [loading, setLoading] = useState(true);
-  const [reloading, setReloading] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
@@ -40,13 +38,6 @@ export default function SkillsPage() {
     const list = await fetchSkills();
     setSkills(list ?? []);
     setLoading(false);
-  }
-
-  async function onReload() {
-    setReloading(true);
-    await reloadSkills();
-    await load();
-    setReloading(false);
   }
 
   useEffect(() => {
@@ -68,32 +59,56 @@ export default function SkillsPage() {
     });
   }, [skills, query, statusFilter, riskFilter]);
 
+  // Per-status counts respect the active search + risk filter but ignore
+  // the status filter itself — that way each tab chip previews how many
+  // skills will appear if you switch to it under the current narrowing.
+  const statusCounts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const counts: Record<StatusFilter, number> = {
+      all: 0,
+      active: 0,
+      candidate: 0,
+      archived: 0,
+    };
+    for (const s of skills) {
+      if (riskFilter !== "all" && s.risk_level !== riskFilter) continue;
+      if (q) {
+        const hay = `${s.name} ${s.description}`.toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      counts.all++;
+      if (s.status === "active") counts.active++;
+      else if (s.status === "candidate") counts.candidate++;
+      else if (s.status === "archived") counts.archived++;
+    }
+    return counts;
+  }, [skills, query, riskFilter]);
+
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          <PageSectionHeader title="skills" count={skills.length}>
-            <HeaderAction
-              icon={<RefreshCw className="size-4" />}
-              label="Reload"
-              onClick={onReload}
-              disabled={reloading || loading}
-              loading={reloading}
-              title="Re-walk ./skills/ on Core"
-            />
-          </PageSectionHeader>
-          <div className="relative flex-1">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search your skill library…"
-              className="pl-9"
-              inputMode="search"
-            />
+          {/* No "skills (#)" header — the total moves into the tab chips
+              below so each status tab carries its own filter-aware count. */}
+
+          {/* Search row centered on desktop with a sane max width — mirrors
+              the Memory tab so the two read as the same family. Mobile stays
+              full-width because there's no space to spare. Reload sits to the
+              right as an icon-only ghost button, matching Memory's refresh. */}
+          <div className="mx-auto w-full sm:max-w-2xl sm:pt-1">
+            <div className="relative flex-1">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search your skill library…"
+                className="pl-9"
+                inputMode="search"
+              />
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -104,8 +119,19 @@ export default function SkillsPage() {
             >
               <PageTabsList columns={4}>
                 {STATUS_FILTERS.map((s) => (
-                  <PageTabsTrigger key={s} value={s}>
-                    {s}
+                  <PageTabsTrigger key={s} value={s} className="gap-1.5">
+                    <span>{s}</span>
+                    <span
+                      className={cn(
+                        "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+                        statusFilter === s
+                          ? "bg-foreground text-background"
+                          : "bg-muted-foreground/15 text-muted-foreground",
+                      )}
+                      aria-label={`${statusCounts[s]} matching`}
+                    >
+                      {statusCounts[s]}
+                    </span>
                   </PageTabsTrigger>
                 ))}
               </PageTabsList>

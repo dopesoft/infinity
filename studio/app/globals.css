@@ -145,13 +145,16 @@
 
   /* ≥16px on text-entry fields keeps iOS Safari from auto-zooming on
    * focus, which blocks the URL-bar collapse and breaks dvh layout math.
-   * Buttons are intentionally excluded — they don't trigger keyboard
-   * zoom and forcing 16px there would override every text-xs / text-sm
-   * label across the app (footer status, header actions, etc.). */
-  input,
-  textarea,
-  select {
-    font-size: max(16px, 1rem);
+   * Scoped to touch devices via @media (pointer: coarse) so desktop UIs
+   * are free to use text-sm / text-xs on inputs without overriding —
+   * iPhones, iPads, and Android stay locked at 16px+, mice/trackpads
+   * (laptops, desktops) honor whatever Tailwind class wins. */
+  @media (pointer: coarse) {
+    input,
+    textarea,
+    select {
+      font-size: max(16px, 1rem);
+    }
   }
 
   button,

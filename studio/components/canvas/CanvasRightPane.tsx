@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { MonitorPlay, X, Lock, Layers } from "lucide-react";
+import { MonitorPlay, X, Lock } from "lucide-react";
 import { CanvasPreview } from "@/components/canvas/CanvasPreview";
 import { CanvasFileTab } from "@/components/canvas/CanvasFileTab";
 import { useCanvasStore } from "@/lib/canvas/store";
@@ -112,10 +112,6 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
             </div>
           );
         })}
-        <span className="ml-auto inline-flex h-8 items-center px-2 text-[10px] text-muted-foreground/60">
-          <Layers className="mr-1 size-3" />
-          {store.tabs.length} tab{store.tabs.length === 1 ? "" : "s"}
-        </span>
       </div>
 
       {/* Content area — every tab is kept mounted to avoid Monaco re-init. */}

@@ -12,18 +12,18 @@ import {
 } from "@/components/ui/drawer";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SignOutButton } from "@/components/SignOutButton";
-import { NAV_TABS } from "@/lib/nav-tabs";
+import { NAV_TABS, NAV_OVERFLOW } from "@/lib/nav-tabs";
 import { useNavBadge } from "@/lib/nav-badges";
 import { cn } from "@/lib/utils";
 
 /* MobileNav is the right-hand hamburger that opens a draggable
- * bottom-sheet drawer on phones. Drawer contains the full nav list +
- * theme toggle. Auto-dismisses when a nav link is tapped. */
+ * bottom-sheet drawer on phones. Drawer is split into two sections:
+ *   • Primary  — Live + Memory (and Settings appended for one-tap reach)
+ *   • More     — demoted routes (Skills, Heartbeat, Trust, Cron, Audit)
+ *     that are mostly observed through the Info modal on /live, but still
+ *     deep-linkable for management. */
 
-// Append Settings here — it's not a primary tab on desktop (it lives
-// elsewhere in the header), but on mobile we surface it inside the same
-// drawer for one-tap reach.
-const tabs = [
+const primaryTabs = [
   ...NAV_TABS,
   { href: "/settings", label: "Settings", Icon: Settings },
 ];
@@ -46,7 +46,7 @@ export function MobileNav() {
       <DrawerContent>
         <DrawerTitle className="sr-only">Navigation</DrawerTitle>
         <nav className="flex flex-col gap-1 px-3 pb-4 pt-2">
-          {tabs.map((t) => {
+          {primaryTabs.map((t) => {
             const active = pathname === t.href || pathname?.startsWith(t.href + "/");
             const Icon = t.Icon;
             return (
@@ -70,6 +70,34 @@ export function MobileNav() {
                 {active && (
                   <span className="size-1.5 rounded-full bg-foreground" aria-hidden />
                 )}
+              </Link>
+            );
+          })}
+
+          <div className="mt-2 px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            More
+          </div>
+          {NAV_OVERFLOW.map((t) => {
+            const active = pathname === t.href || pathname?.startsWith(t.href + "/");
+            const Icon = t.Icon;
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                onClick={() => setOpen(false)}
+                className={cn(
+                  "flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+                  active
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                )}
+              >
+                <Icon
+                  className={cn("size-4 shrink-0", active ? "text-foreground" : "text-muted-foreground")}
+                  aria-hidden
+                />
+                <span className="flex-1">{t.label}</span>
+                <MobileNavBadgeChip href={t.href} />
               </Link>
             );
           })}

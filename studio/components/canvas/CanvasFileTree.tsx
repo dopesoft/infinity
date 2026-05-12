@@ -61,10 +61,19 @@ function pathJoin(parent: string, child: string): string {
   return parent.replace(/\/+$/, "") + "/" + child.replace(/^\/+/, "");
 }
 
-export function CanvasFileTree() {
+export function CanvasFileTree({
+  onFileOpen,
+}: {
+  onFileOpen?: (path: string) => void;
+} = {}) {
   const store = useCanvasStore();
   const [root, setRoot] = useState<Node | null>(null);
   const [filter, setFilter] = useState("");
+
+  const handleSelect = (path: string) => {
+    if (onFileOpen) onFileOpen(path);
+    else store.openFile(path);
+  };
 
   // (Re)build the root whenever the workspace root changes.
   useEffect(() => {
@@ -137,15 +146,21 @@ export function CanvasFileTree() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-1 border-b px-2 py-1.5">
-        <Input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter..."
-          inputMode="search"
-          aria-label="Filter files"
-          className="h-8 flex-1 text-sm"
-        />
+      {/* Filter row — height + visual mass-matched to the Canvas preview
+          URL bar. The outer row is h-11, the input itself slims to h-7 inside
+          a rounded muted wrapper, so the two columns line up across the
+          screen and feel like one continuous toolbar. */}
+      <div className="flex h-11 shrink-0 items-center gap-1 border-b bg-background px-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1 rounded-md border bg-muted/40 px-1.5 dark:bg-zinc-900/60">
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter…"
+            inputMode="search"
+            aria-label="Filter files"
+            className="h-7 min-h-7 flex-1 border-0 bg-transparent px-1 text-xs focus-visible:ring-0"
+          />
+        </div>
         {root && (
           <>
             <Button
@@ -195,7 +210,7 @@ export function CanvasFileTree() {
             depth={0}
             onToggle={onToggle}
             onRefresh={onRefresh}
-            onSelect={(p) => store.openFile(p)}
+            onSelect={handleSelect}
             activeFilePath={
               store.activeTabId.startsWith("file:") ? store.activeTabId.slice("file:".length) : null
             }

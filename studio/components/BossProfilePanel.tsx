@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, RefreshCw, Trash2, UserCircle } from "lucide-react";
+import { ChevronDown, Plus, Trash2, UserCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   deleteProfileFact,
@@ -73,9 +74,40 @@ export function BossProfilePanel() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Boss profile
           </span>
-          <span className="hidden text-[10px] text-muted-foreground/70 sm:inline">
-            always-on primer
-          </span>
+          {/* Status dot — green if facts exist (primer is active for every
+              turn), gray if empty. Hover for the live primer count + what
+              the primer is for. Wrapped in a span because TooltipTrigger
+              propagates the click; the outer header button still toggles
+              collapse-on-mobile via onClick capture. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  "inline-block size-1.5 shrink-0 rounded-full",
+                  loading
+                    ? "bg-muted-foreground/40"
+                    : facts.length > 0
+                      ? "bg-success"
+                      : "bg-muted-foreground/30",
+                )}
+                aria-label="Primer status"
+              />
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start">
+              <div className="space-y-0.5">
+                <div className="font-medium">
+                  {loading
+                    ? "Loading primer…"
+                    : facts.length > 0
+                      ? `Primer active · ${facts.length} fact${facts.length === 1 ? "" : "s"}`
+                      : "No facts saved"}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Every fact here is prepended to every prompt the agent sees.
+                </div>
+              </div>
+            </TooltipContent>
+          </Tooltip>
           {!loading && facts.length > 0 && (
             <span className="font-mono text-[10px] text-muted-foreground/70">
               {facts.length}
@@ -83,20 +115,6 @@ export function BossProfilePanel() {
           )}
         </button>
 
-        {/* Action buttons. Icon-only on mobile (no labels, no bg), expand
-            on sm+ where there's room for text. Sit between the title and
-            the rightmost chevron toggle. */}
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={() => load()}
-          aria-label="Refresh"
-          disabled={loading}
-          className="size-11 lg:size-8"
-        >
-          <RefreshCw className="size-4" />
-        </Button>
         <Button
           type="button"
           size="sm"

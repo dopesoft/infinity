@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Zap, Check, ChevronDown, RefreshCw, Sparkles, X } from "lucide-react";
+import { Zap, Check, ChevronDown, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   decideSkillProposal,
@@ -68,34 +69,55 @@ export function CandidateSkillsPanel() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Candidate skills
           </span>
+          {/* Status dot — green if Voyager is running, yellow if enabled
+              but in a non-running state (starting/idle/paused), red if
+              disabled entirely. Hover reveals the live status string + the
+              open-sessions / tracked-triplets counters that used to live in
+              the verbose chip. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  "inline-block size-1.5 shrink-0 rounded-full",
+                  loading
+                    ? "bg-muted-foreground/40"
+                    : offline
+                      ? "bg-danger"
+                      : status?.status && status.status !== "running"
+                        ? "bg-warning"
+                        : "bg-success",
+                )}
+                aria-label="Voyager status"
+              />
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start">
+              <div className="space-y-0.5">
+                <div className="font-medium">
+                  {loading
+                    ? "Checking Voyager…"
+                    : offline
+                      ? "Voyager off"
+                      : `Voyager · ${status?.status ?? "unknown"}`}
+                </div>
+                {offline ? (
+                  <div className="text-[11px] text-muted-foreground">
+                    Set <code className="font-mono text-[10px]">INFINITY_VOYAGER=true</code> on core
+                    to enable the auto-skill loop.
+                  </div>
+                ) : status ? (
+                  <div className="font-mono text-[11px] text-muted-foreground">
+                    {status.open_sessions} open · {status.tracked_triplets} triplets
+                  </div>
+                ) : null}
+              </div>
+            </TooltipContent>
+          </Tooltip>
           {proposals.length > 0 && (
             <span className="rounded-full bg-info/15 px-1.5 py-0.5 font-mono text-[10px] text-info">
               {proposals.length}
             </span>
           )}
-          {status && (
-            <span
-              className={cn(
-                "hidden truncate rounded-full px-1.5 py-0.5 text-[10px] font-mono uppercase sm:inline",
-                offline ? "bg-muted text-muted-foreground" : "bg-info/10 text-info",
-              )}
-            >
-              {status.status}
-            </span>
-          )}
         </button>
-
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={() => load()}
-          aria-label="Refresh"
-          disabled={loading}
-          className="size-11 lg:size-8"
-        >
-          <RefreshCw className="size-4" />
-        </Button>
 
         {/* Chevron — rightmost. Mobile-only toggle. */}
         <button
