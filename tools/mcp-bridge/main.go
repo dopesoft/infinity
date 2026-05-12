@@ -29,6 +29,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -81,6 +82,17 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	// Direct filesystem + git read endpoints. These bypass MCP entirely
+	// — they shell out via Go's os/exec on the Mac. Used by Studio's
+	// canvas instead of routing `ls` / `cat` through claude_code__Bash,
+	// which is overkill (spawning a Claude Code session per directory
+	// listing) and conceptually conflates a code-editing tool with
+	// basic file browsing. Cloudflare Access still gates these because
+	// they share the bridge's HTTP listener with /sse.
+	mux.HandleFunc("/fs/ls", b.handleFSList)
+	mux.HandleFunc("/fs/read", b.handleFSRead)
+	mux.HandleFunc("/git/status", b.handleGitStatus)
+	mux.HandleFunc("/git/diff", b.handleGitDiff)
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("mcp-bridge listening on %s, command: %s", addr, strings.Join(cmd, " "))
@@ -329,5 +341,161 @@ func randomID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// Ensure unused imports are kept honest if I rework things.
-var _ = context.Background
+// ---- Direct filesystem + git endpoints ------------------------------------
+//
+// These run as plain HTTP handlers on the bridge — no MCP, no Claude Code,
+// no SSE. Studio uses them for cheap operations like directory listings
+// and file reads where spawning a Claude Code session per call is absurd.
+// The bridge is already on the boss's Mac with full filesystem access;
+// just expose the read paths directly.
+
+type fsEntryJSON struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`           // "dir" | "file" | "symlink"
+	Size  int64  `json:"size,omitempty"`
+	MTime string `json:"mtime,omitempty"`
+}
+
+type fsListJSON struct {
+	Path    string        `json:"path"`
+	Entries []fsEntryJSON `json:"entries"`
+}
+
+func (b *bridge) handleFSList(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	entries, err := readDir(path)
+	if err != nil {
+		http.Error(w, "ls: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSONResponse(w, fsListJSON{Path: path, Entries: entries})
+}
+
+func readDir(path string) ([]fsEntryJSON, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]fsEntryJSON, 0, len(names))
+	for _, n := range names {
+		// Skip dotfiles by default (consistent with Studio's existing
+		// behavior). Keep .gitignore / .env.example since they're often
+		// part of a project's surface.
+		if strings.HasPrefix(n, ".") && n != ".gitignore" && n != ".env.example" {
+			continue
+		}
+		full := path + string(os.PathSeparator) + n
+		st, err := os.Lstat(full)
+		if err != nil {
+			continue
+		}
+		e := fsEntryJSON{Name: n}
+		switch {
+		case st.Mode()&os.ModeSymlink != 0:
+			e.Type = "symlink"
+		case st.IsDir():
+			e.Type = "dir"
+		default:
+			e.Type = "file"
+			e.Size = st.Size()
+		}
+		// Optional mtime in RFC3339; cheap to compute.
+		e.MTime = st.ModTime().UTC().Format("2006-01-02T15:04:05Z")
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+type fsReadJSON struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Size    int64  `json:"size"`
+}
+
+func (b *bridge) handleFSRead(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	// Cap response size to keep memory predictable. Anything bigger than
+	// 16MiB is too big for Monaco anyway.
+	st, err := os.Stat(path)
+	if err != nil {
+		http.Error(w, "stat: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	const maxRead = 16 << 20
+	if st.Size() > maxRead {
+		http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "read: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSONResponse(w, fsReadJSON{Path: path, Content: string(data), Size: st.Size()})
+}
+
+func (b *bridge) handleGitStatus(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		http.Error(w, "repo required", http.StatusBadRequest)
+		return
+	}
+	out, err := runGit(r.Context(), repo, "status", "--porcelain=v2", "--branch")
+	if err != nil {
+		http.Error(w, "git status: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(out))
+}
+
+func (b *bridge) handleGitDiff(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		http.Error(w, "repo required", http.StatusBadRequest)
+		return
+	}
+	args := []string{"diff", "--no-color"}
+	if r.URL.Query().Get("staged") == "1" {
+		args = append(args, "--staged")
+	}
+	if p := r.URL.Query().Get("path"); p != "" {
+		args = append(args, "--", p)
+	}
+	out, err := runGit(r.Context(), repo, args...)
+	if err != nil {
+		http.Error(w, "git diff: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(out))
+}
+
+func runGit(ctx context.Context, repo string, args ...string) (string, error) {
+	full := append([]string{"-C", repo}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	out, err := cmd.Output()
+	if err != nil {
+		return string(out), err
+	}
+	return string(out), nil
+}
+
+func writeJSONResponse(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	_ = enc.Encode(v)
+}

@@ -208,25 +208,35 @@ func unwrapBashStdout(raw string) string {
 //
 //	{"type":"text","file":{"filePath":"...","content":"..."}}
 //
-// Falls back to stripReadHeader on the raw string if the wrapper isn't
-// the expected shape (older Claude Code versions or alternate MCP server).
-func unwrapReadContent(raw string) string {
+// Returns ("", false) when the response is `{"type":"file_unchanged",...}`
+// — Claude Code's per-session read cache returns this when the file was
+// already read in the same MCP session, with NO content body. Callers
+// should fall back to a fresh read (e.g. `cat` via Bash) in that case.
+//
+// Falls back to stripReadHeader on raw text if the wrapper isn't a
+// recognizable JSON envelope (older Claude Code versions).
+func unwrapReadContent(raw string) (string, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if !strings.HasPrefix(trimmed, "{") {
-		return stripReadHeader(raw)
+		stripped := stripReadHeader(raw)
+		return stripped, stripped != ""
 	}
 	var wrap struct {
+		Type string `json:"type"`
 		File struct {
 			Content string `json:"content"`
 		} `json:"file"`
 	}
 	if err := json.Unmarshal([]byte(trimmed), &wrap); err != nil {
-		return stripReadHeader(raw)
+		stripped := stripReadHeader(raw)
+		return stripped, stripped != ""
 	}
-	if wrap.File.Content == "" {
-		return stripReadHeader(raw)
+	if wrap.File.Content != "" {
+		return wrap.File.Content, true
 	}
-	return wrap.File.Content
+	// `file_unchanged` envelopes have no content. Signal the caller to
+	// fall back to a fresh read path.
+	return "", false
 }
 
 // parseLsDashOneFOutput parses `ls -1Fp` output: one name per line, with
@@ -320,7 +330,25 @@ func (s *Server) readViaMCP(ctx context.Context, path string) (string, bool) {
 		if execErr != nil || out == "" {
 			continue
 		}
-		return unwrapReadContent(out), true
+		content, ok := unwrapReadContent(out)
+		if ok {
+			return content, true
+		}
+		// Read returned `file_unchanged` with no body — Claude Code's
+		// per-session cache. Fall through to the Bash cat path below.
+	}
+	// Last-ditch: cat the file via Bash. Always returns fresh bytes,
+	// never hits Read's cache. Useful when the agent has already read
+	// the file in this MCP session and the Read tool short-circuits.
+	if t, err := s.canvasMCP("claude_code__Bash"); err == nil {
+		cmd := "cat " + shellQuote(path)
+		raw, execErr := t.Execute(ctx, map[string]any{"command": cmd})
+		if execErr == nil {
+			content := unwrapBashStdout(raw)
+			if content != "" {
+				return content, true
+			}
+		}
 	}
 	return "", false
 }
