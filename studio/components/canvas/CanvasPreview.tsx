@@ -45,11 +45,16 @@ export function CanvasPreview() {
     return "";
   }, [store.previewUrl, store.envPreviewUrl]);
 
+  // First-mount cache key — a single timestamp captured once per page load.
+  // Together with previewRefreshKey, this guarantees the iframe URL is
+  // unique on every paint, defeating the browser's HTTP cache for
+  // Next.js dev's versioned chunks (which 404 after a dev-server
+  // restart if you reload the cached HTML).
+  const mountKeyRef = useRef<number>(Date.now());
   const effectiveUrl = useMemo(() => {
     if (!baseUrl) return "";
-    if (store.previewRefreshKey === 0) return baseUrl;
     const sep = baseUrl.includes("?") ? "&" : "?";
-    return `${baseUrl}${sep}_cv=${store.previewRefreshKey}`;
+    return `${baseUrl}${sep}_cv=${mountKeyRef.current}-${store.previewRefreshKey}`;
   }, [baseUrl, store.previewRefreshKey]);
 
   // Auto-refresh on code-change tool_result events.
