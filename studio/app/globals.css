@@ -244,6 +244,32 @@
     }
   }
 
+  /* Heartbeat pulse — radial ring that fades outward on a 2s cycle. Used
+   * as the hero status indicator on /heartbeat so the page reads as a
+   * live system monitor, not a static dashboard. Two staggered rings
+   * give the impression of a continuous pulse without burning frames. */
+  @keyframes heartbeat-pulse {
+    0% {
+      transform: scale(0.6);
+      opacity: 0.65;
+    }
+    80% {
+      transform: scale(2.4);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(2.4);
+      opacity: 0;
+    }
+  }
+  .heartbeat-ring {
+    animation: heartbeat-pulse 2s ease-out infinite;
+  }
+  .heartbeat-ring-delay {
+    animation: heartbeat-pulse 2s ease-out infinite;
+    animation-delay: 1s;
+  }
+
   /* Top + bottom fade mask on the thinking preview while streaming. Uses
    * mask-image so it works against any background (light/dark) without
    * needing a separate overlay element. */

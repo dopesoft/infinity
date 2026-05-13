@@ -9,24 +9,14 @@ import {
   Lightbulb,
   Play,
   RefreshCw,
-  Search,
   Shield,
   Sparkles,
   Wrench,
   Zap,
+  MessageSquare,
 } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Badge } from "@/components/ui/badge";
-import { MetricCard } from "@/components/MetricCard";
-import {
-  PageTabs,
-  PageTabsList,
-  PageTabsTrigger,
-  HScrollRow,
-  FilterPill,
-  PageSectionHeader,
-  HeaderAction,
-} from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 import {
   fetchHeartbeats,
@@ -40,53 +30,44 @@ import {
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 
-/* Heartbeat tab redesign. Mirrors the visual grammar of /memory:
+/* Heartbeat — system pulse monitor.
  *
- *   - top metric strip (snap-scroll on mobile, grid on sm+)
- *   - PageTabs sub-view switcher (runs · findings · intent)
- *   - HScrollRow filter pills under findings + intent for kind/token filtering
- *   - shared HeaderAction buttons in a sticky section header
+ * This page is the diagnostic command center for the proactive engine: a live
+ * status hero at the top with the actions baked in (not floating beneath as
+ * orphans), an interleaved pulse stream of every event the heartbeat has
+ * emitted on the left, and a compact run + kind sidebar on the right. The
+ * mental model is "watch the agent's pulse" — every tick, every finding,
+ * every classified turn lands here, time-ordered.
  *
- * The page is the source of truth for diagnostic surfaces on the proactive
- * engine: every heartbeat tick, every finding produced (so the boss can audit
- * what the agent decided was worth saying first), and every IntentFlow
- * classification (so the boss can audit how the agent triaged each turn).
- * No realtime cuts — useRealtime re-loads the active sub-view's data when the
- * underlying table fires a row change. */
+ * Distinct from /memory by intent: memory is a library of facts, heartbeat is
+ * a live monitor. Different shape, different rhythm. */
 
-type View = "runs" | "findings" | "intent";
-const VIEWS: { key: View; label: string }[] = [
-  { key: "runs", label: "runs" },
-  { key: "findings", label: "findings" },
-  { key: "intent", label: "intent" },
+type EventKind = "run" | "finding" | "intent";
+type EventFilter = "all" | "findings" | "intent" | "runs";
+
+const EVENT_FILTERS: { key: EventFilter; label: string }[] = [
+  { key: "all", label: "All pulses" },
+  { key: "findings", label: "Findings" },
+  { key: "intent", label: "Intent" },
+  { key: "runs", label: "Runs" },
 ];
 
-const FINDING_KIND_FILTERS = [
-  "all",
-  "surprise",
-  "curiosity",
-  "security",
-  "outcome",
-  "pattern",
-  "self_heal",
-] as const;
-type FindingKindFilter = (typeof FINDING_KIND_FILTERS)[number];
-
-const INTENT_TOKEN_FILTERS = [
-  "all",
-  "full_assistance",
-  "fast_intervention",
-  "silent",
-] as const;
-type IntentTokenFilter = (typeof INTENT_TOKEN_FILTERS)[number];
+type PulseEvent = {
+  id: string;
+  kind: EventKind;
+  at: string;
+  run?: HeartbeatRunDTO;
+  finding?: HeartbeatFindingDTO;
+  intent?: IntentRecordDTO;
+};
 
 const FINDING_TONE: Record<string, string> = {
-  outcome: "border-warning/40 bg-warning/10 text-warning",
-  pattern: "border-info/40 bg-info/10 text-info",
-  curiosity: "border-info/40 bg-info/10 text-info",
-  surprise: "border-success/40 bg-success/10 text-success",
-  security: "border-danger/40 bg-danger/10 text-danger",
-  self_heal: "border-orange-500/40 bg-orange-500/10 text-orange-500",
+  outcome: "text-warning border-warning/40",
+  pattern: "text-info border-info/40",
+  curiosity: "text-info border-info/40",
+  surprise: "text-success border-success/40",
+  security: "text-danger border-danger/40",
+  self_heal: "text-orange-500 border-orange-500/40",
 };
 
 const FINDING_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -98,18 +79,21 @@ const FINDING_ICON: Record<string, React.ComponentType<{ className?: string }>> 
   self_heal: Wrench,
 };
 
-const INTENT_TONE: Record<IntentRecordDTO["token"], { label: string; cls: string }> = {
+const INTENT_TONE: Record<IntentRecordDTO["token"], { label: string; cls: string; ring: string }> = {
   fast_intervention: {
     label: "FAST",
-    cls: "bg-info/15 text-info border-info/40",
+    cls: "text-info",
+    ring: "ring-info/40",
   },
   silent: {
     label: "SILENT",
-    cls: "bg-muted text-muted-foreground border-muted-foreground/20",
+    cls: "text-muted-foreground",
+    ring: "ring-muted-foreground/30",
   },
   full_assistance: {
     label: "FULL",
-    cls: "bg-primary/15 text-primary border-primary/40",
+    cls: "text-primary",
+    ring: "ring-primary/40",
   },
 };
 
@@ -126,11 +110,24 @@ function relTime(iso?: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function clockTime(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 function formatInterval(seconds: number) {
   if (seconds <= 0) return "—";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+function inLast24h(iso: string): boolean {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t < 24 * 60 * 60 * 1000;
 }
 
 export default function HeartbeatPage() {
@@ -141,57 +138,29 @@ export default function HeartbeatPage() {
   const [running, setRunning] = useState(false);
   const [last, setLast] = useState<HeartbeatRunSummaryDTO | null>(null);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<EventFilter>("all");
 
-  const [view, setView] = useState<View>("runs");
-  const [findingKind, setFindingKind] = useState<FindingKindFilter>("all");
-  const [intentToken, setIntentToken] = useState<IntentTokenFilter>("all");
-  const [search, setSearch] = useState("");
-
-  async function loadRuns() {
-    const r = await fetchHeartbeats();
+  async function loadAll() {
+    setLoading(true);
+    const [r, f, i] = await Promise.all([
+      fetchHeartbeats(),
+      fetchHeartbeatFindings(100),
+      fetchIntentRecent(100),
+    ]);
     if (r) {
       setIntervalSeconds(r.interval_seconds);
       setRuns(r.runs);
     }
-  }
-  async function loadFindings(kind: FindingKindFilter = findingKind) {
-    const f = await fetchHeartbeatFindings(100, kind);
     setFindings(f ?? []);
-  }
-  async function loadIntents() {
-    const i = await fetchIntentRecent(100);
     setIntents(i ?? []);
-  }
-
-  async function loadAll() {
-    setLoading(true);
-    await Promise.all([loadRuns(), loadFindings(), loadIntents()]);
     setLoading(false);
   }
 
   useEffect(() => {
     loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useRealtime(["mem_heartbeats", "mem_heartbeat_findings", "mem_intent_decisions"], () => {
-    /* Realtime push from any of the three underlying tables — refresh the
-     * active sub-view's dataset only (avoid hammering all three endpoints
-     * on every row change). The other views stay stale until the user
-     * switches; they re-fetch in the view's effect below. */
-    if (view === "runs") loadRuns();
-    else if (view === "findings") loadFindings();
-    else loadIntents();
-  });
-
-  /* Per-view re-fetch when filters change. The lists are short enough that
-   * client-side filtering would be simpler but server-side keeps the limit
-   * behaviour honest — kind=surprise returns the last 100 surprises, not
-   * 100 random findings filtered down to a handful. */
-  useEffect(() => {
-    if (view === "findings") loadFindings(findingKind);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [findingKind, view]);
+  useRealtime(["mem_heartbeats", "mem_heartbeat_findings", "mem_intent_decisions"], loadAll);
 
   async function fireNow() {
     setRunning(true);
@@ -201,436 +170,503 @@ export default function HeartbeatPage() {
     await loadAll();
   }
 
-  const filteredIntents = useMemo(() => {
-    let list = intents;
-    if (intentToken !== "all") {
-      list = list.filter((i) => i.token === intentToken);
+  /* Stream: time-merged events. Runs that produced 0 findings still show up
+   * (so the boss can see the pulse is alive even when nothing notable
+   * happened) but they're visually de-emphasized. Findings inherit their
+   * parent run's timestamp via the join in the backend query. */
+  const stream = useMemo<PulseEvent[]>(() => {
+    const events: PulseEvent[] = [];
+    for (const r of runs) {
+      events.push({ id: `run-${r.id}`, kind: "run", at: r.started_at, run: r });
     }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(
-        (i) =>
-          i.user_msg.toLowerCase().includes(q) ||
-          (i.reason ?? "").toLowerCase().includes(q),
-      );
+    for (const f of findings) {
+      events.push({ id: `find-${f.id}`, kind: "finding", at: f.started_at, finding: f });
     }
-    return list;
-  }, [intents, intentToken, search]);
+    for (const i of intents) {
+      events.push({ id: `int-${i.id}`, kind: "intent", at: i.created_at, intent: i });
+    }
+    events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+    return events;
+  }, [runs, findings, intents]);
 
-  const filteredFindings = useMemo(() => {
-    if (!search.trim()) return findings;
-    const q = search.trim().toLowerCase();
-    return findings.filter(
-      (f) =>
-        f.title.toLowerCase().includes(q) ||
-        (f.detail ?? "").toLowerCase().includes(q),
-    );
-  }, [findings, search]);
+  const filteredStream = useMemo(() => {
+    if (filter === "all") return stream;
+    return stream.filter((e) => {
+      if (filter === "findings") return e.kind === "finding";
+      if (filter === "intent") return e.kind === "intent";
+      if (filter === "runs") return e.kind === "run";
+      return true;
+    });
+  }, [stream, filter]);
+
+  const stats = useMemo(() => {
+    const findings24h = findings.filter((f) => inLast24h(f.started_at)).length;
+    const intents24h = intents.filter((i) => inLast24h(i.created_at)).length;
+    const surprises = findings.filter((f) => f.kind === "surprise").length;
+    const security = findings.filter((f) => f.kind === "security").length;
+    return { findings24h, intents24h, surprises, security };
+  }, [findings, intents]);
 
   const lastRun = runs[0];
+  const isAlive = lastRun
+    ? Date.now() - new Date(lastRun.started_at).getTime() < (intervalSeconds + 60) * 1000
+    : false;
+
+  /* Top-kind distribution for the sidebar mini-stats. Sorted by count desc,
+   * limited to the kinds actually represented so empty kinds don't bloat
+   * the strip. */
+  const kindCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const f of findings) m[f.kind] = (m[f.kind] ?? 0) + 1;
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [findings]);
 
   return (
     <TabFrame>
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          {/* Metric strip — mobile snap-scroll, sm+ grid. Mirrors /memory so
-              the two pages read as the same family. */}
-          <div className="-mx-3 sm:mx-0">
-            <div className="no-scrollbar flex snap-x snap-mandatory gap-2 overflow-x-auto scroll-touch px-3 pb-1 sm:grid sm:grid-cols-4 sm:gap-2 sm:overflow-visible sm:px-0 sm:pb-0">
-              <MetricCard
-                label="runs"
-                value={runs.length}
-                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
-              />
-              <MetricCard
-                label="findings"
-                value={findings.length}
-                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
-              />
-              <MetricCard
-                label="intent decisions"
-                value={intents.length}
-                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
-              />
-              <MetricCard
-                label="interval"
-                value={formatInterval(intervalSeconds)}
-                className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
-              />
-            </div>
-          </div>
-
-          {/* Action header — Run + Refresh. Last-run timestamp on the right. */}
-          <div className="mx-auto flex w-full items-center gap-2 sm:max-w-3xl">
-            <div className="flex flex-1 items-baseline gap-2">
-              <Activity className="size-4 text-muted-foreground" aria-hidden />
-              <span className="text-sm font-medium tracking-tight text-foreground">
-                heartbeat
-              </span>
-              {lastRun ? (
-                <span
-                  className="text-[11px] text-muted-foreground"
-                  suppressHydrationWarning
+      <div className="flex min-h-0 flex-1 flex-col bg-background">
+        {/* Hero status card. Pulse rings on the left, stats inline, actions
+            anchored to the right edge so they're never orphaned. This is the
+            page's identity — a live monitor, not a dashboard. */}
+        <div className="border-b bg-gradient-to-b from-background to-background/40 px-3 py-4 sm:px-4 sm:py-6">
+          <div className="mx-auto flex w-full max-w-5xl items-center gap-4">
+            <PulseIndicator alive={isAlive} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+                  Heartbeat
+                </h1>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "font-mono text-[10px]",
+                    isAlive
+                      ? "border-success/40 bg-success/10 text-success"
+                      : "border-muted-foreground/40 text-muted-foreground",
+                  )}
                 >
-                  · last {relTime(lastRun.started_at)}
+                  {isAlive ? "alive" : "quiet"}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  ticks every {formatInterval(intervalSeconds)}
+                  {lastRun ? (
+                    <>
+                      {" · last "}
+                      <span suppressHydrationWarning>{relTime(lastRun.started_at)}</span>
+                    </>
+                  ) : null}
                 </span>
-              ) : null}
-            </div>
-            <HeaderAction
-              icon={<Play className="size-4" />}
-              label={running ? "Running…" : "Run now"}
-              primary
-              onClick={fireNow}
-              disabled={running}
-              loading={running}
-            />
-            <HeaderAction
-              icon={<RefreshCw className="size-4" />}
-              label="Refresh"
-              onClick={loadAll}
-              disabled={loading}
-            />
-          </div>
-
-          {/* Sub-view switcher */}
-          <div className="space-y-3">
-            <PageTabs
-              value={view}
-              onValueChange={(v) => setView(v as View)}
-              className="w-full"
-            >
-              <PageTabsList columns={3}>
-                {VIEWS.map(({ key, label }) => {
-                  const count =
-                    key === "runs"
-                      ? runs.length
-                      : key === "findings"
-                        ? findings.length
-                        : intents.length;
-                  return (
-                    <PageTabsTrigger key={key} value={key} className="gap-1.5">
-                      <span>{label}</span>
-                      <span
-                        className={cn(
-                          "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                          view === key
-                            ? "bg-foreground text-background"
-                            : "bg-muted-foreground/15 text-muted-foreground",
-                        )}
-                        aria-label={`${count} total`}
-                      >
-                        {count}
-                      </span>
-                    </PageTabsTrigger>
-                  );
-                })}
-              </PageTabsList>
-            </PageTabs>
-
-            {view === "findings" && (
-              <HScrollRow>
-                {FINDING_KIND_FILTERS.map((k) => (
-                  <FilterPill
-                    key={k}
-                    active={findingKind === k}
-                    onClick={() => setFindingKind(k)}
-                  >
-                    {k}
-                  </FilterPill>
-                ))}
-              </HScrollRow>
-            )}
-            {view === "intent" && (
-              <HScrollRow>
-                {INTENT_TOKEN_FILTERS.map((t) => (
-                  <FilterPill
-                    key={t}
-                    active={intentToken === t}
-                    onClick={() => setIntentToken(t)}
-                  >
-                    {t === "all" ? "all" : INTENT_TONE[t as keyof typeof INTENT_TONE].label.toLowerCase()}
-                  </FilterPill>
-                ))}
-              </HScrollRow>
-            )}
-
-            {(view === "findings" || view === "intent") && (
-              <div className="relative mx-auto w-full sm:max-w-2xl">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  type="search"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={
-                    view === "findings"
-                      ? "Search findings…"
-                      : "Search classified turns…"
-                  }
-                  inputMode="search"
-                  className="flex h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
               </div>
-            )}
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+                <Stat icon={Activity} value={runs.length} label="runs" />
+                <Stat icon={Sparkles} value={stats.findings24h} label="findings 24h" />
+                <Stat icon={Zap} value={stats.intents24h} label="classified 24h" />
+                {stats.surprises > 0 && (
+                  <Stat icon={Lightbulb} value={stats.surprises} label="surprises" />
+                )}
+                {stats.security > 0 && (
+                  <Stat icon={Shield} value={stats.security} label="security" />
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={fireNow}
+                disabled={running}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Play className="size-3.5" aria-hidden />
+                {running ? "Pulsing…" : "Pulse now"}
+              </button>
+              <button
+                type="button"
+                onClick={loadAll}
+                disabled={loading}
+                className="inline-flex size-9 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Refresh"
+                title="Refresh"
+              >
+                <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
+              </button>
+            </div>
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
-          {view === "runs" && (
-            <RunsList runs={runs} loading={loading} last={last} />
-          )}
-          {view === "findings" && (
-            <FindingsList findings={filteredFindings} loading={loading} />
-          )}
-          {view === "intent" && (
-            <IntentList intents={filteredIntents} loading={loading} />
-          )}
+        {/* Body: two-column on desktop, stacked on mobile. Left is the live
+            pulse stream; right is a compact runs ledger + kind distribution. */}
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          {/* Stream */}
+          <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 scroll-touch sm:px-4 lg:px-6">
+            <div className="mx-auto w-full max-w-3xl">
+              <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-1">
+                {EVENT_FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setFilter(f.key)}
+                    className={cn(
+                      "inline-flex h-7 shrink-0 items-center rounded-full border px-3 text-xs font-medium transition-colors",
+                      filter === f.key
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Live last-run findings banner. Shown only right after a
+                  manual run, before the realtime push has merged them
+                  into the persisted feed. */}
+              {last && last.findings.length > 0 && (
+                <div className="mb-4 rounded-xl border border-success/40 bg-success/5 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider text-success">
+                    <Sparkles className="size-3" aria-hidden />
+                    Latest pulse · {last.findings.length} findings
+                  </div>
+                  <ul className="space-y-1.5">
+                    {last.findings.map((f, i) => (
+                      <li key={i} className="text-sm">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                          {f.kind}
+                        </span>{" "}
+                        <span className="text-foreground">{f.title}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {filteredStream.length === 0 ? (
+                <EmptyPulse loading={loading} filter={filter} />
+              ) : (
+                <ol className="relative space-y-3 border-l border-border/60 pl-4">
+                  {filteredStream.map((e) => (
+                    <PulseRow key={e.id} ev={e} />
+                  ))}
+                </ol>
+              )}
+            </div>
+          </main>
+
+          {/* Sidebar */}
+          <aside className="shrink-0 border-t bg-muted/20 px-3 py-4 sm:px-4 lg:w-80 lg:border-l lg:border-t-0 lg:py-6">
+            <div className="space-y-5">
+              <section>
+                <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  Recent ticks
+                </h2>
+                {runs.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {loading ? "Loading…" : "No ticks recorded yet."}
+                  </p>
+                ) : (
+                  <ul className="space-y-1">
+                    {runs.slice(0, 8).map((r) => (
+                      <li
+                        key={r.id}
+                        className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-background"
+                      >
+                        <span className="flex items-center gap-1.5 font-mono text-[11px] text-foreground/80">
+                          <span
+                            className={cn(
+                              "inline-block size-1.5 rounded-full",
+                              r.findings > 0 ? "bg-info" : "bg-muted-foreground/30",
+                            )}
+                            aria-hidden
+                          />
+                          <span suppressHydrationWarning>{clockTime(r.started_at)}</span>
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {r.duration_ms}ms
+                          {r.findings > 0 && (
+                            <span className="ml-1.5 text-info">· {r.findings}</span>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              {kindCounts.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                    Findings by kind
+                  </h2>
+                  <ul className="space-y-1.5">
+                    {kindCounts.map(([kind, count]) => {
+                      const Icon = FINDING_ICON[kind] ?? Brain;
+                      const tone = FINDING_TONE[kind] ?? "text-foreground";
+                      return (
+                        <li
+                          key={kind}
+                          className="flex items-center gap-2 text-xs"
+                        >
+                          <Icon className={cn("size-3.5 shrink-0", tone.split(" ")[0])} aria-hidden />
+                          <span className="flex-1 capitalize text-foreground">
+                            {kind.replace("_", " ")}
+                          </span>
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            {count}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
+
+              {intents.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                    Intent split
+                  </h2>
+                  <IntentSplit intents={intents} />
+                </section>
+              )}
+            </div>
+          </aside>
         </div>
       </div>
     </TabFrame>
   );
 }
 
-function RunsList({
-  runs,
-  loading,
-  last,
-}: {
-  runs: HeartbeatRunDTO[];
-  loading: boolean;
-  last: HeartbeatRunSummaryDTO | null;
-}) {
+function PulseIndicator({ alive }: { alive: boolean }) {
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4">
-      {last && last.findings.length > 0 && (
-        <section className="space-y-2">
-          <PageSectionHeader
-            title="last run · live findings"
-            count={last.findings.length}
-            className="px-0 pb-1 pt-0"
+    <div className="relative flex size-12 shrink-0 items-center justify-center sm:size-14">
+      {alive && (
+        <>
+          <span
+            className="heartbeat-ring absolute inset-0 rounded-full bg-success/30"
+            aria-hidden
           />
-          <ul className="space-y-2">
-            {last.findings.map((f, i) => (
-              <FindingCard
-                key={`live-${i}`}
-                kind={f.kind}
-                title={f.title}
-                detail={f.detail}
-                pre_approved={f.pre_approved}
-              />
-            ))}
-          </ul>
-        </section>
+          <span
+            className="heartbeat-ring-delay absolute inset-0 rounded-full bg-success/30"
+            aria-hidden
+          />
+        </>
       )}
-
-      <section className="space-y-2">
-        <PageSectionHeader
-          title="recent runs"
-          count={runs.length}
-          className="px-0 pb-1 pt-0"
-        />
-        {runs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {loading ? "Loading…" : "No runs yet — hit Run now to fire the heartbeat."}
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {runs.map((r) => (
-              <li
-                key={r.id}
-                className="rounded-xl border bg-card px-3 py-2.5"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <Activity className="size-3" aria-hidden />
-                    <time suppressHydrationWarning>
-                      {new Date(r.started_at).toLocaleString()}
-                    </time>
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <Badge variant="outline" className="font-mono text-[10px]">
-                      {r.duration_ms}ms
-                    </Badge>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "font-mono text-[10px]",
-                        r.findings > 0 && "border-info/40 text-info",
-                      )}
-                    >
-                      {r.findings} {r.findings === 1 ? "finding" : "findings"}
-                    </Badge>
-                  </span>
-                </div>
-                {r.summary && r.summary !== "no findings" && (
-                  <pre className="mt-1.5 whitespace-pre-wrap break-words text-[12px] text-foreground/80">
-                    {r.summary}
-                  </pre>
-                )}
-              </li>
-            ))}
-          </ul>
+      <span
+        className={cn(
+          "relative flex size-6 items-center justify-center rounded-full sm:size-7",
+          alive ? "bg-success" : "bg-muted-foreground/40",
         )}
-      </section>
-    </div>
-  );
-}
-
-function FindingsList({
-  findings,
-  loading,
-}: {
-  findings: HeartbeatFindingDTO[];
-  loading: boolean;
-}) {
-  return (
-    <div className="mx-auto w-full max-w-3xl space-y-2">
-      {findings.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {loading
-            ? "Loading…"
-            : "No findings yet. Findings land here every time the heartbeat ticks and notices something."}
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {findings.map((f) => (
-            <FindingCard
-              key={f.id}
-              kind={f.kind}
-              title={f.title}
-              detail={f.detail}
-              pre_approved={f.pre_approved}
-              when={f.started_at}
-            />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function FindingCard({
-  kind,
-  title,
-  detail,
-  pre_approved,
-  when,
-}: {
-  kind: string;
-  title: string;
-  detail?: string;
-  pre_approved?: boolean;
-  when?: string;
-}) {
-  const Icon = FINDING_ICON[kind] ?? Brain;
-  const tone = FINDING_TONE[kind] ?? "border-muted bg-card";
-  return (
-    <li
-      className={cn(
-        "flex gap-3 rounded-xl border p-3 text-sm",
-        tone,
-      )}
-    >
-      <Icon className="mt-0.5 size-4 shrink-0 opacity-80" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <strong className="break-words text-foreground">{title}</strong>
-          <Badge
-            variant="outline"
-            className="border-current/30 bg-background/60 font-mono text-[10px] uppercase"
-          >
-            {kind}
-          </Badge>
-          {pre_approved && (
-            <Badge
-              variant="outline"
-              className="border-success/40 bg-success/10 font-mono text-[10px] uppercase text-success"
-            >
-              pre-approved
-            </Badge>
+      >
+        <Activity
+          className={cn(
+            "size-3.5 text-background sm:size-4",
+            !alive && "text-foreground/60",
           )}
-          {when && (
-            <span
-              className="ml-auto text-[11px] text-muted-foreground"
-              suppressHydrationWarning
-            >
-              {relTime(when)}
+          aria-hidden
+        />
+      </span>
+    </div>
+  );
+}
+
+function Stat({
+  icon: Icon,
+  value,
+  label,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  value: number | string;
+  label: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Icon className="size-3 text-muted-foreground" aria-hidden />
+      <span className="font-mono font-medium text-foreground">{value}</span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function PulseRow({ ev }: { ev: PulseEvent }) {
+  if (ev.kind === "run" && ev.run) {
+    const r = ev.run;
+    const hasFindings = r.findings > 0;
+    return (
+      <li className="relative">
+        <Dot tone={hasFindings ? "info" : "muted"} />
+        <div className="rounded-lg border bg-card px-3 py-2">
+          <div className="flex items-center gap-2 text-[11px]">
+            <Activity className="size-3 text-muted-foreground" aria-hidden />
+            <span className="font-mono text-foreground/80">
+              <span suppressHydrationWarning>{clockTime(r.started_at)}</span>
             </span>
+            <span className="text-muted-foreground">heartbeat tick</span>
+            <span className="ml-auto font-mono text-muted-foreground">
+              {r.duration_ms}ms
+            </span>
+          </div>
+          {hasFindings ? (
+            <p className="mt-1 text-xs text-foreground/80">
+              {r.findings} {r.findings === 1 ? "finding" : "findings"} produced
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">no findings · all quiet</p>
           )}
         </div>
-        {detail && (
-          <p className="mt-1 break-words text-foreground/85">{detail}</p>
-        )}
-      </div>
-    </li>
+      </li>
+    );
+  }
+  if (ev.kind === "finding" && ev.finding) {
+    const f = ev.finding;
+    const Icon = FINDING_ICON[f.kind] ?? Brain;
+    const tone = FINDING_TONE[f.kind] ?? "text-foreground border-border";
+    return (
+      <li className="relative">
+        <Dot tone={f.kind === "security" ? "danger" : f.kind === "surprise" ? "success" : "info"} />
+        <div className={cn("rounded-lg border bg-card p-3", tone)}>
+          <div className="flex items-center gap-2 text-[11px]">
+            <Icon className="size-3.5" aria-hidden />
+            <span className="font-mono uppercase tracking-wider">{f.kind.replace("_", " ")}</span>
+            {f.pre_approved && (
+              <Badge
+                variant="outline"
+                className="border-current/40 bg-background/60 font-mono text-[9px] uppercase"
+              >
+                pre-approved
+              </Badge>
+            )}
+            <span className="ml-auto font-mono text-muted-foreground">
+              <span suppressHydrationWarning>{clockTime(f.started_at)}</span>
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm font-medium text-foreground">{f.title}</p>
+          {f.detail && (
+            <p className="mt-1 break-words text-[13px] text-foreground/80">{f.detail}</p>
+          )}
+        </div>
+      </li>
+    );
+  }
+  if (ev.kind === "intent" && ev.intent) {
+    const i = ev.intent;
+    const tone = INTENT_TONE[i.token];
+    return (
+      <li className="relative">
+        <Dot
+          tone={
+            i.token === "full_assistance"
+              ? "primary"
+              : i.token === "fast_intervention"
+                ? "info"
+                : "muted"
+          }
+        />
+        <div className="rounded-lg border bg-card p-3">
+          <div className="flex items-center gap-2 text-[11px]">
+            <MessageSquare className={cn("size-3", tone.cls)} aria-hidden />
+            <span className={cn("font-mono font-semibold tracking-wider", tone.cls)}>
+              {tone.label}
+            </span>
+            <span className="font-mono text-muted-foreground">
+              {(i.confidence * 100).toFixed(0)}%
+            </span>
+            <span className="ml-auto font-mono text-muted-foreground">
+              <span suppressHydrationWarning>{clockTime(i.created_at)}</span>
+            </span>
+          </div>
+          {i.user_msg && (
+            <p className="mt-1.5 line-clamp-2 break-words text-sm text-foreground">
+              {i.user_msg}
+            </p>
+          )}
+          {i.reason && (
+            <p className="mt-1 text-[12px] italic text-muted-foreground">→ {i.reason}</p>
+          )}
+        </div>
+      </li>
+    );
+  }
+  return null;
+}
+
+function Dot({ tone }: { tone: "info" | "success" | "danger" | "primary" | "muted" }) {
+  const cls = {
+    info: "bg-info",
+    success: "bg-success",
+    danger: "bg-danger",
+    primary: "bg-primary",
+    muted: "bg-muted-foreground/40",
+  }[tone];
+  return (
+    <span
+      className={cn(
+        "absolute -left-[21px] top-3 size-2.5 rounded-full ring-4 ring-background",
+        cls,
+      )}
+      aria-hidden
+    />
   );
 }
 
-function IntentList({
-  intents,
-  loading,
-}: {
-  intents: IntentRecordDTO[];
-  loading: boolean;
-}) {
+function EmptyPulse({ loading, filter }: { loading: boolean; filter: EventFilter }) {
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-dashed bg-card/40 p-8 text-center text-sm text-muted-foreground">
+        Loading the pulse stream…
+      </div>
+    );
+  }
+  const msg =
+    filter === "findings"
+      ? "No findings yet. Hit Pulse now or wait for the next tick — when the heartbeat notices something worth saying, it shows up here."
+      : filter === "intent"
+        ? "No classified turns yet. Every message you send through Live gets classified — they'll start landing here as you chat."
+        : filter === "runs"
+          ? "No heartbeat ticks recorded. Hit Pulse now to fire one manually."
+          : "Quiet — no pulses yet. Send a message in Live or hit Pulse now to seed the stream.";
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-2">
-      {intents.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {loading
-            ? "Loading…"
-            : "No classifications yet. Every message you send gets classified — they'll start landing here as you chat."}
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {intents.map((r) => {
-            const tone = INTENT_TONE[r.token];
-            return (
-              <li
-                key={r.id}
-                className="rounded-xl border bg-card px-3 py-2.5"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "font-mono text-[10px] font-semibold tracking-wider",
-                      tone.cls,
-                    )}
-                  >
-                    <Zap className="mr-1 size-3" aria-hidden />
-                    {tone.label}
-                  </Badge>
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {(r.confidence * 100).toFixed(0)}%
-                  </span>
-                  <span
-                    className="ml-auto text-[11px] text-muted-foreground"
-                    suppressHydrationWarning
-                  >
-                    {relTime(r.created_at)}
-                  </span>
-                </div>
-                <p className="mt-1.5 line-clamp-2 break-words text-[13px] text-foreground">
-                  {r.user_msg || "—"}
-                </p>
-                {r.reason && (
-                  <p className="mt-1 text-[12px] italic text-muted-foreground">
-                    → {r.reason}
-                  </p>
+    <div className="rounded-xl border border-dashed bg-card/40 p-8 text-center">
+      <Activity className="mx-auto mb-2 size-5 text-muted-foreground" aria-hidden />
+      <p className="text-sm text-muted-foreground">{msg}</p>
+    </div>
+  );
+}
+
+function IntentSplit({ intents }: { intents: IntentRecordDTO[] }) {
+  const total = intents.length;
+  const counts = {
+    full_assistance: intents.filter((i) => i.token === "full_assistance").length,
+    fast_intervention: intents.filter((i) => i.token === "fast_intervention").length,
+    silent: intents.filter((i) => i.token === "silent").length,
+  };
+  return (
+    <div className="space-y-2">
+      {(Object.keys(counts) as (keyof typeof counts)[]).map((k) => {
+        const c = counts[k];
+        const pct = total > 0 ? (c / total) * 100 : 0;
+        const tone = INTENT_TONE[k];
+        return (
+          <div key={k} className="space-y-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className={cn("font-mono font-semibold tracking-wider", tone.cls)}>
+                {tone.label}
+              </span>
+              <span className="font-mono text-muted-foreground">
+                {c} · {pct.toFixed(0)}%
+              </span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  k === "full_assistance" && "bg-primary",
+                  k === "fast_intervention" && "bg-info",
+                  k === "silent" && "bg-muted-foreground/40",
                 )}
-                {r.suggested_action && (
-                  <p className="mt-1 text-[12px] text-foreground/85">
-                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                      suggested:
-                    </span>{" "}
-                    {r.suggested_action}
-                  </p>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
