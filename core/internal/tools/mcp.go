@@ -22,12 +22,12 @@ import (
 )
 
 type MCPServerConfig struct {
-	Name         string   `yaml:"name"`
-	Transport    string   `yaml:"transport"`
-	Enabled      bool     `yaml:"enabled"`
-	Command      []string `yaml:"command"`
-	URL          string   `yaml:"url"`
-	URLEnv       string   `yaml:"url_env"`
+	Name      string   `yaml:"name"`
+	Transport string   `yaml:"transport"`
+	Enabled   bool     `yaml:"enabled"`
+	Command   []string `yaml:"command"`
+	URL       string   `yaml:"url"`
+	URLEnv    string   `yaml:"url_env"`
 	// Auth: "bearer" | "header" | "cloudflare_access" | "" (none).
 	//   - bearer:           Authorization: Bearer <token>
 	//   - header:           <auth_header_name>: <token>   (raw, no prefix)
@@ -41,6 +41,14 @@ type MCPServerConfig struct {
 	// For auth=cloudflare_access: env var names for the Service Token pair.
 	CFClientIDEnv     string `yaml:"cf_client_id_env"`
 	CFClientSecretEnv string `yaml:"cf_client_secret_env"`
+	// DisableStandaloneSSE applies to transport=http. The Streamable HTTP
+	// MCP spec allows a side-channel GET request that opens a long-lived
+	// SSE stream for server-initiated notifications. Many remote MCPs
+	// (GitHub's at api.githubcopilot.com/mcp/, Composio's gateway) don't
+	// implement that channel and return 405 Method Not Allowed on the
+	// GET. Setting this true tells the client to stick to POST-only
+	// request/response, which all Streamable HTTP servers must support.
+	DisableStandaloneSSE bool `yaml:"disable_standalone_sse"`
 }
 
 // resolveURL prefers an explicit url; otherwise reads from $url_env. Returns
@@ -294,8 +302,37 @@ func (m *MCPManager) dialSession(_ context.Context, s MCPServerConfig) (*mcp.Cli
 			}
 		}
 		transport = sse
+	case "http", "streamable_http":
+		// Streamable HTTP transport — the 2025-03-26 spec replacement
+		// for the two-URL SSE handshake. Single endpoint that handles
+		// both POST request/response and an optional GET-based SSE
+		// side-channel. Required by GitHub's remote MCP and Composio's
+		// gateway because their endpoints reject the older SSE GET.
+		url := s.resolveURL()
+		if url == "" {
+			return nil, fmt.Errorf("http transport needs url or url_env")
+		}
+		streamable := &mcp.StreamableClientTransport{
+			Endpoint:             url,
+			DisableStandaloneSSE: s.DisableStandaloneSSE,
+		}
+		headers, err := s.resolveAuthHeaders()
+		if err != nil {
+			return nil, err
+		}
+		if len(headers) > 0 {
+			httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+			httpTransport.ResponseHeaderTimeout = 30 * time.Second
+			streamable.HTTPClient = &http.Client{
+				Transport: &headerRoundTripper{
+					headers: headers,
+					base:    httpTransport,
+				},
+			}
+		}
+		transport = streamable
 	default:
-		return nil, fmt.Errorf("unknown transport: %s", s.Transport)
+		return nil, fmt.Errorf("unknown transport: %s (want sse | http | streamable_http | stdio)", s.Transport)
 	}
 
 	// Detached context with a connect-only deadline. See the long

@@ -43,6 +43,12 @@ servers:
   # locally on the home Mac via claude_code__Bash (uses your gh auth + ssh
   # keys) — this MCP is for everything that touches github.com itself.
   #
+  # TRANSPORT: GitHub's endpoint speaks the 2025-03-26 "Streamable HTTP"
+  # transport, NOT the older two-URL SSE transport. The standalone SSE
+  # side-channel (GET for server-initiated notifications) returns 405
+  # Method Not Allowed on their host, so we disable it — POST-only
+  # request/response is enough for tool listing + execution.
+  #
   # Setup:
   #   1. Create a fine-grained PAT at github.com/settings/personal-access-tokens
   #      scoped to the repos Infinity should touch (Contents R/W, Pull
@@ -54,11 +60,12 @@ servers:
   # rest of Infinity comes up fine — github__* tools just won't be in the
   # registry. Identical fallback shape to claude_code on a missing tunnel URL.
   - name: github
-    transport: sse
+    transport: http
     enabled: true
     url: https://api.githubcopilot.com/mcp/
     auth: bearer
     auth_token_env: GITHUB_MCP_TOKEN
+    disable_standalone_sse: true
 
   # Composio — unified MCP gateway to ~250 SaaS integrations (Gmail, Slack,
   # Notion, Linear, HubSpot, Stripe, …). Composio runs the per-vendor OAuth
@@ -82,12 +89,13 @@ servers:
   #   railway variables --service core --set COMPOSIO_API_KEY=ck_...   (consumer key, for MCP)
   #   railway variables --service core --set COMPOSIO_ADMIN_API_KEY=... (workspace key, for catalog REST)
   - name: composio
-    transport: sse
+    transport: http
     enabled: true
     url: https://connect.composio.dev/mcp
     auth: header
     auth_header_name: x-consumer-api-key
     auth_token_env: COMPOSIO_API_KEY
+    disable_standalone_sse: true
 
   # Tavily MCP (uncomment + set TAVILY_API_KEY)
   # - name: tavily

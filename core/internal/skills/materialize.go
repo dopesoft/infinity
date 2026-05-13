@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -35,9 +36,20 @@ func MaterializeActiveSkills(ctx context.Context, pool *pgxpool.Pool, skillsRoot
 		root = "./skills"
 	}
 
+	// Pull the metadata columns alongside the version body so we can
+	// reconstruct a valid YAML frontmatter when the stored skill_md is
+	// frontmatter-less — which happens whenever GEPA's optimizer
+	// rewrites a skill body without re-emitting the header. The loader
+	// is strict about frontmatter, so without this stitching the
+	// auto-evolved versions get rejected on next boot.
 	rows, err := pool.Query(ctx, `
 		SELECT s.name,
-		       COALESCE(v.skill_md, '')
+		       COALESCE(v.skill_md, ''),
+		       COALESCE(s.description, ''),
+		       COALESCE(s.risk_level, 'low'),
+		       COALESCE(s.trigger_phrases, '[]'::jsonb)::text,
+		       COALESCE(a.active_version, ''),
+		       COALESCE(v.confidence, 0)
 		  FROM mem_skill_active a
 		  JOIN mem_skills s         ON s.name        = a.skill_name
 		  JOIN mem_skill_versions v ON v.skill_name  = a.skill_name
@@ -50,14 +62,26 @@ func MaterializeActiveSkills(ctx context.Context, pool *pgxpool.Pool, skillsRoot
 	defer rows.Close()
 
 	for rows.Next() {
-		var name, body string
-		if err := rows.Scan(&name, &body); err != nil {
+		var name, body, description, riskLevel, triggerJSON, version string
+		var confidence float64
+		if err := rows.Scan(&name, &body, &description, &riskLevel, &triggerJSON, &version, &confidence); err != nil {
 			log.Printf("materialize: scan: %v", err)
 			continue
 		}
 		if name == "" || body == "" {
 			continue
 		}
+
+		// If the stored body lacks YAML frontmatter, synthesize one from
+		// the canonical metadata columns and prepend. Loader rejects any
+		// SKILL.md without a leading `---`, so this is what unblocks
+		// auto-evolved scaffolds whose optimizer dropped the header.
+		// Strip a UTF-8 BOM first since the loader does the same.
+		final := body
+		if !strings.HasPrefix(strings.TrimPrefix(body, "\ufeff"), "---") {
+			final = synthesizeFrontmatter(name, version, description, riskLevel, triggerJSON, confidence) + body
+		}
+
 		dir := root + "/" + safeFilename(name)
 		path := dir + "/SKILL.md"
 
@@ -66,21 +90,100 @@ func MaterializeActiveSkills(ctx context.Context, pool *pgxpool.Pool, skillsRoot
 		// been pushed back to the DB yet — DB wins only when something
 		// changed in the DB.
 		existing, readErr := os.ReadFile(path)
-		if readErr == nil && string(existing) == body {
+		if readErr == nil && string(existing) == final {
 			continue
 		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Printf("materialize: mkdir %s: %v", dir, err)
 			continue
 		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(final), 0o644); err != nil {
 			log.Printf("materialize: write %s: %v", path, err)
 			continue
 		}
 		written++
-		log.Printf("materialize: wrote %s (%d bytes)", path, len(body))
+		log.Printf("materialize: wrote %s (%d bytes)", path, len(final))
 	}
 	return written, rows.Err()
+}
+
+// synthesizeFrontmatter rebuilds a minimal-but-loader-valid YAML header
+// from the canonical metadata in mem_skills. Used when the stored
+// skill_md body is frontmatter-less (GEPA optimizer output, manual
+// inserts that forgot the header, legacy rows). Keeps the same field
+// shape as skills.Frontmatter so the loader's strict YAML parser is
+// happy on the next boot.
+//
+// triggerJSON arrives as the raw JSONB text from the DB. We pass it
+// through unchanged when it's a non-empty array, otherwise emit `[]`.
+func synthesizeFrontmatter(name, version, description, riskLevel, triggerJSON string, confidence float64) string {
+	var triggers []string
+	if triggerJSON != "" {
+		_ = json.Unmarshal([]byte(triggerJSON), &triggers)
+	}
+	if version == "" {
+		version = "1.0.0"
+	}
+	if riskLevel == "" {
+		riskLevel = "low"
+	}
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("name: ")
+	b.WriteString(yamlEscape(name))
+	b.WriteString("\n")
+	b.WriteString("version: \"")
+	b.WriteString(strings.ReplaceAll(version, "\"", "'"))
+	b.WriteString("\"\n")
+	b.WriteString("description: ")
+	b.WriteString(yamlEscape(description))
+	b.WriteString("\n")
+	b.WriteString("risk_level: ")
+	b.WriteString(yamlEscape(riskLevel))
+	b.WriteString("\n")
+	if len(triggers) > 0 {
+		b.WriteString("trigger_phrases:\n")
+		for _, t := range triggers {
+			b.WriteString("  - ")
+			b.WriteString(yamlEscape(t))
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("trigger_phrases: []\n")
+	}
+	if confidence > 0 {
+		fmt.Fprintf(&b, "confidence: %.3f\n", confidence)
+	}
+	b.WriteString("---\n\n")
+	return b.String()
+}
+
+// yamlEscape quotes a string when it contains characters that would
+// break naive YAML scalar parsing (colons, leading/trailing whitespace,
+// special markers, etc.). Single-line strings without those characters
+// pass through unquoted for readability.
+func yamlEscape(s string) string {
+	if s == "" {
+		return "\"\""
+	}
+	needsQuote := false
+	for _, r := range s {
+		if r == ':' || r == '#' || r == '\n' || r == '"' || r == '\'' || r == '\\' || r == '\t' {
+			needsQuote = true
+			break
+		}
+	}
+	if !needsQuote && (s != strings.TrimSpace(s) || strings.HasPrefix(s, "-") || strings.HasPrefix(s, "?") || strings.HasPrefix(s, "&") || strings.HasPrefix(s, "*") || strings.HasPrefix(s, "[") || strings.HasPrefix(s, "{")) {
+		needsQuote = true
+	}
+	if !needsQuote {
+		return s
+	}
+	escaped := strings.ReplaceAll(s, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	escaped = strings.ReplaceAll(escaped, "\n", "\\n")
+	return "\"" + escaped + "\""
 }
 
 // safeFilename mirrors voyager.safeName so disk filenames stay consistent
