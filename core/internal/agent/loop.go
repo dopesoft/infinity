@@ -79,13 +79,19 @@ type SessionNamer interface {
 }
 
 type Loop struct {
+	// providerMu guards llmProvider for hot-swap from Settings PUTs. We
+	// take a Read-lock on every Stream call to grab the current provider,
+	// then drop the lock before doing I/O — keeps the swap path cheap and
+	// concurrent turns safe.
+	providerMu  sync.RWMutex
 	llmProvider llm.Provider
-	tools       *tools.Registry
-	memory      MemoryProvider
-	hooks       HookEmitter
-	skills      SkillMatcher
-	gate        ToolGate
-	namer       SessionNamer
+
+	tools  *tools.Registry
+	memory MemoryProvider
+	hooks  HookEmitter
+	skills SkillMatcher
+	gate   ToolGate
+	namer  SessionNamer
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -133,7 +139,22 @@ func New(cfg Config) *Loop {
 	}
 }
 
-func (l *Loop) Provider() llm.Provider { return l.llmProvider }
+func (l *Loop) Provider() llm.Provider {
+	l.providerMu.RLock()
+	defer l.providerMu.RUnlock()
+	return l.llmProvider
+}
+
+// SetProvider swaps the active LLM provider at runtime. Used by the
+// Settings PUT to flip anthropic ↔ openai_oauth ↔ google without a
+// process restart. Concurrent Stream calls hold a Read-lock so they
+// always see a consistent provider for the duration of the snapshot.
+func (l *Loop) SetProvider(p llm.Provider) {
+	l.providerMu.Lock()
+	defer l.providerMu.Unlock()
+	l.llmProvider = p
+}
+
 func (l *Loop) Tools() *tools.Registry { return l.tools }
 
 func (l *Loop) GetOrCreateSession(id string) *Session {
@@ -224,7 +245,7 @@ const (
 // loop returns nil with a Complete event tagged stop_reason="interrupted".
 // Real provider errors continue to surface as EventError + a returned error.
 func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerCh <-chan string, out chan<- RunEvent) error {
-	if l.llmProvider == nil {
+	if l.Provider() == nil {
 		return errors.New("agent loop has no LLM provider configured")
 	}
 
@@ -265,9 +286,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		var streamErr error
 		streamDone := make(chan struct{})
 
+		// Snapshot the provider once per iteration — a Settings PUT that
+		// swaps mid-turn will affect the *next* iteration, not this one,
+		// keeping the in-flight stream coherent.
+		provider := l.Provider()
 		go func() {
 			defer close(streamDone)
-			resp, streamErr = l.llmProvider.Stream(ctx, model, systemPrompt, s.Snapshot(), l.tools.Definitions(), llmEvents)
+			resp, streamErr = provider.Stream(ctx, model, systemPrompt, s.Snapshot(), l.tools.Definitions(), llmEvents)
 			close(llmEvents)
 		}()
 

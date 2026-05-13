@@ -61,13 +61,14 @@ func serveCmd() *cobra.Command {
 
 			// Memory + hooks + tools wiring (best-effort).
 			var (
-				pool       *pgxpool.Pool
-				store      *memory.Store
-				searcher   *memory.Searcher
-				compressor *memory.Compressor
-				procedural *memory.ProceduralStore
-				pipeline   *hooks.Pipeline
-				embedder   embed.Embedder
+				pool        *pgxpool.Pool
+				store       *memory.Store
+				searcher    *memory.Searcher
+				compressor  *memory.Compressor
+				procedural  *memory.ProceduralStore
+				pipeline    *hooks.Pipeline
+				embedder    embed.Embedder
+				llmRegistry *llm.Registry
 			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -94,6 +95,15 @@ func serveCmd() *cobra.Command {
 						provider = llm.NewOpenAIOAuth(oauthStore, os.Getenv("LLM_MODEL"))
 						fmt.Printf("  llm: openai_oauth provider attached (paste-flow connect via Studio)\n")
 					}
+
+					// Build the multi-provider registry so the Settings PUT
+					// can hot-swap between any vendor whose creds are wired.
+					// The OAuthStore is shared so flipping anthropic ↔
+					// openai_oauth never wipes mem_provider_tokens — re-auth
+					// is not required to switch back.
+					oauthStoreShared := llm.NewOAuthStore(p)
+					llmRegistry = llm.BuildRegistry(oauthStoreShared)
+					fmt.Printf("  llm: registered %v\n", llmRegistry.Available())
 
 					// Compressor needs an Anthropic client; wire only if the
 					// active provider is Anthropic so we don't pin a 2nd key.
@@ -425,6 +435,7 @@ func serveCmd() *cobra.Command {
 				WAL:            walStore,
 				WorkingBuffer:  workingBuf,
 				Heartbeat:      heartbeat,
+				LLMRegistry:    llmRegistry,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

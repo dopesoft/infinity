@@ -33,6 +33,14 @@ const keyPrefix = "setting."
 // next turn. Empty / missing means "use the provider's boot default".
 const KeyModel = keyPrefix + "model"
 
+// KeyProvider is the active LLM provider id (anthropic / openai /
+// openai_oauth / google). Empty / missing means "fall back to the
+// LLM_PROVIDER env at boot". This is intentionally separate from any
+// stored OAuth credentials: switching provider here doesn't touch
+// mem_provider_tokens, so flipping anthropic → openai_oauth → anthropic
+// never requires re-auth.
+const KeyProvider = keyPrefix + "provider"
+
 // Store reads and writes user-controllable settings persisted in the
 // infinity_meta table. Nil-safe: methods on a nil receiver return
 // sensible defaults so wiring without a DB (tests, doctor command)
@@ -110,4 +118,22 @@ func (s *Store) GetModel(ctx context.Context) string {
 // provider rejects an unknown id, so the UI gets feedback either way.
 func (s *Store) SetModel(ctx context.Context, model string) error {
 	return s.Set(ctx, KeyModel, strings.TrimSpace(model))
+}
+
+// GetProvider returns the persisted active provider override (or empty
+// string when none is set, meaning "ride the LLM_PROVIDER boot default").
+func (s *Store) GetProvider(ctx context.Context) string {
+	v, _, err := s.Get(ctx, KeyProvider)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+// SetProvider updates the active provider override. Pass "" to clear it
+// and revert to the boot default. NOTE: this only flips the provider the
+// agent loop uses — stored OAuth credentials in mem_provider_tokens are
+// untouched, so the user can switch back later without re-authenticating.
+func (s *Store) SetProvider(ctx context.Context, provider string) error {
+	return s.Set(ctx, KeyProvider, strings.ToLower(strings.TrimSpace(provider)))
 }

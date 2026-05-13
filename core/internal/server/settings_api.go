@@ -15,10 +15,18 @@ import (
 // `source` field tells Studio whether the user has explicitly chosen
 // ("user") or is riding the boot default ("default") — drives chip UX.
 type settingsModelResponse struct {
-	Model        string `json:"model"`
-	DefaultModel string `json:"default_model"`
-	Provider     string `json:"provider"`
-	Source       string `json:"source"`
+	Model        string   `json:"model"`
+	DefaultModel string   `json:"default_model"`
+	Provider     string   `json:"provider"`
+	Source       string   `json:"source"`
+	// AvailableProviders is the set of provider ids the runtime knows
+	// how to swap to (creds present + registry-registered). Studio uses
+	// it to gray out vendor picker rows whose credentials aren't wired.
+	AvailableProviders []string `json:"available_providers"`
+	// ProviderSource: "user" when the active provider came from the
+	// settings store (Studio picker), "default" when it's the env-set
+	// LLM_PROVIDER. Mirrors the existing Source field for the model.
+	ProviderSource string `json:"provider_source"`
 }
 
 // handleSettingsModel serves GET + PUT /api/settings/model.
@@ -65,7 +73,7 @@ func (s *Server) handleSettingsModel(w http.ResponseWriter, r *http.Request) {
 // model setting. Used by GET and the PUT echo so they share the same
 // payload format and the UI can update from either response.
 func (s *Server) buildSettingsModelResponse(ctx context.Context) settingsModelResponse {
-	resp := settingsModelResponse{Source: "default"}
+	resp := settingsModelResponse{Source: "default", ProviderSource: "default"}
 	if s.loop != nil {
 		if p := s.loop.Provider(); p != nil {
 			resp.Provider = p.Name()
@@ -78,8 +86,67 @@ func (s *Server) buildSettingsModelResponse(ctx context.Context) settingsModelRe
 			resp.Model = override
 			resp.Source = "user"
 		}
+		if persisted := s.settings.GetProvider(ctx); persisted != "" {
+			resp.ProviderSource = "user"
+		}
+	}
+	if s.llmReg != nil {
+		resp.AvailableProviders = s.llmReg.Available()
 	}
 	return resp
+}
+
+// handleSettingsProvider serves GET + PUT /api/settings/provider. The PUT
+// hot-swaps the agent loop's provider via Loop.SetProvider and persists
+// the choice in the settings store. Switching providers does NOT touch
+// mem_provider_tokens — flipping anthropic → openai_oauth → anthropic
+// never requires re-authentication.
+//
+// PUT body: {"provider": "openai_oauth"}. Empty value clears the override
+// and reverts to the LLM_PROVIDER env (next restart only — runtime stays
+// on whatever's active until then).
+func (s *Server) handleSettingsProvider(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.buildSettingsModelResponse(r.Context()))
+	case http.MethodPut, http.MethodPost:
+		if s.settings == nil {
+			writeJSON(w, http.StatusServiceUnavailable,
+				map[string]string{"error": "settings store not configured"})
+			return
+		}
+		if s.llmReg == nil || s.loop == nil {
+			writeJSON(w, http.StatusServiceUnavailable,
+				map[string]string{"error": "provider registry not configured"})
+			return
+		}
+		var body struct {
+			Provider string `json:"provider"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		target := body.Provider
+		if target != "" {
+			p, ok := s.llmReg.Get(target)
+			if !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error": "provider not available — check credentials are wired and try again",
+				})
+				return
+			}
+			s.loop.SetProvider(p)
+		}
+		if err := s.settings.SetProvider(r.Context(), target); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.buildSettingsModelResponse(r.Context()))
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // resolveModel returns the model id the next turn should run against.

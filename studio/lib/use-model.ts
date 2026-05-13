@@ -29,13 +29,18 @@ export type ModelSetting = {
   model: string;
   /** Provider's boot-default model id — what kicks in when the override is cleared. */
   defaultModel: string;
-  /** Provider name (anthropic / openai / google) — read-only from the UI. */
+  /** Active provider id (anthropic / openai / openai_oauth / google). */
   provider: string;
-  /** "user" when the value came from the settings store; "default" when riding the boot env. */
+  /** "user" when the model came from the settings store; "default" when riding the boot env. */
   source: "user" | "default";
+  /** "user" when the provider came from the settings store; "default" when riding LLM_PROVIDER. */
+  providerSource: "user" | "default";
+  /** Providers the runtime knows how to swap to (creds wired). */
+  availableProviders: string[];
 };
 
 const SETTING_ENDPOINT = "/api/settings/model";
+const PROVIDER_ENDPOINT = "/api/settings/provider";
 
 // Module-scoped cache + subscribers. The cache lets a freshly mounted
 // hook render with the last known value instead of a placeholder. The
@@ -49,22 +54,31 @@ function broadcast(next: ModelSetting) {
   for (const fn of subscribers) fn(next);
 }
 
+type WireResp = {
+  model?: string;
+  default_model?: string;
+  provider?: string;
+  source?: string;
+  provider_source?: string;
+  available_providers?: string[];
+};
+
+function decode(raw: WireResp): ModelSetting {
+  return {
+    model: raw.model ?? "",
+    defaultModel: raw.default_model ?? "",
+    provider: (raw.provider ?? "").toLowerCase(),
+    source: raw.source === "user" ? "user" : "default",
+    providerSource: raw.provider_source === "user" ? "user" : "default",
+    availableProviders: raw.available_providers ?? [],
+  };
+}
+
 async function fetchSetting(signal?: AbortSignal): Promise<ModelSetting | null> {
   try {
     const res = await authedFetch(SETTING_ENDPOINT, { signal });
     if (!res.ok) return null;
-    const raw = (await res.json()) as {
-      model?: string;
-      default_model?: string;
-      provider?: string;
-      source?: string;
-    };
-    return {
-      model: raw.model ?? "",
-      defaultModel: raw.default_model ?? "",
-      provider: (raw.provider ?? "").toLowerCase(),
-      source: raw.source === "user" ? "user" : "default",
-    };
+    return decode((await res.json()) as WireResp);
   } catch {
     return null;
   }
@@ -111,18 +125,7 @@ export function useGlobalModel() {
         body: JSON.stringify({ model: modelId }),
       });
       if (!res.ok) return false;
-      const raw = (await res.json()) as {
-        model?: string;
-        default_model?: string;
-        provider?: string;
-        source?: string;
-      };
-      broadcast({
-        model: raw.model ?? "",
-        defaultModel: raw.default_model ?? "",
-        provider: (raw.provider ?? "").toLowerCase(),
-        source: raw.source === "user" ? "user" : "default",
-      });
+      broadcast(decode((await res.json()) as WireResp));
       return true;
     } catch {
       return false;
@@ -131,6 +134,32 @@ export function useGlobalModel() {
     }
   }, []);
 
-  return { setting, setModel, saving };
+  // setProvider hot-swaps the active LLM provider on Core. Stored OAuth
+  // credentials (mem_provider_tokens) are NOT touched, so flipping
+  // openai_oauth → anthropic → openai_oauth doesn't require re-auth.
+  // Pass "" to clear the override and revert to LLM_PROVIDER env (takes
+  // effect at next restart; runtime stays on whatever's active until then).
+  const setProvider = useCallback(async (providerId: string) => {
+    setSaving(true);
+    try {
+      const res = await authedFetch(PROVIDER_ENDPOINT, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: providerId }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        return { ok: false, error: body?.error ?? `HTTP ${res.status}` };
+      }
+      broadcast(decode((await res.json()) as WireResp));
+      return { ok: true as const };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  return { setting, setModel, setProvider, saving };
 }
 

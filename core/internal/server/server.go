@@ -10,6 +10,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/intent"
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
@@ -66,6 +67,11 @@ type Config struct {
 	WAL            *proactive.WAL
 	WorkingBuffer  *proactive.WorkingBuffer
 	Heartbeat      *proactive.Heartbeat
+	// LLMRegistry is the map of constructable providers used by the
+	// Settings PUT to hot-swap the agent loop's active provider without
+	// a restart. Nil-safe — when absent, /api/settings/provider returns
+	// 503 and the loop sticks with its boot provider.
+	LLMRegistry *llm.Registry
 }
 
 type Server struct {
@@ -81,6 +87,7 @@ type Server struct {
 	namer     *sessions.Namer
 	auth      *auth.Verifier
 	settings  *settings.Store
+	llmReg    *llm.Registry
 	started   time.Time
 
 	intentDet *intent.Detector
@@ -120,6 +127,7 @@ func New(cfg Config) *Server {
 		namer:          cfg.Namer,
 		auth:           cfg.Auth,
 		settings:       settings.New(cfg.Pool),
+		llmReg:         cfg.LLMRegistry,
 		started:        time.Now(),
 		turns:          make(map[string]*turnState),
 		intentDet:      cfg.IntentDetector,
@@ -131,6 +139,18 @@ func New(cfg Config) *Server {
 	}
 	if s.heartbeat != nil {
 		s.heartbeat.SetOnFinding(s.onHeartbeatFinding)
+	}
+
+	// Apply the persisted provider override at boot. The agent loop was
+	// constructed with the LLM_PROVIDER env value; if Studio's last save
+	// flipped it elsewhere, honor that — Settings is the source of truth
+	// once the user has touched the picker.
+	if s.loop != nil && s.llmReg != nil && s.settings != nil {
+		if persisted := s.settings.GetProvider(context.Background()); persisted != "" {
+			if p, ok := s.llmReg.Get(persisted); ok {
+				s.loop.SetProvider(p)
+			}
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -203,6 +223,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/active", s.handleCanvasProjectActive)
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
 	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
+	mux.HandleFunc("/api/settings/provider", s.handleSettingsProvider)
 	mux.HandleFunc("/api/meta", s.handleMeta)
 	mux.HandleFunc("/api/auth/openai/start", s.handleOpenAIOAuthStart)
 	mux.HandleFunc("/api/auth/openai/exchange", s.handleOpenAIOAuthExchange)

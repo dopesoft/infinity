@@ -263,57 +263,60 @@ function SectionHeader({ title, description }: { title: string; description: str
 }
 
 function GeneralSection({ status }: { status: CoreStatus | null }) {
-  // Provider selection here is a *view filter* — Core's actual provider is
-  // wired by the env-set LLM_PROVIDER. Picking a different vendor in this
-  // dropdown shows that vendor's pricing + (for openai_oauth) the Connect
-  // ChatGPT flow, but doesn't hot-swap the runtime. Model edits do persist:
-  // they hit /api/settings/model and the agent loop picks them up next turn.
-  const { setting, setModel, saving } = useGlobalModel();
+  // Vendor picker hot-swaps Core's active provider via /api/settings/provider.
+  // The change is synchronous — the next turn (and the Live composer's chip)
+  // sees the new vendor immediately. Stored OAuth credentials persist across
+  // vendor flips, so switching back to ChatGPT later doesn't require re-auth.
+  // Model edits flow through /api/settings/model as before.
+  const { setting, setModel, setProvider, saving } = useGlobalModel();
   const liveProvider = ((setting?.provider ?? status?.provider ?? "") as string).toLowerCase();
   const effectiveModel = setting?.model ?? status?.model ?? "";
   const defaultModel = setting?.defaultModel ?? "";
+  const availableProviders = setting?.availableProviders ?? [];
 
-  const [selectedVendorId, setSelectedVendorId] = useState<string>(
-    liveProvider || VENDORS[0].id,
-  );
   const [draft, setDraft] = useState<string>(effectiveModel);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [providerError, setProviderError] = useState<string | null>(null);
 
-  // Keep the local selectors in sync with whatever Core says is live —
-  // useful when the user cycles the chip in the composer and the hook
-  // broadcasts the change to every subscriber.
+  // Sync the model draft whenever Core's effective model shifts (chip
+  // cycle in composer, vendor swap from this picker — both broadcast).
   useEffect(() => {
     if (effectiveModel) setDraft(effectiveModel);
   }, [effectiveModel]);
-  useEffect(() => {
-    if (liveProvider) setSelectedVendorId(liveProvider);
-  }, [liveProvider]);
 
-  const selectedVendor = findVendor(selectedVendorId);
-  const isLiveVendor = selectedVendor.id === (liveProvider as VendorId);
+  const selectedVendor = findVendor(liveProvider || VENDORS[0].id);
+  const isOAuthVendor = selectedVendor.auth === "oauth";
 
-  // When the user is looking at the live vendor, the model dropdown is
-  // editable + saves through. When they're inspecting a different vendor
-  // (e.g. previewing pricing), the dropdown stays read-only.
+  // The dropdown always reflects the live vendor's models; if the
+  // effective id isn't catalog-known (custom override), prepend it.
   const knownModelIds = new Set(selectedVendor.models.map((m) => m.id));
   const dropdownOptions = knownModelIds.has(draft)
     ? selectedVendor.models
     : [{ id: draft, label: `${draft} (custom)` }, ...selectedVendor.models];
-  const dirty = isLiveVendor && draft !== effectiveModel;
+  const dirty = draft !== effectiveModel;
 
   async function save() {
-    if (!isLiveVendor) return;
     const ok = await setModel(draft);
     if (ok) setSavedAt(Date.now());
   }
 
   async function clearOverride() {
-    if (!isLiveVendor) return;
     const ok = await setModel("");
     if (ok) {
       setDraft(defaultModel);
       setSavedAt(Date.now());
     }
+  }
+
+  async function changeVendor(nextId: string) {
+    setProviderError(null);
+    if (nextId === liveProvider) return;
+    const res = await setProvider(nextId);
+    if (!res.ok) {
+      setProviderError(res.error ?? "Provider swap failed");
+      return;
+    }
+    setSavedAt(Date.now());
   }
 
   return (
@@ -325,43 +328,45 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
       <div className="space-y-3 rounded-md border bg-background p-3">
         <FieldLabel label="Vendor">
-          <NativeSelect value={selectedVendor.id} onChange={setSelectedVendorId}>
-            {VENDORS.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.label}
-                {v.id === (liveProvider as VendorId) ? " · active" : ""}
-              </option>
-            ))}
+          <NativeSelect
+            value={selectedVendor.id}
+            onChange={(v) => void changeVendor(v)}
+            disabled={saving}
+          >
+            {VENDORS.map((v) => {
+              const available =
+                availableProviders.length === 0 ||
+                availableProviders.includes(v.id);
+              return (
+                <option key={v.id} value={v.id} disabled={!available}>
+                  {v.label}
+                  {v.id === (liveProvider as VendorId) ? " · active" : ""}
+                  {!available ? " · not configured" : ""}
+                </option>
+              );
+            })}
           </NativeSelect>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {selectedVendor.docsHint}
           </p>
+          {providerError && (
+            <p className="mt-1 rounded-sm bg-danger/10 p-2 text-[11px] text-danger">
+              {providerError}
+            </p>
+          )}
         </FieldLabel>
 
         <FieldLabel label="Model">
-          <NativeSelect
-            value={isLiveVendor ? draft : defaultModelFor(selectedVendor)}
-            onChange={isLiveVendor ? setDraft : () => undefined}
-            disabled={!isLiveVendor}
-          >
+          <NativeSelect value={draft} onChange={setDraft}>
             {dropdownOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id === defaultModel ? `${m.label} · default` : m.label}
               </option>
             ))}
           </NativeSelect>
-          {!isLiveVendor && (
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Read-only — this isn&apos;t the active vendor. Set{" "}
-              <code className="font-mono">LLM_PROVIDER={selectedVendor.id}</code>{" "}
-              on Core (and connect credentials below if needed) to make it active.
-            </p>
-          )}
         </FieldLabel>
 
-        {selectedVendor.auth === "oauth" && (
-          <OAuthConnectBlock vendor={selectedVendor} />
-        )}
+        {isOAuthVendor && <OAuthConnectBlock vendor={selectedVendor} />}
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
           <code className="truncate font-mono">
@@ -369,34 +374,32 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
             {setting?.source === "user" ? "user override" : "boot default"} · v
             {status?.version || "—"}
           </code>
-          {isLiveVendor && (
-            <div className="flex items-center gap-1.5">
-              {setting?.source === "user" && defaultModel && draft !== defaultModel && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={clearOverride}
-                  disabled={saving}
-                  className="h-7 px-2 text-[11px]"
-                >
-                  reset to default
-                </Button>
-              )}
+          <div className="flex items-center gap-1.5">
+            {setting?.source === "user" && defaultModel && draft !== defaultModel && (
               <Button
                 size="sm"
-                onClick={save}
-                disabled={!dirty || saving}
-                className="h-7 gap-1 px-2 text-[11px]"
+                variant="ghost"
+                onClick={clearOverride}
+                disabled={saving}
+                className="h-7 px-2 text-[11px]"
               >
-                {saving ? (
-                  <CircleDashed className="size-3.5 animate-spin" />
-                ) : savedAt && Date.now() - savedAt < 2000 ? (
-                  <Check className="size-3.5 text-success" />
-                ) : null}
-                {saving ? "saving…" : "save"}
+                reset to default
               </Button>
-            </div>
-          )}
+            )}
+            <Button
+              size="sm"
+              onClick={save}
+              disabled={!dirty || saving}
+              className="h-7 gap-1 px-2 text-[11px]"
+            >
+              {saving ? (
+                <CircleDashed className="size-3.5 animate-spin" />
+              ) : savedAt && Date.now() - savedAt < 2000 ? (
+                <Check className="size-3.5 text-success" />
+              ) : null}
+              {saving ? "saving…" : "save"}
+            </Button>
+          </div>
         </div>
       </div>
 
