@@ -6,6 +6,7 @@ import { useWebSocket } from "@/lib/ws/provider";
 import { fetchCoreStatus, type CoreStatus } from "@/lib/api";
 import { formatUptime, getBootedAt } from "@/lib/uptime";
 import { findVendor, resolveModelEntry, VENDORS } from "@/lib/models-catalog";
+import { useGlobalModel } from "@/lib/use-model";
 
 const dotClass = {
   connected: "bg-success",
@@ -22,6 +23,10 @@ const labelClass = {
 export function FooterStatus() {
   const ws = useWebSocket();
   const [status, setStatus] = useState<CoreStatus | null>(null);
+  // Subscribe to the shared model/provider setting — both the composer's
+  // ModelChip and the Settings page write through this same hook, so any
+  // change there reaches the footer on the same tick (no 30s polling lag).
+  const { setting } = useGlobalModel();
   const [uptime, setUptime] = useState("");
   // Resolve the persisted boot timestamp client-side only, otherwise
   // SSR renders one value and the client re-renders another → hydration
@@ -63,31 +68,38 @@ export function FooterStatus() {
   // Resolve raw provider id + model id to the friendly labels owned by the
   // catalog (Settings + ModelChip use the same source of truth).
   //
-  // CRITICAL: Core's reported `provider` is the source of truth — `openai`
+  // Prefer the live `useGlobalModel` setting over the polled /api/status
+  // snapshot — when the chip cycles or Settings saves, the hook broadcasts
+  // synchronously and the footer re-renders the same tick. /api/status is
+  // still the fallback so first paint isn't blank.
+  //
+  // CRITICAL: provider id (not model id) is the source of truth — `openai`
   // and `openai_oauth` share most model ids (gpt-5.4-mini etc.), so a naive
-  // resolveModelEntry() walk picks `openai` (API key) first and mislabels
-  // a real ChatGPT-subscription turn. Look up the vendor by `status.provider`
-  // first, then look up the model inside THAT vendor's list. Only fall back
-  // to the catalog-wide walk when the provider id is missing or unknown.
-  const vendor = status?.provider
-    ? VENDORS.find((v) => v.id === status.provider) ?? null
+  // resolveModelEntry() walk picks `openai` (API key) first and would
+  // mislabel a real ChatGPT-Plan turn. Look up the vendor by provider id
+  // first, then look up the model inside THAT vendor's list.
+  const liveProvider = setting?.provider || status?.provider || "";
+  const liveModel = setting?.model || status?.model || "";
+
+  const vendor = liveProvider
+    ? VENDORS.find((v) => v.id === liveProvider) ?? null
     : null;
-  const modelFromVendor = vendor && status?.model
-    ? vendor.models.find((m) => m.id === status.model) ?? null
+  const modelFromVendor = vendor && liveModel
+    ? vendor.models.find((m) => m.id === liveModel) ?? null
     : null;
   const fallbackEntry =
-    !vendor && status?.model ? resolveModelEntry(status.model) : null;
+    !vendor && liveModel ? resolveModelEntry(liveModel) : null;
 
   const vendorLabel =
     vendor?.label
     ?? fallbackEntry?.vendor.label
-    ?? (status?.provider ? findVendor(status.provider).label : null)
-    ?? status?.provider
+    ?? (liveProvider ? findVendor(liveProvider).label : null)
+    ?? liveProvider
     ?? "—";
   const modelLabel =
     modelFromVendor?.label
     ?? fallbackEntry?.model.label
-    ?? status?.model
+    ?? liveModel
     ?? "—";
 
   const toolCount = status?.tools?.length ?? 0;

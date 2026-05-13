@@ -36,11 +36,10 @@ export function DashboardHeader({
     >
       <div className="flex items-end justify-between gap-3">
         <div className="flex min-w-0 items-end gap-3">
-          <div className="relative shrink-0">
-            {/* Soft sparkle indicator next to the name to convey "alive" */}
+          <div className="flex shrink-0 items-center gap-2">
             <span
               aria-hidden
-              className="absolute -right-2 -top-1 size-1.5 animate-pulse rounded-full bg-success shadow-[0_0_8px_hsl(var(--success))]"
+              className="size-1.5 animate-pulse rounded-full bg-success shadow-[0_0_8px_hsl(var(--success))]"
             />
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Jarvis
