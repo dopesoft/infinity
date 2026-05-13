@@ -10,10 +10,12 @@ import (
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
+	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/sessions"
 	"github.com/dopesoft/infinity/core/internal/settings"
@@ -84,6 +86,14 @@ type Config struct {
 	// /api/voice/* endpoints all return 503 and Studio's mic button
 	// surfaces "voice not configured".
 	Voice *voice.Minter
+	// PushAPI registers /api/push/* — VAPID key, subscribe/unsubscribe,
+	// device list, test send. Nil-safe: missing VAPID env disables push
+	// and the handlers return empty / 503 cleanly.
+	PushAPI *push.API
+	// DashboardAPI registers GET /api/dashboard returning every section
+	// (pursuits, todos, calendar, follow-ups, saved, memory stats).
+	// Nil-safe: Studio falls back to its local mock when missing.
+	DashboardAPI *dashboard.API
 }
 
 type Server struct {
@@ -186,6 +196,12 @@ func New(cfg Config) *Server {
 	if cfg.VoyagerAPI != nil {
 		cfg.VoyagerAPI.Routes(mux)
 	}
+	if cfg.PushAPI != nil {
+		cfg.PushAPI.Routes(mux)
+	}
+	if cfg.DashboardAPI != nil {
+		cfg.DashboardAPI.Routes(mux)
+	}
 
 	// Auth middleware. /health and /auth/* stay open so the studio can
 	// probe liveness and complete the signup handshake before holding a
@@ -210,6 +226,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/sessions", s.handleSessions)
+	mux.HandleFunc("/api/sessions/seed", s.handleSessionsSeed)
 	mux.HandleFunc("/api/sessions/", s.handleSessionMessages)
 	mux.HandleFunc("/api/messages/", s.handleMessageFeedback)
 	mux.HandleFunc("/api/status", s.handleStatus)

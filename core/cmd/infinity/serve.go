@@ -14,6 +14,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
+	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
@@ -21,6 +22,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
 	"github.com/dopesoft/infinity/core/internal/sessions"
@@ -129,6 +131,7 @@ func serveCmd() *cobra.Command {
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					tools.RegisterSkillTools(registry, p)
+					tools.RegisterDashboardTools(registry, p)
 
 					fmt.Printf("  memory: enabled (embedder=%s, compressor=%v, procedural=on, predictions=on)\n", embedder.Name(), compressor != nil)
 				}
@@ -488,6 +491,43 @@ func serveCmd() *cobra.Command {
 				fmt.Printf("  voice: realtime enabled (model=%s, voice=%s)\n", voiceMinter.Model(), voiceMinter.Voice())
 			}
 
+			// Push notifications. Sender requires VAPID env vars; when
+			// they're missing we still expose the API so Studio can show
+			// "not configured" instead of 404'ing. Store works whenever
+			// the pool is up — subscriptions can land in advance of the
+			// VAPID key being provisioned.
+			var pushAPI *push.API
+			var pushSender *push.Sender
+			if pool != nil {
+				pushStore := push.NewStore(pool)
+				s, perr := push.NewSenderFromEnv(pushStore, nil)
+				if perr != nil {
+					fmt.Printf("  push: store ready; sender disabled (%v)\n", perr)
+					pushAPI = push.NewAPI(pushStore, nil, nil)
+				} else {
+					fmt.Println("  push: VAPID configured, ready to deliver")
+					pushSender = s
+					pushAPI = push.NewAPI(pushStore, s, nil)
+				}
+			}
+
+			// Wire trust → push so an approval queued for the boss
+			// surfaces as a banner on every subscribed device. No-op
+			// when sender isn't configured.
+			if trustStore != nil && pushSender != nil {
+				trustStore.SetNotifier(push.NewTrustAdapter(pushSender))
+				fmt.Println("  push: trust → notification wired")
+			}
+
+			// Dashboard aggregator. Reads from migration-014 tables;
+			// 200 OK with empty arrays when those tables are empty so
+			// Studio can fall back to its local mock fixture.
+			var dashboardAPI *dashboard.API
+			if pool != nil {
+				dashboardAPI = dashboard.NewAPI(pool, nil)
+				fmt.Println("  dashboard: aggregator wired")
+			}
+
 			srv := server.New(server.Config{
 				Addr:           addr,
 				Version:        version,
@@ -512,6 +552,8 @@ func serveCmd() *cobra.Command {
 				LLMRegistry:    llmRegistry,
 				Connectors:     connectorsCache,
 				Voice:          voiceMinter,
+				PushAPI:        pushAPI,
+				DashboardAPI:   dashboardAPI,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

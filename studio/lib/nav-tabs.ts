@@ -4,6 +4,7 @@ import {
   Clock,
   Brain,
   FileCode,
+  LayoutDashboard,
   type LucideIcon,
   MessageSquare,
   Settings,
@@ -34,6 +35,7 @@ export type NavTab = {
 };
 
 export const NAV_TABS: NavTab[] = [
+  { href: "/", label: "Dashboard", Icon: LayoutDashboard },
   { href: "/live", label: "Live", Icon: MessageSquare },
   { href: "/memory", label: "Memory", Icon: Brain },
   { href: "/skills", label: "Skills", Icon: Wrench },

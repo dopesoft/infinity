@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <!-- iOS uses this for the home-screen icon when the PWA is installed
+       via Safari → Add to Home Screen. Square fill + centered glyph. -->
+  <rect width="180" height="180" fill="#000000"/>
+  <path
+    d="M 46 90 Q 46 64 70 64 Q 90 64 90 90 Q 90 116 110 116 Q 134 116 134 90 Q 134 64 110 64 Q 90 64 90 90 Q 90 116 70 116 Q 46 116 46 90 Z"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="12"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

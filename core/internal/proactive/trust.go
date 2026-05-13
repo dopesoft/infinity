@@ -31,10 +31,29 @@ type TrustContract struct {
 }
 
 type TrustStore struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	notifier TrustNotifier
 }
 
 func NewTrustStore(p *pgxpool.Pool) *TrustStore { return &TrustStore{pool: p} }
+
+// TrustNotifier is fired (async) after a successful Queue insert so
+// pluggable surfaces (Web Push, email, Slack DMs) can poke the boss
+// when something needs approval. Keeping the interface here means the
+// proactive package doesn't take a build-time dependency on the push
+// package — serve.go wires the adapter at boot.
+type TrustNotifier interface {
+	NotifyTrustQueued(ctx context.Context, c *TrustContract)
+}
+
+// SetNotifier registers the trust notifier. Safe to call before or
+// after Queue is exercised — nil-safe at the call site.
+func (s *TrustStore) SetNotifier(n TrustNotifier) {
+	if s == nil {
+		return
+	}
+	s.notifier = n
+}
 
 func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error) {
 	if s == nil || s.pool == nil {
@@ -79,6 +98,18 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 	} else {
 		log.Printf("trust.queue: INSERT ok id=%s source=%s status=%s user_id=%v rows=%d",
 			c.ID, c.Source, c.Status, userIDArg, tag.RowsAffected())
+		// Async notifier — runs in a goroutine with a detached context so
+		// it never blocks the gate's wait loop. We deliberately drop the
+		// request context's deadline because push delivery (FCM/APNs over
+		// HTTPS) can outlive a typical 5s API timeout.
+		if s.notifier != nil {
+			contract := *c // capture by value; the goroutine may outlive caller
+			go func() {
+				bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				s.notifier.NotifyTrustQueued(bg, &contract)
+			}()
+		}
 	}
 	return c.ID, err
 }

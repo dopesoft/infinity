@@ -41,16 +41,16 @@ export function WorkspaceChatColumn({
   }, [chat.messages.length, ref]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       <CodingSessionBanner sessionId={chat.sessionId} />
       {/* Outer wrapper must be a flex container so ConversationStream's
           empty state (which uses flex-1 to vertically center its content)
           can actually expand. Without flex here, flex-1 has no effect and
           the empty state collapsed to the top edge. */}
-      <div ref={ref} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div ref={ref} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <ConversationStream messages={chat.messages} />
       </div>
-      <div className="shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
+      <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <PromptInputBox
           onSend={(text) => {
             const t = text.trim();

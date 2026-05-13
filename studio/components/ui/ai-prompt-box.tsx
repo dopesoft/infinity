@@ -34,10 +34,19 @@ const Textarea = React.forwardRef<
   <textarea
     ref={ref}
     rows={1}
+    // cols=1 cancels the HTML default of 20-character intrinsic min-width,
+    // which on iOS Safari is what pushes the textarea (and therefore the
+    // composer + viewport) wider than the parent when a long unbroken
+    // token sits in the buffer. `w-full max-w-full` then constrains it.
+    cols={1}
+    wrap="soft"
     className={cn(
       // text-sm on desktop, the globals.css min-16px rule still kicks in on
       // pointer:coarse devices to prevent iOS Safari zoom-on-focus.
-      "flex w-full resize-none rounded-md border-none bg-transparent px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground",
+      // `min-w-0 max-w-full` together guarantee the textarea can never
+      // exceed its parent's width even when its content has no break
+      // opportunities (long URLs, hashes, paths).
+      "flex w-full min-w-0 max-w-full resize-none rounded-md border-none bg-transparent px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground [overflow-wrap:anywhere]",
       "focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
       "min-h-[44px] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent",
       "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border",
@@ -437,7 +446,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           className={cn(
-            "rounded-3xl border bg-popover p-2 transition-colors duration-200",
+            // `min-w-0 max-w-full` makes the composer respect its parent's
+            // width even when descendants (textarea, action chips) have an
+            // intrinsic content width larger than the viewport — without
+            // these, iOS Safari leaks the overflow up to the page.
+            "min-w-0 max-w-full rounded-3xl border bg-popover p-2 transition-colors duration-200",
             "shadow-[0_8px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.32)]",
             isRecording && "border-danger/70",
             isLoading && "border-info/40",
@@ -487,7 +500,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
            * and any agent work keeps streaming as the boss talks. */}
           <div
             className={cn(
-              "transition-all duration-300",
+              "min-w-0 max-w-full transition-all duration-300",
               (isRecording || voiceActive) ? "h-0 overflow-hidden opacity-0" : "opacity-100",
             )}
           >
@@ -537,10 +550,10 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           )}
 
           {/* Action row */}
-          <div className="flex items-center justify-between gap-2 pt-1.5">
+          <div className="flex min-w-0 items-center justify-between gap-2 pt-1.5">
             <div
               className={cn(
-                "flex items-center gap-1.5 transition-opacity duration-300",
+                "flex min-w-0 items-center gap-1.5 transition-opacity duration-300",
                 isRecording ? "invisible h-0 opacity-0" : "visible opacity-100",
               )}
             >

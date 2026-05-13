@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // API exposes the Voyager subsystem over HTTP. Mounted in serve.go via Routes.
@@ -29,6 +31,45 @@ func (api *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/voyager/optimize", api.handleOptimize)
 	mux.HandleFunc("/api/voyager/code-proposals", api.handleCodeProposals)
 	mux.HandleFunc("/api/voyager/code-proposals/", api.handleCodeProposalDecide)
+	mux.HandleFunc("/api/voyager/calendar/prep", api.handleCalendarPrep)
+}
+
+// handleCalendarPrep triggers prep-checklist generation for one calendar
+// event. Studio's Upcoming card surfaces an "ask Jarvis to plan this"
+// affordance — or future Voyager hooks fire this automatically when a
+// new event is ingested from the calendar connector.
+//
+//	POST /api/voyager/calendar/prep
+//	  { "event_id": "<uuid>" }
+//	→ { "ok": true }
+func (api *API) handleCalendarPrep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if api.m == nil {
+		http.Error(w, "voyager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		EventID string `json:"event_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.EventID == "" {
+		http.Error(w, "event_id required", http.StatusBadRequest)
+		return
+	}
+	id, err := uuid.Parse(strings.TrimSpace(body.EventID))
+	if err != nil {
+		http.Error(w, "invalid event_id", http.StatusBadRequest)
+		return
+	}
+	if err := api.m.GeneratePrepForEvent(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 func (api *API) handleOptimize(w http.ResponseWriter, r *http.Request) {

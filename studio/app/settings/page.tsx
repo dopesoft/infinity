@@ -5,7 +5,9 @@ import {
   Check,
   ChevronDown,
   ExternalLink,
+  Bell,
   Info,
+  LayoutDashboard,
   LayoutPanelLeft,
   Loader2,
   Plug,
@@ -29,6 +31,8 @@ import {
 } from "@/components/ui/resizable";
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
+import { DashboardSettings } from "@/components/settings/DashboardSection";
+import { NotificationsSection } from "@/components/settings/NotificationsSection";
 import { cn } from "@/lib/utils";
 import {
   disconnectOpenAIOAuth,
@@ -52,7 +56,7 @@ import {
   type VendorId,
 } from "@/lib/models-catalog";
 
-type SectionId = "general" | "tools" | "mcp" | "canvas";
+type SectionId = "general" | "dashboard" | "notifications" | "tools" | "mcp" | "canvas";
 
 type SectionMeta = {
   id: SectionId;
@@ -63,6 +67,8 @@ type SectionMeta = {
 
 const SECTIONS: SectionMeta[] = [
   { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
+  { id: "dashboard", label: "Dashboard", description: "Pick which Dashboard sections show on /", icon: LayoutDashboard },
+  { id: "notifications", label: "Notifications", description: "iOS-style push notifications on iPhone + Mac", icon: Bell },
   { id: "tools", label: "Tools", description: "Native + MCP tools the agent can call", icon: Wrench },
   { id: "mcp", label: "Connectors", description: "MCP servers + Composio integrations the agent can call", icon: Plug },
   { id: "canvas", label: "Canvas", description: "Workspace root, preview URL, auto-open", icon: LayoutPanelLeft },
@@ -243,6 +249,10 @@ function SectionContent({
   switch (active) {
     case "general":
       return <GeneralSection status={status} />;
+    case "dashboard":
+      return <DashboardSettings />;
+    case "notifications":
+      return <NotificationsSection />;
     case "tools":
       return <ToolsSection tools={tools} />;
     case "mcp":

@@ -130,6 +130,12 @@
     /* Lock the body so iOS Safari doesn't bounce when the keyboard opens
      * or the URL bar transitions. Scrollers inside use scroll-touch. */
     overscroll-behavior: contain;
+    /* `clip` (not `hidden`) so we don't accidentally create a horizontal
+     * scroll container that would break `position: sticky` on the header
+     * or composer. Belt-and-braces guard against any descendant whose
+     * intrinsic content width (e.g. a textarea holding an unbroken URL on
+     * iOS Safari) tries to push past the viewport edge. */
+    overflow-x: clip;
   }
 
   /* Force native form controls + buttons to inherit the body font;

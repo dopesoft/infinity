@@ -1,0 +1,39 @@
+{
+  "name": "Infinity",
+  "short_name": "Infinity",
+  "description": "Single-user AI agent with persistent memory.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Live conversation",
+      "short_name": "Live",
+      "url": "/live",
+      "description": "Open a chat with Jarvis"
+    },
+    {
+      "name": "Memory",
+      "short_name": "Memory",
+      "url": "/memory"
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import { WebSocketProvider } from "@/lib/ws/provider";
 import { OnboardingGate } from "@/components/OnboardingGate";
 import { TrustToast } from "@/components/TrustToast";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PWARegister } from "@/components/PWARegister";
 import "./globals.css";
 
 // Bust edge HTML cache on every request. Without this, Railway/Next caches the
@@ -27,6 +28,14 @@ export const metadata: Metadata = {
   title: "Infinity",
   description: "Single-user AI agent with persistent memory.",
   applicationName: "Infinity",
+  // The web app manifest unlocks "Add to Home Screen" on iOS Safari (16.4+)
+  // and "Install app" on every desktop browser. Apple still wants its own
+  // apple-touch-icon link tag, which the `icons.apple` entry below emits.
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/apple-touch-icon.svg", sizes: "180x180", type: "image/svg+xml" }],
+  },
   appleWebApp: {
     capable: true,
     title: "Infinity",
@@ -61,6 +70,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <NavBadgesProvider>
               <WebSocketProvider>
                 <TooltipProvider delayDuration={250}>
+                  <PWARegister />
                   <TrustToast />
                   <OnboardingGate>{children}</OnboardingGate>
                 </TooltipProvider>

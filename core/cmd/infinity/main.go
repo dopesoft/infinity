@@ -27,6 +27,7 @@ func main() {
 	root.AddCommand(doctorCmd())
 	root.AddCommand(consolidateCmd())
 	root.AddCommand(reflectCmd())
+	root.AddCommand(vapidCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
