@@ -551,6 +551,26 @@ export type HeartbeatRunSummaryDTO = {
 export const fetchHeartbeats = (signal?: AbortSignal) =>
   getJSON<HeartbeatListDTO>("/api/heartbeat", signal);
 
+export type HeartbeatFindingDTO = {
+  id: string;
+  heartbeat_id: string;
+  started_at: string;
+  kind: string;
+  title: string;
+  detail?: string;
+  pre_approved: boolean;
+};
+
+export const fetchHeartbeatFindings = (
+  limit = 50,
+  kind?: string,
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (kind && kind !== "all") qs.set("kind", kind);
+  return getJSON<HeartbeatFindingDTO[]>(`/api/heartbeat/findings?${qs.toString()}`, signal);
+};
+
 export async function runHeartbeatNow(): Promise<HeartbeatRunSummaryDTO | null> {
   try {
     const res = await authedFetch(`/api/heartbeat/run`, { method: "POST" });

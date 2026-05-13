@@ -34,6 +34,7 @@ func NewAPI(p *pgxpool.Pool, hb *Heartbeat, ts *TrustStore, is *intent.Store) *A
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/heartbeat", a.handleHeartbeats)
 	mux.HandleFunc("/api/heartbeat/run", a.handleHeartbeatRun)
+	mux.HandleFunc("/api/heartbeat/findings", a.handleHeartbeatFindings)
 	mux.HandleFunc("/api/trust-contracts", a.handleTrustList)
 	mux.HandleFunc("/api/trust-contracts/", a.handleTrustScoped)
 	mux.HandleFunc("/api/intent/recent", a.handleIntentRecent)
@@ -91,6 +92,60 @@ func (a *API) heartbeatInterval() time.Duration {
 		return 0
 	}
 	return a.heartbeat.Interval()
+}
+
+type findingListItem struct {
+	ID          string    `json:"id"`
+	HeartbeatID string    `json:"heartbeat_id"`
+	StartedAt   time.Time `json:"started_at"`
+	Kind        string    `json:"kind"`
+	Title       string    `json:"title"`
+	Detail      string    `json:"detail,omitempty"`
+	PreApproved bool      `json:"pre_approved"`
+}
+
+func (a *API) handleHeartbeatFindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.pool == nil {
+		writeJSON(w, http.StatusOK, []findingListItem{})
+		return
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	q := `
+		SELECT f.id::text, f.heartbeat_id::text, h.started_at,
+		       f.kind, f.title, COALESCE(f.detail, ''), f.pre_approved
+		  FROM mem_heartbeat_findings f
+		  JOIN mem_heartbeats h ON h.id = f.heartbeat_id`
+	args := []any{limit}
+	if kind != "" {
+		q += ` WHERE f.kind = $2`
+		args = append(args, kind)
+	}
+	q += ` ORDER BY h.started_at DESC, f.id DESC LIMIT $1`
+	rows, err := a.pool.Query(r.Context(), q, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []findingListItem{}
+	for rows.Next() {
+		var x findingListItem
+		if err := rows.Scan(&x.ID, &x.HeartbeatID, &x.StartedAt,
+			&x.Kind, &x.Title, &x.Detail, &x.PreApproved); err == nil {
+			out = append(out, x)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *API) handleHeartbeatRun(w http.ResponseWriter, r *http.Request) {
