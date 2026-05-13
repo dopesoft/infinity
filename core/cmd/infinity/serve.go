@@ -84,6 +84,17 @@ func serveCmd() *cobra.Command {
 					procedural = memory.NewProceduralStore(p, embedder)
 					searcher.AttachProcedural(procedural)
 
+					// OAuth-backed OpenAI provider needs a pool-backed token
+					// store; FromEnv returns nil for this case so we build it
+					// here once the pool is up. The first inference call will
+					// surface a clean error if the user hasn't connected yet
+					// via Studio's "Connect ChatGPT" flow.
+					if provider == nil && llm.IsOpenAIOAuth() {
+						oauthStore := llm.NewOAuthStore(p)
+						provider = llm.NewOpenAIOAuth(oauthStore, os.Getenv("LLM_MODEL"))
+						fmt.Printf("  llm: openai_oauth provider attached (paste-flow connect via Studio)\n")
+					}
+
 					// Compressor needs an Anthropic client; wire only if the
 					// active provider is Anthropic so we don't pin a 2nd key.
 					if a, ok := provider.(*llm.Anthropic); ok {

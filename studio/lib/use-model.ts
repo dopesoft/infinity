@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { MODELS, type ModelKey } from "@/components/ui/ai-prompt-box";
 import { authedFetch } from "@/lib/api";
 
 /**
@@ -135,12 +134,3 @@ export function useGlobalModel() {
   return { setting, setModel, saving };
 }
 
-/**
- * resolveModelKey maps a raw model id (from /api/settings/model) to the
- * ModelKey the chip uses. Returns the first key when the id is unknown
- * — better to show *something* in the chip than a blank state.
- */
-export function resolveModelKey(modelId: string): ModelKey {
-  const hit = MODELS.find((m) => m.id === modelId);
-  return hit?.key ?? MODELS[0].key;
-}

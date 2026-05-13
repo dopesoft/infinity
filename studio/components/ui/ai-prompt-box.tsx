@@ -172,21 +172,48 @@ const VoiceRecorder: React.FC<{
 };
 
 // ── Model cycle ───────────────────────────────────────────────────────────
-export type ModelKey = "sonnet-4-5" | "opus-4-7" | "haiku-4-5";
+//
+// The chip cycles through whichever vendor is wired (Anthropic, OpenAI,
+// OpenAI-OAuth/ChatGPT, Google). Callers feed it the live model id; the
+// chip looks up the id in the shared catalog, figures out the vendor, and
+// cycles within that vendor's model list. When the id is unknown (e.g. a
+// freshly entered custom model) the cycle starts at the vendor's default.
+import {
+  VENDORS,
+  defaultModelFor,
+  findVendor,
+  resolveModelEntry,
+  type VendorId,
+} from "@/lib/models-catalog";
 
-export const MODELS: { key: ModelKey; label: string; id: string }[] = [
-  { key: "sonnet-4-5", label: "Sonnet 4.5", id: "claude-sonnet-4-5" },
-  { key: "opus-4-7", label: "Opus 4.7", id: "claude-opus-4-7" },
-  { key: "haiku-4-5", label: "Haiku 4.5", id: "claude-haiku-4-5-20251001" },
-];
+function ModelChip({
+  modelId,
+  vendorId,
+  onCycle,
+}: {
+  modelId: string;
+  vendorId?: string;
+  onCycle: (nextModelId: string) => void;
+}) {
+  const resolved = resolveModelEntry(modelId);
+  const vendor = resolved?.vendor ?? findVendor(vendorId);
+  const current =
+    resolved?.model ??
+    vendor.models.find((m) => m.id === modelId) ??
+    vendor.models.find((m) => m.id === defaultModelFor(vendor)) ??
+    vendor.models[0];
 
-function ModelChip({ value, onCycle }: { value: ModelKey; onCycle: () => void }) {
-  const current = MODELS.find((m) => m.key === value) ?? MODELS[0];
+  const cycle = () => {
+    const idx = vendor.models.findIndex((m) => m.id === current.id);
+    const next = vendor.models[(idx + 1) % vendor.models.length];
+    onCycle(next.id);
+  };
+
   return (
     <button
       type="button"
-      onClick={onCycle}
-      title="Click to cycle model"
+      onClick={cycle}
+      title={`${vendor.label} · click to cycle`}
       className={cn(
         "inline-flex h-8 items-center rounded-full border px-3 text-xs font-medium",
         "border-border bg-muted/50 text-foreground/90 transition-colors",
@@ -199,6 +226,10 @@ function ModelChip({ value, onCycle }: { value: ModelKey; onCycle: () => void })
   );
 }
 
+// Re-export for legacy callers (Settings page imports the catalog directly).
+export { VENDORS as MODEL_VENDORS };
+export type { VendorId };
+
 // ── PromptInputBox ────────────────────────────────────────────────────────
 export interface PromptInputBoxProps {
   onSend: (message: string, files?: File[]) => void;
@@ -208,8 +239,15 @@ export interface PromptInputBoxProps {
   className?: string;
   value?: string;
   onValueChange?: (v: string) => void;
-  model?: ModelKey;
-  onModelChange?: (m: ModelKey) => void;
+  /** Active model id (e.g. "claude-opus-4-7", "gpt-5"). When omitted the chip
+   *  falls back to the active vendor's default. */
+  modelId?: string;
+  /** Active vendor id ("anthropic" / "openai" / "openai_oauth" / "google").
+   *  When omitted the chip infers it from the model id, falling back to
+   *  the first vendor in the catalog. */
+  vendorId?: string;
+  /** Called with the next full model id when the user cycles the chip. */
+  onModelChange?: (modelId: string) => void;
   /** Hide the attachment + voice affordances. Defaults to false. */
   minimal?: boolean;
   /** Optional slash-command hook (e.g. /new, /clear). Called before onSend. */
@@ -234,7 +272,8 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       className,
       value: controlledValue,
       onValueChange,
-      model: controlledModel,
+      modelId: controlledModelId,
+      vendorId,
       onModelChange,
       minimal = false,
       onSlash,
@@ -248,13 +287,13 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       else setInternalValue(v);
     };
 
-    const [internalModel, setInternalModel] = React.useState<ModelKey>("sonnet-4-5");
-    const model = controlledModel ?? internalModel;
-    const cycleModel = () => {
-      const idx = MODELS.findIndex((m) => m.key === model);
-      const next = MODELS[(idx + 1) % MODELS.length].key;
-      if (onModelChange) onModelChange(next);
-      else setInternalModel(next);
+    const [internalModelId, setInternalModelId] = React.useState<string>(
+      () => defaultModelFor(findVendor(vendorId ?? null)),
+    );
+    const modelId = controlledModelId ?? internalModelId;
+    const cycleModel = (nextId: string) => {
+      if (onModelChange) onModelChange(nextId);
+      else setInternalModelId(nextId);
     };
 
     const [files, setFiles] = React.useState<File[]>([]);
@@ -437,7 +476,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                 isRecording ? "invisible h-0 opacity-0" : "visible opacity-100",
               )}
             >
-              <ModelChip value={model} onCycle={cycleModel} />
+              <ModelChip modelId={modelId} vendorId={vendorId} onCycle={cycleModel} />
 
               {!minimal && (
                 <Tooltip>

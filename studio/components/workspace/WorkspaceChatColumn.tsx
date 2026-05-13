@@ -3,8 +3,8 @@
 import { useEffect, useRef } from "react";
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
-import { MODELS, PromptInputBox } from "@/components/ui/ai-prompt-box";
-import { resolveModelKey, useGlobalModel } from "@/lib/use-model";
+import { PromptInputBox } from "@/components/ui/ai-prompt-box";
+import { useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
@@ -28,7 +28,6 @@ export function WorkspaceChatColumn({
   scrollRef?: React.MutableRefObject<HTMLDivElement | null>;
 }) {
   const { setting, setModel } = useGlobalModel();
-  const modelKey = resolveModelKey(setting?.model ?? "");
   const localRef = useRef<HTMLDivElement | null>(null);
   const ref = scrollRef ?? localRef;
 
@@ -79,14 +78,14 @@ export function WorkspaceChatColumn({
           isLoading={chat.isStreaming}
           disabled={chat.status !== "connected"}
           placeholder="ask me anything.."
-          model={modelKey}
-          onModelChange={(nextKey) => {
-            // Translate the chip's ModelKey (e.g. "opus-4-7") to the
-            // Anthropic id ("claude-opus-4-7") that Core stores. The
-            // hook broadcasts the change so the Settings page reflects
-            // it instantly without a roundtrip on its end.
-            const id = MODELS.find((m) => m.key === nextKey)?.id ?? "";
-            void setModel(id);
+          modelId={setting?.model ?? ""}
+          vendorId={setting?.provider ?? ""}
+          onModelChange={(nextId) => {
+            // The chip pushes back a full model id; we PUT it straight
+            // through to Core's settings store. The hook broadcasts the
+            // change so the Settings page reflects it instantly without
+            // a roundtrip on its end.
+            void setModel(nextId);
           }}
           minimal={minimalComposer}
         />

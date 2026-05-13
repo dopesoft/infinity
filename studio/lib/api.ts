@@ -791,6 +791,74 @@ export async function invokeSkill(
   }
 }
 
+// ---- OpenAI OAuth (ChatGPT-subscription provider) --------------------------
+//
+// Paste-based PKCE connect flow. Studio renders a "Connect ChatGPT" button
+// for the openai_oauth vendor; clicking it calls `startOpenAIOAuth`, opens
+// the authorize URL in a new tab, then asks the user to paste the callback
+// URL (or the bare code+state) into a box that calls `exchangeOpenAIOAuth`.
+
+export type OpenAIOAuthStartResponse = {
+  state: string;
+  authorize_url: string;
+  redirect_uri: string;
+  expires_at: string;
+};
+
+export type OpenAIOAuthStatusResponse = {
+  connected: boolean;
+  provider?: string;
+  account_id?: string;
+  account_email?: string;
+  scope?: string;
+  expires_at?: string;
+  last_refreshed?: string;
+};
+
+export async function startOpenAIOAuth(): Promise<OpenAIOAuthStartResponse | null> {
+  try {
+    const res = await authedFetch(`/api/auth/openai/start`, { method: "POST" });
+    if (!res.ok) return null;
+    return (await res.json()) as OpenAIOAuthStartResponse;
+  } catch {
+    return null;
+  }
+}
+
+export async function exchangeOpenAIOAuth(input: {
+  code?: string;
+  state?: string;
+  callback_url?: string;
+}): Promise<OpenAIOAuthStatusResponse | { error: string }> {
+  try {
+    const res = await authedFetch(`/api/auth/openai/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json()) as OpenAIOAuthStatusResponse & { error?: string };
+    if (!res.ok) return { error: body.error ?? `HTTP ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function fetchOpenAIOAuthStatus(
+  signal?: AbortSignal,
+): Promise<OpenAIOAuthStatusResponse | null> {
+  return getJSON<OpenAIOAuthStatusResponse>(`/api/auth/openai/status`, signal);
+}
+
+export async function disconnectOpenAIOAuth(): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/auth/openai/disconnect`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Submit a thumbs-up / thumbs-down on an assistant message. Pass null to
  * clear the existing rating. Fire-and-forget — UI optimistically updates,

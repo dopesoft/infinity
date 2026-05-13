@@ -204,6 +204,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
 	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
 	mux.HandleFunc("/api/meta", s.handleMeta)
+	mux.HandleFunc("/api/auth/openai/start", s.handleOpenAIOAuthStart)
+	mux.HandleFunc("/api/auth/openai/exchange", s.handleOpenAIOAuthExchange)
+	mux.HandleFunc("/api/auth/openai/status", s.handleOpenAIOAuthStatus)
+	mux.HandleFunc("/api/auth/openai/disconnect", s.handleOpenAIOAuthDisconnect)
 }
 
 func (s *Server) Start() error {

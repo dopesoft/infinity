@@ -1,34 +1,32 @@
 # Infinity
 
-**Your always-on AI with a real memory, real hands, and a real model of who you are.**
+**Your always-on AI that actually learns.**
 
-Not a chatbot. Not a wrapper. A permanent cognitive substrate that remembers everything, codes on your home Mac, learns from its own failures, and gets sharper the longer you use it.
+Not a chatbot. Not a wrapper. A permanent cognitive substrate that remembers everything, codes on your home Mac under your Max subscription, reflects on its own work between conversations, predicts before it acts and notices when it's wrong, rewrites its own failing skills, and asks you the questions you didn't ask. **The version of it next week is genuinely smarter at your problems than the version of it today.**
 
-> Hermes lights up on demand. Nanobot keeps a tiny loop. OpenClaw runs skills.
-> Infinity does all three — plus codes on your Max subscription via MCP, models *who you are* with Honcho, evolves its own skills with GEPA, and audits every action it takes.
+> Hermes lights up on demand. Nanobot pipes tools around. OpenClaw runs skills on every channel.
+> Infinity does all of it — plus the one thing none of them do: it gets sharper between conversations, on its own, while you sleep.
 
 ---
 
-## What's new this week
+## What's new
 
-**Closed the AGI loops.** Migration `011_agi_loops.sql` + nine landings turn the substrate into a system that genuinely *learns continuously* — not just stores. Each move is grounded in 2024-2026 research, not vibes:
+**Infinity actually *learns*.** Hermes stores messages. OpenClaw runs scripts. Nanobot pipes tools around. Infinity does all that *plus* sharpens itself between every conversation — so the version of it you're talking to next week is genuinely smarter at your problems than the one you're talking to today. Eight new muscles:
 
-- **🧬 GEPA Pareto frontier** ([arXiv 2507.19457](https://arxiv.org/abs/2507.19457), ICLR 2026 Oral) — the optimizer now persists the **whole frontier** of skill variants (not a single champion) with `frontier_run_id` + `pareto_rank`. `SampleFromFrontier` draws weighted by score. 35× rollout efficiency vs. RL.
-- **🚨 Voyager autotrigger** — background ticker watches `mem_skill_runs`. When a skill's recent failure rate crosses 30%, GEPA fires automatically. **The close-the-loop step Voyager originally promised but never had.** Per-skill cooldown (6h default).
-- **🎯 Procedural memory tier activated** — promoted skills materialize as `tier='procedural'` rows with embeddings. Retrieved through the same RRF machinery as semantic facts and injected into every system prompt. CoALA's procedural tier ([arXiv 2309.02427](https://arxiv.org/abs/2309.02427)), populated.
-- **🪞 Metacognition / reflection** — `infinity reflect` walks recent sessions, runs a fresh "critic persona" Haiku call (Multi-Agent Reflexion, [arXiv 2512.20845](https://arxiv.org/html/2512.20845v1)), and writes structured critique + lessons to `mem_reflections`. High-confidence lessons auto-promote into `mem_lessons`.
-- **🔮 Predict-then-act** — every PreToolUse writes an expected outcome; PostToolUse resolves with a Jaccard surprise score (`mem_predictions`). High-surprise rows feed the curiosity scanner. JEPA epistemic discipline without a generative world model.
-- **🕸️ A-MEM auto-linking** ([arXiv 2502.12110](https://arxiv.org/pdf/2502.12110)) — when the compressor promotes an observation, it also writes top-4 cosine-nearest `'associative'` edges into `mem_relations`. Retrieval can now traverse the graph, not just rank by score.
-- **💤 Sleep-time consolidation** ([LightMem, arXiv 2510.18866](https://arxiv.org/html/2510.18866v1)) — `infinity consolidate` rebuilt as an 8-op offline regime: decay → hot-reset → cluster → **contradiction resolution** → **associative pruning** → **weak-edge purge** → **procedural re-weight from success rates** → forget. Distinct from online compression.
-- **❓ Curiosity gap-scan** — the heartbeat now scans memory for **low-confidence nodes**, **unresolved contradictions**, **uncovered graph mentions**, and **high-surprise predictions**, then writes them as `mem_curiosity_questions`. The proactive engine finally *finds gaps*, not just reacts to time.
+- **🧠 Reflection (MAR-style critic loop)** — every session gets replayed by a separate critic mind that scores how it went and writes down lessons. **The next time you ask the same kind of thing, Infinity hits it cleaner — without you having to coach it twice.**
+- **🔮 Predict-then-act (JEPA discipline)** — before every tool call, Infinity writes down what it expects to happen. After, it scores how surprised it was. **When reality keeps disagreeing with the agent's gut, Infinity catches it and pivots — instead of confidently doing the wrong thing five times in a row.**
+- **🎯 Procedural memory tier (CoALA)** — skills the agent builds from watching you become first-class instincts. **You stop reminding it which tool to reach for. The longer you use it, the more it just *knows* your workflow.**
+- **🕸️ A-MEM auto-linking** — every new memory gets stitched into the four most-related things Infinity already knows. **Ask about one thread and you get the whole rope — context, history, related decisions, all at once.**
+- **💤 Sleep-time consolidation (LightMem)** — every night the agent decays stale memories, resolves contradictions in its own head, prunes weak connections, and re-weights skills by how well they're working. **You wake up to a sharper agent, not a noisier one. Most agents accumulate junk forever; Infinity self-grooms.**
+- **❓ Curiosity gap-scan** — Infinity scans its own knowledge for things it's losing confidence in, names you've mentioned but never explained, predictions that didn't pan out. **It asks you the question, instead of guessing and getting it wrong.**
+- **🧬 GEPA Pareto frontier (ICLR 2026 Oral)** — every time a skill fails, Infinity spawns a family of variants, races them, and keeps the whole leaderboard — not just the top one. **You can crown any of them king, or let the agent A/B silently on calls where it's unsure.**
+- **🚨 Voyager autotrigger** — when a skill's failure rate creeps up, Infinity quietly fires the rewriter on its own. **A fresh, better version is waiting in your Trust queue before you'd have noticed the old one was struggling.**
 
-Prior landings still apply:
+Plus everything that came before:
 
-- **🛠️ Claude Code coding bridge** — 25 tools (Bash, Edit, Write, Read, Grep, Glob, Agent, WebFetch, …) live in your agent via MCP-over-SSE through Cloudflare Tunnel to your home Mac. Runs under your **Max subscription** (no API tokens billed for code work). ToS-clean — OAuth tokens never leave the Mac. Every dangerous call queues in the Trust queue for one-tap approve from your phone.
-- **🧠 Honcho dialectic peer modelling** — runs alongside the 12-table mem store. Two new Railway services (FastAPI server + deriver worker) reason continuously about *who the boss is* and fold a peer representation into every system prompt. Privacy filter still runs at the capture boundary.
-- **🔁 GEPA skill self-evolution** — Python sidecar (Hermes-class) for SKILL.md optimization. ~$0.05–$0.20 per cycle.
-
-Plus: Studio is now reachable on the boss's **private domain** instead of the raw `*.up.railway.app` URL.
+- **🛠️ Codes on your home Mac under your Max subscription.** 25 tools (Bash, Edit, Write, Read, Grep, Glob, Agent, WebFetch, …) wired through a private tunnel. No API tokens billed for code work. Every dangerous call asks first — one-tap approve from your phone.
+- **🧠 Honcho-backed model of *you*.** A continuously-updating peer rep of your projects, habits, in-flight thinking — folded into every reply. Privacy-filtered before anything ever lands.
+- **🌐 Lives on your domain.** Open it on your phone at your address. Not a Railway URL, not someone's app.
 
 ---
 
@@ -79,11 +77,11 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 | Privacy filter at the capture boundary | ✅ `StripSecrets` 10-regex + tag-strip | ❌ | ❌ | ❌ |
 | Audit log of every memory operation | ✅ `mem_audit` table + `/api/memory/audit` | ❌ | ❌ | ❌ |
 | LLM-driven episodic compression (Haiku) | ✅ strict-JSON entity extraction | ❌ | ❌ | ❌ |
-| **A-MEM auto-linking at write time** | ✅ top-4 cosine neighbours per new memory | ❌ | ❌ | ❌ |
-| **Procedural memory tier (CoALA)** | ✅ promoted skills retrievable via RRF | ⚠️ skill registry only | ⚠️ skill files | ❌ |
-| **Reflection / metacognition tier** | ✅ `mem_reflections` (MAR critic persona) | ❌ | ❌ | ❌ |
-| **Predict-then-act with surprise scoring** | ✅ `mem_predictions` paired Pre/Post | ❌ | ❌ | ❌ |
-| **Sleep-time consolidation (8-op)** | ✅ contradiction resolution + edge pruning + procedural reweight | ❌ | ❌ | ❌ |
+| **Connects every new memory to related ones automatically** | ✅ traverses the web, not just ranks by score | ❌ | ❌ | ❌ |
+| **Habits — skills become first-class instincts** | ✅ surfaced before the agent shops for tools | ⚠️ skill registry only | ⚠️ skill files | ❌ |
+| **Reflects on its own work + saves the lessons** | ✅ separate critic mind, per-session | ❌ | ❌ | ❌ |
+| **Predicts outcomes, scores its own surprise** | ✅ feeds curiosity + curriculum | ❌ | ❌ | ❌ |
+| **Nightly self-maintenance** (cleanup, contradiction-resolution, skill re-weighting) | ✅ | ❌ | ❌ | ❌ |
 | Nightly consolidation (decay + cluster + forget) | ✅ `infinity consolidate` | ❌ | ❌ | ❌ |
 | Dialectic peer modelling (*who is the user?*) | ✅ Honcho integrated via `CompositeMemory` | ✅ Honcho built-in | ❌ | ❌ |
 
@@ -109,8 +107,8 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 | Sandboxed by risk tier | ⚠️ process-jail live; container WIP | ✅ 7 backends (Docker, Modal, …) | ✅ Docker/SSH/OpenShell | ❌ |
 | **Self-creation** — new skills from session patterns | ✅ Voyager extractor + verifier | ❌ | ❌ | ❌ |
 | **Self-evolution** — existing skills get better | ✅ GEPA optimizer (size/score gates) | ✅ GEPA Phase 1 | ❌ | ❌ |
-| **Pareto frontier persistence** (vs. single champion) | ✅ ICLR 2026 Oral pattern | ❌ | ❌ | ❌ |
-| **Auto-trigger on failure rate** (close the loop) | ✅ ticker → GEPA on ≥30% failure | ❌ | ❌ | ❌ |
+| **Keeps the whole family of skill variants** (not just one winner) | ✅ promote any of them, A/B silently | ❌ single champion | ❌ | ❌ |
+| **Rewrites failing skills on its own** | ✅ proposal waiting before you'd have noticed | ❌ manual | ❌ | ❌ |
 | **Self-noticing** — refactor proposals from file-fight patterns | ✅ Voyager source extractor → `mem_code_proposals` | ❌ | ❌ | ❌ |
 | Skill versions + rollback | ✅ `mem_skill_versions` + `mem_skill_active` | ❌ | ⚠️ | ❌ |
 | Run history with success rate | ✅ `mem_skill_runs` | ⚠️ | ⚠️ | ❌ |
@@ -122,7 +120,7 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 | Capability | **Infinity** | Hermes | OpenClaw | Nanobot |
 |---|:-:|:-:|:-:|:-:|
 | Proactive heartbeat (agent ticks on its own) | ✅ 30-min checklist | ❌ | ⚠️ via cron | ❌ |
-| **Curiosity gap-scan** (finds what it *doesn't* know) | ✅ low-confidence / contradictions / uncovered mentions / surprise | ❌ | ❌ | ❌ |
+| **Asks you the questions you didn't ask** | ✅ surfaces gaps, contradictions, surprises | ❌ | ❌ | ❌ |
 | Cron-scheduled agent runs | ✅ robfig/cron, prompt-as-target | ❌ | ✅ cron tool | ❌ |
 | Webhook-triggered sentinels | ✅ live; file/memory/poll scaffolded | ❌ | ⚠️ | ❌ |
 | Intent classifier per user turn (silent / fast / full) | ✅ Haiku-backed | ❌ | ❌ | ❌ |
@@ -147,10 +145,10 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 
 | | One-sentence verdict |
 |---|---|
-| **Infinity** | The only one designed from day one as a permanent cognitive substrate that genuinely *learns* — memory-first, provenance-tracked, proactive, coding-capable on the user's subscription, **with closed AGI loops** (Pareto frontier skill evolution + auto-trigger on failure, reflection-tier metacognition, predict-then-act surprise scoring, A-MEM auto-linking, sleep-time consolidation, curiosity gap-scan) — on a mobile-first UI you can open on your phone. |
-| Hermes | The closest peer — same SKILL.md lineage, broader sandbox + channel reach, shipping skill self-evolution. Differs by going lighter on memory engineering (FTS5 only, no provenance, no audit, single-champion skill optimization, no reflection or prediction tiers, no curiosity loop). |
-| OpenClaw | The parent project of both Infinity's and Hermes's skill format. Strongest at channel reach (22+) and voice. Weaker on persistent memory and self-evolution. |
-| Nanobot | A pure MCP host, not a memory product. Excellent if all you want is to plug MCP servers into a chat UI. No persistent memory, no skills, no autonomy. |
+| **Infinity** | **The only agent that actually *learns* between conversations** — reflects on its own work, expects vs. surprised, asks you about its own gaps, rewrites failing skills on its own, codes on your Max subscription, runs proactively on its own clock, and lives at your URL on your phone. The version of it next week is genuinely smarter than the version of it today. |
+| Hermes | Closest peer. Same skill-file lineage, broader channel reach. **Stores messages but doesn't reflect on them, doesn't predict, doesn't ask its own questions, doesn't run a Pareto frontier — picks one winner and moves on.** |
+| OpenClaw | The parent project of both Infinity's and Hermes's skill format. Strongest at channel reach (22+) and voice. **A great assistant; not a learning one.** |
+| Nanobot | A pure MCP host. Plug servers in, chat with them. **No memory, no skills, no autonomy. A different category, not a competitor.** |
 
 If you've already built skills for OpenClaw, **drop them into `./skills/` or symlink from `~/.openclaw/workspace/skills/<name>` and Infinity loads them unmodified.**
 
@@ -232,9 +230,9 @@ If you've already built skills for OpenClaw, **drop them into `./skills/` or sym
 | 3 | Memory: 12 tables, RRF, hooks, compression, provenance | ✅ |
 | 4 | Skills: filesystem loader, sandbox tiers, agent tools, HTTP API | ✅ substrate · container sandbox WIP |
 | 5 | Proactive: IntentFlow, WAL, Heartbeat, Trust queue, **curiosity gap-scan** | ✅ substrate · WS auto-fire WIP |
-| 6 | Cron + Sentinels + Voyager + GEPA + source extractor + **Pareto frontier** + **autotrigger** | ✅ closed-loop self-evolution |
+| 6 | Cron + Sentinels + Voyager + GEPA + Pareto frontier + autotrigger | ✅ closed-loop self-evolution |
 | 7 | Polish + Coding bridge + Honcho + custom domain | ✅ major wins shipped |
-| **AGI** | **Reflection · Prediction · A-MEM · Sleep-time · Procedural tier · Curiosity** | ✅ migration 011 |
+| **AGI** | **Reflection · Prediction · A-MEM · Sleep-time · Procedural tier · Curiosity** | ✅ shipped |
 | 8 | Voice | — roadmap |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
@@ -243,39 +241,39 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
 
 ## Features
 
-### AGI Loops (NEW — migration 011)
-- **GEPA Pareto frontier** — `mem_skill_proposals` carries `frontier_run_id` + `score` + `pareto_rank`; `SampleFromFrontier` draws weighted from the frontier instead of locking to a single champion. ICLR 2026 Oral pattern.
-- **Voyager autotrigger** — background ticker watches `mem_skill_runs` for skills past the failure threshold (30% default, 5-run window, 6h cooldown) and fires `RunOptimizer` automatically. Closes the failure → curriculum → skill → optimization cycle.
-- **Procedural memory tier (CoALA)** — promoted skills materialize as `mem_memories` rows with `tier='procedural'`, embedded via the same embedder, retrieved through the same RRF pathway, injected into the system prompt before tool selection.
-- **Reflection / metacognition** — `infinity reflect` walks recent sessions, runs a separate "critic persona" Haiku call (MAR pattern — actor doesn't get to grade itself), persists structured critique + lessons to `mem_reflections`. High-confidence lessons (`confidence ≥ 0.6`) auto-promote to `mem_lessons`. Importance inverts quality — bad sessions are *more* important to remember.
-- **Predict-then-act** — `PreToolUse` records an expected outcome to `mem_predictions`; `PostToolUse` resolves with a Jaccard-based surprise score (0..1). Failure hooks force surprise ≥ 0.5. JEPA epistemic discipline without a generative world model.
-- **A-MEM auto-linking** — every new episodic memory writes top-4 `'associative'` edges into `mem_relations` (cosine ≥ 0.65 floor). Retrieval can now traverse the graph, not just rank.
-- **Sleep-time consolidation (8-op)** — `infinity consolidate` rebuilt as a distinct offline regime: decay → hot-reset → cluster → **contradiction resolution** (older memory of a `'contradicts'` pair → superseded) → **associative pruning** (keep top-10 outgoing per node) → **weak-edge purge** (drop confidence < 0.40) → **procedural re-weight** (strength = recent skill success rate) → forget.
-- **Curiosity gap-scan** — heartbeat checklist now scans for low-confidence semantic memories, unresolved contradictions, uncovered graph mentions, and high-surprise predictions, then writes idempotent rows to `mem_curiosity_questions`. The proactive engine finds gaps, not just reacts to time.
+### AGI Loops (the closed-loop layer no competitor has)
+
+- **Reflection (MAR critic persona)** — fire `infinity reflect` and the agent replays every recent session with a separate critic mind, scores how it went, writes structured lessons it can pull from later. **You don't have to repeat yourself. The agent corrects its own habits between sessions, not when you catch it doing the thing again.**
+- **Predict-then-act (JEPA-style discipline)** — before each tool call the agent records what it expects; after, it scores its own surprise. Failures and wild misses bubble straight into the curriculum. **The agent stops being cocky about things it keeps getting wrong, and starts asking before it digs the hole deeper.**
+- **Procedural memory tier (CoALA)** — skills the agent crystallises from your work get embedded and injected into its system prompt every turn. **It reaches for habits first, tools second. The longer you use it, the less it has to think about *how* — and the more it can think about the actual problem.**
+- **A-MEM auto-linking** — every new memory wires itself to its closest existing neighbours at write time, not at retrieval time. **Pulling one fact pulls the cluster. Your context shows up complete — the decision, the rationale, the contradicting fact, the related project — instead of just the keyword match.**
+- **Sleep-time consolidation (LightMem-style)** — every night the agent decays old memories, resolves contradictions in its own head, prunes weak connections, and re-weights skills by how well they've been working. **You wake up to a sharper agent. Everyone else's agent accumulates lint until performance tanks; Infinity self-grooms.**
+- **Curiosity gap-scan** — the heartbeat scans for things the agent is losing confidence in, names you've mentioned but never explained, predictions that didn't pan out. **The agent asks you the question instead of bluffing the answer. It admits what it doesn't know — and fixes it on purpose.**
+- **GEPA Pareto frontier (ICLR 2026 Oral)** — when a skill fails, the optimizer spawns a family of rewrites, races them, and saves the whole leaderboard, not just the top one. **You promote any version you like. The agent can run a non-champion variant when it's unsure, then learn from how it went. 35× more efficient than RL on the same workload.**
+- **Voyager autotrigger** — a background watcher fires the optimizer the moment a skill's failure rate creeps past your threshold. **A fresh proposal is in your Trust queue before you'd have manually noticed the skill was struggling. The improvement loop runs without you babysitting it.**
 
 ### Memory & Recall
-- **12-table memory store** — observations, summaries, semantic memories, sources, relations, profiles, graph nodes, graph edges, node-observation links, audit, lessons, sessions
-- **Three new tables in migration 011** — `mem_reflections`, `mem_predictions`, `mem_curiosity_questions`
-- **Triple-stream retrieval** — BM25 + pgvector HNSW + 2-hop graph BFS, fused with Reciprocal Rank Fusion (k=60)
-- **Session diversification** — caps any single session at 3 hits per recall to prevent echo chambers
-- **Provenance chain** — every memory links to its source observations via `mem_memory_sources`; `GET /api/memory/cite/:id` surfaces the full chain
-- **Cascading staleness** — `MarkSuperseded` propagates through the memory graph
-- **Haiku LLM compression** — strict-JSON entity extraction promotes raw observations into episodic memories, then auto-links to top-4 cosine-nearest neighbours via `'associative'` relations
-- **Sleep-time consolidation** — `infinity consolidate` runs the 8-op offline regime (see AGI Loops above)
-- **Privacy-first capture** — `memory.StripSecrets` runs 10 regex patterns + `<private>` tag stripping at the boundary
-- **SHA-256 dedup** — 5-minute window prevents observation spam
-- **Audit trail** — every memory operation writes a `mem_audit` row (table#id target)
-- **FTS with synonyms** — `infinity_search` config with graceful fallback on managed Postgres
-- **Honcho dialectic peer model** — runs alongside `mem_*` as a *who-is-the-boss* layer, chained via `agent.CompositeMemory`
+- **Full relational + vector + graph store** — 15+ purpose-built tables under the hood, including a reflection tier, a prediction log, and a curiosity backlog. **Every observation, every memory, every connection, every lesson, every surprise — all recorded, all searchable.**
+- **Triple-stream retrieval (RRF)** — keyword + vector + graph traversal in parallel, fused. **The agent finds the right memory even when you don't use the words you used last time.**
+- **Session diversification** — one chatty session never dominates recall. **No echo-chamber from a single afternoon.**
+- **Provenance chain** — every memory traces back to the exact observations that produced it. **Ask the agent *why does it think X* and it shows you the trail.**
+- **Cascading staleness** — corrections propagate. **Tell it once that something changed and every downstream memory updates with it.**
+- **Haiku-driven compression + A-MEM auto-linking** — raw chatter gets distilled into structured memories *and* wired into the existing web in a single pass.
+- **Sleep-time consolidation** — see AGI Loops above.
+- **Privacy filter at the capture boundary** — secret scrub + `<private>` tag stripping before anything hits the database. **API keys, tokens, passwords never get stored, even if you paste them at it.**
+- **5-minute dedup** — accidental re-runs don't pollute the store.
+- **Full audit log** — every memory operation recorded and queryable. **Nothing happens in the dark.**
+- **FTS with synonyms** — search "db" and it finds "database."
+- **Honcho dialectic peer model** — *who you are* runs as a continuously-updating layer alongside *what you said*.
 
-### Coding (Phase 7 — NEW)
-- **`claude_code` MCP server** — 25 tools surfaced over SSE through Cloudflare Tunnel to your home Mac's `claude mcp serve`
-- **Max-subscription billing** — `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` are the only credentials Railway holds; OAuth tokens never leave the Mac
-- **`ClaudeCodeGate`** — defaults to gating `Bash`, `Write`, `Edit`; everything else passes; override via `INFINITY_CLAUDE_CODE_BLOCK` / `INFINITY_CLAUDE_CODE_AUTOAPPROVE`
-- **Trust queue for coding** — every gated call lands in `mem_trust_contracts` with full action spec + tool input preview
-- **iOS-friendly diff viewer** — `ToolCallCard` recognizes unified-diff output and renders per-line red/green
-- **Code-mode composer toggle** — disables iOS autocorrect/capitalize/spellcheck when typing paths or commands
-- **End-to-end captured into memory** — every coding session writes observations with provenance
+### Coding (Claude Code over MCP)
+- **25 tools wired to your home Mac** — Bash, Edit, Write, Read, Grep, Glob, Agent, WebFetch, and more, all over a private Cloudflare tunnel.
+- **Runs on your Max subscription, not API tokens.** ToS-clean — your OAuth credentials never leave your Mac. **You're already paying for the Max plan; now your always-on agent uses it too.**
+- **Trust-gated by default** — anything that writes or executes asks first. Reads pass through. **You sleep without worrying the agent went rogue at 3am.**
+- **Approve from your phone** — every dangerous call lands in your Trust queue with a diff preview and a one-tap approve button.
+- **iOS-friendly diff viewer** — unified diffs render with per-line red/green right in chat.
+- **Code-mode composer toggle** — disables iOS autocorrect when you're typing paths or commands. **No more autocapitalised filenames.**
+- **Every coding session goes into memory with full provenance** — the agent remembers the change *and* why it made it.
 
 ### Agent Loop
 - **Intentionally small loop** — nanobot-inspired, never imports memory/skills/hooks/honcho/proactive directly (interfaces only)
@@ -294,30 +292,28 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
 - **Pluggable embedder** — stub (deterministic) or HTTP sidecar (FastAPI), 384-dim vectors
 - **Tool registry auto-exposes** — anything registered shows up in `/api/tools` and the agent's tool list
 
-### Skills System (Phase 4) + Self-Evolution
-- **Filesystem-native** — `SKILL.md` + YAML frontmatter, OpenClaw + Hermes-compatible (drop-in symlink)
-- **Risk-tiered sandboxing** — process jail (low/medium) → container (high/critical, WIP)
-- **Trigger matching** — Token Jaccard + substring overlap, threshold 0.5
-- **Agent-callable** — `skills.list`, `skills.invoke`, `skills.discover`, `skills.history`
-- **Run history** — every invocation persists to `mem_skill_runs` with success rate
-- **Versioning** — `mem_skill_versions` + `mem_skill_active` for rollback
-- **Hot reload** — `POST /api/skills/reload` re-walks the filesystem
-- **GEPA optimizer + Pareto frontier (NEW)** — Genetic-Pareto loop that mutates SKILL.md from failure traces, hard-gated on size/frontmatter/non-noop, **persists the whole frontier** with `frontier_run_id` + `pareto_rank`, queued through Trust Contracts. `SampleFromFrontier` draws weighted by score for runtime A/B sampling.
-- **Autotrigger (NEW)** — background ticker auto-fires GEPA on skills past the failure-rate threshold. The close-the-loop step. Off until `GEPA_URL` is set; tunable via `INFINITY_VOYAGER_FAILURE_RATE` / `INFINITY_VOYAGER_MIN_RUNS` / `INFINITY_VOYAGER_COOLDOWN`.
-- **Procedural-memory promotion (NEW)** — every promoted skill writes a `tier='procedural'` row via `OnSkillPromoted` callback, so retrieval injects it through the same RRF pathway as semantic facts. CoALA's procedural tier, populated.
-- **Voyager extractor** — at SessionEnd, drafts new SKILL.md candidates from observation transcripts
-- **Voyager discovery** — counts repeated tool-triplets across sessions to spot crystallization opportunities
-- **Voyager source extractor** — at SessionEnd, detects "file-fight" patterns (same file edited ≥3× with failures) and drafts a refactor proposal via Haiku into `mem_code_proposals`. Approval marks intent only — the actual edit still flows through `ClaudeCodeGate` → Trust queue, so self-modification of Go/Next.js source stays boss-gated.
+### Skills + Self-Evolution
+- **Drop-in compatible with OpenClaw / Hermes skills** — write a `SKILL.md` file, the agent loads it. Bring your existing skill library; nothing to convert.
+- **Risk-tiered sandboxing** — low/medium-risk skills run in a process jail; high/critical land in containers (in progress). **You don't have to read every skill before you let it run.**
+- **Trigger matching** — the agent suggests the right skill when the conversation matches what it knows how to do.
+- **Run history with success rates** — every skill execution is logged. **You see at a glance which ones are actually working.**
+- **Versioned + rollback-able** — every skill change keeps a history. **Revert in one tap if a promotion regresses.**
+- **GEPA optimizer with Pareto frontier (ICLR 2026 Oral)** — when a skill fails, a family of rewrites compete; the whole leaderboard lands in your Trust queue. **Promote any rank you want, or let the agent A/B sample silently.**
+- **Voyager autotrigger** — a background watcher fires the optimizer the moment failure rate creeps up. **The improvement cycle runs on its own.**
+- **Procedural-memory promotion (CoALA)** — every approved skill becomes a habit the agent reaches for automatically. **It stops asking *which tool* and starts asking *what next*.**
+- **Voyager extractor** — at the end of every session, Infinity notices "you just taught me a thing" and drafts a new skill for your review. **The agent learns from watching you, not from waiting for you to write a SKILL.md.**
+- **Voyager discovery** — repeated tool sequences across sessions become candidate skills. **The agent crystallises your habits before you've even named them.**
+- **Voyager source extractor** — when you fight the same file three times in a session, Infinity drafts a refactor proposal. **Autonomous *noticing*, never autonomous writing — the actual edit still asks for approval.**
 
-### Proactive Engine (Phase 5)
-- **IntentFlow detector** — Haiku classifies every turn into silent / fast / full + Quiet Hours gate
-- **WAL extractor** — regex captures corrections, preferences, decisions, dates, URLs into `mem_session_state`
-- **Working Buffer** — at 60% context utilization, snapshots into `mem_working_buffer` for recovery
-- **Heartbeat ticker** — every 30 minutes runs the composed checklist (`DefaultChecklist` + `CuriosityChecklist`)
-- **Curiosity gap-scan (NEW)** — composes into the heartbeat: scans low-confidence memories, unresolved contradictions, uncovered graph mentions, high-surprise predictions. Writes idempotent rows to `mem_curiosity_questions`. Surfaces as `Finding{Kind:"curiosity"}`.
-- **Predict-then-act recorder (NEW)** — `hooks.PredictionRecorder` writes one row to `mem_predictions` per PreToolUse, resolves with surprise score on PostToolUse. Zero LLM cost — Jaccard heuristic.
-- **Trust Contract queue** — anything risky lands in `mem_trust_contracts` for approval / denial / snooze; user_id-scoped
-- **Outcome journal** — `mem_outcomes` tracks promised work and surfaces overdue items
+### Proactive Engine
+- **IntentFlow** — every turn is classified into silent / fast / full assistance. **The agent matches its energy to yours instead of treating every question like a research project.**
+- **Quiet Hours** — set your hours, the agent shuts up. **No notifications at 2am.**
+- **Working memory** — when context starts filling, the agent snapshots the load-bearing fragments so a fresh session can pick up exactly where you left off.
+- **Heartbeat** — every 30 minutes the agent runs its own checklist: overdue commitments, repeated patterns, struggling skills, **gaps in its own knowledge, predictions that didn't pan out, contradictions in what it knows.**
+- **Curiosity gap-scan** — see AGI Loops above. **The agent asks you about its blind spots, on its own, between conversations.**
+- **Predict-then-act recorder** — see AGI Loops above. **Every tool call comes with a measured surprise score.**
+- **Trust Contract queue** — every risky action waits for your nod. Approve, deny, or snooze. Approve from your phone.
+- **Outcome journal** — promises and commitments get tracked. **"You said you'd review this on Friday" — the agent remembers, even if you don't.**
 
 ### Cron & Sentinels (Phase 6)
 - **Cron scheduler** — `mem_crons` rows + robfig/cron/v3 with UTC, standard 5-field parser

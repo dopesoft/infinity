@@ -5,11 +5,17 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  ExternalLink,
+  Info,
   LayoutPanelLeft,
+  Loader2,
+  Plug,
+  PlugZap,
   RefreshCw,
   Search,
   Server,
   Sliders,
+  Unplug,
   Wrench,
   X,
 } from "lucide-react";
@@ -25,14 +31,27 @@ import {
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { cn } from "@/lib/utils";
 import {
+  disconnectOpenAIOAuth,
+  exchangeOpenAIOAuth,
   fetchCoreStatus,
   fetchMCP,
+  fetchOpenAIOAuthStatus,
   fetchTools,
+  startOpenAIOAuth,
   type CoreStatus,
   type MCPStatus,
+  type OpenAIOAuthStartResponse,
+  type OpenAIOAuthStatusResponse,
   type ToolDescriptor,
 } from "@/lib/api";
 import { useGlobalModel } from "@/lib/use-model";
+import {
+  VENDORS,
+  defaultModelFor,
+  findVendor,
+  type VendorEntry,
+  type VendorId,
+} from "@/lib/models-catalog";
 
 type SectionId = "general" | "tools" | "mcp" | "canvas";
 
@@ -243,94 +262,53 @@ function SectionHeader({ title, description }: { title: string; description: str
   );
 }
 
-type ProviderCatalogEntry = {
-  id: string;
-  label: string;
-  keyEnv: string;
-  models: { id: string; label: string; recommended?: boolean }[];
-  docsHint: string;
-};
-
-const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
-  {
-    id: "anthropic",
-    label: "Anthropic",
-    keyEnv: "ANTHROPIC_API_KEY",
-    docsHint: "Get a key at console.anthropic.com → API keys.",
-    models: [
-      { id: "claude-opus-4-7", label: "Claude Opus 4.7 — most capable" },
-      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — balanced" },
-      { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5 (default)", recommended: true },
-      { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — fastest" },
-    ],
-  },
-  {
-    id: "openai",
-    label: "OpenAI",
-    keyEnv: "OPENAI_API_KEY",
-    docsHint: "Get a key at platform.openai.com → API keys.",
-    models: [
-      { id: "gpt-5", label: "GPT-5 (default)", recommended: true },
-      { id: "gpt-4o", label: "GPT-4o — multimodal" },
-      { id: "gpt-4o-mini", label: "GPT-4o mini — cheapest" },
-    ],
-  },
-  {
-    id: "google",
-    label: "Google",
-    keyEnv: "GOOGLE_API_KEY",
-    docsHint: "Get a key at aistudio.google.com → Get API key.",
-    models: [
-      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (default)", recommended: true },
-      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash — fast + cheap" },
-      { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
-    ],
-  },
-];
-
-function findProvider(id: string | undefined | null): ProviderCatalogEntry {
-  return PROVIDER_CATALOG.find((p) => p.id === id) ?? PROVIDER_CATALOG[0];
-}
-
 function GeneralSection({ status }: { status: CoreStatus | null }) {
-  // Provider is determined by the env-set LLM_PROVIDER on Core and is
-  // read-only here — swapping providers requires a different API key,
-  // which still lives in env. The model, however, is fully editable
-  // from the UI: changes hit /api/settings/model and the Core agent
-  // loop picks them up on the next turn (no restart needed).
+  // Provider selection here is a *view filter* — Core's actual provider is
+  // wired by the env-set LLM_PROVIDER. Picking a different vendor in this
+  // dropdown shows that vendor's pricing + (for openai_oauth) the Connect
+  // ChatGPT flow, but doesn't hot-swap the runtime. Model edits do persist:
+  // they hit /api/settings/model and the agent loop picks them up next turn.
   const { setting, setModel, saving } = useGlobalModel();
-  const liveProvider = (setting?.provider ?? status?.provider ?? "").toLowerCase();
+  const liveProvider = ((setting?.provider ?? status?.provider ?? "") as string).toLowerCase();
   const effectiveModel = setting?.model ?? status?.model ?? "";
   const defaultModel = setting?.defaultModel ?? "";
 
+  const [selectedVendorId, setSelectedVendorId] = useState<string>(
+    liveProvider || VENDORS[0].id,
+  );
   const [draft, setDraft] = useState<string>(effectiveModel);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // Sync the local form whenever Core/setting state arrives or shifts.
-  // The hook broadcasts on every PUT so this picks up changes the chip
-  // makes in the chat composer too.
+  // Keep the local selectors in sync with whatever Core says is live —
+  // useful when the user cycles the chip in the composer and the hook
+  // broadcasts the change to every subscriber.
   useEffect(() => {
     if (effectiveModel) setDraft(effectiveModel);
   }, [effectiveModel]);
+  useEffect(() => {
+    if (liveProvider) setSelectedVendorId(liveProvider);
+  }, [liveProvider]);
 
-  const provider = findProvider(liveProvider);
-  const knownModelIds = new Set(provider.models.map((m) => m.id));
+  const selectedVendor = findVendor(selectedVendorId);
+  const isLiveVendor = selectedVendor.id === (liveProvider as VendorId);
 
-  // Show the live id in the dropdown even when it's not in the static
-  // catalog — Anthropic ships new models faster than we can update the
-  // list, and rendering a blank select would just be confusing.
+  // When the user is looking at the live vendor, the model dropdown is
+  // editable + saves through. When they're inspecting a different vendor
+  // (e.g. previewing pricing), the dropdown stays read-only.
+  const knownModelIds = new Set(selectedVendor.models.map((m) => m.id));
   const dropdownOptions = knownModelIds.has(draft)
-    ? provider.models
-    : [{ id: draft, label: `${draft} (custom)` }, ...provider.models];
-
-  const dirty = draft !== effectiveModel;
+    ? selectedVendor.models
+    : [{ id: draft, label: `${draft} (custom)` }, ...selectedVendor.models];
+  const dirty = isLiveVendor && draft !== effectiveModel;
 
   async function save() {
+    if (!isLiveVendor) return;
     const ok = await setModel(draft);
     if (ok) setSavedAt(Date.now());
   }
 
   async function clearOverride() {
+    if (!isLiveVendor) return;
     const ok = await setModel("");
     if (ok) {
       setDraft(defaultModel);
@@ -342,34 +320,48 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
     <div className="space-y-4">
       <SectionHeader
         title="General"
-        description="Pick the model your agent runs on. Changes save to Core's settings store and take effect on the next turn — no restart, no env-var dance."
+        description="Pick a vendor to inspect its pricing and connect credentials. The active provider is wired via LLM_PROVIDER on Core; switch the env to flip which one runs the chat."
       />
 
       <div className="space-y-3 rounded-md border bg-background p-3">
-        <FieldLabel label="Provider (env-set)">
-          <NativeSelect value={provider.id} onChange={() => undefined} disabled>
-            {PROVIDER_CATALOG.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
+        <FieldLabel label="Vendor">
+          <NativeSelect value={selectedVendor.id} onChange={setSelectedVendorId}>
+            {VENDORS.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.label}
+                {v.id === (liveProvider as VendorId) ? " · active" : ""}
               </option>
             ))}
           </NativeSelect>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            Provider is wired to <code className="font-mono">LLM_PROVIDER</code> and{" "}
-            <code className="font-mono">{provider.keyEnv}</code> on Core. Swapping
-            providers requires a different API key, so it stays in env for now.
+            {selectedVendor.docsHint}
           </p>
         </FieldLabel>
 
         <FieldLabel label="Model">
-          <NativeSelect value={draft} onChange={setDraft}>
+          <NativeSelect
+            value={isLiveVendor ? draft : defaultModelFor(selectedVendor)}
+            onChange={isLiveVendor ? setDraft : () => undefined}
+            disabled={!isLiveVendor}
+          >
             {dropdownOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id === defaultModel ? `${m.label} · default` : m.label}
               </option>
             ))}
           </NativeSelect>
+          {!isLiveVendor && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Read-only — this isn&apos;t the active vendor. Set{" "}
+              <code className="font-mono">LLM_PROVIDER={selectedVendor.id}</code>{" "}
+              on Core (and connect credentials below if needed) to make it active.
+            </p>
+          )}
         </FieldLabel>
+
+        {selectedVendor.auth === "oauth" && (
+          <OAuthConnectBlock vendor={selectedVendor} />
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
           <code className="truncate font-mono">
@@ -377,32 +369,384 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
             {setting?.source === "user" ? "user override" : "boot default"} · v
             {status?.version || "—"}
           </code>
-          <div className="flex items-center gap-1.5">
-            {setting?.source === "user" && defaultModel && draft !== defaultModel && (
+          {isLiveVendor && (
+            <div className="flex items-center gap-1.5">
+              {setting?.source === "user" && defaultModel && draft !== defaultModel && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={clearOverride}
+                  disabled={saving}
+                  className="h-7 px-2 text-[11px]"
+                >
+                  reset to default
+                </Button>
+              )}
               <Button
                 size="sm"
-                variant="ghost"
-                onClick={clearOverride}
-                disabled={saving}
-                className="h-7 px-2 text-[11px]"
+                onClick={save}
+                disabled={!dirty || saving}
+                className="h-7 gap-1 px-2 text-[11px]"
               >
-                reset to default
+                {saving ? (
+                  <CircleDashed className="size-3.5 animate-spin" />
+                ) : savedAt && Date.now() - savedAt < 2000 ? (
+                  <Check className="size-3.5 text-success" />
+                ) : null}
+                {saving ? "saving…" : "save"}
               </Button>
-            )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <PricingTable vendor={selectedVendor} />
+    </div>
+  );
+}
+
+// ── Pricing table ─────────────────────────────────────────────────────────
+// Static snapshot of the most popular models for the selected vendor.
+// Prices are USD per 1M tokens; subscription-billed vendors (openai_oauth)
+// surface their plan note instead. Anyone updating prices in
+// `models-catalog.ts` automatically updates this table.
+function PricingTable({ vendor }: { vendor: VendorEntry }) {
+  const subscriptionOnly = vendor.models.every(
+    (m) => m.input_per_mtok == null && m.output_per_mtok == null,
+  );
+
+  return (
+    <div className="space-y-2 rounded-md border bg-background p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold tracking-tight">
+          {vendor.label} pricing
+        </h3>
+        <Badge variant="secondary" className="font-mono text-[10px]">
+          {subscriptionOnly ? "subscription" : "per 1M tokens"}
+        </Badge>
+      </div>
+      <div className="overflow-x-auto scroll-touch">
+        <table className="w-full text-left text-[12px]">
+          <thead>
+            <tr className="border-b text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              <th className="px-2 py-1.5 font-normal">Model</th>
+              {subscriptionOnly ? (
+                <th className="px-2 py-1.5 text-right font-normal">Cost</th>
+              ) : (
+                <>
+                  <th className="px-2 py-1.5 text-right font-normal">Input</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Output</th>
+                </>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {vendor.models.map((m) => (
+              <tr key={m.id} className="border-b last:border-b-0">
+                <td className="px-2 py-2">
+                  <div className="flex flex-col">
+                    <span className="font-medium">{m.label}</span>
+                    {m.tagline && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {m.tagline}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                {subscriptionOnly ? (
+                  <td className="px-2 py-2 text-right font-mono text-[11px] text-muted-foreground">
+                    {m.note ?? "Included"}
+                  </td>
+                ) : (
+                  <>
+                    <td className="px-2 py-2 text-right font-mono">
+                      {m.input_per_mtok != null
+                        ? `$${m.input_per_mtok.toFixed(2)}`
+                        : "—"}
+                    </td>
+                    <td className="px-2 py-2 text-right font-mono">
+                      {m.output_per_mtok != null
+                        ? `$${m.output_per_mtok.toFixed(2)}`
+                        : "—"}
+                    </td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10px] text-muted-foreground">{vendor.pricingNote}</p>
+    </div>
+  );
+}
+
+// ── OAuth Connect block (openai_oauth only) ────────────────────────────────
+// Three states:
+//   • disconnected — "Connect ChatGPT" button kicks off /api/auth/openai/start,
+//     opens the authorize URL in a new tab, reveals the paste box.
+//   • paste-pending — user has clicked through, needs to paste the callback
+//     URL (or code+state). Pressing "Connect" calls /exchange.
+//   • connected — shows account email, last refresh, expiry, with a
+//     Disconnect button. Reconnect is a one-click flow that re-enters the
+//     paste-pending state without dropping the existing token until success.
+function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
+  const [status, setStatus] = useState<OpenAIOAuthStatusResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState<OpenAIOAuthStartResponse | null>(null);
+  const [paste, setPaste] = useState("");
+  const [busy, setBusy] = useState<"start" | "exchange" | "disconnect" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [successAt, setSuccessAt] = useState<number | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const s = await fetchOpenAIOAuthStatus();
+      setStatus(s);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function connect() {
+    setBusy("start");
+    setError(null);
+    try {
+      const next = await startOpenAIOAuth();
+      if (!next) {
+        setError("Could not start the connect flow — check Core logs.");
+        return;
+      }
+      setPending(next);
+      // Open in a new tab so the user can leave Studio open and paste
+      // back without losing the dialog state.
+      if (typeof window !== "undefined") {
+        window.open(next.authorize_url, "_blank", "noopener,noreferrer");
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function exchange() {
+    if (!pending) return;
+    setBusy("exchange");
+    setError(null);
+    try {
+      const trimmed = paste.trim();
+      const looksLikeURL = /^https?:\/\//i.test(trimmed) || trimmed.startsWith("/");
+      const body = looksLikeURL
+        ? { callback_url: trimmed, state: pending.state }
+        : { code: trimmed, state: pending.state };
+      const res = await exchangeOpenAIOAuth(body);
+      if ("error" in res) {
+        setError(res.error);
+        return;
+      }
+      setStatus(res);
+      setPending(null);
+      setPaste("");
+      setSuccessAt(Date.now());
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function disconnect() {
+    setBusy("disconnect");
+    setError(null);
+    try {
+      const ok = await disconnectOpenAIOAuth();
+      if (ok) {
+        setStatus({ connected: false });
+        setPending(null);
+        setPaste("");
+      } else {
+        setError("Disconnect failed — check Core logs.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const connected = !!status?.connected;
+  const expiresAt = status?.expires_at ? new Date(status.expires_at) : null;
+  const refreshedAt = status?.last_refreshed ? new Date(status.last_refreshed) : null;
+
+  return (
+    <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <PlugZap className="size-3.5 text-muted-foreground" aria-hidden />
+          <span className="text-xs font-semibold tracking-tight">
+            ChatGPT subscription connect
+          </span>
+        </div>
+        {loading ? (
+          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+        ) : connected ? (
+          <Badge variant="secondary" className="gap-1 text-[10px]">
+            <Check className="size-3 text-success" />
+            connected
+          </Badge>
+        ) : (
+          <Badge variant="secondary" className="gap-1 text-[10px]">
+            <Unplug className="size-3 text-muted-foreground" />
+            not connected
+          </Badge>
+        )}
+      </div>
+
+      {connected && (
+        <dl className="space-y-1 text-[11px] text-muted-foreground">
+          {status?.account_email && (
+            <div className="flex items-center justify-between gap-2">
+              <dt className="font-mono uppercase tracking-wider">account</dt>
+              <dd className="truncate font-mono">{status.account_email}</dd>
+            </div>
+          )}
+          {refreshedAt && (
+            <div className="flex items-center justify-between gap-2">
+              <dt className="font-mono uppercase tracking-wider">refreshed</dt>
+              <dd className="font-mono" suppressHydrationWarning>
+                {refreshedAt.toLocaleString()}
+              </dd>
+            </div>
+          )}
+          {expiresAt && (
+            <div className="flex items-center justify-between gap-2">
+              <dt className="font-mono uppercase tracking-wider">expires</dt>
+              <dd className="font-mono" suppressHydrationWarning>
+                {expiresAt.toLocaleString()}
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+
+      {!connected && !pending && (
+        <div className="space-y-2 rounded-md border bg-background p-2.5">
+          <div className="flex items-start gap-2 rounded-sm bg-info/10 p-2 text-[11px] text-info">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <p className="leading-relaxed">
+              <span className="font-semibold">Heads up:</span> after you log in,
+              your browser will show a &quot;can&apos;t reach{" "}
+              <code className="font-mono">localhost:1455</code>&quot; page.
+              That&apos;s expected — OpenAI&apos;s OAuth client only redirects
+              to localhost, and Studio lives in the cloud. Just copy the URL
+              from the address bar back here.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {pending && (
+        <div className="space-y-2 rounded-md border bg-background p-2.5">
+          <p className="text-[11px] text-muted-foreground">
+            Logged in? Copy the full address-bar URL from the &quot;can&apos;t
+            reach&quot; page (or just the{" "}
+            <code className="font-mono">code=…</code> value) and paste it below.
+          </p>
+          <a
+            href={pending.authorize_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] text-info hover:underline"
+          >
+            <ExternalLink className="size-3" />
+            re-open authorize URL
+          </a>
+          <Input
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+            placeholder="paste callback URL or code…"
+            inputMode="text"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="h-9 font-mono text-[11px]"
+          />
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             <Button
               size="sm"
-              onClick={save}
-              disabled={!dirty || saving}
+              variant="ghost"
+              onClick={() => {
+                setPending(null);
+                setPaste("");
+                setError(null);
+              }}
+              className="h-7 px-2 text-[11px]"
+            >
+              cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={exchange}
+              disabled={!paste.trim() || busy === "exchange"}
               className="h-7 gap-1 px-2 text-[11px]"
             >
-              {saving ? (
-                <CircleDashed className="size-3.5 animate-spin" />
-              ) : savedAt && Date.now() - savedAt < 2000 ? (
-                <Check className="size-3.5 text-success" />
-              ) : null}
-              {saving ? "saving…" : "save"}
+              {busy === "exchange" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Check className="size-3.5" />
+              )}
+              connect
             </Button>
           </div>
+        </div>
+      )}
+
+      {error && (
+        <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{error}</p>
+      )}
+      {successAt && Date.now() - successAt < 4000 && !error && (
+        <p className="rounded-sm bg-success/10 p-2 text-[11px] text-success">
+          Connected — Core will use this token on the next openai_oauth turn.
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <p className="text-[10px] text-muted-foreground">
+          {vendor.pricingNote}
+        </p>
+        <div className="flex items-center gap-1.5">
+          {connected && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={disconnect}
+              disabled={busy === "disconnect"}
+              className="h-7 gap-1 px-2 text-[11px]"
+            >
+              {busy === "disconnect" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Unplug className="size-3.5" />
+              )}
+              disconnect
+            </Button>
+          )}
+          {!pending && (
+            <Button
+              size="sm"
+              variant={connected ? "ghost" : "default"}
+              onClick={connect}
+              disabled={busy === "start"}
+              className="h-7 gap-1 px-2 text-[11px]"
+            >
+              {busy === "start" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Plug className="size-3.5" />
+              )}
+              {connected ? "reconnect" : "open ChatGPT login"}
+            </Button>
+          )}
         </div>
       </div>
     </div>
