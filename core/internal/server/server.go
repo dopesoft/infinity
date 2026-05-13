@@ -19,6 +19,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/settings"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -78,6 +79,11 @@ type Config struct {
 	// 503 and the catalog block falls back to its toolkit-summary form
 	// without account-id awareness.
 	Connectors *connectors.Cache
+	// Voice mints OpenAI Realtime ephemeral keys so the browser can do
+	// WebRTC directly. Nil-safe: when unset (OPENAI_API_KEY missing) the
+	// /api/voice/* endpoints all return 503 and Studio's mic button
+	// surfaces "voice not configured".
+	Voice *voice.Minter
 }
 
 type Server struct {
@@ -95,6 +101,7 @@ type Server struct {
 	settings  *settings.Store
 	llmReg     *llm.Registry
 	connectors *connectors.Cache
+	voice      *voice.Minter
 	started    time.Time
 
 	intentDet *intent.Detector
@@ -136,6 +143,7 @@ func New(cfg Config) *Server {
 		settings:       settings.New(cfg.Pool),
 		llmReg:         cfg.LLMRegistry,
 		connectors:     cfg.Connectors,
+		voice:          cfg.Voice,
 		started:        time.Now(),
 		turns:          make(map[string]*turnState),
 		intentDet:      cfg.IntentDetector,
@@ -247,6 +255,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/connectors/composio/accounts/", s.handleComposioAccount)
 	mux.HandleFunc("/api/connectors/composio/aliases", s.handleComposioAliases)
 	mux.HandleFunc("/api/connectors/composio/cache", s.handleComposioCacheStatus)
+
+	// Voice — OpenAI Realtime over WebRTC. Browser holds the audio
+	// pipes, Core mints the key, runs tools, and persists turns.
+	mux.HandleFunc("/api/voice/session", s.handleVoiceSession)
+	mux.HandleFunc("/api/voice/tool", s.handleVoiceTool)
+	mux.HandleFunc("/api/voice/turn", s.handleVoiceTurn)
 }
 
 func (s *Server) Start() error {

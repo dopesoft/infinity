@@ -377,6 +377,40 @@ func (l *Loop) SystemPrompt() string { return l.systemPrompt }
 // skill-prefix contribution to context. Nil-safe.
 func (l *Loop) Skills() SkillMatcher { return l.skills }
 
+// MemoryPrefix is the query-conditioned memory prefix the loop would
+// otherwise prepend to system prompt for the next turn. Exposed so the
+// voice session minter can stamp the same context into the realtime
+// ephemeral key. Empty string + nil error when no memory provider is
+// wired or when the provider returned empty (cold start, no relevant
+// retrievals).
+func (l *Loop) MemoryPrefix(ctx context.Context, sessionID, query string) (string, error) {
+	if l == nil || l.memory == nil {
+		return "", nil
+	}
+	return l.memory.BuildSystemPrefix(ctx, sessionID, query)
+}
+
+// GateForVoice returns the tool gate used by the agent loop. Voice tool
+// calls go through the same gate chain as text so high-risk calls land
+// in the Trust queue exactly like normal. Falls back to AllowAll when
+// no gate was configured at construction.
+func (l *Loop) GateForVoice() ToolGate {
+	if l == nil || l.gate == nil {
+		return AllowAll{}
+	}
+	return l.gate
+}
+
+// Hooks exposes the pipeline emitter so callers outside the loop (the
+// voice HTTP handlers) can fire the same UserPromptSubmit/TaskCompleted
+// events text turns do. Nil-safe at the call site.
+func (l *Loop) Hooks() HookEmitter {
+	if l == nil {
+		return nil
+	}
+	return l.hooks
+}
+
 func (l *Loop) GetOrCreateSession(id string) *Session {
 	l.mu.Lock()
 	if id == "" {

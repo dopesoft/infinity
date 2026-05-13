@@ -1113,3 +1113,86 @@ export async function setComposioAlias(
     return false;
   }
 }
+
+// ---- Voice (OpenAI Realtime) -----------------------------------------------
+
+export type VoiceSessionDTO = {
+  client_secret: string;
+  expires_at: number;
+  model: string;
+  voice: string;
+  sdp_url: string;
+};
+
+export type VoiceToolResult = {
+  call_id: string;
+  output: string;
+  is_error?: boolean;
+  gated_for_trust?: boolean;
+  contract_id?: string;
+  preview?: string;
+};
+
+export async function startVoiceSession(
+  sessionId: string,
+  query = "",
+): Promise<VoiceSessionDTO | { error: string }> {
+  try {
+    const res = await authedFetch("/api/voice/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, query }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.error ?? `voice/session ${res.status}` };
+    return body as VoiceSessionDTO;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function runVoiceTool(args: {
+  sessionId: string;
+  callId: string;
+  name: string;
+  input: Record<string, unknown>;
+}): Promise<VoiceToolResult | { error: string }> {
+  try {
+    const res = await authedFetch("/api/voice/tool", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: args.sessionId,
+        call_id: args.callId,
+        name: args.name,
+        input: args.input,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.error ?? `voice/tool ${res.status}` };
+    return body as VoiceToolResult;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function recordVoiceTurn(args: {
+  sessionId: string;
+  role: "user" | "assistant";
+  text: string;
+}): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/voice/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: args.sessionId,
+        role: args.role,
+        text: args.text,
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

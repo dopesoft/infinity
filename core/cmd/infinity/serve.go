@@ -27,6 +27,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -479,6 +480,14 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
+			// Voice (OpenAI Realtime over WebRTC). nil-safe — when
+			// OPENAI_API_KEY isn't set, voice.New() returns nil and
+			// the /api/voice/* endpoints simply 503.
+			voiceMinter := voice.New()
+			if voiceMinter != nil {
+				fmt.Printf("  voice: realtime enabled (model=%s, voice=%s)\n", voiceMinter.Model(), voiceMinter.Voice())
+			}
+
 			srv := server.New(server.Config{
 				Addr:           addr,
 				Version:        version,
@@ -502,6 +511,7 @@ func serveCmd() *cobra.Command {
 				Heartbeat:      heartbeat,
 				LLMRegistry:    llmRegistry,
 				Connectors:     connectorsCache,
+				Voice:          voiceMinter,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

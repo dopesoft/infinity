@@ -76,7 +76,7 @@ export function FooterStatus() {
 
   return (
     <footer
-      className="flex h-10 items-center gap-2 whitespace-nowrap border-t bg-background px-3 pb-safe text-xs text-muted-foreground sm:gap-2.5 sm:px-4"
+      className="hidden h-10 items-center gap-2 whitespace-nowrap border-t bg-background px-3 pb-safe text-xs text-muted-foreground sm:gap-2.5 sm:px-4 lg:flex"
       role="contentinfo"
     >
       <button

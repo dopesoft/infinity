@@ -3,10 +3,12 @@
 import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ArrowUp, Paperclip, Square, X, StopCircle, Mic } from "lucide-react";
+import { ArrowUp, Paperclip, Square, X, StopCircle, Mic, MicOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
+import { VoiceOrb } from "@/components/VoiceOrb";
+import { useVoice } from "@/lib/voice/use-voice";
 
 /**
  * AI prompt box — adapted from 21st.dev/r/easemize/ai-prompt-box.
@@ -235,6 +237,38 @@ function ModelChip({
 export { VENDORS as MODEL_VENDORS };
 export type { VendorId };
 
+// voiceCaptionLabel maps the voice state machine to the small uppercase
+// label that sits above the rolling caption text. Kept here (rather than
+// inside the hook) so the same label surfaces consistently anywhere the
+// composer is rendered.
+function voiceCaptionLabel(v: {
+  status: import("@/lib/voice/client").VoiceStatus;
+  muted: boolean;
+  toolName: string | null;
+  error: string | null;
+}): string {
+  if (v.error) return `Voice error · ${v.error}`;
+  if (v.muted) return "Muted";
+  switch (v.status) {
+    case "requesting-permission":
+      return "Mic permission…";
+    case "connecting":
+      return "Connecting…";
+    case "user-speaking":
+      return "Listening…";
+    case "assistant-speaking":
+      return "Speaking…";
+    case "tool-running":
+      return v.toolName ? `Running ${v.toolName}` : "Running tool…";
+    case "listening":
+      return "Listening";
+    case "error":
+      return "Voice error";
+    default:
+      return "Voice";
+  }
+}
+
 // ── PromptInputBox ────────────────────────────────────────────────────────
 export interface PromptInputBoxProps {
   onSend: (message: string, files?: File[]) => void;
@@ -308,6 +342,12 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
     const [filePreviews, setFilePreviews] = React.useState<Record<string, string>>({});
     const [selectedImage, setSelectedImage] = React.useState<string | null>(null);
     const [isRecording, setIsRecording] = React.useState(false);
+
+    // Voice mode (OpenAI Realtime over WebRTC). Owns its own state
+    // machine; we just read .active to swap the composer body and
+    // hand .start / .stop to the mic / end buttons.
+    const voice = useVoice(sessionId);
+    const voiceActive = voice.active;
 
     const uploadRef = React.useRef<HTMLInputElement>(null);
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -441,11 +481,14 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
             </div>
           )}
 
-          {/* Textarea (hidden while recording) */}
+          {/* Textarea (hidden while voice is active or while the legacy
+           * fake recorder runs). Voice replaces the textarea inline so the
+           * conversation stream above stays fully visible — tool cards
+           * and any agent work keeps streaming as the boss talks. */}
           <div
             className={cn(
               "transition-all duration-300",
-              isRecording ? "h-0 overflow-hidden opacity-0" : "opacity-100",
+              (isRecording || voiceActive) ? "h-0 overflow-hidden opacity-0" : "opacity-100",
             )}
           >
             <Textarea
@@ -457,13 +500,30 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
               // Allow typing while a turn is in flight so the user can
               // queue a steer mid-stream. Recording still locks the
               // textarea since the input is audio at that point.
-              disabled={disabled || isRecording}
+              disabled={disabled || isRecording || voiceActive}
               autoCapitalize="sentences"
               autoCorrect="on"
               spellCheck
               inputMode="text"
             />
           </div>
+
+          {voiceActive && (
+            <div className="flex min-h-[44px] items-center gap-3 px-3 py-2">
+              <VoiceOrb status={voice.status} level={voice.level} />
+              <div className="min-w-0 flex-1">
+                <p
+                  className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                  aria-live="polite"
+                >
+                  {voiceCaptionLabel(voice)}
+                </p>
+                <p className="truncate text-sm text-foreground/90" aria-live="polite">
+                  {voice.assistantCaption || voice.userCaption || ""}
+                </p>
+              </div>
+            </div>
+          )}
 
           {isRecording && (
             <VoiceRecorder
@@ -484,39 +544,66 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                 isRecording ? "invisible h-0 opacity-0" : "visible opacity-100",
               )}
             >
-              <ModelChip modelId={modelId} vendorId={vendorId} onCycle={cycleModel} />
-              <ContextMeter sessionId={sessionId} />
-
-              {!minimal && (
+              {voiceActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => uploadRef.current?.click()}
-                      disabled={disabled || isRecording}
+                      onClick={() => voice.setMuted(!voice.muted)}
                       className={cn(
-                        "inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground",
-                        "transition-colors hover:bg-muted hover:text-foreground",
-                        "disabled:cursor-not-allowed disabled:opacity-50",
+                        "inline-flex h-8 w-8 items-center justify-center rounded-full",
+                        "transition-colors",
+                        voice.muted
+                          ? "bg-muted text-danger"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
                       )}
-                      aria-label="Attach image"
+                      aria-label={voice.muted ? "Unmute mic" : "Mute mic"}
+                      aria-pressed={voice.muted}
                     >
-                      <Paperclip className="h-4 w-4" />
-                      <input
-                        ref={uploadRef}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) processFile(f);
-                          if (e.target) e.target.value = "";
-                        }}
-                      />
+                      {voice.muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="top">Attach image</TooltipContent>
+                  <TooltipContent side="top">
+                    {voice.muted ? "Unmute" : "Mute"}
+                  </TooltipContent>
                 </Tooltip>
+              ) : (
+                <>
+                  <ModelChip modelId={modelId} vendorId={vendorId} onCycle={cycleModel} />
+                  <ContextMeter sessionId={sessionId} />
+
+                  {!minimal && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => uploadRef.current?.click()}
+                          disabled={disabled || isRecording}
+                          className={cn(
+                            "inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground",
+                            "transition-colors hover:bg-muted hover:text-foreground",
+                            "disabled:cursor-not-allowed disabled:opacity-50",
+                          )}
+                          aria-label="Attach image"
+                        >
+                          <Paperclip className="h-4 w-4" />
+                          <input
+                            ref={uploadRef}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) processFile(f);
+                              if (e.target) e.target.value = "";
+                            }}
+                          />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Attach image</TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
               )}
             </div>
 
@@ -532,18 +619,30 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
               //   - hasContent                               → "send"
               //   - else                                     → "voice" (or noop in minimal)
               const canStop = isLoading && !!onStop;
-              const mode: "stop" | "steer" | "stop-recording" | "send" | "voice" =
-                canStop && !hasContent
-                  ? "stop"
-                  : isLoading && hasContent
-                    ? "steer"
-                    : isRecording
-                      ? "stop-recording"
-                      : hasContent
-                        ? "send"
-                        : "voice";
+              const mode:
+                | "stop"
+                | "steer"
+                | "stop-recording"
+                | "end-voice"
+                | "send"
+                | "voice" =
+                voiceActive
+                  ? "end-voice"
+                  : canStop && !hasContent
+                    ? "stop"
+                    : isLoading && hasContent
+                      ? "steer"
+                      : isRecording
+                        ? "stop-recording"
+                        : hasContent
+                          ? "send"
+                          : "voice";
 
               const onClick = () => {
+                if (mode === "end-voice") {
+                  voice.stop();
+                  return;
+                }
                 if (mode === "stop") {
                   onStop?.();
                   return;
@@ -556,8 +655,8 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                   handleSubmit();
                   return;
                 }
-                // mode === "voice"
-                if (!minimal) setIsRecording(true);
+                // mode === "voice" — kick off the realtime session.
+                if (!minimal) void voice.start();
               };
 
               const disable =
@@ -574,9 +673,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                     ? "Send steer to running turn"
                     : mode === "stop-recording"
                       ? "Stop recording"
-                      : mode === "send"
-                        ? "Send message"
-                        : "Voice message";
+                      : mode === "end-voice"
+                        ? "End voice session"
+                        : mode === "send"
+                          ? "Send message"
+                          : "Voice message";
 
               const tooltip =
                 mode === "stop"
@@ -585,9 +686,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                     ? "Steer (mid-turn)"
                     : mode === "stop-recording"
                       ? "Stop recording"
-                      : mode === "send"
-                        ? "Send"
-                        : "Voice";
+                      : mode === "end-voice"
+                        ? "End voice"
+                        : mode === "send"
+                          ? "Send"
+                          : "Voice";
 
               return (
                 <Tooltip>
@@ -606,6 +709,8 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                           "bg-transparent text-foreground hover:bg-muted",
                         mode === "stop-recording" &&
                           "bg-transparent text-danger hover:bg-danger/10",
+                        mode === "end-voice" &&
+                          "bg-transparent text-danger hover:bg-danger/10",
                         mode === "voice" && !minimal &&
                           "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
                         mode === "voice" && minimal &&
@@ -618,6 +723,8 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                         <Square className="h-4 w-4 animate-pulse" />
                       ) : mode === "stop-recording" ? (
                         <StopCircle className="h-5 w-5" />
+                      ) : mode === "end-voice" ? (
+                        <Square className="h-4 w-4" />
                       ) : mode === "send" || mode === "steer" ? (
                         <ArrowUp className="h-4 w-4" />
                       ) : (

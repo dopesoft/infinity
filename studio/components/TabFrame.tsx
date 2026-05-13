@@ -4,6 +4,7 @@ import { TabNav } from "@/components/TabNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SignOutButton } from "@/components/SignOutButton";
 import { StatusPill, type AgentState } from "@/components/StatusPill";
+import { AutoStatusPill } from "@/components/AutoStatusPill";
 import { FooterStatus } from "@/components/FooterStatus";
 import { MobileNav } from "@/components/MobileNav";
 import { NavOverflow } from "@/components/NavOverflow";
@@ -16,7 +17,7 @@ import { NavOverflow } from "@/components/NavOverflow";
 
 export function TabFrame({
   children,
-  agentState = "listening",
+  agentState,
 }: {
   children: React.ReactNode;
   agentState?: AgentState;
@@ -31,7 +32,7 @@ export function TabFrame({
               infinity
             </span>
           </Link>
-          <StatusPill state={agentState} />
+          {agentState ? <StatusPill state={agentState} /> : <AutoStatusPill />}
         </div>
 
         {/* Desktop: TabNav anchored to the geometric center of the header so
