@@ -166,7 +166,7 @@ function ViewerBody({
       transition={{ duration: 0.18, ease: [0.2, 0.7, 0.2, 1] }}
       className="flex h-full max-h-full min-h-0 flex-col"
     >
-      <ViewerHeader item={item} onClose={onClose} layout={layout} />
+      <ViewerHeader item={item} layout={layout} />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 scroll-touch sm:px-5">
         <ViewerContent item={item} />
       </div>
@@ -177,11 +177,9 @@ function ViewerBody({
 
 function ViewerHeader({
   item,
-  onClose,
   layout,
 }: {
   item: DashboardItem;
-  onClose: () => void;
   layout: "dialog" | "drawer";
 }) {
   const { Icon, label, tone } = headerMeta(item);
@@ -208,16 +206,6 @@ function ViewerHeader({
           {getViewerTitle(item)}
         </h2>
       </div>
-      {layout === "dialog" ? (
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-4" />
-        </button>
-      ) : null}
     </header>
   );
 }

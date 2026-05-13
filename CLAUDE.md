@@ -65,6 +65,21 @@ Service Dockerfiles: `core/Dockerfile`, `studio/Dockerfile`, `docker/gepa/Docker
 
 ## Hard rules (in addition to the global ones in `~/.claude/CLAUDE.md`)
 
+### Migrations — NEVER claim "all migrations applied" without verifying the live DB
+
+**This bit us on 2026-05-13.** Prod was silently missing migrations 011 (AGI loops), 012 (OpenAI OAuth), 013 (session usage), and 014 (dashboard) for weeks. Dashboard handlers were spewing `relation "mem_tasks" does not exist` warnings; AGI-loop features had no tables to write to. A prior Claude session had asserted migrations were applied without checking.
+
+Non-negotiable rules:
+
+- **`infinity serve` does NOT auto-migrate.** The Railway start command is `infinity serve` — migrations only apply when `infinity migrate` is run explicitly. Merging a new `core/db/migrations/NNN_*.sql` file does NOTHING to prod on its own.
+- **Verify against the live DB before answering ANY question about migration / schema state.** Never infer from `git log`, `ls core/db/migrations/`, or "I just merged it." Authoritative sources only:
+  - `cd core && railway run --service core -- go run ./cmd/infinity migrate` — idempotent; prints `skip` for already-applied versions and `apply` for new ones. The output IS the source of truth.
+  - `npx supabase db dump --linked --schema-only` — for inspecting actual table/column state.
+  - Querying `schema_migrations` directly via Supabase MCP if available.
+- **After merging a new migration, run it against prod the same session.** Pattern: merge → `cd core && railway run --service core -- go run ./cmd/infinity migrate` → confirm `apply NNN_*.sql` in output → only THEN tell the user it's live. Never split "merge" from "apply" across sessions — that's how 011-014 got stranded.
+- **When debugging `relation does not exist` (SQLSTATE 42P01) errors, FIRST run the migrator.** Don't write fix code, don't propose schema changes, don't speculate — run `infinity migrate` and check the output. The fix is usually that someone forgot to apply.
+- **If asked "are migrations applied?" the only acceptable answer is the output of `infinity migrate` run just now.** Anything else is a guess and guessing on this question has already caused production data loss equivalents (silent feature breakage for weeks). If you cannot run the migrator in the current session, say so explicitly — do not assert.
+
 ### Mobile-first responsiveness — iOS Safari + Chrome are the primary targets
 
 The user lives on their phone. Every UI change must be designed for mobile first and verified at 375px. These rules are non-negotiable:
