@@ -61,7 +61,10 @@ const (
 	defaultOpenAIClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
 	defaultOpenAIAuthBase    = "https://auth.openai.com"
 	defaultOpenAIAPIBase     = "https://chatgpt.com/backend-api/codex"
-	defaultOpenAIScopes      = "openid profile email offline_access"
+	// Scopes must include the connectors scopes Codex CLI requests —
+	// without them the issuer routes you to the platform project picker
+	// instead of the subscription-org consent screen.
+	defaultOpenAIScopes = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 	defaultOpenAIRedirectURI = "http://localhost:1455/auth/callback"
 	defaultOpenAIRefreshLead = 2 * time.Minute
 )
@@ -131,6 +134,14 @@ func RandomState() (string, error) {
 }
 
 // BuildAuthorizeURL returns the URL the user should visit in their browser.
+//
+// The `codex_cli_simplified_flow` + `id_token_add_organizations` flags are
+// the bits that make OpenAI skip its platform project-picker step and
+// instead bind the resulting token to the user's ChatGPT subscription org —
+// so the issued access token routes to chatgpt.com/backend-api/codex
+// (subscription quota) rather than api.openai.com (pay-per-token). Codex
+// CLI sends both unconditionally; omitting them is what triggers the
+// "choose a project" page some users have hit on this flow.
 func (o *OpenAIOAuth) BuildAuthorizeURL(state, challenge string) string {
 	q := url.Values{}
 	q.Set("response_type", "code")
@@ -140,6 +151,8 @@ func (o *OpenAIOAuth) BuildAuthorizeURL(state, challenge string) string {
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 	q.Set("state", state)
+	q.Set("id_token_add_organizations", "true")
+	q.Set("codex_cli_simplified_flow", "true")
 	return fmt.Sprintf("%s/oauth/authorize?%s", strings.TrimRight(o.authBase, "/"), q.Encode())
 }
 

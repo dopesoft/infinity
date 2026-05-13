@@ -296,14 +296,18 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   const selectedVendor = findVendor(draftVendor);
   const isOAuthVendor = selectedVendor.auth === "oauth";
 
-  // Auto-reset the model dropdown when its current value belongs to a
-  // different vendor than the draft vendor — UI only, no server hit.
-  // The user then picks a real model from the dropdown (or accepts the
-  // default) and clicks Save to commit.
+  // Auto-reset the model dropdown when the current draft isn't in the
+  // active vendor's catalog at all (e.g. Anthropic's claude-haiku surviving
+  // a flip to openai_oauth). We check the *active vendor's catalog* rather
+  // than asking resolveModelEntry which vendor "owns" the id — that's
+  // wrong when an id is shared across multiple catalogs (gpt-5.4 lives in
+  // both `openai` and `openai_oauth`), because the lookup grabs the first
+  // match and would snap subscription picks back to the API vendor's
+  // default.
   useEffect(() => {
     if (!draftModel) return;
-    const owner = resolveModelEntry(draftModel)?.vendor.id;
-    if (owner && owner !== draftVendor) {
+    const inActiveVendor = selectedVendor.models.some((m) => m.id === draftModel);
+    if (!inActiveVendor) {
       const fallback =
         selectedVendor.models.find((m) => m.recommended) ?? selectedVendor.models[0];
       if (fallback) setDraftModel(fallback.id);
