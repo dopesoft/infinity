@@ -224,65 +224,71 @@ export default function HeartbeatPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col bg-background">
-        {/* Hero status card. Pulse rings on the left, stats inline, actions
-            anchored to the right edge so they're never orphaned. This is the
-            page's identity — a live monitor, not a dashboard. */}
+        {/* Hero status card. Mobile-first: pulse + title/stats on top, action
+            row spans full width below for 44px-min tap targets. sm+: actions
+            float to the right of the header inline (same row). Never orphans
+            the buttons — they're always anchored to a parent surface. */}
         <div className="border-b bg-gradient-to-b from-background to-background/40 px-3 py-4 sm:px-4 sm:py-6">
-          <div className="mx-auto flex w-full max-w-5xl items-center gap-4">
-            <PulseIndicator alive={isAlive} />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-                  Heartbeat
-                </h1>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "font-mono text-[10px]",
-                    isAlive
-                      ? "border-success/40 bg-success/10 text-success"
-                      : "border-muted-foreground/40 text-muted-foreground",
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
+              <PulseIndicator alive={isAlive} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:gap-x-3">
+                  <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+                    Heartbeat
+                  </h1>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "font-mono text-[10px]",
+                      isAlive
+                        ? "border-success/40 bg-success/10 text-success"
+                        : "border-muted-foreground/40 text-muted-foreground",
+                    )}
+                  >
+                    {isAlive ? "alive" : "quiet"}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    every {formatInterval(intervalSeconds)}
+                    {lastRun ? (
+                      <>
+                        {" · "}
+                        <span suppressHydrationWarning>{relTime(lastRun.started_at)}</span>
+                      </>
+                    ) : null}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground sm:gap-x-4">
+                  <Stat icon={Activity} value={runs.length} label="runs" />
+                  <Stat icon={Sparkles} value={stats.findings24h} label="findings 24h" />
+                  <Stat icon={Zap} value={stats.intents24h} label="classified 24h" />
+                  {stats.surprises > 0 && (
+                    <Stat icon={Lightbulb} value={stats.surprises} label="surprises" />
                   )}
-                >
-                  {isAlive ? "alive" : "quiet"}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  ticks every {formatInterval(intervalSeconds)}
-                  {lastRun ? (
-                    <>
-                      {" · last "}
-                      <span suppressHydrationWarning>{relTime(lastRun.started_at)}</span>
-                    </>
-                  ) : null}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
-                <Stat icon={Activity} value={runs.length} label="runs" />
-                <Stat icon={Sparkles} value={stats.findings24h} label="findings 24h" />
-                <Stat icon={Zap} value={stats.intents24h} label="classified 24h" />
-                {stats.surprises > 0 && (
-                  <Stat icon={Lightbulb} value={stats.surprises} label="surprises" />
-                )}
-                {stats.security > 0 && (
-                  <Stat icon={Shield} value={stats.security} label="security" />
-                )}
+                  {stats.security > 0 && (
+                    <Stat icon={Shield} value={stats.security} label="security" />
+                  )}
+                </div>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            {/* Action row. Full-width on mobile so Pulse now is a fat
+                primary CTA (44px+ tap target); shrinks to icon-on-right
+                on sm+. Refresh stays compact icon-only. */}
+            <div className="flex shrink-0 items-stretch gap-2">
               <button
                 type="button"
                 onClick={fireNow}
                 disabled={running}
-                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60 sm:h-10 sm:flex-none sm:text-xs"
               >
-                <Play className="size-3.5" aria-hidden />
+                <Play className="size-4 sm:size-3.5" aria-hidden />
                 {running ? "Pulsing…" : "Pulse now"}
               </button>
               <button
                 type="button"
                 onClick={loadAll}
                 disabled={loading}
-                className="inline-flex size-9 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 sm:size-10"
                 aria-label="Refresh"
                 title="Refresh"
               >
@@ -298,14 +304,16 @@ export default function HeartbeatPage() {
           {/* Stream */}
           <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 scroll-touch sm:px-4 lg:px-6">
             <div className="mx-auto w-full max-w-3xl">
-              <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-1">
+              {/* Filter pills. Mobile gets a horizontal snap-scroll row at
+                  44px tap height; sm+ collapses to a tighter desktop bar. */}
+              <div className="-mx-3 mb-3 flex snap-x snap-mandatory items-center gap-2 overflow-x-auto px-3 pb-1 scroll-touch sm:mx-0 sm:snap-none sm:px-0">
                 {EVENT_FILTERS.map((f) => (
                   <button
                     key={f.key}
                     type="button"
                     onClick={() => setFilter(f.key)}
                     className={cn(
-                      "inline-flex h-7 shrink-0 items-center rounded-full border px-3 text-xs font-medium transition-colors",
+                      "inline-flex h-10 shrink-0 snap-start items-center rounded-full border px-4 text-sm font-medium transition-colors sm:h-8 sm:px-3 sm:text-xs",
                       filter === f.key
                         ? "border-foreground bg-foreground text-background"
                         : "border-border text-muted-foreground hover:text-foreground",
