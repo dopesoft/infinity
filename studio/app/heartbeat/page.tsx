@@ -228,7 +228,6 @@ export default function HeartbeatPage() {
   }, [findings, search]);
 
   const lastRun = runs[0];
-  const findingsLastRun = lastRun?.findings ?? 0;
 
   return (
     <TabFrame>
