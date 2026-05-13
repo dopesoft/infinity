@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -66,4 +67,89 @@ func (AllowAll) WaitForDecision(_ context.Context, _ string, _ time.Duration) (b
 // without coupling to the MCP package.
 func IsClaudeCodeTool(name string) bool {
 	return strings.HasPrefix(name, "claude_code__")
+}
+
+// IsGitHubTool reports whether the tool name belongs to the github MCP
+// namespace (i.e. github/github-mcp-server). Mirrors IsClaudeCodeTool — used
+// by GitHubGate so it can no-op on every other tool call.
+func IsGitHubTool(name string) bool {
+	return strings.HasPrefix(name, "github__")
+}
+
+// GateChain composes multiple ToolGate implementations into one. Each call
+// to Authorize walks the chain in order: the first gate that returns a
+// non-allow decision wins. Gates that don't recognise the tool name MUST
+// return Allow=true so subsequent gates get a chance.
+//
+// WaitForDecision routing: every gate that issues a ContractID must be
+// recorded so we can dispatch the wait back to it. We track ownership in
+// an in-memory map keyed by ContractID. The map only needs to survive
+// across one (Authorize → WaitForDecision) cycle inside the same agent
+// turn — a Railway restart kills the loop anyway, so persistence is moot.
+//
+// This is the seam that turns Infinity from "claude_code Trust queue" into
+// a per-MCP gate system. Adding Gmail/Slack/Linear later just means adding
+// another gate to the chain.
+type GateChain struct {
+	gates []ToolGate
+	mu    sync.Mutex
+	owner map[string]ToolGate // contractID → gate that queued it
+}
+
+// NewGateChain returns a chain over the given gates. Nil gates are skipped
+// so callers can build the slice conditionally without nil-checks.
+func NewGateChain(gates ...ToolGate) *GateChain {
+	out := make([]ToolGate, 0, len(gates))
+	for _, g := range gates {
+		if g == nil {
+			continue
+		}
+		out = append(out, g)
+	}
+	return &GateChain{gates: out, owner: make(map[string]ToolGate)}
+}
+
+func (c *GateChain) Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) GateDecision {
+	if c == nil {
+		return GateDecision{Allow: true}
+	}
+	for _, g := range c.gates {
+		d := g.Authorize(ctx, sessionID, project, toolName, input)
+		if d.Allow {
+			continue
+		}
+		if d.ContractID != "" {
+			c.mu.Lock()
+			c.owner[d.ContractID] = g
+			c.mu.Unlock()
+		}
+		return d
+	}
+	return GateDecision{Allow: true}
+}
+
+func (c *GateChain) WaitForDecision(ctx context.Context, contractID string, timeout time.Duration) (bool, string) {
+	if c == nil || contractID == "" {
+		return false, "no contract id"
+	}
+	c.mu.Lock()
+	owner := c.owner[contractID]
+	c.mu.Unlock()
+	if owner == nil {
+		// Lost ownership (process restart between Authorize and wait, or
+		// chain replaced). Fall back to the first gate — every gate shares
+		// the same TrustStore today, so polling against any of them reads
+		// the right row.
+		if len(c.gates) == 0 {
+			return false, "no gates configured"
+		}
+		owner = c.gates[0]
+	}
+	approved, reason := owner.WaitForDecision(ctx, contractID, timeout)
+	if approved || reason != "" {
+		c.mu.Lock()
+		delete(c.owner, contractID)
+		c.mu.Unlock()
+	}
+	return approved, reason
 }

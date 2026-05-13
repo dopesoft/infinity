@@ -257,7 +257,16 @@ func serveCmd() *cobra.Command {
 					cfg.Hooks = &hooks.PipelineAdapter{P: pipeline}
 				}
 				if earlyTrust != nil {
-					cfg.Gate = proactive.NewClaudeCodeGate(earlyTrust)
+					// Gate chain: ClaudeCodeGate handles claude_code__* (home
+					// Mac shell/edit/write), GitHubGate handles github__* (PR
+					// opens, merges, file pushes, etc). Both share the same
+					// TrustStore so a single Trust tab approval covers either
+					// surface. Future MCPs (Gmail, Slack, Linear) just append
+					// their gate to this chain.
+					cfg.Gate = agent.NewGateChain(
+						proactive.NewClaudeCodeGate(earlyTrust),
+						proactive.NewGitHubGate(earlyTrust),
+					)
 				}
 				loop = agent.New(cfg)
 			}

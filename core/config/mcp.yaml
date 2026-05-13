@@ -36,6 +36,30 @@ servers:
     cf_client_id_env: CF_ACCESS_CLIENT_ID
     cf_client_secret_env: CF_ACCESS_CLIENT_SECRET
 
+  # GitHub remote MCP (official, github/github-mcp-server hosted by GitHub).
+  #
+  # Gives Infinity the GitHub API surface: list repos, read PRs/issues/files,
+  # search code, open PRs/issues, post comments. Commits/pushes still happen
+  # locally on the home Mac via claude_code__Bash (uses your gh auth + ssh
+  # keys) — this MCP is for everything that touches github.com itself.
+  #
+  # Setup:
+  #   1. Create a fine-grained PAT at github.com/settings/personal-access-tokens
+  #      scoped to the repos Infinity should touch (Contents R/W, Pull
+  #      requests R/W, Issues R/W, Metadata R).
+  #   2. railway variables --service core --set GITHUB_MCP_TOKEN=<pat>
+  #   3. Rebuild + redeploy core (mcp.yaml is embedded into the binary).
+  #
+  # If GITHUB_MCP_TOKEN is unset on boot, connect fails loudly and the
+  # rest of Infinity comes up fine — github__* tools just won't be in the
+  # registry. Identical fallback shape to claude_code on a missing tunnel URL.
+  - name: github
+    transport: sse
+    enabled: true
+    url: https://api.githubcopilot.com/mcp/
+    auth: bearer
+    auth_token_env: GITHUB_MCP_TOKEN
+
   # Tavily MCP (uncomment + set TAVILY_API_KEY)
   # - name: tavily
   #   transport: sse

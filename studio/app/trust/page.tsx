@@ -7,6 +7,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { RiskBadge } from "@/components/RiskBadge";
+import { ToolIcon } from "@/components/ToolIcon";
 import {
   PageTabs,
   PageTabsList,
@@ -138,7 +139,13 @@ export default function TrustPage() {
                       </span>
                       <RiskBadge level={c.risk_level} />
                     </div>
-                    <p className="mt-1 line-clamp-2 break-words text-sm font-semibold">{c.title}</p>
+                    <div className="mt-1 flex items-start gap-1.5">
+                      <ToolIcon
+                        name={(c.action_spec?.tool as string | undefined) ?? ""}
+                        className="mt-0.5 size-3.5 shrink-0"
+                      />
+                      <p className="line-clamp-2 break-words text-sm font-semibold">{c.title}</p>
+                    </div>
                     <p className="mt-1 text-[11px] uppercase text-muted-foreground">{c.source}</p>
                   </button>
                 ))
@@ -172,7 +179,13 @@ export default function TrustPage() {
                     <Badge variant="outline" className="font-mono uppercase">{selected.source}</Badge>
                     <Badge variant="secondary" className="font-mono uppercase">{selected.status}</Badge>
                   </div>
-                  <h3 className="text-base font-semibold">{selected.title}</h3>
+                  <h3 className="flex items-center gap-2 text-base font-semibold">
+                    <ToolIcon
+                      name={(selected.action_spec?.tool as string | undefined) ?? ""}
+                      className="size-4 shrink-0"
+                    />
+                    <span className="break-words">{selected.title}</span>
+                  </h3>
                 </header>
                 <Section title="Reasoning">
                   <p className="whitespace-pre-wrap break-words text-sm">{selected.reasoning || "—"}</p>

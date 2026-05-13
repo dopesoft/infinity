@@ -9,10 +9,10 @@ import {
   Loader2,
   Lock,
   ShieldCheck,
-  Wrench,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ToolIcon } from "@/components/ToolIcon";
 import { cn } from "@/lib/utils";
 import { decideTrust } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -103,7 +103,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
         aria-expanded={open}
       >
-        <Wrench className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <ToolIcon name={call.name} className="size-4 shrink-0" />
         <span className="truncate font-mono text-xs sm:text-sm">{call.name}</span>
         <StatusIcon status={status} />
         <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
