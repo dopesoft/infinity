@@ -47,7 +47,6 @@ import {
 import { useGlobalModel } from "@/lib/use-model";
 import {
   VENDORS,
-  defaultModelFor,
   findVendor,
   type VendorEntry,
   type VendorId,
