@@ -12,6 +12,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/hooks"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/voice"
 )
 
@@ -71,11 +72,17 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pull (or seed) the in-memory session so we share its ActiveSet
+	// with text mode. Voice respects the same lazy-load discipline:
+	// only the active subset's schemas ship in the realtime session,
+	// everything else lives in the dormant catalog block. The model
+	// pulls in dormant tools mid-conversation via tool_search →
+	// load_tools, and the client mirrors the new list back into the
+	// realtime session with session.update.
+	sess := s.loop.GetOrCreateSession(sessionID)
+
 	// Build instructions the same way the agent loop would for a turn —
-	// soul prompt + memory prefix + skills + accounts + tool catalog.
-	// Voice runs without the lazy active-set so the model sees the full
-	// tool surface; we still inject the catalog block for parity (it
-	// describes the toolkit in plain English which helps voice routing).
+	// soul prompt + memory prefix + skills + tool catalog block.
 	systemPrompt := s.loop.SystemPrompt()
 	// Memory retrieval needs a non-empty query to embed against. When
 	// the boss taps mic before saying anything, fall back to a generic
@@ -94,11 +101,17 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
+	// Dormant tool catalog — same block text-mode prepends so the model
+	// knows the long tail exists and can pull it in on demand. Without
+	// this, the model wouldn't know to call tool_search at all in voice.
+	if catalog := s.loop.ToolCatalogBlock(sess.Active); catalog != "" {
+		systemPrompt = catalog + "\n\n" + systemPrompt
+	}
 
-	tools := s.loop.Tools()
+	registry := s.loop.Tools()
 	var defs []llm.ToolDef
-	if tools != nil {
-		defs = tools.Definitions()
+	if registry != nil {
+		defs = registry.DefinitionsFor(sess.Active.Names())
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -137,12 +150,17 @@ type voiceToolReq struct {
 }
 
 type voiceToolResp struct {
-	CallID         string `json:"call_id"`
-	Output         string `json:"output"`
-	IsError        bool   `json:"is_error,omitempty"`
-	GatedForTrust  bool   `json:"gated_for_trust,omitempty"`
-	ContractID     string `json:"contract_id,omitempty"`
-	Preview        string `json:"preview,omitempty"`
+	CallID        string `json:"call_id"`
+	Output        string `json:"output"`
+	IsError       bool   `json:"is_error,omitempty"`
+	GatedForTrust bool   `json:"gated_for_trust,omitempty"`
+	ContractID    string `json:"contract_id,omitempty"`
+	Preview       string `json:"preview,omitempty"`
+	// UpdatedTools is populated when the tool call mutated the session's
+	// active set (e.g. load_tools / unload_tools / tool_search). Shape
+	// matches OpenAI Realtime's tool format so the browser can stuff it
+	// straight into a `session.update` without translation.
+	UpdatedTools []map[string]any `json:"updated_tools,omitempty"`
 }
 
 func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +193,13 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tool registry not configured"})
 		return
 	}
+
+	// Share the session's ActiveSet with the tool execution so
+	// load_tools / unload_tools / tool_search mutate the same surface
+	// the next voice turn will see. Snapshot names before so we can
+	// diff after and tell the client whether to push session.update.
+	sess := s.loop.GetOrCreateSession(sessionID)
+	beforeActive := stringSet(sess.Active.Names())
 
 	pipeline := s.loop.Hooks()
 	if pipeline != nil {
@@ -225,7 +250,10 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), toolTimeout)
 	defer cancel()
-	output, err := registry.Execute(ctx, llm.ToolCall{ID: callID, Name: name, Input: body.Input})
+	// Wrap with the session's ActiveSet so load_tools / unload_tools /
+	// tool_search mutate the same per-session whitelist text mode uses.
+	toolCtx := tools.WithActiveSet(ctx, sess.Active)
+	output, err := registry.Execute(toolCtx, llm.ToolCall{ID: callID, Name: name, Input: body.Input})
 	isErr := false
 	if err != nil {
 		isErr = true
@@ -247,11 +275,64 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, voiceToolResp{
+	// Decay any TTL'd active-set entries the same way text-mode does
+	// at each iteration boundary, then diff. If the active set changed
+	// (load_tools / unload_tools / tool_search materialised something
+	// or aged it out), ship the new tool list back so the client can
+	// session.update — otherwise the realtime session stays stuck on
+	// the schemas it had at mint time.
+	sess.Active.DecayTTL()
+	afterActive := stringSet(sess.Active.Names())
+	resp := voiceToolResp{
 		CallID:  callID,
 		Output:  output,
 		IsError: isErr,
-	})
+	}
+	if !sameSet(beforeActive, afterActive) {
+		newDefs := registry.DefinitionsFor(sess.Active.Names())
+		resp.UpdatedTools = toolDefsToRealtime(newDefs)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// toolDefsToRealtime mirrors voice.toRealtimeTools (kept private to that
+// package). We render once here against the diffed defs so the client
+// receives a session.update payload it can forward verbatim.
+func toolDefsToRealtime(defs []llm.ToolDef) []map[string]any {
+	out := make([]map[string]any, 0, len(defs))
+	for _, d := range defs {
+		schema := d.Schema
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		}
+		out = append(out, map[string]any{
+			"type":        "function",
+			"name":        d.Name,
+			"description": d.Description,
+			"parameters":  schema,
+		})
+	}
+	return out
+}
+
+func stringSet(s []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(s))
+	for _, v := range s {
+		m[v] = struct{}{}
+	}
+	return m
+}
+
+func sameSet(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // voiceTurnReq carries a finalised utterance from the browser. The realtime

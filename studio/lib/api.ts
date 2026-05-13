@@ -1131,6 +1131,10 @@ export type VoiceToolResult = {
   gated_for_trust?: boolean;
   contract_id?: string;
   preview?: string;
+  /** When the tool mutated the session's active toolset (load_tools /
+   *  unload_tools / tool_search), Core returns the new tools list in
+   *  OpenAI Realtime's tool shape so the client can session.update. */
+  updated_tools?: Array<Record<string, unknown>>;
 };
 
 export async function startVoiceSession(

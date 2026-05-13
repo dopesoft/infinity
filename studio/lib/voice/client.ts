@@ -210,6 +210,21 @@ export class VoiceClient {
     this.dc.send(JSON.stringify({ type: "response.create" }));
   }
 
+  /** Replace the realtime session's tools list. Used after a tool call
+   * (load_tools / unload_tools / tool_search) mutates Core's per-session
+   * ActiveSet — the diffed tool defs come back on the /api/voice/tool
+   * response and we push them here so the next turn sees the new
+   * schemas. No-op when the data channel isn't open. */
+  updateTools(tools: Array<Record<string, unknown>>): void {
+    if (!this.dc || this.dc.readyState !== "open") return;
+    this.dc.send(
+      JSON.stringify({
+        type: "session.update",
+        session: { tools },
+      }),
+    );
+  }
+
   /** Tear everything down. Safe to call multiple times. */
   stop(): void {
     const cb = this.args.callbacks ?? {};

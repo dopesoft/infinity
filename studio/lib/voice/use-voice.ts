@@ -169,6 +169,13 @@ export function useVoice(sessionId: string | undefined) {
           // running — submitting on a closed data channel is a no-op
           // inside the client, but bailing early saves a render.
           if (!clientRef.current) return;
+          // If load_tools / unload_tools / tool_search mutated the
+          // active set, push the new tool list to OpenAI BEFORE
+          // submitting the result so the model's next response is
+          // aware of the new schemas it can call.
+          if (!("error" in result) && result.updated_tools && result.updated_tools.length > 0) {
+            clientRef.current.updateTools(result.updated_tools);
+          }
           const output = "error" in result
             ? `tool ${call.name} failed: ${result.error}`
             : result.output;

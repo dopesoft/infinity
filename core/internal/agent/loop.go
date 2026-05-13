@@ -411,6 +411,19 @@ func (l *Loop) Hooks() HookEmitter {
 	return l.hooks
 }
 
+// ToolCatalogBlock renders the dormant-tool catalog string the loop
+// prepends to the system prompt before each text turn. Exposed so the
+// voice HTTP handler can stamp the same block into a realtime session's
+// instructions — the model needs to know the long-tail tool surface
+// exists and can be brought online via tool_search → load_tools, exactly
+// like in text mode.
+func (l *Loop) ToolCatalogBlock(active *tools.ActiveSet) string {
+	if l == nil {
+		return ""
+	}
+	return buildToolCatalogBlock(l.tools, active)
+}
+
 func (l *Loop) GetOrCreateSession(id string) *Session {
 	l.mu.Lock()
 	if id == "" {
