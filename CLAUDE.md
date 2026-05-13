@@ -212,6 +212,20 @@ Redaction discipline: when you paste log lines back to the user, scrub anything 
 
 **Failure mode to avoid:** writing a response that ends with "check your Deployments tab" or "looks like it might be X" when one `railway logs --lines 200 -d` would have answered the question. The user has explicitly empowered you to run this CLI — guessing instead is the worst-of-both-worlds option.
 
+### NEVER `set -x` in any container entrypoint or shell that runs in prod
+
+**This bit us on 2026-05-13.** A diagnostic entrypoint with `set -e -u -x` on the Honcho services traced every command — including `[ -n "$LLM_OPENAI_API_KEY" ]` and case-match on `$DB_CONNECTION_URI` — to stderr. Railway captures stderr, so the full OpenAI API key and the Supabase Postgres password ended up in the deploy logs verbatim. Both had to be rotated.
+
+Rules:
+
+- **No `set -x` (or `set -xv`, `bash -x`, `PS4` tracing) in any shell that touches secrets.** This is non-negotiable. Even one `set -x` line in a startup script is enough to leak everything in the environment.
+- **Never compare secret env vars directly in shell.** `[ -n "$SECRET" ]` is safe under `set +x` but expands the value under `set -x`. Use `test -n "${SECRET:-}" && echo set || echo unset` patterns and *only* echo the boolean result.
+- **Never `echo $SOMETHING_URI` where URI could contain credentials.** Use `printf '%s' "$URI" | cut -d: -f1` to surface just the scheme. Treat *every* connection string as a credential, not a URL.
+- **If a diagnostic entrypoint is needed, use explicit `echo` lines with redaction baked in.** `echo "boot: DB_SCHEME=$(printf '%s' "${URI:-}" | cut -d: -f1)://[redacted]"` is the canonical form. Never the raw value.
+- **`docker/honcho/Dockerfile` and `docker/honcho-deriver/Dockerfile` are the reference shape** — copy those entrypoints when adding a new sidecar service.
+
+If you ever need full command tracing for one-shot debugging, do it on a *local* container with throwaway secrets, never on Railway. And revert before deploying.
+
 ## Common gotchas
 
 - **`pnpm-workspace.yaml` is sensitive on pnpm 11.** It must contain `allowBuilds: { unrs-resolver: false }` or installs fail with `ERR_PNPM_IGNORED_BUILDS`. Don't strip that key.

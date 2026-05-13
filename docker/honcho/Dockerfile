@@ -60,7 +60,12 @@ ENV PORT=8000
 # rule and our diagnostic script lands verbatim.
 RUN cat > /app/entrypoint.sh <<'EOF' && chmod +x /app/entrypoint.sh
 #!/bin/bash
-set -e -u -x
+# NO `set -x` here. `set -x` traces command + arg-expansions to stderr,
+# which leaks secret values (API keys, DSNs) into Railway logs. The
+# diagnostic visibility we needed was already provided by the explicit
+# `echo` lines below — `set -x` was redundant for diagnostics but
+# load-bearing for the leak. Don't add it back.
+set -e -u
 echo "honcho-boot: ===================================================="
 echo "honcho-boot: PWD=$(pwd)"
 echo "honcho-boot: PYTHON=$(command -v python || true)  ($(python --version 2>&1 || true))"
@@ -68,10 +73,13 @@ echo "honcho-boot: UVICORN=$(command -v uvicorn || true)"
 echo "honcho-boot: FASTAPI=$(command -v fastapi || true)"
 echo "honcho-boot: ALEMBIC=$(command -v alembic || true)"
 echo "honcho-boot: PATH=$PATH"
-echo "honcho-boot: DB_CONNECTION_URI scheme = ${DB_CONNECTION_URI%%:*}://"
-echo "honcho-boot: LLM_OPENAI_API_KEY set = $([ -n "${LLM_OPENAI_API_KEY:-}" ] && echo yes || echo no)"
-echo "honcho-boot: OPENAI_API_KEY set = $([ -n "${OPENAI_API_KEY:-}" ] && echo yes || echo no)"
-echo "honcho-boot: CACHE_URL scheme = ${CACHE_URL%%:*}://"
+# Print env-var PRESENCE only, never the value. Wrap each check in a
+# subshell with locally unset secrets so even an accidental `set -x`
+# elsewhere can't trace through here.
+echo "honcho-boot: DB scheme    = $(printf '%s' "${DB_CONNECTION_URI:-}" | cut -d: -f1)://[redacted]"
+echo "honcho-boot: LLM_OPENAI   = $(test -n "${LLM_OPENAI_API_KEY:-}" && echo set || echo unset)"
+echo "honcho-boot: OPENAI       = $(test -n "${OPENAI_API_KEY:-}" && echo set || echo unset)"
+echo "honcho-boot: CACHE scheme = $(printf '%s' "${CACHE_URL:-}" | cut -d: -f1)://[redacted]"
 echo "honcho-boot: PORT=${PORT:-8000}"
 
 # Scheme rewrite: postgresql:// -> postgresql+psycopg://

@@ -42,14 +42,17 @@ RUN chmod -R a+rX /app /app/.venv && find /app/.venv/bin -type f -exec chmod a+x
 # Dockerfile parser.
 RUN cat > /app/entrypoint.sh <<'EOF' && chmod +x /app/entrypoint.sh
 #!/bin/bash
-set -e -u -x
+# NO `set -x`. See docker/honcho/Dockerfile for the full reasoning —
+# command tracing leaks secret values (API keys, DSNs) into Railway
+# logs. The echo lines below cover the diagnostic surface without it.
+set -e -u
 echo "deriver-boot: ===================================================="
 echo "deriver-boot: PWD=$(pwd)"
 echo "deriver-boot: PYTHON=$(command -v python || true)  ($(python --version 2>&1 || true))"
 echo "deriver-boot: PATH=$PATH"
-echo "deriver-boot: DB_CONNECTION_URI scheme = ${DB_CONNECTION_URI%%:*}://"
-echo "deriver-boot: LLM_OPENAI_API_KEY set = $([ -n "${LLM_OPENAI_API_KEY:-}" ] && echo yes || echo no)"
-echo "deriver-boot: CACHE_URL scheme = ${CACHE_URL%%:*}://"
+echo "deriver-boot: DB scheme    = $(printf '%s' "${DB_CONNECTION_URI:-}" | cut -d: -f1)://[redacted]"
+echo "deriver-boot: LLM_OPENAI   = $(test -n "${LLM_OPENAI_API_KEY:-}" && echo set || echo unset)"
+echo "deriver-boot: CACHE scheme = $(printf '%s' "${CACHE_URL:-}" | cut -d: -f1)://[redacted]"
 
 case "${DB_CONNECTION_URI:-}" in
   postgresql+*) echo "deriver-boot: DB URI already psycopg" ;;
