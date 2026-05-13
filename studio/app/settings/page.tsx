@@ -375,9 +375,6 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
               );
             })}
           </NativeSelect>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            {selectedVendor.docsHint}
-          </p>
         </FieldLabel>
 
         <FieldLabel label="Model">
@@ -390,28 +387,21 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           </NativeSelect>
         </FieldLabel>
 
-        {isOAuthVendor && <OAuthConnectBlock vendor={selectedVendor} />}
+        {isOAuthVendor && <OAuthConnectBlock />}
 
         {err && (
           <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
-          <code className="truncate font-mono">
-            live: {liveProvider || "—"} · {effectiveModel || "—"} ·{" "}
-            {setting?.source === "user" ? "user override" : "boot default"} · v
-            {status?.version || "—"}
-          </code>
-          <div className="flex items-center gap-2">
-            {setting?.source === "user" && defaultModel && draftModel !== defaultModel && (
-              <Button variant="ghost" onClick={clearOverride} disabled={busy}>
-                Reset to default
-              </Button>
-            )}
-            <Button onClick={save} disabled={!dirty || busy}>
-              {busy ? "Saving…" : "Save"}
+        <div className="flex items-center justify-end gap-2 border-t pt-3">
+          {setting?.source === "user" && defaultModel && draftModel !== defaultModel && (
+            <Button variant="ghost" onClick={clearOverride} disabled={busy}>
+              Reset to default
             </Button>
-          </div>
+          )}
+          <Button onClick={save} disabled={!dirty || busy}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
         </div>
       </div>
 
@@ -426,9 +416,32 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 // surface their plan note instead. Anyone updating prices in
 // `models-catalog.ts` automatically updates this table.
 function PricingTable({ vendor }: { vendor: VendorEntry }) {
-  const subscriptionOnly = vendor.models.every(
-    (m) => m.input_per_mtok == null && m.output_per_mtok == null,
-  );
+  // Sortable column state. Default is catalog order — the boss has it
+  // arranged with the recommended model on top, so first-render shouldn't
+  // jump them around. Click a column header to toggle asc/desc.
+  type SortKey = "default" | "input" | "output";
+  const [sortKey, setSortKey] = useState<SortKey>("default");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  function toggle(next: SortKey) {
+    if (next === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(next);
+      setSortDir("asc");
+    }
+  }
+
+  const sorted = useMemo(() => {
+    if (sortKey === "default") return vendor.models;
+    const arr = [...vendor.models];
+    arr.sort((a, b) => {
+      const av = (sortKey === "input" ? a.input_per_mtok : a.output_per_mtok) ?? Infinity;
+      const bv = (sortKey === "input" ? b.input_per_mtok : b.output_per_mtok) ?? Infinity;
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+    return arr;
+  }, [vendor.models, sortKey, sortDir]);
 
   return (
     <div className="space-y-2 rounded-md border bg-background p-3">
@@ -437,7 +450,7 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
           {vendor.label} pricing
         </h3>
         <Badge variant="secondary" className="font-mono text-[10px]">
-          {subscriptionOnly ? "subscription" : "per 1M tokens"}
+          per 1M tokens
         </Badge>
       </div>
       <div className="overflow-x-auto scroll-touch">
@@ -445,18 +458,12 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
           <thead>
             <tr className="border-b text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
               <th className="px-2 py-1.5 font-normal">Model</th>
-              {subscriptionOnly ? (
-                <th className="px-2 py-1.5 text-right font-normal">Cost</th>
-              ) : (
-                <>
-                  <th className="px-2 py-1.5 text-right font-normal">Input</th>
-                  <th className="px-2 py-1.5 text-right font-normal">Output</th>
-                </>
-              )}
+              <SortHeader label="Input" active={sortKey === "input"} dir={sortDir} onClick={() => toggle("input")} />
+              <SortHeader label="Output" active={sortKey === "output"} dir={sortDir} onClick={() => toggle("output")} />
             </tr>
           </thead>
           <tbody>
-            {vendor.models.map((m) => (
+            {sorted.map((m) => (
               <tr key={m.id} className="border-b last:border-b-0">
                 <td className="px-2 py-2">
                   <div className="flex flex-col">
@@ -464,35 +471,53 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
                     {m.tagline && (
                       <span className="text-[10px] text-muted-foreground">
                         {m.tagline}
+                        {m.note ? ` · ${m.note}` : ""}
                       </span>
                     )}
                   </div>
                 </td>
-                {subscriptionOnly ? (
-                  <td className="px-2 py-2 text-right font-mono text-[11px] text-muted-foreground">
-                    {m.note ?? "Included"}
-                  </td>
-                ) : (
-                  <>
-                    <td className="px-2 py-2 text-right font-mono">
-                      {m.input_per_mtok != null
-                        ? `$${m.input_per_mtok.toFixed(2)}`
-                        : "—"}
-                    </td>
-                    <td className="px-2 py-2 text-right font-mono">
-                      {m.output_per_mtok != null
-                        ? `$${m.output_per_mtok.toFixed(2)}`
-                        : "—"}
-                    </td>
-                  </>
-                )}
+                <td className="px-2 py-2 text-right font-mono">
+                  {m.input_per_mtok != null ? `$${m.input_per_mtok.toFixed(2)}` : "—"}
+                </td>
+                <td className="px-2 py-2 text-right font-mono">
+                  {m.output_per_mtok != null ? `$${m.output_per_mtok.toFixed(2)}` : "—"}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="text-[10px] text-muted-foreground">{vendor.pricingNote}</p>
     </div>
+  );
+}
+
+function SortHeader({
+  label,
+  active,
+  dir,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  dir: "asc" | "desc";
+  onClick: () => void;
+}) {
+  return (
+    <th className="px-2 py-1.5 text-right font-normal">
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "inline-flex items-center gap-1 transition-colors hover:text-foreground",
+          active && "text-foreground",
+        )}
+      >
+        {label}
+        <span className="text-[8px]" aria-hidden>
+          {active ? (dir === "asc" ? "▲" : "▼") : "↕"}
+        </span>
+      </button>
+    </th>
   );
 }
 
@@ -505,7 +530,7 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
 //   • connected — shows account email, last refresh, expiry, with a
 //     Disconnect button. Reconnect is a one-click flow that re-enters the
 //     paste-pending state without dropping the existing token until success.
-function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
+function OAuthConnectBlock() {
   const [status, setStatus] = useState<OpenAIOAuthStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<OpenAIOAuthStartResponse | null>(null);
@@ -723,10 +748,7 @@ function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
         </p>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-        <p className="text-[10px] text-muted-foreground">
-          {vendor.pricingNote}
-        </p>
+      <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
         <div className="flex items-center gap-1.5">
           {connected && (
             <Button

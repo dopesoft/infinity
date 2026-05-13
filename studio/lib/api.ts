@@ -791,6 +791,26 @@ export async function invokeSkill(
   }
 }
 
+// ---- Context usage (composer meter) ---------------------------------------
+
+export type ContextCategoryDTO = {
+  id: "system_prompt" | "tools" | "messages" | "free" | string;
+  label: string;
+  tokens: number;
+};
+
+export type ContextUsageDTO = {
+  model: string;
+  context_window: number;
+  used_tokens: number;
+  categories: ContextCategoryDTO[];
+};
+
+export const fetchContextUsage = (sessionId?: string, signal?: AbortSignal) => {
+  const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  return getJSON<ContextUsageDTO>(`/api/context/usage${qs}`, signal);
+};
+
 // ---- OpenAI OAuth (ChatGPT-subscription provider) --------------------------
 //
 // Paste-based PKCE connect flow. Studio renders a "Connect ChatGPT" button

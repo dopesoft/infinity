@@ -6,6 +6,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ArrowUp, Paperclip, Square, X, StopCircle, Mic } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { ContextMeter } from "@/components/ContextMeter";
 
 /**
  * AI prompt box — adapted from 21st.dev/r/easemize/ai-prompt-box.
@@ -252,6 +253,8 @@ export interface PromptInputBoxProps {
   vendorId?: string;
   /** Called with the next full model id when the user cycles the chip. */
   onModelChange?: (modelId: string) => void;
+  /** Active session id — drives the context meter's per-session query. */
+  sessionId?: string;
   /** Hide the attachment + voice affordances. Defaults to false. */
   minimal?: boolean;
   /** Optional slash-command hook (e.g. /new, /clear). Called before onSend. */
@@ -279,6 +282,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       modelId: controlledModelId,
       vendorId,
       onModelChange,
+      sessionId,
       minimal = false,
       onSlash,
       onStop,
@@ -481,6 +485,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
               )}
             >
               <ModelChip modelId={modelId} vendorId={vendorId} onCycle={cycleModel} />
+              <ContextMeter sessionId={sessionId} />
 
               {!minimal && (
                 <Tooltip>

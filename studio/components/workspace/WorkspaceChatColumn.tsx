@@ -80,6 +80,7 @@ export function WorkspaceChatColumn({
           placeholder="ask me anything.."
           modelId={setting?.model ?? ""}
           vendorId={setting?.provider ?? ""}
+          sessionId={chat.sessionId}
           onModelChange={(nextId) => {
             // The chip pushes back a full model id; we PUT it straight
             // through to Core's settings store. The hook broadcasts the

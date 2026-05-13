@@ -157,6 +157,15 @@ func (l *Loop) SetProvider(p llm.Provider) {
 
 func (l *Loop) Tools() *tools.Registry { return l.tools }
 
+// SystemPrompt returns the constant system prompt (soul + base). Memory and
+// skills prefixes are added per-turn and aren't included here; the context
+// meter API uses this for the static portion of its breakdown.
+func (l *Loop) SystemPrompt() string { return l.systemPrompt }
+
+// Skills returns the loop's skill matcher so callers can compute the
+// skill-prefix contribution to context. Nil-safe.
+func (l *Loop) Skills() SkillMatcher { return l.skills }
+
 func (l *Loop) GetOrCreateSession(id string) *Session {
 	l.mu.Lock()
 	defer l.mu.Unlock()
