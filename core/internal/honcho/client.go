@@ -56,10 +56,28 @@ type Client struct {
 	peer       string
 	httpClient *http.Client
 
-	cacheMu sync.RWMutex
+	cacheMu  sync.RWMutex
 	repCache string
 	repAt    time.Time
+
+	// Simple in-process circuit breaker. Honcho on Railway's free tier
+	// can wedge for minutes at a time — when it does, every turn we'd
+	// otherwise pay the 2-second read deadline AND log a 4-second hook
+	// timeout on every user/assistant message. The breaker tracks
+	// consecutive failures; once it trips, all calls short-circuit
+	// returning the cached/empty value (no I/O, no logs) until the
+	// cooldown elapses.
+	cbMu              sync.Mutex
+	consecutiveErrors int
+	openUntil         time.Time
 }
+
+const (
+	// Breaker trips after this many consecutive failures.
+	breakerFailureThreshold = 3
+	// Once tripped, calls short-circuit for this long before retrying.
+	breakerOpenDuration = 5 * time.Minute
+)
 
 // FromEnv returns a Client when HONCHO_BASE_URL is set, otherwise nil. Callers
 // should treat a nil return as "Honcho disabled" and not call any methods on
@@ -117,12 +135,51 @@ type honchoMessage struct {
 	Content string `json:"content"`
 }
 
+// breakerTripped reports whether the circuit is currently open. Open ==
+// short-circuit all I/O until the cooldown elapses.
+func (c *Client) breakerTripped() bool {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	if c.openUntil.IsZero() {
+		return false
+	}
+	if time.Now().Before(c.openUntil) {
+		return true
+	}
+	// Cooldown elapsed — half-open: let the next request try, reset the
+	// timestamps. If it fails we trip again immediately.
+	c.openUntil = time.Time{}
+	c.consecutiveErrors = 0
+	return false
+}
+
+// markResult lets the breaker advance state based on whether the last
+// call succeeded. Wrap every network call with this.
+func (c *Client) markResult(err error) {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	if err == nil {
+		c.consecutiveErrors = 0
+		c.openUntil = time.Time{}
+		return
+	}
+	c.consecutiveErrors++
+	if c.consecutiveErrors >= breakerFailureThreshold && c.openUntil.IsZero() {
+		c.openUntil = time.Now().Add(breakerOpenDuration)
+	}
+}
+
 // PostMessage writes a single observation to Honcho. v3 batches messages
 // under sessions, so a session_id is required — when none is supplied we
 // fall back to a default per-peer bucket so messages still land somewhere
 // indexed for the deriver to pick up.
 func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	if !c.Enabled() {
+		return nil
+	}
+	// Breaker open — silently drop. The hook pipeline will see no error;
+	// Honcho's deriver lags one turn (or many), Studio chat unaffected.
+	if c.breakerTripped() {
 		return nil
 	}
 	peerID := m.PeerID
@@ -148,7 +205,9 @@ func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	// 30s of log spam and goroutine pileup.
 	postCtx, cancel := context.WithTimeout(ctx, postTimeout)
 	defer cancel()
-	return c.do(postCtx, http.MethodPost, url, body, nil)
+	err = c.do(postCtx, http.MethodPost, url, body, nil)
+	c.markResult(err)
+	return err
 }
 
 // DialecticQuery asks Honcho's reasoning endpoint a natural-language
@@ -204,6 +263,12 @@ func (c *Client) Representation(ctx context.Context, ttl time.Duration) (string,
 	if cached != "" && time.Since(at) < ttl {
 		return cached, nil
 	}
+	// Breaker open — return whatever's cached (possibly empty) without
+	// hitting the wire. The on-turn read path treats "" as "no peer
+	// representation this turn" and continues with Infinity's own RRF.
+	if c.breakerTripped() {
+		return cached, nil
+	}
 
 	path := envOr("HONCHO_REPRESENTATION_PATH",
 		fmt.Sprintf("/v3/workspaces/%s/peers/%s/context", c.workspace, c.peer))
@@ -214,7 +279,9 @@ func (c *Client) Representation(ctx context.Context, ttl time.Duration) (string,
 		Summary        string `json:"summary,omitempty"`
 		Content        string `json:"content,omitempty"` // fallback for shape drift
 	}
-	if err := c.do(ctx, http.MethodGet, url, nil, &raw); err != nil {
+	err := c.do(ctx, http.MethodGet, url, nil, &raw)
+	c.markResult(err)
+	if err != nil {
 		return cached, err // return last good if refresh fails
 	}
 	picked := strings.TrimSpace(raw.Representation)

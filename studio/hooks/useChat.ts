@@ -117,6 +117,46 @@ function writeCachedMessages(sessionId: string, messages: ChatMessage[]) {
   }
 }
 
+// mergeServerRows reconciles the canonical transcript from Core with the
+// optimistic local state. We keep any *pending* local messages (thinking
+// indicators, drafts in flight) and replace finalized turns with whatever
+// Core reports — Core is the source of truth for completed turns.
+//
+// This is the rehydration path used on WS reconnect: a turn the agent
+// completed while we were disconnected is in `rows` but missing locally,
+// so we append it.
+function mergeServerRows(
+  local: ChatMessage[],
+  rows: Array<{ role: ChatRole; text: string; created_at: string }>,
+): ChatMessage[] {
+  // Convert server rows into ChatMessage shape with stable created_at
+  // timestamps for ordering.
+  const fromServer: ChatMessage[] = rows.map((r) => ({
+    id: makeId(),
+    role: r.role,
+    text: r.text,
+    createdAt: new Date(r.created_at).getTime() || Date.now(),
+  }));
+  // Detect pending tail items to preserve (in-flight stream, watchdog
+  // error bubble we don't want to silently erase).
+  const pendingTail: ChatMessage[] = [];
+  for (let i = local.length - 1; i >= 0; i--) {
+    const m = local[i];
+    if (m.pending || m.role === "thinking") {
+      pendingTail.unshift(m);
+    } else {
+      break;
+    }
+  }
+  // De-dupe: if the rehydrated tail covers the same content as a pending
+  // bubble, drop the pending one (the server's finalized turn wins).
+  const serverTexts = new Set(fromServer.map((m) => m.role + ":" + m.text.trim()));
+  const filteredPending = pendingTail.filter(
+    (m) => !serverTexts.has(m.role + ":" + m.text.trim()),
+  );
+  return [...fromServer, ...filteredPending];
+}
+
 // Mark the most recent pending `thinking` message as complete. Called whenever
 // the agent transitions out of "thinking" — first text delta, first tool call,
 // or stream complete. Returns a new array (never mutates).
@@ -224,6 +264,36 @@ export function useChat() {
   }, [sessionId, messages]);
 
   useEffect(() => () => clearWatchdog(), [clearWatchdog]);
+
+  // WS-reconnect rehydration. iOS Safari (and any flaky network) can kill
+  // the WebSocket mid-turn. The agent finishes the turn and writes to
+  // mem_messages, but the `complete` frame never reaches us — the UI ends
+  // up stuck on "thinking forever" until the user nudges the agent.
+  //
+  // On every connect transition we re-fetch the session's messages from
+  // Core and merge in any assistant turns that landed while we were
+  // disconnected. Streaming-in-progress is left alone — we only patch
+  // when the local state has gaps Core knows about.
+  const lastStatusRef = useRef<typeof ws.status>(ws.status);
+  useEffect(() => {
+    const prevStatus = lastStatusRef.current;
+    lastStatusRef.current = ws.status;
+    if (ws.status !== "connected") return;
+    if (prevStatus === "connected") return; // ignore initial mount; covered by the session-load effect
+    if (!sessionId) return;
+    if (isStreaming) return; // don't clobber an in-flight turn
+
+    const ac = new AbortController();
+    void fetchSessionMessages(sessionId, ac.signal).then((rows) => {
+      if (!rows || rows.length === 0) return;
+      setMessages((prev) => mergeServerRows(prev, rows));
+    });
+    return () => ac.abort();
+    // We deliberately depend on ws.status + sessionId. isStreaming is a
+    // guard at the top of the effect; we don't want a refetch on every
+    // streaming flip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws.status, sessionId]);
 
   useEffect(() => {
     return ws.subscribe((ev: WSEvent) => {
