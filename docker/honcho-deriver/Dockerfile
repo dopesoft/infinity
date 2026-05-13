@@ -1,4 +1,4 @@
-# Honcho deriver worker — same image as docker/honcho/, different CMD.
+# Honcho deriver worker — same image as docker/honcho/, different CMD. (cache-bust: 2026-05-13 diagnostic-entrypoint)
 #
 # The deriver is a long-running background process that consumes new
 # messages from Redis and updates each peer's reasoned representation.

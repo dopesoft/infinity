@@ -1,4 +1,4 @@
-# Honcho FastAPI server — built from upstream plastic-labs/honcho.
+# Honcho FastAPI server — built from upstream plastic-labs/honcho. (cache-bust: 2026-05-13 diagnostic-entrypoint)
 #
 # We pin to a branch and rebuild from source on each image push. The
 # upstream repo's own Dockerfile assumes its source layout is at the build
