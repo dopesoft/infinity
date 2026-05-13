@@ -56,9 +56,19 @@ Each service has its own Dockerfile at the service root. `railway.toml` sets `ro
 3. pgxpool.New(DATABASE_URL)
    embed.FromEnv()             → stub | http (sidecar)
    memory.NewStore / NewSearcher
-   memory.NewCompressor        (only when LLM_PROVIDER=anthropic)
+   memory.NewProceduralStore → attached to Searcher so the system prefix
+                              injects top-K procedural memories per turn
+                              (CoALA's procedural tier, populated by
+                              voyager.Manager.OnSkillPromoted callback)
+   memory.NewCompressor        (only when LLM_PROVIDER=anthropic) →
+                              now auto-links new memories to top-4
+                              cosine-nearest neighbours via 'associative'
+                              edges (A-MEM, arXiv 2502.12110)
    hooks.NewPipeline()
    hooks.RegisterDefaults      → wires capture into all 12 event hooks
+   memory.NewPredictionStore   → recorded by hooks.PredictionRecorder
+                                 (PreToolUse writes expected, PostToolUse
+                                 resolves with Jaccard surprise score)
    tools.RegisterMemoryTools   → remember, recall, forget
 4. honcho.FromEnv()            → optional dialectic peer client (HONCHO_BASE_URL)
    if enabled, register two hooks (UserPromptSubmit, TaskCompleted) that
@@ -75,11 +85,21 @@ Each service has its own Dockerfile at the service root. `railway.toml` sets `ro
        Hooks  = PipelineAdapter{pipeline},
        Gate   = ClaudeCodeGate{trustStore},
    })
-8. proactive.NewHeartbeat / intent.New / proactive.NewAPI
+8. proactive.NewHeartbeat with ComposeChecklists(DefaultChecklist,
+   CuriosityChecklist) — heartbeat now scans for low-confidence memories,
+   unresolved contradictions, uncovered graph mentions, high-surprise
+   predictions, writing idempotent rows to mem_curiosity_questions
+   intent.New / proactive.NewAPI
 9. cron.New / cron.Scheduler.Start
    sentinel.NewManager / sentinel.Manager.Reload
-   voyager.New (extractor + verifier + discovery)
-   voyager.NewAPI                 → /api/voyager/{status,proposals,optimize}
+   voyager.New (extractor + verifier + discovery + source_extractor)
+   voyager.Manager.OnSkillPromoted(memory.ProceduralStore.UpsertFromSkill)
+     → every promoted skill writes a tier='procedural' row
+   voyager.NewAutoTrigger(voyagerMgr, voyager.NewOptimizer()).Start
+     → background ticker watches mem_skill_runs for failing skills,
+       auto-fires GEPA when failure rate ≥ threshold + cooldown elapsed
+       (close-the-loop step Voyager was missing)
+   voyager.NewAPI                 → /api/voyager/{status,proposals,optimize,code-proposals}
 10. server.New + server.Start
     signal.NotifyContext(SIGINT, SIGTERM)
 ```
@@ -95,7 +115,11 @@ core/
     serve.go           boot wiring (the diagram above)
     migrate.go         applies //go:embed db/migrations/*.sql
     doctor.go          env + DB ping + pgvector extension check
-    consolidate.go     nightly cron entrypoint (--compress flag)
+    consolidate.go     nightly cron entrypoint (--compress flag);
+                       calls the 8-op sleep-time ConsolidateNightly
+    reflect.go         metacognition entrypoint — walks recent sessions,
+                       runs MAR critic persona via Haiku, writes
+                       mem_reflections + auto-promotes lessons
 
   db/migrations/       embedded into the Go binary
     001_init.sql       vector + pg_trgm + uuid-ossp
@@ -107,6 +131,15 @@ core/
                        mem_outcomes, mem_trust_contracts, mem_patterns
     006_voyager.sql    mem_crons, mem_sentinels,
                        mem_skill_proposals/failures/tests
+    007_auth.sql       JWKS owner-claim + signup gate
+    008_realtime.sql   supabase_realtime publication wiring
+    009_canvas_projects.sql  mem_sessions project columns
+    010_code_proposals.sql   mem_code_proposals (Voyager source extractor)
+    011_agi_loops.sql  mem_reflections, mem_predictions,
+                       mem_curiosity_questions, Pareto frontier columns
+                       on mem_skill_proposals (frontier_run_id, score,
+                       pareto_rank, gepa_metadata), procedural-tier
+                       index, mem_relations(relation_type) index
 
   config/            mcp.yaml + embed.go (//go:embed, package config) so the
                      distroless container ships the canonical MCP registry
@@ -115,15 +148,23 @@ core/
                        + AllowAll + IsClaudeCodeTool helper),
                        composite_memory.go (chains N MemoryProviders)
     llm/               Provider interface + Anthropic, OpenAI, Google stub,
-                       AnthropicSummarizer (Haiku) for memory compression
+                       AnthropicSummarizer (Haiku) for memory compression,
+                       AnthropicCritic for session reflection (MAR persona)
     tools/             Tool interface, Registry, MCP client w/ headerRoundTripper
                        (auth=bearer | cloudflare_access), native tools,
                        memory tools, defaults
-    memory/            store, search (BM25+vector+graph), rrf, compress,
+    memory/            store, search (BM25+vector+graph), rrf,
+                       compress (now with A-MEM auto-linking),
                        privacy, forget, staleness, audit, provenance, list,
-                       summarizer_adapter, types
+                       consolidate (8-op sleep regime),
+                       procedural (CoALA's procedural tier — promoted-skill
+                                    materializer + TopK retrieval),
+                       reflection (metacognition; MAR critic persona),
+                       predictions (Pre/Post pairing with Jaccard surprise),
+                       summarizer_adapter, critic_adapter, types
     hooks/             pipeline, capture (privacy-first), 12 event constants,
-                       defaults wiring, PipelineAdapter for agent.HookEmitter
+                       defaults wiring, predict (PredictionRecorder hooks),
+                       PipelineAdapter for agent.HookEmitter
     honcho/            client.go (HTTP), provider.go (MemoryProvider impl);
                        reads HONCHO_BASE_URL / HONCHO_API_KEY / HONCHO_WORKSPACE
                        / HONCHO_PEER; 60-sec cached representation
@@ -134,15 +175,27 @@ core/
                        agent_adapter, http
     intent/            flow.go (Haiku detector + Quiet hours), store
     proactive/         wal (regex extractor), buffer (60% threshold),
-                       heartbeat (ticker), checklist (default checks),
+                       heartbeat (ticker),
+                       checklist (default deterministic checks),
+                       curiosity (4 gap-detectors + ComposeChecklists),
                        trust (TrustStore), gate.go (ClaudeCodeGate routes
                        risky claude_code__* to mem_trust_contracts),
                        http (4 endpoints)
-    voyager/           manager (state), extractor (SessionEnd → SKILL.md draft),
-                       verifier (synthetic tests via Haiku), discovery
-                       (tool-triplet patterns), optimizer.go (calls GEPA
-                       sidecar, applies hard gates, persists proposals),
-                       api.go (/status, /proposals, /optimize)
+    voyager/           manager (state, OnSkillPromoted callback for
+                       procedural-memory writes),
+                       extractor (SessionEnd → SKILL.md draft),
+                       source_extractor (SessionEnd → mem_code_proposals
+                       refactor draft from file-fight patterns), verifier
+                       (synthetic tests via Haiku), discovery (tool-triplet
+                       patterns),
+                       optimizer.go (GEPA sidecar, hard gates, persists
+                                     WHOLE Pareto frontier with
+                                     frontier_run_id + pareto_rank;
+                                     SampleFromFrontier for runtime A/B),
+                       autotrigger.go (background ticker — watches
+                                       mem_skill_runs, auto-fires GEPA
+                                       on failure-rate threshold),
+                       api.go (/status, /proposals, /code-proposals, /optimize)
     cron/              types, scheduler (robfig/cron/v3),
                        executor_agent (cron→agent.Loop bridge), http
     sentinel/          types, manager, dispatcher (Log + Skill), http
@@ -213,6 +266,8 @@ studio/
 | `/api/voyager/proposals?status=` | GET | voyager.API | list mem_skill_proposals |
 | `/api/voyager/proposals/:id/decide` | POST | voyager.API | promote / reject |
 | `/api/voyager/optimize` | POST | voyager.API | trigger GEPA on `{ "skill": "<name>" }` |
+| `/api/voyager/code-proposals?status=` | GET | voyager.API | list mem_code_proposals (source-extractor output) |
+| `/api/voyager/code-proposals/:id/decide` | POST | voyager.API | approve / reject / applied (with optional note) |
 
 CORS is permissive (`*`) since Studio and Core run on different Railway domains. WebSocket origin is unrestricted for the same reason.
 
@@ -504,9 +559,10 @@ agent.BuildSystemPrefix ────► CompositeMemory:
   Honcho's async SQLAlchemy wants `postgresql+psycopg://…`. A small sh
   snippet in the CMD prefixes the scheme without surfacing the secret.
 
-## 12. Voyager / GEPA — skill self-evolution
+## 12. Voyager / GEPA — skill self-evolution + code self-noticing
 
-Two coordinated loops, off-by-default via `INFINITY_VOYAGER=true`.
+Three coordinated loops, on by default — disable explicitly via
+`INFINITY_VOYAGER=false`.
 
 ### Voyager creation (`core/internal/voyager/`)
 - **Discovery** — every PostToolUse appends to a per-session window of tool
@@ -517,11 +573,44 @@ Two coordinated loops, off-by-default via `INFINITY_VOYAGER=true`.
 - **Verification** — Haiku generates synthetic test cases. Instruction-only
   skills auto-promote; impl-bearing skills wait for human decide.
 
+### Source extraction — code self-noticing (`source_extractor.go`)
+The fourth Voyager hook. Counterpart of skill extraction, but for *source*
+struggle instead of *behavior* crystallization.
+
+- Hook: `OnSessionEndSource` registered on `SessionEnd` alongside
+  `voyager.extract`.
+- Heuristic (per session, scan ≤200 observations):
+    - For each `claude_code__edit` / `claude_code__write` PreToolUse, pull
+      `file_path` from the input.
+    - Attribute the *next* `PostToolUseFailure` back to the last file the
+      agent was editing (or count it as a bash failure if the last tool was
+      `claude_code__bash`).
+    - Flag as a "fight" any file with ≥3 edits AND either ≥1 attributed
+      failure OR ≥1 session-wide bash failure (typecheck/build/test).
+- Up to 3 hot files per session draft proposals (async, 120s Haiku window).
+- Each draft asks Haiku for `{title, rationale, proposed_change,
+  risk_level}` and lands a row in `mem_code_proposals` with full
+  evidence JSON (edit count, failure count, bash sample, duration).
+- LLM-less degradation: insert a stub row that surfaces the signal without
+  the drafted change.
+
+**Safety posture (load-bearing):** approving a code proposal does *not*
+auto-apply the change. The `mem_code_proposals.status` column is intent
+only — the agent attempts the edit on its next relevant turn, and that
+edit still routes through `ClaudeCodeGate` → `mem_trust_contracts` → boss
+approval per call. There is no autonomous write path to Go/Next.js source.
+Voyager is doing autonomous *noticing*; the human still owns the keyboard.
+
 ### GEPA improvement (`core/internal/voyager/optimizer.go` + `docker/gepa/`)
-Hermes-style Genetic-Pareto prompt evolution for *existing* skills.
+Genetic-Pareto prompt evolution for *existing* skills. Per Agrawal et al.,
+ICLR 2026 Oral ([arXiv 2507.19457](https://arxiv.org/abs/2507.19457)) —
+reflective prompt evolution outperforms RL with 35× fewer rollouts when you
+maintain a Pareto frontier and sample stochastically instead of locking to a
+single champion.
 
 ```
-POST /api/voyager/optimize { "skill": "<name>" }
+POST /api/voyager/optimize { "skill": "<name>" }   ← manual entry
+                                                   ← OR fired by AutoTrigger
    → voyager.RunOptimizer:
        1. pull recent mem_skill_runs for the skill (failures + successes)
        2. POST docker/gepa/ sidecar at /optimize with traces + current SKILL.md
@@ -530,20 +619,271 @@ POST /api/voyager/optimize { "skill": "<name>" }
             • Haiku mutates SKILL.md targeted at the root cause (6 candidates)
             • Haiku scores each candidate against eval cases (6 calls)
             • returns Pareto-sorted by score, size
-       3. pickWinner applies hard gates:
+       3. paretoFrontier applies hard gates (per candidate):
             • non-empty after trim
             • ≤15KB (mirror Hermes Phase 1 ceiling)
             • starts with "---" frontmatter
             • not byte-identical to original
-       4. insert winner into mem_skill_proposals as candidate
-       5. boss approves via existing /api/voyager/proposals/:id/decide
+            → returns ALL viable candidates, sorted by score desc
+       4. assign a frontier_run_id (UUID); insert EVERY surviving candidate
+          into mem_skill_proposals with score + pareto_rank + gepa_metadata
+       5. boss reviews the frontier and promotes the winning rank(s) via
+          /api/voyager/proposals/:id/decide
+       6. SampleFromFrontier(skill) — draws weighted-by-score for runtime
+          A/B (used by agent code that wants a non-champion variant on a
+          specific call without permanent promotion)
 ```
 
 The sidecar (`docker/gepa/`) holds no state — it just runs Haiku calls and
 returns candidates. Hard gates ride on the Go side so a sidecar
 compromise can't bypass them. Cost per run: ~$0.05–$0.20.
 
-## 13. Studio conventions
+### Autotrigger (`core/internal/voyager/autotrigger.go`)
+This is the close-the-loop step Voyager was missing. A background ticker
+watches `mem_skill_runs` and auto-fires `RunOptimizer` for skills past the
+failure threshold. Without this, GEPA only ran when someone POSTed
+`/api/voyager/optimize` by hand.
+
+```
+voyager.NewAutoTrigger(manager, NewOptimizer())
+  Enabled() == optimizer.Enabled() && env != INFINITY_VOYAGER_AUTOTRIGGER=off
+  Start(ctx) → goroutine ticker at INFINITY_VOYAGER_AUTOTRIGGER_EVERY (default 30m)
+
+every tick:
+   SELECT skill_name, fails, total
+     FROM mem_skill_runs (last 24h, last N runs per skill where N=MIN_RUNS)
+    HAVING fails/total >= INFINITY_VOYAGER_FAILURE_RATE (default 0.30)
+
+   for each failing skill:
+      if last fire < INFINITY_VOYAGER_COOLDOWN (default 6h ago): skip
+      RunOptimizer(skill, traceLimit=20)
+      log frontier_run_id + candidates + calls
+```
+
+Tunables (all env): `INFINITY_VOYAGER_AUTOTRIGGER` (on|off), `_EVERY`,
+`_FAILURE_RATE`, `_MIN_RUNS`, `_COOLDOWN`. Defaults: 30m, 0.30, 5, 6h.
+
+## 13. AGI loops — migration 011
+
+Migration `011_agi_loops.sql` adds the substrate for six AGI-trajectory
+loops on top of the Phase 4-7 foundation. Each is grounded in 2024-2026
+research, not vibes. The substrate is in place and runs automatically —
+no env flag required (procedural memory, predictions, A-MEM, sleep-time,
+curiosity all activate as soon as the binary boots against the migrated
+DB). GEPA Pareto + autotrigger require `GEPA_URL` to be set.
+
+### 13.1 Procedural memory tier (CoALA)
+
+CoALA ([Sumers et al., arXiv 2309.02427](https://arxiv.org/abs/2309.02427))
+names four memory tiers: working, episodic, semantic, procedural. The
+schema has always had a `tier` column with all four values; we now actually
+*populate* the procedural row when a skill is promoted, and *retrieve*
+them through the same RRF machinery as semantic facts.
+
+```
+voyager.Manager.Decide(promote)
+   → persistSkillToDB (existing path: mem_skills + versions + active)
+   → writeSkillToDisk
+   → m.onPromoted(ctx, name, description, skillMD)        ← NEW callback
+       fired in serve.go to:
+       memory.ProceduralStore.UpsertFromSkill
+         → builds compact body (description + "When to use" section + first
+           N step lines, capped at 1200 chars)
+         → embeds title + body via embedder
+         → INSERT/UPDATE mem_memories WHERE
+              tier='procedural' AND title='skill:<name>'
+              strength=1.0, importance=7 (above average by default)
+
+memory.Searcher.BuildSystemPrefix(query)
+   → fetchBossProfile()                                  ← unchanged
+   → procedural.TopK(query, 5)                           ← NEW
+       cosine search against tier='procedural' active rows
+       (with query="" falls back to strength × importance ranking)
+   → memory.FormatForPrompt(entries) writes:
+       "## Your procedural skills (top matches)
+        - skill_name — first line of description
+        - ..."
+   → standard RRF Search (unchanged) appends below
+```
+
+### 13.2 Reflection / metacognition
+
+Park et al.'s Generative Agents (2023) reflection trees + Multi-Agent
+Reflexion ([MAR, arXiv 2512.20845](https://arxiv.org/html/2512.20845v1))
+critic-persona separation. The key MAR finding: the model that just acted
+can't critique itself in the same call. We instantiate a separate critic
+persona via a fresh Haiku call.
+
+```
+infinity reflect [--session <id> | --window 24h --limit 20] [--force]
+   → memory.Reflector.ReflectOnSession / ReflectRecent
+       1. pull observation transcript for the session(s)
+          (≤60 obs, 12k chars; USER/ASSISTANT/TOOL annotated)
+       2. llm.AnthropicCritic.CritiqueSession (Haiku, fresh persona via
+          critiqueSystem prompt; strict JSON return shape)
+       3. memory.Reflector.persist
+          • INSERT mem_reflections (critique, lessons jsonb,
+            quality_score, importance, embedding)
+          • importance = 8 - 5*quality_score (low quality → HIGH importance:
+            bad sessions are the ones worth remembering)
+          • for each lesson with confidence >= 0.6:
+              INSERT mem_lessons (lesson_text, confidence)
+
+Reflections feed:
+  - the curiosity scanner (low-quality reflections seed gaps)
+  - mem_lessons (existing search machinery)
+  - manual review in Studio (planned tab)
+```
+
+Cost: ~$0.01 per session at Haiku rates. The CLI command can also run
+under cron for nightly reflection passes.
+
+### 13.3 Predict-then-act (JEPA epistemic discipline)
+
+No production text world model exists today, but the *posture* is
+implementable: before non-trivial tool calls, emit an expected outcome;
+after the call, score how surprising the actual result was. The delta
+becomes a curriculum signal.
+
+```
+hooks.PredictionRecorder.Register(pipeline) wires:
+  PreToolUse hook:
+    extractToolMeta(payload) → (name, tool_call_id, input)
+    expected = heuristicPrediction(name, input)         ← zero LLM cost
+    store.Record(session, call_id, name, expected, input)
+      → INSERT mem_predictions
+
+  PostToolUse / PostToolUseFailure hook:
+    extractToolMeta → tool_call_id
+    actual = payload.output
+    matched, surprise = memory.SurpriseFor(expected||name||input, actual)
+       (Jaccard on token sets, lowered tokens, ≥3 chars)
+       (error/blocked prefix on actual → strong surprise unless expected)
+    failure hook → force matched=false, surprise=max(0.5, surprise)
+    store.Resolve(call_id, actual, matched, surprise)
+      → UPDATE mem_predictions SET resolved_at = NOW()
+```
+
+The agent loop emits `tool_call_id` on both Pre/Post payloads
+(loop.go:326 + 419) so the recorder can pair them. The Jaccard heuristic
+is intentionally crude — the *value* is the post-hoc score, not the
+prediction text. High-surprise rows (`surprise_score >= 0.8`) feed the
+curiosity scanner.
+
+### 13.4 A-MEM auto-linking
+
+A-MEM ([arXiv 2502.12110](https://arxiv.org/pdf/2502.12110), 2×
+LoCoMo/MemGPT on multi-hop) — at write time, link the new memory to its
+k nearest neighbours so retrieval can traverse the graph, not just rank.
+
+```
+compressor.Compress(observation, project) → mem_memories row (memID)
+   → tx.Commit()
+   → autoLinkNeighbours(memID, embedding) ← async goroutine
+       SELECT id, 1 - (embedding <=> $1) AS sim
+         FROM mem_memories
+        WHERE id != $memID AND status = 'active' AND embedding IS NOT NULL
+        ORDER BY embedding <=> $1 ASC
+        LIMIT 4
+
+       for each hit where sim >= 0.65:
+         INSERT mem_relations (source_id, target_id, relation_type, confidence)
+           VALUES ($memID, $hit_id, 'associative', $sim)
+           ON CONFLICT DO NOTHING
+```
+
+Async so it never blocks the compression path. Bounded at k=4 with a
+0.65 cosine floor to prevent the "everything is loosely related" noise
+A-MEM's authors warn about. Pruned aggressively by sleep-time (§13.5)
+to keep edge counts reasonable.
+
+### 13.5 Sleep-time consolidation (8-op)
+
+LightMem ([arXiv 2510.18866](https://arxiv.org/html/2510.18866v1))
+argues consolidation is a distinct compute regime, not a cron job
+afterthought. `ConsolidateNightly` is now an 8-op pipeline:
+
+```
+infinity consolidate [--compress] [--dry-run]
+   → memory.ConsolidateNightly:
+       1. Decay strength × 0.95 on all active memories
+       2. Reset hot memories (last_accessed > 7d ago) to strength=1.0
+       3. Cluster identification (episodic, cosine > 0.85, group of ≥3)
+       4. Contradiction resolution:
+          SELECT pairs FROM mem_relations WHERE relation_type='contradicts'
+          for each pair where both are still active:
+            mark the OLDER memory superseded; set superseded_by to the newer
+       5. Associative pruning: keep top-10 outgoing 'associative' edges per
+          (source, relation_type); delete the rest (rank by confidence desc)
+       6. Weak-edge purge: DELETE 'associative' edges WHERE confidence < 0.40
+       7. Procedural re-weight:
+          For each skill with ≥3 runs in the last 7d:
+            UPDATE mem_memories
+               SET strength = LEAST(1.0, GREATEST(0.1, success_rate))
+             WHERE tier='procedural' AND title='skill:<name>'
+       8. RunAutoForget (decay-driven deletion of unimportant low-strength
+          memories past the TTL)
+   → returns ConsolidateReport JSON
+```
+
+The procedural re-weight in step 7 is the load-bearing one: skills that
+fail get demoted in the procedural-tier ranking the system prompt pulls
+from, so the agent stops reaching for habits that don't work.
+
+Pair with `--compress` to also LLM-promote uncompressed observations
+into the episodic tier (with A-MEM auto-linking firing on each new
+memory).
+
+### 13.6 Curiosity gap-scan
+
+The proactive engine's heartbeat used to be purely time-triggered with a
+deterministic checklist. We now compose `DefaultChecklist` with
+`CuriosityChecklist` so every tick also scans for *what the agent
+doesn't know*.
+
+```
+proactive.NewCuriosityScan(pool) provides 4 detectors:
+
+  scanLowConfidence    SELECT semantic memories WHERE strength < 0.35
+                       AND created_at < NOW() - 24h
+                       → question = "Is this still true: ...?"
+                       → source_kind='low_confidence'
+
+  scanContradictions   SELECT pairs FROM mem_relations
+                       WHERE relation_type='contradicts'
+                       AND both endpoints status='active'
+                       → question = "Two memories disagree — which is right?"
+                       → source_kind='contradiction', importance=8
+
+  scanUncoveredMentions SELECT graph_nodes with ≥3 obs but 0 derived memories
+                       → question = "You've mentioned <type> <name> — what's
+                                     important about it?"
+                       → source_kind='uncovered_mention'
+
+  scanHighSurprise     SELECT predictions WHERE surprise_score >= 0.8
+                       AND resolved_at > NOW() - 48h
+                       → question = "Tool <name> returned something
+                                     unexpected — should I rework prompt?"
+                       → source_kind='high_surprise'
+
+All four insert into mem_curiosity_questions with ON CONFLICT DO NOTHING
+guarded by a unique index on (question) WHERE status='open' — idempotent
+across heartbeats.
+
+proactive.CuriosityChecklist(pool) is a Checklist function that:
+  1. runs scanner.Run(ctx) (writes new questions)
+  2. queries scanner.ListOpen(5) (top-K by importance)
+  3. returns each as Finding{Kind:"curiosity", Title:question, Detail:rationale}
+
+ComposeChecklists(DefaultChecklist, CuriosityChecklist) is what's wired
+in serve.go's heartbeat construction.
+```
+
+Open questions show up alongside `pattern`/`outcome`/`self_heal`/`security`
+findings in `mem_heartbeat_findings`. The Studio Heartbeat tab renders
+them with the curiosity kind badge.
+
+## 14. Studio conventions
 
 ### Mobile-first invariants
 Already enforced in `studio/app/globals.css`:
@@ -563,7 +903,7 @@ Already enforced in `studio/app/globals.css`:
 - `CI=true` + `NEXT_TELEMETRY_DISABLED=1` to avoid the `confirmModulesPurge` interactive prompt
 - `pnpm-workspace.yaml` must contain `allowBuilds: { unrs-resolver: false }`
 
-## 14. Deployment
+## 15. Deployment
 
 ```
 Railway project: Infinity
@@ -615,14 +955,19 @@ Environment variables that matter:
 | `HONCHO_BASE_URL` | core | `http://honcho.railway.internal:8000` (Railway private network) |
 | `HONCHO_WORKSPACE` | core | default `infinity` |
 | `HONCHO_PEER` | core | default `boss` |
-| `GEPA_URL` | core | `http://gepa.railway.internal:8080` |
+| `GEPA_URL` | core | `http://gepa.railway.internal:8080` — also enables the Voyager autotrigger when set |
+| `INFINITY_VOYAGER_AUTOTRIGGER` | core | `on` (default when `GEPA_URL` set) / `off` |
+| `INFINITY_VOYAGER_AUTOTRIGGER_EVERY` | core | Go duration; default `30m` |
+| `INFINITY_VOYAGER_FAILURE_RATE` | core | float 0..1; default `0.30` (fire GEPA when failure rate ≥ this) |
+| `INFINITY_VOYAGER_MIN_RUNS` | core | int; default `5` (sliding window size per skill) |
+| `INFINITY_VOYAGER_COOLDOWN` | core | Go duration; default `6h` (per-skill GEPA cooldown) |
 | `DB_CONNECTION_URI` | honcho, honcho-deriver | typically `${{core.DATABASE_URL}}`; CMD rewrites scheme |
 | `CACHE_URL` | honcho, honcho-deriver | `redis://default@redis.railway.internal:6379/0?suppress=true` |
 | `AUTH_USE_AUTH` | honcho, honcho-deriver | `false` (Railway private network is the perimeter) |
 | `NEXT_PUBLIC_CORE_URL` | studio | https origin of core service (baked at build time) |
 | `NEXT_PUBLIC_CORE_WS_URL` | studio | wss origin + `/ws` path |
 
-## 15. Phase status (honest)
+## 16. Phase status (honest)
 
 | Phase | Spec scope | What's live | Gaps |
 |---|---|---|---|
@@ -631,19 +976,46 @@ Environment variables that matter:
 | 2 | Tools + MCP + Settings MVP | ✅ all | Settings tab depth — Phase 7 |
 | 3 | Memory subsystem | ✅ all | Recall@10 benchmark fixture pending |
 | 4 | Skills system | ✅ schema, registry, process-jail, agent tools, HTTP API, Studio Skills tab | Container sandbox for high/critical risk · network egress enforcement at the HTTP transport · Tests sub-tab in Studio · "+ New skill" / Import buttons · Edit + Disable + dropdown export/fork/archive |
-| 5 | Proactive engine | ✅ IntentFlow detector, WAL, Working Buffer, Heartbeat, Trust queue, all schemas, HTTP APIs, Heartbeat + Trust Studio tabs | **Hierarchical memory access** struct (DepthFor exists; not wired) · **Compaction Recovery** flow on session start · IntentFlow + WAL + Buffer not yet auto-fired from the WS handler · Reverse Prompting / Curiosity / Pattern detector · Heartbeat checklist items: security scan, memory %, surprise · Live tab 3-column layout · Studio Heartbeat sub-tabs (Proactive tracker, Pattern recognition, Outcome journal, Curiosity loop, Surprise queue) · Phase 5 Studio components: ControlTokenBadge, IntentStream, ContextBudget, SuggestionCard, TrustGate · "Always allow this pattern" rules · bulk approve in Trust |
-| 6 | Voyager + Cron + Sentinels | ✅ Cron scheduler + Sentinel manager + Skill dispatcher + schemas + HTTP APIs + Studio Cron+Sentinels tab | **Curriculum** generator · **Skill generator** (LLM-driven) · **Verifier** synthetic tests · **AutoSkill** failure-reflection-patch loop · Skill discovery hooks (regex pattern detection in observations) · Sentinel runtimes for non-webhook watch types (file_change, memory_event, external_api_poll, threshold) · Skills tab Candidate column population · NaturalLanguageScheduleInput live parser · Verification log sub-tab |
+| 5 | Proactive engine | ✅ IntentFlow detector, WAL, Working Buffer, Heartbeat, Trust queue, all schemas, HTTP APIs, Heartbeat + Trust Studio tabs; ✅ **Curiosity gap-scan** composed into heartbeat (low-confidence / contradictions / uncovered mentions / high-surprise predictions) | **Hierarchical memory access** struct (DepthFor exists; not wired) · **Compaction Recovery** flow on session start · IntentFlow + WAL + Buffer not yet auto-fired from the WS handler · Heartbeat checklist items: security scan, memory % · Live tab 3-column layout · Studio Heartbeat sub-tabs (Proactive tracker, Pattern recognition, Outcome journal, Curiosity loop, Surprise queue) · Phase 5 Studio components: ControlTokenBadge, IntentStream, ContextBudget, SuggestionCard, TrustGate · "Always allow this pattern" rules · bulk approve in Trust |
+| 6 | Voyager + Cron + Sentinels | ✅ Cron scheduler + Sentinel manager + Skill dispatcher + schemas + HTTP APIs + Studio Cron+Sentinels tab; ✅ **Voyager source extractor**; ✅ **GEPA Pareto frontier persistence** (per ICLR 2026 Oral); ✅ **Voyager autotrigger** — closes the failure→curriculum→skill→optimization cycle by auto-firing GEPA on skills past the failure threshold. | **Curriculum** generator · **Skill generator** (LLM-driven) · **Verifier** synthetic tests · **AutoSkill** failure-reflection-patch loop · Skill discovery hooks (regex pattern detection in observations) · Sentinel runtimes for non-webhook watch types (file_change, memory_event, external_api_poll, threshold) · Skills tab Candidate column population · Studio frontier-comparison view (render Pareto siblings side-by-side) · NaturalLanguageScheduleInput live parser · Verification log sub-tab · Auto-apply path for approved code proposals |
 | 7 | Polish | ✅ Audit log endpoint + viewer; ✅ Honcho dialectic peer modelling; ✅ Claude Code coding bridge (25 tools via MCP + CF Access); ✅ GEPA skill optimizer sidecar; ✅ custom domain `infinity.dopesoft.io` | Command palette (cmd+K, cmdk lib) · Sessions rewind · Skills Tests sub-tab · Settings 10-section depth · Memory tab knowledge graph viewer · Backup/export · `infinity restore` · Doctor full diagnostic suite · Light/dark + animation polish |
+| **AGI** | **Migration 011 — close the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Curiosity scanner** integrated into heartbeat | Studio surfaces: dedicated Reflections sub-tab on Memory tab · Predictions surprise feed · Curiosity question approval / dismissal UI · Procedural-tier badge in Memory list · A-MEM graph visualization for top-K associative neighbours · LLM-driven prediction text on high-cost tool calls (Haiku, gated on cost heuristic) · Cross-session reflection chains (cluster N reflections → meta-lesson) |
 | 8 | Voice | — | Skipped per direction |
 
-## 16. Next-session priorities
+## 17. Next-session priorities
 
-If you're picking this up fresh, the highest-leverage gaps to close are:
+The AGI-loop substrate (migration 011) is in place — every loop runs
+automatically once the binary boots. The next layer of work is mostly
+Studio surfaces + scheduling polish:
 
-1. **Wire IntentFlow + WAL + WorkingBuffer into the WebSocket handler.** Each user turn should classify → record → optionally extract → optionally append to buffer. The substrate is ready; this is one file edit in `internal/server/ws.go`.
-2. **Compaction Recovery.** On session start, if the user message contains a `<summary>` tag or matches "where were we", read `mem_working_buffer` + `mem_session_state` and surface a "recovered from buffer" message.
-3. **Skill discovery hooks.** Run the regex set from the Voyager spec against every observation in `hooks.CaptureHook`; insert detected candidates into `mem_patterns` and `mem_skill_proposals`. Surface them in the Skills tab as "candidate".
-4. **Container sandbox.** `core/internal/skills/sandbox_container.go` with `docker/docker/client`. Unblocks high/critical-risk skills.
-5. **Curriculum + Verifier.** Daily heartbeat sub-task that calls `mem_observations` clusters → LLM → `mem_skill_proposals`; verifier runs synthetic tests against the proposed implementation; promotion gates through `mem_trust_contracts`.
+1. **Studio surfaces for the AGI loops.** Reflections sub-tab on `/memory`
+   that renders `mem_reflections` with quality_score colouring; a
+   Predictions feed sorted by surprise; a Curiosity question approval
+   UI on `/heartbeat`; procedural-tier badge in Memory list views. None
+   require new endpoints — the data is already in mem_* tables.
+2. **Schedule the loops via cron.** `infinity reflect` and `infinity
+   consolidate` should both run nightly. Either set a Railway cron job
+   or add a `mem_crons` row pointing at the existing `agent.Loop`-driven
+   isolated-turn target. The Voyager autotrigger is the only loop that's
+   wired to its own goroutine; the other two are CLI-invoked.
+3. **Wire IntentFlow + WAL + WorkingBuffer into the WebSocket handler.**
+   Each user turn should classify → record → optionally extract →
+   optionally append to buffer. The substrate is ready; this is one
+   file edit in `internal/server/ws.go`.
+4. **Compaction Recovery.** On session start, if the user message
+   contains a `<summary>` tag or matches "where were we", read
+   `mem_working_buffer` + `mem_session_state` and surface a "recovered
+   from buffer" message.
+5. **Container sandbox.** `core/internal/skills/sandbox_container.go`
+   with `docker/docker/client`. Unblocks high/critical-risk skills.
+6. **Pareto frontier comparison UI.** Studio render of N candidates
+   sharing a `frontier_run_id` side-by-side, with promote/reject per
+   row. Backed by the existing `/api/voyager/proposals?status=candidate`
+   endpoint — add a `?frontier=<id>` filter.
+7. **LLM-driven prediction text** for high-cost tool calls. The current
+   `heuristicPrediction` is rule-based and free; a per-call Haiku call
+   gated on a difficulty heuristic would sharpen the surprise signal on
+   the calls that matter most.
 
-Phases 4-7 substrate is feature-complete enough that each gap above is a focused, scoped follow-up — no architectural rework needed.
+Phases 4-7 + AGI substrate is feature-complete enough that each gap
+above is a focused, scoped follow-up — no architectural rework needed.

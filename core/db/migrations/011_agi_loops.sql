@@ -1,4 +1,9 @@
--- 010_agi_loops.sql — Close the AGI loops Infinity advertised but didn't have.
+-- 011_agi_loops.sql — Close the AGI loops Infinity advertised but didn't have.
+--
+-- Note: an earlier version of this file was applied as 010_agi_loops.sql before
+-- the collision with 010_code_proposals.sql was noticed. All operations are
+-- idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS), so re-running this
+-- file under the new name is a safe no-op against the already-migrated DB.
 --
 -- Adds substrate for:
 --   • Reflections (metacognition) — agent critiques its own sessions.

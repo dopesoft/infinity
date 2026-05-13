@@ -10,14 +10,14 @@ The build is split into a Go service (Core) and a Next.js service (Studio). Both
 
 Infinity is an AGI-trajectory product. Every architectural decision should be evaluated against whether it moves the agent toward open-ended, self-improving, durable cognition. Concretely:
 
-- **Memory is the substrate, not a feature.** The 12 `mem_*` tables are the brain. Every event in the agent loop fires a hook that captures into Postgres. Treat memory writes as load-bearing, not telemetry.
-- **The agent should learn continuously.** Observations promote into the episodic tier via the Claude Haiku compressor (`core/internal/memory/compress.go`). Episodic clusters consolidate to semantic via the nightly `infinity consolidate` cron. Procedural memories will land in Phase 4 as Voyager-style skills the agent writes for itself.
-- **Provenance is non-negotiable.** Every memory traces back to source observations via `mem_memory_sources`. Cascading staleness (`MarkSuperseded`) propagates through the graph. When the agent cites a fact, it must be able to surface the chain.
-- **The agent should evolve its own toolset over time.** The `tools.Registry` is intentionally pluggable (native Go tools + MCP + Phase 4 skills). Don't hard-couple agent logic to specific tool implementations.
+- **Memory is the substrate, not a feature.** The `mem_*` tables (now 15+ after migration 011) are the brain. Every event in the agent loop fires a hook that captures into Postgres. Treat memory writes as load-bearing, not telemetry.
+- **The agent learns continuously, and the loops are CLOSED.** Migration 011 added the substrate for: procedural memory tier (CoALA — promoted skills go into `mem_memories` tier='procedural'), reflection (`mem_reflections` + `infinity reflect` CLI, MAR critic persona pattern), predict-then-act (`mem_predictions` Pre/Post pairing with Jaccard surprise), A-MEM auto-linking (top-4 cosine `associative` edges at compress time), sleep-time consolidation (8-op nightly regime: decay → hot-reset → cluster → contradiction resolve → associative prune → weak-edge purge → procedural reweight → forget), curiosity gap-scan (composed into heartbeat), GEPA Pareto frontier persistence (per ICLR 2026 Oral pattern), and Voyager autotrigger (background ticker that closes the failure → curriculum → skill → optimization cycle GEPA was missing). **Don't reintroduce the single-champion / no-reflection / no-prediction defaults; the substrate is in place and every new feature should compose with these loops.**
+- **Provenance is non-negotiable.** Every memory traces back to source observations via `mem_memory_sources`. Cascading staleness (`MarkSuperseded`) propagates through the graph. The sleep-time consolidate now ALSO auto-resolves `'contradicts'` edges by marking the older memory superseded. When the agent cites a fact, it must be able to surface the chain.
+- **The agent evolves its own toolset over time.** The `tools.Registry` is intentionally pluggable (native Go tools + MCP + skills + procedural-tier injection). Promoted skills materialize as procedural memories via the `voyager.Manager.OnSkillPromoted` callback; the agent retrieves them through the same RRF machinery as semantic facts. Don't hard-couple agent logic to specific tool implementations.
 - **Privacy filtering is mandatory at the capture boundary.** `memory.StripSecrets` runs before any observation hits the database. Add new patterns when you discover new secret formats.
-- **The Live tab is the present, the Memory tab is the brain, the Sessions tab is the history.** Don't conflate these. Each has a distinct mental model.
+- **The Live tab is the present, the Memory tab is the brain, the Sessions tab is the history.** Don't conflate these. Each has a distinct mental model. Reflections, Predictions, and Curiosity questions all live under Memory conceptually (the AGI-loop outputs ARE memories) — surface them there when wiring Studio.
 
-Phases 0-3 are done. Phases 4-8 (Skills system, Proactive Engine, Voyager self-evolution, Polish, Voice) are the path forward. When you build them, preserve the memory-first invariant.
+Phases 0-7 + AGI loops are done. The remaining work is Studio surfaces for the AGI loops, IntentFlow/WAL/Buffer WS wiring, container sandbox for high-risk skills, and Voice (Phase 8). When you build, preserve the memory-first invariant and the new closed-loop invariant: every capability emits hooks, every artifact lands in the schema with provenance, every skill failure feeds curriculum.
 
 ## Architecture at a glance
 
@@ -28,31 +28,36 @@ Read it before any non-trivial change. The summary:
 ```
 infinity/
   core/              # Go 1.26 binary — agent loop, MCP client, memory, hooks, server
-    cmd/infinity/      # cobra CLI: serve, migrate, doctor, consolidate
+    cmd/infinity/      # cobra CLI: serve, migrate, doctor, consolidate, reflect
     config/            # mcp.yaml + embed.go (//go:embed for distroless runtime)
-    db/migrations/     # 001..006 — embedded via go:embed
+    db/migrations/     # 001..011 — embedded via go:embed (011 = AGI loops)
     internal/
       agent/           # loop.go (nanobot-inspired) + gate.go (ToolGate) + composite_memory.go
-      llm/             # Provider interface + Anthropic, OpenAI, Google + Haiku summarizer
+      llm/             # Provider interface + Anthropic, OpenAI, Google + Haiku summarizer + critic (MAR persona)
       tools/           # Registry, MCP client (SSE+bearer/cloudflare_access), native tools, memory tools
-      memory/          # store, search (BM25+pgvector+graph), RRF, compress, forget, staleness, provenance
-      hooks/           # 12-event pipeline + capture chain
+      memory/          # store, search (BM25+pgvector+graph), RRF, compress (w/ A-MEM auto-link),
+                       #   forget, staleness, provenance, procedural (CoALA tier), reflection (metacognition),
+                       #   predictions (predict-then-act), consolidate (sleep-time 8-op)
+      hooks/           # 12-event pipeline + capture chain + predict (Pre/Post recorder)
       honcho/          # Phase 7 — dialectic peer-modelling client + MemoryProvider
       embed/           # Embedder interface (stub | http)
       skills/          # Phase 4 — registry, sandbox, runner, store, agent tools, HTTP
       intent/          # Phase 5 — IntentFlow detector (Haiku) + decision store
-      proactive/       # Phase 5 — WAL, Working Buffer, Heartbeat, Trust queue, gate.go (ClaudeCodeGate), HTTP
-      voyager/         # Phase 6 — discovery, extractor, verifier, optimizer (GEPA), HTTP API
+      proactive/       # Phase 5 — WAL, Working Buffer, Heartbeat (w/ curiosity gap-scan composed in),
+                       #   Trust queue, gate.go (ClaudeCodeGate), HTTP
+      voyager/         # Phase 6 — discovery, extractor, source_extractor, verifier,
+                       #   optimizer (GEPA + Pareto frontier persistence + SampleFromFrontier),
+                       #   autotrigger (background ticker that closes the failure→GEPA loop), HTTP API
       cron/            # Phase 6 — robfig scheduler + agent executor + HTTP
       sentinel/        # Phase 6 — manager + dispatcher (skill / log) + HTTP
       server/          # HTTP + WebSocket + JSON API + audit
   studio/            # Next.js 14 app router
-    app/{live,sessions,memory,skills,heartbeat,trust,cron,audit,settings}/
+    app/{live,sessions,memory,skills,heartbeat,trust,cron,code-proposals,audit,settings}/
     components/        # TabFrame, MobileNav, Drawer, ToolCallCard, MemoryCard, SkillCard, …
     components/ui/     # shadcn primitives + drawer (vaul)
     lib/               # ws client, api client, utils
   docker/            # codeexec, embed, gepa, honcho, honcho-deriver Dockerfiles
-  docs/              # claude-code/ (Mac runbook + launchd plists) + honcho/ + gepa/
+  docs/              # claude-code/ + honcho/ + gepa/ + agi-loops/ (migration 011 trail)
   railway.toml
 ```
 
@@ -125,6 +130,16 @@ Full wiring in [`ARCHITECTURE.md` §12](ARCHITECTURE.md#12-voyager--gepa--skill-
 - **Hard gates in `core/internal/voyager/optimizer.go`**: ≤15KB, valid frontmatter, non-empty, non-identical, ≥1 candidate scored. Winners land in `mem_skill_proposals` and route through the existing Trust/decide flow.
 - **Triggered manually for now**, not auto on failure rate. Cost ~$0.05–$0.20 per run.
 
+### Voyager source extractor — code self-noticing
+Fourth Voyager hook (alongside extract/discover/verify). Drafts source-refactor proposals when the boss visibly fought the same file. Operational invariants:
+
+- **SessionEnd hook** registered in [`serve.go`](core/cmd/infinity/serve.go) as `voyager.source_extract` → `Manager.OnSessionEndSource`. Lives in [`source_extractor.go`](core/internal/voyager/source_extractor.go).
+- **Heuristic:** scan ≤200 observations per session; flag any file with ≥3 `claude_code__edit`/`__write` calls AND either ≥1 failure attributed to that file or ≥1 session-wide bash failure. Up to 3 files per session draft proposals.
+- **Drafts** via Haiku → `mem_code_proposals` rows with `{title, rationale, proposed_change, risk_level, evidence}`. LLM-less path inserts a stub row so the signal is preserved.
+- **Approval is intent only.** The `mem_code_proposals.status` column does NOT auto-apply edits. Any actual `claude_code__edit/__write/__bash` still routes through `ClaudeCodeGate` → `mem_trust_contracts` → boss approval per call. Voyager is doing autonomous *noticing*, not autonomous writing.
+- **Studio surface:** `/code-proposals` tab in `NAV_OVERFLOW`. Realtime via `mem_code_proposals` publication entry in migration 010.
+- **APIs:** `GET /api/voyager/code-proposals?status=` · `POST /api/voyager/code-proposals/:id/decide` (`approved` | `rejected` | `applied`).
+
 ### Deployment + operations
 Full diagram in [`ARCHITECTURE.md` §14](ARCHITECTURE.md#14-deployment). Operational invariants:
 
@@ -160,6 +175,16 @@ When asked to add a feature, read these files in this order to understand the re
 - Claude Code coding bridge: `core/config/mcp.yaml` → `core/internal/tools/mcp.go` (bearer auth) → `core/internal/agent/{gate,loop}.go` → `core/internal/proactive/gate.go` → `docs/claude-code/SETUP.md`
 - Honcho user modelling: `core/internal/honcho/{client,provider}.go` → `core/internal/agent/composite_memory.go` → `core/cmd/infinity/serve.go` → `docs/honcho/SETUP.md`
 - GEPA skill optimizer: `docker/gepa.Dockerfile` + `docker/gepa/server.py` → `core/internal/voyager/optimizer.go` → `core/internal/voyager/api.go` (`POST /api/voyager/optimize`) → `docs/gepa/README.md`
+- Voyager source extractor (code proposals): `core/internal/voyager/source_extractor.go` (`OnSessionEndSource`, file-fight detection, Haiku draft) → `core/internal/voyager/api.go` (`/api/voyager/code-proposals` + `/decide`) → `core/db/migrations/010_code_proposals.sql` → `studio/app/code-proposals/page.tsx`
+- **AGI loops (migration 011)**: start at [`docs/agi-loops/README.md`](docs/agi-loops/README.md) for the trail + citations. Then by loop:
+  - Procedural tier: `core/internal/memory/procedural.go` → `core/internal/memory/search.go` (AttachProcedural + BuildSystemPrefix) → `core/internal/voyager/voyager.go` (OnSkillPromoted callback in `Decide`) → wired in `core/cmd/infinity/serve.go`
+  - Reflection: `core/internal/llm/critic.go` (MAR persona) → `core/internal/memory/critic_adapter.go` → `core/internal/memory/reflection.go` → `core/cmd/infinity/reflect.go` (CLI)
+  - Predict-then-act: `core/internal/memory/predictions.go` (store + Jaccard SurpriseFor) → `core/internal/hooks/predict.go` (PredictionRecorder) → `core/internal/agent/loop.go` (emits `tool_call_id` in Pre/Post payloads)
+  - A-MEM auto-linking: `core/internal/memory/compress.go` → `autoLinkNeighbours` (async, top-4, cosine ≥ 0.65, writes `relation_type='associative'` to `mem_relations`)
+  - Sleep-time consolidate: `core/internal/memory/consolidate.go` → `ConsolidateNightly` (8-op) → invoked by `core/cmd/infinity/consolidate.go`
+  - Curiosity gap-scan: `core/internal/proactive/curiosity.go` (4 detectors + `CuriosityChecklist` + `ComposeChecklists`) → wired into heartbeat in `serve.go`
+  - GEPA Pareto frontier: `core/internal/voyager/optimizer.go` (`paretoFrontier`, `insertFrontierProposal`, `SampleFromFrontier`)
+  - Voyager autotrigger: `core/internal/voyager/autotrigger.go` (background ticker) → started in `serve.go` when `GEPA_URL` is set
 
 ## Phase status
 
@@ -172,9 +197,10 @@ See `ARCHITECTURE.md` § 12 for the granular gap list. Summary:
 | 2 | ✅ | Tools and MCP: registry, websearch, filesystem, codeexec, httpfetch, Settings tab |
 | 3 | ✅ | Memory: agentmemory port, triple-stream retrieval, 12-hook pipeline, compression, Memory tab, provenance |
 | 4 | ✅ substrate | Skills system: schema, registry, process-jail sandbox, agent tools, HTTP, Studio Skills tab. **Gaps:** container sandbox for high/critical, Tests sub-tab, "+ New skill" / Import buttons. |
-| 5 | ✅ substrate | Proactive Engine: IntentFlow detector (Haiku), WAL, Working Buffer, Heartbeat ticker, Trust queue, full schema, all HTTP APIs, Heartbeat + Trust tabs. **Gaps:** WS-handler integration of IntentFlow/WAL/Buffer (currently API-only), Compaction Recovery flow, Curiosity/Pattern/Surprise loops, 3-column Live, sub-tabs in Heartbeat. |
-| 6 | ✅ substrate | Cron + Sentinels: robfig scheduler with agent executor, sentinel manager + skill dispatcher, schemas, HTTP APIs, combined Cron+Sentinels tab. **Gaps:** Voyager curriculum/skill-generator/verifier/AutoSkill loops, skill discovery hooks, sentinel runtimes for non-webhook watch types. |
+| 5 | ✅ | Proactive Engine: IntentFlow detector (Haiku), WAL, Working Buffer, Heartbeat ticker, Trust queue, full schema, all HTTP APIs, Heartbeat + Trust tabs. **WS-handler integration is live** — `ws.go` fires IntentFlow per turn, appends to WAL on user input, captures WorkingBuffer pairs after each turn. **Curiosity gap-scan composed into heartbeat** (NEW) — `mem_curiosity_questions` populated automatically. **Remaining gaps:** Compaction Recovery flow, 3-column Live, sub-tabs in Heartbeat, Studio approval/dismissal UI for curiosity questions. |
+| 6 | ✅ | Cron + Sentinels + Voyager: robfig scheduler with agent executor, sentinel manager + skill dispatcher, schemas, HTTP APIs, combined Cron+Sentinels tab. **Voyager is on by default** (`INFINITY_VOYAGER=false` to opt out): SessionEnd → skill extractor + verifier (auto-promotes instruction-only candidates), PostToolUse → triplet discovery, **GEPA optimizer with Pareto frontier persistence** (NEW — per ICLR 2026 Oral; `frontier_run_id` + `pareto_rank` per candidate, `SampleFromFrontier` for runtime A/B), **Voyager autotrigger** (NEW — background ticker auto-fires GEPA on failing skills, closes the loop), and source extractor for `mem_code_proposals`. Studio: `/code-proposals` tab. **Remaining gaps:** curriculum generator, AutoSkill failure-reflection-patch loop, sentinel runtimes for non-webhook watch types, frontier-comparison UI in Studio, auto-apply path for approved code proposals. |
 | 7 | ⚠️ partial | Audit log endpoint + viewer. **Gaps:** command palette (cmd+K), sessions rewind, settings depth, knowledge graph viewer, backup/export, full doctor suite. |
+| **AGI** | ✅ | **Migration 011 — AGI loops shipped.** Procedural memory tier (CoALA — promoted skills → `tier='procedural'` rows, injected into system prompt via RRF). Reflection / metacognition (`infinity reflect` CLI + `mem_reflections` with MAR critic persona). Predict-then-act (`mem_predictions` Pre/Post pairing with Jaccard surprise scoring). A-MEM auto-linking (top-4 cosine `associative` edges at compress time). Sleep-time consolidate (8-op `ConsolidateNightly`: decay → hot-reset → cluster → contradiction resolve → associative prune → weak-edge purge → procedural reweight → forget). Curiosity scanner composed into heartbeat. See [`docs/agi-loops/README.md`](docs/agi-loops/README.md) for the trail. **Remaining gaps:** Studio surfaces (Reflections sub-tab, Predictions feed, Curiosity UI, Procedural badge, A-MEM graph viz, Pareto frontier comparison), cron the CLI loops (`infinity reflect` + `infinity consolidate`), LLM-driven prediction text for high-cost tools. |
 | 8 | — | Voice (skipped per direction) |
 | 6 | — | Voyager Self-Evolution (skill curriculum, automated improvement) |
 | 7 | — | Polish (token budgets, multi-provider failover, full benchmarks) |

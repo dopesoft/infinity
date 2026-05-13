@@ -11,11 +11,22 @@ Not a chatbot. Not a wrapper. A permanent cognitive substrate that remembers eve
 
 ## What's new this week
 
-Three big-deal landings on top of the Phase 1-7 substrate:
+**Closed the AGI loops.** Migration `011_agi_loops.sql` + nine landings turn the substrate into a system that genuinely *learns continuously* — not just stores. Each move is grounded in 2024-2026 research, not vibes:
+
+- **🧬 GEPA Pareto frontier** ([arXiv 2507.19457](https://arxiv.org/abs/2507.19457), ICLR 2026 Oral) — the optimizer now persists the **whole frontier** of skill variants (not a single champion) with `frontier_run_id` + `pareto_rank`. `SampleFromFrontier` draws weighted by score. 35× rollout efficiency vs. RL.
+- **🚨 Voyager autotrigger** — background ticker watches `mem_skill_runs`. When a skill's recent failure rate crosses 30%, GEPA fires automatically. **The close-the-loop step Voyager originally promised but never had.** Per-skill cooldown (6h default).
+- **🎯 Procedural memory tier activated** — promoted skills materialize as `tier='procedural'` rows with embeddings. Retrieved through the same RRF machinery as semantic facts and injected into every system prompt. CoALA's procedural tier ([arXiv 2309.02427](https://arxiv.org/abs/2309.02427)), populated.
+- **🪞 Metacognition / reflection** — `infinity reflect` walks recent sessions, runs a fresh "critic persona" Haiku call (Multi-Agent Reflexion, [arXiv 2512.20845](https://arxiv.org/html/2512.20845v1)), and writes structured critique + lessons to `mem_reflections`. High-confidence lessons auto-promote into `mem_lessons`.
+- **🔮 Predict-then-act** — every PreToolUse writes an expected outcome; PostToolUse resolves with a Jaccard surprise score (`mem_predictions`). High-surprise rows feed the curiosity scanner. JEPA epistemic discipline without a generative world model.
+- **🕸️ A-MEM auto-linking** ([arXiv 2502.12110](https://arxiv.org/pdf/2502.12110)) — when the compressor promotes an observation, it also writes top-4 cosine-nearest `'associative'` edges into `mem_relations`. Retrieval can now traverse the graph, not just rank by score.
+- **💤 Sleep-time consolidation** ([LightMem, arXiv 2510.18866](https://arxiv.org/html/2510.18866v1)) — `infinity consolidate` rebuilt as an 8-op offline regime: decay → hot-reset → cluster → **contradiction resolution** → **associative pruning** → **weak-edge purge** → **procedural re-weight from success rates** → forget. Distinct from online compression.
+- **❓ Curiosity gap-scan** — the heartbeat now scans memory for **low-confidence nodes**, **unresolved contradictions**, **uncovered graph mentions**, and **high-surprise predictions**, then writes them as `mem_curiosity_questions`. The proactive engine finally *finds gaps*, not just reacts to time.
+
+Prior landings still apply:
 
 - **🛠️ Claude Code coding bridge** — 25 tools (Bash, Edit, Write, Read, Grep, Glob, Agent, WebFetch, …) live in your agent via MCP-over-SSE through Cloudflare Tunnel to your home Mac. Runs under your **Max subscription** (no API tokens billed for code work). ToS-clean — OAuth tokens never leave the Mac. Every dangerous call queues in the Trust queue for one-tap approve from your phone.
 - **🧠 Honcho dialectic peer modelling** — runs alongside the 12-table mem store. Two new Railway services (FastAPI server + deriver worker) reason continuously about *who the boss is* and fold a peer representation into every system prompt. Privacy filter still runs at the capture boundary.
-- **🔁 GEPA skill self-evolution** — a Python sidecar that watches `mem_skill_runs` failures, asks Claude Haiku to reflect on root cause, mutates `SKILL.md`s in a Genetic-Pareto loop, and queues winners through the existing Trust flow. ~$0.05–$0.20 per cycle.
+- **🔁 GEPA skill self-evolution** — Python sidecar (Hermes-class) for SKILL.md optimization. ~$0.05–$0.20 per cycle.
 
 Plus: Studio is now reachable on the boss's **private domain** instead of the raw `*.up.railway.app` URL.
 
@@ -68,6 +79,11 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 | Privacy filter at the capture boundary | ✅ `StripSecrets` 10-regex + tag-strip | ❌ | ❌ | ❌ |
 | Audit log of every memory operation | ✅ `mem_audit` table + `/api/memory/audit` | ❌ | ❌ | ❌ |
 | LLM-driven episodic compression (Haiku) | ✅ strict-JSON entity extraction | ❌ | ❌ | ❌ |
+| **A-MEM auto-linking at write time** | ✅ top-4 cosine neighbours per new memory | ❌ | ❌ | ❌ |
+| **Procedural memory tier (CoALA)** | ✅ promoted skills retrievable via RRF | ⚠️ skill registry only | ⚠️ skill files | ❌ |
+| **Reflection / metacognition tier** | ✅ `mem_reflections` (MAR critic persona) | ❌ | ❌ | ❌ |
+| **Predict-then-act with surprise scoring** | ✅ `mem_predictions` paired Pre/Post | ❌ | ❌ | ❌ |
+| **Sleep-time consolidation (8-op)** | ✅ contradiction resolution + edge pruning + procedural reweight | ❌ | ❌ | ❌ |
 | Nightly consolidation (decay + cluster + forget) | ✅ `infinity consolidate` | ❌ | ❌ | ❌ |
 | Dialectic peer modelling (*who is the user?*) | ✅ Honcho integrated via `CompositeMemory` | ✅ Honcho built-in | ❌ | ❌ |
 
@@ -93,6 +109,9 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 | Sandboxed by risk tier | ⚠️ process-jail live; container WIP | ✅ 7 backends (Docker, Modal, …) | ✅ Docker/SSH/OpenShell | ❌ |
 | **Self-creation** — new skills from session patterns | ✅ Voyager extractor + verifier | ❌ | ❌ | ❌ |
 | **Self-evolution** — existing skills get better | ✅ GEPA optimizer (size/score gates) | ✅ GEPA Phase 1 | ❌ | ❌ |
+| **Pareto frontier persistence** (vs. single champion) | ✅ ICLR 2026 Oral pattern | ❌ | ❌ | ❌ |
+| **Auto-trigger on failure rate** (close the loop) | ✅ ticker → GEPA on ≥30% failure | ❌ | ❌ | ❌ |
+| **Self-noticing** — refactor proposals from file-fight patterns | ✅ Voyager source extractor → `mem_code_proposals` | ❌ | ❌ | ❌ |
 | Skill versions + rollback | ✅ `mem_skill_versions` + `mem_skill_active` | ❌ | ⚠️ | ❌ |
 | Run history with success rate | ✅ `mem_skill_runs` | ⚠️ | ⚠️ | ❌ |
 | Trigger-phrase matching at turn-start | ✅ Token Jaccard, threshold 0.5 | ⚠️ | ✅ | ❌ |
@@ -103,6 +122,7 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 | Capability | **Infinity** | Hermes | OpenClaw | Nanobot |
 |---|:-:|:-:|:-:|:-:|
 | Proactive heartbeat (agent ticks on its own) | ✅ 30-min checklist | ❌ | ⚠️ via cron | ❌ |
+| **Curiosity gap-scan** (finds what it *doesn't* know) | ✅ low-confidence / contradictions / uncovered mentions / surprise | ❌ | ❌ | ❌ |
 | Cron-scheduled agent runs | ✅ robfig/cron, prompt-as-target | ❌ | ✅ cron tool | ❌ |
 | Webhook-triggered sentinels | ✅ live; file/memory/poll scaffolded | ❌ | ⚠️ | ❌ |
 | Intent classifier per user turn (silent / fast / full) | ✅ Haiku-backed | ❌ | ❌ | ❌ |
@@ -127,8 +147,8 @@ Honest comparison after pulling the actual READMEs and code. ✅ = shipping, ⚠
 
 | | One-sentence verdict |
 |---|---|
-| **Infinity** | The only one designed from day one as a permanent cognitive substrate — memory-first, provenance-tracked, proactive, coding-capable on the user's subscription, and self-improving — with a mobile-first UI you can open on your phone. |
-| Hermes | The closest peer — same SKILL.md lineage, broader sandbox + channel reach, shipping skill self-evolution. Differs by going lighter on memory engineering (FTS5 only, no provenance, no audit). |
+| **Infinity** | The only one designed from day one as a permanent cognitive substrate that genuinely *learns* — memory-first, provenance-tracked, proactive, coding-capable on the user's subscription, **with closed AGI loops** (Pareto frontier skill evolution + auto-trigger on failure, reflection-tier metacognition, predict-then-act surprise scoring, A-MEM auto-linking, sleep-time consolidation, curiosity gap-scan) — on a mobile-first UI you can open on your phone. |
+| Hermes | The closest peer — same SKILL.md lineage, broader sandbox + channel reach, shipping skill self-evolution. Differs by going lighter on memory engineering (FTS5 only, no provenance, no audit, single-champion skill optimization, no reflection or prediction tiers, no curiosity loop). |
 | OpenClaw | The parent project of both Infinity's and Hermes's skill format. Strongest at channel reach (22+) and voice. Weaker on persistent memory and self-evolution. |
 | Nanobot | A pure MCP host, not a memory product. Excellent if all you want is to plug MCP servers into a chat UI. No persistent memory, no skills, no autonomy. |
 
@@ -211,9 +231,10 @@ If you've already built skills for OpenClaw, **drop them into `./skills/` or sym
 | 2 | Tools + MCP + Settings MVP | ✅ |
 | 3 | Memory: 12 tables, RRF, hooks, compression, provenance | ✅ |
 | 4 | Skills: filesystem loader, sandbox tiers, agent tools, HTTP API | ✅ substrate · container sandbox WIP |
-| 5 | Proactive: IntentFlow, WAL, Heartbeat, Trust queue | ✅ substrate · WS auto-fire WIP |
-| 6 | Cron + Sentinels + Voyager + **GEPA optimizer** | ✅ schemas + dispatch + GEPA |
-| 7 | Polish + **Coding bridge** + **Honcho** + **custom domain** | ✅ major wins shipped |
+| 5 | Proactive: IntentFlow, WAL, Heartbeat, Trust queue, **curiosity gap-scan** | ✅ substrate · WS auto-fire WIP |
+| 6 | Cron + Sentinels + Voyager + GEPA + source extractor + **Pareto frontier** + **autotrigger** | ✅ closed-loop self-evolution |
+| 7 | Polish + Coding bridge + Honcho + custom domain | ✅ major wins shipped |
+| **AGI** | **Reflection · Prediction · A-MEM · Sleep-time · Procedural tier · Curiosity** | ✅ migration 011 |
 | 8 | Voice | — roadmap |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
@@ -222,14 +243,25 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
 
 ## Features
 
+### AGI Loops (NEW — migration 011)
+- **GEPA Pareto frontier** — `mem_skill_proposals` carries `frontier_run_id` + `score` + `pareto_rank`; `SampleFromFrontier` draws weighted from the frontier instead of locking to a single champion. ICLR 2026 Oral pattern.
+- **Voyager autotrigger** — background ticker watches `mem_skill_runs` for skills past the failure threshold (30% default, 5-run window, 6h cooldown) and fires `RunOptimizer` automatically. Closes the failure → curriculum → skill → optimization cycle.
+- **Procedural memory tier (CoALA)** — promoted skills materialize as `mem_memories` rows with `tier='procedural'`, embedded via the same embedder, retrieved through the same RRF pathway, injected into the system prompt before tool selection.
+- **Reflection / metacognition** — `infinity reflect` walks recent sessions, runs a separate "critic persona" Haiku call (MAR pattern — actor doesn't get to grade itself), persists structured critique + lessons to `mem_reflections`. High-confidence lessons (`confidence ≥ 0.6`) auto-promote to `mem_lessons`. Importance inverts quality — bad sessions are *more* important to remember.
+- **Predict-then-act** — `PreToolUse` records an expected outcome to `mem_predictions`; `PostToolUse` resolves with a Jaccard-based surprise score (0..1). Failure hooks force surprise ≥ 0.5. JEPA epistemic discipline without a generative world model.
+- **A-MEM auto-linking** — every new episodic memory writes top-4 `'associative'` edges into `mem_relations` (cosine ≥ 0.65 floor). Retrieval can now traverse the graph, not just rank.
+- **Sleep-time consolidation (8-op)** — `infinity consolidate` rebuilt as a distinct offline regime: decay → hot-reset → cluster → **contradiction resolution** (older memory of a `'contradicts'` pair → superseded) → **associative pruning** (keep top-10 outgoing per node) → **weak-edge purge** (drop confidence < 0.40) → **procedural re-weight** (strength = recent skill success rate) → forget.
+- **Curiosity gap-scan** — heartbeat checklist now scans for low-confidence semantic memories, unresolved contradictions, uncovered graph mentions, and high-surprise predictions, then writes idempotent rows to `mem_curiosity_questions`. The proactive engine finds gaps, not just reacts to time.
+
 ### Memory & Recall
 - **12-table memory store** — observations, summaries, semantic memories, sources, relations, profiles, graph nodes, graph edges, node-observation links, audit, lessons, sessions
+- **Three new tables in migration 011** — `mem_reflections`, `mem_predictions`, `mem_curiosity_questions`
 - **Triple-stream retrieval** — BM25 + pgvector HNSW + 2-hop graph BFS, fused with Reciprocal Rank Fusion (k=60)
 - **Session diversification** — caps any single session at 3 hits per recall to prevent echo chambers
 - **Provenance chain** — every memory links to its source observations via `mem_memory_sources`; `GET /api/memory/cite/:id` surfaces the full chain
 - **Cascading staleness** — `MarkSuperseded` propagates through the memory graph
-- **Haiku LLM compression** — strict-JSON entity extraction promotes raw observations into episodic memories
-- **Nightly consolidation** — `infinity consolidate` runs decay, hot-reset, clustering, and auto-forget
+- **Haiku LLM compression** — strict-JSON entity extraction promotes raw observations into episodic memories, then auto-links to top-4 cosine-nearest neighbours via `'associative'` relations
+- **Sleep-time consolidation** — `infinity consolidate` runs the 8-op offline regime (see AGI Loops above)
 - **Privacy-first capture** — `memory.StripSecrets` runs 10 regex patterns + `<private>` tag stripping at the boundary
 - **SHA-256 dedup** — 5-minute window prevents observation spam
 - **Audit trail** — every memory operation writes a `mem_audit` row (table#id target)
@@ -262,7 +294,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
 - **Pluggable embedder** — stub (deterministic) or HTTP sidecar (FastAPI), 384-dim vectors
 - **Tool registry auto-exposes** — anything registered shows up in `/api/tools` and the agent's tool list
 
-### Skills System (Phase 4) + Self-Evolution (NEW)
+### Skills System (Phase 4) + Self-Evolution
 - **Filesystem-native** — `SKILL.md` + YAML frontmatter, OpenClaw + Hermes-compatible (drop-in symlink)
 - **Risk-tiered sandboxing** — process jail (low/medium) → container (high/critical, WIP)
 - **Trigger matching** — Token Jaccard + substring overlap, threshold 0.5
@@ -270,15 +302,20 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the source-of-truth wiring diagram.
 - **Run history** — every invocation persists to `mem_skill_runs` with success rate
 - **Versioning** — `mem_skill_versions` + `mem_skill_active` for rollback
 - **Hot reload** — `POST /api/skills/reload` re-walks the filesystem
-- **GEPA optimizer** — Genetic-Pareto loop that mutates SKILL.md from failure traces, hard-gated on size/frontmatter/non-noop, queued through Trust Contracts
+- **GEPA optimizer + Pareto frontier (NEW)** — Genetic-Pareto loop that mutates SKILL.md from failure traces, hard-gated on size/frontmatter/non-noop, **persists the whole frontier** with `frontier_run_id` + `pareto_rank`, queued through Trust Contracts. `SampleFromFrontier` draws weighted by score for runtime A/B sampling.
+- **Autotrigger (NEW)** — background ticker auto-fires GEPA on skills past the failure-rate threshold. The close-the-loop step. Off until `GEPA_URL` is set; tunable via `INFINITY_VOYAGER_FAILURE_RATE` / `INFINITY_VOYAGER_MIN_RUNS` / `INFINITY_VOYAGER_COOLDOWN`.
+- **Procedural-memory promotion (NEW)** — every promoted skill writes a `tier='procedural'` row via `OnSkillPromoted` callback, so retrieval injects it through the same RRF pathway as semantic facts. CoALA's procedural tier, populated.
 - **Voyager extractor** — at SessionEnd, drafts new SKILL.md candidates from observation transcripts
 - **Voyager discovery** — counts repeated tool-triplets across sessions to spot crystallization opportunities
+- **Voyager source extractor** — at SessionEnd, detects "file-fight" patterns (same file edited ≥3× with failures) and drafts a refactor proposal via Haiku into `mem_code_proposals`. Approval marks intent only — the actual edit still flows through `ClaudeCodeGate` → Trust queue, so self-modification of Go/Next.js source stays boss-gated.
 
 ### Proactive Engine (Phase 5)
 - **IntentFlow detector** — Haiku classifies every turn into silent / fast / full + Quiet Hours gate
 - **WAL extractor** — regex captures corrections, preferences, decisions, dates, URLs into `mem_session_state`
 - **Working Buffer** — at 60% context utilization, snapshots into `mem_working_buffer` for recovery
-- **Heartbeat ticker** — every 30 minutes runs the default checklist (overdue outcomes, open patterns, failing skills)
+- **Heartbeat ticker** — every 30 minutes runs the composed checklist (`DefaultChecklist` + `CuriosityChecklist`)
+- **Curiosity gap-scan (NEW)** — composes into the heartbeat: scans low-confidence memories, unresolved contradictions, uncovered graph mentions, high-surprise predictions. Writes idempotent rows to `mem_curiosity_questions`. Surfaces as `Finding{Kind:"curiosity"}`.
+- **Predict-then-act recorder (NEW)** — `hooks.PredictionRecorder` writes one row to `mem_predictions` per PreToolUse, resolves with surprise score on PostToolUse. Zero LLM cost — Jaccard heuristic.
 - **Trust Contract queue** — anything risky lands in `mem_trust_contracts` for approval / denial / snooze; user_id-scoped
 - **Outcome journal** — `mem_outcomes` tracks promised work and surfaces overdue items
 
@@ -388,9 +425,24 @@ go run ./cmd/infinity doctor
 ### 6. Nightly consolidation (cron)
 
 ```sh
-go run ./cmd/infinity consolidate           # decay, hot-reset, cluster, auto-forget
-go run ./cmd/infinity consolidate --compress # also runs Haiku observation→memory promotion
+# Sleep-time 8-op regime: decay, hot-reset, cluster, contradiction resolve,
+# associative prune, weak-edge purge, procedural reweight, auto-forget.
+go run ./cmd/infinity consolidate
+go run ./cmd/infinity consolidate --compress # also runs Haiku observation→memory promotion + A-MEM auto-linking
 go run ./cmd/infinity consolidate --dry-run  # preview deletions only
+```
+
+### 6b. Metacognition / reflection (NEW)
+
+```sh
+# Walk every session in the last 24h that doesn't yet have a reflection.
+# Runs a fresh Haiku critic persona per session (~$0.01/session).
+go run ./cmd/infinity reflect
+
+# Override window or target a single session:
+go run ./cmd/infinity reflect --window 168h --limit 50
+go run ./cmd/infinity reflect --session <uuid>
+go run ./cmd/infinity reflect --session <uuid> --force   # overwrite existing
 ```
 
 ### 7. Optional: home-Mac coding bridge
@@ -408,21 +460,25 @@ bash docs/claude-code/install.sh
 infinity/
   core/                           # Go binary — self-contained, embedded migrations
     Dockerfile                    # build context = core/
-    cmd/infinity/                 # cobra CLI: serve, migrate, doctor, consolidate
+    cmd/infinity/                 # cobra CLI: serve, migrate, doctor, consolidate, reflect
     config/                       # mcp.yaml + embed.go (//go:embed for distroless)
-    db/migrations/                # 001_init → 008_realtime (embedded into binary)
+    db/migrations/                # 001_init → 011_agi_loops (embedded into binary)
     internal/
       agent/                      # loop.go + gate.go (ToolGate) + composite_memory.go
-      llm/                        # Anthropic, OpenAI, Google + Haiku summarizer
+      llm/                        # Anthropic, OpenAI, Google + Haiku summarizer + critic
       tools/                      # Registry, MCP client (bearer/CF-Access), native tools
-      memory/                     # store, search, RRF, compress, forget, provenance
-      hooks/                      # 12-event pipeline, capture, privacy
+      memory/                     # store, search, RRF, compress (w/ A-MEM auto-link),
+                                  #   forget, provenance, procedural, reflection,
+                                  #   predictions, consolidate (sleep-time 8-op)
+      hooks/                      # 12-event pipeline, capture, privacy, predict
       honcho/                     # client.go + MemoryProvider — dialectic peer modelling
       embed/                      # Embedder interface (stub | http sidecar)
       skills/                     # loader, sandbox, runner, registry tools, HTTP API
       intent/                     # IntentFlow detector + Quiet hours
-      proactive/                  # WAL, working buffer, heartbeat, trust, gate (ClaudeCodeGate)
-      voyager/                    # extractor + verifier + discovery + optimizer (GEPA)
+      proactive/                  # WAL, working buffer, heartbeat, trust,
+                                  #   gate (ClaudeCodeGate), curiosity gap-scan
+      voyager/                    # extractor + verifier + discovery + optimizer (GEPA
+                                  #   w/ Pareto frontier) + autotrigger
       cron/                       # scheduler, executor, HTTP API
       sentinel/                   # manager, dispatcher, HTTP API
       server/                     # HTTP + WebSocket + JSON API
