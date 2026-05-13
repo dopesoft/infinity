@@ -23,7 +23,7 @@ export function TabFrame({
 }) {
   return (
     <div className="flex h-app min-h-app flex-col bg-background">
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b bg-background/95 px-3 pt-safe backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 lg:h-16">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b bg-background/95 px-3 pt-safe backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 lg:relative lg:h-16">
         <div className="flex min-w-0 items-center gap-2">
           <Link href="/live" className="flex items-center gap-2 text-foreground">
             <InfinityIcon className="size-6 shrink-0" aria-hidden />
@@ -34,9 +34,12 @@ export function TabFrame({
           <StatusPill state={agentState} />
         </div>
 
-        {/* Desktop: full TabNav, centered. */}
-        <div className="hidden flex-1 lg:flex lg:justify-center">
-          <TabNav />
+        {/* Desktop: TabNav anchored to the geometric center of the header so
+         * side-cluster width changes (e.g. StatusPill resizing) don't push it. */}
+        <div className="pointer-events-none absolute inset-y-0 left-1/2 hidden -translate-x-1/2 items-center lg:flex">
+          <div className="pointer-events-auto">
+            <TabNav />
+          </div>
         </div>
 
         {/* Right cluster: theme + sign out on desktop, hamburger on mobile. */}
