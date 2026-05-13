@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   ChevronDown,
-  CircleDashed,
   ExternalLink,
   Info,
   LayoutPanelLeft,

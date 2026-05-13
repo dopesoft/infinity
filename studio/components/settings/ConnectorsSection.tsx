@@ -787,14 +787,14 @@ function CustomComingSoon() {
         </Badge>
       </div>
       <p className="text-xs text-muted-foreground">
-        For now, MCPs that aren't on Composio go through{" "}
+        For now, MCPs that aren&apos;t on Composio go through{" "}
         <code className="font-mono">core/config/mcp.yaml</code> — add a server entry, set any
         required env vars on Railway, redeploy. See the existing{" "}
         <code className="font-mono">claude_code</code> and <code className="font-mono">composio</code>{" "}
         entries as a reference.
       </p>
       <p className="text-xs text-muted-foreground">
-        The in-app "add custom MCP" form will land when we add a{" "}
+        The in-app &ldquo;add custom MCP&rdquo; form will land when we add a{" "}
         <code className="font-mono">user_mcp_servers</code> table — it needs persistence so
         servers survive deploys without a rebuild.
       </p>
@@ -977,7 +977,7 @@ function NameAccountPrompt({
       <p className="text-xs text-muted-foreground">
         Pick a short label for this {toolkit.name} account — &ldquo;personal&rdquo;,
         &ldquo;work&rdquo;, &ldquo;newsletters&rdquo;. The agent uses this name to route
-        ("send from work account"). You can change it later from the activated list.
+        (&ldquo;send from work account&rdquo;). You can change it later from the activated list.
       </p>
       {toolkit.existingAliases.length > 0 && (
         <p className="text-[11px] text-muted-foreground">
