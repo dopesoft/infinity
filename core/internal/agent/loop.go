@@ -323,7 +323,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()
-			l.fireHook("PreToolUse", s.ID, s.Project, tc.Name, map[string]any{"name": tc.Name, "input": tc.Input})
+			l.fireHook("PreToolUse", s.ID, s.Project, tc.Name, map[string]any{
+				"name":         tc.Name,
+				"input":        tc.Input,
+				"tool_call_id": tc.ID,
+			})
 
 			decision := l.gate.Authorize(ctx, s.ID, s.Project, tc.Name, tc.Input)
 
@@ -417,9 +421,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				hookName = "PostToolUseFailure"
 			}
 			l.fireHook(hookName, s.ID, s.Project, tc.Name+": "+output, map[string]any{
-				"name":   tc.Name,
-				"input":  tc.Input,
-				"output": output,
+				"name":         tc.Name,
+				"input":        tc.Input,
+				"output":       output,
+				"tool_call_id": tc.ID,
 			})
 
 			s.Append(llm.Message{

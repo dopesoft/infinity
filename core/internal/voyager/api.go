@@ -13,10 +13,12 @@ func NewAPI(m *Manager) *API { return &API{m: m} }
 
 // Routes registers handlers. Endpoints:
 //
-//	GET  /api/voyager/status                — manager status + counters
-//	GET  /api/voyager/proposals?status=X    — list proposals
-//	POST /api/voyager/proposals/{id}/decide — { "decision": "promoted" | "rejected" }
-//	POST /api/voyager/optimize              — { "skill": "<name>" } GEPA evolve
+//	GET  /api/voyager/status                       — manager status + counters
+//	GET  /api/voyager/proposals?status=X           — list skill proposals
+//	POST /api/voyager/proposals/{id}/decide        — { "decision": "promoted" | "rejected" }
+//	POST /api/voyager/optimize                     — { "skill": "<name>" } GEPA evolve
+//	GET  /api/voyager/code-proposals?status=X      — list code-refactor proposals
+//	POST /api/voyager/code-proposals/{id}/decide   — { "decision": "approved|rejected|applied", "note": "..." }
 func (api *API) Routes(mux *http.ServeMux) {
 	if api == nil {
 		return
@@ -25,6 +27,8 @@ func (api *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/voyager/proposals", api.handleProposals)
 	mux.HandleFunc("/api/voyager/proposals/", api.handleProposalDecide)
 	mux.HandleFunc("/api/voyager/optimize", api.handleOptimize)
+	mux.HandleFunc("/api/voyager/code-proposals", api.handleCodeProposals)
+	mux.HandleFunc("/api/voyager/code-proposals/", api.handleCodeProposalDecide)
 }
 
 func (api *API) handleOptimize(w http.ResponseWriter, r *http.Request) {
@@ -57,18 +61,12 @@ func (api *API) handleOptimize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	winner, calls, err := api.m.RunOptimizer(r.Context(), opt, skillName, body.TraceLimit)
+	result, err := api.m.RunOptimizer(r.Context(), opt, skillName, body.TraceLimit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"skill":      skillName,
-		"calls":      calls,
-		"score":      winner.Score,
-		"size_chars": winner.SizeChars,
-		"rationale":  winner.Rationale,
-	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 type statusDTO struct {
@@ -139,6 +137,57 @@ func (api *API) handleProposalDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := api.m.Decide(r.Context(), id, strings.ToLower(strings.TrimSpace(body.Decision))); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (api *API) handleCodeProposals(w http.ResponseWriter, r *http.Request) {
+	if api.m == nil {
+		writeJSON(w, http.StatusOK, []CodeProposalDTO{})
+		return
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	props, err := api.m.ListCodeProposals(r.Context(), status, 50)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, props)
+}
+
+func (api *API) handleCodeProposalDecide(w http.ResponseWriter, r *http.Request) {
+	if api.m == nil {
+		http.NotFound(w, r)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/voyager/code-proposals/")
+	parts := strings.Split(strings.TrimSuffix(rest, "/"), "/")
+	if len(parts) < 2 || parts[1] != "decide" {
+		http.NotFound(w, r)
+		return
+	}
+	id := strings.TrimSpace(parts[0])
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Decision string `json:"decision"`
+		Note     string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := api.m.DecideCodeProposal(r.Context(), id,
+		strings.ToLower(strings.TrimSpace(body.Decision)), body.Note); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

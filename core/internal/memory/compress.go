@@ -218,6 +218,78 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 		"entities":       len(facts.Entities),
 	}
 	_ = c.auditor.Log(ctx, "create", "mem_memories", memID, "compressor", diff)
+
+	// A-MEM auto-linking. arXiv 2502.12110 — at write time, link this new
+	// memory to its top-K neighbours so retrieval can traverse the graph,
+	// not just rank by score. Async via goroutine: never blocks the
+	// compression path; failures log and continue.
+	if memEmb != nil {
+		go func(id string, emb []float32) {
+			bg, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := c.autoLinkNeighbours(bg, id, emb); err != nil {
+				fmt.Printf("[compress] autolink %s: %v\n", id, err)
+			}
+		}(memID, memEmb)
+	}
+	return nil
+}
+
+// autoLinkNeighbours writes mem_relations rows of type 'associative' from
+// the freshly-written memory to its k nearest neighbours in embedding space.
+// We bound k at 4 — A-MEM's paper used k=5 but our schema doesn't dedupe so
+// fewer edges are better. Threshold of 0.65 cosine similarity prevents
+// linking to "everything is loosely related" noise.
+func (c *Compressor) autoLinkNeighbours(ctx context.Context, memID string, emb []float32) error {
+	if c.pool == nil {
+		return nil
+	}
+	const (
+		k         = 4
+		simFloor  = 0.65
+	)
+	rows, err := c.pool.Query(ctx, `
+		SELECT id::text, 1 - (embedding <=> $1) AS sim
+		  FROM mem_memories
+		 WHERE id::text <> $2
+		   AND status = 'active'
+		   AND embedding IS NOT NULL
+		 ORDER BY embedding <=> $1 ASC
+		 LIMIT $3
+	`, pgvector.NewVector(emb), memID, k)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type pair struct {
+		id  string
+		sim float64
+	}
+	var hits []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.id, &p.sim); err != nil {
+			return err
+		}
+		if p.sim < simFloor {
+			continue
+		}
+		hits = append(hits, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, h := range hits {
+		if _, err := c.pool.Exec(ctx, `
+			INSERT INTO mem_relations (source_id, target_id, relation_type, confidence)
+			VALUES ($1::uuid, $2::uuid, 'associative', $3)
+			ON CONFLICT DO NOTHING
+		`, memID, h.id, h.sim); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

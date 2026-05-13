@@ -65,6 +65,7 @@ func serveCmd() *cobra.Command {
 				store      *memory.Store
 				searcher   *memory.Searcher
 				compressor *memory.Compressor
+				procedural *memory.ProceduralStore
 				pipeline   *hooks.Pipeline
 				embedder   embed.Embedder
 			)
@@ -80,6 +81,8 @@ func serveCmd() *cobra.Command {
 					embedder = embed.FromEnv()
 					store = memory.NewStore(p)
 					searcher = memory.NewSearcher(p, embedder)
+					procedural = memory.NewProceduralStore(p, embedder)
+					searcher.AttachProcedural(procedural)
 
 					// Compressor needs an Anthropic client; wire only if the
 					// active provider is Anthropic so we don't pin a 2nd key.
@@ -92,10 +95,18 @@ func serveCmd() *cobra.Command {
 					pipeline = hooks.NewPipeline()
 					hooks.RegisterDefaults(pipeline, p, store, embedder, compressor)
 
+					// Predict-then-act: every PreToolUse writes an expected
+					// outcome; PostToolUse resolves with a surprise score.
+					// High-surprise rows feed the curiosity scanner + Voyager
+					// curriculum. JEPA discipline without a generative world
+					// model — see core/internal/memory/predictions.go.
+					predictions := memory.NewPredictionStore(p)
+					hooks.NewPredictionRecorder(predictions).Register(pipeline)
+
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					tools.RegisterSkillTools(registry, p)
 
-					fmt.Printf("  memory: enabled (embedder=%s, compressor=%v)\n", embedder.Name(), compressor != nil)
+					fmt.Printf("  memory: enabled (embedder=%s, compressor=%v, procedural=on, predictions=on)\n", embedder.Name(), compressor != nil)
 				}
 			} else {
 				fmt.Fprintf(os.Stderr, "  memory: disabled (no DATABASE_URL)\n")
@@ -253,7 +264,15 @@ func serveCmd() *cobra.Command {
 					trustStore = proactive.NewTrustStore(pool)
 				}
 				heartbeat = proactive.NewHeartbeat(pool, heartbeatInterval(),
-					proactive.DefaultChecklist(pool))
+					proactive.ComposeChecklists(
+						proactive.DefaultChecklist(pool),
+						// Curiosity gap-scan: scan memory for low-confidence
+						// nodes, unresolved contradictions, uncovered graph
+						// mentions, and high-surprise predictions, then
+						// surface the top-K as Findings. CoALA's active
+						// learning loop, populated.
+						proactive.CuriosityChecklist(pool),
+					))
 				heartbeat.Start(cmd.Context())
 				if a, ok := provider.(*llm.Anthropic); ok {
 					intentDetector = intent.New(intent.Config{
@@ -322,9 +341,39 @@ func serveCmd() *cobra.Command {
 				if pipeline != nil {
 					pipeline.RegisterFunc("voyager.extract", voyagerMgr.OnSessionEnd, hooks.SessionEnd)
 					pipeline.RegisterFunc("voyager.discover", voyagerMgr.OnPostToolUse, hooks.PostToolUse)
+					// source_extract is the third Voyager hook — drafts a
+					// code-refactor proposal when the boss visibly fought
+					// the same file during a session. Lands rows in
+					// mem_code_proposals for review in Studio.
+					pipeline.RegisterFunc("voyager.source_extract", voyagerMgr.OnSessionEndSource, hooks.SessionEnd)
+				}
+				// Promotion → procedural memory: every promoted skill writes
+				// a procedural-tier memory so the agent retrieves it through
+				// the same RRF pathway as semantic facts. CoALA's procedural
+				// tier, activated.
+				if procedural != nil {
+					voyagerMgr.OnSkillPromoted(func(ctx context.Context, name, description, skillMD string) {
+						if err := procedural.UpsertFromSkill(ctx, name, description, skillMD, 7); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: procedural upsert %s: %v\n", name, err)
+						}
+					})
 				}
 				voyagerAPI = voyager.NewAPI(voyagerMgr)
 				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
+
+				// Auto-trigger: when GEPA_URL is configured, run a background
+				// ticker that watches mem_skill_runs and fires the optimizer
+				// for any skill whose recent failure rate crosses the
+				// threshold. This is the close-the-loop step Voyager was
+				// missing — without it, GEPA only fires when someone POSTs
+				// /api/voyager/optimize by hand.
+				autoTrigger := voyager.NewAutoTrigger(voyagerMgr, voyager.NewOptimizer())
+				if autoTrigger.Enabled() {
+					autoTrigger.Start(cmd.Context())
+					fmt.Printf("  voyager.autotrigger: on\n")
+				} else {
+					fmt.Printf("  voyager.autotrigger: off (set GEPA_URL to enable)\n")
+				}
 			}
 
 			authVerifier, err := auth.FromEnv(cmd.Context(), pool)

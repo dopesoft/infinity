@@ -45,11 +45,26 @@ type Manager struct {
 	skillsRoot string
 	enabled    bool
 
+	// onPromoted is fired after a skill proposal is successfully promoted.
+	// serve.go wires this to memory.ProceduralStore.UpsertFromSkill so every
+	// promoted skill materialises as a procedural memory the agent can
+	// retrieve via the same RRF/search machinery as semantic facts.
+	onPromoted func(ctx context.Context, name, description, skillMD string)
+
 	// Discovery state — per-session sliding windows of recent tool names plus
 	// a global counter of repeated triplets across sessions.
 	mu              sync.Mutex
 	sessionWindows  map[string][]toolEvent
 	tripletCounters map[string]*tripletCounter
+}
+
+// OnSkillPromoted registers a callback fired after a successful promotion.
+// Safe to call once at boot; nil-callbacks no-op.
+func (m *Manager) OnSkillPromoted(fn func(ctx context.Context, name, description, skillMD string)) {
+	if m == nil {
+		return
+	}
+	m.onPromoted = fn
 }
 
 type toolEvent struct {
@@ -217,6 +232,15 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 		if m.skillsReg != nil {
 			_, _ = m.skillsReg.Reload(ctx)
 		}
+		if m.onPromoted != nil {
+			// Fire async — procedural-memory writes embed text via Haiku
+			// and shouldn't block the Trust-queue response.
+			go func(n, d, md string) {
+				bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				m.onPromoted(bg, n, d, md)
+			}(name, description, skillMD)
+		}
 	}
 
 	_, err := m.pool.Exec(ctx, `
@@ -331,6 +355,48 @@ func safeName(s string) string {
 func envTrue(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+// envValue is a tiny wrapper so the autotrigger can read env without importing
+// os. Kept in this file so the voyager package remains self-contained.
+func envValue(key string) string {
+	return os.Getenv(key)
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
+}
+
+func envFloat(key string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	var f float64
+	if _, err := fmt.Sscanf(v, "%f", &f); err != nil || f < 0 {
+		return def
+	}
+	return f
+}
+
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	var n int
+	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 // envFalse is the opt-out twin of envTrue. Used where the default should be

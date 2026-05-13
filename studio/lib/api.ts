@@ -409,6 +409,56 @@ export async function decideSkillProposal(id: string, decision: "promoted" | "re
   }
 }
 
+// ---- Code proposals (Voyager source extractor) ----------------------------
+//
+// Code proposals are Voyager's source-refactor counterpart to skill proposals.
+// When a session has the boss fighting the same file (multiple edits +
+// failures), the source_extract hook drafts a refactor sketch via Haiku and
+// lands a row in mem_code_proposals. The boss reviews here and decides whether
+// the agent should attempt the change — actual edits still flow through
+// ClaudeCodeGate → Trust queue.
+
+export type CodeProposalStatus = "candidate" | "approved" | "rejected" | "applied";
+export type CodeProposalDecision = "approved" | "rejected" | "applied";
+
+export type CodeProposalDTO = {
+  id: string;
+  target_path: string;
+  title: string;
+  rationale: string;
+  proposed_change: string;
+  evidence: Record<string, unknown>;
+  risk_level: "low" | "medium" | "high" | "critical";
+  status: CodeProposalStatus;
+  source_session?: string;
+  created_at: string;
+  decided_at?: string | null;
+  decision_note?: string;
+};
+
+export const fetchCodeProposals = (status = "candidate", signal?: AbortSignal) =>
+  getJSON<CodeProposalDTO[]>(
+    `/api/voyager/code-proposals?status=${encodeURIComponent(status)}`,
+    signal,
+  );
+
+export async function decideCodeProposal(
+  id: string,
+  decision: CodeProposalDecision,
+  note = "",
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/voyager/code-proposals/${id}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, note }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ---- Skills ----------------------------------------------------------------
 
 export type SkillRiskLevel = "low" | "medium" | "high" | "critical";

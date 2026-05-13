@@ -21,8 +21,9 @@ const (
 )
 
 type Searcher struct {
-	pool     *pgxpool.Pool
-	embedder embed.Embedder
+	pool       *pgxpool.Pool
+	embedder   embed.Embedder
+	procedural *ProceduralStore
 }
 
 func NewSearcher(pool *pgxpool.Pool, embedder embed.Embedder) *Searcher {
@@ -30,6 +31,17 @@ func NewSearcher(pool *pgxpool.Pool, embedder embed.Embedder) *Searcher {
 		embedder = embed.NewStub()
 	}
 	return &Searcher{pool: pool, embedder: embedder}
+}
+
+// AttachProcedural plugs the procedural-tier store into the searcher so
+// BuildSystemPrefix can include the top-K procedural skills relevant to the
+// current query. Optional — when nil, the system prefix simply omits the
+// procedural block.
+func (s *Searcher) AttachProcedural(p *ProceduralStore) {
+	if s == nil {
+		return
+	}
+	s.procedural = p
 }
 
 // Search runs the three streams (BM25 / vector / graph) in parallel,
@@ -278,6 +290,18 @@ func (s *Searcher) BuildSystemPrefix(ctx context.Context, sessionID, query strin
 		b.WriteString("About the boss (always-on context):\n")
 		b.WriteString(profile)
 		b.WriteString("\n")
+	}
+
+	// Procedural skills — top-K relevant to this query, retrieved via the
+	// same vector machinery as semantic memories. CoALA's "procedural" tier
+	// applied: skills the agent already knows, surfaced *before* the agent
+	// scans tools, so it reaches for habit over improvisation.
+	if s.procedural != nil {
+		entries, _ := s.procedural.TopK(ctx, query, 5)
+		if block := FormatForPrompt(entries); block != "" {
+			b.WriteString(block)
+			b.WriteString("\n")
+		}
 	}
 
 	results, err := s.Search(ctx, query, SearchOpts{Limit: 10})

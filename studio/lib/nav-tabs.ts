@@ -3,6 +3,7 @@ import {
   ClipboardList,
   Clock,
   Brain,
+  FileCode,
   type LucideIcon,
   MessageSquare,
   Settings,
@@ -42,6 +43,7 @@ export const NAV_OVERFLOW: NavTab[] = [
   { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
   { href: "/trust", label: "Trust", Icon: ShieldCheck },
   { href: "/cron", label: "Cron", Icon: Clock },
+  { href: "/code-proposals", label: "Code", Icon: FileCode },
   { href: "/audit", label: "Audit", Icon: ClipboardList },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];
