@@ -393,7 +393,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
         )}
 
-        <div className="flex items-center justify-end gap-2 border-t pt-3">
+        <div className="flex items-center justify-end gap-2">
           {setting?.source === "user" && defaultModel && draftModel !== defaultModel && (
             <Button variant="ghost" onClick={clearOverride} disabled={busy}>
               Reset to default
