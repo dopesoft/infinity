@@ -102,7 +102,7 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
               )
             ) : m.role === "thinking" ? (
               <div className="flex justify-start">
-                <div className="w-full sm:w-1/2">
+                <div className="w-full sm:w-3/4">
                   <ThinkingBlock message={m} />
                 </div>
               </div>

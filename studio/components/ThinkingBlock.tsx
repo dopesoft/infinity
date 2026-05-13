@@ -84,7 +84,7 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
         />
         <span
           className={cn(
-            "truncate text-xs sm:text-sm",
+            "whitespace-nowrap text-xs sm:text-sm",
             isPending ? "thinking-shimmer" : "text-muted-foreground",
           )}
         >

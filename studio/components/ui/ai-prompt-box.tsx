@@ -599,12 +599,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                       className={cn(
                         "inline-flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
                         mode === "stop" &&
-                          "border-2 border-danger bg-transparent text-danger hover:bg-danger/10",
-                        // Steer is a send, not a stop — keep the primary
-                        // up-arrow look so red stays reserved for "this
-                        // action cancels something."
+                          "bg-transparent text-danger hover:bg-danger/10",
+                        // Same treatment as stop: transparent button, just
+                        // the icon carries the color. No filled background.
                         (mode === "send" || mode === "steer") &&
-                          "bg-primary text-primary-foreground hover:bg-primary/90",
+                          "bg-transparent text-foreground hover:bg-muted",
                         mode === "stop-recording" &&
                           "bg-transparent text-danger hover:bg-danger/10",
                         mode === "voice" && !minimal &&

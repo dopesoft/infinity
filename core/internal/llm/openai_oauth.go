@@ -434,6 +434,18 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 	if system != "" {
 		body["instructions"] = system
 	}
+	// Reasoning-capable models compute thinking tokens internally regardless
+	// of this flag, but the SUMMARY text only streams when we explicitly
+	// request it. Without `reasoning.summary` the UI's "Jarvis is thinking"
+	// pill stays empty even though the model is actually reasoning. We ask
+	// for "auto" so the upstream picks whichever shape its current model
+	// supports (concise/detailed). Skipped for non-reasoning models
+	// (gpt-4o, gpt-4.1) where the param would error.
+	if modelSupportsReasoning(model) {
+		body["reasoning"] = map[string]any{
+			"summary": "auto",
+		}
+	}
 	if len(tools) > 0 {
 		apiTools := make([]map[string]any, 0, len(tools))
 		for _, t := range tools {
@@ -451,6 +463,21 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 		body["tools"] = apiTools
 	}
 	return body
+}
+
+// modelSupportsReasoning identifies the OpenAI model families that emit
+// reasoning summaries. All GPT-5.x variants (including the minis and nanos)
+// support it per OpenAI's model docs, as do the o-series reasoning models.
+// gpt-4* models don't and will error if `reasoning` is sent.
+func modelSupportsReasoning(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(m, "gpt-5") {
+		return true
+	}
+	if strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o1") {
+		return true
+	}
+	return false
 }
 
 // readResponsesSSE consumes the SSE stream and emits StreamEvents. We accept
@@ -494,7 +521,16 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 				resp.Text += evt.Delta
 				emit(out, StreamEvent{Kind: StreamText, TextDelta: evt.Delta})
 			}
-		case "response.reasoning.delta", "response.reasoning_summary.delta":
+		case
+			// Current Responses API reasoning event names (gpt-5 reasoning
+			// variants, o3, o4 family). Names have shifted across model
+			// generations so we handle the family of variants the upstream
+			// has shipped — extra unknown ones get ignored silently below.
+			"response.reasoning.delta",
+			"response.reasoning_summary.delta",
+			"response.reasoning_summary_text.delta",
+			"response.reasoning_summary_part.delta",
+			"response.reasoning_text.delta":
 			if evt.Delta != "" {
 				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: evt.Delta})
 			}
