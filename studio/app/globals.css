@@ -154,12 +154,18 @@
    * Scoped to touch devices via @media (pointer: coarse) so desktop UIs
    * are free to use text-sm / text-xs on inputs without overriding —
    * iPhones, iPads, and Android stay locked at 16px+, mice/trackpads
-   * (laptops, desktops) honor whatever Tailwind class wins. */
+   * (laptops, desktops) honor whatever Tailwind class wins.
+   *
+   * `!important` is required: without it any Tailwind utility on the
+   * input (text-sm, text-xs, text-[13px], etc.) outranks this element
+   * selector by class specificity (0-1-0 > 0-0-1) and iOS slips back
+   * into auto-zoom-on-focus mode. The whole point of this rule is to
+   * be unconditional on touch devices, so !important matches intent. */
   @media (pointer: coarse) {
     input,
     textarea,
     select {
-      font-size: max(16px, 1rem);
+      font-size: max(16px, 1rem) !important;
     }
   }
 
