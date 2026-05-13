@@ -94,7 +94,7 @@ export function ObjectViewer({
             {item ? getViewerKindLabel(item) : ""}
           </DialogDescription>
           <AnimatePresence mode="wait">
-            {item ? <ViewerBody key={getViewerKey(item)} item={item} onClose={onClose} /> : null}
+            {item ? <ViewerBody key={getViewerKey(item)} item={item} /> : null}
           </AnimatePresence>
         </DialogContent>
       </Dialog>
@@ -109,7 +109,7 @@ export function ObjectViewer({
         </DrawerDescription>
         <AnimatePresence mode="wait">
           {item ? (
-            <ViewerBody key={getViewerKey(item)} item={item} onClose={onClose} layout="drawer" />
+            <ViewerBody key={getViewerKey(item)} item={item} layout="drawer" />
           ) : null}
         </AnimatePresence>
       </DrawerContent>
@@ -151,13 +151,15 @@ function getViewerKindLabel(item: DashboardItem): string {
 
 function ViewerBody({
   item,
-  onClose,
   layout = "dialog",
 }: {
   item: DashboardItem;
-  onClose: () => void;
   layout?: "dialog" | "drawer";
 }) {
+  // No `onClose` here — Dialog/Drawer wrappers in ObjectViewer drive the
+  // close action via their own onOpenChange. The X icon that used to
+  // sit in the header moved out when the seeded-session CTA rewrite
+  // shifted the close affordance to the modal chrome.
   return (
     <motion.div
       initial={{ opacity: 0, y: layout === "drawer" ? 0 : 4 }}

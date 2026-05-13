@@ -6,7 +6,11 @@ FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+# BuildKit cache mount on the pnpm content-addressable store. Tarballs
+# from npmjs.org survive across builds; only the unpacked node_modules/
+# is fresh per build. Speeds up rebuilds where deps haven't changed.
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS build
 WORKDIR /app
@@ -35,7 +39,13 @@ ENV NEXT_PUBLIC_CORE_URL=$NEXT_PUBLIC_CORE_URL \
     NEXT_PUBLIC_PREVIEW_URL=$NEXT_PUBLIC_PREVIEW_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     CI=true
-RUN pnpm build
+# BuildKit cache mount on Next.js's incremental compile cache. Without
+# this, every build does a cold webpack pass — Railway logs the
+# "No build cache found. Please configure build caching" warning to
+# advertise the fix. With the mount, only-changed-routes rebuild and
+# the steady-state build drops to ~10s on Studio's surface area.
+RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
+    pnpm build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
