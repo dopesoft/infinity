@@ -48,7 +48,6 @@ import { useGlobalModel } from "@/lib/use-model";
 import {
   VENDORS,
   findVendor,
-  resolveModelEntry,
   type VendorEntry,
   type VendorId,
 } from "@/lib/models-catalog";
