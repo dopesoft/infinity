@@ -637,7 +637,7 @@ function OAuthConnectBlock() {
         <div className="flex items-center gap-2">
           <PlugZap className="size-3.5 text-muted-foreground" aria-hidden />
           <span className="text-xs font-semibold tracking-tight">
-            ChatGPT subscription connect
+            ChatGPT (Plan) connect
           </span>
         </div>
         {loading ? (

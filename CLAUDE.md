@@ -151,6 +151,42 @@ Full diagram in [`ARCHITECTURE.md` §14](ARCHITECTURE.md#14-deployment). Operati
 - **Never commit `.env`.** Already gitignored. Set production vars via `railway variables --service <name> --set KEY=VALUE`.
 - **Don't run git or deployment commands unless the user explicitly asks.** Inherits from the global rules.
 
+### Railway CLI — use it for debugging, do NOT speculate
+
+**You have full `railway` CLI access from this repo.** Project: `Infinity` · environment: `production`. When a production service is misbehaving (timeouts, blank metrics, weird behaviour) — *check Railway directly before guessing*. Do not write "you should check the Deployments tab" or "looks like it might be sleeping" — pull the data yourself.
+
+Standard debug recipe when a service is acting up:
+
+```bash
+railway status                                 # confirm project/env/service
+railway logs --service <name> --lines 200 -d   # last 200 lines of DEPLOY logs (runtime)
+railway logs --service <name> --lines 200 -b   # BUILD logs (Dockerfile failures)
+railway logs --service <name> --http           # HTTP request/response logs
+railway deployment list --service <name>       # recent deploys, SUCCESS / FAILED / REMOVED
+railway variables --service <name> --kv        # env var NAMES (the values are secret — never paste back in responses)
+```
+
+Useful refinements:
+- `-f "@level:error"` or `-f "context deadline"` — Railway log filter syntax (text + `@level:` selectors).
+- `--json` — structured output when you need timestamps + attributes for analysis.
+- `--lines N` disables streaming (one-shot fetch); without it, the command streams forever.
+- Logs are bound to a **deployment ID**. If `--lines` returns only "Starting Container" the container booted then died before producing app stdout — that's a crash, not silence. Look at the build logs and the env vars next.
+
+Allowed without asking:
+- `railway logs ...` (any flag)
+- `railway status`, `railway service`, `railway deployment list`
+- `railway variables --service X --kv` (treat the values as opaque secrets — never echo them; redact when summarising)
+- `railway run <cmd>` (executes locally with prod env injected — fine for read-only diagnostics like `curl honcho.railway.internal/health`)
+
+Always require explicit user authorisation:
+- `railway deployment redeploy` / `railway up` — those are deploys, blocked by the same global rule that gates `git push`.
+- `railway variables --set KEY=VALUE` — already pre-authorised per memory (`feedback_railway_env_authorized.md`), but never set keys whose names look secret unless the user told you the value verbatim.
+- `railway down`, deleting services, deleting volumes — destructive, ask first.
+
+Redaction discipline: when you paste log lines back to the user, scrub anything that looks like a JWT, API key, Bearer token, full DSN, or PII. Names of env vars (left side of `=`) are fine to surface. Values are not. The `--kv` view we use is for *understanding what's configured*, not for echoing the values to anywhere.
+
+**Failure mode to avoid:** writing a response that ends with "check your Deployments tab" or "looks like it might be X" when one `railway logs --lines 200 -d` would have answered the question. The user has explicitly empowered you to run this CLI — guessing instead is the worst-of-both-worlds option.
+
 ## Common gotchas
 
 - **`pnpm-workspace.yaml` is sensitive on pnpm 11.** It must contain `allowBuilds: { unrs-resolver: false }` or installs fail with `ERR_PNPM_IGNORED_BUILDS`. Don't strip that key.

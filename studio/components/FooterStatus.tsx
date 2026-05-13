@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchCoreStatus, type CoreStatus } from "@/lib/api";
 import { formatUptime, getBootedAt } from "@/lib/uptime";
-import { findVendor, resolveModelEntry } from "@/lib/models-catalog";
+import { findVendor, resolveModelEntry, VENDORS } from "@/lib/models-catalog";
 
 const dotClass = {
   connected: "bg-success",
@@ -61,15 +61,34 @@ export function FooterStatus() {
         : "core offline";
 
   // Resolve raw provider id + model id to the friendly labels owned by the
-  // catalog (Settings + ModelChip use the same source of truth). Falls back
-  // to whatever Core returned when an id isn't catalogued — better an ugly
-  // slug than a missing chip.
-  const entry = status?.model ? resolveModelEntry(status.model) : null;
-  const vendorLabel = entry?.vendor.label
+  // catalog (Settings + ModelChip use the same source of truth).
+  //
+  // CRITICAL: Core's reported `provider` is the source of truth — `openai`
+  // and `openai_oauth` share most model ids (gpt-5.4-mini etc.), so a naive
+  // resolveModelEntry() walk picks `openai` (API key) first and mislabels
+  // a real ChatGPT-subscription turn. Look up the vendor by `status.provider`
+  // first, then look up the model inside THAT vendor's list. Only fall back
+  // to the catalog-wide walk when the provider id is missing or unknown.
+  const vendor = status?.provider
+    ? VENDORS.find((v) => v.id === status.provider) ?? null
+    : null;
+  const modelFromVendor = vendor && status?.model
+    ? vendor.models.find((m) => m.id === status.model) ?? null
+    : null;
+  const fallbackEntry =
+    !vendor && status?.model ? resolveModelEntry(status.model) : null;
+
+  const vendorLabel =
+    vendor?.label
+    ?? fallbackEntry?.vendor.label
     ?? (status?.provider ? findVendor(status.provider).label : null)
     ?? status?.provider
     ?? "—";
-  const modelLabel = entry?.model.label ?? status?.model ?? "—";
+  const modelLabel =
+    modelFromVendor?.label
+    ?? fallbackEntry?.model.label
+    ?? status?.model
+    ?? "—";
 
   const toolCount = status?.tools?.length ?? 0;
   const sep = <span aria-hidden className="text-border">|</span>;

@@ -123,7 +123,7 @@ export const VENDORS: VendorEntry[] = [
   },
   {
     id: "openai",
-    label: "OpenAI (API key)",
+    label: "ChatGPT (API Key)",
     keyEnv: "OPENAI_API_KEY",
     auth: "api_key",
     models: [
@@ -307,7 +307,7 @@ export const VENDORS: VendorEntry[] = [
   },
   {
     id: "openai_oauth",
-    label: "OpenAI (ChatGPT subscription)",
+    label: "ChatGPT (Plan)",
     auth: "oauth",
     models: [
       {
