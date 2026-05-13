@@ -142,9 +142,22 @@ export function useVoice(sessionId: string | undefined) {
         onToolCall: async (call) => {
           let input: Record<string, unknown> = {};
           try {
-            input = JSON.parse(call.arguments) as Record<string, unknown>;
-          } catch {
-            input = {};
+            input = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
+          } catch (err) {
+            // Don't silently run with empty input — the boss should see
+            // this in the console + the model gets a real signal back.
+            console.warn("voice: failed to parse tool arguments", {
+              tool: call.name,
+              raw: call.arguments,
+              err,
+            });
+            clientRef.current?.submitToolResult(
+              call.callId,
+              `tool ${call.name} call failed: invalid JSON arguments — ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return;
           }
           const result = await runVoiceTool({
             sessionId,
@@ -152,10 +165,14 @@ export function useVoice(sessionId: string | undefined) {
             name: call.name,
             input,
           });
+          // Guard against the user ending voice while the tool was
+          // running — submitting on a closed data channel is a no-op
+          // inside the client, but bailing early saves a render.
+          if (!clientRef.current) return;
           const output = "error" in result
             ? `tool ${call.name} failed: ${result.error}`
             : result.output;
-          clientRef.current?.submitToolResult(call.callId, output);
+          clientRef.current.submitToolResult(call.callId, output);
         },
       },
     });

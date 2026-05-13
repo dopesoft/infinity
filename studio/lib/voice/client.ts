@@ -93,13 +93,50 @@ export class VoiceClient {
     this.pc = pc;
 
     // Outbound audio from OpenAI lands on this <audio> element.
-    const audioEl = new Audio();
+    //
+    // iOS Safari quirks worth knowing about here:
+    //   - autoplay-blocking is bypassed by the user gesture that started
+    //     the session (the mic tap), but only if the element is in the
+    //     DOM. A detached `new Audio()` plays no sound. Append it,
+    //     hidden but live.
+    //   - `playsInline` is required to keep audio in-page on iPhone
+    //     instead of opening a fullscreen player.
+    const audioEl = document.createElement("audio");
     audioEl.autoplay = true;
+    // `playsInline` lives on the DOM element only on TS lib >= dom.iterable
+    // with a recent target; set via attribute for ironclad iOS coverage.
+    audioEl.setAttribute("playsinline", "true");
+    audioEl.setAttribute("aria-hidden", "true");
+    audioEl.style.position = "fixed";
+    audioEl.style.width = "0";
+    audioEl.style.height = "0";
+    audioEl.style.opacity = "0";
+    audioEl.style.pointerEvents = "none";
+    document.body.appendChild(audioEl);
     this.audioEl = audioEl;
     pc.ontrack = (e) => {
       const stream = e.streams[0];
       audioEl.srcObject = stream;
+      // Some browsers race the metadata; call play() explicitly after
+      // the gesture. Swallow the "interrupted by new load" rejection.
+      audioEl.play().catch(() => undefined);
       this.attachOutLevelMeter(stream);
+    };
+
+    // Surface connection failures so the UI doesn't sit on "connecting"
+    // forever. NAT-restricted networks without TURN will land here.
+    pc.oniceconnectionstatechange = () => {
+      const st = pc.iceConnectionState;
+      if (st === "failed" || st === "disconnected") {
+        this.args.callbacks?.onError?.(`ICE ${st} — network blocked WebRTC`);
+        this.args.callbacks?.onStatus?.("error", `ice-${st}`);
+      }
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed") {
+        this.args.callbacks?.onError?.("Peer connection failed");
+        this.args.callbacks?.onStatus?.("error", "pc-failed");
+      }
     };
 
     // Send local mic.
@@ -125,6 +162,10 @@ export class VoiceClient {
         headers: {
           Authorization: `Bearer ${this.args.clientSecret}`,
           "Content-Type": "application/sdp",
+          // Some realtime revisions still gate on this beta header even
+          // though they ignore it during normal operation. Harmless once
+          // the family fully GA's.
+          "OpenAI-Beta": "realtime=v1",
         },
         body: offer.sdp,
       });
@@ -189,8 +230,9 @@ export class VoiceClient {
       try {
         this.audioEl.pause();
         this.audioEl.srcObject = null;
+        if (this.audioEl.parentNode) this.audioEl.parentNode.removeChild(this.audioEl);
       } catch {
-        // intentionally swallow
+        // intentionally swallow — DOM detach races on close are routine
       }
     }
     if (this.micLevelTimer) {

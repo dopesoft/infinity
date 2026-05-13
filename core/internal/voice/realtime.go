@@ -144,30 +144,46 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	}
 	instructions += britishAccentLine
 
+	// Newer Realtime API (gpt-realtime family) nests audio config under
+	// `audio.input` and `audio.output`. The old flat keys
+	// (input_audio_transcription, turn_detection, voice at top level)
+	// return 400 "unknown_parameter". Mirror the supported shape so the
+	// mint succeeds and the browser can still drive barge-in + captions.
+	// We deliberately don't send `output_modalities` here. The same revision
+	// that nests audio config under `audio.*` also rejects the legacy
+	// top-level modalities key on some surfaces. Realtime defaults to audio
+	// output anyway when an audio.output block is present.
 	session := map[string]any{
 		"type":         "realtime",
 		"model":        m.model,
-		"voice":        m.voice,
 		"instructions": instructions,
-		// Server-side VAD drives barge-in: the browser pauses the
-		// audio element on `input_audio_buffer.speech_started` and the
-		// model truncates its own response. `create_response: true`
-		// makes the model speak back automatically after the user
-		// stops, so we don't have to issue manual `response.create`.
-		"turn_detection": map[string]any{
-			"type":              "server_vad",
-			"create_response":   true,
-			"threshold":         0.5,
-			"prefix_padding_ms": 300,
-			"silence_duration_ms": 500,
+		"tool_choice":  "auto",
+		"audio": map[string]any{
+			"input": map[string]any{
+				// Server-side VAD drives barge-in: the browser pauses
+				// the audio element on
+				// `input_audio_buffer.speech_started` and the model
+				// truncates its own response. `create_response: true`
+				// makes the model speak back automatically after the
+				// user stops, so we don't have to issue manual
+				// response.create from the client.
+				"turn_detection": map[string]any{
+					"type":                "server_vad",
+					"create_response":     true,
+					"threshold":           0.5,
+					"prefix_padding_ms":   300,
+					"silence_duration_ms": 500,
+				},
+				// Captions: ask for live transcription so Studio can
+				// render the rolling caption strip.
+				"transcription": map[string]any{
+					"model": "whisper-1",
+				},
+			},
+			"output": map[string]any{
+				"voice": m.voice,
+			},
 		},
-		// Captions: ask for live transcription of both sides so Studio
-		// can render the rolling caption strip.
-		"input_audio_transcription": map[string]any{
-			"model": "whisper-1",
-		},
-		"output_modalities": []string{"audio"},
-		"tool_choice":       "auto",
 	}
 
 	if len(req.Tools) > 0 {

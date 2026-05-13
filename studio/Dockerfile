@@ -9,7 +9,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # BuildKit cache mount on the pnpm content-addressable store. Tarballs
 # from npmjs.org survive across builds; only the unpacked node_modules/
 # is fresh per build. Speeds up rebuilds where deps haven't changed.
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+#
+# Railway's Metal builder requires the mount id to be namespaced with
+# `s/<service id>-<target path>` so caches don't leak between services.
+# studio service id: 0254c607-6d6e-4ca6-94a3-352ecb80bce7 (per
+# `railway variables --service studio --kv | grep RAILWAY_SERVICE_ID`).
+RUN --mount=type=cache,id=s/0254c607-6d6e-4ca6-94a3-352ecb80bce7-/root/.local/share/pnpm/store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS build
@@ -44,7 +49,8 @@ ENV NEXT_PUBLIC_CORE_URL=$NEXT_PUBLIC_CORE_URL \
 # "No build cache found. Please configure build caching" warning to
 # advertise the fix. With the mount, only-changed-routes rebuild and
 # the steady-state build drops to ~10s on Studio's surface area.
-RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
+# Same Railway-mandated id namespace as the pnpm-store mount above.
+RUN --mount=type=cache,id=s/0254c607-6d6e-4ca6-94a3-352ecb80bce7-/app/.next/cache,target=/app/.next/cache \
     pnpm build
 
 FROM node:22-alpine AS runner

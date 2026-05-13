@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -76,11 +77,20 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 	// tool surface; we still inject the catalog block for parity (it
 	// describes the toolkit in plain English which helps voice routing).
 	systemPrompt := s.loop.SystemPrompt()
-	if mem := buildMemoryPrefix(r.Context(), s.loop, sessionID, body.Query); mem != "" {
+	// Memory retrieval needs a non-empty query to embed against. When
+	// the boss taps mic before saying anything, fall back to a generic
+	// seed so the boss-profile primer + recently-touched memories still
+	// flow into instructions. Voice is going to ask about *something*;
+	// better to have context loaded than none.
+	memQuery := strings.TrimSpace(body.Query)
+	if memQuery == "" {
+		memQuery = "voice session opening — surface recent context, active projects, and any in-flight commitments"
+	}
+	if mem := buildMemoryPrefix(r.Context(), s.loop, sessionID, memQuery); mem != "" {
 		systemPrompt = mem + "\n\n" + systemPrompt
 	}
 	if sk := s.loop.Skills(); sk != nil {
-		if skillsPrefix := sk.MatchAndPrefix(body.Query, 5); skillsPrefix != "" {
+		if skillsPrefix := sk.MatchAndPrefix(memQuery, 5); skillsPrefix != "" {
 			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
@@ -203,7 +213,17 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// Voice tools can be slow (claude_code__bash, long-running deploys).
+	// Cap at five minutes so the realtime session doesn't expire silently
+	// waiting for a result. Override via INFINITY_VOICE_TOOL_TIMEOUT
+	// (Go duration string, e.g. "10m").
+	toolTimeout := 5 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("INFINITY_VOICE_TOOL_TIMEOUT")); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+			toolTimeout = d
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), toolTimeout)
 	defer cancel()
 	output, err := registry.Execute(ctx, llm.ToolCall{ID: callID, Name: name, Input: body.Input})
 	isErr := false
