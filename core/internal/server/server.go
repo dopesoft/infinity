@@ -8,6 +8,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
@@ -72,6 +73,11 @@ type Config struct {
 	// a restart. Nil-safe — when absent, /api/settings/provider returns
 	// 503 and the loop sticks with its boot provider.
 	LLMRegistry *llm.Registry
+	// Connectors caches the live picture of Composio connected accounts
+	// + boss aliases. Nil-safe: when unset, the alias endpoints return
+	// 503 and the catalog block falls back to its toolkit-summary form
+	// without account-id awareness.
+	Connectors *connectors.Cache
 }
 
 type Server struct {
@@ -87,8 +93,9 @@ type Server struct {
 	namer     *sessions.Namer
 	auth      *auth.Verifier
 	settings  *settings.Store
-	llmReg    *llm.Registry
-	started   time.Time
+	llmReg     *llm.Registry
+	connectors *connectors.Cache
+	started    time.Time
 
 	intentDet *intent.Detector
 	intentDB  *intent.Store
@@ -128,6 +135,7 @@ func New(cfg Config) *Server {
 		auth:           cfg.Auth,
 		settings:       settings.New(cfg.Pool),
 		llmReg:         cfg.LLMRegistry,
+		connectors:     cfg.Connectors,
 		started:        time.Now(),
 		turns:          make(map[string]*turnState),
 		intentDet:      cfg.IntentDetector,
@@ -230,6 +238,15 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/openai/exchange", s.handleOpenAIOAuthExchange)
 	mux.HandleFunc("/api/auth/openai/status", s.handleOpenAIOAuthStatus)
 	mux.HandleFunc("/api/auth/openai/disconnect", s.handleOpenAIOAuthDisconnect)
+
+	// Composio Connectors — proxy endpoints for the Studio /connectors page.
+	// Key never leaves core; browser sees Composio JSON shape directly.
+	mux.HandleFunc("/api/connectors/composio/toolkits", s.handleComposioToolkits)
+	mux.HandleFunc("/api/connectors/composio/connected", s.handleComposioConnected)
+	mux.HandleFunc("/api/connectors/composio/connect", s.handleComposioConnect)
+	mux.HandleFunc("/api/connectors/composio/accounts/", s.handleComposioAccount)
+	mux.HandleFunc("/api/connectors/composio/aliases", s.handleComposioAliases)
+	mux.HandleFunc("/api/connectors/composio/cache", s.handleComposioCacheStatus)
 }
 
 func (s *Server) Start() error {

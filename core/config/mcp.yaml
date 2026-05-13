@@ -60,6 +60,35 @@ servers:
     auth: bearer
     auth_token_env: GITHUB_MCP_TOKEN
 
+  # Composio — unified MCP gateway to ~250 SaaS integrations (Gmail, Slack,
+  # Notion, Linear, HubSpot, Stripe, …). Composio runs the per-vendor OAuth
+  # apps and token vault on their side; Infinity just consumes the unified
+  # MCP. Tools register as composio__<TOOLKIT>_<VERB>, e.g.
+  # composio__GITHUB_CREATE_ISSUE, composio__GMAIL_SEND_EMAIL.
+  #
+  # AUTH NOTE: Composio's MCP gateway authenticates with the consumer key
+  # via `x-consumer-api-key: <raw>` — NOT `Authorization: Bearer`. The
+  # workspace admin API key (used for the catalog REST proxy in
+  # connectors_api.go) is a separate credential and goes in
+  # COMPOSIO_ADMIN_API_KEY when you want the /connectors browse tab to work.
+  #
+  # Why Composio instead of registering every OAuth app ourselves:
+  #   - Skips 6+ months of vendor-by-vendor OAuth app registration
+  #   - Google's app-verification fee ($15-75k for restricted scopes) is theirs, not ours
+  #   - Their catalog grows — we get new integrations for free
+  #   - Multi-tenant story is shipped: pass per-user entity_id and they handle the rest
+  #
+  # Setup:
+  #   railway variables --service core --set COMPOSIO_API_KEY=ck_...   (consumer key, for MCP)
+  #   railway variables --service core --set COMPOSIO_ADMIN_API_KEY=... (workspace key, for catalog REST)
+  - name: composio
+    transport: sse
+    enabled: true
+    url: https://connect.composio.dev/mcp
+    auth: header
+    auth_header_name: x-consumer-api-key
+    auth_token_env: COMPOSIO_API_KEY
+
   # Tavily MCP (uncomment + set TAVILY_API_KEY)
   # - name: tavily
   #   transport: sse

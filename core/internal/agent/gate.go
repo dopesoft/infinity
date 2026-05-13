@@ -76,6 +76,15 @@ func IsGitHubTool(name string) bool {
 	return strings.HasPrefix(name, "github__")
 }
 
+// IsComposioTool reports whether the tool name belongs to the Composio
+// unified gateway. Composio names tools as `composio__<TOOLKIT>_<VERB>`
+// (e.g. composio__GITHUB_CREATE_ISSUE, composio__GMAIL_SEND_EMAIL), so a
+// single gate can apply pattern-based policy across every toolkit Composio
+// fronts. See proactive.ComposioGate.
+func IsComposioTool(name string) bool {
+	return strings.HasPrefix(name, "composio__")
+}
+
 // GateChain composes multiple ToolGate implementations into one. Each call
 // to Authorize walks the chain in order: the first gate that returns a
 // non-allow decision wins. Gates that don't recognise the tool name MUST

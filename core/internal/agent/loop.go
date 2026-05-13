@@ -10,11 +10,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
 )
@@ -50,6 +54,21 @@ type Session struct {
 	lastOutputTokens  int
 	totalInputTokens  int
 	totalOutputTokens int
+
+	// Active is the per-session whitelist of tools whose full schemas are
+	// shipped to the LLM each turn. Everything else lives in the dormant
+	// catalog (one line in the system prompt) and is loadable on demand
+	// via the load_tools native tool. See tools/active_set.go for the
+	// full semantics including TTL decay and pinning. Initialised in
+	// GetOrCreateSession with the curated default loadout.
+	Active *tools.ActiveSet
+
+	// SystemPromptOverride replaces the loop's base soul prompt for this
+	// session only. The memory prefix + skills prefix + tool catalog still
+	// stack above it — only the constant "you are Jarvis" portion is
+	// swapped. Used by the delegate tool to apply a persona to a child
+	// session without forking the whole agent loop.
+	SystemPromptOverride string
 }
 
 func (s *Session) Append(m llm.Message) {
@@ -67,6 +86,17 @@ func (s *Session) Snapshot() []llm.Message {
 	out := make([]llm.Message, len(s.Messages))
 	copy(out, s.Messages)
 	return out
+}
+
+// ReplaceMessages atomically swaps the session's message history. Used
+// by the conversation compactor to drop older turns after they've been
+// promoted to mem_observations. The caller is responsible for ensuring
+// the new list is coherent (e.g. doesn't strand a tool result without
+// its preceding call).
+func (s *Session) ReplaceMessages(next []llm.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Messages = next
 }
 
 // RecordUsage updates the session's API-reported token counters after a
@@ -125,6 +155,15 @@ type SessionNamer interface {
 	MaybeName(sessionID, userMsg, assistantMsg string)
 }
 
+// AccountResolver injects the "which third-party accounts are connected"
+// system-prompt block. Implementation lives in core/internal/connectors;
+// declared here to keep the agent package free of pgx/http deps for
+// that subsystem. Nil-safe — when unset the loop simply doesn't add
+// the block and the model loses awareness of multi-account routing.
+type AccountResolver interface {
+	SystemPromptBlock() string
+}
+
 type Loop struct {
 	// providerMu guards llmProvider for hot-swap from Settings PUTs. We
 	// take a Read-lock on every Stream call to grab the current provider,
@@ -133,18 +172,80 @@ type Loop struct {
 	providerMu  sync.RWMutex
 	llmProvider llm.Provider
 
-	tools  *tools.Registry
-	memory MemoryProvider
-	hooks  HookEmitter
-	skills SkillMatcher
-	gate   ToolGate
-	namer  SessionNamer
+	tools    *tools.Registry
+	memory   MemoryProvider
+	hooks    HookEmitter
+	skills   SkillMatcher
+	gate     ToolGate
+	namer    SessionNamer
+	accounts AccountResolver
 
 	mu       sync.Mutex
 	sessions map[string]*Session
 
 	systemPrompt      string
 	maxToolIterations int
+
+	// compactor handles automatic conversation compaction when a turn's
+	// reported input_tokens crosses the threshold. Nil-safe: when unset
+	// (no provider/pool wired) the loop simply never auto-compacts and
+	// the model can still trigger compaction manually via the
+	// compact_context tool. Set via SetCompactor after construction.
+	compactorMu sync.RWMutex
+	compactor   *memory.ConversationCompactor
+
+	// autoCompactThreshold is the input-token count above which a turn's
+	// successful completion fires a background compaction pass. Default
+	// 120_000 (roughly 60% of a 200K window) so we compact before the
+	// next turn starts to bloat further. Tune via INFINITY_AUTO_COMPACT_AT.
+	autoCompactThreshold int
+}
+
+// SetCompactor installs the conversation compactor used by the auto-
+// compact path. Safe to call after agent.New() since the loop doesn't
+// touch the compactor until the first turn completes.
+func (l *Loop) SetCompactor(c *memory.ConversationCompactor) {
+	l.compactorMu.Lock()
+	defer l.compactorMu.Unlock()
+	l.compactor = c
+}
+
+// maybeAutoCompact fires a background compaction pass when the most
+// recent turn's input-token count crossed the configured threshold AND
+// a compactor is wired AND the session has enough history to bother. Runs
+// async (detached context) so the user-visible response isn't delayed.
+//
+// Concurrency: ReplaceMessages takes the session's mutex, so a turn that
+// starts before the goroutine finishes will see either the pre- or
+// post-compaction message list — never a torn intermediate state.
+func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
+	if l.autoCompactThreshold <= 0 || lastInputTokens < l.autoCompactThreshold {
+		return
+	}
+	l.compactorMu.RLock()
+	c := l.compactor
+	l.compactorMu.RUnlock()
+	if c == nil {
+		return
+	}
+	go func() {
+		// Detached context with a generous deadline — compaction is
+		// network-bound on the summariser call but should never run
+		// longer than a minute or two.
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		newMsgs, res, err := c.Compact(ctx, s.ID, s.Snapshot(), &memory.CompactionConfig{})
+		if err != nil {
+			log.Printf("auto-compact: session=%s err=%v", s.ID, err)
+			return
+		}
+		if res.CompactedTurns == 0 {
+			return
+		}
+		s.ReplaceMessages(newMsgs)
+		log.Printf("auto-compact: session=%s compacted %d turns, kept %d, %d observations promoted",
+			s.ID, res.CompactedTurns, res.KeptTurns, len(res.ObservationIDs))
+	}()
 }
 
 type Config struct {
@@ -155,6 +256,7 @@ type Config struct {
 	Skills            SkillMatcher
 	Gate              ToolGate
 	Namer             SessionNamer
+	Accounts          AccountResolver
 	SystemPrompt      string
 	MaxToolIterations int
 }
@@ -172,17 +274,25 @@ func New(cfg Config) *Loop {
 	if cfg.Gate == nil {
 		cfg.Gate = AllowAll{}
 	}
+	threshold := 120_000
+	if v := strings.TrimSpace(os.Getenv("INFINITY_AUTO_COMPACT_AT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			threshold = n
+		}
+	}
 	return &Loop{
-		llmProvider:       cfg.LLM,
-		tools:             cfg.Tools,
-		memory:            cfg.Memory,
-		hooks:             cfg.Hooks,
-		skills:            cfg.Skills,
-		gate:              cfg.Gate,
-		namer:             cfg.Namer,
-		systemPrompt:      cfg.SystemPrompt,
-		maxToolIterations: cfg.MaxToolIterations,
-		sessions:          make(map[string]*Session),
+		llmProvider:          cfg.LLM,
+		tools:                cfg.Tools,
+		memory:               cfg.Memory,
+		hooks:                cfg.Hooks,
+		skills:               cfg.Skills,
+		gate:                 cfg.Gate,
+		namer:                cfg.Namer,
+		accounts:             cfg.Accounts,
+		systemPrompt:         cfg.SystemPrompt,
+		maxToolIterations:    cfg.MaxToolIterations,
+		sessions:             make(map[string]*Session),
+		autoCompactThreshold: threshold,
 	}
 }
 
@@ -221,9 +331,18 @@ func (l *Loop) GetOrCreateSession(id string) *Session {
 	}
 	s, ok := l.sessions[id]
 	if !ok {
-		s = &Session{ID: id, StartedAt: time.Now().UTC()}
+		s = &Session{
+			ID:        id,
+			StartedAt: time.Now().UTC(),
+			Active:    tools.NewDefaultActiveSet(),
+		}
 		l.sessions[id] = s
 		l.fireHook("SessionStart", s.ID, s.Project, "session started", map[string]any{"id": s.ID})
+	}
+	if s.Active == nil {
+		// Defensive — older sessions reattached after a process restart
+		// might not have an ActiveSet yet. Backfill with the default.
+		s.Active = tools.NewDefaultActiveSet()
 	}
 	return s
 }
@@ -311,6 +430,9 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	l.fireHook("UserPromptSubmit", s.ID, s.Project, userMsg, nil)
 
 	systemPrompt := l.systemPrompt
+	if override := strings.TrimSpace(s.SystemPromptOverride); override != "" {
+		systemPrompt = override
+	}
 	if l.memory != nil {
 		prefix, err := l.memory.BuildSystemPrefix(ctx, s.ID, userMsg)
 		if err == nil && prefix != "" {
@@ -322,8 +444,28 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
+	// Prepend the dormant tool catalog so the model knows what exists
+	// even when it doesn't have the schema in hand. Cheap (~30 tokens
+	// per entry) and unlocks the tool_search → load_tools loop.
+	if catalog := buildToolCatalogBlock(l.tools, s.Active); catalog != "" {
+		systemPrompt = catalog + "\n\n" + systemPrompt
+	}
+	// Prepend the connected-accounts overlay so the model can route to
+	// the right OAuth account when a tool has multi-account support
+	// (e.g. four Gmail mailboxes). The block lists per-toolkit
+	// alias → account_id mappings; the model picks based on the user's
+	// stated intent.
+	if l.accounts != nil {
+		if accountsBlock := l.accounts.SystemPromptBlock(); accountsBlock != "" {
+			systemPrompt = accountsBlock + "\n\n" + systemPrompt
+		}
+	}
 
 	for iter := 0; iter < l.maxToolIterations; iter++ {
+		// Age out TTL'd entries before the next LLM call — keeps an
+		// exploratory `load_tools` from squatting once the relevant work
+		// is done.
+		s.Active.DecayTTL()
 		select {
 		case <-ctx.Done():
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
@@ -346,9 +488,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// swaps mid-turn will affect the *next* iteration, not this one,
 		// keeping the in-flight stream coherent.
 		provider := l.Provider()
+		// Only ship schemas for tools currently in the session's active
+		// set — the dormant long tail lives in the system-prompt catalog
+		// block and surfaces via tool_search. This is the core Phase-1
+		// context-budget win.
+		toolDefs := l.tools.DefinitionsFor(s.Active.Names())
 		go func() {
 			defer close(streamDone)
-			resp, streamErr = provider.Stream(ctx, model, systemPrompt, s.Snapshot(), l.tools.Definitions(), llmEvents)
+			resp, streamErr = provider.Stream(ctx, model, systemPrompt, s.Snapshot(), toolDefs, llmEvents)
 			close(llmEvents)
 		}()
 
@@ -402,6 +549,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			if l.namer != nil {
 				l.namer.MaybeName(s.ID, userMsg, resp.Text)
 			}
+			// Auto-compaction: if this turn's reported input crossed the
+			// threshold, run compaction in the background so the *next*
+			// turn lands on a tighter buffer. We don't block the return
+			// because the user's response has already streamed.
+			l.maybeAutoCompact(s, resp.Usage.Input)
 			return nil
 		}
 
@@ -443,7 +595,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 			switch {
 			case decision.Allow:
-				output, execErr = l.tools.Execute(ctx, tc)
+				// Inject the session's ActiveSet so session-aware tools
+				// (load_tools / unload_tools / compact_context) can
+				// mutate the right session's loaded list.
+				toolCtx := tools.WithActiveSet(ctx, s.Active)
+				output, execErr = l.tools.Execute(toolCtx, tc)
 				endedAt = time.Now().UTC()
 
 			case decision.WaitForApproval && decision.ContractID != "":
@@ -464,7 +620,8 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				})
 				approved, reason := l.gate.WaitForDecision(ctx, decision.ContractID, timeout)
 				if approved {
-					output, execErr = l.tools.Execute(ctx, tc)
+					toolCtx := tools.WithActiveSet(ctx, s.Active)
+					output, execErr = l.tools.Execute(toolCtx, tc)
 				} else {
 					if reason == "" {
 						reason = "denied or expired"

@@ -29,6 +29,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
+import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { cn } from "@/lib/utils";
 import {
   disconnectOpenAIOAuth,
@@ -64,7 +65,7 @@ type SectionMeta = {
 const SECTIONS: SectionMeta[] = [
   { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
   { id: "tools", label: "Tools", description: "Native + MCP tools the agent can call", icon: Wrench },
-  { id: "mcp", label: "MCP servers", description: "Connected MCP servers + their tool exports", icon: Server },
+  { id: "mcp", label: "Connectors", description: "MCP servers + Composio integrations the agent can call", icon: Plug },
   { id: "canvas", label: "Canvas", description: "Workspace root, preview URL, auto-open", icon: LayoutPanelLeft },
 ];
 
@@ -246,7 +247,7 @@ function SectionContent({
     case "tools":
       return <ToolsSection tools={tools} />;
     case "mcp":
-      return <McpSection servers={mcp} />;
+      return <ConnectorsSection servers={mcp} />;
     case "canvas":
       return <CanvasSettings />;
   }
@@ -1024,128 +1025,6 @@ function SearchBar({
         </button>
       )}
     </div>
-  );
-}
-
-function McpSection({ servers }: { servers: MCPStatus[] }) {
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-
-  const filtered = useMemo(() => {
-    if (!q) return servers;
-    return servers.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.tools ?? []).some((t) => t.toLowerCase().includes(q)),
-    );
-  }, [servers, q]);
-
-  return (
-    <div className="space-y-3">
-      <SectionHeader
-        title={`MCP servers (${servers.length})`}
-        description="Each entry in core/config/mcp.yaml that was attempted at boot. Tap to see exported tools."
-      />
-      <SearchBar
-        value={query}
-        onChange={setQuery}
-        placeholder="Search by server or tool name…"
-      />
-      {q && (
-        <p className="text-[11px] text-muted-foreground">
-          {filtered.length} match{filtered.length === 1 ? "" : "es"}
-        </p>
-      )}
-      {servers.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No MCP servers configured. Edit <code className="font-mono">core/config/mcp.yaml</code> and restart Core.
-        </p>
-      ) : filtered.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No servers match “{query}”.</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {filtered.map((s) => (
-            <McpCard key={s.name} server={s} highlightTool={q} />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function McpCard({ server, highlightTool }: { server: MCPStatus; highlightTool?: string }) {
-  const matchedTool = Boolean(
-    highlightTool && (server.tools ?? []).some((t) => t.toLowerCase().includes(highlightTool)),
-  );
-  const [open, setOpen] = useState(false);
-  const isOpen = open || matchedTool;
-  const toolCount = server.tools?.length ?? 0;
-  return (
-    <li className="overflow-hidden rounded-md border bg-background">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/40"
-      >
-        {server.connected ? (
-          <Check className="size-3.5 shrink-0 text-success" aria-hidden />
-        ) : server.error ? (
-          <X className="size-3.5 shrink-0 text-danger" aria-hidden />
-        ) : (
-          <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        )}
-        <span className="truncate font-mono text-xs">{server.name}</span>
-        {toolCount > 0 && (
-          <Badge variant="secondary" className="h-4 shrink-0 px-1 font-mono text-[9px]">
-            {toolCount}
-          </Badge>
-        )}
-        <span className="ml-auto flex items-center gap-2">
-          <span className="hidden text-[10px] text-muted-foreground sm:inline" suppressHydrationWarning>
-            {new Date(server.tested).toLocaleTimeString()}
-          </span>
-          <ChevronDown
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform",
-              isOpen && "rotate-180",
-            )}
-            aria-hidden
-          />
-        </span>
-      </button>
-      {isOpen && (
-        <div className="space-y-2 border-t bg-muted/30 px-3 py-2.5">
-          <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-            <span className="font-mono uppercase tracking-wider">last tested</span>
-            <span suppressHydrationWarning>{new Date(server.tested).toLocaleString()}</span>
-          </div>
-          {server.error && (
-            <p className="break-words rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{server.error}</p>
-          )}
-          {toolCount > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {(server.tools ?? []).map((t) => {
-                const matches = highlightTool && t.toLowerCase().includes(highlightTool);
-                return (
-                  <Badge
-                    key={t}
-                    variant="secondary"
-                    className={cn(
-                      "font-mono text-[10px]",
-                      matches && "bg-info/15 text-info ring-1 ring-info/40",
-                    )}
-                  >
-                    {t}
-                  </Badge>
-                );
-              })}
-            </div>
-          ) : (
-            !server.error && <p className="text-[11px] text-muted-foreground">No tools exported.</p>
-          )}
-        </div>
-      )}
-    </li>
   );
 }
 

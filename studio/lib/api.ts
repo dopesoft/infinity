@@ -908,3 +908,208 @@ export async function submitMessageFeedback(
     return false;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Composio connectors
+//
+// All four calls hit core's /api/connectors/composio/* proxy so the API
+// key never leaves the server. Types are loose because Composio's response
+// shape evolves — the /connectors page reads fields defensively rather
+// than locking us to a specific schema version.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type ComposioToolkit = {
+  slug: string;
+  name?: string;
+  meta?: {
+    description?: string;
+    logo?: string;
+    categories?: Array<{ slug?: string; name?: string }>;
+  };
+  no_auth?: boolean;
+  is_local_toolkit?: boolean;
+  auth_schemes?: string[];
+};
+
+export type ComposioConnectedAccount = {
+  id: string;
+  status?: string;
+  toolkit?: { slug?: string; name?: string; logo?: string };
+  user_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  // Composio's response carries auth metadata that often includes the
+  // OAuth identity (Gmail address, Slack workspace name, GitHub login).
+  // We don't strongly type it because each toolkit puts the identity
+  // under a different path; the Studio row best-effort extracts it.
+  meta?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+};
+
+export type ComposioPage<T> = {
+  items: T[];
+  next_cursor?: string | null;
+  total_pages?: number;
+  current_page?: number;
+};
+
+// parseComposioResponse reads the proxy response defensively. The
+// happy path is JSON in both 2xx and 4xx (Composio errors are JSON,
+// our proxy mirrors them). The unhappy path is when core itself
+// hasn't deployed the route yet (Go's default mux returns
+// "404 page not found\n" as text/plain) or when Cloudflare is in
+// front and returns an HTML error page — JSON.parse on either of
+// those is what produces the cryptic "Unexpected character at
+// position 4" message. Distinguish so the user gets a useful hint.
+async function parseComposioResponse(
+  res: Response,
+  what: string,
+): Promise<{ error: string } | { value: Record<string, unknown> }> {
+  const text = await res.text();
+  if (!text) {
+    return { error: `Empty response from core (${res.status}). Endpoint may not be deployed.` };
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    // Non-JSON body — almost always means the route doesn't exist on
+    // core yet (deploy pending) or a proxy/CDN error page intercepted.
+    const sample = text.slice(0, 80).replace(/\s+/g, " ");
+    if (text.startsWith("404")) {
+      return {
+        error: `Core hasn't deployed the /api/connectors/composio/* routes yet. Push & redeploy core. (got: "${sample}")`,
+      };
+    }
+    return {
+      error: `Non-JSON response from core (${res.status}, ${what}): "${sample}". Likely a proxy or undeployed route.`,
+    };
+  }
+  if (!res.ok) {
+    const msg =
+      ((body?.error as Record<string, unknown>)?.message as string) ??
+      (body?.error as string) ??
+      `HTTP ${res.status}`;
+    return { error: msg };
+  }
+  return { value: body };
+}
+
+export async function fetchComposioToolkits(params: {
+  q?: string;
+  cursor?: string;
+  limit?: number;
+  category?: string;
+  signal?: AbortSignal;
+}): Promise<ComposioPage<ComposioToolkit> | { error: string }> {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("search", params.q);
+  if (params.cursor) qs.set("cursor", params.cursor);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.category) qs.set("category", params.category);
+  try {
+    const res = await authedFetch(
+      `/api/connectors/composio/toolkits${qs.toString() ? `?${qs}` : ""}`,
+      { signal: params.signal },
+    );
+    const body = await parseComposioResponse(res, "toolkits");
+    if ("error" in body) return body;
+    return body.value as ComposioPage<ComposioToolkit>;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+export async function fetchComposioConnected(
+  signal?: AbortSignal,
+): Promise<ComposioPage<ComposioConnectedAccount> | { error: string }> {
+  try {
+    const res = await authedFetch("/api/connectors/composio/connected", { signal });
+    const body = await parseComposioResponse(res, "connected accounts");
+    if ("error" in body) return body;
+    return body.value as ComposioPage<ComposioConnectedAccount>;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+export async function initiateComposioConnect(
+  toolkitSlug: string,
+  opts?: { userId?: string; alias?: string },
+): Promise<{ redirect_url?: string; id?: string; error?: string }> {
+  try {
+    const reqBody: Record<string, unknown> = { toolkit_slug: toolkitSlug };
+    if (opts?.userId) reqBody.user_id = opts.userId;
+    if (opts?.alias) reqBody.alias = opts.alias;
+    const res = await authedFetch("/api/connectors/composio/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      const msg =
+        ((body?.error as Record<string, unknown>)?.message as string) ??
+        (body?.error as string) ??
+        `HTTP ${res.status}`;
+      return { error: msg };
+    }
+    return {
+      redirect_url:
+        (body.redirect_url as string | undefined) ??
+        (body.redirectUrl as string | undefined) ??
+        ((body.connection_data as Record<string, unknown> | undefined)?.redirect_url as string | undefined),
+      id: body.id as string | undefined,
+    };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+export async function disconnectComposioAccount(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(
+      `/api/connectors/composio/accounts/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Aliases are the boss-assigned human labels per connected account
+// ("personal", "work", "support inbox"). Stored in infinity_meta as a
+// single JSON map keyed by Composio's account id; the agent loop reads
+// them via connectors.Cache and renders them into the per-turn system
+// prompt so the model can route by name.
+export type ComposioAliasMap = Record<string, string>;
+
+export async function fetchComposioAliases(
+  signal?: AbortSignal,
+): Promise<ComposioAliasMap> {
+  try {
+    const res = await authedFetch("/api/connectors/composio/aliases", { signal });
+    if (!res.ok) return {};
+    const body = (await res.json()) as { aliases?: ComposioAliasMap };
+    return body.aliases ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export async function setComposioAlias(
+  accountId: string,
+  alias: string,
+): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/connectors/composio/aliases", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_id: accountId, alias }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

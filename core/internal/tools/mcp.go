@@ -28,10 +28,16 @@ type MCPServerConfig struct {
 	Command      []string `yaml:"command"`
 	URL          string   `yaml:"url"`
 	URLEnv       string   `yaml:"url_env"`
-	// Auth: "bearer" | "cloudflare_access" | "" (none).
+	// Auth: "bearer" | "header" | "cloudflare_access" | "" (none).
+	//   - bearer:           Authorization: Bearer <token>
+	//   - header:           <auth_header_name>: <token>   (raw, no prefix)
+	//   - cloudflare_access: CF-Access-Client-{Id,Secret}
 	Auth string `yaml:"auth"`
-	// For auth=bearer: name of the env var holding the token.
+	// For auth=bearer / auth=header: name of the env var holding the token.
 	AuthTokenEnv string `yaml:"auth_token_env"`
+	// For auth=header: HTTP header name to attach the raw token under
+	// (e.g. "x-api-key", "x-consumer-api-key"). Required when auth=header.
+	AuthHeaderName string `yaml:"auth_header_name"`
 	// For auth=cloudflare_access: env var names for the Service Token pair.
 	CFClientIDEnv     string `yaml:"cf_client_id_env"`
 	CFClientSecretEnv string `yaml:"cf_client_secret_env"`
@@ -67,6 +73,22 @@ func (s MCPServerConfig) resolveAuthHeaders() (map[string]string, error) {
 			return nil, fmt.Errorf("auth=bearer but $%s is empty", s.AuthTokenEnv)
 		}
 		return map[string]string{"Authorization": "Bearer " + tok}, nil
+	case "header":
+		// Generic single-header auth. Composio's MCP at connect.composio.dev/mcp
+		// expects `x-consumer-api-key: <raw>`; OpenAI-compatible MCPs sometimes
+		// want `x-api-key`. Bearer mode covers the common "Authorization:
+		// Bearer ..." shape; this mode covers everything else.
+		if s.AuthTokenEnv == "" {
+			return nil, fmt.Errorf("auth=header requires auth_token_env")
+		}
+		if strings.TrimSpace(s.AuthHeaderName) == "" {
+			return nil, fmt.Errorf("auth=header requires auth_header_name")
+		}
+		tok := strings.TrimSpace(os.Getenv(s.AuthTokenEnv))
+		if tok == "" {
+			return nil, fmt.Errorf("auth=header but $%s is empty", s.AuthTokenEnv)
+		}
+		return map[string]string{s.AuthHeaderName: tok}, nil
 	case "cloudflare_access":
 		if s.CFClientIDEnv == "" || s.CFClientSecretEnv == "" {
 			return nil, fmt.Errorf("auth=cloudflare_access requires cf_client_id_env and cf_client_secret_env")
@@ -81,7 +103,7 @@ func (s MCPServerConfig) resolveAuthHeaders() (map[string]string, error) {
 			"CF-Access-Client-Secret": secret,
 		}, nil
 	default:
-		return nil, fmt.Errorf("unknown auth mode %q (want bearer | cloudflare_access)", s.Auth)
+		return nil, fmt.Errorf("unknown auth mode %q (want bearer | header | cloudflare_access)", s.Auth)
 	}
 }
 

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/dopesoft/infinity/core/config"
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/embed"
@@ -235,9 +237,28 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
+			// Connectors cache: live picture of Composio connected accounts +
+			// boss-assigned aliases. Powers the multi-account routing block
+			// the agent loop injects into its system prompt so the model
+			// can pick the right account when a tool exposes per-account
+			// `connected_account_id` parameters. Started later so the
+			// background refresh ticker is tied to the serve context.
+			var connectorsCache *connectors.Cache
+			if pool != nil {
+				connectorsCache = connectors.New(pool, func() string {
+					if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
+						return v
+					}
+					return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY"))
+				})
+			}
+
 			var loop *agent.Loop
 			if provider != nil {
 				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt, Namer: sessionNamer}
+				if connectorsCache != nil {
+					cfg.Accounts = connectorsCache
+				}
 				// Compose memory providers: Infinity's RRF searcher always
 				// runs first, Honcho's peer representation folds in second
 				// when configured. Order matters — searcher emits the boss
@@ -257,18 +278,41 @@ func serveCmd() *cobra.Command {
 					cfg.Hooks = &hooks.PipelineAdapter{P: pipeline}
 				}
 				if earlyTrust != nil {
-					// Gate chain: ClaudeCodeGate handles claude_code__* (home
-					// Mac shell/edit/write), GitHubGate handles github__* (PR
-					// opens, merges, file pushes, etc). Both share the same
-					// TrustStore so a single Trust tab approval covers either
-					// surface. Future MCPs (Gmail, Slack, Linear) just append
-					// their gate to this chain.
+					// Gate chain: per-MCP authorization policies, all sharing
+					// the same TrustStore so the boss sees a single approval
+					// queue in Studio. Order matters only for tools that match
+					// multiple gates (none today) — first non-allow decision
+					// wins.
+					//
+					//   ClaudeCodeGate → claude_code__*  (home Mac shell/edit/write)
+					//   GitHubGate     → github__*       (direct github-mcp-server)
+					//   ComposioGate   → composio__*     (Composio gateway, all SaaS
+					//                                     toolkits — pattern-based
+					//                                     write-verb detection)
 					cfg.Gate = agent.NewGateChain(
 						proactive.NewClaudeCodeGate(earlyTrust),
 						proactive.NewGitHubGate(earlyTrust),
+						proactive.NewComposioGate(earlyTrust),
 					)
 				}
 				loop = agent.New(cfg)
+				// Register the delegate + delegate_parallel sub-agent
+				// spawners now that the loop exists. They live in the
+				// agent package (need direct Loop access) but register
+				// into the same tools.Registry the loop uses, so the
+				// model sees them like any other tool.
+				registry.Register(&agent.Delegate{Loop: loop})
+				registry.Register(&agent.DelegateParallel{Loop: loop})
+				// Compaction tool: rewrites the active session's
+				// message history, folding older turns into
+				// mem_observations (which the compressor promotes to
+				// mem_memories). Auto-trigger also reads this struct
+				// via Loop.SetCompactor for the >= 80% threshold path.
+				if pool != nil && provider != nil {
+					convCompactor := memory.NewConversationCompactor(store, provider)
+					registry.Register(&agent.CompactContext{Loop: loop, Compactor: convCompactor})
+					loop.SetCompactor(convCompactor)
+				}
 			}
 
 			// Proactive engine: IntentFlow + WAL + Working Buffer + Heartbeat +
@@ -445,10 +489,19 @@ func serveCmd() *cobra.Command {
 				WorkingBuffer:  workingBuf,
 				Heartbeat:      heartbeat,
 				LLMRegistry:    llmRegistry,
+				Connectors:     connectorsCache,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
+
+			// Start the connectors cache background refresh now that the
+			// serve context exists. Synchronously primes once so the first
+			// turn after boot already sees connected-account state.
+			if connectorsCache != nil {
+				connectorsCache.Start(ctx)
+				defer connectorsCache.Stop()
+			}
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Start() }()
