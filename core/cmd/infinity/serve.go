@@ -97,7 +97,7 @@ func serveCmd() *cobra.Command {
 					// via Studio's "Connect ChatGPT" flow.
 					if provider == nil && llm.IsOpenAIOAuth() {
 						oauthStore := llm.NewOAuthStore(p)
-						provider = llm.NewOpenAIOAuth(oauthStore, os.Getenv("LLM_MODEL"))
+						provider = llm.NewOpenAIOAuth(oauthStore, llm.ModelForVendor("openai_oauth"))
 						fmt.Printf("  llm: openai_oauth provider attached (paste-flow connect via Studio)\n")
 					}
 

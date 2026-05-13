@@ -7,12 +7,52 @@ import (
 	"strings"
 )
 
+// ModelForVendor resolves the model id to hand to a provider constructor.
+// Priority: per-vendor env (LLM_MODEL_ANTHROPIC / _OPENAI / _OPENAI_OAUTH /
+// _GOOGLE) → generic LLM_MODEL if its prefix matches the vendor's family →
+// empty string (provider falls back to its built-in default).
+//
+// Why: a single LLM_MODEL env used to be blasted at every provider in
+// BuildRegistry, which meant an Anthropic model id like
+// "claude-sonnet-4-5-20250929" got stuffed into the openai_oauth provider's
+// model field. First inference call would crash or get silently routed to
+// gpt-5. Family-match guards against that and lets one env serve every
+// vendor whose id happens to match.
+func ModelForVendor(vendor string) string {
+	if v := strings.TrimSpace(os.Getenv("LLM_MODEL_" + strings.ToUpper(vendor))); v != "" {
+		return v
+	}
+	generic := strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	if generic == "" {
+		return ""
+	}
+	lower := strings.ToLower(generic)
+	switch vendor {
+	case "anthropic":
+		if strings.HasPrefix(lower, "claude-") {
+			return generic
+		}
+	case "openai", "openai_oauth":
+		// OpenAI ships gpt-* and o*-series (o1, o3, o4-mini, etc).
+		if strings.HasPrefix(lower, "gpt-") ||
+			strings.HasPrefix(lower, "o1") ||
+			strings.HasPrefix(lower, "o3") ||
+			strings.HasPrefix(lower, "o4") {
+			return generic
+		}
+	case "google":
+		if strings.HasPrefix(lower, "gemini-") {
+			return generic
+		}
+	}
+	return ""
+}
+
 func FromEnv() (Provider, error) {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
 	if provider == "" {
 		provider = "anthropic"
 	}
-	model := os.Getenv("LLM_MODEL")
 
 	switch provider {
 	case "anthropic":
@@ -20,9 +60,9 @@ func FromEnv() (Provider, error) {
 		if key == "" {
 			return nil, fmt.Errorf("ANTHROPIC_API_KEY is required for provider=anthropic")
 		}
-		return NewAnthropic(key, model), nil
+		return NewAnthropic(key, ModelForVendor("anthropic")), nil
 	case "openai":
-		return NewOpenAI(os.Getenv("OPENAI_API_KEY"), model), nil
+		return NewOpenAI(os.Getenv("OPENAI_API_KEY"), ModelForVendor("openai")), nil
 	case "openai_oauth":
 		// OAuth-backed provider needs a Postgres pool for token storage,
 		// which isn't available at this construction point. The serve
@@ -32,7 +72,7 @@ func FromEnv() (Provider, error) {
 		// migrate/consolidate commands).
 		return nil, fmt.Errorf("LLM_PROVIDER=openai_oauth requires a database pool; constructed by serve cmd after pool init")
 	case "google":
-		return NewGoogle(os.Getenv("GOOGLE_API_KEY"), model), nil
+		return NewGoogle(os.Getenv("GOOGLE_API_KEY"), ModelForVendor("google")), nil
 	default:
 		return nil, fmt.Errorf("unknown LLM_PROVIDER=%q", provider)
 	}
@@ -91,18 +131,17 @@ func (r *Registry) Available() []string {
 // openai_oauth provider. Boot prints which ones registered.
 func BuildRegistry(oauthStore *OAuthStore) *Registry {
 	reg := NewRegistry()
-	model := os.Getenv("LLM_MODEL")
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		reg.Register(NewAnthropic(key, model))
+		reg.Register(NewAnthropic(key, ModelForVendor("anthropic")))
 	}
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		reg.Register(NewOpenAI(key, model))
+		reg.Register(NewOpenAI(key, ModelForVendor("openai")))
 	}
 	if oauthStore != nil {
-		reg.Register(NewOpenAIOAuth(oauthStore, model))
+		reg.Register(NewOpenAIOAuth(oauthStore, ModelForVendor("openai_oauth")))
 	}
 	if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
-		reg.Register(NewGoogle(key, model))
+		reg.Register(NewGoogle(key, ModelForVendor("google")))
 	}
 	return reg
 }
