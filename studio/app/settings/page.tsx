@@ -48,6 +48,7 @@ import { useGlobalModel } from "@/lib/use-model";
 import {
   VENDORS,
   findVendor,
+  resolveModelEntry,
   type VendorEntry,
   type VendorId,
 } from "@/lib/models-catalog";
@@ -267,55 +268,88 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   // sees the new vendor immediately. Stored OAuth credentials persist across
   // vendor flips, so switching back to ChatGPT later doesn't require re-auth.
   // Model edits flow through /api/settings/model as before.
-  const { setting, setModel, setProvider, saving } = useGlobalModel();
+  const { setting, setModel, setProvider } = useGlobalModel();
   const liveProvider = ((setting?.provider ?? status?.provider ?? "") as string).toLowerCase();
   const effectiveModel = setting?.model ?? status?.model ?? "";
   const defaultModel = setting?.defaultModel ?? "";
   const availableProviders = setting?.availableProviders ?? [];
 
-  const [draft, setDraft] = useState<string>(effectiveModel);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [providerError, setProviderError] = useState<string | null>(null);
+  // Vendor + model are both *drafts* until Save fires — selecting from
+  // either dropdown mutates local state only. Save is the deterministic
+  // commit; matches the BossProfilePanel pattern in this codebase.
+  const [draftVendor, setDraftVendor] = useState<string>(liveProvider || VENDORS[0].id);
+  const [draftModel, setDraftModel] = useState<string>(effectiveModel);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  // Sync the model draft whenever Core's effective model shifts (chip
-  // cycle in composer, vendor swap from this picker — both broadcast).
+  // Sync drafts with whatever Core broadcasts (composer chip cycle,
+  // first load, etc.). The model effect runs on every effectiveModel
+  // change — but only resets the draft when the user hasn't started
+  // editing locally yet (draft still equals the last broadcast).
   useEffect(() => {
-    if (effectiveModel) setDraft(effectiveModel);
+    if (liveProvider) setDraftVendor(liveProvider);
+  }, [liveProvider]);
+  useEffect(() => {
+    setDraftModel(effectiveModel);
   }, [effectiveModel]);
 
-  const selectedVendor = findVendor(liveProvider || VENDORS[0].id);
+  const selectedVendor = findVendor(draftVendor);
   const isOAuthVendor = selectedVendor.auth === "oauth";
 
-  // The dropdown always reflects the live vendor's models; if the
-  // effective id isn't catalog-known (custom override), prepend it.
+  // Auto-reset the model dropdown when its current value belongs to a
+  // different vendor than the draft vendor — UI only, no server hit.
+  // The user then picks a real model from the dropdown (or accepts the
+  // default) and clicks Save to commit.
+  useEffect(() => {
+    if (!draftModel) return;
+    const owner = resolveModelEntry(draftModel)?.vendor.id;
+    if (owner && owner !== draftVendor) {
+      const fallback =
+        selectedVendor.models.find((m) => m.recommended) ?? selectedVendor.models[0];
+      if (fallback) setDraftModel(fallback.id);
+    }
+  }, [draftVendor, draftModel, selectedVendor]);
+
   const knownModelIds = new Set(selectedVendor.models.map((m) => m.id));
-  const dropdownOptions = knownModelIds.has(draft)
+  const dropdownOptions = knownModelIds.has(draftModel)
     ? selectedVendor.models
-    : [{ id: draft, label: `${draft} (custom)` }, ...selectedVendor.models];
-  const dirty = draft !== effectiveModel;
+    : draftModel
+      ? [{ id: draftModel, label: `${draftModel} (custom)` }, ...selectedVendor.models]
+      : selectedVendor.models;
+
+  const dirty =
+    draftVendor !== liveProvider || draftModel !== effectiveModel;
 
   async function save() {
-    const ok = await setModel(draft);
-    if (ok) setSavedAt(Date.now());
+    setBusy(true);
+    setErr(null);
+    try {
+      if (draftVendor !== liveProvider) {
+        const res = await setProvider(draftVendor);
+        if (!res.ok) {
+          setErr(res.error ?? "provider swap failed");
+          return;
+        }
+      }
+      if (draftModel !== effectiveModel) {
+        const ok = await setModel(draftModel);
+        if (!ok) {
+          setErr("model save failed");
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function clearOverride() {
-    const ok = await setModel("");
-    if (ok) {
-      setDraft(defaultModel);
-      setSavedAt(Date.now());
+    setBusy(true);
+    try {
+      await setModel("");
+      if (defaultModel) setDraftModel(defaultModel);
+    } finally {
+      setBusy(false);
     }
-  }
-
-  async function changeVendor(nextId: string) {
-    setProviderError(null);
-    if (nextId === liveProvider) return;
-    const res = await setProvider(nextId);
-    if (!res.ok) {
-      setProviderError(res.error ?? "Provider swap failed");
-      return;
-    }
-    setSavedAt(Date.now());
   }
 
   return (
@@ -327,11 +361,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
       <div className="space-y-3 rounded-md border bg-background p-3">
         <FieldLabel label="Vendor">
-          <NativeSelect
-            value={selectedVendor.id}
-            onChange={(v) => void changeVendor(v)}
-            disabled={saving}
-          >
+          <NativeSelect value={draftVendor} onChange={setDraftVendor}>
             {VENDORS.map((v) => {
               const available =
                 availableProviders.length === 0 ||
@@ -348,15 +378,10 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           <p className="mt-1 text-[11px] text-muted-foreground">
             {selectedVendor.docsHint}
           </p>
-          {providerError && (
-            <p className="mt-1 rounded-sm bg-danger/10 p-2 text-[11px] text-danger">
-              {providerError}
-            </p>
-          )}
         </FieldLabel>
 
         <FieldLabel label="Model">
-          <NativeSelect value={draft} onChange={setDraft}>
+          <NativeSelect value={draftModel} onChange={setDraftModel}>
             {dropdownOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id === defaultModel ? `${m.label} · default` : m.label}
@@ -367,36 +392,24 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
         {isOAuthVendor && <OAuthConnectBlock vendor={selectedVendor} />}
 
+        {err && (
+          <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[11px] text-muted-foreground">
           <code className="truncate font-mono">
             live: {liveProvider || "—"} · {effectiveModel || "—"} ·{" "}
             {setting?.source === "user" ? "user override" : "boot default"} · v
             {status?.version || "—"}
           </code>
-          <div className="flex items-center gap-1.5">
-            {setting?.source === "user" && defaultModel && draft !== defaultModel && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={clearOverride}
-                disabled={saving}
-                className="h-7 px-2 text-[11px]"
-              >
-                reset to default
+          <div className="flex items-center gap-2">
+            {setting?.source === "user" && defaultModel && draftModel !== defaultModel && (
+              <Button variant="ghost" onClick={clearOverride} disabled={busy}>
+                Reset to default
               </Button>
             )}
-            <Button
-              size="sm"
-              onClick={save}
-              disabled={!dirty || saving}
-              className="h-7 gap-1 px-2 text-[11px]"
-            >
-              {saving ? (
-                <CircleDashed className="size-3.5 animate-spin" />
-              ) : savedAt && Date.now() - savedAt < 2000 ? (
-                <Check className="size-3.5 text-success" />
-              ) : null}
-              {saving ? "saving…" : "save"}
+            <Button onClick={save} disabled={!dirty || busy}>
+              {busy ? "Saving…" : "Save"}
             </Button>
           </div>
         </div>
@@ -682,7 +695,6 @@ function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
                 setPaste("");
                 setError(null);
               }}
-              className="h-7 px-2 text-[11px]"
             >
               cancel
             </Button>
@@ -690,12 +702,11 @@ function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
               size="sm"
               onClick={exchange}
               disabled={!paste.trim() || busy === "exchange"}
-              className="h-7 gap-1 px-2 text-[11px]"
             >
               {busy === "exchange" ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <Loader2 className="animate-spin" />
               ) : (
-                <Check className="size-3.5" />
+                <Check />
               )}
               connect
             </Button>
@@ -723,13 +734,8 @@ function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
               variant="ghost"
               onClick={disconnect}
               disabled={busy === "disconnect"}
-              className="h-7 gap-1 px-2 text-[11px]"
             >
-              {busy === "disconnect" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Unplug className="size-3.5" />
-              )}
+              {busy === "disconnect" ? <Loader2 className="animate-spin" /> : <Unplug />}
               disconnect
             </Button>
           )}
@@ -739,13 +745,8 @@ function OAuthConnectBlock({ vendor }: { vendor: VendorEntry }) {
               variant={connected ? "ghost" : "default"}
               onClick={connect}
               disabled={busy === "start"}
-              className="h-7 gap-1 px-2 text-[11px]"
             >
-              {busy === "start" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Plug className="size-3.5" />
-              )}
+              {busy === "start" ? <Loader2 className="animate-spin" /> : <Plug />}
               {connected ? "reconnect" : "open ChatGPT login"}
             </Button>
           )}

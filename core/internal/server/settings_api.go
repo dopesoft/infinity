@@ -142,6 +142,15 @@ func (s *Server) handleSettingsProvider(w http.ResponseWriter, r *http.Request) 
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		// Clear the model override on every provider swap. A model id is
+		// vendor-specific (e.g. "claude-haiku-4-5-…" only means something
+		// to Anthropic) so carrying it forward poisons the next turn. By
+		// resetting we make the new provider's boot default the active
+		// model, and Studio's chip cycles within the new vendor's catalog.
+		if err := s.settings.SetModel(r.Context(), ""); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, s.buildSettingsModelResponse(r.Context()))
 	default:
 		w.Header().Set("Allow", "GET, PUT")

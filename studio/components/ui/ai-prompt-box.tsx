@@ -195,10 +195,14 @@ function ModelChip({
   vendorId?: string;
   onCycle: (nextModelId: string) => void;
 }) {
-  const resolved = resolveModelEntry(modelId);
-  const vendor = resolved?.vendor ?? findVendor(vendorId);
+  // The active vendor wins over whatever vendor the model id happens to
+  // belong to in the global catalog. Otherwise a stale model override
+  // from a previous provider (e.g. "claude-haiku-…" carried over after
+  // switching to openai_oauth) would display under the wrong vendor.
+  const vendor = vendorId
+    ? findVendor(vendorId)
+    : (resolveModelEntry(modelId)?.vendor ?? findVendor(null));
   const current =
-    resolved?.model ??
     vendor.models.find((m) => m.id === modelId) ??
     vendor.models.find((m) => m.id === defaultModelFor(vendor)) ??
     vendor.models[0];
