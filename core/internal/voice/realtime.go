@@ -55,12 +55,12 @@ const (
 	// baked in.
 	realtimeClientSecretsURL = "https://api.openai.com/v1/realtime/client_secrets"
 
-	// realtimeSDPBase is exposed to the browser so it can do the SDP
-	// exchange directly. We return it from the session endpoint instead
-	// of hardcoding it in the Studio bundle — that way an env override
-	// (for an Azure/Bedrock-style proxy down the line) only needs Core
-	// to change.
-	realtimeSDPBase = "https://api.openai.com/v1/realtime"
+	// realtimeSDPURL is the GA WebRTC entrypoint. The browser POSTs its
+	// SDP offer here with the ephemeral key in Authorization; OpenAI
+	// returns the SDP answer. The model id is baked into the ephemeral
+	// at mint time, so no query params. (The beta surface used
+	// /v1/realtime?model=… — do not revive that.)
+	realtimeSDPURL = "https://api.openai.com/v1/realtime/calls"
 )
 
 // SessionRequest captures everything Core needs to know to mint a key for
@@ -201,9 +201,10 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
-	// OpenAI Realtime gating header. Harmless when the family no
-	// longer requires it; required for the older preview families.
-	httpReq.Header.Set("OpenAI-Beta", "realtime=v1")
+	// Do NOT send `OpenAI-Beta: realtime=v1` here. The GA Realtime
+	// surface mints "GA client secrets" and rejects them in any
+	// subsequent request that carries the beta header
+	// (api_version_mismatch). Mint and SDP exchange both stay GA.
 
 	resp, err := m.httpClient.Do(httpReq)
 	if err != nil {
@@ -247,7 +248,7 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 		ExpiresAt:    expires,
 		Model:        m.model,
 		Voice:        m.voice,
-		SDPURL:       realtimeSDPBase + "?model=" + m.model,
+		SDPURL:       realtimeSDPURL,
 	}, nil
 }
 

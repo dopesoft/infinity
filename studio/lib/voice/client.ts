@@ -162,10 +162,6 @@ export class VoiceClient {
         headers: {
           Authorization: `Bearer ${this.args.clientSecret}`,
           "Content-Type": "application/sdp",
-          // Some realtime revisions still gate on this beta header even
-          // though they ignore it during normal operation. Harmless once
-          // the family fully GA's.
-          "OpenAI-Beta": "realtime=v1",
         },
         body: offer.sdp,
       });
@@ -277,6 +273,16 @@ export class VoiceClient {
 
   // ── Internals ──────────────────────────────────────────────────────────
 
+  // Per-call accumulators for streamed function-call arguments. GA emits
+  // `response.function_call_arguments.delta` but the canonical "done"
+  // signal arrives via `response.done` (with output items carrying the
+  // assembled function_call). Keying by call_id keeps us correct when
+  // multiple tools are requested in a single response.
+  private toolArgsBuf: Map<string, { name: string; args: string }> = new Map();
+  // Track which calls we've already dispatched so a redundant signal
+  // from either path doesn't fire the tool twice.
+  private dispatchedCalls: Set<string> = new Set();
+
   private handleEvent(raw: unknown): void {
     if (typeof raw !== "string") return;
     let evt: { type?: string; [k: string]: unknown };
@@ -303,20 +309,19 @@ export class VoiceClient {
         break;
       }
 
-      // User transcription. The realtime API streams partials on
-      // some model families; we only act on the completed event for
-      // memory capture and ignore deltas to keep captions stable.
+      // User transcription. GA emits deltas + completed; we only act
+      // on `completed` for caption + memory capture since deltas
+      // would replace the caption text mid-utterance and feel jittery.
       case "conversation.item.input_audio_transcription.completed": {
         const text = String((evt as { transcript?: string }).transcript ?? "").trim();
         if (text) cb.onUserTranscript?.(text, true);
         break;
       }
 
-      // Assistant audio + transcript. The audio comes through the
-      // <audio> element via the WebRTC track; transcript deltas
-      // arrive on the data channel for caption rendering.
-      case "response.audio_transcript.delta":
-      case "response.output_text.delta": {
+      // Assistant audio transcript. GA event names are
+      // response.output_audio_transcript.{delta,done}. The beta
+      // surface used response.audio_transcript.* — do NOT revive that.
+      case "response.output_audio_transcript.delta": {
         const delta = String((evt as { delta?: string }).delta ?? "");
         if (!delta) break;
         const respId = String((evt as { response_id?: string }).response_id ?? "");
@@ -327,11 +332,9 @@ export class VoiceClient {
         cb.onStatus?.("assistant-speaking");
         break;
       }
-      case "response.audio_transcript.done":
-      case "response.output_text.done": {
+      case "response.output_audio_transcript.done": {
         const respId = String((evt as { response_id?: string }).response_id ?? "");
         const text = (evt as { transcript?: string }).transcript
-          ?? (evt as { text?: string }).text
           ?? (respId ? this.assistantBuf.get(respId) : undefined)
           ?? "";
         const final = String(text).trim();
@@ -340,22 +343,69 @@ export class VoiceClient {
         break;
       }
 
-      // Tool calls. The model emits arguments incrementally on
-      // `delta` events and a terminating `done`. We only act on
-      // `done` — partial JSON would fail to parse anyway.
-      case "response.function_call_arguments.done": {
+      // Function call arguments arrive incrementally on .delta. GA
+      // doesn't always fire a .done sibling; the assembled call lands
+      // in response.done's output items instead. Accumulate by call_id
+      // here and let the response.done handler dispatch.
+      case "response.function_call_arguments.delta": {
         const callId = String((evt as { call_id?: string }).call_id ?? "");
+        if (!callId) break;
         const name = String((evt as { name?: string }).name ?? "");
-        const args = String((evt as { arguments?: string }).arguments ?? "{}");
-        if (callId && name) {
-          cb.onStatus?.("tool-running", name);
-          cb.onToolCall?.({ callId, name, arguments: args });
-        }
+        const delta = String((evt as { delta?: string }).delta ?? "");
+        const cur = this.toolArgsBuf.get(callId) ?? { name: "", args: "" };
+        if (name) cur.name = name;
+        cur.args += delta;
+        this.toolArgsBuf.set(callId, cur);
+        cb.onStatus?.("tool-running", cur.name);
         break;
       }
 
+      // response.done is the canonical "response is fully assembled"
+      // signal in GA. Its `response.output` array contains items —
+      // any with type === "function_call" carry { call_id, name,
+      // arguments } as a complete payload. Dispatch here.
       case "response.done": {
-        cb.onStatus?.("listening");
+        const response = (evt as { response?: { output?: Array<Record<string, unknown>> } }).response;
+        const output = response?.output ?? [];
+        let dispatched = 0;
+        for (const item of output) {
+          if (item?.type !== "function_call") continue;
+          const callId = String(item.call_id ?? "");
+          if (!callId || this.dispatchedCalls.has(callId)) continue;
+          const name = String(item.name ?? this.toolArgsBuf.get(callId)?.name ?? "");
+          const argsStr = String(
+            item.arguments ?? this.toolArgsBuf.get(callId)?.args ?? "{}",
+          );
+          if (!name) continue;
+          this.dispatchedCalls.add(callId);
+          this.toolArgsBuf.delete(callId);
+          cb.onStatus?.("tool-running", name);
+          cb.onToolCall?.({ callId, name, arguments: argsStr });
+          dispatched++;
+        }
+        if (dispatched === 0) cb.onStatus?.("listening");
+        break;
+      }
+
+      // Legacy/defensive: some surfaces still emit a `.done` sibling
+      // event for function calls. Honour it if it shows up so we
+      // don't sit on accumulated args waiting for response.done.
+      case "response.function_call_arguments.done": {
+        const callId = String((evt as { call_id?: string }).call_id ?? "");
+        if (!callId || this.dispatchedCalls.has(callId)) break;
+        const name = String(
+          (evt as { name?: string }).name ?? this.toolArgsBuf.get(callId)?.name ?? "",
+        );
+        const args = String(
+          (evt as { arguments?: string }).arguments
+            ?? this.toolArgsBuf.get(callId)?.args
+            ?? "{}",
+        );
+        if (!name) break;
+        this.dispatchedCalls.add(callId);
+        this.toolArgsBuf.delete(callId);
+        cb.onStatus?.("tool-running", name);
+        cb.onToolCall?.({ callId, name, arguments: args });
         break;
       }
 

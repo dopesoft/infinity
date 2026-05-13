@@ -105,11 +105,11 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       <div className="hidden min-h-0 flex-1 lg:flex">
         {/* No autoSaveId — column widths reset to defaults on every refresh.
             Dragging the dividers still works in-session, but a reload always
-            returns to the 30 / 22 / 48 layout. The boss explicitly wants the
+            returns to the 35 / 15 / 50 layout. The boss explicitly wants the
             workspace to feel "fresh" on each visit instead of accumulating
             stuck layouts from random drag sessions. */}
         <ResizablePanelGroup direction="horizontal">
-          <ResizablePanel defaultSize={20} minSize={15} maxSize={50}>
+          <ResizablePanel defaultSize={35} minSize={15} maxSize={50}>
             <div className="flex h-full min-h-0 flex-col border-r bg-muted/30 dark:bg-zinc-900/40">
               <WorkspaceChatColumn chat={chat} />
             </div>
@@ -121,7 +121,7 @@ export function Workspace({ chat }: { chat: ChatHook }) {
             </div>
           </ResizablePanel>
           <ResizableHandle />
-          <ResizablePanel defaultSize={65} minSize={30}>
+          <ResizablePanel defaultSize={50} minSize={30}>
             <div className="flex h-full min-h-0 flex-col">
               <CanvasRightPane chat={chat} />
             </div>
