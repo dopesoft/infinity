@@ -11,6 +11,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// infoLog writes to stdout so Railway's log shipper tags these lines
+// with severity=info instead of the severity=error it stamps on
+// anything that comes out of stderr (which is where the stdlib `log`
+// package writes by default). Reserve the default `log.Printf` for
+// genuine failures.
+var infoLog = log.New(os.Stdout, "", log.LstdFlags)
+
 // MaterializeActiveSkills syncs Postgres → on-disk skill files at boot.
 //
 // Why: Voyager auto-evolved skills are persisted to mem_skill_versions
@@ -102,7 +109,7 @@ func MaterializeActiveSkills(ctx context.Context, pool *pgxpool.Pool, skillsRoot
 			continue
 		}
 		written++
-		log.Printf("materialize: wrote %s (%d bytes)", path, len(final))
+		infoLog.Printf("materialize: wrote %s (%d bytes)", path, len(final))
 	}
 	return written, rows.Err()
 }

@@ -35,16 +35,47 @@ RUN chmod -R a+rX /app /app/.venv && find /app/.venv/bin -type f -exec chmod a+x
 # No exposed port — the deriver is a worker, not a server.
 
 # Same DB URL rewrite as the API service so Railway reference variables work
-# verbatim across both services.
-CMD ["sh", "-c", "\
-  if [ -n \"$DB_CONNECTION_URI\" ]; then \
-    case \"$DB_CONNECTION_URI\" in \
-      postgresql+*) ;; \
-      postgresql://*) DB_CONNECTION_URI=\"postgresql+psycopg://${DB_CONNECTION_URI#postgresql://}\" ;; \
-      postgres://*)   DB_CONNECTION_URI=\"postgresql+psycopg://${DB_CONNECTION_URI#postgres://}\" ;; \
-    esac; \
-    export DB_CONNECTION_URI; \
-  fi; \
-  echo 'deriver: waiting briefly for api migrations' && sleep 5 && \
-  exec python -m src.deriver \
-"]
+# verbatim across both services. Mirrors docker/honcho/Dockerfile's diagnostic
+# entrypoint so a silent crash leaves a usable log trail.
+# BuildKit's COPY <<EOF chokes on bash-modifier syntax in interpolation.
+# Use RUN heredoc so the script body is handled by the shell, not the
+# Dockerfile parser.
+RUN cat > /app/entrypoint.sh <<'EOF' && chmod +x /app/entrypoint.sh
+#!/bin/bash
+set -e -u -x
+echo "deriver-boot: ===================================================="
+echo "deriver-boot: PWD=$(pwd)"
+echo "deriver-boot: PYTHON=$(command -v python || true)  ($(python --version 2>&1 || true))"
+echo "deriver-boot: PATH=$PATH"
+echo "deriver-boot: DB_CONNECTION_URI scheme = ${DB_CONNECTION_URI%%:*}://"
+echo "deriver-boot: LLM_OPENAI_API_KEY set = $([ -n "${LLM_OPENAI_API_KEY:-}" ] && echo yes || echo no)"
+echo "deriver-boot: CACHE_URL scheme = ${CACHE_URL%%:*}://"
+
+case "${DB_CONNECTION_URI:-}" in
+  postgresql+*) echo "deriver-boot: DB URI already psycopg" ;;
+  postgresql://*) DB_CONNECTION_URI="postgresql+psycopg://${DB_CONNECTION_URI#postgresql://}"; echo "deriver-boot: rewrote scheme" ;;
+  postgres://*)   DB_CONNECTION_URI="postgresql+psycopg://${DB_CONNECTION_URI#postgres://}";   echo "deriver-boot: rewrote scheme" ;;
+  *) echo "deriver-boot: WARNING DB_CONNECTION_URI unrecognised or empty" ;;
+esac
+export DB_CONNECTION_URI
+
+echo "deriver-boot: waiting briefly for api migrations"
+sleep 5
+
+echo "deriver-boot: probing deriver module import..."
+python - <<'PY'
+import importlib, sys, traceback
+try:
+    m = importlib.import_module("src.deriver")
+    print("deriver-boot: src.deriver imported:", m.__file__)
+except Exception:
+    print("deriver-boot: src.deriver import FAILED")
+    traceback.print_exc()
+    sys.exit(3)
+PY
+
+echo "deriver-boot: launching deriver"
+exec python -m src.deriver
+EOF
+
+CMD ["/app/entrypoint.sh"]

@@ -110,6 +110,16 @@ The user lives on their phone. Every UI change must be designed for mobile first
 
 The dark theme uses pure black (`hsl(0 0% 0%)`) backgrounds with neutral grays (no blue/slate hue rotation). When defining new tokens or components, keep that constraint — accent colors stay desaturated unless they're carrying meaning (info / success / warning / danger / tier palette). Don't reintroduce the shadcn-default `222 47%` slate.
 
+### Logging — severity must match reality
+
+**Railway's log shipper tags every line by stream: stdout → `severity:info`, stderr → `severity:error`.** Go's stdlib `log.Printf` writes to stderr by default, so a `log.Printf("wrote %d bytes", n)` shows up in Railway as a red `error` row even though it's a success. That's how you end up scrolling past dozens of fake errors looking for the real one — and eventually missing the real one. Non-negotiable rules:
+
+- **Successes go to stdout. Failures go to stderr.** No exceptions. Either use a package-level `infoLog := log.New(os.Stdout, "", log.LstdFlags)` for the info lines and keep stdlib `log` for errors, or use `slog` with structured JSON output (preferred for new packages) so Railway picks up the explicit `level` field instead of falling back to stream-based severity.
+- **Never use `log.Printf` for a "wrote / loaded / started / reconnected / promoted / queued / approved" line.** Those are all info-level. The reference fix lives in [`core/internal/skills/materialize.go`](core/internal/skills/materialize.go) — copy the `infoLog` pattern from there.
+- **Real errors stay on stderr exactly as today.** `log.Printf("scan: %v", err)` / `log.Printf("write %s: %v", path, err)` is correct usage. Don't move failure logs to stdout to "clean up" Railway — that destroys the signal you actually need.
+- **When in doubt, ask: would I want this page me at 3am?** If yes → stderr. If no → stdout. There is no third stream.
+- **When you touch a package that uses stdlib `log` for both success and failure, split it.** Don't leave the next session to discover the same Railway noise pattern in a different package. Sweep the file you're editing while you're there.
+
 ### Memory + capture invariants
 
 - **Every event in the agent loop fires a hook.** When you add a new transition (e.g. a Phase 4 skill execution), call `hooks.Pipeline.Emit` with the right `EventName`. The pipeline is async — never block the loop on capture.

@@ -49,15 +49,63 @@ ENV PORT=8000
 # Railway/Supabase emit plain postgresql:// URLs. We rewrite the prefix
 # at container startup so the secret never has to be edited by hand and
 # Railway reference variables (${{core.DATABASE_URL}}) keep working.
-CMD ["sh", "-c", "\
-  if [ -n \"$DB_CONNECTION_URI\" ]; then \
-    case \"$DB_CONNECTION_URI\" in \
-      postgresql+*) ;; \
-      postgresql://*) DB_CONNECTION_URI=\"postgresql+psycopg://${DB_CONNECTION_URI#postgresql://}\" ;; \
-      postgres://*)   DB_CONNECTION_URI=\"postgresql+psycopg://${DB_CONNECTION_URI#postgres://}\" ;; \
-    esac; \
-    export DB_CONNECTION_URI; \
-  fi; \
-  echo 'honcho: alembic upgrade head' && alembic upgrade head && \
-  exec python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000} \
-"]
+#
+# Diagnostics: shell uses `set -e -u -x` so any silent failure surfaces
+# (every step echoed, undefined var aborts, non-zero exit propagates).
+# Print env-summary up front so a future log-only debug session can
+# tell which vars made it into the container without exposing values.
+# BuildKit's COPY <<EOF parses ${VAR%%:*} as a Dockerfile substitution
+# and chokes on bash-only modifiers (% # //). Writing via RUN heredoc
+# pushes the body through the shell layer instead, where bash semantics
+# rule and our diagnostic script lands verbatim.
+RUN cat > /app/entrypoint.sh <<'EOF' && chmod +x /app/entrypoint.sh
+#!/bin/bash
+set -e -u -x
+echo "honcho-boot: ===================================================="
+echo "honcho-boot: PWD=$(pwd)"
+echo "honcho-boot: PYTHON=$(command -v python || true)  ($(python --version 2>&1 || true))"
+echo "honcho-boot: UVICORN=$(command -v uvicorn || true)"
+echo "honcho-boot: FASTAPI=$(command -v fastapi || true)"
+echo "honcho-boot: ALEMBIC=$(command -v alembic || true)"
+echo "honcho-boot: PATH=$PATH"
+echo "honcho-boot: DB_CONNECTION_URI scheme = ${DB_CONNECTION_URI%%:*}://"
+echo "honcho-boot: LLM_OPENAI_API_KEY set = $([ -n "${LLM_OPENAI_API_KEY:-}" ] && echo yes || echo no)"
+echo "honcho-boot: OPENAI_API_KEY set = $([ -n "${OPENAI_API_KEY:-}" ] && echo yes || echo no)"
+echo "honcho-boot: CACHE_URL scheme = ${CACHE_URL%%:*}://"
+echo "honcho-boot: PORT=${PORT:-8000}"
+
+# Scheme rewrite: postgresql:// -> postgresql+psycopg://
+case "${DB_CONNECTION_URI:-}" in
+  postgresql+*) echo "honcho-boot: DB URI already has psycopg prefix" ;;
+  postgresql://*) DB_CONNECTION_URI="postgresql+psycopg://${DB_CONNECTION_URI#postgresql://}"; echo "honcho-boot: rewrote scheme -> postgresql+psycopg://" ;;
+  postgres://*)   DB_CONNECTION_URI="postgresql+psycopg://${DB_CONNECTION_URI#postgres://}";   echo "honcho-boot: rewrote scheme -> postgresql+psycopg://" ;;
+  *) echo "honcho-boot: WARNING DB_CONNECTION_URI unrecognised or empty" ;;
+esac
+export DB_CONNECTION_URI
+
+echo "honcho-boot: probing DB connectivity via python..."
+python - <<'PY'
+import os, sys
+url = os.environ["DB_CONNECTION_URI"].replace("postgresql+psycopg://", "postgresql://", 1)
+print("honcho-boot: probe url scheme =", url.split(":",1)[0])
+try:
+    import psycopg
+    print("honcho-boot: psycopg version =", psycopg.__version__)
+    with psycopg.connect(url, connect_timeout=8) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            print("honcho-boot: DB select ->", cur.fetchone())
+    print("honcho-boot: DB probe OK")
+except Exception as e:
+    print("honcho-boot: DB probe FAILED:", type(e).__name__, str(e)[:240])
+    sys.exit(2)
+PY
+
+echo "honcho-boot: alembic upgrade head"
+alembic upgrade head
+
+echo "honcho-boot: launching uvicorn on port ${PORT:-8000}"
+exec python -m uvicorn src.main:app --host 0.0.0.0 --port "${PORT:-8000}" --log-level info
+EOF
+
+CMD ["/app/entrypoint.sh"]
