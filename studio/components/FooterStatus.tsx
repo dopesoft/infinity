@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchCoreStatus, type CoreStatus } from "@/lib/api";
 import { formatUptime, getBootedAt } from "@/lib/uptime";
+import { findVendor, resolveModelEntry } from "@/lib/models-catalog";
 
 const dotClass = {
   connected: "bg-success",
@@ -59,8 +60,16 @@ export function FooterStatus() {
         ? "connecting…"
         : "core offline";
 
-  const provider = status?.provider ?? "—";
-  const model = status?.model ?? "—";
+  // Resolve raw provider id + model id to the friendly labels owned by the
+  // catalog (Settings + ModelChip use the same source of truth). Falls back
+  // to whatever Core returned when an id isn't catalogued — better an ugly
+  // slug than a missing chip.
+  const entry = status?.model ? resolveModelEntry(status.model) : null;
+  const vendorLabel = entry?.vendor.label
+    ?? (status?.provider ? findVendor(status.provider).label : null)
+    ?? status?.provider
+    ?? "—";
+  const modelLabel = entry?.model.label ?? status?.model ?? "—";
 
   const toolCount = status?.tools?.length ?? 0;
   const sep = <span aria-hidden className="text-border">|</span>;
@@ -92,7 +101,7 @@ export function FooterStatus() {
       </span>
       <span className="ml-auto hidden items-center gap-2.5 truncate sm:flex">
         {sep}
-        <span className="truncate">{provider} · {model}</span>
+        <span className="truncate">{vendorLabel} · {modelLabel}</span>
       </span>
     </footer>
   );

@@ -253,11 +253,23 @@ func serveCmd() *cobra.Command {
 				})
 			}
 
+			// Persisted token usage. Migration 013 added the columns;
+			// UsagePersistence reads/writes them so the context meter
+			// survives Railway container rotation. Nil-safe in the
+			// agent loop, so we only build when the pool exists.
+			var usageStore *sessions.UsagePersistence
+			if pool != nil {
+				usageStore = sessions.NewUsagePersistence(pool)
+			}
+
 			var loop *agent.Loop
 			if provider != nil {
 				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt, Namer: sessionNamer}
 				if connectorsCache != nil {
 					cfg.Accounts = connectorsCache
+				}
+				if usageStore != nil {
+					cfg.UsageStore = usageStore
 				}
 				// Compose memory providers: Infinity's RRF searcher always
 				// runs first, Honcho's peer representation folds in second

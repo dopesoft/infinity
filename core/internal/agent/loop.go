@@ -136,9 +136,39 @@ func (s *Session) UsageSnapshot() UsageSnapshot {
 	}
 }
 
+// SeedUsage installs counters from persistent storage when a session is
+// faulted back into the in-memory map after a process restart. Unlike
+// RecordUsage, this overwrites unconditionally (including zero values)
+// and replaces totals rather than incrementing — the persisted row is
+// already the cumulative truth.
+func (s *Session) SeedUsage(snap UsageSnapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastInputTokens = snap.LastInputTokens
+	s.lastOutputTokens = snap.LastOutputTokens
+	s.totalInputTokens = snap.TotalInputTokens
+	s.totalOutputTokens = snap.TotalOutputTokens
+}
+
 // MemoryProvider lets memory inject relevant retrievals without coupling.
 type MemoryProvider interface {
 	BuildSystemPrefix(ctx context.Context, sessionID, query string) (string, error)
+}
+
+// UsageStore persists per-session API-reported token counters across
+// process restarts. The agent loop records every successful turn's
+// Usage.Input/Output onto Session.{last,total}{Input,Output}Tokens — those
+// fields live in process memory, so without persistence Railway's nightly
+// container rotation wipes them and Studio's context meter shows 0% on
+// sessions that very much aren't empty.
+//
+// Implementations live in core/internal/sessions (backed by mem_sessions).
+// All methods must be safe to call concurrently. Hydrate returning a zero
+// snapshot + nil error means "no row yet" — that's the signal that this
+// session has never recorded usage, not an error.
+type UsageStore interface {
+	Hydrate(ctx context.Context, sessionID string) (UsageSnapshot, error)
+	Save(ctx context.Context, sessionID string, snap UsageSnapshot) error
 }
 
 // HookEmitter is implemented by hooks.Pipeline. Decoupled here.
@@ -179,6 +209,13 @@ type Loop struct {
 	gate     ToolGate
 	namer    SessionNamer
 	accounts AccountResolver
+
+	// usageStore persists session token counters so the context meter
+	// survives restarts. Nil-safe: when unset the loop simply doesn't
+	// hydrate or persist and the meter falls back to its pre-013
+	// behavior (0% after restart).
+	usageStoreMu sync.RWMutex
+	usageStore   UsageStore
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -257,6 +294,7 @@ type Config struct {
 	Gate              ToolGate
 	Namer             SessionNamer
 	Accounts          AccountResolver
+	UsageStore        UsageStore
 	SystemPrompt      string
 	MaxToolIterations int
 }
@@ -293,7 +331,23 @@ func New(cfg Config) *Loop {
 		maxToolIterations:    cfg.MaxToolIterations,
 		sessions:             make(map[string]*Session),
 		autoCompactThreshold: threshold,
+		usageStore:           cfg.UsageStore,
 	}
+}
+
+// SetUsageStore installs (or replaces) the persistence backing for
+// session token counters. Safe to call after agent.New() since the
+// loop reads the store under an RWMutex on every hydrate/persist.
+func (l *Loop) SetUsageStore(s UsageStore) {
+	l.usageStoreMu.Lock()
+	defer l.usageStoreMu.Unlock()
+	l.usageStore = s
+}
+
+func (l *Loop) UsageStore() UsageStore {
+	l.usageStoreMu.RLock()
+	defer l.usageStoreMu.RUnlock()
+	return l.usageStore
 }
 
 func (l *Loop) Provider() llm.Provider {
@@ -325,11 +379,11 @@ func (l *Loop) Skills() SkillMatcher { return l.skills }
 
 func (l *Loop) GetOrCreateSession(id string) *Session {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if id == "" {
 		id = uuid.NewString()
 	}
 	s, ok := l.sessions[id]
+	created := false
 	if !ok {
 		s = &Session{
 			ID:        id,
@@ -337,12 +391,31 @@ func (l *Loop) GetOrCreateSession(id string) *Session {
 			Active:    tools.NewDefaultActiveSet(),
 		}
 		l.sessions[id] = s
-		l.fireHook("SessionStart", s.ID, s.Project, "session started", map[string]any{"id": s.ID})
+		created = true
 	}
 	if s.Active == nil {
 		// Defensive — older sessions reattached after a process restart
 		// might not have an ActiveSet yet. Backfill with the default.
 		s.Active = tools.NewDefaultActiveSet()
+	}
+	l.mu.Unlock()
+
+	if created {
+		// Best-effort hydrate of persisted token counters. We deliberately
+		// run this outside l.mu so a slow DB doesn't stall every other
+		// session lookup. The lookup is keyed by PK — sub-ms on a healthy
+		// pool — but the timeout caps the worst case.
+		if store := l.UsageStore(); store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			snap, err := store.Hydrate(ctx, id)
+			cancel()
+			if err != nil {
+				log.Printf("usage hydrate: session=%s err=%v", id, err)
+			} else {
+				s.SeedUsage(snap)
+			}
+		}
+		l.fireHook("SessionStart", s.ID, s.Project, "session started", map[string]any{"id": s.ID})
 	}
 	return s
 }
@@ -518,6 +591,20 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// context meter reads s.lastInputTokens to show current window
 		// fill — 0 on empty sessions, accurate after each turn.
 		s.RecordUsage(resp.Usage)
+		// Persist counters so a process restart doesn't reset the meter
+		// to 0% on a session with real history. Best-effort + detached
+		// context so the user-visible turn isn't gated on the DB write.
+		if store := l.UsageStore(); store != nil && (resp.Usage.Input > 0 || resp.Usage.Output > 0) {
+			snap := s.UsageSnapshot()
+			sessionID := s.ID
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := store.Save(ctx, sessionID, snap); err != nil {
+					log.Printf("usage persist: session=%s err=%v", sessionID, err)
+				}
+			}()
+		}
 
 		if streamErr != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
