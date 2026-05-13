@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/dopesoft/infinity/core/internal/agent"
 )
 
 // Context usage endpoint — backs the circular meter in Studio's composer.
@@ -84,6 +86,14 @@ func contextWindowFor(model string) int {
 }
 
 // handleContextUsage serves GET /api/context/usage?session_id=…
+//
+// Returns real API-reported token usage for the session — NOT a preview of
+// what would be sent next. Before any turn fires the session has zero
+// reported usage, so the meter sits at 0%. After each turn the loop records
+// resp.Usage.Input/Output via Session.RecordUsage; this endpoint reads
+// LastInputTokens to render current context-window fill. Category breakdown
+// is reconstructed by attributing the constant-overhead bits (system prompt,
+// tool schemas) and treating whatever's left as messages.
 func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -100,8 +110,6 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the model id the way the agent loop will at next turn:
-	// settings override wins over provider default.
 	modelID := provider.Model()
 	if s.settings != nil {
 		if override := s.settings.GetModel(r.Context()); override != "" {
@@ -110,41 +118,45 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	window := contextWindowFor(modelID)
 
-	systemTokens := estimateTokens(s.loop.SystemPrompt())
-
-	// Tool defs serialize as JSON in the wire payload; count what the
-	// provider would actually send.
-	var toolsTokens int
-	if reg := s.loop.Tools(); reg != nil {
-		if defs := reg.Definitions(); len(defs) > 0 {
-			if blob, err := json.Marshal(defs); err == nil {
-				toolsTokens = estimateTokens(string(blob))
-			}
-		}
-	}
-
-	// Messages — only counted when a session is named. The composer always
-	// has one, so the empty-string case here is mainly defensive.
-	var messageTokens int
+	// Pull the real API-reported usage for this session. If no session id
+	// was supplied or the session has never sent a turn, snapshot.LastInputTokens
+	// is 0 and every category reports 0 — exactly what we want for an
+	// empty conversation.
+	var snapshot agent.UsageSnapshot
 	if sid := strings.TrimSpace(r.URL.Query().Get("session_id")); sid != "" {
-		sess := s.loop.GetOrCreateSession(sid)
-		for _, m := range sess.Snapshot() {
-			messageTokens += estimateTokens(m.Content)
-			messageTokens += estimateTokens(string(m.Role))
-			messageTokens += estimateTokens(m.ToolCallID) + estimateTokens(m.ToolName)
-			for _, tc := range m.ToolCalls {
-				messageTokens += estimateTokens(tc.Name)
-				if blob, err := json.Marshal(tc.Input); err == nil {
-					messageTokens += estimateTokens(string(blob))
-				}
-			}
-		}
+		snapshot = s.loop.GetOrCreateSession(sid).UsageSnapshot()
 	}
 
-	used := systemTokens + toolsTokens + messageTokens
+	used := snapshot.LastInputTokens
 	free := window - used
 	if free < 0 {
 		free = 0
+	}
+
+	// Reconstruct the breakdown from the constant-overhead bits the
+	// provider sent. When used == 0 (no turn yet), every category is 0.
+	// When used > 0, system prompt + tools are the constants and the
+	// remainder lands in messages.
+	var systemTokens, toolsTokens, messageTokens int
+	if used > 0 {
+		systemTokens = estimateTokens(s.loop.SystemPrompt())
+		if reg := s.loop.Tools(); reg != nil {
+			if defs := reg.Definitions(); len(defs) > 0 {
+				if blob, err := json.Marshal(defs); err == nil {
+					toolsTokens = estimateTokens(string(blob))
+				}
+			}
+		}
+		messageTokens = used - systemTokens - toolsTokens
+		// Estimates may overshoot the API's actual count; pin the deltas
+		// to non-negative so a tight call doesn't render "-500 messages".
+		if messageTokens < 0 {
+			systemTokens += messageTokens // attribute the slack to system
+			if systemTokens < 0 {
+				systemTokens = 0
+			}
+			messageTokens = 0
+		}
 	}
 
 	writeJSON(w, http.StatusOK, contextUsageResp{

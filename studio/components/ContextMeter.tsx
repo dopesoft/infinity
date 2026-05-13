@@ -76,20 +76,22 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
 
       {isDesktop ? (
         <Dialog open={open} onOpenChange={setOpen}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md gap-0 p-0">
             <DialogHeader>
               <DialogTitle>Context usage</DialogTitle>
             </DialogHeader>
-            <UsageBody data={data} />
+            <div className="px-4 pb-4 pt-1">
+              <UsageBody data={data} />
+            </div>
           </DialogContent>
         </Dialog>
       ) : (
         <Drawer open={open} onOpenChange={setOpen}>
           <DrawerContent>
-            <DrawerHeader>
+            <DrawerHeader className="text-left">
               <DrawerTitle>Context usage</DrawerTitle>
             </DrawerHeader>
-            <div className="px-4 pb-4">
+            <div className="px-4 pb-6 pt-1">
               <UsageBody data={data} />
             </div>
           </DrawerContent>
@@ -148,66 +150,60 @@ function UsageBody({ data }: { data: ContextUsageDTO | null }) {
     );
   }
   const pct = data.context_window > 0 ? data.used_tokens / data.context_window : 0;
-  // Prefer the catalog's friendly label (e.g. "Opus 4.7") over the raw
-  // model id when we recognise it; show the model id as a small caption
-  // beneath so the user can still copy it for support.
   const entry = resolveModelEntry(data.model);
   const friendly = entry?.model.label ?? data.model;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="space-y-1.5">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <p className="text-base font-semibold tracking-tight">
-            {friendly}
-            <span className="ml-2 font-mono text-xs text-muted-foreground">
-              [{formatTokens(data.context_window)}]
-            </span>
+        <div className="flex items-baseline gap-1.5">
+          <h3 className="text-sm font-semibold tracking-tight">{friendly}</h3>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            [{formatTokens(data.context_window)}]
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-mono text-[11px] text-muted-foreground">
+            {formatTokens(data.used_tokens)} / {formatTokens(data.context_window)}
+          </p>
+          <p className="font-mono text-[11px] text-muted-foreground">
+            {Math.round(pct * 100)}%
           </p>
         </div>
-        {entry && (
-          <p className="font-mono text-[10px] text-muted-foreground/80">{data.model}</p>
-        )}
-        <p className="text-sm text-muted-foreground">
-          {formatTokens(data.used_tokens)} / {formatTokens(data.context_window)} tokens (
-          {Math.round(pct * 100)}%)
-        </p>
         <SegmentedBar categories={data.categories} total={data.context_window} />
       </div>
 
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            <th className="px-2 py-1.5 text-left font-normal">Category</th>
-            <th className="px-2 py-1.5 text-right font-normal">Tokens</th>
-            <th className="px-2 py-1.5 text-right font-normal">Usage</th>
-          </tr>
-        </thead>
+      <table className="w-full text-[12px]">
         <tbody>
           {data.categories.map((c) => {
             const p =
               data.context_window > 0 ? (c.tokens / data.context_window) * 100 : 0;
+            const isFree = c.id === "free";
+            const isEmpty = c.tokens === 0;
             return (
               <tr key={c.id} className="border-b last:border-b-0">
-                <td className="px-2 py-2">
+                <td className="py-1.5">
                   <span className="inline-flex items-center gap-2">
-                    {c.id === "free" ? (
-                      <span className="size-2.5" aria-hidden />
+                    {isFree ? (
+                      <span className="size-2" aria-hidden />
                     ) : (
                       <span
-                        className={cn("size-2.5 rounded-sm", colorForCategory(c.id))}
+                        className={cn("size-2 rounded-full", colorForCategory(c.id))}
                         aria-hidden
                       />
                     )}
-                    <span className={c.id === "free" ? "text-muted-foreground" : ""}>
+                    <span className={cn(isFree || isEmpty ? "text-muted-foreground" : "")}>
                       {c.label}
                     </span>
                   </span>
                 </td>
-                <td className="px-2 py-2 text-right font-mono">
+                <td className={cn(
+                  "py-1.5 text-right font-mono",
+                  isEmpty && "text-muted-foreground",
+                )}>
                   {formatTokens(c.tokens)}
                 </td>
-                <td className="px-2 py-2 text-right font-mono text-muted-foreground">
+                <td className="py-1.5 pl-3 text-right font-mono text-muted-foreground">
                   {p < 0.1 && c.tokens > 0 ? "<0.1" : p.toFixed(1)}%
                 </td>
               </tr>
@@ -215,6 +211,7 @@ function UsageBody({ data }: { data: ContextUsageDTO | null }) {
           })}
         </tbody>
       </table>
+
     </div>
   );
 }

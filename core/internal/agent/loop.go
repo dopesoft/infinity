@@ -40,6 +40,16 @@ type Session struct {
 	StartedAt time.Time
 	Messages  []llm.Message
 	mu        sync.Mutex
+
+	// Real API-reported usage from the most recent completed turn — fed
+	// straight from the LLM provider's Response.Usage. lastInputTokens
+	// represents the current context-window fill (= what the API counted
+	// on the last call); the context meter reads this so the meter shows
+	// 0 on empty sessions and only grows when a turn has actually fired.
+	lastInputTokens   int
+	lastOutputTokens  int
+	totalInputTokens  int
+	totalOutputTokens int
 }
 
 func (s *Session) Append(m llm.Message) {
@@ -57,6 +67,43 @@ func (s *Session) Snapshot() []llm.Message {
 	out := make([]llm.Message, len(s.Messages))
 	copy(out, s.Messages)
 	return out
+}
+
+// RecordUsage updates the session's API-reported token counters after a
+// turn completes. Called by the loop with whatever the provider returned in
+// Response.Usage. Safe to call with zero values — turns that erred before
+// the LLM responded simply don't move the counters.
+func (s *Session) RecordUsage(u llm.TokenUsage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u.Input > 0 {
+		s.lastInputTokens = u.Input
+		s.totalInputTokens += u.Input
+	}
+	if u.Output > 0 {
+		s.lastOutputTokens = u.Output
+		s.totalOutputTokens += u.Output
+	}
+}
+
+// UsageSnapshot returns the API-reported counters for this session. Used by
+// the context meter to render "real" fill instead of preview estimates.
+type UsageSnapshot struct {
+	LastInputTokens   int
+	LastOutputTokens  int
+	TotalInputTokens  int
+	TotalOutputTokens int
+}
+
+func (s *Session) UsageSnapshot() UsageSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return UsageSnapshot{
+		LastInputTokens:   s.lastInputTokens,
+		LastOutputTokens:  s.lastOutputTokens,
+		TotalInputTokens:  s.totalInputTokens,
+		TotalOutputTokens: s.totalOutputTokens,
+	}
 }
 
 // MemoryProvider lets memory inject relevant retrievals without coupling.
@@ -319,6 +366,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}
 
 		<-streamDone
+
+		// Record real API-reported usage on every successful stream. The
+		// context meter reads s.lastInputTokens to show current window
+		// fill — 0 on empty sessions, accurate after each turn.
+		s.RecordUsage(resp.Usage)
 
 		if streamErr != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
