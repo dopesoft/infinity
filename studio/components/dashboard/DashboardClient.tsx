@@ -36,6 +36,7 @@ import type {
   FollowUp,
   MemoryStats,
   Pursuit,
+  Reflection,
   Saved,
   Todo,
   WorkItem,
@@ -57,34 +58,47 @@ import type {
  */
 
 export function DashboardClient() {
-  const [pursuits, setPursuits] = useState<Pursuit[]>(mockPursuits);
-  const [todos, setTodos] = useState<Todo[]>(mockTodos);
-  const [events, setEvents] = useState<CalendarEvent[]>(mockEvents);
-  const [approvals, setApprovals] = useState<Approval[]>(mockApprovals);
-  const [followUps, setFollowUps] = useState<FollowUp[]>(mockFollowUps);
-  const [work] = useState<WorkItem[]>(mockWorkItems);
-  const [saved, setSaved] = useState<Saved[]>(mockSaved);
-  const [activity, setActivity] = useState<ActivityEvent[]>(mockActivity);
-  const [reflection, setReflection] = useState(mockReflection);
+  // Start empty. Mock fixtures are a *fetch-failure* fallback only —
+  // when /api/dashboard succeeds (even with empty sections) the live
+  // data wins. The earlier `length > 0` guard silently kept mocks
+  // whenever a table was empty in prod, which made the dashboard look
+  // unwired even though it wasn't.
+  const [pursuits, setPursuits] = useState<Pursuit[]>([]);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [followUps, setFollowUps] = useState<FollowUp[]>([]);
+  const [work] = useState<WorkItem[]>(mockWorkItems); // no backend yet
+  const [saved, setSaved] = useState<Saved[]>([]);
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [reflection, setReflection] = useState<Reflection | null>(null);
   const [memoryStats, setMemoryStats] = useState<MemoryStats>(mockMemoryStats);
 
-  // Fetch real data from Core's /api/dashboard. Each section is
-  // independent — anything Core returns replaces the local mock,
-  // anything Core omits keeps the mock. Lets us ship sections as their
-  // backend lands without a big-bang cutover.
   useEffect(() => {
     const ctl = new AbortController();
     void (async () => {
       const data = await fetchDashboard(ctl.signal);
-      if (!data) return;
-      if (data.pursuits && data.pursuits.length > 0) setPursuits(data.pursuits);
-      if (data.todos && data.todos.length > 0) setTodos(data.todos);
-      if (data.calendarEvents && data.calendarEvents.length > 0) setEvents(data.calendarEvents);
-      if (data.followUps && data.followUps.length > 0) setFollowUps(data.followUps);
-      if (data.saved && data.saved.length > 0) setSaved(data.saved);
-      if (data.approvals && data.approvals.length > 0) setApprovals(data.approvals);
-      if (data.activity && data.activity.length > 0) setActivity(data.activity);
-      if (data.reflection) setReflection(data.reflection);
+      if (!data) {
+        // Fetch failed (network/auth). Seed mocks so a disconnected
+        // local dev session still has something to look at.
+        setPursuits(mockPursuits);
+        setTodos(mockTodos);
+        setEvents(mockEvents);
+        setApprovals(mockApprovals);
+        setFollowUps(mockFollowUps);
+        setSaved(mockSaved);
+        setActivity(mockActivity);
+        setReflection(mockReflection);
+        return;
+      }
+      setPursuits(data.pursuits ?? []);
+      setTodos(data.todos ?? []);
+      setEvents(data.calendarEvents ?? []);
+      setFollowUps(data.followUps ?? []);
+      setSaved(data.saved ?? []);
+      setApprovals(data.approvals ?? []);
+      setActivity(data.activity ?? []);
+      setReflection(data.reflection ?? null);
       if (data.memoryStats) setMemoryStats(data.memoryStats);
     })();
     return () => ctl.abort();
@@ -186,7 +200,9 @@ export function DashboardClient() {
             </div>
           )}
 
-          {s.reflection && <ReflectionCard reflection={reflection} onOpen={openViewer} />}
+          {s.reflection && reflection && (
+            <ReflectionCard reflection={reflection} onOpen={openViewer} />
+          )}
 
           {(s.approvals || s.followups) && (
             <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
