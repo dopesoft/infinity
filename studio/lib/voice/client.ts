@@ -52,9 +52,7 @@ export class VoiceClient {
   private localStream: MediaStream | null = null;
   private audioEl: HTMLAudioElement | null = null;
   private micLevelTimer: number | null = null;
-  private outLevelTimer: number | null = null;
   private micAnalyser: AnalyserNode | null = null;
-  private outAnalyser: AnalyserNode | null = null;
   private audioCtx: AudioContext | null = null;
   // Buffer assistant transcript deltas per response so we can fire
   // onAssistantTranscript({ isFinal: true }) with the full text on
@@ -120,7 +118,14 @@ export class VoiceClient {
       // Some browsers race the metadata; call play() explicitly after
       // the gesture. Swallow the "interrupted by new load" rejection.
       audioEl.play().catch(() => undefined);
-      this.attachOutLevelMeter(stream);
+      // Intentionally do NOT route this stream through createMediaStreamSource
+      // for an analyser. Several browsers (notably Chrome in some configs)
+      // treat a MediaStream as exclusive — once an AudioContext consumes it,
+      // the <audio> element it's also attached to stops producing sound.
+      // That cost us the entire "I can't hear the agent" symptom. If we ever
+      // want an output-side level meter, do it off `audioEl.captureStream()`
+      // or read the audio element's media element source, not the WebRTC
+      // track's stream.
     };
 
     // Surface connection failures so the UI doesn't sit on "connecting"
@@ -250,10 +255,6 @@ export class VoiceClient {
       window.clearInterval(this.micLevelTimer);
       this.micLevelTimer = null;
     }
-    if (this.outLevelTimer) {
-      window.clearInterval(this.outLevelTimer);
-      this.outLevelTimer = null;
-    }
     if (this.audioCtx) {
       try {
         this.audioCtx.close();
@@ -267,7 +268,6 @@ export class VoiceClient {
     this.localStream = null;
     this.audioEl = null;
     this.micAnalyser = null;
-    this.outAnalyser = null;
     cb.onStatus?.("closed");
   }
 
@@ -447,26 +447,6 @@ export class VoiceClient {
     }
   }
 
-  private attachOutLevelMeter(stream: MediaStream): void {
-    try {
-      const ctx = this.audioCtx ?? new AudioContext();
-      this.audioCtx = ctx;
-      const src = ctx.createMediaStreamSource(stream);
-      const an = ctx.createAnalyser();
-      an.fftSize = 256;
-      src.connect(an);
-      this.outAnalyser = an;
-      const buf = new Uint8Array(an.frequencyBinCount);
-      const cb = this.args.callbacks ?? {};
-      this.outLevelTimer = window.setInterval(() => {
-        an.getByteFrequencyData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) sum += buf[i];
-        const level = Math.min(1, sum / (buf.length * 255) * 2.5);
-        cb.onLevel?.("out", level);
-      }, 90);
-    } catch {
-      // intentionally swallow
-    }
-  }
+  // (Output level meter removed — see ontrack comment for the reason. The
+  // orb pulses on mic level + status transitions, which is enough signal.)
 }

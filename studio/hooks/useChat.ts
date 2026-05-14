@@ -148,12 +148,32 @@ function mergeServerRows(
       break;
     }
   }
-  // De-dupe: if the rehydrated tail covers the same content as a pending
-  // bubble, drop the pending one (the server's finalized turn wins).
-  const serverTexts = new Set(fromServer.map((m) => m.role + ":" + m.text.trim()));
-  const filteredPending = pendingTail.filter(
-    (m) => !serverTexts.has(m.role + ":" + m.text.trim()),
-  );
+  // De-dupe: drop any pending bubble whose text matches OR is a prefix of
+  // a same-role server row. The server's finalized turn always wins.
+  //
+  // The prefix check matters for voice mode: a streaming assistant bubble
+  // may sit at a partial transcript ("Good afternoon, boss. What's on
+  // your") while the server has already persisted the completed text
+  // ("…What's on your mind today?"). Without the prefix-dedupe we'd
+  // render BOTH — the orphaned streaming partial AND the canonical
+  // completed turn. The bug looked like the agent "duplicating" itself.
+  const sameRoleServer: Map<ChatRole, string[]> = new Map();
+  for (const m of fromServer) {
+    const list = sameRoleServer.get(m.role) ?? [];
+    list.push(m.text.trim());
+    sameRoleServer.set(m.role, list);
+  }
+  const filteredPending = pendingTail.filter((m) => {
+    const candidates = sameRoleServer.get(m.role);
+    if (!candidates) return true;
+    const local = m.text.trim();
+    if (!local) return true;
+    for (const s of candidates) {
+      if (s === local) return false;
+      if (s.startsWith(local)) return false;
+    }
+    return true;
+  });
   return [...fromServer, ...filteredPending];
 }
 
