@@ -183,6 +183,30 @@ export type ProvenanceChain = {
   confidence: number;
 };
 
+export type ReflectionDTO = {
+  id: string;
+  session_id?: string;
+  kind: string;
+  critique: string;
+  lessons: { text: string; confidence: number }[];
+  quality_score: number;
+  importance: number;
+  created_at: string;
+};
+
+export type PredictionDTO = {
+  id: string;
+  session_id?: string;
+  tool_call_id: string;
+  tool_name: string;
+  expected: string;
+  actual?: string;
+  matched: boolean;
+  surprise_score: number;
+  created_at: string;
+  resolved_at?: string;
+};
+
 function coreBaseURL(): string {
   if (typeof window === "undefined") return "";
   const explicit = process.env.NEXT_PUBLIC_CORE_URL;
@@ -237,6 +261,12 @@ export const fetchMemoryCounts = (signal?: AbortSignal) =>
 
 export const fetchObservations = (signal?: AbortSignal) =>
   getJSON<ObservationDTO[]>("/api/memory/observations", signal);
+
+export const fetchReflections = (signal?: AbortSignal) =>
+  getJSON<ReflectionDTO[]>("/api/memory/reflections", signal);
+
+export const fetchPredictions = (signal?: AbortSignal) =>
+  getJSON<PredictionDTO[]>("/api/memory/predictions", signal);
 
 export const fetchMemories = (
   params: { tier?: string; project?: string } = {},

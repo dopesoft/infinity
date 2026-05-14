@@ -10,52 +10,69 @@ It also codes on your home Mac under your Max subscription, lives at your own UR
 
 ## The honest comparison
 
+Verified May 2026 against each project's public repo + docs — `NousResearch/hermes-agent`, `openclaw/openclaw`, `nanobot-ai/nanobot`. Where a competitor's capability is plugin- or backend-dependent rather than native, it's marked ⚠️.
+
 | | **Infinity** | Hermes | OpenClaw | Nanobot |
 |---|:-:|:-:|:-:|:-:|
 | **How it remembers** | | | | |
-| Persistent memory across sessions | ✅ relational + vector + graph | ✅ FTS5 + peer rep | ⚠️ flat MEMORY.md files | ❌ |
-| Provenance — every memory cites its source | ✅ | ❌ | ❌ | ❌ |
-| Auto-links new memories to related ones at write time | ✅ | ❌ | ❌ | ❌ |
-| Resolves contradictions in its own head, nightly | ✅ | ❌ | ❌ | ❌ |
-| Continuously-updated model of *who you are* | ✅ Honcho | ✅ Honcho | ❌ | ❌ |
+| Persistent memory across sessions | ✅ relational + vector + graph | ✅ FTS5 + markdown + Honcho | ✅ markdown + SQLite + vector | ❌ |
+| Provenance — every memory cites its source | ✅ | ❌ | ⚠️ via Memory Wiki plugin | ❌ |
+| Auto-links new memories to related ones at write time | ✅ | ❌ | ⚠️ via plugin | ❌ |
+| Resolves contradictions in its own head | ✅ nightly | ❌ | ⚠️ "Dreaming" + plugin | ❌ |
+| Continuously-updated model of *who you are* | ✅ Honcho | ✅ Honcho | ⚠️ Honcho (opt-in backend) | ❌ |
 | Privacy filter strips secrets before storage | ✅ | ❌ | ❌ | ❌ |
-| Full audit log of every memory write | ✅ | ❌ | ❌ | ❌ |
+| Full audit log of every memory write | ✅ | ⚠️ generic event hooks | ❌ | ❌ |
 | **How it learns** | | | | |
-| Reflects on its own past sessions + saves lessons | ✅ | ❌ | ❌ | ❌ |
+| Reflects on its own past sessions + saves lessons | ✅ critic persona | ⚠️ FTS5 summarization | ✅ "Dreaming" consolidation | ❌ |
 | Predicts each tool outcome, scores its own surprise | ✅ | ❌ | ❌ | ❌ |
-| Crystallises new skills from watching you work | ✅ | ❌ | ❌ | ❌ |
+| Crystallises new skills from watching you work | ✅ | ✅ after complex tasks | ⚠️ via community skill | ❌ |
 | Detects when you keep fighting the same file → drafts a refactor | ✅ | ❌ | ❌ | ❌ |
-| Asks you about its blind spots, on its own | ✅ | ❌ | ❌ | ❌ |
-| Rewrites failing skills automatically | ✅ | ❌ | ❌ | ❌ |
-| Keeps the whole family of skill variants (not just one) | ✅ | ❌ single winner | ❌ | ❌ |
+| Asks you about its blind spots, on its own | ✅ | ⚠️ periodic nudges | ⚠️ synthesis sessions | ❌ |
+| Rewrites failing skills automatically | ✅ GEPA autotrigger | ⚠️ manual skill edit | ❌ | ❌ |
+| Keeps the whole family of skill variants (not just one) | ✅ | ❌ single version | ❌ | ❌ |
 | **What it can do** | | | | |
-| Code on local files (edit, run, refactor) | ✅ 25 tools | ✅ | ✅ | ⚠️ via MCP |
-| Use your Max subscription instead of API tokens | ✅ uniquely ToS-clean | ❌ API key | ❌ API key | ❌ API key |
+| Code on local files (edit, run, refactor) | ✅ 25 tools | ✅ 40+ tools | ✅ ~7 core tools | ⚠️ only via attached MCP |
+| Coding under your Claude/ChatGPT subscription, not API tokens | ✅ Claude Max | ❌ API key | ✅ ChatGPT/Codex OAuth | ❌ API key |
 | Multi-file refactors with sub-agents | ✅ | ✅ | ⚠️ | ⚠️ |
-| Per-call approval gate with phone deep-link | ✅ | ❌ | ⚠️ allow/deny lists | ❌ |
-| Heartbeat — runs on its own schedule | ✅ | ❌ | ⚠️ via cron | ❌ |
-| Cron-scheduled agent runs | ✅ | ❌ | ✅ | ❌ |
-| Webhook-triggered actions | ✅ | ❌ | ⚠️ | ❌ |
+| Per-call approval gate | ✅ + phone deep-link | ✅ shell hooks | ⚠️ sender-pairing gate | ❌ |
+| Heartbeat — runs on its own schedule | ✅ | ⚠️ periodic nudges | ✅ | ❌ |
+| Cron-scheduled agent runs | ✅ | ✅ | ✅ | ❌ |
+| Webhook-triggered actions | ✅ | ✅ | ✅ | ❌ |
 | **What it assembles** | | | | |
-| Builds multi-step workflows from a sentence — durable, resumable | ✅ | ❌ | ❌ | ❌ |
-| Writes *and activates* its own skills at runtime | ✅ live | ⚠️ proposes only | ⚠️ | ❌ |
-| Wires new APIs / MCP servers into itself at runtime | ✅ | ❌ | ❌ | ⚠️ manual config |
+| Builds multi-step workflows from a sentence — durable, resumable | ✅ | ⚠️ script pipelines (not durable) | ⚠️ TaskFlow | ❌ |
+| Writes *and activates* its own skills at runtime | ✅ live | ✅ `skill_manage` | ⚠️ installs from hub | ❌ |
+| Wires new APIs / MCP servers into itself at runtime | ✅ agent-driven | ⚠️ config-level MCP | ⚠️ config-level MCP | ⚠️ config-level MCP |
 | Scorecards — tracks whether its own work is actually working | ✅ | ❌ | ❌ | ❌ |
-| Holds *its own* goals and pursues them autonomously | ✅ | ❌ | ❌ | ❌ |
-| Decides when to interrupt you vs. batch it into a digest | ✅ | ❌ | ❌ | ❌ |
+| Holds *its own* goals and pursues them autonomously | ✅ | ❌ | ⚠️ heartbeat, no goal store | ❌ |
+| Decides when to interrupt you vs. batch it into a digest | ✅ | ❌ | ⚠️ | ❌ |
 | **How you reach it** | | | | |
-| Open it on your phone | ✅ mobile-first PWA | ❌ | ⚠️ | ⚠️ |
-| Custom domain at your address | ✅ | ❌ | ❌ | ❌ |
-| WhatsApp / Slack / Telegram / iMessage | ❌ | ✅ 8+ channels | ✅ 22+ channels | ⚠️ MCP-UI |
-| Voice (wake word, dictation) | ❌ on roadmap | ❌ | ✅ | ❌ |
-| Public skill marketplace | ❌ | ✅ agentskills.io | ✅ ClawHub | ❌ |
-| Open source | ⚠️ private repo | ✅ MIT | ✅ | ✅ |
-| Hundreds of LLMs via OpenRouter | ❌ Anthropic primary | ✅ 200+ | ✅ multi | ✅ multi |
+| Open it on your phone | ✅ mobile-first PWA | ✅ PWA workspace | ✅ iOS + Android nodes | ❌ localhost web UI |
+| Custom domain at your address | ✅ | ❌ | ⚠️ Tailscale / remote | ❌ |
+| WhatsApp / Slack / Telegram / iMessage | ❌ | ⚠️ 20+ channels, no iMessage | ✅ 22+ channels, incl. iMessage | ❌ |
+| Voice | ✅ GPT Realtime | ✅ realtime | ✅ wake word + talk mode | ❌ |
+| Public skill marketplace / hub | ❌ | ✅ Skills Hub | ✅ ClawHub | ❌ |
+| Open source | ⚠️ private repo | ✅ MIT | ✅ MIT | ✅ Apache-2.0 |
+| Many LLMs via OpenRouter | ❌ Anthropic primary | ✅ OpenRouter 200+ | ⚠️ multi-LLM, no OpenRouter | ⚠️ multi-LLM, no OpenRouter |
 
-**Where Infinity wins:** memory, learning loops, mobile, custom domain, ToS-clean coding on your existing subscription.
-**Where Hermes wins today:** open source, multi-LLM reach, skill marketplace, more deployment backends.
-**Where OpenClaw wins today:** voice, channel reach (WhatsApp/Telegram/etc.), public hub.
-**Where Nanobot wins today:** pure MCP host — best if all you want is plugging servers into a chat UI.
+**Where Infinity wins:** the *depth* of memory — provenance, write-time auto-linking, contradiction resolution, secret-stripping, and a full audit log, all native rather than plugins. The learning loops nobody else has: predict-then-act surprise scoring, file-fight refactor detection, automatic failing-skill rewrites. And the entire assembly substrate — durable resumable workflows, runtime self-extension, eval scorecards, agent-owned goals. Plus a custom domain at your own address.
+**Where Hermes wins today:** more messaging channels, more deployment backends, OpenRouter's 200+ models, a mature skill ecosystem — and it *matches* Infinity on cron, webhooks, runtime skill authoring, and a per-call approval gate. The strongest competitor.
+**Where OpenClaw wins today:** wake-word voice, the widest channel reach (incl. native iMessage), the ClawHub public hub, "Dreaming" memory consolidation — and, like Infinity, it can run coding under a ChatGPT subscription.
+**Where Nanobot wins today:** it's a deliberately minimal MCP host — best if all you want is plugging MCP servers into a chat UI, nothing more.
+
+### AGI-trajectory score
+
+There is no standardized benchmark that scores agent *products* — ARC-AGI, GAIA and the like score *models* on tasks, and none of these four publish results. So this is a transparent rubric, scored straight off the verified table above. Every capability row that maps to **cognition trajectory** counts — durable structured memory, closed learning loops, self-assembly / self-improvement, autonomous operation (✅ = 1, ⚠️ = 0.5, ❌ = 0). It deliberately *excludes* the "how you reach it" rows — channels, voice, marketplace, open-source, LLM breadth — because those measure distribution, not how close to AGI.
+
+| Dimension | Infinity | Hermes | OpenClaw | Nanobot |
+|---|:-:|:-:|:-:|:-:|
+| Durable structured memory · 7 rows | 7.0 | 2.5 | 3.0 | 0.0 |
+| Closed learning loops · 7 rows | 7.0 | 2.5 | 2.0 | 0.0 |
+| Self-assembly & self-improvement · 6 rows | 6.0 | 2.0 | 2.5 | 0.5 |
+| Autonomous operation · 4 rows | 4.0 | 3.5 | 3.5 | 0.5 |
+| **AGI-trajectory score** | **24.0 / 24** | **10.5 / 24** | **11.0 / 24** | **1.0 / 24** |
+| | **100%** | **44%** | **46%** | **4%** |
+
+Infinity scores 24/24 because these are the exact capabilities it was architected around — this is our thesis made *measurable*, not a neutral third-party audit. The per-row ✅/⚠️/❌ table above is the raw data; score it with your own rubric and you'll get your own numbers. The gap that matters: Hermes and OpenClaw are real, capable agents (~45%) — but the half they're missing is the *self-improvement* half. Predict-then-act, reflection-with-lessons, failing-skill rewrites, eval scorecards, agent-owned goals — the loops that make next week's agent sharper than this week's. That's the bet.
 
 If you've already written skills for OpenClaw or Hermes, **drop them into `./skills/` and Infinity loads them unmodified.**
 
@@ -199,7 +216,7 @@ Full wiring, schema, HTTP API, and source-of-truth boot sequence in [ARCHITECTUR
 | 7 | Polish + coding bridge + peer modelling + custom domain | ✅ |
 | **Learning** | Reflection · prediction · associative links · sleep consolidation · procedural tier · curiosity | ✅ |
 | **Substrate** | The assembly substrate — generic surface contract · runtime skill-authoring · durable workflow engine · runtime self-extension · eval scorecards · world model + agent goals · initiative + economics | ✅ |
-| 8 | Voice | — roadmap |
+| 8 | Voice — GPT Realtime over WebRTC, full-duplex, tool calls through the same gate as text | ✅ |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the per-phase gap list.
 

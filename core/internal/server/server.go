@@ -97,18 +97,18 @@ type Config struct {
 }
 
 type Server struct {
-	cfg       Config
-	http      *http.Server
-	loop      *agent.Loop
-	mcp       *tools.MCPManager
-	pool      *pgxpool.Pool
-	store     *memory.Store
-	searcher  *memory.Searcher
-	skillsAPI *skills.API
-	trust     *proactive.TrustStore
-	namer     *sessions.Namer
-	auth      *auth.Verifier
-	settings  *settings.Store
+	cfg        Config
+	http       *http.Server
+	loop       *agent.Loop
+	mcp        *tools.MCPManager
+	pool       *pgxpool.Pool
+	store      *memory.Store
+	searcher   *memory.Searcher
+	skillsAPI  *skills.API
+	trust      *proactive.TrustStore
+	namer      *sessions.Namer
+	auth       *auth.Verifier
+	settings   *settings.Store
 	llmReg     *llm.Registry
 	connectors *connectors.Cache
 	voice      *voice.Minter
@@ -236,6 +236,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/api/memory/observations", s.handleObservations)
 	mux.HandleFunc("/api/memory/memories", s.handleMemoryList)
+	mux.HandleFunc("/api/memory/reflections", s.handleMemoryReflections)
+	mux.HandleFunc("/api/memory/predictions", s.handleMemoryPredictions)
 	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
 	mux.HandleFunc("/api/memory/profile", s.handleProfile)
@@ -302,16 +304,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 //
 // Three things this implementation gets right that the prior version didn't:
 //
-//   1. **Echo the Origin** instead of wildcarding `*`. Some browsers /
-//      proxies (Cloudflare in front of Railway included) drop or rewrite
-//      `Access-Control-Allow-Origin: *` for credentialed-ish requests.
-//      Echoing the explicit origin works everywhere.
-//   2. **Reflect the request's `Access-Control-Request-Headers`** so any
-//      header Studio decides to send in the future (x-request-id, etc.)
-//      is preflight-approved automatically.
-//   3. **`Access-Control-Max-Age`** so the browser caches the preflight
-//      for an hour — fewer round-trips, less surface area for transient
-//      preflight failures.
+//  1. **Echo the Origin** instead of wildcarding `*`. Some browsers /
+//     proxies (Cloudflare in front of Railway included) drop or rewrite
+//     `Access-Control-Allow-Origin: *` for credentialed-ish requests.
+//     Echoing the explicit origin works everywhere.
+//  2. **Reflect the request's `Access-Control-Request-Headers`** so any
+//     header Studio decides to send in the future (x-request-id, etc.)
+//     is preflight-approved automatically.
+//  3. **`Access-Control-Max-Age`** so the browser caches the preflight
+//     for an hour — fewer round-trips, less surface area for transient
+//     preflight failures.
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")

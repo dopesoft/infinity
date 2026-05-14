@@ -2,8 +2,10 @@ package server
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/memory"
 )
 
@@ -87,4 +89,60 @@ func (s *Server) handleMemoryList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, mems)
+}
+
+// /api/memory/reflections — recent metacognitive session critiques.
+func (s *Server) handleMemoryReflections(w http.ResponseWriter, r *http.Request) {
+	if s.pool == nil {
+		writeJSON(w, http.StatusOK, []memory.Reflection{})
+		return
+	}
+	limit := intQuery(r, "limit", 25)
+	reflector := memory.NewReflector(s.pool, embed.NewStub(), nil)
+	rows, err := reflector.Reflections(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// /api/memory/predictions — high-surprise predict-then-act rows.
+func (s *Server) handleMemoryPredictions(w http.ResponseWriter, r *http.Request) {
+	if s.pool == nil {
+		writeJSON(w, http.StatusOK, []memory.PredictionRow{})
+		return
+	}
+	limit := intQuery(r, "limit", 25)
+	threshold := floatQuery(r, "threshold", 0.7)
+	rows, err := memory.NewPredictionStore(s.pool).HighSurprise(r.Context(), threshold, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func intQuery(r *http.Request, key string, fallback int) int {
+	v := strings.TrimSpace(r.URL.Query().Get(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func floatQuery(r *http.Request, key string, fallback float64) float64 {
+	v := strings.TrimSpace(r.URL.Query().Get(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }

@@ -275,6 +275,8 @@ studio/
 | `/api/memory/search?q=` | GET | server.handleMemorySearch | triple-stream + RRF |
 | `/api/memory/observations` | GET | server.handleObservations | recent raw observations |
 | `/api/memory/memories?tier=&project=` | GET | server.handleMemoryList | filtered memory list |
+| `/api/memory/reflections?limit=` | GET | server.handleMemoryReflections | recent metacognitive critiques |
+| `/api/memory/predictions?threshold=&limit=` | GET | server.handleMemoryPredictions | high-surprise predict-then-act rows |
 | `/api/memory/cite/:id` | GET | server.handleMemoryCite | provenance chain |
 | `/api/memory/audit?limit=&op=` | GET | server.handleAuditLog | mem_audit rows (table#id target) |
 | `/api/skills` | GET | skills.API | list summaries (last_run + success_rate) |
@@ -467,7 +469,7 @@ every 30 min:
                 └──────────────────────────────┘
 ```
 
-The IntentFlow detector and WAL are *available* but not yet wired into the WebSocket handler — they're API-callable for now and will be folded into the per-turn capture pipeline next session.
+The IntentFlow detector, WAL, and Working Buffer are wired into the WebSocket handler. Each user turn records durable session-state fragments, classifies the turn asynchronously, emits an `intent` WS frame for Studio, and appends completed turn pairs to the working buffer for compaction recovery.
 
 ## 9. Cron + Sentinels (Phase 6)
 
@@ -1007,12 +1009,12 @@ Environment variables that matter:
 | 2 | Tools + MCP + Settings MVP | ✅ all | Settings tab depth — Phase 7 |
 | 3 | Memory subsystem | ✅ all | Recall@10 benchmark fixture pending |
 | 4 | Skills system | ✅ schema, registry, process-jail, agent tools, HTTP API, Studio Skills tab | Container sandbox for high/critical risk · network egress enforcement at the HTTP transport · Tests sub-tab in Studio · "+ New skill" / Import buttons · Edit + Disable + dropdown export/fork/archive |
-| 5 | Proactive engine | ✅ IntentFlow detector, WAL, Working Buffer, Heartbeat, Trust queue, all schemas, HTTP APIs, Heartbeat + Trust Studio tabs; ✅ **Curiosity gap-scan** composed into heartbeat (low-confidence / contradictions / uncovered mentions / high-surprise predictions) | **Hierarchical memory access** struct (DepthFor exists; not wired) · **Compaction Recovery** flow on session start · IntentFlow + WAL + Buffer not yet auto-fired from the WS handler · Heartbeat checklist items: security scan, memory % · Live tab 3-column layout · Studio Heartbeat sub-tabs (Proactive tracker, Pattern recognition, Outcome journal, Curiosity loop, Surprise queue) · Phase 5 Studio components: ControlTokenBadge, IntentStream, ContextBudget, SuggestionCard, TrustGate · "Always allow this pattern" rules · bulk approve in Trust |
+| 5 | Proactive engine | ✅ IntentFlow detector, WAL, Working Buffer, Heartbeat, Trust queue, all schemas, HTTP APIs, Heartbeat + Trust Studio tabs; ✅ **Curiosity gap-scan** composed into heartbeat (low-confidence / contradictions / uncovered mentions / high-surprise predictions); ✅ IntentFlow + WAL + Buffer auto-fired from the WS handler | **Hierarchical memory access** struct (DepthFor exists; not wired) · **Compaction Recovery** flow on session start · Heartbeat checklist items: security scan, memory % · Live tab 3-column layout · Studio Heartbeat sub-tabs (Proactive tracker, Pattern recognition, Outcome journal, Curiosity loop, Surprise queue) · Phase 5 Studio components: ControlTokenBadge, IntentStream, ContextBudget, SuggestionCard, TrustGate · "Always allow this pattern" rules · bulk approve in Trust |
 | 6 | Voyager + Cron + Sentinels | ✅ Cron scheduler + Sentinel manager + Skill dispatcher + schemas + HTTP APIs + Studio Cron+Sentinels tab; ✅ **Voyager source extractor**; ✅ **GEPA Pareto frontier persistence** (per ICLR 2026 Oral); ✅ **Voyager autotrigger** — closes the failure→curriculum→skill→optimization cycle by auto-firing GEPA on skills past the failure threshold. | **Curriculum** generator · **Skill generator** (LLM-driven) · **Verifier** synthetic tests · **AutoSkill** failure-reflection-patch loop · Skill discovery hooks (regex pattern detection in observations) · Sentinel runtimes for non-webhook watch types (file_change, memory_event, external_api_poll, threshold) · Skills tab Candidate column population · Studio frontier-comparison view (render Pareto siblings side-by-side) · NaturalLanguageScheduleInput live parser · Verification log sub-tab · Auto-apply path for approved code proposals |
 | 7 | Polish | ✅ Audit log endpoint + viewer; ✅ Honcho dialectic peer modelling; ✅ Claude Code coding bridge (25 tools via MCP + CF Access); ✅ GEPA skill optimizer sidecar; ✅ custom domain `infinity.dopesoft.io` | Command palette (cmd+K, cmdk lib) · Sessions rewind · Skills Tests sub-tab · Settings 10-section depth · Memory tab knowledge graph viewer · Backup/export · `infinity restore` · Doctor full diagnostic suite · Light/dark + animation polish |
-| **AGI** | **Migration 011 — close the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Curiosity scanner** integrated into heartbeat | Studio surfaces: dedicated Reflections sub-tab on Memory tab · Predictions surprise feed · Curiosity question approval / dismissal UI · Procedural-tier badge in Memory list · A-MEM graph visualization for top-K associative neighbours · LLM-driven prediction text on high-cost tool calls (Haiku, gated on cost heuristic) · Cross-session reflection chains (cluster N reflections → meta-lesson) |
+| **AGI** | **Migration 011 — close the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Curiosity scanner** integrated into heartbeat; ✅ Studio Memory feeds for reflections + high-surprise predictions; ✅ curiosity approval / dismissal in Heartbeat; ✅ procedural-tier badge in Memory list | A-MEM graph visualization for top-K associative neighbours · LLM-driven prediction text on high-cost tool calls (Haiku, gated on cost heuristic) · Cross-session reflection chains (cluster N reflections → meta-lesson) |
 | **Substrate** | **Migrations 016–021 — the assembly substrate (§18)** | ✅ **Generic surface contract** (`mem_surface_items` + `surface_item`/`surface_update`); ✅ **Skill self-authoring loop** (`skill_create` → live registry, durable across restarts); ✅ **Durable workflow engine** (`mem_workflows`/`_runs`/`_steps` + background worker — retries, checkpoints, resume-on-restart, dependency-aware scheduling); ✅ **Runtime self-extension** (`mem_extensions` — agent wires MCP servers + REST-API tools live); ✅ **Verification** (`mem_evals` scorecards with regression detection + `workflow_validate`); ✅ **World model + agent goals** (`mem_entities`/`_links`/`mem_agent_goals` + autonomous-pursuit heartbeat); ✅ **Initiative + economics** (`mem_notifications` urgency policy + `mem_cost_events` budget rollup) | Sandboxed dry-run execution of workflows · automatic per-LLM-call cost capture · multi-dependency (DAG) workflow scheduling · full-registry browse views in Studio (extensions / evals / entities are agent-tool-queryable today) |
-| 8 | Voice | — | Skipped per direction |
+| 8 | Voice | ✅ **GPT Realtime over WebRTC** — `core/internal/voice/realtime.go` mints short-lived OpenAI `client_secret`s; the browser does the WebRTC SDP exchange P2P with `api.openai.com` (audio never touches Core); tool calls round-trip through `/api/voice/tool` so voice has the same registry + Trust gate as text, and `/api/voice/turn` fires the same memory-capture hooks. Model `gpt-realtime-1.5`, server-VAD barge-in, live transcription. nil-safe — `/api/voice/*` returns 503 when `OPENAI_API_KEY` is unset. | Studio mic-button polish · wake-word activation (currently tap-to-talk) |
 
 ## 17. Next-session priorities
 
@@ -1020,31 +1022,27 @@ The AGI-loop substrate (migration 011) is in place — every loop runs
 automatically once the binary boots. The next layer of work is mostly
 Studio surfaces + scheduling polish:
 
-1. **Studio surfaces for the AGI loops.** Reflections sub-tab on `/memory`
-   that renders `mem_reflections` with quality_score colouring; a
-   Predictions feed sorted by surprise; a Curiosity question approval
-   UI on `/heartbeat`; procedural-tier badge in Memory list views. None
-   require new endpoints — the data is already in mem_* tables.
+1. **Finish AGI-loop Studio depth.** `/memory` now has Reflections and
+   Predictions feeds, `/heartbeat` can approve/dismiss curiosity questions,
+   and procedural memories carry their tier badge. Remaining surface work:
+   A-MEM graph visualization for top-K associative neighbours and
+   cross-session reflection chains.
 2. **Schedule the loops via cron.** `infinity reflect` and `infinity
    consolidate` should both run nightly. Either set a Railway cron job
    or add a `mem_crons` row pointing at the existing `agent.Loop`-driven
    isolated-turn target. The Voyager autotrigger is the only loop that's
    wired to its own goroutine; the other two are CLI-invoked.
-3. **Wire IntentFlow + WAL + WorkingBuffer into the WebSocket handler.**
-   Each user turn should classify → record → optionally extract →
-   optionally append to buffer. The substrate is ready; this is one
-   file edit in `internal/server/ws.go`.
-4. **Compaction Recovery.** On session start, if the user message
+3. **Compaction Recovery.** On session start, if the user message
    contains a `<summary>` tag or matches "where were we", read
    `mem_working_buffer` + `mem_session_state` and surface a "recovered
    from buffer" message.
-5. **Container sandbox.** `core/internal/skills/sandbox_container.go`
+4. **Container sandbox.** `core/internal/skills/sandbox_container.go`
    with `docker/docker/client`. Unblocks high/critical-risk skills.
-6. **Pareto frontier comparison UI.** Studio render of N candidates
+5. **Pareto frontier comparison UI.** Studio render of N candidates
    sharing a `frontier_run_id` side-by-side, with promote/reject per
    row. Backed by the existing `/api/voyager/proposals?status=candidate`
    endpoint — add a `?frontier=<id>` filter.
-7. **LLM-driven prediction text** for high-cost tool calls. The current
+6. **LLM-driven prediction text** for high-cost tool calls. The current
    `heuristicPrediction` is rule-based and free; a per-call Haiku call
    gated on a difficulty heuristic would sharpen the surprise signal on
    the calls that matter most.
