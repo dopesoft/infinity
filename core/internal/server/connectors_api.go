@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -153,43 +154,57 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
-	if _, ok := in["toolkit_slug"]; !ok {
+	slug, _ := in["toolkit_slug"].(string)
+	if slug == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "toolkit_slug required"})
 		return
 	}
-	// Pull off the optional alias and stash it once we know the new
-	// connected_account_id (we re-apply after a refresh below). The
-	// Composio API doesn't accept an alias param, so we don't pass it.
-	aliasPending, _ := in["alias"].(string)
-	delete(in, "alias")
-
-	payload, err := json.Marshal(in)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	userID, _ := in["user_id"].(string)
+	if userID == "" {
+		userID = "default"
 	}
-	// Proxy upstream first, but capture the response so we can refresh
-	// the cache and apply the pending alias once the connected_account_id
-	// is known.
+	aliasPending, _ := in["alias"].(string)
+
 	key, isAdmin := composioRESTKey()
 	if key == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no Composio key on core (set COMPOSIO_ADMIN_API_KEY for catalog browse)",
+			"error": "set COMPOSIO_ADMIN_API_KEY on core to initiate connections",
 		})
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, composioAPIBase+"/connected_accounts/initiate", strings.NewReader(string(payload)))
+	if !isAdmin {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "connection initiation requires the workspace admin key (COMPOSIO_ADMIN_API_KEY), not the consumer MCP key",
+		})
+		return
+	}
+
+	// Composio v3 split the old single-call /connected_accounts/initiate
+	// flow into two steps. Step 1: locate (or create) an auth_config for
+	// this toolkit. Step 2: POST to /connected_accounts/link with the
+	// auth_config_id + user_id to receive the OAuth redirect URL.
+	authConfigID, err := findOrCreateAuthConfig(r.Context(), key, isAdmin, slug)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "auth_config: " + err.Error()})
+		return
+	}
+
+	linkBody, _ := json.Marshal(map[string]string{
+		"auth_config_id": authConfigID,
+		"user_id":        userID,
+	})
+	req, err := http.NewRequestWithContext(
+		r.Context(), http.MethodPost,
+		composioAPIBase+"/connected_accounts/link",
+		strings.NewReader(string(linkBody)),
+	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if isAdmin {
-		req.Header.Set("x-api-key", key)
-		req.Header.Set("Authorization", "Bearer "+key)
-	} else {
-		req.Header.Set("x-consumer-api-key", key)
-	}
 	req.Header.Set("Content-Type", "application/json")
+	applyComposioAuth(req, key, isAdmin)
+
 	resp, err := composioHTTP.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "composio upstream unreachable: " + err.Error()})
@@ -198,20 +213,16 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
-	// Refresh the cache so the new pending account shows up immediately
-	// in Studio's active list (status will be INITIATED until the boss
-	// finishes the OAuth dance — the next refresh tick flips to ACTIVE).
+	// Background cache refresh so the pending account shows up in the
+	// activated list (status=INITIATED until the boss finishes OAuth).
 	if s.connectors != nil {
 		go func() {
 			_ = s.connectors.Refresh(r.Context())
 		}()
 	}
 
-	// If the caller pre-supplied an alias and we can pluck the new
-	// connected_account_id out of the response, persist it. Best-effort
-	// — Composio's initiate response shape varies; we look for the
-	// canonical fields.
-	if aliasPending != "" && s.connectors != nil {
+	// Persist the alias against the new connected_account_id on success.
+	if resp.StatusCode < 400 && aliasPending != "" && s.connectors != nil {
 		var probe map[string]any
 		if jerr := json.Unmarshal(body, &probe); jerr == nil {
 			if id := extractConnectedAccountID(probe); id != "" {
@@ -220,10 +231,132 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Normalize the success shape to {redirect_url, id} so the FE keeps
+	// its existing contract regardless of Composio's response field names.
+	if resp.StatusCode < 400 {
+		var src map[string]any
+		if jerr := json.Unmarshal(body, &src); jerr == nil {
+			out := map[string]any{}
+			if v, ok := src["redirect_url"].(string); ok && v != "" {
+				out["redirect_url"] = v
+			}
+			if id := extractConnectedAccountID(src); id != "" {
+				out["id"] = id
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+	}
+
+	// Error path — pass through Composio's body so the FE can surface
+	// the vendor's actual message.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
 }
+
+// applyComposioAuth sets the right credential headers on `req` given
+// the key tier. Centralises the admin vs consumer branching so every
+// upstream call uses the same shape.
+func applyComposioAuth(req *http.Request, key string, isAdmin bool) {
+	if isAdmin {
+		req.Header.Set("x-api-key", key)
+		req.Header.Set("Authorization", "Bearer "+key)
+		return
+	}
+	req.Header.Set("x-consumer-api-key", key)
+}
+
+// findOrCreateAuthConfig returns an auth_config_id for the given
+// toolkit slug. Prefers an existing config in the workspace; falls
+// back to creating a Composio-managed OAuth config if none exists.
+//
+// Caching is not worth the lock contention here — Composio's list
+// endpoint replies in well under a second and connect is a manual
+// user action, not a hot path. If two concurrent connects race on
+// the create step we end up with two equivalent configs, and the
+// next list returns whichever; both are valid.
+func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug string) (string, error) {
+	// 1) List existing configs filtered by toolkit slug. Composio's
+	//    response wraps each row in `{ "auth_config": {...} }` or
+	//    flat depending on the endpoint — handle both.
+	listURL := composioAPIBase + "/auth_configs?toolkit_slug=" + url.QueryEscape(slug) + "&limit=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return "", err
+	}
+	applyComposioAuth(req, key, isAdmin)
+	resp, err := composioHTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	listBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("auth_configs list %d: %s", resp.StatusCode, truncate(string(listBody), 300))
+	}
+	var list struct {
+		Items []struct {
+			AuthConfig struct {
+				ID string `json:"id"`
+			} `json:"auth_config"`
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(listBody, &list); err == nil && len(list.Items) > 0 {
+		if id := list.Items[0].AuthConfig.ID; id != "" {
+			return id, nil
+		}
+		if id := list.Items[0].ID; id != "" {
+			return id, nil
+		}
+	}
+
+	// 2) None exist — create one using Composio-managed auth so the boss
+	//    doesn't have to register an OAuth app per toolkit. For toolkits
+	//    that don't support Composio-managed auth (rare), this will fail
+	//    and the error message tells the boss to wire a custom config in
+	//    the Composio dashboard.
+	createBody, _ := json.Marshal(map[string]any{
+		"toolkit":     map[string]string{"slug": slug},
+		"auth_config": map[string]string{"type": "use_composio_managed_auth"},
+	})
+	creq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, composioAPIBase+"/auth_configs",
+		strings.NewReader(string(createBody)),
+	)
+	if err != nil {
+		return "", err
+	}
+	creq.Header.Set("Content-Type", "application/json")
+	applyComposioAuth(creq, key, isAdmin)
+	cresp, err := composioHTTP.Do(creq)
+	if err != nil {
+		return "", err
+	}
+	defer cresp.Body.Close()
+	cbody, _ := io.ReadAll(cresp.Body)
+	if cresp.StatusCode >= 400 {
+		return "", fmt.Errorf("auth_config create %d: %s", cresp.StatusCode, truncate(string(cbody), 300))
+	}
+	var created struct {
+		AuthConfig struct {
+			ID string `json:"id"`
+		} `json:"auth_config"`
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(cbody, &created); err != nil {
+		return "", fmt.Errorf("auth_config create decode: %w", err)
+	}
+	if id := created.AuthConfig.ID; id != "" {
+		return id, nil
+	}
+	if id := created.ID; id != "" {
+		return id, nil
+	}
+	return "", fmt.Errorf("auth_config create: missing id in response: %s", truncate(string(cbody), 300))
+}
+
 
 // extractConnectedAccountID pulls the new connected_account id out of
 // Composio's initiate response. The field can live under different
