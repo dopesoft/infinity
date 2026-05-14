@@ -11,6 +11,7 @@ import type {
   Reflection,
   Saved,
   Todo,
+  WorkItem,
 } from "./types";
 
 /* Dashboard fetcher.
@@ -33,6 +34,7 @@ export type DashboardResponse = {
   approvals: Approval[] | null;
   reflection: Reflection | null;
   activity: ActivityEvent[] | null;
+  work: WorkItem[] | null;
   memoryStats: MemoryStats | null;
 };
 
@@ -51,6 +53,7 @@ type RawResponse = {
   approvals?: Approval[] | null;
   reflection?: Reflection | null;
   activity?: ActivityEvent[] | null;
+  work?: WorkItem[] | null;
   memoryStats?: MemoryStats | null;
 };
 
@@ -68,6 +71,7 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
       approvals: raw.approvals ?? null,
       reflection: raw.reflection ?? null,
       activity: raw.activity ?? null,
+      work: raw.work ?? null,
       memoryStats: raw.memoryStats ?? null,
     };
   } catch {

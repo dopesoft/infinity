@@ -16,18 +16,6 @@ import { MemoryFooter } from "./MemoryFooter";
 import { ObjectViewer } from "./ObjectViewer";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
 import { fetchDashboard } from "@/lib/dashboard/fetcher";
-import {
-  mockActivity,
-  mockApprovals,
-  mockEvents,
-  mockFollowUps,
-  mockMemoryStats,
-  mockPursuits,
-  mockReflection,
-  mockSaved,
-  mockTodos,
-  mockWorkItems,
-} from "@/lib/dashboard/mock";
 import type {
   ActivityEvent,
   Approval,
@@ -57,40 +45,33 @@ import type {
  * stable — they just say "no matches" inline.
  */
 
+const ZERO_MEMORY_STATS: MemoryStats = {
+  newToday: 0,
+  promotedToday: 0,
+  procedural: 0,
+  streakDays: 0,
+};
+
 export function DashboardClient() {
-  // Start empty. Mock fixtures are a *fetch-failure* fallback only —
-  // when /api/dashboard succeeds (even with empty sections) the live
-  // data wins. The earlier `length > 0` guard silently kept mocks
-  // whenever a table was empty in prod, which made the dashboard look
-  // unwired even though it wasn't.
+  // Every section starts empty and is filled only by /api/dashboard.
+  // No mock fixtures, no fallback fixtures — if the fetch fails the
+  // dashboard shows empty state, not a lie.
   const [pursuits, setPursuits] = useState<Pursuit[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
-  const [work] = useState<WorkItem[]>(mockWorkItems); // no backend yet
+  const [work, setWork] = useState<WorkItem[]>([]);
   const [saved, setSaved] = useState<Saved[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [reflection, setReflection] = useState<Reflection | null>(null);
-  const [memoryStats, setMemoryStats] = useState<MemoryStats>(mockMemoryStats);
+  const [memoryStats, setMemoryStats] = useState<MemoryStats>(ZERO_MEMORY_STATS);
 
   useEffect(() => {
     const ctl = new AbortController();
     void (async () => {
       const data = await fetchDashboard(ctl.signal);
-      if (!data) {
-        // Fetch failed (network/auth). Seed mocks so a disconnected
-        // local dev session still has something to look at.
-        setPursuits(mockPursuits);
-        setTodos(mockTodos);
-        setEvents(mockEvents);
-        setApprovals(mockApprovals);
-        setFollowUps(mockFollowUps);
-        setSaved(mockSaved);
-        setActivity(mockActivity);
-        setReflection(mockReflection);
-        return;
-      }
+      if (!data) return;
       setPursuits(data.pursuits ?? []);
       setTodos(data.todos ?? []);
       setEvents(data.calendarEvents ?? []);
@@ -98,6 +79,7 @@ export function DashboardClient() {
       setSaved(data.saved ?? []);
       setApprovals(data.approvals ?? []);
       setActivity(data.activity ?? []);
+      setWork(data.work ?? []);
       setReflection(data.reflection ?? null);
       if (data.memoryStats) setMemoryStats(data.memoryStats);
     })();

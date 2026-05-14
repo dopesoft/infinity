@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,8 +58,8 @@ type Response struct {
 	Approvals      []Approval      `json:"approvals"`
 	Reflection     *Reflection     `json:"reflection,omitempty"`
 	Activity       []ActivityEvent `json:"activity"`
+	Work           []WorkItem      `json:"work"`
 	MemoryStats    *MemoryStats    `json:"memoryStats,omitempty"`
-	// Work board still uses mock — multi-table aggregator pending.
 }
 
 // ── DTOs (mirror studio/lib/dashboard/types.ts) ───────────────────────────
@@ -178,6 +179,23 @@ type ActivityEvent struct {
 	Future bool      `json:"future,omitempty"`
 }
 
+// WorkItem mirrors studio/lib/dashboard/types.ts WorkItem. Each row maps
+// onto a column in the agent-work Kanban: queued (scheduled for later),
+// running (in-flight), awaiting (needs boss decision), done (finished
+// today).
+type WorkItem struct {
+	ID           string     `json:"id"`
+	Kind         string     `json:"kind"` // cron_run|voyager_opt|sentinel|skill_run|trust|code_proposal|curiosity|memory_op|reflection
+	Title        string     `json:"title"`
+	Subtitle     string     `json:"subtitle,omitempty"`
+	Column       string     `json:"column"` // queued|running|awaiting|done
+	ScheduledFor *time.Time `json:"scheduledFor,omitempty"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	DurationMs   *int       `json:"durationMs,omitempty"`
+	DetailHref   string     `json:"detailHref,omitempty"`
+}
+
 // ── handler ───────────────────────────────────────────────────────────────
 
 func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +256,11 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		a.Logger.Warn("dashboard: activity", "err", err)
 	} else {
 		resp.Activity = e
+	}
+	if wi, err := a.loadWork(ctx); err != nil {
+		a.Logger.Warn("dashboard: work", "err", err)
+	} else {
+		resp.Work = wi
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -708,6 +731,345 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 		out = out[:40]
 	}
 	return out, nil
+}
+
+// loadWork unions live cron/sentinel/skill-run/trust/code-proposal rows
+// into the Kanban shape. One small query per source — no joins — keeps
+// the payload predictable and each column independently fail-safe.
+//
+// Column policy:
+//   - queued    → enabled crons with next_run_at > now, plus voyager
+//                 skill proposals still awaiting verifier decision.
+//   - running   → enabled sentinels (always watching), plus skill runs
+//                 in-flight (started but not ended).
+//   - awaiting  → pending trust contracts + candidate code proposals.
+//                 These also appear in Approvals — that's intentional;
+//                 the Kanban is a *status board*, the Approvals card is
+//                 the decision surface.
+//   - done      → today's completed cron runs + completed skill runs.
+func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
+	if a.Pool == nil {
+		return nil, errors.New("no pool")
+	}
+	const perCol = 10
+	out := make([]WorkItem, 0, perCol*4)
+
+	// ── queued: upcoming crons ────────────────────────────────────────
+	cronQRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, name, schedule_natural, schedule, next_run_at
+		FROM mem_crons
+		WHERE enabled = TRUE AND next_run_at IS NOT NULL AND next_run_at > NOW()
+		ORDER BY next_run_at ASC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for cronQRows.Next() {
+			var (
+				id, name             string
+				natural, schedule    *string
+				nextRunAt            time.Time
+			)
+			if err := cronQRows.Scan(&id, &name, &natural, &schedule, &nextRunAt); err != nil {
+				cronQRows.Close()
+				return nil, err
+			}
+			sub := "scheduled"
+			if natural != nil && *natural != "" {
+				sub = "scheduled · " + *natural
+			} else if schedule != nil && *schedule != "" {
+				sub = "scheduled · " + *schedule
+			}
+			nra := nextRunAt
+			out = append(out, WorkItem{
+				ID:           "cron-q-" + id,
+				Kind:         "cron_run",
+				Title:        name,
+				Subtitle:     sub,
+				Column:       "queued",
+				ScheduledFor: &nra,
+				DetailHref:   "/cron",
+			})
+		}
+		cronQRows.Close()
+	}
+
+	// Voyager skill proposals waiting for verifier / decision.
+	propRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, name, COALESCE(parent_skill, '')
+		FROM mem_skill_proposals
+		WHERE status = 'candidate'
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for propRows.Next() {
+			var id, name, parent string
+			if err := propRows.Scan(&id, &name, &parent); err != nil {
+				propRows.Close()
+				return nil, err
+			}
+			title := "Voyager: verify " + name
+			sub := "verifier queued"
+			if parent != "" {
+				title = "Voyager: patch " + parent
+				sub = "GEPA proposal · " + name
+			}
+			out = append(out, WorkItem{
+				ID:         "vop-" + id,
+				Kind:       "voyager_opt",
+				Title:      title,
+				Subtitle:   sub,
+				Column:     "queued",
+				DetailHref: "/skills",
+			})
+		}
+		propRows.Close()
+	}
+
+	// ── running: sentinels (always-on) + in-flight skill runs ─────────
+	sentRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, name, watch_type, cooldown_seconds
+		FROM mem_sentinels
+		WHERE enabled = TRUE
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for sentRows.Next() {
+			var (
+				id, name, watch string
+				cooldown        int
+			)
+			if err := sentRows.Scan(&id, &name, &watch, &cooldown); err != nil {
+				sentRows.Close()
+				return nil, err
+			}
+			out = append(out, WorkItem{
+				ID:         "sent-" + id,
+				Kind:       "sentinel",
+				Title:      "Sentinel: " + name,
+				Subtitle:   watch + " · cooldown " + humanSeconds(cooldown),
+				Column:     "running",
+				DetailHref: "/cron",
+			})
+		}
+		sentRows.Close()
+	}
+
+	// Skill runs that started but haven't ended yet (in-flight). Cap at
+	// last hour so a crashed never-ended row doesn't leak into the UI
+	// forever.
+	skillRunningRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, skill_name, trigger_source, started_at
+		FROM mem_skill_runs
+		WHERE ended_at IS NULL AND started_at >= NOW() - INTERVAL '1 hour'
+		ORDER BY started_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for skillRunningRows.Next() {
+			var id, name, trigger string
+			var startedAt time.Time
+			if err := skillRunningRows.Scan(&id, &name, &trigger, &startedAt); err != nil {
+				skillRunningRows.Close()
+				return nil, err
+			}
+			s := startedAt
+			out = append(out, WorkItem{
+				ID:         "srun-" + id,
+				Kind:       "skill_run",
+				Title:      "Skill: " + name,
+				Subtitle:   "via " + trigger,
+				Column:     "running",
+				StartedAt:  &s,
+				DetailHref: "/skills",
+			})
+		}
+		skillRunningRows.Close()
+	}
+
+	// ── awaiting: trust contracts + code proposals ────────────────────
+	trustRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, title, action_spec, risk_level, created_at
+		FROM mem_trust_contracts
+		WHERE status = 'pending'
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for trustRows.Next() {
+			var (
+				id, title, risk string
+				actionRaw       []byte
+				created         time.Time
+			)
+			if err := trustRows.Scan(&id, &title, &actionRaw, &risk, &created); err != nil {
+				trustRows.Close()
+				return nil, err
+			}
+			var action map[string]any
+			_ = json.Unmarshal(actionRaw, &action)
+			tool, _ := action["tool"].(string)
+			sub := "needs approval"
+			if tool != "" {
+				sub = tool + " · " + risk
+			} else if risk != "" {
+				sub = risk + " · needs approval"
+			}
+			c := created
+			out = append(out, WorkItem{
+				ID:         "trust-" + id,
+				Kind:       "trust",
+				Title:      title,
+				Subtitle:   sub,
+				Column:     "awaiting",
+				StartedAt:  &c,
+				DetailHref: "/trust",
+			})
+		}
+		trustRows.Close()
+	}
+
+	codeRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, title, target_path, risk_level, created_at
+		FROM mem_code_proposals
+		WHERE status = 'candidate'
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for codeRows.Next() {
+			var (
+				id, title, risk string
+				targetPath      *string
+				created         time.Time
+			)
+			if err := codeRows.Scan(&id, &title, &targetPath, &risk, &created); err != nil {
+				codeRows.Close()
+				return nil, err
+			}
+			path := ""
+			if targetPath != nil {
+				path = *targetPath
+			}
+			sub := risk
+			if path != "" {
+				sub = path + " · " + risk
+			}
+			c := created
+			out = append(out, WorkItem{
+				ID:         "code-" + id,
+				Kind:       "code_proposal",
+				Title:      title,
+				Subtitle:   sub,
+				Column:     "awaiting",
+				StartedAt:  &c,
+				DetailHref: "/code-proposals",
+			})
+		}
+		codeRows.Close()
+	}
+
+	// ── done: today's completed cron + skill runs ────────────────────
+	cronDoneRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, name, last_run_at, last_run_status, last_run_duration_ms
+		FROM mem_crons
+		WHERE last_run_at IS NOT NULL
+		  AND last_run_at >= date_trunc('day', NOW())
+		ORDER BY last_run_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for cronDoneRows.Next() {
+			var (
+				id, name      string
+				lastRunAt     time.Time
+				status        *string
+				durationMs    *int
+			)
+			if err := cronDoneRows.Scan(&id, &name, &lastRunAt, &status, &durationMs); err != nil {
+				cronDoneRows.Close()
+				return nil, err
+			}
+			sub := "completed"
+			if status != nil && *status != "" {
+				sub = *status
+			}
+			fa := lastRunAt
+			item := WorkItem{
+				ID:         "cron-d-" + id,
+				Kind:       "cron_run",
+				Title:      name,
+				Subtitle:   sub,
+				Column:     "done",
+				FinishedAt: &fa,
+				DetailHref: "/cron",
+			}
+			if durationMs != nil {
+				d := *durationMs
+				item.DurationMs = &d
+			}
+			out = append(out, item)
+		}
+		cronDoneRows.Close()
+	}
+
+	skillDoneRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, skill_name, ended_at, duration_ms, success
+		FROM mem_skill_runs
+		WHERE ended_at IS NOT NULL
+		  AND ended_at >= date_trunc('day', NOW())
+		ORDER BY ended_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for skillDoneRows.Next() {
+			var (
+				id, name   string
+				endedAt    time.Time
+				durationMs int
+				success    bool
+			)
+			if err := skillDoneRows.Scan(&id, &name, &endedAt, &durationMs, &success); err != nil {
+				skillDoneRows.Close()
+				return nil, err
+			}
+			sub := "succeeded"
+			if !success {
+				sub = "failed"
+			}
+			fa := endedAt
+			d := durationMs
+			out = append(out, WorkItem{
+				ID:         "srun-d-" + id,
+				Kind:       "skill_run",
+				Title:      "Skill: " + name,
+				Subtitle:   sub,
+				Column:     "done",
+				FinishedAt: &fa,
+				DurationMs: &d,
+				DetailHref: "/skills",
+			})
+		}
+		skillDoneRows.Close()
+	}
+
+	return out, nil
+}
+
+// humanSeconds renders a small seconds value as "Ns" / "Nm" / "Nh".
+// Used for sentinel cooldown subtitles.
+func humanSeconds(s int) string {
+	switch {
+	case s <= 0:
+		return "0s"
+	case s < 60:
+		return strconv.Itoa(s) + "s"
+	case s < 3600:
+		return strconv.Itoa(s/60) + "m"
+	default:
+		return strconv.Itoa(s/3600) + "h"
+	}
 }
 
 // activityKindFromFinding maps heartbeat finding kinds to the dashboard's

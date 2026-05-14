@@ -229,7 +229,7 @@ export class VoiceClient {
     this.dc.send(
       JSON.stringify({
         type: "session.update",
-        session: { tools },
+        session: { type: "realtime", tools, tool_choice: "auto" },
       }),
     );
   }

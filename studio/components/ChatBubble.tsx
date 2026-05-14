@@ -5,12 +5,8 @@ import { Check, CornerDownRight, Copy, Sparkles, ThumbsDown, ThumbsUp, Undo2 } f
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
-
-function formatMs(ms?: number) {
-  if (!ms) return "";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+import { Markdown } from "@/components/chat/Markdown";
+import { Citations } from "@/components/chat/Citations";
 
 function formatTime(ms: number, now: number): string {
   if (!ms) return "";
@@ -178,8 +174,10 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
               </span>
             </div>
           )}
-          <div className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-            {message.text}
+          <div className="min-w-0 max-w-full">
+            {message.text ? (
+              <Markdown text={message.text} />
+            ) : null}
             {message.pending && (
               <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
             )}
@@ -191,6 +189,14 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* Sources strip — extracted URLs as favicon pills. Lives outside
+          the bubble so it visually attributes to the assistant message
+          but doesn't crowd the message body. Hidden while pending so it
+          doesn't flicker as the agent streams. */}
+      {!isUser && !message.pending && message.text && (
+        <Citations text={message.text} />
       )}
 
       {/* Metadata row — timestamp stays visible all the time. Action icons
@@ -208,18 +214,6 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
           )}
         >
           <span suppressHydrationWarning>{formatTime(message.createdAt, now)}</span>
-          {!isUser && message.outputTokens ? (
-            <>
-              <span className="text-muted-foreground/40">·</span>
-              <span className="font-mono">{message.outputTokens} tok</span>
-            </>
-          ) : null}
-          {!isUser && message.latencyMs ? (
-            <>
-              <span className="text-muted-foreground/40">·</span>
-              <span className="font-mono">{formatMs(message.latencyMs)}</span>
-            </>
-          ) : null}
           <div
             className={cn(
               "ml-1 flex items-center gap-0.5",
