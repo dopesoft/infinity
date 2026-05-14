@@ -46,6 +46,11 @@ export type UseVoiceCallbacks = {
   onAssistantDelta?: (delta: string, isFinal: boolean) => void;
 };
 
+type AssistantUiEvent = { delta: string; isFinal: boolean };
+
+const ASSISTANT_FINALIZE_DELAY_MS = 900;
+const USER_TRANSCRIPT_ORDER_TIMEOUT_MS = 6000;
+
 // playConnectChime plays a short two-note ascending tone via the Web
 // Audio API. Fires once when the realtime session reaches "listening"
 // for the first time, so the boss has an audible confirmation that
@@ -116,10 +121,45 @@ export function useVoice(
   // /api/voice/turn (memory + transcript). We post on the final event
   // and clear here.
   const assistantTextRef = useRef("");
+  const assistantFinalizeTimerRef = useRef<number | null>(null);
+  const waitingForUserTranscriptRef = useRef(false);
+  const userTranscriptOrderTimerRef = useRef<number | null>(null);
+  const assistantUiQueueRef = useRef<AssistantUiEvent[]>([]);
   // Track whether we've already chimed for this session so we don't
   // play the connect tone every time we cycle back through "listening"
   // (e.g. after each tool call completes).
   const chimedRef = useRef(false);
+
+  const clearAssistantFinalizeTimer = useCallback(() => {
+    if (assistantFinalizeTimerRef.current) {
+      window.clearTimeout(assistantFinalizeTimerRef.current);
+      assistantFinalizeTimerRef.current = null;
+    }
+  }, []);
+
+  const clearUserTranscriptOrderTimer = useCallback(() => {
+    if (userTranscriptOrderTimerRef.current) {
+      window.clearTimeout(userTranscriptOrderTimerRef.current);
+      userTranscriptOrderTimerRef.current = null;
+    }
+  }, []);
+
+  const emitAssistantUi = useCallback((delta: string, isFinal: boolean) => {
+    if (waitingForUserTranscriptRef.current) {
+      assistantUiQueueRef.current.push({ delta, isFinal });
+      return;
+    }
+    cbRef.current.onAssistantDelta?.(delta, isFinal);
+  }, []);
+
+  const flushAssistantUiQueue = useCallback(() => {
+    if (assistantUiQueueRef.current.length === 0) return;
+    const queued = assistantUiQueueRef.current;
+    assistantUiQueueRef.current = [];
+    for (const ev of queued) {
+      cbRef.current.onAssistantDelta?.(ev.delta, ev.isFinal);
+    }
+  }, []);
 
   // Smooth-peak ticker — runs as long as a session exists.
   useEffect(() => {
@@ -143,9 +183,13 @@ export function useVoice(
     micLevelRef.current = 0;
     outLevelRef.current = 0;
     assistantTextRef.current = "";
+    clearAssistantFinalizeTimer();
+    clearUserTranscriptOrderTimer();
+    waitingForUserTranscriptRef.current = false;
+    assistantUiQueueRef.current = [];
     chimedRef.current = false;
     setState(INITIAL);
-  }, []);
+  }, [clearAssistantFinalizeTimer, clearUserTranscriptOrderTimer]);
 
   const setMuted = useCallback((muted: boolean) => {
     clientRef.current?.setMuted(muted);
@@ -177,6 +221,14 @@ export function useVoice(
             status,
             toolName: status === "tool-running" ? detail ?? null : null,
           }));
+          if (status === "user-speaking") {
+            waitingForUserTranscriptRef.current = true;
+            clearUserTranscriptOrderTimer();
+            userTranscriptOrderTimerRef.current = window.setTimeout(() => {
+              waitingForUserTranscriptRef.current = false;
+              flushAssistantUiQueue();
+            }, USER_TRANSCRIPT_ORDER_TIMEOUT_MS);
+          }
           // Audible "connected" cue on the FIRST transition into
           // listening. Subsequent listening states (after a tool
           // call, after a user turn) don't re-chime.
@@ -194,32 +246,41 @@ export function useVoice(
         },
         onUserTranscript: (text, isFinal) => {
           if (!isFinal) return;
+          clearUserTranscriptOrderTimer();
           // Push the finalised user utterance into the conversation
           // stream as a real chat message AND mirror to Core for
           // memory capture. Belt + suspenders: the live UI shows it
           // immediately; the next session reload would rebuild it
           // from mem_observations either way.
           cbRef.current.onUserMessage?.(text);
+          waitingForUserTranscriptRef.current = false;
+          flushAssistantUiQueue();
           void recordVoiceTurn({ sessionId, role: "user", text });
         },
         onAssistantTranscript: (delta, isFinal) => {
           if (!isFinal) {
+            clearAssistantFinalizeTimer();
             assistantTextRef.current += delta;
             // Stream the delta into the assistant message bubble.
             // useChat creates / extends a pending bubble exactly like
             // text-mode deltas do — the conversation stream is the
             // single source of truth for "what did the agent say".
-            cbRef.current.onAssistantDelta?.(delta, false);
+            emitAssistantUi(delta, false);
             return;
           }
           const finalText = delta && delta.length > assistantTextRef.current.length
             ? delta
             : assistantTextRef.current;
-          assistantTextRef.current = "";
-          if (finalText.trim()) {
-            cbRef.current.onAssistantDelta?.(finalText, true);
-            void recordVoiceTurn({ sessionId, role: "assistant", text: finalText });
-          }
+          assistantTextRef.current = finalText;
+          clearAssistantFinalizeTimer();
+          assistantFinalizeTimerRef.current = window.setTimeout(() => {
+            assistantFinalizeTimerRef.current = null;
+            const text = assistantTextRef.current.trim();
+            assistantTextRef.current = "";
+            if (!text) return;
+            emitAssistantUi(text, true);
+            void recordVoiceTurn({ sessionId, role: "assistant", text });
+          }, ASSISTANT_FINALIZE_DELAY_MS);
         },
         onToolCall: async (call) => {
           let input: Record<string, unknown> = {};
@@ -274,15 +335,25 @@ export function useVoice(
       // client.
       clientRef.current = null;
     }
-  }, [sessionId]);
+  }, [
+    sessionId,
+    clearAssistantFinalizeTimer,
+    clearUserTranscriptOrderTimer,
+    emitAssistantUi,
+    flushAssistantUiQueue,
+  ]);
 
   // Auto-cleanup on unmount or when the session id changes underneath us.
   useEffect(() => {
     return () => {
       clientRef.current?.stop();
       clientRef.current = null;
+      clearAssistantFinalizeTimer();
+      clearUserTranscriptOrderTimer();
+      waitingForUserTranscriptRef.current = false;
+      assistantUiQueueRef.current = [];
     };
-  }, []);
+  }, [clearAssistantFinalizeTimer, clearUserTranscriptOrderTimer]);
   useEffect(() => {
     // Session swap mid-voice ends the current call rather than crossing
     // sessions silently. The composer can re-tap mic if they want to

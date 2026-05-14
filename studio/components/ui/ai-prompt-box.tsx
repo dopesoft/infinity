@@ -482,19 +482,20 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
             // That keeps long, multi-sentence replies readable instead
             // of getting chopped off in a one-line caption.
             //
-            // Centered horizontally so "Connecting…" / "Listening…" /
-            // "Speaking…" reads as a focal point instead of being
-            // tucked against the left edge.
-            <div className="flex min-h-[44px] w-full min-w-0 items-center justify-center gap-3 px-3 py-2">
-              <span className="shrink-0">
-                <VoiceOrb status={voice.status} level={voice.level} />
-              </span>
-              <p
-                className="min-w-0 flex-1 truncate text-center text-sm font-medium text-muted-foreground"
-                aria-live="polite"
-              >
-                {voiceCaptionLabel(voice)}
-              </p>
+            // Center the orb + label as one intrinsic group so the
+            // status text does not float away from the pulse icon.
+            <div className="flex min-h-[44px] w-full min-w-0 items-center justify-center px-3 py-2">
+              <div className="flex min-w-0 max-w-full items-center justify-center gap-3">
+                <span className="shrink-0">
+                  <VoiceOrb status={voice.status} level={voice.level} />
+                </span>
+                <p
+                  className="min-w-0 truncate text-sm font-medium text-muted-foreground"
+                  aria-live="polite"
+                >
+                  {voiceCaptionLabel(voice)}
+                </p>
+              </div>
             </div>
           )}
 
