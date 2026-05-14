@@ -386,8 +386,27 @@ func serveCmd() *cobra.Command {
 			 * `intent` WS frame for Studio's IntentStream panel. The
 			 * detector is passed into server.Config below. */
 
+			// Connector poller — deterministic Composio tools.execute path
+			// (no LLM) that connector_poll cron jobs ride on. Reads the
+			// same admin/consumer key resolution the connectors cache uses
+			// so a Railway env swap propagates without restart.
+			var connectorPoller *connectors.Poller
+			if pool != nil {
+				execClient := connectors.NewExecuteClient(func() string {
+					if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
+						return v
+					}
+					return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY"))
+				})
+				connectorPoller = connectors.NewPoller(pool, execClient, pipeline)
+				fmt.Println("  connector poller: ready (composio tools.execute)")
+			}
+
 			// Cron scheduler + Sentinel manager. Both degrade gracefully when
-			// no DB pool is configured.
+			// no DB pool is configured. The scheduler now runs a composite
+			// executor — agent jobs (system_event / isolated_agent_turn) go
+			// to the agent loop, connector_poll jobs to the poller. Either
+			// half is optional; missing handlers surface as last_run_status.
 			var (
 				cronScheduler *cron.Scheduler
 				sentinelMgr   *sentinel.Manager
@@ -395,15 +414,20 @@ func serveCmd() *cobra.Command {
 				sentinelAPI   *sentinel.API
 			)
 			if pool != nil {
+				var agentExec cron.Executor
 				if loop != nil {
-					cronScheduler = cron.New(pool, cron.NewAgentExecutor(loop))
-				} else {
-					cronScheduler = cron.New(pool, nil)
+					agentExec = cron.NewAgentExecutor(loop)
 				}
+				var connectorExec cron.Executor
+				if connectorPoller != nil {
+					connectorExec = cron.NewConnectorExecutor(connectorPoller)
+				}
+				cronScheduler = cron.New(pool, cron.NewCompositeExecutor(agentExec, connectorExec))
 				if err := cronScheduler.Start(cmd.Context()); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: cron start: %v\n", err)
 				}
 				cronAPI = cron.NewAPI(cronScheduler)
+				tools.RegisterCronTools(registry, cronSchedulerAdapter{s: cronScheduler}, pool)
 
 				dispatcher := sentinel.SkillDispatcher{
 					Inner:   sentinel.LogDispatcher{},
@@ -601,6 +625,58 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address (or use $PORT)")
 	cmd.Flags().StringVar(&mcpConfig, "mcp-config", "", "path to MCP server registry (default: $MCP_CONFIG or core/config/mcp.yaml)")
 	return cmd
+}
+
+// cronSchedulerAdapter bridges *cron.Scheduler → tools.CronScheduler.
+// The tools package can't import cron directly (would cycle through
+// agent), so we translate between cron.Job and tools.CronJob here. The
+// adapter is stateless — every call passes through to the wrapped
+// scheduler with minimal copy overhead.
+type cronSchedulerAdapter struct{ s *cron.Scheduler }
+
+func (a cronSchedulerAdapter) toTools(j cron.Job) tools.CronJob {
+	return tools.CronJob{
+		ID: j.ID, Name: j.Name, Schedule: j.Schedule,
+		ScheduleNatural: j.ScheduleNatural,
+		JobKind:         string(j.JobKind),
+		Target:          j.Target, TargetConfig: j.TargetConfig,
+		Enabled: j.Enabled, MaxRetries: j.MaxRetries, BackoffSeconds: j.BackoffSeconds,
+		LastRunStatus: j.LastRunStatus,
+	}
+}
+
+func (a cronSchedulerAdapter) toCron(j tools.CronJob) cron.Job {
+	return cron.Job{
+		ID: j.ID, Name: j.Name, Schedule: j.Schedule,
+		ScheduleNatural: j.ScheduleNatural,
+		JobKind:         cron.JobKind(j.JobKind),
+		Target:          j.Target, TargetConfig: j.TargetConfig,
+		Enabled: j.Enabled, MaxRetries: j.MaxRetries, BackoffSeconds: j.BackoffSeconds,
+	}
+}
+
+func (a cronSchedulerAdapter) Upsert(ctx context.Context, j tools.CronJob) (string, error) {
+	return a.s.Upsert(ctx, a.toCron(j))
+}
+func (a cronSchedulerAdapter) Delete(ctx context.Context, id string) error {
+	return a.s.Delete(ctx, id)
+}
+func (a cronSchedulerAdapter) List(ctx context.Context) ([]tools.CronJob, error) {
+	jobs, err := a.s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tools.CronJob, len(jobs))
+	for i, j := range jobs {
+		out[i] = a.toTools(j)
+	}
+	return out, nil
+}
+func (a cronSchedulerAdapter) RunOnce(ctx context.Context, j tools.CronJob) error {
+	return a.s.RunOnce(ctx, a.toCron(j))
+}
+func (a cronSchedulerAdapter) Reload(ctx context.Context) error {
+	return a.s.Reload(ctx)
 }
 
 // skillInvoker bridges sentinel.SkillInvoker → skills.Runner. Tiny shim so

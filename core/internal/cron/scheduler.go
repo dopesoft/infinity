@@ -56,6 +56,7 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, schedule, COALESCE(schedule_natural,''), job_kind, target,
+		       COALESCE(target_config::text, '{}'),
 		       enabled, max_retries, backoff_seconds,
 		       last_run_at, COALESCE(last_run_status,''), COALESCE(last_run_duration_ms,0),
 		       next_run_at, failure_count, created_at
@@ -71,13 +72,15 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 	for rows.Next() {
 		var j Job
 		var kind string
+		var targetCfg string
 		if err := rows.Scan(&j.ID, &j.Name, &j.Schedule, &j.ScheduleNatural, &kind,
-			&j.Target, &j.Enabled, &j.MaxRetries, &j.BackoffSeconds,
+			&j.Target, &targetCfg, &j.Enabled, &j.MaxRetries, &j.BackoffSeconds,
 			&j.LastRunAt, &j.LastRunStatus, &j.LastRunDuration,
 			&j.NextRunAt, &j.FailureCount, &j.CreatedAt); err != nil {
 			return err
 		}
 		j.JobKind = JobKind(kind)
+		j.TargetConfig = []byte(targetCfg)
 		wanted[j.ID] = j
 	}
 
@@ -150,17 +153,22 @@ func (s *Scheduler) Upsert(ctx context.Context, j Job) (string, error) {
 	if j.ID == "" {
 		j.ID = uuid.NewString()
 	}
+	targetCfg := string(j.TargetConfig)
+	if targetCfg == "" {
+		targetCfg = "{}"
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_crons (id, name, schedule, schedule_natural, job_kind, target,
-		                       enabled, max_retries, backoff_seconds)
-		VALUES ($1::uuid, $2, $3, NULLIF($4,''), $5, $6, $7, $8, $9)
+		                       target_config, enabled, max_retries, backoff_seconds)
+		VALUES ($1::uuid, $2, $3, NULLIF($4,''), $5, $6, $7::jsonb, $8, $9, $10)
 		ON CONFLICT (name) DO UPDATE SET
 		  schedule = EXCLUDED.schedule,
 		  schedule_natural = EXCLUDED.schedule_natural,
 		  job_kind = EXCLUDED.job_kind,
 		  target = EXCLUDED.target,
+		  target_config = EXCLUDED.target_config,
 		  enabled = EXCLUDED.enabled
-	`, j.ID, j.Name, j.Schedule, j.ScheduleNatural, string(j.JobKind), j.Target,
+	`, j.ID, j.Name, j.Schedule, j.ScheduleNatural, string(j.JobKind), j.Target, targetCfg,
 		j.Enabled, j.MaxRetries, j.BackoffSeconds)
 	if err != nil {
 		return "", err
@@ -186,6 +194,7 @@ func (s *Scheduler) List(ctx context.Context) ([]Job, error) {
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, schedule, COALESCE(schedule_natural,''), job_kind, target,
+		       COALESCE(target_config::text, '{}'),
 		       enabled, max_retries, backoff_seconds,
 		       last_run_at, COALESCE(last_run_status,''), COALESCE(last_run_duration_ms,0),
 		       next_run_at, failure_count, created_at
@@ -200,16 +209,53 @@ func (s *Scheduler) List(ctx context.Context) ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var kind string
+		var targetCfg string
 		if err := rows.Scan(&j.ID, &j.Name, &j.Schedule, &j.ScheduleNatural, &kind,
-			&j.Target, &j.Enabled, &j.MaxRetries, &j.BackoffSeconds,
+			&j.Target, &targetCfg, &j.Enabled, &j.MaxRetries, &j.BackoffSeconds,
 			&j.LastRunAt, &j.LastRunStatus, &j.LastRunDuration,
 			&j.NextRunAt, &j.FailureCount, &j.CreatedAt); err != nil {
 			return nil, err
 		}
 		j.JobKind = JobKind(kind)
+		j.TargetConfig = []byte(targetCfg)
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+// RunOnce fires a single job immediately, regardless of schedule. It does
+// not mutate the schedule entry — the next regular firing still happens at
+// the cron-expression's next tick. Used by the cron_run_now agent tool and
+// by Studio's "Run now" button.
+//
+// Errors from the executor propagate; the scheduler still updates
+// last_run_at / last_run_status so the run shows up in audit.
+func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
+	if s == nil {
+		return errors.New("scheduler nil")
+	}
+	start := time.Now().UTC()
+	var execErr error
+	if s.executor != nil {
+		execErr = s.executor.ExecuteJob(j)
+	} else {
+		execErr = errors.New("no executor configured")
+	}
+	end := time.Now().UTC()
+	status := "ok (manual)"
+	if execErr != nil {
+		status = "error (manual): " + execErr.Error()
+	}
+	if s.pool != nil {
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE mem_crons SET
+			  last_run_at = $2,
+			  last_run_status = $3,
+			  last_run_duration_ms = $4
+			 WHERE id = $1::uuid
+		`, j.ID, end, status, end.Sub(start).Milliseconds())
+	}
+	return execErr
 }
 
 // SimulateNext returns the next 3 fire times for a schedule expression. Used
