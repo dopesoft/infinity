@@ -629,10 +629,89 @@ export function useChat() {
     if (sessionId) writeCachedMessages(sessionId, []);
   }, [ws, sessionId, clearWatchdog]);
 
+  // ── Voice integration ──────────────────────────────────────────────────
+  //
+  // Voice mode (OpenAI Realtime over WebRTC) streams transcripts on the
+  // browser side instead of going through the WS turn pipeline. These
+  // hooks let the voice client push final user utterances and live
+  // assistant deltas straight into the same `messages` array text mode
+  // populates — so the conversation reads as one continuous thread,
+  // regardless of which modality each turn arrived through.
+  //
+  // The /api/voice/turn POST still fires on the Core side for memory
+  // capture + cross-tab durability; these methods only mirror the same
+  // data into the local view for live UX.
+
+  /** Append a finalised user utterance from voice mode. */
+  const addVoiceUserMessage = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setMessages((prev) => [
+      ...prev,
+      { id: makeId(), role: "user", text: trimmed, createdAt: Date.now() },
+    ]);
+  }, []);
+
+  /** Stream an assistant delta from voice. Creates a pending assistant
+   *  message on the first delta of a response and appends to it on
+   *  subsequent deltas. On `isFinal`, the message is committed (loses
+   *  its pending flag) so the cache picks it up. */
+  const streamVoiceAssistantDelta = useCallback((delta: string, isFinal: boolean) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === "assistant" && last.pending) {
+        next[next.length - 1] = {
+          ...last,
+          text: isFinal && delta.length > last.text.length ? delta : last.text + delta,
+          pending: !isFinal,
+        };
+        return next;
+      }
+      // No in-flight assistant bubble — start one. For the final-only
+      // case (no preceding deltas) this captures the full transcript
+      // in a single, immediately-committed message.
+      next.push({
+        id: makeId(),
+        role: "assistant",
+        text: delta,
+        pending: !isFinal,
+        createdAt: Date.now(),
+      });
+      return next;
+    });
+  }, []);
+
   const status = ws.status;
 
   return useMemo(
-    () => ({ sessionId, messages, usage, isStreaming, send, interrupt, newSession, switchSession, clear, status }),
-    [sessionId, messages, usage, isStreaming, send, interrupt, newSession, switchSession, clear, status],
+    () => ({
+      sessionId,
+      messages,
+      usage,
+      isStreaming,
+      send,
+      interrupt,
+      newSession,
+      switchSession,
+      clear,
+      status,
+      addVoiceUserMessage,
+      streamVoiceAssistantDelta,
+    }),
+    [
+      sessionId,
+      messages,
+      usage,
+      isStreaming,
+      send,
+      interrupt,
+      newSession,
+      switchSession,
+      clear,
+      status,
+      addVoiceUserMessage,
+      streamVoiceAssistantDelta,
+    ],
   );
 }

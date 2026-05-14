@@ -101,17 +101,24 @@ export class VoiceClient {
     //     hidden but live.
     //   - `playsInline` is required to keep audio in-page on iPhone
     //     instead of opening a fullscreen player.
+    // The audio element MUST be in the DOM and not fully invisible —
+    // 0×0 / display:none / opacity:0 cause some browsers (notably
+    // Chrome with restrictive autoplay policies, Safari on iOS) to
+    // silently refuse playback. Visually-hidden via clip-path keeps
+    // the element layout-rendered without showing it.
     const audioEl = document.createElement("audio");
     audioEl.autoplay = true;
-    // `playsInline` lives on the DOM element only on TS lib >= dom.iterable
-    // with a recent target; set via attribute for ironclad iOS coverage.
-    audioEl.setAttribute("playsinline", "true");
+    audioEl.setAttribute("playsinline", "");
     audioEl.setAttribute("aria-hidden", "true");
     audioEl.style.position = "fixed";
-    audioEl.style.width = "0";
-    audioEl.style.height = "0";
-    audioEl.style.opacity = "0";
+    audioEl.style.left = "0";
+    audioEl.style.bottom = "0";
+    audioEl.style.width = "1px";
+    audioEl.style.height = "1px";
+    audioEl.style.opacity = "0.01";
     audioEl.style.pointerEvents = "none";
+    audioEl.style.clipPath = "inset(50%)";
+    audioEl.volume = 1.0;
     document.body.appendChild(audioEl);
     this.audioEl = audioEl;
     pc.ontrack = (e) => {

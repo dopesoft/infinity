@@ -292,11 +292,48 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
+// withCORS handles cross-origin requests from Studio.
+//
+// Production reality: Studio runs at infinity.dopesoft.io while Core runs at
+// core-production-*.up.railway.app — two different origins. Every authed
+// fetch from Studio sends `Authorization: Bearer …` which is a non-simple
+// header, so the browser preflights with OPTIONS before the real request.
+// Any miss on the preflight → the actual call never goes out.
+//
+// Three things this implementation gets right that the prior version didn't:
+//
+//   1. **Echo the Origin** instead of wildcarding `*`. Some browsers /
+//      proxies (Cloudflare in front of Railway included) drop or rewrite
+//      `Access-Control-Allow-Origin: *` for credentialed-ish requests.
+//      Echoing the explicit origin works everywhere.
+//   2. **Reflect the request's `Access-Control-Request-Headers`** so any
+//      header Studio decides to send in the future (x-request-id, etc.)
+//      is preflight-approved automatically.
+//   3. **`Access-Control-Max-Age`** so the browser caches the preflight
+//      for an hour — fewer round-trips, less surface area for transient
+//      preflight failures.
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+		// Echo whatever headers the browser asked to send. Falls back to a
+		// sane default for clients that don't request anything specific.
+		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+		if reqHeaders == "" {
+			reqHeaders = "Content-Type,Authorization"
+		}
+		w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "3600")
+		// Short-circuit ALL preflight requests here so nothing downstream
+		// (auth middleware, the mux, individual handlers) gets a chance
+		// to swallow them and return a header-less 401/404/405.
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

@@ -24,8 +24,6 @@ export type UseVoiceState = {
   status: VoiceStatus;
   level: number; // 0..1, peak of mic+out so the orb pulse stays smooth
   muted: boolean;
-  userCaption: string;
-  assistantCaption: string;
   toolName: string | null;
   error: string | null;
 };
@@ -34,13 +32,29 @@ const INITIAL: UseVoiceState = {
   status: "idle",
   level: 0,
   muted: false,
-  userCaption: "",
-  assistantCaption: "",
   toolName: null,
   error: null,
 };
 
-export function useVoice(sessionId: string | undefined) {
+/** Hooks the chat conversation stream into voice's transcript events so
+ *  user utterances and live assistant deltas appear as proper chat
+ *  messages in the conversation area — never as ephemeral captions in
+ *  the composer. The composer only ever renders the orb + status + Mute
+ *  + End controls. */
+export type UseVoiceCallbacks = {
+  onUserMessage?: (text: string) => void;
+  onAssistantDelta?: (delta: string, isFinal: boolean) => void;
+};
+
+export function useVoice(
+  sessionId: string | undefined,
+  callbacks?: UseVoiceCallbacks,
+) {
+  // Keep callbacks fresh across renders without re-binding the voice
+  // client's event handlers (which were created when start() was called).
+  const cbRef = useRef<UseVoiceCallbacks>(callbacks ?? {});
+  cbRef.current = callbacks ?? {};
+
   const [state, setState] = useState<UseVoiceState>(INITIAL);
   const clientRef = useRef<VoiceClient | null>(null);
   // Latest mic + out levels feed a smoothed peak into state so the orb
@@ -118,16 +132,22 @@ export function useVoice(sessionId: string | undefined) {
         },
         onUserTranscript: (text, isFinal) => {
           if (!isFinal) return;
-          setState((s) => ({ ...s, userCaption: text }));
+          // Push the finalised user utterance into the conversation
+          // stream as a real chat message AND mirror to Core for
+          // memory capture. Belt + suspenders: the live UI shows it
+          // immediately; the next session reload would rebuild it
+          // from mem_observations either way.
+          cbRef.current.onUserMessage?.(text);
           void recordVoiceTurn({ sessionId, role: "user", text });
         },
         onAssistantTranscript: (delta, isFinal) => {
           if (!isFinal) {
             assistantTextRef.current += delta;
-            setState((s) => ({
-              ...s,
-              assistantCaption: (s.assistantCaption + delta).slice(-280),
-            }));
+            // Stream the delta into the assistant message bubble.
+            // useChat creates / extends a pending bubble exactly like
+            // text-mode deltas do — the conversation stream is the
+            // single source of truth for "what did the agent say".
+            cbRef.current.onAssistantDelta?.(delta, false);
             return;
           }
           const finalText = delta && delta.length > assistantTextRef.current.length
@@ -135,7 +155,7 @@ export function useVoice(sessionId: string | undefined) {
             : assistantTextRef.current;
           assistantTextRef.current = "";
           if (finalText.trim()) {
-            setState((s) => ({ ...s, assistantCaption: finalText.slice(-280) }));
+            cbRef.current.onAssistantDelta?.(finalText, true);
             void recordVoiceTurn({ sessionId, role: "assistant", text: finalText });
           }
         },

@@ -251,6 +251,12 @@ export interface PromptInputBoxProps {
    * sends a steer instead of stopping.
    */
   onStop?: () => void;
+  /** Voice mode hooks: voice's finalised user transcript becomes a
+   *  conversation message; assistant deltas stream into the same
+   *  conversation as a pending bubble until the response finalises.
+   *  See useChat.addVoiceUserMessage / streamVoiceAssistantDelta. */
+  onVoiceUserMessage?: (text: string) => void;
+  onVoiceAssistantDelta?: (delta: string, isFinal: boolean) => void;
 }
 
 export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxProps>(
@@ -270,6 +276,8 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       minimal = false,
       onSlash,
       onStop,
+      onVoiceUserMessage,
+      onVoiceAssistantDelta,
     } = props;
 
     const [internalValue, setInternalValue] = React.useState("");
@@ -294,8 +302,13 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
 
     // Voice mode (OpenAI Realtime over WebRTC). Owns its own state
     // machine; we just read .active to swap the composer body and
-    // hand .start / .stop to the mic / end buttons.
-    const voice = useVoice(sessionId);
+    // hand .start / .stop to the mic / end buttons. Transcripts flow
+    // into the conversation stream via the host's callbacks — the
+    // composer never renders caption text itself.
+    const voice = useVoice(sessionId, {
+      onUserMessage: onVoiceUserMessage,
+      onAssistantDelta: onVoiceAssistantDelta,
+    });
     const voiceActive = voice.active;
 
     const uploadRef = React.useRef<HTMLInputElement>(null);
@@ -462,24 +475,33 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           </div>
 
           {voiceActive && (
+            // Composer slot in voice mode: orb + one-line status only.
+            // The actual transcript (what you said, what the agent
+            // says back) streams into the conversation thread above —
+            // see useChat.addVoiceUserMessage / streamVoiceAssistantDelta.
+            // That keeps long, multi-sentence replies readable instead
+            // of getting chopped off in a one-line caption.
             <div className="flex min-h-[44px] items-center gap-3 px-3 py-2">
               <VoiceOrb status={voice.status} level={voice.level} />
-              <div className="min-w-0 flex-1">
-                <p
-                  className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground"
-                  aria-live="polite"
-                >
-                  {voiceCaptionLabel(voice)}
-                </p>
-                <p className="truncate text-sm text-foreground/90" aria-live="polite">
-                  {voice.assistantCaption || voice.userCaption || ""}
-                </p>
-              </div>
+              <p
+                className="truncate text-sm font-medium text-muted-foreground"
+                aria-live="polite"
+              >
+                {voiceCaptionLabel(voice)}
+              </p>
             </div>
           )}
 
-          {/* Action row */}
-          <div className="flex min-w-0 items-center justify-between gap-2 pt-1.5">
+          {/* Action row. In voice mode we collapse to a centered cluster
+           * so Mute + End sit together with a small gap; in text mode
+           * the model chip / context meter / paperclip occupy the left
+           * while send/stop pins to the right edge. */}
+          <div
+            className={cn(
+              "flex min-w-0 items-center pt-1.5",
+              voiceActive ? "justify-center gap-6" : "justify-between gap-2",
+            )}
+          >
             <div className="flex min-w-0 items-center gap-1.5">
               {voiceActive ? (
                 <Tooltip>
