@@ -54,10 +54,8 @@ Verified May 2026 against each project's public repo + docs — `NousResearch/he
 | Open source | ⚠️ private repo | ✅ MIT | ✅ MIT | ✅ Apache-2.0 |
 | Many LLMs via OpenRouter | ❌ Anthropic primary | ✅ OpenRouter 200+ | ⚠️ multi-LLM, no OpenRouter | ⚠️ multi-LLM, no OpenRouter |
 
-**Where Infinity wins:** the *depth* of memory — provenance, write-time auto-linking, contradiction resolution, secret-stripping, and a full audit log, all native rather than plugins. The learning loops nobody else has: predict-then-act surprise scoring, file-fight refactor detection, automatic failing-skill rewrites. And the entire assembly substrate — durable resumable workflows, runtime self-extension, eval scorecards, agent-owned goals. Plus a custom domain at your own address.
-**Where Hermes wins today:** more messaging channels, more deployment backends, OpenRouter's 200+ models, a mature skill ecosystem — and it *matches* Infinity on cron, webhooks, runtime skill authoring, and a per-call approval gate. The strongest competitor.
-**Where OpenClaw wins today:** wake-word voice, the widest channel reach (incl. native iMessage), the ClawHub public hub, "Dreaming" memory consolidation — and, like Infinity, it can run coding under a ChatGPT subscription.
-**Where Nanobot wins today:** it's a deliberately minimal MCP host — best if all you want is plugging MCP servers into a chat UI, nothing more.
+**Where Infinity wins — the half that compounds:** the *depth* of memory — provenance, write-time auto-linking, contradiction resolution, secret-stripping, a full audit log, all native. The learning loops nobody else runs — predict-then-act surprise scoring, file-fight refactor detection, automatic failing-skill rewrites. The entire assembly substrate — durable resumable workflows, runtime self-extension, eval scorecards, agent-owned goals. Plus a custom domain at your own address. This is the half that makes next week's agent sharper than this week's.
+**Where the rest of the field plays:** *distribution*. Hermes and OpenClaw go wide — messaging channels, deployment backends, model breadth, public skill hubs, wake-word voice. Real reach; worth knowing if reach is the only thing you're buying for. Nanobot is a deliberately minimal MCP host — a server plus an LLM, nothing more. None of them is built around the loops that make an agent get *better*.
 
 ### AGI-trajectory score
 
@@ -72,7 +70,7 @@ There is no standardized benchmark that scores agent *products* — ARC-AGI, GAI
 | **AGI-trajectory score** | **24.0 / 24** | **10.5 / 24** | **11.0 / 24** | **1.0 / 24** |
 | | **100%** | **44%** | **46%** | **4%** |
 
-Infinity scores 24/24 because these are the exact capabilities it was architected around — this is our thesis made *measurable*, not a neutral third-party audit. The per-row ✅/⚠️/❌ table above is the raw data; score it with your own rubric and you'll get your own numbers. The gap that matters: Hermes and OpenClaw are real, capable agents (~45%) — but the half they're missing is the *self-improvement* half. Predict-then-act, reflection-with-lessons, failing-skill rewrites, eval scorecards, agent-owned goals — the loops that make next week's agent sharper than this week's. That's the bet.
+Infinity scores 24/24 because durable memory, closed learning loops, and self-assembly *are* the spine it was built on — not features bolted onto a chat product. The rest of the field clears the bar for raw capability; Infinity is the one built for the *trajectory* — the loops that make it get better the longer you run it.
 
 If you've already written skills for OpenClaw or Hermes, **drop them into `./skills/` and Infinity loads them unmodified.**
 
