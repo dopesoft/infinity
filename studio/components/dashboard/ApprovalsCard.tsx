@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, FileCode, HelpCircle, ShieldCheck, Terminal } from "lucide-react";
+import { AlertTriangle, FileCode, HelpCircle, Terminal } from "lucide-react";
 import { Section, TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
