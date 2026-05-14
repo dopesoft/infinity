@@ -45,9 +45,8 @@ const (
 	defaultVoice         = "ash"
 
 	// britishAccentLine is appended to the realtime instructions so the
-	// Ash voice renders in the accent the boss wants. Ash adapts to
-	// accent prompts well; this single line is enough.
-	britishAccentLine = "Speak with a refined British (Received Pronunciation) accent — measured, articulate, slightly aristocratic. Stay warm and unhurried."
+	// voice renderer has explicit delivery guidance, not just persona.
+	britishAccentLine = "Voice delivery: use a clearly British Received Pronunciation accent. Prefer non-rhotic British vowels, crisp consonants, measured pacing, and warm Jarvis-style restraint. Do not use American pronunciation. Do not use em dash or en dash characters in spoken transcripts."
 
 	// realtimeClientSecretsURL is the OpenAI endpoint that mints the
 	// browser's short-lived authentication key. The full API key never

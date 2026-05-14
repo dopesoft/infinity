@@ -604,6 +604,7 @@ export const fetchHeartbeats = (signal?: AbortSignal) =>
 export type HeartbeatFindingDTO = {
   id: string;
   heartbeat_id: string;
+  curiosity_id?: string;
   started_at: string;
   kind: string;
   title: string;
@@ -620,6 +621,23 @@ export const fetchHeartbeatFindings = (
   if (kind && kind !== "all") qs.set("kind", kind);
   return getJSON<HeartbeatFindingDTO[]>(`/api/heartbeat/findings?${qs.toString()}`, signal);
 };
+
+export async function decideCuriosityQuestion(
+  id: string,
+  decision: "asked" | "answered" | "dismissed",
+  answer = "",
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/curiosity/questions/${id}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, answer }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 export async function runHeartbeatNow(): Promise<HeartbeatRunSummaryDTO | null> {
   try {
@@ -641,7 +659,7 @@ export type TrustContractDTO = {
   cited_memory_ids: string[];
   risk_assessment: Record<string, unknown>;
   preview: string;
-  status: "pending" | "approved" | "denied" | "snoozed";
+  status: "pending" | "approved" | "consumed" | "denied" | "snoozed";
   decided_at?: string | null;
   decision_note?: string;
   created_at: string;

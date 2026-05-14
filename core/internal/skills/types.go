@@ -38,6 +38,9 @@ const (
 	SourceHermes    Source = "hermes_imported"
 	SourceAuto      Source = "auto_evolved"
 	SourceCandidate Source = "curriculum_proposed"
+	// SourceAgent marks a skill the agent authored at runtime via the
+	// skill_create tool — the closed-loop self-authoring path.
+	SourceAgent Source = "agent_authored"
 )
 
 // Status tracks the agent-facing lifecycle. Active skills are invocable;

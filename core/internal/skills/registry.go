@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -69,6 +70,29 @@ func (r *Registry) Reload(ctx context.Context) ([]LoadError, error) {
 		}
 	}
 	return errs, nil
+}
+
+// Put adds (or replaces) a skill in the in-memory index and, when a Store
+// is attached, persists it to Postgres. This is the runtime self-authoring
+// path: a skill the agent creates via skill_create is invocable THIS
+// session — no redeploy, no boot reload. The boot-time
+// MaterializeActiveSkills + Reload chain re-hydrates it from the DB on the
+// next restart, so it is durable.
+func (r *Registry) Put(ctx context.Context, s *Skill) error {
+	if s == nil || s.Name == "" {
+		return errors.New("skills: nil or unnamed skill")
+	}
+	s.LoadedAt = time.Now().UTC()
+	r.mu.Lock()
+	r.skills[s.Name] = s
+	store := r.store
+	r.mu.Unlock()
+	if store != nil {
+		if err := store.UpsertSkill(ctx, s); err != nil {
+			return fmt.Errorf("skills: persist %q: %w", s.Name, err)
+		}
+	}
+	return nil
 }
 
 // Get returns a skill by name. Lookup is case-sensitive — names are kebab-case

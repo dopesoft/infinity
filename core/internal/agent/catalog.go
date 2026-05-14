@@ -13,12 +13,12 @@ import (
 // via tool_search → load_tools, not a phantom.
 const catalogBlockHeader = `<tool_catalog>
 The following tools exist but their JSON schemas are NOT in your current
-toolset to save context. They are real and callable — discover candidates
+toolset to save context. They are real and callable. Discover candidates
 with tool_search("query") and bring them online with load_tools(["name"]).
 Prefer this two-step over guessing the schema or asking the user. After
 the work is done, unload_tools to keep the active surface tight.
 
-Format: name — short description.
+Format: name - short description.
 `
 
 // buildToolCatalogBlock renders the dormant catalog into a system-prompt
@@ -69,7 +69,7 @@ func buildToolCatalogBlock(reg *tools.Registry, active *tools.ActiveSet) string 
 		}
 		b.WriteString("- ")
 		b.WriteString(d.Name)
-		b.WriteString(" — ")
+		b.WriteString(" - ")
 		b.WriteString(desc)
 		b.WriteString("\n")
 	}

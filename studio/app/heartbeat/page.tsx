@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   AlertTriangle,
@@ -19,6 +20,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
+  decideCuriosityQuestion,
   fetchHeartbeats,
   fetchHeartbeatFindings,
   fetchIntentRecent,
@@ -28,6 +30,7 @@ import {
   type HeartbeatFindingDTO,
   type IntentRecordDTO,
 } from "@/lib/api";
+import { seedSession } from "@/lib/dashboard/seed";
 import { useRealtime } from "@/lib/realtime/provider";
 
 /* Heartbeat — system pulse monitor.
@@ -131,6 +134,7 @@ function inLast24h(iso: string): boolean {
 }
 
 export default function HeartbeatPage() {
+  const router = useRouter();
   const [intervalSeconds, setIntervalSeconds] = useState(0);
   const [runs, setRuns] = useState<HeartbeatRunDTO[]>([]);
   const [findings, setFindings] = useState<HeartbeatFindingDTO[]>([]);
@@ -170,16 +174,43 @@ export default function HeartbeatPage() {
     await loadAll();
   }
 
+  async function discussFinding(f: HeartbeatFindingDTO) {
+    if (!f.curiosity_id) return;
+    await decideCuriosityQuestion(f.curiosity_id, "asked");
+    const sessionId = await seedSession("curiosity", f.curiosity_id, {
+      question: f.title,
+      context: f.detail,
+      source: "heartbeat",
+      heartbeat_finding_id: f.id,
+    });
+    if (sessionId) router.push(`/live?session=${encodeURIComponent(sessionId)}`);
+    else router.push("/live");
+  }
+
+  async function dismissFinding(f: HeartbeatFindingDTO) {
+    if (!f.curiosity_id) return;
+    const ok = await decideCuriosityQuestion(f.curiosity_id, "dismissed");
+    if (!ok) return;
+    setFindings((prev) =>
+      prev.filter((x) => x.curiosity_id !== f.curiosity_id && x.title !== f.title),
+    );
+    await loadAll();
+  }
+
   /* Stream: time-merged events. Runs that produced 0 findings still show up
    * (so the boss can see the pulse is alive even when nothing notable
    * happened) but they're visually de-emphasized. Findings inherit their
    * parent run's timestamp via the join in the backend query. */
   const stream = useMemo<PulseEvent[]>(() => {
     const events: PulseEvent[] = [];
+    const seenFindings = new Set<string>();
     for (const r of runs) {
       events.push({ id: `run-${r.id}`, kind: "run", at: r.started_at, run: r });
     }
     for (const f of findings) {
+      const key = `${f.kind}:${f.title}`;
+      if (seenFindings.has(key)) continue;
+      seenFindings.add(key);
       events.push({ id: `find-${f.id}`, kind: "finding", at: f.started_at, finding: f });
     }
     for (const i of intents) {
@@ -351,7 +382,12 @@ export default function HeartbeatPage() {
               ) : (
                 <ol className="relative space-y-3 border-l border-border/60 pl-4">
                   {filteredStream.map((e) => (
-                    <PulseRow key={e.id} ev={e} />
+                    <PulseRow
+                      key={e.id}
+                      ev={e}
+                      onDiscuss={discussFinding}
+                      onDismiss={dismissFinding}
+                    />
                   ))}
                 </ol>
               )}
@@ -493,7 +529,15 @@ function Stat({
   );
 }
 
-function PulseRow({ ev }: { ev: PulseEvent }) {
+function PulseRow({
+  ev,
+  onDiscuss,
+  onDismiss,
+}: {
+  ev: PulseEvent;
+  onDiscuss: (finding: HeartbeatFindingDTO) => void;
+  onDismiss: (finding: HeartbeatFindingDTO) => void;
+}) {
   if (ev.kind === "run" && ev.run) {
     const r = ev.run;
     const hasFindings = r.findings > 0;
@@ -549,6 +593,25 @@ function PulseRow({ ev }: { ev: PulseEvent }) {
           {f.detail && (
             <p className="mt-1 break-words text-[13px] text-foreground/80">{f.detail}</p>
           )}
+          {f.kind === "curiosity" && f.curiosity_id ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onDiscuss(f)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-colors hover:opacity-90"
+              >
+                <MessageSquare className="size-3.5" aria-hidden />
+                Discuss
+              </button>
+              <button
+                type="button"
+                onClick={() => onDismiss(f)}
+                className="inline-flex h-9 items-center rounded-md border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
         </div>
       </li>
     );

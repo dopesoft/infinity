@@ -60,6 +60,10 @@ type Response struct {
 	Activity       []ActivityEvent `json:"activity"`
 	Work           []WorkItem      `json:"work"`
 	MemoryStats    *MemoryStats    `json:"memoryStats,omitempty"`
+	// SurfaceItems is the generic surface contract: mem_surface_items
+	// grouped by `surface` key. Studio renders each group with one
+	// generic SurfaceCard.
+	SurfaceItems map[string][]SurfaceItem `json:"surfaceItems"`
 }
 
 // ── DTOs (mirror studio/lib/dashboard/types.ts) ───────────────────────────
@@ -118,6 +122,26 @@ type FollowUp struct {
 	Draft      string    `json:"draft,omitempty"`
 	Unread     bool      `json:"unread"`
 	ReceivedAt time.Time `json:"receivedAt"`
+}
+
+// SurfaceItem mirrors core/internal/surface.Item — one row of the generic
+// dashboard surface contract (mem_surface_items). The dashboard groups
+// these by Surface and renders each group with the same generic card.
+type SurfaceItem struct {
+	ID               string         `json:"id"`
+	Surface          string         `json:"surface"`
+	Kind             string         `json:"kind"`
+	Source           string         `json:"source"`
+	ExternalID       string         `json:"externalId,omitempty"`
+	Title            string         `json:"title"`
+	Subtitle         string         `json:"subtitle,omitempty"`
+	Body             string         `json:"body,omitempty"`
+	URL              string         `json:"url,omitempty"`
+	Importance       *int           `json:"importance,omitempty"`
+	ImportanceReason string         `json:"importanceReason,omitempty"`
+	Metadata         map[string]any `json:"metadata"`
+	Status           string         `json:"status"`
+	CreatedAt        time.Time      `json:"createdAt"`
 }
 
 type Saved struct {
@@ -194,6 +218,21 @@ type WorkItem struct {
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
 	DurationMs   *int       `json:"durationMs,omitempty"`
 	DetailHref   string     `json:"detailHref,omitempty"`
+	// WorkflowSteps is populated only for Kind == "workflow" — the run's
+	// step state-machine, carried inline so tapping the Kanban card opens
+	// the drawer with the full workflow without a second fetch.
+	WorkflowSteps []WorkflowStep `json:"workflowSteps,omitempty"`
+}
+
+// WorkflowStep is one step of a workflow run, surfaced inside a workflow
+// WorkItem so the ObjectViewer can render the state-machine.
+type WorkflowStep struct {
+	Index  int    `json:"index"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`   // tool | skill | agent | checkpoint
+	Status string `json:"status"` // pending | running | done | failed | skipped | awaiting
+	Output string `json:"output,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // ── handler ───────────────────────────────────────────────────────────────
@@ -261,6 +300,11 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		a.Logger.Warn("dashboard: work", "err", err)
 	} else {
 		resp.Work = wi
+	}
+	if si, err := a.loadSurface(ctx); err != nil {
+		a.Logger.Warn("dashboard: surface", "err", err)
+	} else {
+		resp.SurfaceItems = si
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -391,6 +435,54 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 			return nil, err
 		}
 		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// loadSurface reads the generic surface contract (mem_surface_items) and
+// groups visible items by their `surface` key. Studio renders each group
+// with one generic SurfaceCard — a new surface the agent invents appears
+// on the dashboard with zero backend changes.
+func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error) {
+	rows, err := a.Pool.Query(ctx, `
+		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
+		       title, subtitle, body, COALESCE(url,''), importance,
+		       importance_reason, metadata, status, created_at
+		FROM mem_surface_items
+		WHERE status = 'open'
+		   OR (status = 'snoozed' AND snoozed_until < NOW())
+		ORDER BY surface, importance DESC NULLS LAST, created_at DESC
+		LIMIT 200
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]SurfaceItem{}
+	for rows.Next() {
+		var (
+			it      SurfaceItem
+			imp     *int16
+			metaRaw []byte
+		)
+		if err := rows.Scan(
+			&it.ID, &it.Surface, &it.Kind, &it.Source, &it.ExternalID,
+			&it.Title, &it.Subtitle, &it.Body, &it.URL, &imp,
+			&it.ImportanceReason, &metaRaw, &it.Status, &it.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if imp != nil {
+			v := int(*imp)
+			it.Importance = &v
+		}
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &it.Metadata)
+		}
+		if it.Metadata == nil {
+			it.Metadata = map[string]any{}
+		}
+		out[it.Surface] = append(out[it.Surface], it)
 	}
 	return out, rows.Err()
 }
@@ -672,7 +764,12 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 
 	hbRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, kind, title, detail, created_at
-		FROM mem_heartbeat_findings
+		FROM (
+			SELECT DISTINCT ON (kind, title)
+			       id::text, kind, title, detail, created_at
+			  FROM mem_heartbeat_findings
+			 ORDER BY kind, title, created_at DESC
+		) recent_unique
 		ORDER BY created_at DESC
 		LIMIT 20
 	`)
@@ -1052,6 +1149,115 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			})
 		}
 		skillDoneRows.Close()
+	}
+
+	// ── workflow runs — span columns by run status ────────────────────
+	// pending→queued, running→running, paused→awaiting, terminal→done.
+	// Each run carries its step list inline so tapping a Kanban card opens
+	// the ObjectViewer drawer with the full step state-machine — the
+	// Kanban IS the workflow view, no separate page.
+	wfRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, workflow_name, status, current_step,
+		       started_at, finished_at
+		FROM mem_workflow_runs
+		WHERE status IN ('pending', 'running', 'paused')
+		   OR (status IN ('done', 'failed', 'cancelled')
+		       AND COALESCE(finished_at, created_at) >= date_trunc('day', NOW()))
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, perCol*2)
+	if err == nil {
+		wfItems := make([]*WorkItem, 0, perCol*2)
+		runIndex := map[string]*WorkItem{}
+		for wfRows.Next() {
+			var (
+				id, name, status string
+				currentStep      int
+				startedAt        *time.Time
+				finishedAt       *time.Time
+			)
+			if err := wfRows.Scan(&id, &name, &status, &currentStep, &startedAt, &finishedAt); err != nil {
+				wfRows.Close()
+				return nil, err
+			}
+			column := "queued"
+			sub := "step " + strconv.Itoa(currentStep)
+			switch status {
+			case "running":
+				column = "running"
+				sub = "running · step " + strconv.Itoa(currentStep)
+			case "paused":
+				column = "awaiting"
+				sub = "paused at checkpoint · step " + strconv.Itoa(currentStep)
+			case "done":
+				column = "done"
+				sub = "completed"
+			case "failed":
+				column = "done"
+				sub = "failed at step " + strconv.Itoa(currentStep)
+			case "cancelled":
+				column = "done"
+				sub = "cancelled"
+			}
+			item := &WorkItem{
+				ID:            "wf-" + id,
+				Kind:          "workflow",
+				Title:         "Workflow: " + name,
+				Subtitle:      sub,
+				Column:        column,
+				StartedAt:     startedAt,
+				FinishedAt:    finishedAt,
+				WorkflowSteps: []WorkflowStep{},
+			}
+			wfItems = append(wfItems, item)
+			runIndex[id] = item
+		}
+		wfRows.Close()
+
+		// Batch-load every step for the surfaced runs in one query, then
+		// attach to its run — no N+1, no separate endpoint.
+		if len(runIndex) > 0 {
+			runIDs := make([]string, 0, len(runIndex))
+			for id := range runIndex {
+				runIDs = append(runIDs, id)
+			}
+			stepRows, serr := a.Pool.Query(ctx, `
+				SELECT run_id::text, step_index, name, kind, status, output, error
+				FROM mem_workflow_steps
+				WHERE run_id = ANY($1::uuid[])
+				ORDER BY run_id, step_index
+			`, runIDs)
+			if serr == nil {
+				for stepRows.Next() {
+					var (
+						runID, sName, sKind, sStatus, sOutput, sErr string
+						stepIndex                                   int
+					)
+					if err := stepRows.Scan(&runID, &stepIndex, &sName, &sKind, &sStatus, &sOutput, &sErr); err != nil {
+						stepRows.Close()
+						return nil, err
+					}
+					if item, ok := runIndex[runID]; ok {
+						// Trim long outputs — the drawer shows a preview.
+						if len(sOutput) > 600 {
+							sOutput = sOutput[:600] + "…"
+						}
+						item.WorkflowSteps = append(item.WorkflowSteps, WorkflowStep{
+							Index:  stepIndex,
+							Name:   sName,
+							Kind:   sKind,
+							Status: sStatus,
+							Output: sOutput,
+							Error:  sErr,
+						})
+					}
+				}
+				stepRows.Close()
+			}
+		}
+		for _, item := range wfItems {
+			out = append(out, *item)
+		}
 	}
 
 	return out, nil

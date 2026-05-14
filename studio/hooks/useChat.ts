@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchSessionMessages } from "@/lib/api";
@@ -211,6 +212,8 @@ function findLatestPendingAssistant(messages: ChatMessage[]): number {
 
 export function useChat() {
   const ws = useWebSocket();
+  const searchParams = useSearchParams();
+  const requestedSessionId = searchParams.get("session")?.trim() ?? "";
   // Empty on first server render; assigned client-side in useEffect to avoid
   // hydration mismatches from non-deterministic UUID generation.
   const [sessionId, setSessionId] = useState<string>("");
@@ -266,20 +269,20 @@ export function useChat() {
   // once auth is wired so multiple tabs / devices stay in sync.
   useEffect(() => {
     const stored = readStoredSessionId();
-    const id = stored || newSessionId();
+    const id = requestedSessionId || stored || newSessionId();
     setSessionId(id);
-    if (!stored) writeStoredSessionId(id);
-
-    if (!stored) return;
+    writeStoredSessionId(id);
 
     const cached = readCachedMessages(id);
     if (cached.length > 0) {
-      setMessages((prev) => (prev.length === 0 ? cached : prev));
+      setMessages(cached);
+    } else {
+      setMessages([]);
     }
 
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
-      if (!rows || rows.length === 0) return;
+      if (!rows) return;
       const restored: ChatMessage[] = rows.map((r) => ({
         id: makeId(),
         role: r.role,
@@ -291,7 +294,7 @@ export function useChat() {
       writeCachedMessages(id, restored);
     });
     return () => ac.abort();
-  }, []);
+  }, [requestedSessionId]);
 
   // Mirror the visible transcript into localStorage whenever it changes.
   // Pending / thinking messages are filtered out by writeCachedMessages

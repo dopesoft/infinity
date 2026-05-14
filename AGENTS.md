@@ -6,6 +6,20 @@ If you're an agent, **read this top-to-bottom before answering any question abou
 
 ---
 
+## Rule #1 — the agent assembles; you do not hardwire it
+
+This is the product. Infinity has APIs, MCPs, tools, queues, memory, the internet, and a coding surface. The goal is an agent that takes a workflow in **natural language** and **assembles it** from those pieces. That assembly is the point — an agent that can't assemble is just a chatbot.
+
+**Do not** build a feature as a hardwired Go vertical: a bespoke column + a Go function with the rubric frozen in a string `const` + a single-source widget. That's you doing the work, not the agent. It doesn't scale and it isn't an agent.
+
+**Do** build it as a recipe: a `SKILL.md` whose body is the instruction ("hit the API, pull the data, analyze it, act"), orchestrated by the LLM over generic, schema-driven contracts the app renders automatically. Go is for building blocks — tools, queues, contracts, the loop that runs due skills — never for the cognition. **A prompt in a `.go` file means you built the wrong thing.**
+
+Reference failure: `core/internal/proactive/followup_scoring.go` — ranking rubric baked into a `const`. Email triage is a recipe, not Go.
+
+The test: *could the agent have assembled this itself from a natural-language request using the tools it has?* If yes → skill over generic contracts. If no → the missing piece is a generic building block; build that. Full rationale in [CLAUDE.md](CLAUDE.md#rule-1--the-agent-assembles-you-do-not-hardwire-it).
+
+---
+
 ## Migrations — verify, never assert
 
 **Burned us on 2026-05-13.** Prod silently ran without migrations 011 (AGI loops), 012 (OpenAI OAuth), 013 (session usage), and 014 (dashboard) for weeks. Dashboard endpoints logged `relation "mem_tasks" does not exist`; AGI-loop features had nowhere to write. A prior agent session had told the boss "all migrations applied" without checking. That was a lie by omission and it cost real time.

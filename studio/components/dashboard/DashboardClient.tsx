@@ -9,6 +9,7 @@ import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
 import { ApprovalsCard } from "./ApprovalsCard";
 import { FollowUpsCard } from "./FollowUpsCard";
+import { SurfaceCard } from "./SurfaceCard";
 import { AgentWorkBoard } from "./AgentWorkBoard";
 import { SavedCard } from "./SavedCard";
 import { ActivityCard } from "./ActivityCard";
@@ -26,6 +27,7 @@ import type {
   Pursuit,
   Reflection,
   Saved,
+  SurfaceItem,
   Todo,
   WorkItem,
 } from "@/lib/dashboard/types";
@@ -66,6 +68,10 @@ export function DashboardClient() {
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [reflection, setReflection] = useState<Reflection | null>(null);
   const [memoryStats, setMemoryStats] = useState<MemoryStats>(ZERO_MEMORY_STATS);
+  // Generic surface contract: items the agent surfaced via `surface_item`,
+  // grouped by `surface` key. A new surface the agent invents renders here
+  // automatically — no new state field, no new card component.
+  const [surfaceItems, setSurfaceItems] = useState<Record<string, SurfaceItem[]>>({});
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -81,6 +87,7 @@ export function DashboardClient() {
       setActivity(data.activity ?? []);
       setWork(data.work ?? []);
       setReflection(data.reflection ?? null);
+      setSurfaceItems(data.surfaceItems ?? {});
       if (data.memoryStats) setMemoryStats(data.memoryStats);
     })();
     return () => ctl.abort();
@@ -93,6 +100,15 @@ export function DashboardClient() {
 
   const openViewer = useCallback((item: DashboardItem) => setViewing(item), []);
   const closeViewer = useCallback(() => setViewing(null), []);
+  const resolveViewerItem = useCallback((item: DashboardItem) => {
+    if (item.kind !== "approval") return;
+    const id = item.data.id;
+    setApprovals((prev) => prev.filter((a) => a.id !== id));
+    setWork((prev) =>
+      prev.filter((w) => w.id !== `trust-${id}` && w.id !== `code-${id}`),
+    );
+    setViewing(null);
+  }, []);
 
   const toggleHabit = useCallback((id: string) => {
     setPursuits((prev) =>
@@ -131,10 +147,19 @@ export function DashboardClient() {
         work,
         saved,
         activity,
+        surfaceItems,
       };
     }
     const match = (...parts: (string | undefined | null)[]) =>
       parts.some((p) => (p ?? "").toLowerCase().includes(q));
+    // Surface groups filter per-item; a group with zero matches drops out.
+    const surfaceFiltered: Record<string, SurfaceItem[]> = {};
+    for (const [key, items] of Object.entries(surfaceItems)) {
+      const m = items.filter((it) =>
+        match(it.title, it.subtitle, it.body, it.kind, it.source),
+      );
+      if (m.length) surfaceFiltered[key] = m;
+    }
     return {
       pursuits: pursuits.filter((p) => match(p.title, p.cadence)),
       todos: todos.filter((t) => match(t.title, t.priority, t.source)),
@@ -150,14 +175,18 @@ export function DashboardClient() {
       work: work.filter((w) => match(w.title, w.subtitle, w.kind)),
       saved: saved.filter((s) => match(s.title, s.body, s.source, s.url)),
       activity: activity.filter((e) => match(e.title, e.detail)),
+      surfaceItems: surfaceFiltered,
     };
-  }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity]);
+  }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
 
   // Counter for the "need you" badge in the header — anything actionable.
+  // High-importance surfaced items (80+) count too.
   const needYouCount =
     approvals.length +
     followUps.filter((f) => f.unread).length +
-    work.filter((w) => w.column === "awaiting").length;
+    Object.values(surfaceItems)
+      .flat()
+      .filter((it) => (it.importance ?? 0) >= 80).length;
 
   return (
     <TabFrame>
@@ -179,6 +208,23 @@ export function DashboardClient() {
                 <TodosCard todos={filtered.todos} onOpen={openViewer} onToggle={toggleTodo} />
               )}
               {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
+            </div>
+          )}
+
+          {/* Generic surface contract — every group the agent surfaced via
+              `surface_item`, each rendered by one generic SurfaceCard. A new
+              surface the agent invents appears here with zero new code. */}
+          {Object.keys(filtered.surfaceItems).length > 0 && (
+            <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
+              {Object.entries(filtered.surfaceItems).map(([surfaceKey, items], i) => (
+                <SurfaceCard
+                  key={surfaceKey}
+                  surface={surfaceKey}
+                  items={items}
+                  delay={0.15 + i * 0.05}
+                  onOpen={openViewer}
+                />
+              ))}
             </div>
           )}
 
@@ -207,7 +253,7 @@ export function DashboardClient() {
         {s.memoryFooter && <MemoryFooter stats={memoryStats} />}
       </div>
 
-      <ObjectViewer item={viewing} onClose={closeViewer} />
+      <ObjectViewer item={viewing} onClose={closeViewer} onResolved={resolveViewerItem} />
     </TabFrame>
   );
 }

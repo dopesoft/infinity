@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, relTime } from "@/lib/dashboard/format";
 import { useIsDesktop } from "@/lib/dashboard/use-is-desktop";
 import { seedSession } from "@/lib/dashboard/seed";
+import { decideCodeProposal, decideTrust } from "@/lib/api";
 import type {
   Approval,
   CalendarEvent,
@@ -57,6 +58,7 @@ import type {
   Pursuit,
   Reflection,
   Saved,
+  SurfaceItem,
   Todo,
   ActivityEvent as ActivityEv,
   WorkItem,
@@ -75,9 +77,11 @@ import type {
 export function ObjectViewer({
   item,
   onClose,
+  onResolved,
 }: {
   item: DashboardItem | null;
   onClose: () => void;
+  onResolved?: (item: DashboardItem) => void;
 }) {
   // Only one primitive mounts at a time. Rendering both means both
   // portals stack their overlays at <body> level (each with backdrop-blur)
@@ -94,7 +98,7 @@ export function ObjectViewer({
             {item ? getViewerKindLabel(item) : ""}
           </DialogDescription>
           <AnimatePresence mode="wait">
-            {item ? <ViewerBody key={getViewerKey(item)} item={item} /> : null}
+            {item ? <ViewerBody key={getViewerKey(item)} item={item} onResolved={onResolved} /> : null}
           </AnimatePresence>
         </DialogContent>
       </Dialog>
@@ -109,7 +113,7 @@ export function ObjectViewer({
         </DrawerDescription>
         <AnimatePresence mode="wait">
           {item ? (
-            <ViewerBody key={getViewerKey(item)} item={item} layout="drawer" />
+            <ViewerBody key={getViewerKey(item)} item={item} layout="drawer" onResolved={onResolved} />
           ) : null}
         </AnimatePresence>
       </DrawerContent>
@@ -129,6 +133,7 @@ function getViewerTitle(item: DashboardItem): string {
     case "reflection": return item.data.title;
     case "approval": return item.data.title;
     case "followup": return item.data.subject ?? item.data.from;
+    case "surface": return item.data.title;
     case "work": return item.data.title;
     case "saved": return item.data.title;
     case "activity": return item.data.title;
@@ -143,17 +148,27 @@ function getViewerKindLabel(item: DashboardItem): string {
     case "reflection": return "Reflection";
     case "approval": return "Approval";
     case "followup": return "Follow-up";
+    case "surface": return surfaceKindLabel(item.data.surface);
     case "work": return "Agent work item";
     case "saved": return "Saved item";
     case "activity": return "Activity event";
   }
 }
 
+// Surface items carry a free-form `surface` key. Titleize it for the
+// kind label so an agent-invented surface still reads cleanly.
+function surfaceKindLabel(surface: string): string {
+  const t = surface.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return `${t} item`;
+}
+
 function ViewerBody({
   item,
+  onResolved,
   layout = "dialog",
 }: {
   item: DashboardItem;
+  onResolved?: (item: DashboardItem) => void;
   layout?: "dialog" | "drawer";
 }) {
   // No `onClose` here — Dialog/Drawer wrappers in ObjectViewer drive the
@@ -172,7 +187,7 @@ function ViewerBody({
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 scroll-touch sm:px-5">
         <ViewerContent item={item} />
       </div>
-      <ViewerActions item={item} />
+      <ViewerActions item={item} onResolved={onResolved} />
     </motion.div>
   );
 }
@@ -212,18 +227,25 @@ function ViewerHeader({
   );
 }
 
-function ViewerActions({ item }: { item: DashboardItem }) {
+function ViewerActions({
+  item,
+  onResolved,
+}: {
+  item: DashboardItem;
+  onResolved?: (item: DashboardItem) => void;
+}) {
   // Every item gets a "Discuss with Jarvis" primary CTA. Kind-specific
   // secondary actions (approve, reject, snooze, mark done, dismiss) live
   // to the left of it.
   const router = useRouter();
   const [seeding, setSeeding] = React.useState(false);
+  const [deciding, setDeciding] = React.useState<"approved" | "denied" | "snoozed" | "rejected" | null>(null);
 
   async function discuss() {
     const id = (item.data as { id?: string }).id ?? "";
     setSeeding(true);
     try {
-      const sessionId = await seedSession(item.kind, id);
+      const sessionId = await seedSession(item.kind, id, item.data);
       if (sessionId) {
         router.push(`/live?session=${encodeURIComponent(sessionId)}`);
       } else {
@@ -236,16 +258,44 @@ function ViewerActions({ item }: { item: DashboardItem }) {
     }
   }
 
+  async function decideApproval(decision: "approved" | "denied" | "snoozed" | "rejected") {
+    if (item.kind !== "approval") return;
+    setDeciding(decision);
+    try {
+      let ok = false;
+      if (item.data.kind.startsWith("trust_")) {
+        ok = await decideTrust(item.data.id, decision === "rejected" ? "denied" : decision);
+      } else if (item.data.kind === "code_proposal") {
+        if (decision === "approved" || decision === "rejected") {
+          ok = await decideCodeProposal(item.data.id, decision);
+        }
+      }
+      if (ok) onResolved?.(item);
+    } finally {
+      setDeciding(null);
+    }
+  }
+
   function renderSecondary(): React.ReactNode {
     switch (item.kind) {
       case "approval":
         if (item.data.kind.startsWith("trust_")) {
           return (
             <>
-              <SecondaryButton tone="success" Icon={CheckCircle2}>
+              <SecondaryButton
+                tone="success"
+                Icon={CheckCircle2}
+                onClick={() => decideApproval("approved")}
+                disabled={deciding !== null}
+              >
                 Approve
               </SecondaryButton>
-              <SecondaryButton tone="danger" Icon={X}>
+              <SecondaryButton
+                tone="danger"
+                Icon={X}
+                onClick={() => decideApproval("denied")}
+                disabled={deciding !== null}
+              >
                 Reject
               </SecondaryButton>
             </>
@@ -254,11 +304,21 @@ function ViewerActions({ item }: { item: DashboardItem }) {
         if (item.data.kind === "code_proposal") {
           return (
             <>
-              <SecondaryButton tone="success" Icon={CheckCircle2}>
+              <SecondaryButton
+                tone="success"
+                Icon={CheckCircle2}
+                onClick={() => decideApproval("approved")}
+                disabled={deciding !== null}
+              >
                 Approve
               </SecondaryButton>
-              <SecondaryButton tone="muted" Icon={Clock4}>
-                Snooze
+              <SecondaryButton
+                tone="danger"
+                Icon={X}
+                onClick={() => decideApproval("rejected")}
+                disabled={deciding !== null}
+              >
+                Reject
               </SecondaryButton>
             </>
           );
@@ -308,10 +368,14 @@ function ViewerActions({ item }: { item: DashboardItem }) {
 function SecondaryButton({
   Icon,
   tone,
+  onClick,
+  disabled,
   children,
 }: {
   Icon: React.ComponentType<{ className?: string }>;
   tone: "success" | "danger" | "muted";
+  onClick?: () => void;
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
   const cls =
@@ -323,8 +387,10 @@ function SecondaryButton({
   return (
     <button
       type="button"
+      onClick={onClick}
+      disabled={disabled}
       className={cn(
-        "inline-flex h-10 items-center gap-1.5 rounded-md border bg-background px-3 text-[13px] font-medium transition-colors",
+        "inline-flex h-10 items-center gap-1.5 rounded-md border bg-background px-3 text-[13px] font-medium transition-colors disabled:opacity-60",
         cls,
       )}
     >
@@ -344,6 +410,7 @@ function ViewerContent({ item }: { item: DashboardItem }) {
     case "reflection": return <ReflectionBody r={item.data} />;
     case "approval": return <ApprovalBody a={item.data} />;
     case "followup": return <FollowUpBody f={item.data} />;
+    case "surface": return <SurfaceBody item={item.data} />;
     case "work": return <WorkBody w={item.data} />;
     case "saved": return <SavedBody s={item.data} />;
     case "activity": return <ActivityBody e={item.data} />;
@@ -657,6 +724,78 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   );
 }
 
+// ── Surface item (generic surface contract) ───────────────────────────────
+function SurfaceBody({ item }: { item: SurfaceItem }) {
+  const metaEntries = Object.entries(item.metadata ?? {}).filter(
+    ([, v]) => v !== null && v !== undefined && v !== "",
+  );
+  return (
+    <div className="space-y-3 pt-3">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
+          {item.kind}
+        </span>
+        <span className="font-mono">· via {item.source}</span>
+        <span className="font-mono" suppressHydrationWarning>
+          · {relTime(item.createdAt)}
+        </span>
+        {typeof item.importance === "number" ? (
+          <span
+            className={cn(
+              "font-mono uppercase tracking-wider",
+              item.importance >= 80
+                ? "text-danger"
+                : item.importance >= 50
+                  ? "text-info"
+                  : "text-muted-foreground",
+            )}
+          >
+            · importance {item.importance}
+          </span>
+        ) : null}
+      </div>
+      {item.subtitle ? (
+        <p className="text-[13px] text-foreground/85">{item.subtitle}</p>
+      ) : null}
+      {item.importanceReason ? (
+        <p className="text-[12px] italic text-muted-foreground">{item.importanceReason}</p>
+      ) : null}
+      {item.body ? (
+        <ContextBlock>
+          <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground/90">
+            {item.body}
+          </pre>
+        </ContextBlock>
+      ) : null}
+      {metaEntries.length > 0 ? (
+        <ContextBlock meta="metadata">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
+            {metaEntries.map(([k, v]) => (
+              <React.Fragment key={k}>
+                <dt className="font-mono text-muted-foreground">{k}</dt>
+                <dd className="break-words text-foreground/85">
+                  {typeof v === "string" ? v : JSON.stringify(v)}
+                </dd>
+              </React.Fragment>
+            ))}
+          </dl>
+        </ContextBlock>
+      ) : null}
+      {item.url ? (
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-[12px] text-info hover:underline"
+        >
+          <ExternalLink className="size-3.5" aria-hidden />
+          {item.url}
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Saved ─────────────────────────────────────────────────────────────────
 function SavedBody({ s }: { s: Saved }) {
   return (
@@ -720,6 +859,54 @@ function WorkBody({ w }: { w: WorkItem }) {
           {w.finishedAt ? <Row label="finished" value={clockTime(w.finishedAt)} /> : null}
         </dl>
       </ContextBlock>
+
+      {/* Workflow runs carry their step state-machine inline — the Kanban
+          card IS the workflow view. Tap any column, see the steps. */}
+      {w.kind === "workflow" && w.workflowSteps && w.workflowSteps.length > 0 ? (
+        <ContextBlock
+          meta={`${w.workflowSteps.length} step${w.workflowSteps.length === 1 ? "" : "s"}`}
+        >
+          <ol className="space-y-2">
+            {w.workflowSteps.map((s) => (
+              <li key={s.index} className="flex gap-2 text-[12px]">
+                <span
+                  className={cn(
+                    "mt-1 size-1.5 shrink-0 rounded-full",
+                    workflowStepDot(s.status),
+                  )}
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {s.kind}
+                    </span>
+                    <span className="truncate text-foreground/90">
+                      {s.name || `step ${s.index}`}
+                    </span>
+                    <span
+                      className={cn(
+                        "ml-auto shrink-0 font-mono text-[10px] uppercase tracking-wider",
+                        workflowStepText(s.status),
+                      )}
+                    >
+                      {s.status}
+                    </span>
+                  </div>
+                  {s.error ? (
+                    <p className="mt-0.5 break-words text-[11px] text-danger">{s.error}</p>
+                  ) : s.output ? (
+                    <p className="mt-0.5 line-clamp-2 break-words text-[11px] text-muted-foreground">
+                      {s.output}
+                    </p>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </ContextBlock>
+      ) : null}
+
       {w.detailHref ? (
         <Link
           href={w.detailHref}
@@ -731,6 +918,39 @@ function WorkBody({ w }: { w: WorkItem }) {
       ) : null}
     </div>
   );
+}
+
+// Workflow step status → dot colour / text colour for the run drawer.
+function workflowStepDot(status: string): string {
+  switch (status) {
+    case "done":
+      return "bg-success";
+    case "failed":
+      return "bg-danger";
+    case "running":
+      return "bg-info animate-pulse";
+    case "awaiting":
+      return "bg-rose-400";
+    case "skipped":
+      return "bg-muted-foreground/40";
+    default:
+      return "bg-muted-foreground/30";
+  }
+}
+
+function workflowStepText(status: string): string {
+  switch (status) {
+    case "done":
+      return "text-success";
+    case "failed":
+      return "text-danger";
+    case "running":
+      return "text-info";
+    case "awaiting":
+      return "text-rose-400";
+    default:
+      return "text-muted-foreground";
+  }
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -785,6 +1005,15 @@ function headerMeta(item: DashboardItem): {
       return { Icon: Terminal, label: "Approval", tone: "border-rose-400/40 bg-rose-400/10 text-rose-400" };
     case "followup":
       return { Icon: Inbox, label: "Follow-up", tone: "border-border bg-muted text-foreground" };
+    case "surface":
+      return {
+        Icon: Sparkles,
+        label: surfaceKindLabel(item.data.surface),
+        tone:
+          (item.data.importance ?? 0) >= 80
+            ? "border-danger/40 bg-danger/10 text-danger"
+            : "border-border bg-muted text-foreground",
+      };
     case "work":
       return { Icon: Layers, label: "Agent work", tone: "border-border bg-muted text-foreground" };
     case "saved":

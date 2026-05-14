@@ -140,6 +140,14 @@ core/
                        on mem_skill_proposals (frontier_run_id, score,
                        pareto_rank, gepa_metadata), procedural-tier
                        index, mem_relations(relation_type) index
+    012_openai_oauth.sql · 013_session_usage.sql · 014_dashboard.sql ·
+    015_connector_polls.sql
+    016_surface_items.sql    the assembly substrate — see §18:
+    017_workflows.sql        mem_surface_items (016), mem_workflows +
+    018_extensions.sql       _runs + _steps (017), mem_extensions (018),
+    019_evals.sql            mem_evals (019), mem_entities + _links +
+    020_world_model.sql      mem_agent_goals (020), mem_notifications +
+    021_initiative.sql       mem_cost_events + mem_workflow_runs.depends_on (021)
 
   config/            mcp.yaml + embed.go (//go:embed, package config) so the
                      distroless container ships the canonical MCP registry
@@ -200,6 +208,29 @@ core/
                        executor_agent (cron→agent.Loop bridge), http
     sentinel/          types, manager, dispatcher (Log + Skill), http
     server/            server, health, ws, api, memory_api, audit_api
+
+    --- the assembly substrate (§18) — six generic building-block packages ---
+    surface/           generic dashboard surface contract — types, store;
+                       backs surface_item / surface_update tools
+    workflow/          durable workflow engine — types, store, engine
+                       (background worker, retries, checkpoints, resume),
+                       validate (static step-list check)
+    extensions/        runtime self-extension — types, store, http_tool
+                       (generic REST tool), manager, tools (extension_*)
+    eval/              verification substrate — eval.go (Store + Scorecard
+                       with regression detection), tools (eval_*)
+    worldmodel/        world model + agent goals — types, store
+                       (entities + links + goals), tools (entity_* / goal_*)
+    initiative/        initiative + economics — initiative.go (notification
+                       + cost ledgers, Notifier urgency policy), tools
+                       (notify / notification_digest / cost_record /
+                       budget_status)
+    proactive/agent_goals.go + substrate_surface.go — heartbeat checklists
+                       that pursue agent goals + mirror substrate state onto
+                       the surface contract
+    cmd/infinity/workflow_executor.go + initiative_deliverer.go — the
+                       concrete Executor / Deliverer adapters (package main,
+                       so the substrate packages stay dependency-light)
 
 studio/
   app/
@@ -980,6 +1011,7 @@ Environment variables that matter:
 | 6 | Voyager + Cron + Sentinels | ✅ Cron scheduler + Sentinel manager + Skill dispatcher + schemas + HTTP APIs + Studio Cron+Sentinels tab; ✅ **Voyager source extractor**; ✅ **GEPA Pareto frontier persistence** (per ICLR 2026 Oral); ✅ **Voyager autotrigger** — closes the failure→curriculum→skill→optimization cycle by auto-firing GEPA on skills past the failure threshold. | **Curriculum** generator · **Skill generator** (LLM-driven) · **Verifier** synthetic tests · **AutoSkill** failure-reflection-patch loop · Skill discovery hooks (regex pattern detection in observations) · Sentinel runtimes for non-webhook watch types (file_change, memory_event, external_api_poll, threshold) · Skills tab Candidate column population · Studio frontier-comparison view (render Pareto siblings side-by-side) · NaturalLanguageScheduleInput live parser · Verification log sub-tab · Auto-apply path for approved code proposals |
 | 7 | Polish | ✅ Audit log endpoint + viewer; ✅ Honcho dialectic peer modelling; ✅ Claude Code coding bridge (25 tools via MCP + CF Access); ✅ GEPA skill optimizer sidecar; ✅ custom domain `infinity.dopesoft.io` | Command palette (cmd+K, cmdk lib) · Sessions rewind · Skills Tests sub-tab · Settings 10-section depth · Memory tab knowledge graph viewer · Backup/export · `infinity restore` · Doctor full diagnostic suite · Light/dark + animation polish |
 | **AGI** | **Migration 011 — close the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Curiosity scanner** integrated into heartbeat | Studio surfaces: dedicated Reflections sub-tab on Memory tab · Predictions surprise feed · Curiosity question approval / dismissal UI · Procedural-tier badge in Memory list · A-MEM graph visualization for top-K associative neighbours · LLM-driven prediction text on high-cost tool calls (Haiku, gated on cost heuristic) · Cross-session reflection chains (cluster N reflections → meta-lesson) |
+| **Substrate** | **Migrations 016–021 — the assembly substrate (§18)** | ✅ **Generic surface contract** (`mem_surface_items` + `surface_item`/`surface_update`); ✅ **Skill self-authoring loop** (`skill_create` → live registry, durable across restarts); ✅ **Durable workflow engine** (`mem_workflows`/`_runs`/`_steps` + background worker — retries, checkpoints, resume-on-restart, dependency-aware scheduling); ✅ **Runtime self-extension** (`mem_extensions` — agent wires MCP servers + REST-API tools live); ✅ **Verification** (`mem_evals` scorecards with regression detection + `workflow_validate`); ✅ **World model + agent goals** (`mem_entities`/`_links`/`mem_agent_goals` + autonomous-pursuit heartbeat); ✅ **Initiative + economics** (`mem_notifications` urgency policy + `mem_cost_events` budget rollup) | Sandboxed dry-run execution of workflows · automatic per-LLM-call cost capture · multi-dependency (DAG) workflow scheduling · full-registry browse views in Studio (extensions / evals / entities are agent-tool-queryable today) |
 | 8 | Voice | — | Skipped per direction |
 
 ## 17. Next-session priorities
@@ -1019,3 +1051,50 @@ Studio surfaces + scheduling polish:
 
 Phases 4-7 + AGI substrate is feature-complete enough that each gap
 above is a focused, scoped follow-up — no architectural rework needed.
+
+---
+
+## 18. The assembly substrate (migrations 016–021)
+
+The principle is **Rule #1** in [CLAUDE.md](CLAUDE.md): the agent *assembles*
+workflows from natural language out of generic building blocks; Go is for
+the substrate, never the cognition. The full per-phase trail — schema,
+data flow, code map — lives in [`docs/substrate/README.md`](docs/substrate/README.md).
+This section is the architectural summary.
+
+Six packages, six migrations, ~26 agent tools. Each phase is a generic,
+schema-driven contract — not a feature:
+
+| # | Package | Migration | Contract |
+|---|---|---|---|
+| 1a | `surface/` | `016` | `mem_surface_items` — one generic table any producer writes ranked, structured items into; Studio's `SurfaceCard` renders any `surface` key. Tools: `surface_item`, `surface_update`. |
+| 1b | `skills/` (extended) | — | `skill_create` + `Registry.Put` — a low-risk recipe the agent authors goes **live this session**, persisted to `mem_skills`, re-hydrated on boot. |
+| 2 | `workflow/` | `017` | `mem_workflows`/`_runs`/`_steps` + a background `Engine` — claims a runnable run, advances one step per tick (`tool`/`skill`/`agent`/`checkpoint`), persists after every step, retries with attempts, resumes mid-flow on restart (`ReclaimOrphans`). Tools: `workflow_create/_run/_status/_resume/_cancel/_list/_validate`. |
+| 3 | `extensions/` | `018` | `mem_extensions` — the agent wires an MCP server or a REST-API-as-tool at runtime; live this session, re-activated on boot via `Manager.LoadAll`. Tools: `extension_register/_list/_remove`. |
+| 4 | `eval/` | `019` | `mem_evals` outcome ledger + `Scorecard` (success rate, recent-vs-prior trend, regression flag). The workflow engine auto-records every run. Tools: `eval_record`, `eval_scorecard`. |
+| 5 | `worldmodel/` | `020` | `mem_entities`/`_links` (structured model of the boss's world) + `mem_agent_goals` (the agent's own objectives, living plan). Heartbeat `AgentGoalChecklist` resurfaces stalled goals. Tools: `entity_upsert/_link/_get/_search`, `goal_set/_update/_list`. |
+| 6 | `initiative/` | `021` | `mem_notifications` (urgency-routed: push / surface / digest) + `mem_cost_events` (budget rollup vs `INFINITY_BUDGET_USD`) + `mem_workflow_runs.depends_on` (dependency-aware scheduling). Tools: `notify`, `notification_digest`, `cost_record`, `budget_status`. |
+
+**Dependency discipline.** Each substrate package imports only `pgx` +
+stdlib (+ `tools` for the packages that register tools). Cross-subsystem
+wiring — the workflow `Executor`, the `CheckpointSurfacer`, the
+`EvalRecorder`, the initiative `Deliverer` — is done via interfaces, with
+the concrete adapters living in `cmd/infinity/` (package main) so the
+substrate packages stay dependency-light. Same pattern as `cron`'s
+`CronScheduler` interface.
+
+**Studio.** No new top-level pages. The generic surface contract (1a)
+renders five surface groups through one `SurfaceCard`: `followups`,
+`agenda` (the agent's goals — distinct from the boss's Pursuits card),
+`health` (broken extensions + regressed capabilities, mirrored by
+`SubstrateSurfaceChecklist`), `alerts`, `approvals`. Workflow runs flow
+through the existing Agent Work board — tapping a Kanban card opens the
+ObjectViewer drawer with the run's step state-machine inline.
+
+**Boot wiring** is in `cmd/infinity/serve.go`: surface/workflow/eval/
+worldmodel tools register in the memory block; the workflow `Engine`
+starts after the agent loop exists; `extensions.Manager.LoadAll` runs
+after the embedded `mcp.yaml` connect; the `initiative` tools register
+after the push `Sender` is built. The heartbeat composes
+`DefaultChecklist + CuriosityChecklist + AgentGoalChecklist +
+SubstrateSurfaceChecklist`.

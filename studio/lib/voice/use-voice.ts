@@ -51,6 +51,13 @@ type AssistantUiEvent = { delta: string; isFinal: boolean };
 const ASSISTANT_FINALIZE_DELAY_MS = 900;
 const USER_TRANSCRIPT_ORDER_TIMEOUT_MS = 6000;
 
+function normalizeVoiceTranscript(text: string): string {
+  return text
+    .replace(/\s*[\u2013\u2014]\s*/g, ", ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // playConnectChime plays a short two-note ascending tone via the Web
 // Audio API. Fires once when the realtime session reaches "listening"
 // for the first time, so the boss has an audible confirmation that
@@ -246,30 +253,33 @@ export function useVoice(
         },
         onUserTranscript: (text, isFinal) => {
           if (!isFinal) return;
+          const cleanText = normalizeVoiceTranscript(text);
+          if (!cleanText) return;
           clearUserTranscriptOrderTimer();
           // Push the finalised user utterance into the conversation
           // stream as a real chat message AND mirror to Core for
           // memory capture. Belt + suspenders: the live UI shows it
           // immediately; the next session reload would rebuild it
           // from mem_observations either way.
-          cbRef.current.onUserMessage?.(text);
+          cbRef.current.onUserMessage?.(cleanText);
           waitingForUserTranscriptRef.current = false;
           flushAssistantUiQueue();
-          void recordVoiceTurn({ sessionId, role: "user", text });
+          void recordVoiceTurn({ sessionId, role: "user", text: cleanText });
         },
         onAssistantTranscript: (delta, isFinal) => {
+          const cleanDelta = normalizeVoiceTranscript(delta);
           if (!isFinal) {
             clearAssistantFinalizeTimer();
-            assistantTextRef.current += delta;
+            assistantTextRef.current += cleanDelta;
             // Stream the delta into the assistant message bubble.
             // useChat creates / extends a pending bubble exactly like
             // text-mode deltas do — the conversation stream is the
             // single source of truth for "what did the agent say".
-            emitAssistantUi(delta, false);
+            if (cleanDelta) emitAssistantUi(cleanDelta, false);
             return;
           }
-          const finalText = delta && delta.length > assistantTextRef.current.length
-            ? delta
+          const finalText = cleanDelta && cleanDelta.length > assistantTextRef.current.length
+            ? cleanDelta
             : assistantTextRef.current;
           assistantTextRef.current = finalText;
           clearAssistantFinalizeTimer();
@@ -296,7 +306,7 @@ export function useVoice(
             });
             clientRef.current?.submitToolResult(
               call.callId,
-              `tool ${call.name} call failed: invalid JSON arguments — ${
+              `tool ${call.name} call failed: invalid JSON arguments: ${
                 err instanceof Error ? err.message : String(err)
               }`,
             );

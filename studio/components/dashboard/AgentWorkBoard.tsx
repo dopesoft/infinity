@@ -47,6 +47,7 @@ const KIND_ICON: Record<WorkItemKind, LucideIcon> = {
   voyager_opt: Workflow,
   sentinel: Activity,
   skill_run: Cog,
+  workflow: Workflow,
   trust: Terminal,
   code_proposal: FileCode,
   curiosity: HelpCircle,

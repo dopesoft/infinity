@@ -125,6 +125,29 @@ export type FollowUp = {
   draft?: string;
 };
 
+// ── Surface items (the generic dashboard surface contract) ───────────────────
+// Mirror of core/internal/surface.Item. ANY producer — a skill recipe, a
+// connector poll, a cron, the agent mid-conversation — writes items through
+// the `surface_item` tool; the dashboard groups them by `surface` and renders
+// each group with one generic SurfaceCard. A new surface the agent invents
+// appears with zero new frontend code.
+export type SurfaceItem = {
+  id: string;
+  surface: string; // dashboard region: "followups" | "alerts" | "digest" | …
+  kind: string; // semantic type for the icon: "email" | "alert" | "metric" | …
+  source: string; // skill name / connector slug / cron name / "agent"
+  externalId?: string;
+  title: string;
+  subtitle?: string;
+  body?: string;
+  url?: string;
+  importance?: number; // 0-100, undefined = unranked
+  importanceReason?: string;
+  metadata: Record<string, unknown>;
+  status: "open" | "snoozed" | "done" | "dismissed";
+  createdAt: string;
+};
+
 // ── Agent Work Board (Kanban) ────────────────────────────────────────────────
 export type WorkColumn = "queued" | "running" | "awaiting" | "done";
 
@@ -133,11 +156,24 @@ export type WorkItemKind =
   | "voyager_opt"
   | "sentinel"
   | "skill_run"
+  | "workflow"
   | "trust"
   | "code_proposal"
   | "curiosity"
   | "memory_op"
   | "reflection";
+
+// One step of a workflow run's state-machine — carried inline on a
+// workflow WorkItem so tapping the Kanban card opens the drawer with the
+// full workflow, no second fetch.
+export type WorkflowStep = {
+  index: number;
+  name: string;
+  kind: "tool" | "skill" | "agent" | "checkpoint";
+  status: "pending" | "running" | "done" | "failed" | "skipped" | "awaiting";
+  output?: string;
+  error?: string;
+};
 
 export type WorkItem = {
   id: string;
@@ -151,6 +187,8 @@ export type WorkItem = {
   durationMs?: number;
   // links to existing routes for "see in /trust" / "see in /cron" etc.
   detailHref?: string;
+  // populated only for kind === "workflow" — the run's step state-machine.
+  workflowSteps?: WorkflowStep[];
 };
 
 // ── Saved (articles, links, notes, quotes) ───────────────────────────────────
@@ -202,6 +240,7 @@ export type DashboardItem =
   | { kind: "reflection"; data: Reflection }
   | { kind: "approval"; data: Approval }
   | { kind: "followup"; data: FollowUp }
+  | { kind: "surface"; data: SurfaceItem }
   | { kind: "work"; data: WorkItem }
   | { kind: "saved"; data: Saved }
   | { kind: "activity"; data: ActivityEvent };

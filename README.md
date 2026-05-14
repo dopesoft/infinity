@@ -2,7 +2,7 @@
 
 **Your always-on AI that actually learns.**
 
-Other agents store messages. Infinity reviews its own work between conversations, catches its mistakes, builds new habits, asks you the questions you didn't ask, and quietly rewrites the parts of itself that aren't working. The version of it next week is genuinely sharper at your problems than the version of it today.
+Other agents store messages. Infinity reviews its own work between conversations, catches its mistakes, builds new habits, asks you the questions you didn't ask, assembles whole workflows from a plain-English request, and quietly rewrites the parts of itself that aren't working. The version of it next week is genuinely sharper at your problems than the version of it today.
 
 It also codes on your home Mac under your Max subscription, lives at your own URL on your phone, and queues every dangerous action for one-tap approval.
 
@@ -36,6 +36,13 @@ It also codes on your home Mac under your Max subscription, lives at your own UR
 | Heartbeat — runs on its own schedule | ✅ | ❌ | ⚠️ via cron | ❌ |
 | Cron-scheduled agent runs | ✅ | ❌ | ✅ | ❌ |
 | Webhook-triggered actions | ✅ | ❌ | ⚠️ | ❌ |
+| **What it assembles** | | | | |
+| Builds multi-step workflows from a sentence — durable, resumable | ✅ | ❌ | ❌ | ❌ |
+| Writes *and activates* its own skills at runtime | ✅ live | ⚠️ proposes only | ⚠️ | ❌ |
+| Wires new APIs / MCP servers into itself at runtime | ✅ | ❌ | ❌ | ⚠️ manual config |
+| Scorecards — tracks whether its own work is actually working | ✅ | ❌ | ❌ | ❌ |
+| Holds *its own* goals and pursues them autonomously | ✅ | ❌ | ❌ | ❌ |
+| Decides when to interrupt you vs. batch it into a digest | ✅ | ❌ | ❌ | ❌ |
 | **How you reach it** | | | | |
 | Open it on your phone | ✅ mobile-first PWA | ❌ | ⚠️ | ⚠️ |
 | Custom domain at your address | ✅ | ❌ | ❌ | ❌ |
@@ -83,6 +90,26 @@ When you fight the same file three times in a session — multiple edits, failin
 Once a skill is approved, it becomes a first-class instinct: the agent reaches for it automatically before it goes hunting through tools.
 
 **The tactics behind it:** Voyager-style session extraction, real-time tool-triplet discovery, source-fight detection, procedural-tier memory promotion (CoALA).
+
+### Turns a sentence into a working system
+
+Tell Infinity *"every weekday morning, pull my calendar, draft prep notes for each meeting, drop them on my dashboard — but check with me before booking anything,"* and it doesn't just do it once. It **assembles** it: writes the skill, wires the steps into a durable workflow, schedules it, and the result lands on your dashboard. The workflow survives restarts — if the server reboots mid-run, it resumes exactly where it left off. Steps that fail retry on their own. "Check with me" becomes a real checkpoint that pauses the whole thing and pings you.
+
+When it hits a capability it doesn't have — an API it's never touched, a service it isn't wired to — it wires it in itself, at runtime, no redeploy. It writes new skills the moment it spots a reusable pattern, and they're usable immediately, not queued for later.
+
+You're not configuring a tool. You're describing an outcome, and it builds the machine that produces it.
+
+**The tactics behind it:** a generic surface contract every capability writes through, runtime skill-authoring straight into the live registry, a durable workflow engine (state machine + retries + human checkpoints, resumable across restarts), runtime MCP / REST-API self-extension. The competitors *execute what you wired* — Infinity assembles what you asked for.
+
+### Holds goals — and knows if it's delivering
+
+Infinity keeps its own goals, not just yours. *"Get the migration shipped," "keep the inbox triaged daily"* — it carries a living plan for each, records its own progress, and if one stalls or gets blocked, the heartbeat pulls it back into view so it re-plans instead of forgetting.
+
+It also keeps score. Every workflow run, every skill, every tool it builds gets an outcome recorded; a scorecard rolls that into a success rate and a trend. When something it relies on starts regressing, that lands on your dashboard — *before* you'd have noticed.
+
+And it knows when to interrupt. Urgent goes to your phone now; normal becomes a dashboard card; small stuff batches into a digest so it isn't pinging you all day. It tracks what it costs to run, so it can throttle expensive work instead of burning the budget blind.
+
+**The tactics behind it:** agent-owned goals with an autonomous-pursuit heartbeat scan, a generic eval ledger with recent-vs-historical regression detection, urgency-routed notifications over Web Push, a cost ledger with budget rollup, and a structured world model of the people and projects you work with.
 
 ### Rewrites its own failing skills
 
@@ -171,6 +198,7 @@ Full wiring, schema, HTTP API, and source-of-truth boot sequence in [ARCHITECTUR
 | 6 | Cron + Sentinels + Voyager + GEPA + Pareto frontier + autotrigger | ✅ closed-loop self-evolution |
 | 7 | Polish + coding bridge + peer modelling + custom domain | ✅ |
 | **Learning** | Reflection · prediction · associative links · sleep consolidation · procedural tier · curiosity | ✅ |
+| **Substrate** | The assembly substrate — generic surface contract · runtime skill-authoring · durable workflow engine · runtime self-extension · eval scorecards · world model + agent goals · initiative + economics | ✅ |
 | 8 | Voice | — roadmap |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the per-phase gap list.

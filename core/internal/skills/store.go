@@ -84,6 +84,29 @@ func (s *Store) UpsertSkill(ctx context.Context, sk *Skill) error {
 	return tx.Commit(ctx)
 }
 
+// InsertProposal drops a candidate skill into mem_skill_proposals for the
+// boss to review and promote in the Skills tab. Used by skill_create when
+// a skill is too risky to auto-activate (anything above risk_level=low, or
+// anything carrying an executable implementation). Returns the proposal id.
+func (s *Store) InsertProposal(ctx context.Context, name, description, reasoning, skillMD, riskLevel string) (string, error) {
+	if s == nil || s.pool == nil {
+		return "", errors.New("skills: no store configured")
+	}
+	if riskLevel == "" {
+		riskLevel = "low"
+	}
+	id := uuid.NewString()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO mem_skill_proposals
+			(id, name, description, reasoning, skill_md, risk_level, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'candidate', NOW())
+	`, id, name, description, reasoning, skillMD, riskLevel)
+	if err != nil {
+		return "", fmt.Errorf("skills: insert proposal: %w", err)
+	}
+	return id, nil
+}
+
 // RecordRun persists a single skill execution. Returns the assigned UUID.
 func (s *Store) RecordRun(ctx context.Context, run *Run) (string, error) {
 	if s == nil || s.pool == nil {

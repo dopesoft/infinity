@@ -10,6 +10,7 @@ import type {
   Pursuit,
   Reflection,
   Saved,
+  SurfaceItem,
   Todo,
   WorkItem,
 } from "./types";
@@ -36,6 +37,8 @@ export type DashboardResponse = {
   activity: ActivityEvent[] | null;
   work: WorkItem[] | null;
   memoryStats: MemoryStats | null;
+  // Generic surface contract: items grouped by `surface` key.
+  surfaceItems: Record<string, SurfaceItem[]> | null;
 };
 
 type RawResponse = {
@@ -55,6 +58,7 @@ type RawResponse = {
   activity?: ActivityEvent[] | null;
   work?: WorkItem[] | null;
   memoryStats?: MemoryStats | null;
+  surfaceItems?: Record<string, SurfaceItem[]> | null;
 };
 
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardResponse | null> {
@@ -73,6 +77,7 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
       activity: raw.activity ?? null,
       work: raw.work ?? null,
       memoryStats: raw.memoryStats ?? null,
+      surfaceItems: raw.surfaceItems ?? null,
     };
   } catch {
     return null;

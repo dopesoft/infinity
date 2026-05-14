@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -36,8 +38,9 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Kind string `json:"kind"`
-		ID   string `json:"id"`
+		Kind     string          `json:"kind"`
+		ID       string          `json:"id"`
+		Snapshot json.RawMessage `json:"snapshot"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
@@ -55,10 +58,14 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seedJSON, _ := json.Marshal(map[string]any{
+	seed := map[string]any{
 		"kind": body.Kind,
 		"id":   body.ID,
-	})
+	}
+	if len(body.Snapshot) > 0 && string(body.Snapshot) != "null" {
+		seed["snapshot"] = body.Snapshot
+	}
+	seedJSON, _ := json.Marshal(seed)
 
 	id := uuid.New()
 	_, err := s.pool.Exec(r.Context(), `
@@ -70,8 +77,20 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Make the seed visible in the chat transcript immediately and durable
+	// for turn-one hydration. The next user reply follows this context in the
+	// same session, so the agent sees exactly what the boss is responding to.
+	rawText := formatSeedContext(body.Kind, body.ID, body.Snapshot)
+	if _, err := s.pool.Exec(r.Context(), `
+		INSERT INTO mem_observations (session_id, hook_name, payload, raw_text, importance, created_at)
+		VALUES ($1::uuid, 'UserPromptSubmit', $2::jsonb, $3, 8, NOW())
+	`, id, string(seedJSON), rawText); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("seed context: %v", err))
+		return
+	}
+
 	writeJSONResponse(w, http.StatusOK, map[string]any{
-		"id":       id.String(),
+		"id":         id.String(),
 		"seededFrom": map[string]any{"kind": body.Kind, "id": body.ID},
 	})
 }
@@ -87,6 +106,26 @@ func isSeedKindWithoutID(kind string) bool {
 	default:
 		return false
 	}
+}
+
+func formatSeedContext(kind, artifactID string, snapshot json.RawMessage) string {
+	var b strings.Builder
+	b.WriteString("Dashboard context for discussion\n")
+	b.WriteString("Kind: ")
+	b.WriteString(kind)
+	if artifactID != "" {
+		b.WriteString("\nID: ")
+		b.WriteString(artifactID)
+	}
+	if len(snapshot) > 0 && string(snapshot) != "null" {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, snapshot, "", "  "); err == nil {
+			b.WriteString("\n\nArtifact:\n")
+			b.Write(pretty.Bytes())
+		}
+	}
+	b.WriteString("\n\nI want to discuss this with Jarvis.")
+	return b.String()
 }
 
 // Local helpers — server.go has its own writeJSON/writeErr but they're

@@ -248,6 +248,15 @@ func (m *MCPManager) Connect(ctx context.Context, cfg *MCPConfig, registry *Regi
 	return nil
 }
 
+// ConnectServer connects a single MCP server at runtime and registers its
+// tools into the registry — the runtime self-extension path. Unlike
+// Connect (which takes the whole embedded mcp.yaml at boot), this adds one
+// server to a live process. The extensions Manager calls it when the agent
+// registers an MCP extension.
+func (m *MCPManager) ConnectServer(ctx context.Context, s MCPServerConfig, registry *Registry) error {
+	return m.connectOne(ctx, s, registry)
+}
+
 // dialSession opens a fresh MCP session for the given server. It performs
 // the connect handshake only — listing tools and registering them is left
 // to the caller so this can be reused by Reconnect.

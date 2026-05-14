@@ -23,18 +23,19 @@ export function ApprovalsCard({
   approvals: Approval[];
   onOpen: (item: DashboardItem) => void;
 }) {
+  const emptyText = "No open questions from Jarvis.";
+
   return (
     <Section
-      title="Approvals"
-      Icon={ShieldCheck}
+      title="Questions"
+      Icon={HelpCircle}
       delay={0.25}
       badge={approvals.length}
-      action={{ label: "open trust", href: "/trust" }}
     >
       <div className="space-y-2">
         {approvals.length === 0 ? (
           <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-            All clear — nothing waiting on you.
+            {emptyText}
           </div>
         ) : (
           <ul className="space-y-2">

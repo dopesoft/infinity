@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,8 +17,11 @@ import (
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/embed"
+	"github.com/dopesoft/infinity/core/internal/eval"
+	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
+	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
@@ -28,9 +32,12 @@ import (
 	"github.com/dopesoft/infinity/core/internal/sessions"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/soul"
+	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
+	"github.com/dopesoft/infinity/core/internal/workflow"
+	"github.com/dopesoft/infinity/core/internal/worldmodel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
@@ -132,6 +139,24 @@ func serveCmd() *cobra.Command {
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					tools.RegisterSkillTools(registry, p)
 					tools.RegisterDashboardTools(registry, p)
+					// Generic dashboard surface contract (Rule #1 substrate):
+					// surface_item / surface_update. The standard boundary any
+					// skill recipe / connector / cron writes through to put a
+					// ranked, structured item in front of the boss.
+					tools.RegisterSurfaceTools(registry, p)
+					// Durable workflow tools (Phase 2 substrate): workflow_create
+					// / _run / _status / _resume / _cancel / _list / _validate.
+					// The agent assembles multi-step processes; the engine
+					// (wired below, after the loop exists) runs them.
+					tools.RegisterWorkflowTools(registry, p)
+					// Verification substrate (Phase 4): eval_record /
+					// eval_scorecard. How the agent learns whether what it
+					// assembled actually works, and catches regressions.
+					eval.RegisterTools(registry, eval.NewStore(p, slog.Default()))
+					// World model + agent-owned goals (Phase 5): entity_* +
+					// goal_* tools. A structured model of the boss's world,
+					// and the agent's own durable objectives.
+					worldmodel.RegisterTools(registry, worldmodel.NewStore(p, slog.Default()))
 
 					fmt.Printf("  memory: enabled (embedder=%s, compressor=%v, procedural=on, predictions=on)\n", embedder.Name(), compressor != nil)
 				}
@@ -188,6 +213,23 @@ func serveCmd() *cobra.Command {
 			skills.RegisterTools(registry, skillRegistry, skillRunner)
 			skillsAPI := skills.NewAPI(skillRegistry, skillRunner, skillStore)
 			fmt.Printf("  skills: %d loaded from %s\n", len(skillRegistry.All()), skillsRoot)
+
+			// Runtime self-extension (Phase 3 substrate). The agent wires
+			// new MCP servers / REST-API tools at runtime via the
+			// extension_* tools; LoadAll re-activates everything a prior
+			// session registered. Runs AFTER the embedded mcp.yaml connect
+			// so a runtime extension layers cleanly on top.
+			if pool != nil {
+				extManager := extensions.NewManager(
+					extensions.NewStore(pool, slog.Default()), registry, mcp, slog.Default(),
+				)
+				if n, err := extManager.LoadAll(cmd.Context()); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: extensions load: %v\n", err)
+				} else if n > 0 {
+					fmt.Printf("  extensions: re-activated %d runtime extension(s)\n", n)
+				}
+				extensions.RegisterTools(registry, extManager)
+			}
 
 			soulPrompt, soulSource := soul.Load()
 			fmt.Printf("  soul: %s (%d chars)\n", soulSource, len(soulPrompt))
@@ -331,6 +373,32 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
+			// Durable workflow engine — Phase 2 substrate. The agent
+			// assembles multi-step processes via the workflow_* tools; this
+			// background worker advances each run one step per tick,
+			// persisting after every step so a restart resumes mid-flow.
+			// Checkpoint steps surface a card on the dashboard via the
+			// surface contract.
+			if pool != nil && loop != nil {
+				wfStore := workflow.NewStore(pool, slog.Default())
+				wfExec := &workflowExecutor{
+					registry:    registry,
+					skillRunner: skillRunner,
+					loop:        loop,
+				}
+				wfEngine := workflow.NewEngine(wfStore, wfExec, slog.Default())
+				wfEngine = wfEngine.WithCheckpointSurfacer(
+					&checkpointSurfacer{store: surface.NewStore(pool, slog.Default())},
+				)
+				// Auto-record every run's outcome to the verification
+				// substrate, so workflow scorecards sit next to skill/tool ones.
+				wfEngine = wfEngine.WithEvalRecorder(
+					&workflowEvalRecorder{store: eval.NewStore(pool, slog.Default())},
+				)
+				wfEngine.Start(cmd.Context())
+				fmt.Printf("  workflows: engine started (durable, resumable)\n")
+			}
+
 			// Proactive engine: IntentFlow + WAL + Working Buffer + Heartbeat +
 			// Trust Contracts. Each component degrades gracefully when its
 			// dependency (LLM provider, DB pool) is missing.
@@ -362,6 +430,16 @@ func serveCmd() *cobra.Command {
 						// surface the top-K as Findings. CoALA's active
 						// learning loop, populated.
 						proactive.CuriosityChecklist(pool),
+						// Autonomous pursuit (Phase 5): resurface the agent's
+						// own goals that are blocked, due soon, or stalled —
+						// so a goal it set and forgot gets revisited.
+						proactive.AgentGoalChecklist(pool),
+						// Substrate → dashboard: mirror the agent's goals and
+						// anything broken (failed extensions, regressed
+						// capabilities) onto the generic surface contract, so
+						// they render on the dashboard with zero bespoke
+						// Studio code. Rule #1 applied to the substrate itself.
+						proactive.SubstrateSurfaceChecklist(pool),
 					))
 				heartbeat.Start(cmd.Context())
 				if a, ok := provider.(*llm.Anthropic); ok {
@@ -541,6 +619,22 @@ func serveCmd() *cobra.Command {
 			if trustStore != nil && pushSender != nil {
 				trustStore.SetNotifier(push.NewTrustAdapter(pushSender))
 				fmt.Println("  push: trust → notification wired")
+			}
+
+			// Initiative + economics substrate (Phase 6, final). The agent
+			// reaches the boss through an urgency policy (notify), batches
+			// low-priority updates (notification_digest), and tracks what it
+			// spends (cost_record / budget_status). Wired here, after the
+			// push Sender exists, so urgent notifications can reach the phone.
+			if pool != nil {
+				initStore := initiative.NewStore(pool, slog.Default())
+				initDeliverer := &initiativeDeliverer{
+					sender:  pushSender,
+					surface: surface.NewStore(pool, slog.Default()),
+				}
+				initNotifier := initiative.NewNotifier(initStore, initDeliverer, slog.Default())
+				initiative.RegisterTools(registry, initNotifier, initStore)
+				fmt.Println("  initiative: notify + cost tools wired")
 			}
 
 			// Dashboard aggregator. Reads from migration-014 tables;

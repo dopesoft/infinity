@@ -1,5 +1,25 @@
 # Infinity — project guide for Claude
 
+## Rule #1 — the agent ASSEMBLES; you do not hardwire it
+
+**This is the whole point of Infinity. Read it before you write a single line.**
+
+Infinity has APIs, MCP servers, native tools, queues, persistent memory, the internet, and a surface to write and run code. The goal is an agent that takes a workflow described in **natural language** and **assembles it** from those building blocks — fetch from an API, batch it through an LLM, rank it, write it somewhere, surface it. That assembly *is* the product. An agent that can't assemble is just a chatbot wired to a database — good for asking your horoscope, nothing more.
+
+**The anti-pattern — do not do this.** Building a feature as a hardwired vertical slice in Go: a bespoke table column, a bespoke Go function with the *intelligence* frozen in a string constant, a bespoke widget that only understands one source. That is not the agent doing the work — that is you doing the work and leaving the agent with nothing to assemble. Every new source then needs its own Go file, its own prompt constant, its own migration, its own widget. It does not scale and it does not move us toward AGI.
+
+The reference failure: `core/internal/proactive/followup_scoring.go` — a Go scorer with the ranking rubric ("hard rules") baked into a `const scoringSystem` string, writing to a bespoke `mem_followups.importance` column, rendered by a Gmail-shaped `FollowUpsCard`. Email triage is a **recipe**, not Go code.
+
+**The pattern — do this.**
+
+- **Capabilities are recipes — skills whose body is the instruction.** "Hit the API, pull the data, analyze it, act on it" is a `SKILL.md` the LLM reads and orchestrates using the tools it already has (MCP connectors, native tools, memory, queues). The judgment — the rubric, the "hard rules" — lives in the skill body: versioned, visible in the Skills tab, improvable by Voyager/GEPA. Never in a Go `const`.
+- **Contracts are generic and schema-driven.** Anything the agent produces lands in a generic, typed contract (a surface table, a queue, a memory tier) that the app renders generically. Add a new capability → it surfaces automatically. No new widget, no new column, no new loader.
+- **Go is for the substrate, not the cognition.** Write Go for the building blocks — the tool, the queue, the contract, the loop that runs due skills. Never write Go that *is* the intelligence. **If there is a prompt in a `.go` file, you have almost certainly built the wrong thing.**
+
+**The test before you build:** *Could the agent have assembled this itself, from a natural-language request, using the tools it already has?* If yes — build it as a skill/recipe over generic contracts. If no — the missing piece is a **building block** (a tool, a queue, a contract), so build that, and keep it generic. If you are reaching for a bespoke Go function with embedded judgment, stop: you are hardwiring what should be assembled.
+
+Anything less is just a pile of code, and a pile of code is not what we are building here.
+
 ## What this is
 
 Infinity is a single-user, always-on AI agent with persistent memory. It is built to be the user's permanent companion across every device — a personal cognitive substrate, not a chatbot. The differentiator vs. Hermes / nanobot / openclaw is the memory layer: every observation is captured, compressed, retrieved, and consolidated so the agent's understanding of the user, their projects, and their work compounds over time.
@@ -236,8 +256,9 @@ If you ever need full command tracing for one-shot debugging, do it on a *local*
 
 ## Where to look first
 
-When asked to add a feature, read these files in this order to understand the relevant slice:
+When asked to add a feature, **first re-read [Rule #1](#rule-1--the-agent-assembles-you-do-not-hardwire-it)** — most "features" are skills the agent should assemble, or generic building blocks, not hardwired Go. Then read these files in this order to understand the relevant slice:
 
+- **The assembly substrate (Rule #1 build-out)**: start at [`docs/substrate/README.md`](docs/substrate/README.md) — the surface contract (`mem_surface_items` + `surface_item`/`surface_update` tools + generic `SurfaceCard`) and the skill-authoring loop (`skill_create` + `Registry.Put`). This is the canonical example of "building block, not vertical."
 - Agent loop end-to-end: `core/internal/agent/loop.go` → `core/internal/server/ws.go` → `studio/hooks/useChat.ts` → `studio/components/ConversationStream.tsx`
 - Adding a tool: `core/internal/tools/registry.go` → `core/internal/tools/{httpfetch,websearch,memory_tools}.go` → `core/internal/tools/defaults.go`
 - Memory write path: `core/internal/hooks/capture.go` → `core/internal/memory/store.go` → `core/internal/memory/compress.go`

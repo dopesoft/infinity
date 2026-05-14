@@ -12,12 +12,16 @@ import { authedFetch } from "@/lib/api";
  * Returns null on any failure — caller should fall back to navigating
  * to /live (unseeded) so the boss can still start typing.
  */
-export async function seedSession(kind: string, id: string): Promise<string | null> {
+export async function seedSession(
+  kind: string,
+  id: string,
+  snapshot?: unknown,
+): Promise<string | null> {
   try {
     const res = await authedFetch("/api/sessions/seed", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind, id }),
+      body: JSON.stringify({ kind, id, snapshot }),
     });
     if (!res.ok) return null;
     const body = (await res.json()) as { id?: string };

@@ -23,7 +23,7 @@ import {
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 
-const STATUS_FILTERS = ["pending", "approved", "denied", "snoozed", "all"] as const;
+const STATUS_FILTERS = ["all", "pending", "approved", "consumed", "denied", "snoozed"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 export default function TrustPage() {
@@ -31,7 +31,7 @@ export default function TrustPage() {
   const focusId = searchParams.get("focus") ?? "";
   const [contracts, setContracts] = useState<TrustContractDTO[]>([]);
   const [selected, setSelected] = useState<TrustContractDTO | null>(null);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [showDetail, setShowDetail] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -93,7 +93,7 @@ export default function TrustPage() {
             onValueChange={(v) => setStatusFilter(v as StatusFilter)}
             className="w-full"
           >
-            <PageTabsList columns={5}>
+            <PageTabsList columns={6}>
               {STATUS_FILTERS.map((s) => (
                 <PageTabsTrigger key={s} value={s}>
                   {s}
