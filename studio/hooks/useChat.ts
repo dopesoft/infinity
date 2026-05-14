@@ -202,6 +202,13 @@ function isDuplicateVoiceAssistantText(a: string, b: string): boolean {
   return left === right || left.startsWith(right) || right.startsWith(left);
 }
 
+function findLatestPendingAssistant(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && messages[i].pending) return i;
+  }
+  return -1;
+}
+
 export function useChat() {
   const ws = useWebSocket();
   // Empty on first server render; assigned client-side in useEffect to avoid
@@ -677,10 +684,22 @@ export function useChat() {
   const addVoiceUserMessage = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    setMessages((prev) => [
-      ...prev,
-      { id: makeId(), role: "user", text: trimmed, createdAt: Date.now() },
-    ]);
+    const userMessage: ChatMessage = {
+      id: makeId(),
+      role: "user",
+      text: trimmed,
+      createdAt: Date.now(),
+    };
+    setMessages((prev) => {
+      const next = [...prev];
+      const pendingAssistantIdx = findLatestPendingAssistant(next);
+      if (pendingAssistantIdx >= 0) {
+        next.splice(pendingAssistantIdx, 0, userMessage);
+        return next;
+      }
+      next.push(userMessage);
+      return next;
+    });
   }, []);
 
   /** Stream an assistant delta from voice. Creates a pending assistant
@@ -700,27 +719,22 @@ export function useChat() {
       if (last && last.role === "assistant" && last.pending) {
         next[next.length - 1] = {
           ...last,
-          text: isFinal ? (last.text.trim() ? last.text : delta) : last.text + delta,
+          text: isFinal ? (delta.trim() || last.text) : last.text + delta,
+          pending: !isFinal,
+        };
+        return next;
+      }
+      const pendingAssistantIdx = findLatestPendingAssistant(next);
+      if (pendingAssistantIdx >= 0) {
+        const pending = next[pendingAssistantIdx];
+        next[pendingAssistantIdx] = {
+          ...pending,
+          text: isFinal ? (delta.trim() || pending.text) : pending.text + delta,
           pending: !isFinal,
         };
         return next;
       }
       if (isFinal) {
-        // A user can barge in while the assistant bubble is still pending.
-        // That appends the user's next utterance after the pending assistant
-        // bubble, then Realtime may deliver the final transcript a beat later.
-        // Finalize the most recent pending assistant in place instead of
-        // appending a duplicate final bubble after the user's message.
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].role === "assistant" && next[i].pending) {
-            next[i] = {
-              ...next[i],
-              text: next[i].text.trim() ? next[i].text : delta,
-              pending: false,
-            };
-            return next;
-          }
-        }
         for (let i = next.length - 1, seen = 0; i >= 0 && seen < 8; i--) {
           if (next[i].role !== "assistant") continue;
           seen++;
