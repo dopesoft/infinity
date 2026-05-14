@@ -58,6 +58,7 @@ export class VoiceClient {
   // onAssistantTranscript({ isFinal: true }) with the full text on
   // response.done. Keyed by response_id.
   private assistantBuf: Map<string, string> = new Map();
+  private interruptedResponses: Set<string> = new Set();
 
   constructor(private args: VoiceClientArgs) {}
 
@@ -275,6 +276,8 @@ export class VoiceClient {
     this.localStream = null;
     this.audioEl = null;
     this.micAnalyser = null;
+    this.assistantBuf.clear();
+    this.interruptedResponses.clear();
     cb.onStatus?.("closed");
   }
 
@@ -306,6 +309,12 @@ export class VoiceClient {
       // browsers can leave it paused for the next assistant response,
       // which looks exactly like "the bot hears me but I can't hear it."
       case "input_audio_buffer.speech_started": {
+        for (const [respId, text] of this.assistantBuf) {
+          const final = text.trim();
+          if (final) cb.onAssistantTranscript?.(final, true);
+          if (respId) this.interruptedResponses.add(respId);
+        }
+        this.assistantBuf.clear();
         cb.onStatus?.("user-speaking");
         break;
       }
@@ -346,6 +355,11 @@ export class VoiceClient {
       }
       case "response.output_audio_transcript.done": {
         const respId = String((evt as { response_id?: string }).response_id ?? "");
+        if (respId && this.interruptedResponses.has(respId)) {
+          this.interruptedResponses.delete(respId);
+          this.assistantBuf.delete(respId);
+          break;
+        }
         const text = (evt as { transcript?: string }).transcript
           ?? (respId ? this.assistantBuf.get(respId) : undefined)
           ?? "";

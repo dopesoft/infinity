@@ -191,6 +191,17 @@ function closePendingThinking(messages: ChatMessage[]): ChatMessage[] {
   return next;
 }
 
+function normalizedVoiceText(text: string): string {
+  return text.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isDuplicateVoiceAssistantText(a: string, b: string): boolean {
+  const left = normalizedVoiceText(a);
+  const right = normalizedVoiceText(b);
+  if (!left || !right) return false;
+  return left === right || left.startsWith(right) || right.startsWith(left);
+}
+
 export function useChat() {
   const ws = useWebSocket();
   // Empty on first server render; assigned client-side in useEffect to avoid
@@ -689,10 +700,32 @@ export function useChat() {
       if (last && last.role === "assistant" && last.pending) {
         next[next.length - 1] = {
           ...last,
-          text: isFinal ? delta : last.text + delta,
+          text: isFinal ? (last.text.trim() ? last.text : delta) : last.text + delta,
           pending: !isFinal,
         };
         return next;
+      }
+      if (isFinal) {
+        // A user can barge in while the assistant bubble is still pending.
+        // That appends the user's next utterance after the pending assistant
+        // bubble, then Realtime may deliver the final transcript a beat later.
+        // Finalize the most recent pending assistant in place instead of
+        // appending a duplicate final bubble after the user's message.
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === "assistant" && next[i].pending) {
+            next[i] = {
+              ...next[i],
+              text: next[i].text.trim() ? next[i].text : delta,
+              pending: false,
+            };
+            return next;
+          }
+        }
+        for (let i = next.length - 1, seen = 0; i >= 0 && seen < 8; i--) {
+          if (next[i].role !== "assistant") continue;
+          seen++;
+          if (isDuplicateVoiceAssistantText(next[i].text, delta)) return next;
+        }
       }
       // No in-flight assistant bubble — start one. For the final-only
       // case (no preceding deltas) this captures the full transcript
