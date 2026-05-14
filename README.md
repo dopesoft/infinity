@@ -86,15 +86,19 @@ Ask it *why does it think X* and it shows you the chain — the original observa
 
 **The tactics behind it:** parallel keyword + vector + graph retrieval (RRF k=60), session diversification, automatic associative linking at write time (A-MEM), cascading staleness through a typed memory graph, full audit log.
 
-### Learns between conversations
+### Learns the way you do
 
-After every session, a separate critic mind replays what happened, scores how it went, and writes down lessons. Those lessons feed forward. You don't have to coach Infinity twice.
+Most "AI agents" quietly skip the hard part: they don't get smarter. Every session starts cold. Infinity doesn't — and the mechanism is the same one that makes *you* better at your job. You don't rewire your brain; you accumulate memory and skills over time, and that accumulation *is* the expertise. Infinity runs that loop on purpose.
 
-Before each tool call, it writes down what it expects. After, it scores its own surprise. When reality keeps disagreeing with its gut, that becomes the next thing it studies — instead of confidently digging the same hole five times.
+After every session, a separate critic mind replays what happened, scores how it went, and writes down lessons. Those lessons feed forward — you don't coach it twice.
 
-Every night, while you sleep, it cleans house: decays stale memories, prunes weak connections, resolves contradictions in its own head, and re-weights its own skills by how well they've been working. You wake up to a sharper agent, not a noisier one.
+Before each tool call it writes down what it expects; after, it scores its own surprise. When reality keeps disagreeing with its gut, that becomes the next thing it studies — instead of confidently digging the same hole five times.
 
-**The tactics behind it:** Park-style reflection trees with a MAR-pattern critic persona, JEPA-style predict-then-act surprise scoring, LightMem-style sleep-time consolidation. None of the competitors do any of this.
+Every night, while you sleep, it cleans house: decays stale memories, prunes weak connections, resolves contradictions in its own head, re-weights its own skills by how well they've actually been working. You wake up to a sharper agent, not a noisier one.
+
+Run it for a month and it is measurably better at *your* problems than it was on day one. That isn't a tagline — it's the architecture.
+
+**The tactics behind it:** Park-style reflection trees with a MAR-pattern critic persona, JEPA-style predict-then-act surprise scoring, LightMem-style sleep-time consolidation. No competitor runs the full loop — the predict-then-act surprise scoring is Infinity's alone.
 
 ### Builds habits from watching you
 
