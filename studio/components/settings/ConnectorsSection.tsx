@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  Info,
   Link as LinkIcon,
   Pencil,
   Plus,
@@ -972,26 +973,44 @@ function NameAccountPrompt({
     onSubmit(alias.trim());
   }
 
-  const body = (
-    <div className="space-y-3 px-1">
-      <p className="text-xs text-muted-foreground">
-        Pick a short label for this {toolkit.name} account — &ldquo;personal&rdquo;,
-        &ldquo;work&rdquo;, &ldquo;newsletters&rdquo;. The agent uses this name to route
-        (&ldquo;send from work account&rdquo;). You can change it later from the activated list.
-      </p>
-      {toolkit.existingAliases.length > 0 && (
-        <p className="text-[11px] text-muted-foreground">
-          Already used:{" "}
-          {toolkit.existingAliases.map((a, i) => (
-            <span key={a}>
-              <code className="font-mono">{a}</code>
-              {i < toolkit.existingAliases.length - 1 ? ", " : ""}
-            </span>
-          ))}
-        </p>
+  const kind = toolkitKind(toolkit.slug);
+  const instructions = toolkitInstructions(toolkit.slug, toolkit.name);
+
+  // Header — logo block + bold title + small kind subtitle. Replaces
+  // the previous "blah blah explanation" paragraph: the kind label
+  // tells the boss what this thing IS in two words; everything else
+  // collapses into the info block below.
+  const header = (
+    <div className="flex items-start gap-3">
+      {toolkit.logo ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img src={toolkit.logo} alt="" className="size-10 shrink-0 rounded-lg object-contain" />
+      ) : (
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted font-mono text-base font-semibold">
+          {toolkit.name.charAt(0).toUpperCase()}
+        </div>
       )}
-      <div className="space-y-1">
-        <label htmlFor="connector-alias" className="block text-[11px] font-medium text-muted-foreground">
+      <div className="min-w-0 flex-1">
+        <div className="text-base font-semibold leading-tight">Connect {toolkit.name}</div>
+        <div className="mt-0.5 text-[12px] text-muted-foreground">{kind}</div>
+      </div>
+    </div>
+  );
+
+  // Body — info card with the one-sentence instruction, then the
+  // labeled input, then validation feedback. No more paragraphs of
+  // dev-console prose; the placeholder + info card carry the meaning.
+  const body = (
+    <div className="space-y-4">
+      <div className="flex gap-2.5 rounded-lg bg-muted/60 px-3 py-2.5 text-[12.5px] text-foreground/80">
+        <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <p className="leading-snug">{instructions}</p>
+      </div>
+      <div className="space-y-1.5">
+        <label
+          htmlFor="connector-alias"
+          className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+        >
           Account label
         </label>
         <Input
@@ -1011,38 +1030,32 @@ function NameAccountPrompt({
           autoCapitalize="none"
           spellCheck={false}
         />
+        {toolkit.existingAliases.length > 0 && !error && (
+          <p className="text-[11px] text-muted-foreground">
+            In use:{" "}
+            {toolkit.existingAliases.map((a, i) => (
+              <span key={a}>
+                <code className="font-mono">{a}</code>
+                {i < toolkit.existingAliases.length - 1 ? ", " : ""}
+              </span>
+            ))}
+          </p>
+        )}
         {error && <p className="text-[11px] text-danger">{error}</p>}
       </div>
     </div>
   );
 
-  const header = (
-    <div className="flex items-center gap-2">
-      {toolkit.logo ? (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img src={toolkit.logo} alt="" className="size-6 rounded object-contain" />
-      ) : (
-        <div className="flex size-6 items-center justify-center rounded bg-muted font-mono text-xs font-semibold">
-          {toolkit.name.charAt(0).toUpperCase()}
-        </div>
-      )}
-      <span>Connect {toolkit.name}</span>
-    </div>
-  );
-
-  const description =
-    "Naming the account up-front means the agent can always tell which one you mean — even after you connect a second or third.";
-
   if (isDesktop) {
     return (
       <Dialog open onOpenChange={(o) => !o && onCancel()}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{header}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
+          <DialogHeader className="p-5 pb-3">
+            <DialogTitle asChild>{header}</DialogTitle>
+            <DialogDescription className="sr-only">Connect {toolkit.name}</DialogDescription>
           </DialogHeader>
-          {body}
-          <div className="mt-4 flex justify-end gap-2">
+          <div className="px-5 pb-5">{body}</div>
+          <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
             <Button variant="ghost" size="sm" onClick={onCancel}>
               Cancel
             </Button>
@@ -1058,12 +1071,12 @@ function NameAccountPrompt({
   return (
     <Drawer open onOpenChange={(o) => !o && onCancel()}>
       <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>{header}</DrawerTitle>
-          <DrawerDescription>{description}</DrawerDescription>
+        <DrawerHeader className="px-5 pb-3 pt-2">
+          <DrawerTitle asChild>{header}</DrawerTitle>
+          <DrawerDescription className="sr-only">Connect {toolkit.name}</DrawerDescription>
         </DrawerHeader>
-        <div className="px-4 pb-2">{body}</div>
-        <DrawerFooter className="flex-row justify-end gap-2">
+        <div className="px-5 pb-4">{body}</div>
+        <DrawerFooter className="flex-row justify-end gap-2 border-t bg-muted/30 px-5 py-3">
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Cancel
           </Button>
@@ -1074,6 +1087,107 @@ function NameAccountPrompt({
       </DrawerContent>
     </Drawer>
   );
+}
+
+// toolkitKind maps a Composio toolkit slug to a two-word category
+// label rendered as the modal's subtitle ("Email service", "Note
+// application"). The boss asked for this — first read in the dialog
+// should be "what kind of thing am I connecting," not "what's a
+// connector alias."
+function toolkitKind(slug: string): string {
+  switch (slug.toLowerCase()) {
+    case "gmail":
+      return "Email service";
+    case "googlecalendar":
+    case "outlook":
+    case "calendly":
+      return "Calendar";
+    case "googledrive":
+    case "dropbox":
+    case "box":
+    case "onedrive":
+      return "File storage";
+    case "googledocs":
+    case "googlesheets":
+      return "Document editor";
+    case "notion":
+      return "Note application";
+    case "slack":
+    case "discord":
+    case "telegram":
+    case "whatsapp":
+      return "Chat workspace";
+    case "github":
+    case "gitlab":
+    case "bitbucket":
+      return "Code repository";
+    case "linear":
+    case "jira":
+    case "asana":
+    case "trello":
+    case "clickup":
+      return "Issue tracker";
+    case "hubspot":
+    case "salesforce":
+    case "pipedrive":
+      return "Customer CRM";
+    case "stripe":
+    case "paypal":
+    case "square":
+      return "Payments";
+    case "shopify":
+    case "woocommerce":
+      return "E-commerce";
+    case "intercom":
+    case "zendesk":
+    case "freshdesk":
+      return "Customer support";
+    case "twilio":
+      return "SMS & voice";
+    case "sendgrid":
+    case "mailchimp":
+    case "postmark":
+      return "Transactional email";
+    case "airtable":
+      return "Database";
+    case "figma":
+      return "Design tool";
+    case "loom":
+      return "Video recording";
+    case "youtube":
+    case "vimeo":
+      return "Video platform";
+    case "twitter":
+    case "x":
+    case "linkedin":
+    case "facebook":
+    case "instagram":
+    case "tiktok":
+      return "Social network";
+    default:
+      return "External service";
+  }
+}
+
+// toolkitInstructions returns the one-sentence context that lives in
+// the light-grey info card. Most toolkits share the generic "name it
+// so the agent can route between accounts" line; a few have toolkit-
+// specific hints (workspace name for Slack, org name for GitHub).
+function toolkitInstructions(slug: string, name: string): string {
+  switch (slug.toLowerCase()) {
+    case "slack":
+    case "discord":
+      return `Use the workspace name so the agent can route messages to the right ${name} space.`;
+    case "github":
+    case "gitlab":
+    case "bitbucket":
+      return `Use the org name so the agent picks the right ${name} repos when you ask.`;
+    case "stripe":
+    case "paypal":
+      return `Pick a label like "business" or "personal" — the agent uses it to pick which ${name} account to charge against.`;
+    default:
+      return `Pick a short label like "personal" or "work" so the agent knows which ${name} account to use when you have more than one.`;
+  }
 }
 
 // defaultAliasPlaceholder hints at sensible labels per toolkit so the boss

@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth/session";
 import { fetchProfile, getMeta } from "@/lib/api";
 
 const EXEMPT_PREFIXES = ["/login", "/onboarding"];
+const LOCAL_FLAG = "boss_onboarded";
 
 /* OnboardingGate runs once per session after the user is signed in. On first
  * load we check two signals: the infinity_meta "boss_onboarded" flag and the
@@ -31,11 +32,16 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
       setChecked(true);
       return;
     }
+    if (typeof window !== "undefined" && localStorage.getItem(LOCAL_FLAG) === "true") {
+      setChecked(true);
+      return;
+    }
     let cancelled = false;
     (async () => {
       const flag = await getMeta("boss_onboarded");
       if (cancelled) return;
       if (flag === "true") {
+        try { localStorage.setItem(LOCAL_FLAG, "true"); } catch {}
         setChecked(true);
         return;
       }

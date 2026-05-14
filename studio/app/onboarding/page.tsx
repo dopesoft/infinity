@@ -147,6 +147,7 @@ export default function OnboardingPage() {
       return;
     }
     await setMeta("boss_onboarded", "true");
+    try { localStorage.setItem("boss_onboarded", "true"); } catch {}
     setSubmitting(false);
     router.replace("/live");
   }
@@ -155,8 +156,11 @@ export default function OnboardingPage() {
     setSkipping(true);
     /* Set the flag without writing any facts. Agent boots blank but the
      * wizard never reappears — the user can seed their profile later from
-     * the Boss Profile panel in Memory. */
+     * the Boss Profile panel in Memory. The localStorage write is the
+     * escape hatch when Core is unreachable (local dev with no backend),
+     * so Skip always works even if the API call silently fails. */
     await setMeta("boss_onboarded", "true");
+    try { localStorage.setItem("boss_onboarded", "true"); } catch {}
     setSkipping(false);
     router.replace("/live");
   }
@@ -178,8 +182,8 @@ export default function OnboardingPage() {
         </button>
       </header>
 
-      <div className="mx-auto flex w-full max-w-xl flex-1 flex-col px-4 pb-safe sm:px-6">
-        <div className="flex items-center gap-1 pt-6">
+      <div className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-4 pb-safe sm:px-6">
+        <div className="flex items-center gap-1">
           {STEPS.map((_, i) => (
             <span
               key={i}
@@ -236,7 +240,7 @@ export default function OnboardingPage() {
           </p>
         )}
 
-        <div className="mt-auto flex items-center gap-2 pt-8 pb-6">
+        <div className="flex items-center gap-2 pt-8">
           <Button
             type="button"
             variant="ghost"
