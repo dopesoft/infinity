@@ -149,15 +149,17 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	// (input_audio_transcription, turn_detection, voice at top level)
 	// return 400 "unknown_parameter". Mirror the supported shape so the
 	// mint succeeds and the browser can still drive barge-in + captions.
-	// We deliberately don't send `output_modalities` here. The same revision
-	// that nests audio config under `audio.*` also rejects the legacy
-	// top-level modalities key on some surfaces. Realtime defaults to audio
-	// output anyway when an audio.output block is present.
+	// Per the GA docs: `output_modalities` defaults to ["audio"] for a
+	// realtime session, but make it explicit. Some surfaces have been
+	// observed routing to text-only when this is omitted alongside a
+	// configured `audio.output.voice` — better to be explicit than to
+	// rely on a default that's been shifting between revisions.
 	session := map[string]any{
-		"type":         "realtime",
-		"model":        m.model,
-		"instructions": instructions,
-		"tool_choice":  "auto",
+		"type":              "realtime",
+		"model":             m.model,
+		"instructions":      instructions,
+		"tool_choice":       "auto",
+		"output_modalities": []string{"audio"},
 		"audio": map[string]any{
 			"input": map[string]any{
 				// Server-side VAD drives barge-in: the browser pauses

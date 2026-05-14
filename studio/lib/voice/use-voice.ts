@@ -46,6 +46,56 @@ export type UseVoiceCallbacks = {
   onAssistantDelta?: (delta: string, isFinal: boolean) => void;
 };
 
+// playConnectChime plays a short two-note ascending tone via the Web
+// Audio API. Fires once when the realtime session reaches "listening"
+// for the first time, so the boss has an audible confirmation that
+// audio output is working AND the agent is ready to listen. Doubles as
+// a sanity check: if you don't hear the chime, you won't hear the
+// agent either — fix your output device before recording bug reports.
+function playConnectChime(): void {
+  try {
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    // The mic gesture that started this session already unlocked
+    // audio; resume() is a no-op if running, a kick if suspended.
+    void ctx.resume();
+    const now = ctx.currentTime;
+
+    const tone = (freq: number, start: number, dur: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      // Short attack + decay envelope so the chime sounds intentional
+      // and doesn't pop.
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.015);
+      gain.gain.linearRampToValueAtTime(0, start + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + dur + 0.02);
+    };
+
+    // C5 → E5: a small, pleasant rising third.
+    tone(523.25, now, 0.16);
+    tone(659.25, now + 0.13, 0.22);
+
+    // Close the context after the chime finishes so we don't leak.
+    window.setTimeout(() => {
+      void ctx.close();
+    }, 700);
+  } catch {
+    // Audio context construction can fail in private modes or on
+    // some embedded webviews — silent failure is fine, the chime is
+    // a convenience.
+  }
+}
+
 export function useVoice(
   sessionId: string | undefined,
   callbacks?: UseVoiceCallbacks,
@@ -66,6 +116,10 @@ export function useVoice(
   // /api/voice/turn (memory + transcript). We post on the final event
   // and clear here.
   const assistantTextRef = useRef("");
+  // Track whether we've already chimed for this session so we don't
+  // play the connect tone every time we cycle back through "listening"
+  // (e.g. after each tool call completes).
+  const chimedRef = useRef(false);
 
   // Smooth-peak ticker — runs as long as a session exists.
   useEffect(() => {
@@ -89,6 +143,7 @@ export function useVoice(
     micLevelRef.current = 0;
     outLevelRef.current = 0;
     assistantTextRef.current = "";
+    chimedRef.current = false;
     setState(INITIAL);
   }, []);
 
@@ -122,6 +177,13 @@ export function useVoice(
             status,
             toolName: status === "tool-running" ? detail ?? null : null,
           }));
+          // Audible "connected" cue on the FIRST transition into
+          // listening. Subsequent listening states (after a tool
+          // call, after a user turn) don't re-chime.
+          if (status === "listening" && !chimedRef.current) {
+            chimedRef.current = true;
+            playConnectChime();
+          }
         },
         onError: (msg) => {
           setState((s) => ({ ...s, error: msg }));

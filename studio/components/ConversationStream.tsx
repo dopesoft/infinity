@@ -71,11 +71,16 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
   }
 
   return (
-    <div className="relative flex flex-1 min-h-0 flex-col">
+    // min-w-0 on the flex column AND on the inner scroller is what stops
+    // a long un-wrapping line (e.g. a voice transcript without natural
+    // word breaks at the right place) from pushing the column wider than
+    // its parent. Without it, the message bubbles' max-w-[%] computes
+    // against an inflated parent and the bubble overflows the viewport.
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 space-y-3 overflow-y-auto px-3 py-3 scroll-touch sm:px-4"
+        className="flex-1 min-w-0 space-y-3 overflow-y-auto px-3 py-3 scroll-touch sm:px-4"
       >
         {messages.map((m) => (
           <div key={m.id}>

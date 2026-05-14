@@ -144,7 +144,11 @@ export class VoiceClient {
       }
     };
 
-    // Send local mic.
+    // Send local mic. addTrack creates a sendrecv transceiver by
+    // default, which is exactly what OpenAI's canonical browser sample
+    // does — DO NOT also call addTransceiver("audio", …); that creates
+    // a second m-line OpenAI doesn't bind in the answer, and inbound
+    // audio dies on the floor. (Lesson learned the slow way.)
     for (const track of this.localStream.getAudioTracks()) {
       pc.addTrack(track, this.localStream);
     }
@@ -174,6 +178,11 @@ export class VoiceClient {
         const body = await resp.text().catch(() => "");
         throw new Error(`SDP exchange ${resp.status}: ${body.slice(0, 300)}`);
       }
+      // GA Realtime `/v1/realtime/calls` returns the answer SDP as
+      // plain text per OpenAI's official browser sample. No JSON
+      // wrapper, no FormData on the request side — that's a different
+      // path used when you authenticate with the master API key
+      // directly. Ephemeral flow stays text-in / text-out.
       answerSDP = await resp.text();
     } catch (err) {
       cb.onError?.(err instanceof Error ? err.message : "SDP exchange failed");

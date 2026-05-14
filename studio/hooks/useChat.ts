@@ -675,7 +675,13 @@ export function useChat() {
   /** Stream an assistant delta from voice. Creates a pending assistant
    *  message on the first delta of a response and appends to it on
    *  subsequent deltas. On `isFinal`, the message is committed (loses
-   *  its pending flag) so the cache picks it up. */
+   *  its pending flag) so the cache picks it up.
+   *
+   *  Important: when `isFinal` is true, `delta` is the COMPLETE final
+   *  transcript (not an incremental chunk). We replace the bubble's
+   *  text wholesale instead of concatenating — otherwise the final
+   *  transcript gets appended to the already-accumulated streamed
+   *  text, producing duplicated "X X" bubbles. */
   const streamVoiceAssistantDelta = useCallback((delta: string, isFinal: boolean) => {
     setMessages((prev) => {
       const next = [...prev];
@@ -683,7 +689,7 @@ export function useChat() {
       if (last && last.role === "assistant" && last.pending) {
         next[next.length - 1] = {
           ...last,
-          text: isFinal && delta.length > last.text.length ? delta : last.text + delta,
+          text: isFinal ? delta : last.text + delta,
           pending: !isFinal,
         };
         return next;
