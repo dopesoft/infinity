@@ -115,9 +115,7 @@ export class VoiceClient {
     pc.ontrack = (e) => {
       const stream = e.streams[0];
       audioEl.srcObject = stream;
-      // Some browsers race the metadata; call play() explicitly after
-      // the gesture. Swallow the "interrupted by new load" rejection.
-      audioEl.play().catch(() => undefined);
+      this.ensureAudioPlayback();
       // Intentionally do NOT route this stream through createMediaStreamSource
       // for an analyser. Several browsers (notably Chrome in some configs)
       // treat a MediaStream as exclusive — once an AudioContext consumes it,
@@ -303,13 +301,11 @@ export class VoiceClient {
     const cb = this.args.callbacks ?? {};
 
     switch (evt.type) {
-      // Barge-in: user starts talking. Pause the audio element so the
-      // model's last delta is silenced immediately. Server-side VAD
-      // also tells the model to truncate.
+      // Barge-in: user starts talking. Server-side VAD truncates/cancels
+      // the model's response. Do not pause the WebRTC audio element here:
+      // browsers can leave it paused for the next assistant response,
+      // which looks exactly like "the bot hears me but I can't hear it."
       case "input_audio_buffer.speech_started": {
-        if (this.audioEl) {
-          try { this.audioEl.pause(); } catch { /* close races */ }
-        }
         cb.onStatus?.("user-speaking");
         break;
       }
@@ -333,11 +329,18 @@ export class VoiceClient {
       case "response.output_audio_transcript.delta": {
         const delta = String((evt as { delta?: string }).delta ?? "");
         if (!delta) break;
+        this.ensureAudioPlayback();
         const respId = String((evt as { response_id?: string }).response_id ?? "");
         if (respId) {
           this.assistantBuf.set(respId, (this.assistantBuf.get(respId) ?? "") + delta);
         }
         cb.onAssistantTranscript?.(delta, false);
+        cb.onStatus?.("assistant-speaking");
+        break;
+      }
+
+      case "response.output_audio.delta": {
+        this.ensureAudioPlayback();
         cb.onStatus?.("assistant-speaking");
         break;
       }
@@ -454,6 +457,17 @@ export class VoiceClient {
       // Audio context creation can fail on some browsers — surface as
       // missing level meter, not as a session-killing error.
     }
+  }
+
+  private ensureAudioPlayback(): void {
+    const audioEl = this.audioEl;
+    if (!audioEl || !audioEl.srcObject) return;
+    if (!audioEl.paused && audioEl.readyState > 0) return;
+    // Some browsers race metadata, autoplay state, or a prior user
+    // interruption. The mic tap that started the session is the user
+    // gesture; retrying play() here keeps remote WebRTC audio audible
+    // without touching the media stream itself.
+    audioEl.play().catch(() => undefined);
   }
 
   // (Output level meter removed — see ontrack comment for the reason. The

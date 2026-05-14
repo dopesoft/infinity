@@ -83,7 +83,7 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
         className="flex-1 min-w-0 space-y-3 overflow-y-auto px-3 py-3 scroll-touch sm:px-4"
       >
         {messages.map((m) => (
-          <div key={m.id}>
+          <div key={m.id} className="min-w-0 max-w-full" data-message>
             {m.role === "tool" ? (
               // Skill-pipeline tool calls (skill_propose, skill_optimize)
               // render as a rich proposal card so "new skill proposed" is
@@ -91,7 +91,7 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
               // tool-call card.
               SKILL_TOOL_NAMES.has(m.toolCall?.name ?? "") ? (
                 <div className="flex justify-start">
-                  <div className="w-full sm:w-3/4">
+                  <div className="w-full min-w-0 max-w-full sm:w-3/4">
                     <SkillProposalCard message={m} />
                   </div>
                 </div>
@@ -100,14 +100,14 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
                 // to be the conversation. Same width as ThinkingBlock for visual
                 // rhythm — both are "system" feedback, not chat.
                 <div className="flex justify-start">
-                  <div className="w-full sm:w-1/2">
+                  <div className="w-full min-w-0 max-w-full sm:w-1/2">
                     <ToolCallCard message={m} />
                   </div>
                 </div>
               )
             ) : m.role === "thinking" ? (
               <div className="flex justify-start">
-                <div className="w-full sm:w-3/4">
+                <div className="w-full min-w-0 max-w-full sm:w-3/4">
                   <ThinkingBlock message={m} />
                 </div>
               </div>

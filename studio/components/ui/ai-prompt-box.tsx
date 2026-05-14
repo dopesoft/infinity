@@ -485,10 +485,12 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
             // Centered horizontally so "Connecting…" / "Listening…" /
             // "Speaking…" reads as a focal point instead of being
             // tucked against the left edge.
-            <div className="flex min-h-[44px] items-center justify-center gap-3 px-3 py-2">
-              <VoiceOrb status={voice.status} level={voice.level} />
+            <div className="flex min-h-[44px] w-full min-w-0 items-center justify-center gap-3 px-3 py-2">
+              <span className="shrink-0">
+                <VoiceOrb status={voice.status} level={voice.level} />
+              </span>
               <p
-                className="truncate text-sm font-medium text-muted-foreground"
+                className="min-w-0 flex-1 truncate text-center text-sm font-medium text-muted-foreground"
                 aria-live="polite"
               >
                 {voiceCaptionLabel(voice)}
@@ -502,11 +504,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
            * while send/stop pins to the right edge. */}
           <div
             className={cn(
-              "flex min-w-0 items-center pt-1.5",
+              "flex w-full min-w-0 items-center pt-1.5",
               voiceActive ? "justify-center gap-6" : "justify-between gap-2",
             )}
           >
-            <div className="flex min-w-0 items-center gap-1.5">
+            <div className={cn("flex min-w-0 items-center gap-1.5", voiceActive && "shrink-0")}>
               {voiceActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -514,7 +516,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                       type="button"
                       onClick={() => voice.setMuted(!voice.muted)}
                       className={cn(
-                        "inline-flex h-8 w-8 items-center justify-center rounded-full",
+                        "inline-flex size-11 shrink-0 items-center justify-center rounded-full",
                         "transition-colors",
                         voice.muted
                           ? "bg-muted text-danger"
@@ -652,7 +654,8 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                       onClick={onClick}
                       disabled={disable}
                       className={cn(
-                        "inline-flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
+                        "inline-flex shrink-0 items-center justify-center rounded-full transition-all duration-200",
+                        voiceActive ? "size-11" : "h-9 w-9",
                         mode === "stop" &&
                           "bg-transparent text-danger hover:bg-danger/10",
                         // Same treatment as stop: transparent button, just

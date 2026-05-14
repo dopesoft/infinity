@@ -121,7 +121,7 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
     // [@media(hover:none)] variant pins opacity to 100.
     <div
       className={cn(
-        "group flex w-full flex-col gap-1",
+        "group flex w-full min-w-0 max-w-full flex-col gap-1",
         isUser ? "items-end" : "items-start",
       )}
     >
@@ -138,7 +138,7 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
         // don't wrap prematurely) while keeping the wrap point tight
         // enough that the left edge of multi-line text doesn't drift far
         // off-axis from where the eye expects "user content" to live.
-        <div className="max-w-[85%] sm:max-w-[80%]">
+        <div className="min-w-0 max-w-[85%] sm:max-w-[80%]">
           {message.steered && (
             <div className="flex items-center justify-end gap-1 pb-0.5 text-[10px] uppercase tracking-wide text-info">
               <CornerDownRight className="size-3" />
@@ -147,7 +147,7 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
           )}
           <div
             className={cn(
-              "whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground",
+              "min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed text-foreground",
               message.steered && "border-r-2 border-info/60 pr-2",
             )}
           >
@@ -164,7 +164,7 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
         // origin badge so the boss can tell the agent spoke first.
         <div
           className={cn(
-            "max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
+            "min-w-0 max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
             message.proactive && "border border-info/40",
           )}
         >
@@ -178,7 +178,7 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
               </span>
             </div>
           )}
-          <div className="whitespace-pre-wrap break-words">
+          <div className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
             {message.text}
             {message.pending && (
               <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
