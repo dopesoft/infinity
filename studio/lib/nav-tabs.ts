@@ -1,8 +1,8 @@
 import {
   Activity,
-  ClipboardList,
   Clock,
   Brain,
+  Dumbbell,
   FileCode,
   LayoutDashboard,
   type LucideIcon,
@@ -38,6 +38,7 @@ export const NAV_TABS: NavTab[] = [
   { href: "/", label: "Dashboard", Icon: LayoutDashboard },
   { href: "/live", label: "Live", Icon: MessageSquare },
   { href: "/memory", label: "Memory", Icon: Brain },
+  { href: "/gym", label: "Gym", Icon: Dumbbell },
   { href: "/skills", label: "Skills", Icon: Wrench },
 ];
 
@@ -46,6 +47,5 @@ export const NAV_OVERFLOW: NavTab[] = [
   { href: "/trust", label: "Trust", Icon: ShieldCheck },
   { href: "/cron", label: "Cron", Icon: Clock },
   { href: "/code-proposals", label: "Code", Icon: FileCode },
-  { href: "/audit", label: "Audit", Icon: ClipboardList },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];

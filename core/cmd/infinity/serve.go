@@ -12,8 +12,8 @@ import (
 
 	"github.com/dopesoft/infinity/core/config"
 	"github.com/dopesoft/infinity/core/internal/agent"
-	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/embed"
@@ -25,6 +25,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
@@ -325,6 +326,9 @@ func serveCmd() *cobra.Command {
 				memProviders := []agent.MemoryProvider{}
 				if searcher != nil {
 					memProviders = append(memProviders, searcher)
+				}
+				if pool != nil {
+					memProviders = append(memProviders, plasticity.NewProvider(pool))
 				}
 				if honchoClient.Enabled() {
 					memProviders = append(memProviders, honcho.NewMemoryProvider(honchoClient))

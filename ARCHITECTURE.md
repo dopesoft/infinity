@@ -2,7 +2,7 @@
 
 This document is the source of truth for how the running system is wired up. It reflects the codebase after the Coding-bridge / Honcho / GEPA work landed on top of Phase 4-7 substrate. Where the spec describes something we have not built yet, that's called out explicitly in the **Gaps** section at the end.
 
-## 1. Five Railway services + one database + one Mac
+## 1. Six Railway services + one database + one Mac
 
 ```
                                 ┌────────────────────────────┐
@@ -22,7 +22,8 @@ This document is the source of truth for how the running system is wired up. It 
               │  Postgres + pgvector     │         │  honcho   (8000)     │
               │  Supabase session pooler │◄────────┤  honcho-deriver       │
               │  aws-1-us-west-1 :5432   │         │  gepa     (8080)     │
-              │  IPv4, sslmode=require   │         │  redis    (6379)     │
+              │  IPv4, sslmode=require   │         │  plasticity (8080)  │
+              │                          │         │  redis    (6379)     │
               └──────────────────────────┘         └──────────────────────┘
 
                              ▲ MCP/SSE w/ CF-Access service token
@@ -148,6 +149,9 @@ core/
     019_evals.sql            mem_evals (019), mem_entities + _links +
     020_world_model.sql      mem_agent_goals (020), mem_notifications +
     021_initiative.sql       mem_cost_events + mem_workflow_runs.depends_on (021)
+    022_plasticity.sql       Gym / plasticity ledgers: mem_training_examples,
+                       mem_distillation_datasets/runs, mem_model_adapters,
+                       mem_adapter_evals, mem_policy_routes
 
   config/            mcp.yaml + embed.go (//go:embed, package config) so the
                      distroless container ships the canonical MCP registry
@@ -207,7 +211,7 @@ core/
     cron/              types, scheduler (robfig/cron/v3),
                        executor_agent (cron→agent.Loop bridge), http
     sentinel/          types, manager, dispatcher (Log + Skill), http
-    server/            server, health, ws, api, memory_api, audit_api
+    server/            server, health, ws, api, memory_api, audit_api, gym_api
 
     --- the assembly substrate (§18) — six generic building-block packages ---
     surface/           generic dashboard surface contract — types, store;
@@ -225,6 +229,9 @@ core/
                        + cost ledgers, Notifier urgency policy), tools
                        (notify / notification_digest / cost_record /
                        budget_status)
+    plasticity/        Gym substrate read store for training examples,
+                       distillation datasets/runs, adapters, adapter evals,
+                       and policy routes
     proactive/agent_goals.go + substrate_surface.go — heartbeat checklists
                        that pursue agent goals + mirror substrate state onto
                        the surface contract
@@ -243,13 +250,14 @@ studio/
     heartbeat/         Phase 5
     trust/             Phase 5
     cron/              Phase 6 (with sub-tabs cron + sentinel)
-    audit/             Phase 7
+    gym/               Gym: plasticity status + datasets/adapters/routes +
+                       combined audit ledger
+    audit/             redirects to /gym?tab=audit
     settings/          Phase 2 MVP
   components/
     TabFrame.tsx       sticky header (logo + StatusPill + TabNav + ThemeToggle)
                        + main + FooterStatus
-    TabNav.tsx         8 tabs: live / sessions / memory / skills / heartbeat /
-                       trust / cron / audit
+    TabNav.tsx         primary tabs: dashboard / live / memory / gym / skills
     Composer / ConversationStream / ChatBubble / SessionHeader / ToolCallCard
     MemoryCard / MemoryDetail / MetricCard / TierBadge / ProvenanceChain
     SkillCard / SkillDetail / RiskBadge
@@ -279,6 +287,7 @@ studio/
 | `/api/memory/predictions?threshold=&limit=` | GET | server.handleMemoryPredictions | high-surprise predict-then-act rows |
 | `/api/memory/cite/:id` | GET | server.handleMemoryCite | provenance chain |
 | `/api/memory/audit?limit=&op=` | GET | server.handleAuditLog | mem_audit rows (table#id target) |
+| `/api/gym?limit=` | GET | server.handleGym | Gym snapshot: plasticity ledgers + policy routes |
 | `/api/skills` | GET | skills.API | list summaries (last_run + success_rate) |
 | `/api/skills/reload` | POST | skills.API | re-walk filesystem |
 | `/api/skills/:name` | GET | skills.API | full SKILL.md + frontmatter |
@@ -944,6 +953,7 @@ Railway project: Infinity
   ├─ studio          rootDirectory=studio/          node:22-alpine → standalone
   │                  custom domain: infinity.dopesoft.io (CNAME → studio.up.railway.app)
   ├─ gepa            rootDirectory=docker/gepa/     python:3.12 + FastAPI + httpx
+  ├─ plasticity      rootDirectory=docker/plasticity/ python:3.12 stdlib HTTP worker
   ├─ honcho          rootDirectory=docker/honcho/   python:3.13 + plastic-labs/honcho main
   ├─ honcho-deriver  rootDirectory=docker/honcho-deriver/  same image, CMD = python -m src.deriver
   └─ redis           image: redis:7-alpine          (Honcho cache; private network only)
@@ -989,6 +999,7 @@ Environment variables that matter:
 | `HONCHO_WORKSPACE` | core | default `infinity` |
 | `HONCHO_PEER` | core | default `boss` |
 | `GEPA_URL` | core | `http://gepa.railway.internal:8080` — also enables the Voyager autotrigger when set |
+| `PLASTICITY_URL` | core | `http://plasticity.railway.internal:8080` — future Gym worker endpoint for dataset build / adapter train / eval jobs |
 | `INFINITY_VOYAGER_AUTOTRIGGER` | core | `on` (default when `GEPA_URL` set) / `off` |
 | `INFINITY_VOYAGER_AUTOTRIGGER_EVERY` | core | Go duration; default `30m` |
 | `INFINITY_VOYAGER_FAILURE_RATE` | core | float 0..1; default `0.30` (fire GEPA when failure rate ≥ this) |
@@ -1014,6 +1025,7 @@ Environment variables that matter:
 | 7 | Polish | ✅ Audit log endpoint + viewer; ✅ Honcho dialectic peer modelling; ✅ Claude Code coding bridge (25 tools via MCP + CF Access); ✅ GEPA skill optimizer sidecar; ✅ custom domain `infinity.dopesoft.io` | Command palette (cmd+K, cmdk lib) · Sessions rewind · Skills Tests sub-tab · Settings 10-section depth · Memory tab knowledge graph viewer · Backup/export · `infinity restore` · Doctor full diagnostic suite · Light/dark + animation polish |
 | **AGI** | **Migration 011 — close the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Curiosity scanner** integrated into heartbeat; ✅ Studio Memory feeds for reflections + high-surprise predictions; ✅ curiosity approval / dismissal in Heartbeat; ✅ procedural-tier badge in Memory list | A-MEM graph visualization for top-K associative neighbours · LLM-driven prediction text on high-cost tool calls (Haiku, gated on cost heuristic) · Cross-session reflection chains (cluster N reflections → meta-lesson) |
 | **Substrate** | **Migrations 016–021 — the assembly substrate (§18)** | ✅ **Generic surface contract** (`mem_surface_items` + `surface_item`/`surface_update`); ✅ **Skill self-authoring loop** (`skill_create` → live registry, durable across restarts); ✅ **Durable workflow engine** (`mem_workflows`/`_runs`/`_steps` + background worker — retries, checkpoints, resume-on-restart, dependency-aware scheduling); ✅ **Runtime self-extension** (`mem_extensions` — agent wires MCP servers + REST-API tools live); ✅ **Verification** (`mem_evals` scorecards with regression detection + `workflow_validate`); ✅ **World model + agent goals** (`mem_entities`/`_links`/`mem_agent_goals` + autonomous-pursuit heartbeat); ✅ **Initiative + economics** (`mem_notifications` urgency policy + `mem_cost_events` budget rollup) | Sandboxed dry-run execution of workflows · automatic per-LLM-call cost capture · multi-dependency (DAG) workflow scheduling · full-registry browse views in Studio (extensions / evals / entities are agent-tool-queryable today) |
+| **Gym** | **Migration 022 — plasticity control surface** | ✅ Plasticity metadata schema (`mem_training_examples`, datasets, runs, adapters, adapter evals, policy routes); ✅ `core/internal/plasticity` read store; ✅ deterministic example extraction from evals/reflections/high-surprise predictions; ✅ prompt-path reflex provider injects top Gym lessons into the agent through `CompositeMemory`; ✅ `/api/gym` + POST extract action; ✅ `infinity gym extract`; ✅ Studio `/gym` page with overview, datasets, adapters, routes, and combined audit ledger; ✅ `/audit` redirects to Gym audit tab; ✅ `docker/plasticity` Railway sidecar skeleton | Nightly extraction scheduling · sidecar train/eval implementation · eval replay / adapter promotion Trust contracts · learned policy router integration · object-storage artifact backend |
 | 8 | Voice | ✅ **GPT Realtime over WebRTC** — `core/internal/voice/realtime.go` mints short-lived OpenAI `client_secret`s; the browser does the WebRTC SDP exchange P2P with `api.openai.com` (audio never touches Core); tool calls round-trip through `/api/voice/tool` so voice has the same registry + Trust gate as text, and `/api/voice/turn` fires the same memory-capture hooks. Model `gpt-realtime-1.5`, server-VAD barge-in, live transcription. nil-safe — `/api/voice/*` returns 503 when `OPENAI_API_KEY` is unset. | Studio mic-button polish · wake-word activation (currently tap-to-talk) |
 
 ## 17. Next-session priorities

@@ -5,6 +5,7 @@
 #   core service    → root directory = core/
 #   studio service  → root directory = studio/
 #   gepa service    → root directory = docker/gepa/   (Phase-6 skill optimizer)
+#   plasticity      → root directory = docker/plasticity/ (Gym worker)
 #   embed sidecar   → root directory = .              (uses docker/embed.Dockerfile)
 #
 # Postgres: use Supabase or Neon for the database — both have pgvector
@@ -48,6 +49,21 @@ name = "gepa"
 
 [services.source]
 rootDirectory = "docker/gepa"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+
+[services.deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+
+[[services]]
+name = "plasticity"
+
+[services.source]
+rootDirectory = "docker/plasticity"
 
 [services.build]
 dockerfilePath = "Dockerfile"

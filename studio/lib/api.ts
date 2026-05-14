@@ -594,6 +594,128 @@ export const fetchAuditLog = (limit = 100, op = "", signal?: AbortSignal) => {
   return getJSON<AuditRowDTO[]>(`/api/memory/audit?${qs.toString()}`, signal);
 };
 
+// ---- Gym / plasticity ------------------------------------------------------
+
+export type GymSummaryDTO = {
+  ready: boolean;
+  reflex_on: boolean;
+  examples: number;
+  datasets: number;
+  runs: number;
+  candidates: number;
+  active: number;
+  regressions: number;
+  last_run_at?: string;
+};
+
+export type GymExampleDTO = {
+  id: string;
+  source_kind: string;
+  source_id?: string;
+  task_kind: string;
+  label: string;
+  score: number;
+  privacy_class: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type GymDatasetDTO = {
+  id: string;
+  name: string;
+  status: string;
+  example_count: number;
+  artifact_uri?: string;
+  checksum?: string;
+  filters?: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type GymRunDTO = {
+  id: string;
+  dataset_id?: string;
+  adapter_id?: string;
+  status: string;
+  trigger: string;
+  reason?: string;
+  base_model?: string;
+  metrics?: Record<string, unknown>;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+};
+
+export type GymAdapterDTO = {
+  id: string;
+  name: string;
+  base_model: string;
+  status: string;
+  task_scope: string[];
+  metrics?: Record<string, unknown>;
+  created_at: string;
+  promoted_at?: string;
+  rolled_back_at?: string;
+};
+
+export type GymEvalDTO = {
+  id: string;
+  adapter_id?: string;
+  eval_name: string;
+  baseline_score: number;
+  candidate_score: number;
+  regression_count: number;
+  passed: boolean;
+  metrics?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type GymRouteDTO = {
+  id: string;
+  route: string;
+  task_kind: string;
+  active_adapter_id?: string;
+  status: string;
+  confidence: number;
+  min_score: number;
+  metadata?: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type GymSnapshotDTO = {
+  summary: GymSummaryDTO;
+  examples: GymExampleDTO[];
+  datasets: GymDatasetDTO[];
+  runs: GymRunDTO[];
+  adapters: GymAdapterDTO[];
+  evals: GymEvalDTO[];
+  routes: GymRouteDTO[];
+};
+
+export const fetchGym = (limit = 50, signal?: AbortSignal) =>
+  getJSON<GymSnapshotDTO>(`/api/gym?limit=${limit}`, signal);
+
+export type GymExtractResultDTO = {
+  inserted: number;
+  evals: number;
+  lessons: number;
+  surprise: number;
+};
+
+export async function extractGymExamples(limit = 100): Promise<GymExtractResultDTO | null> {
+  try {
+    const res = await authedFetch("/api/gym", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "extract_examples", limit }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as GymExtractResultDTO;
+  } catch {
+    return null;
+  }
+}
+
 // ---- Heartbeat / Trust / IntentFlow ----------------------------------------
 
 export type HeartbeatRunDTO = {
