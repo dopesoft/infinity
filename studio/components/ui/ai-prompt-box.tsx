@@ -481,7 +481,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
             // see useChat.addVoiceUserMessage / streamVoiceAssistantDelta.
             // That keeps long, multi-sentence replies readable instead
             // of getting chopped off in a one-line caption.
-            <div className="flex min-h-[44px] items-center gap-3 px-3 py-2">
+            //
+            // Centered horizontally so "Connecting…" / "Listening…" /
+            // "Speaking…" reads as a focal point instead of being
+            // tucked against the left edge.
+            <div className="flex min-h-[44px] items-center justify-center gap-3 px-3 py-2">
               <VoiceOrb status={voice.status} level={voice.level} />
               <p
                 className="truncate text-sm font-medium text-muted-foreground"
