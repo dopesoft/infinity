@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
@@ -21,24 +20,11 @@ type ChatHook = ReturnType<typeof useChat>;
 export function WorkspaceChatColumn({
   chat,
   minimalComposer = false,
-  scrollRef,
 }: {
   chat: ChatHook;
   minimalComposer?: boolean;
-  scrollRef?: React.MutableRefObject<HTMLDivElement | null>;
 }) {
   const { setting, setModel } = useGlobalModel();
-  const localRef = useRef<HTMLDivElement | null>(null);
-  const ref = scrollRef ?? localRef;
-
-  // Keep the conversation scrolled to the latest message when new content
-  // arrives. ConversationStream renders its own scroller; we just nudge it.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const last = el.querySelector("[data-message]:last-of-type");
-    if (last) (last as HTMLElement).scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [chat.messages.length, ref]);
 
   return (
     // overflow-x-hidden here is the page-level guard: even if a child
@@ -55,7 +41,7 @@ export function WorkspaceChatColumn({
           empty state (which uses flex-1 to vertically center its content)
           can actually expand. Without flex here, flex-1 has no effect and
           the empty state collapsed to the top edge. */}
-      <div ref={ref} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* onQuickReply routes the "Approve & fix" action on heartbeat
             finding cards through chat.send, so the agent acts on the
             finding in this same session. */}
