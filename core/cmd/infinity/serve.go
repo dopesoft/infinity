@@ -176,6 +176,12 @@ func serveCmd() *cobra.Command {
 			// when they're missing. Never overwrites a file the boss has
 			// touched. On Railway's ephemeral filesystem this means the
 			// canonical agent-facing scaffolds are always present.
+			//
+			// Skills that aren't project scaffolds (e.g.
+			// self-improve-from-finding) are seeded directly into the
+			// Postgres store via a migration instead — the store is the
+			// durable home, and MaterializeActiveSkills derives them to
+			// disk at boot. No rebuild needed to ship or evolve those.
 			if planted, err := config.MaterializeScaffoldSkills(skillsRoot); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: materialize scaffold skills: %v\n", err)
 			} else if len(planted) > 0 {

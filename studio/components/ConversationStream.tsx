@@ -7,11 +7,21 @@ import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { SkillProposalCard } from "@/components/SkillProposalCard";
+import { DashboardContextCard } from "@/components/DashboardContextCard";
 import type { ChatMessage } from "@/hooks/useChat";
 
 const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
 
-export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
+export function ConversationStream({
+  messages,
+  // onQuickReply sends a canned message into the current session. Used by
+  // the "Approve & fix" action on heartbeat finding cards — it routes
+  // through chat.send so the agent acts in this same conversation.
+  onQuickReply,
+}: {
+  messages: ChatMessage[];
+  onQuickReply?: (text: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showJump, setShowJump] = useState(false);
   const stickToBottomRef = useRef(true);
@@ -111,8 +121,17 @@ export function ConversationStream({ messages }: { messages: ChatMessage[] }) {
                   <ThinkingBlock message={m} />
                 </div>
               </div>
+            ) : m.seeded ? (
+              // Discuss-with-Jarvis context block — a left-anchored card
+              // (same rhythm as the thinking / skill cards) so it reads as
+              // "something the boss brought in", not a typed user message.
+              <div className="flex justify-start">
+                <div className="w-full min-w-0 max-w-full sm:w-3/4">
+                  <DashboardContextCard message={m} onQuickReply={onQuickReply} />
+                </div>
+              </div>
             ) : (
-              <ChatBubble message={m} />
+              <ChatBubble message={m} onQuickReply={onQuickReply} />
             )}
           </div>
         ))}

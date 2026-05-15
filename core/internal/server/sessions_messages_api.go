@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -17,6 +18,17 @@ type sessionMessageDTO struct {
 	Role      string `json:"role"`
 	Text      string `json:"text"`
 	CreatedAt string `json:"created_at"`
+	// Kind discriminates non-plain messages so Studio can render them
+	// with distinct chrome. Empty for ordinary user/assistant turns;
+	// "dashboard_seed" for the context block injected by Discuss-with-Jarvis.
+	Kind string `json:"kind,omitempty"`
+	// SeedKind is the dashboard item kind (e.g. "activity", "memory") for
+	// a "dashboard_seed" message — used as the card's header label.
+	SeedKind string `json:"seed_kind,omitempty"`
+	// CuriosityID links a "dashboard_seed" message back to an open
+	// curiosity question (best-effort, by artifact-title match). When set,
+	// the card renders an "Approve & fix" action.
+	CuriosityID string `json:"curiosity_id,omitempty"`
 }
 
 // handleSessionMessages serves /api/sessions/{id}/messages by reading the
@@ -62,10 +74,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hook_name, COALESCE(raw_text, ''), created_at
+		SELECT hook_name, COALESCE(raw_text, ''), COALESCE(payload::text, ''), created_at
 		FROM mem_observations
 		WHERE session_id = $1
-		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted')
+		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
 		ORDER BY created_at ASC
 		LIMIT 500
 	`, id)
@@ -77,9 +89,9 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 
 	out := []sessionMessageDTO{}
 	for rows.Next() {
-		var hook, text string
+		var hook, text, payload string
 		var createdAt time.Time
-		if err := rows.Scan(&hook, &text, &createdAt); err != nil {
+		if err := rows.Scan(&hook, &text, &payload, &createdAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -87,11 +99,25 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		if text == "" {
 			continue
 		}
-		role := "assistant"
-		if hook == "UserPromptSubmit" {
-			role = "user"
+		// DashboardSeed is the Discuss-with-Jarvis context block. It reads
+		// as a user-role turn to the model, but Studio renders it as a
+		// distinct "from dashboard" card — so it carries a Kind + the
+		// originating dashboard item kind parsed out of the seed payload.
+		msg := sessionMessageDTO{
+			Role:      "assistant",
+			Text:      text,
+			CreatedAt: createdAt.UTC().Format(time.RFC3339),
 		}
-		out = append(out, sessionMessageDTO{Role: role, Text: text, CreatedAt: createdAt.UTC().Format(time.RFC3339)})
+		switch hook {
+		case "UserPromptSubmit":
+			msg.Role = "user"
+		case "DashboardSeed":
+			msg.Role = "user"
+			msg.Kind = "dashboard_seed"
+			msg.SeedKind = seedKindFromPayload(payload)
+			msg.CuriosityID = s.curiosityIDForSeed(r.Context(), payload)
+		}
+		out = append(out, msg)
 	}
 	if err := rows.Err(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -121,7 +147,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 		SELECT hook_name, COALESCE(raw_text, ''), created_at
 		FROM mem_observations
 		WHERE session_id = $1
-		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted')
+		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
 		ORDER BY created_at ASC
 		LIMIT 50
 	`, sessionID)
@@ -141,12 +167,69 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 		if text == "" {
 			continue
 		}
+		// DashboardSeed is injected context, but to the model it's the
+		// opening user turn — so it hydrates as a user-role message.
 		role := llm.RoleAssistant
-		if hook == "UserPromptSubmit" {
+		if hook == "UserPromptSubmit" || hook == "DashboardSeed" {
 			role = llm.RoleUser
 		}
 		sess.Append(llm.Message{Role: role, Content: text})
 	}
+}
+
+// seedKindFromPayload pulls the dashboard item kind ("activity", "memory",
+// …) out of a DashboardSeed observation's payload JSON ({kind, id, snapshot}).
+// Returns "" when the payload is missing or unparseable — the card just
+// falls back to a generic header in that case.
+func seedKindFromPayload(payload string) string {
+	if strings.TrimSpace(payload) == "" {
+		return ""
+	}
+	var p struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return ""
+	}
+	return p.Kind
+}
+
+// curiosityIDForSeed best-effort links a DashboardSeed observation back to
+// an open curiosity question by matching the seeded artifact's title
+// against mem_curiosity_questions.question — the same title-match the
+// heartbeat-findings endpoint uses. Returns "" when there's no snapshot
+// title or no open question matches; a miss just means the chat card
+// shows no "Approve & fix" action, never an error.
+func (s *Server) curiosityIDForSeed(ctx context.Context, payload string) string {
+	if s.pool == nil || strings.TrimSpace(payload) == "" {
+		return ""
+	}
+	var p struct {
+		Snapshot json.RawMessage `json:"snapshot"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil || len(p.Snapshot) == 0 {
+		return ""
+	}
+	var art struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(p.Snapshot, &art); err != nil {
+		return ""
+	}
+	title := strings.TrimSpace(art.Title)
+	if title == "" {
+		return ""
+	}
+	var id string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT id::text FROM mem_curiosity_questions
+		 WHERE question = $1 AND status = 'open'
+		 ORDER BY created_at DESC
+		 LIMIT 1
+	`, title).Scan(&id); err != nil {
+		return ""
+	}
+	return id
 }
 
 // handleSessionRename serves POST /api/sessions/{id}/rename {"name": "..."}.

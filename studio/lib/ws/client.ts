@@ -42,7 +42,15 @@ export type WSEvent =
   // heartbeat when a finding crosses the surface threshold (surprise,
   // curiosity, security, or any pre-approved finding). useChat renders
   // these as regular assistant bubbles with a subtle origin badge.
-  | { type: "proactive_message"; session_id: string; text: string; finding_kind?: string };
+  // curiosity_id is set when the finding is backed by a curiosity
+  // question — it lets the chat card offer an "Approve & fix" action.
+  | {
+      type: "proactive_message";
+      session_id: string;
+      text: string;
+      finding_kind?: string;
+      curiosity_id?: string;
+    };
 
 export type WSIntent = {
   token: "silent" | "fast_intervention" | "full_assistance";

@@ -251,6 +251,17 @@ export type SessionMessageDTO = {
   role: "user" | "assistant";
   text: string;
   created_at: string;
+  // kind discriminates non-plain transcript rows. Absent for ordinary
+  // turns; "dashboard_seed" for the context block injected by
+  // Discuss-with-Jarvis (rendered as a distinct card, not a user bubble).
+  kind?: string;
+  // seed_kind is the originating dashboard item kind (e.g. "activity")
+  // for a "dashboard_seed" row — used as the card's header label.
+  seed_kind?: string;
+  // curiosity_id links a "dashboard_seed" row to an open curiosity
+  // question (best-effort title match) — when present the card renders
+  // an "Approve & fix" action.
+  curiosity_id?: string;
 };
 
 export const fetchSessionMessages = (id: string, signal?: AbortSignal) =>
@@ -776,7 +787,7 @@ export const fetchHeartbeatFindings = (
 
 export async function decideCuriosityQuestion(
   id: string,
-  decision: "asked" | "answered" | "dismissed",
+  decision: "asked" | "answered" | "dismissed" | "approved",
   answer = "",
 ): Promise<boolean> {
   try {

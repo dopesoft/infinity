@@ -37,6 +37,17 @@ export type ChatMessage = {
   // spoke first.
   proactive?: boolean;
   proactiveKind?: string;
+  // seeded=true marks the dashboard context block injected by
+  // Discuss-with-Jarvis. It's a user-role turn to the model, but Studio
+  // renders it as a distinct "from dashboard" card (DashboardContextCard)
+  // instead of a plain user message. seedKind is the originating
+  // dashboard item kind (e.g. "activity") used as the card header.
+  seeded?: boolean;
+  seedKind?: string;
+  // curiosityId links a heartbeat/seeded finding to an open curiosity
+  // question. When set, the card renders an "Approve & fix" action that
+  // marks the question approved and tells the agent to apply the fix.
+  curiosityId?: string;
 };
 
 type Usage = { input: number; output: number };
@@ -59,6 +70,33 @@ function makeId() {
 function newSessionId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
   return `sess_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+// A server transcript row as returned by GET /api/sessions/{id}/messages.
+type ServerRow = {
+  role: ChatRole;
+  text: string;
+  created_at: string;
+  kind?: string;
+  seed_kind?: string;
+  curiosity_id?: string;
+};
+
+// rowToMessage converts a canonical server transcript row into the local
+// ChatMessage shape. Single source of truth for the mapping so the
+// session-load, switch-session, and reconnect-merge paths stay in sync —
+// notably the `seeded` flag that routes the Discuss-with-Jarvis context
+// block to DashboardContextCard instead of a plain user bubble.
+function rowToMessage(r: ServerRow): ChatMessage {
+  return {
+    id: makeId(),
+    role: r.role,
+    text: r.text,
+    createdAt: new Date(r.created_at).getTime() || Date.now(),
+    seeded: r.kind === "dashboard_seed" || undefined,
+    seedKind: r.seed_kind || undefined,
+    curiosityId: r.curiosity_id || undefined,
+  };
 }
 
 function readStoredSessionId(): string {
@@ -128,16 +166,11 @@ function writeCachedMessages(sessionId: string, messages: ChatMessage[]) {
 // so we append it.
 function mergeServerRows(
   local: ChatMessage[],
-  rows: Array<{ role: ChatRole; text: string; created_at: string }>,
+  rows: ServerRow[],
 ): ChatMessage[] {
   // Convert server rows into ChatMessage shape with stable created_at
   // timestamps for ordering.
-  const fromServer: ChatMessage[] = rows.map((r) => ({
-    id: makeId(),
-    role: r.role,
-    text: r.text,
-    createdAt: new Date(r.created_at).getTime() || Date.now(),
-  }));
+  const fromServer: ChatMessage[] = rows.map(rowToMessage);
   // Detect pending tail items to preserve (in-flight stream, watchdog
   // error bubble we don't want to silently erase).
   const pendingTail: ChatMessage[] = [];
@@ -222,6 +255,13 @@ export function useChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const turnStartRef = useRef<number | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Discuss-with-Jarvis opens a session whose only row is a DashboardSeed
+  // context block — no agent reply yet. seededKickRef parks such a session
+  // id until the socket is connected enough to fire one `resume` turn so
+  // the agent actually responds. kickedSessionsRef dedupes so a remount or
+  // reconnect never re-fires the opening turn.
+  const seededKickRef = useRef<string>("");
+  const kickedSessionsRef = useRef<Set<string>>(new Set());
 
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current) {
@@ -260,6 +300,52 @@ export function useChat() {
     }, TURN_WATCHDOG_MS);
   }, [clearWatchdog]);
 
+  // Fire one `resume` turn for a freshly-seeded session so the agent
+  // replies to the dashboard context Discuss-with-Jarvis injected (the
+  // context block alone never triggers a turn). No-op once a session has
+  // been kicked. If the socket isn't OPEN yet, the id is parked on
+  // seededKickRef and the ws.status effect below retries on connect.
+  const kickSeeded = useCallback(
+    (target: string) => {
+      if (!target || kickedSessionsRef.current.has(target)) return;
+      const ok = ws.send({ type: "resume", session_id: target });
+      if (!ok) {
+        seededKickRef.current = target; // retry once connected
+        return;
+      }
+      seededKickRef.current = "";
+      kickedSessionsRef.current.add(target);
+      turnStartRef.current = Date.now();
+      setIsStreaming(true);
+      armWatchdog();
+      // Show the "Jarvis is thinking" indicator while the resume turn
+      // spins up — same optimistic affordance a normal send() gives.
+      setMessages((prev) =>
+        prev.some((m) => m.role === "thinking" && m.pending)
+          ? prev
+          : [
+              ...prev,
+              { id: makeId(), role: "thinking", text: "", pending: true, createdAt: Date.now() },
+            ],
+      );
+    },
+    [ws, armWatchdog],
+  );
+  // Latest-callback ref so the session-load effect can kick a seeded
+  // session without taking kickSeeded as a dependency (which would make
+  // it re-fetch the transcript on every ws status change).
+  const kickSeededRef = useRef(kickSeeded);
+  useEffect(() => {
+    kickSeededRef.current = kickSeeded;
+  }, [kickSeeded]);
+
+  // Retry a parked seeded-session kick once the socket reconnects.
+  useEffect(() => {
+    if (ws.status === "connected" && seededKickRef.current) {
+      kickSeeded(seededKickRef.current);
+    }
+  }, [ws.status, kickSeeded]);
+
   // Restore session id from localStorage on mount; mint a fresh one if none.
   // Hydrate from the optimistic local cache *immediately* so a refresh —
   // even one while Core is offline — keeps the visible conversation. Then
@@ -283,15 +369,16 @@ export function useChat() {
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows) return;
-      const restored: ChatMessage[] = rows.map((r) => ({
-        id: makeId(),
-        role: r.role,
-        text: r.text,
-        createdAt: new Date(r.created_at).getTime() || Date.now(),
-      }));
+      const restored: ChatMessage[] = rows.map(rowToMessage);
       // Core is authoritative — overwrite both state and cache.
       setMessages(restored);
       writeCachedMessages(id, restored);
+      // A session whose entire transcript is a single seeded context
+      // block was just opened from Discuss-with-Jarvis and has no reply
+      // yet — fire the opening turn so the agent actually responds.
+      if (restored.length === 1 && restored[0].seeded) {
+        kickSeededRef.current(id);
+      }
     });
     return () => ac.abort();
   }, [requestedSessionId]);
@@ -530,6 +617,7 @@ export function useChat() {
               text: ev.text,
               proactive: true,
               proactiveKind: ev.finding_kind,
+              curiosityId: ev.curiosity_id,
               createdAt: Date.now(),
             },
           ]);
@@ -652,14 +740,15 @@ export function useChat() {
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows) return;
-      const restored: ChatMessage[] = rows.map((r) => ({
-        id: makeId(),
-        role: r.role,
-        text: r.text,
-        createdAt: new Date(r.created_at).getTime() || Date.now(),
-      }));
+      const restored: ChatMessage[] = rows.map(rowToMessage);
       setMessages(restored);
       writeCachedMessages(id, restored);
+      // Same seeded-session kick as the mount path: switching into a
+      // Discuss-with-Jarvis session that has only the context block and
+      // no reply should fire the opening turn.
+      if (restored.length === 1 && restored[0].seeded) {
+        kickSeededRef.current(id);
+      }
     });
   }, [sessionId, clearWatchdog]);
 

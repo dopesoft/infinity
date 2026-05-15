@@ -55,6 +55,17 @@ type Finding struct {
 	Title       string `json:"title"`
 	Detail      string `json:"detail,omitempty"`
 	PreApproved bool   `json:"pre_approved"`
+	// Source is the finer-grained origin within a Kind — e.g. a curiosity
+	// finding's Source is "high_surprise" | "contradiction" |
+	// "uncovered_mention". Used by the chat formatter to explain *why* the
+	// finding surfaced; not persisted (mem_heartbeat_findings has no column
+	// for it), purely an in-process hint.
+	Source string `json:"source,omitempty"`
+	// CuriosityID links a curiosity finding back to its row in
+	// mem_curiosity_questions so the chat surface can offer an
+	// "Approve & fix" action that marks the question and lets the agent
+	// act on it. Empty for findings with no curiosity-question backing.
+	CuriosityID string `json:"curiosity_id,omitempty"`
 }
 
 func NewHeartbeat(p *pgxpool.Pool, interval time.Duration, checklist Checklist) *Heartbeat {

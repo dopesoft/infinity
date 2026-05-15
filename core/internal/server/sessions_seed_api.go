@@ -80,10 +80,17 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 	// Make the seed visible in the chat transcript immediately and durable
 	// for turn-one hydration. The next user reply follows this context in the
 	// same session, so the agent sees exactly what the boss is responding to.
+	//
+	// hook_name is 'DashboardSeed' (not 'UserPromptSubmit') on purpose: this
+	// is injected context, not something the boss typed. The distinct hook
+	// lets the messages API render it as a "from dashboard" context card and
+	// keeps the Voyager extractors from mistaking it for a real user prompt.
+	// hydrateLoopSession still maps it to a user-role turn so the agent
+	// treats it as the opening of the conversation.
 	rawText := formatSeedContext(body.Kind, body.ID, body.Snapshot)
 	if _, err := s.pool.Exec(r.Context(), `
 		INSERT INTO mem_observations (session_id, hook_name, payload, raw_text, importance, created_at)
-		VALUES ($1::uuid, 'UserPromptSubmit', $2::jsonb, $3, 8, NOW())
+		VALUES ($1::uuid, 'DashboardSeed', $2::jsonb, $3, 8, NOW())
 	`, id, string(seedJSON), rawText); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("seed context: %v", err))
 		return

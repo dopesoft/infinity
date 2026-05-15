@@ -7,6 +7,7 @@ import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
 import { Markdown } from "@/components/chat/Markdown";
 import { Citations } from "@/components/chat/Citations";
+import { FindingActions } from "@/components/FindingActions";
 
 function formatTime(ms: number, now: number): string {
   if (!ms) return "";
@@ -50,7 +51,15 @@ function writeFeedback(map: FeedbackMap) {
   }
 }
 
-export function ChatBubble({ message }: { message: ChatMessage }) {
+export function ChatBubble({
+  message,
+  // onQuickReply sends a canned message into the current session — wired
+  // to the "Approve & fix" action on proactive heartbeat findings.
+  onQuickReply,
+}: {
+  message: ChatMessage;
+  onQuickReply?: (text: string) => void;
+}) {
   // All hooks must run on every render, so early returns live below them.
   // The "tool"/"thinking" branch renders nothing but still pays for hook
   // setup — that's the cost of holding the rules-of-hooks invariant.
@@ -187,6 +196,15 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
               <Undo2 className="size-3" />
               <span>{message.text ? "interrupted" : "stopped before reply"}</span>
             </div>
+          )}
+          {/* Proactive curiosity findings get the one-tap "Approve & fix"
+              row — it tells the agent to act on the finding right here in
+              this conversation and confirm what it changed. */}
+          {message.proactive && message.curiosityId && (
+            <FindingActions
+              curiosityId={message.curiosityId}
+              onSend={onQuickReply}
+            />
           )}
         </div>
       )}

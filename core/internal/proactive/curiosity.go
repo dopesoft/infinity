@@ -185,7 +185,12 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 			continue
 		}
 		question := fmt.Sprintf("Tool %s returned something unexpected — should I rework the prompt around it?", tool)
-		rationale := fmt.Sprintf("expected=%q actual=%q (surprise≥0.8)", clipShort(expected, 80), clipShort(actual, 80))
+		// Structured, un-escaped, one concept per line so both the
+		// Heartbeat tab and the chat formatter can render it cleanly.
+		// oneLine collapses embedded whitespace so each value stays on a
+		// single line — the chat formatter splits on "\n" to label parts.
+		rationale := fmt.Sprintf("expected: %s\nactual: %s",
+			clipShort(oneLine(expected), 240), clipShort(oneLine(actual), 240))
 		if c.insertQuestion(ctx, question, rationale, "high_surprise", []string{id}, 7) {
 			n++
 		}
@@ -274,6 +279,13 @@ func CuriosityChecklist(pool *pgxpool.Pool) Checklist {
 				Kind:   "curiosity",
 				Title:  q.Question,
 				Detail: q.Rationale,
+				// SourceKind ("high_surprise" | "contradiction" |
+				// "uncovered_mention") lets the chat formatter explain
+				// precisely why this question surfaced.
+				Source: q.SourceKind,
+				// CuriosityID lets the chat surface offer "Approve & fix"
+				// — it round-trips to /api/curiosity/questions/:id/decide.
+				CuriosityID: q.ID,
 			})
 		}
 		return out, nil
@@ -314,6 +326,14 @@ func clipShort(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// oneLine collapses every run of whitespace (including newlines) into a
+// single space. Used on prediction expected/actual values so a rationale
+// stays one-concept-per-line — the chat formatter splits the rationale on
+// "\n" to label its parts, so embedded newlines would corrupt that.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // uuidArray converts a Go string slice to a pgx-friendly []string. pgx will

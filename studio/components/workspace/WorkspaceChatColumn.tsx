@@ -48,7 +48,10 @@ export function WorkspaceChatColumn({
           can actually expand. Without flex here, flex-1 has no effect and
           the empty state collapsed to the top edge. */}
       <div ref={ref} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <ConversationStream messages={chat.messages} />
+        {/* onQuickReply routes the "Approve & fix" action on heartbeat
+            finding cards through chat.send, so the agent acts on the
+            finding in this same session. */}
+        <ConversationStream messages={chat.messages} onQuickReply={chat.send} />
       </div>
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <PromptInputBox

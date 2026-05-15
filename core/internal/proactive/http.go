@@ -161,7 +161,7 @@ func (a *API) handleHeartbeatFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 type curiosityDecisionReq struct {
-	Decision string `json:"decision"` // asked | answered | dismissed
+	Decision string `json:"decision"` // asked | answered | dismissed | approved
 	Answer   string `json:"answer,omitempty"`
 }
 
@@ -177,9 +177,14 @@ func (a *API) handleCuriosityScoped(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 	switch body.Decision {
-	case "asked", "answered", "dismissed":
+	// "approved" means the boss told the agent to act on the question —
+	// the chat surface fires this alongside a follow-up turn that hands
+	// the agent the finding to fix. It resolves the question like
+	// answered/dismissed do (it's no longer open), just with a status
+	// that records the boss said "go".
+	case "asked", "answered", "dismissed", "approved":
 	default:
-		http.Error(w, "decision must be asked | answered | dismissed", http.StatusBadRequest)
+		http.Error(w, "decision must be asked | answered | dismissed | approved", http.StatusBadRequest)
 		return
 	}
 	if a.pool == nil {
@@ -191,7 +196,7 @@ func (a *API) handleCuriosityScoped(w http.ResponseWriter, r *http.Request) {
 		   SET status = $2,
 		       answer = CASE WHEN $3 <> '' THEN $3 ELSE answer END,
 		       asked_at = CASE WHEN $2 = 'asked' THEN NOW() ELSE asked_at END,
-		       resolved_at = CASE WHEN $2 IN ('answered','dismissed') THEN NOW() ELSE resolved_at END
+		       resolved_at = CASE WHEN $2 IN ('answered','dismissed','approved') THEN NOW() ELSE resolved_at END
 		 WHERE id = $1::uuid
 	`, parts[0], body.Decision, strings.TrimSpace(body.Answer))
 	if err != nil {

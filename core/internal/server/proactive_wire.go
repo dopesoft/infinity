@@ -86,9 +86,10 @@ func (s *Server) onHeartbeatFinding(ctx context.Context, f proactive.Finding) {
 		return
 	}
 	s.broadcastProactive(wsServerEvent{
-		Type:      "proactive_message",
-		Text:      text,
+		Type:        "proactive_message",
+		Text:        text,
 		FindingKind: f.Kind,
+		CuriosityID: f.CuriosityID,
 	})
 }
 
@@ -109,37 +110,188 @@ func shouldSurfaceFinding(f proactive.Finding) bool {
 	return false
 }
 
-// formatFindingForChat composes the assistant-style sentence the boss sees
-// when the heartbeat decides to speak. Kept tight on purpose — these are
-// interruptions and should read like a co-worker tap on the shoulder, not
-// a system notification.
+// formatFindingForChat composes the Markdown the boss sees when the
+// heartbeat decides to speak. The chat surface renders Markdown, so this
+// uses real structure — a header, a one-line "why this surfaced" framing,
+// the actual ask set off as a quote, and supporting detail with any
+// code/JSON pushed into fenced blocks. The old single-run-on-paragraph
+// form was unreadable the moment a finding carried a JSON payload.
 func formatFindingForChat(f proactive.Finding) string {
 	title := strings.TrimSpace(f.Title)
 	detail := strings.TrimSpace(f.Detail)
 	if title == "" && detail == "" {
 		return ""
 	}
+
 	var b strings.Builder
+
+	// Header + a one-line "why" so the boss isn't left guessing what the
+	// agent is actually flagging or why it spoke up.
+	header, why := findingFraming(f)
+	b.WriteString(header)
+	b.WriteString("\n\n")
+	if why != "" {
+		b.WriteString(why)
+		b.WriteString("\n\n")
+	}
+
+	// The ask itself — set off as a blockquote so it's visually distinct
+	// from the framing above and the supporting data below.
+	if title != "" {
+		switch f.Kind {
+		case "curiosity":
+			b.WriteString("**My question**\n")
+		case "surprise":
+			b.WriteString("**The idea**\n")
+		default:
+			b.WriteString("**What I noticed**\n")
+		}
+		b.WriteString("> ")
+		b.WriteString(strings.ReplaceAll(title, "\n", "\n> "))
+		b.WriteString("\n")
+	}
+
+	// Supporting detail — labelled sections, with code/JSON fenced so it
+	// never bleeds into the prose as an unreadable run-on.
+	if detail != "" {
+		b.WriteString("\n")
+		b.WriteString(formatFindingDetail(detail))
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// findingFraming returns the bold header line and a one-sentence
+// explanation of why a finding surfaced. The curiosity branch keys off
+// Finding.Source so "a prediction missed" vs "two memories disagree" read
+// accurately instead of a vague catch-all.
+func findingFraming(f proactive.Finding) (header, why string) {
 	switch f.Kind {
 	case "surprise":
-		b.WriteString("Boss — quick idea: ")
-	case "curiosity":
-		b.WriteString("Boss, quick question: ")
+		return "💡 **Heartbeat — an idea for you**",
+			"Something I noticed while reviewing recent activity that might be worth acting on."
 	case "security":
-		b.WriteString("⚠️ Heads up: ")
-	default:
-		b.WriteString("Heads up — ")
-	}
-	if title != "" {
-		b.WriteString(title)
-	}
-	if detail != "" {
-		if title != "" {
-			b.WriteString(". ")
+		return "⚠️ **Heartbeat — security heads-up**",
+			"This looked security-relevant, so I'm surfacing it now rather than waiting for you to ask."
+	case "curiosity":
+		switch f.Source {
+		case "high_surprise":
+			return "🔭 **Heartbeat — a prediction of mine missed**",
+				"I predicted how a tool would behave and the result came back noticeably different. I'd like your read before I change how I use it."
+		case "contradiction":
+			return "🔭 **Heartbeat — two memories disagree**",
+				"I'm holding two memories that contradict each other and can't tell which is right on my own."
+		case "uncovered_mention":
+			return "🔭 **Heartbeat — a gap I noticed**",
+				"You've referenced this several times but I haven't captured anything durable about it yet."
+		default:
+			return "🔭 **Heartbeat — a question for you**",
+				"Something didn't line up while I was reviewing recent activity and I'd like your call on it."
 		}
-		b.WriteString(detail)
+	default:
+		return "**Heartbeat — heads-up**", ""
 	}
-	return b.String()
+}
+
+// formatFindingDetail turns a finding's raw detail string into readable
+// Markdown. Lines shaped "label: value" become bold-labelled sections;
+// any value that looks like code/JSON is pushed into a fenced block so it
+// reads as data, not prose. Anything that isn't label-shaped is kept as a
+// plain paragraph.
+func formatFindingDetail(detail string) string {
+	var b strings.Builder
+	for _, ln := range strings.Split(detail, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		label, value, ok := splitLabeled(ln)
+		if !ok {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(ln)
+			b.WriteString("\n")
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("**")
+		b.WriteString(prettyLabel(label))
+		b.WriteString("**\n")
+		if looksLikeCode(value) {
+			lang := ""
+			if looksLikeJSON(value) {
+				lang = "json"
+			}
+			b.WriteString("```")
+			b.WriteString(lang)
+			b.WriteString("\n")
+			b.WriteString(value)
+			b.WriteString("\n```\n")
+		} else {
+			b.WriteString(value)
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// splitLabeled splits "label: value" when the label is a single short
+// token (so prose sentences that merely contain a colon aren't mangled).
+func splitLabeled(line string) (label, value string, ok bool) {
+	i := strings.Index(line, ":")
+	if i <= 0 || i > 24 {
+		return "", "", false
+	}
+	label = strings.TrimSpace(line[:i])
+	value = strings.TrimSpace(line[i+1:])
+	if label == "" || value == "" || strings.ContainsAny(label, " \t") {
+		return "", "", false
+	}
+	return label, value, true
+}
+
+// prettyLabel maps the known machine labels to boss-facing phrasing and
+// Title-cases anything else.
+func prettyLabel(label string) string {
+	switch strings.ToLower(label) {
+	case "expected":
+		return "What I expected"
+	case "actual":
+		return "What actually came back"
+	default:
+		if label == "" {
+			return label
+		}
+		return strings.ToUpper(label[:1]) + label[1:]
+	}
+}
+
+// looksLikeJSON is a cheap structural sniff — enough to pick a fence
+// language, not a validator.
+func looksLikeJSON(value string) bool {
+	v := strings.TrimSpace(value)
+	return strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[")
+}
+
+// looksLikeCode decides whether a value should go in a fenced block
+// rather than inline prose. JSON-ish payloads and obviously machine
+// strings (braces, angle brackets) qualify; a plain sentence does not.
+func looksLikeCode(value string) bool {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return false
+	}
+	if looksLikeJSON(v) {
+		return true
+	}
+	if strings.HasPrefix(v, "<") {
+		return true
+	}
+	// Dense punctuation that reads as a payload, not a sentence.
+	return strings.Count(v, "\"") >= 2 && strings.ContainsAny(v, "{}[]")
 }
 
 // classifyIntentAsync runs IntentFlow on a user message without blocking the

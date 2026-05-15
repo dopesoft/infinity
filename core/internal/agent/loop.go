@@ -547,9 +547,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	}
 
 	s := l.GetOrCreateSession(sessionID)
-	s.Append(llm.Message{Role: llm.RoleUser, Content: userMsg})
-
-	l.fireHook("UserPromptSubmit", s.ID, s.Project, userMsg, nil)
+	// An empty userMsg is the "resume" path: run one turn against the
+	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
+	// session whose opening turn is the DashboardSeed context block) without
+	// appending a fresh — and empty — user message or firing a bogus
+	// UserPromptSubmit hook.
+	if userMsg != "" {
+		s.Append(llm.Message{Role: llm.RoleUser, Content: userMsg})
+		l.fireHook("UserPromptSubmit", s.ID, s.Project, userMsg, nil)
+	}
 
 	systemPrompt := l.systemPrompt
 	if override := strings.TrimSpace(s.SystemPromptOverride); override != "" {

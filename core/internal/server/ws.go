@@ -52,6 +52,10 @@ type wsServerEvent struct {
 	// render an icon + tone consistent with the Heartbeat tab — e.g.
 	// "surprise" gets a lightbulb, "security" gets a shield.
 	FindingKind string `json:"finding_kind,omitempty"`
+	// CuriosityID is set on type="proactive_message" frames for findings
+	// backed by a mem_curiosity_questions row, so the chat card can offer
+	// an "Approve & fix" action that round-trips to the decide endpoint.
+	CuriosityID string `json:"curiosity_id,omitempty"`
 }
 
 type wsToolEvent struct {
@@ -255,6 +259,44 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
 			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
+		case "resume":
+			// Run one agent turn against a session's existing history
+			// without a fresh user message. Discuss-with-Jarvis uses this:
+			// the seeded DashboardSeed context block is the opening turn,
+			// and Studio fires `resume` once on session open so the agent
+			// actually replies to it (instead of the context just sitting
+			// silent in the transcript).
+			sessionID := msg.SessionID
+			if sessionID == "" {
+				send(wsServerEvent{Type: "error", SessionID: "", Message: "resume requires a session id"})
+				continue
+			}
+			if sessionID != activeSessionID {
+				if activeSessionID != "" {
+					s.unregisterSession(activeSessionID, send)
+				}
+				activeSessionID = sessionID
+				s.registerSession(sessionID, send)
+			}
+			// A turn already running for this session — nothing to do; the
+			// in-flight turn will produce the reply. Prevents a double-fire
+			// if Studio retries the resume across a reconnect.
+			s.turnsMu.Lock()
+			_, busy := s.turns[sessionID]
+			s.turnsMu.Unlock()
+			if busy {
+				continue
+			}
+			s.hydrateLoopSession(r, sessionID)
+			// Guard against resuming a session with no history at all —
+			// the LLM stream would error on an empty message list. The
+			// seeded-session path always has the DashboardSeed turn, so
+			// this only trips on a misuse of the frame.
+			if sess := s.loop.GetOrCreateSession(sessionID); sess == nil || len(sess.Snapshot()) == 0 {
+				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume — session has no history"})
+				continue
+			}
+			s.startTurn(connCtx, userID, sessionID, "", send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
