@@ -7,7 +7,6 @@ import {
   MessageCircle,
   Trash2,
   Check,
-  X as XIcon,
 } from "lucide-react";
 import {
   Drawer,
@@ -101,11 +100,11 @@ export function SessionsDrawer({
   // disable + the row doesn't blink-disappear before the response.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  // Multi-select mode for bulk delete. Entered via the header's "Select"
-  // button. In selection mode rows toggle into selectedIds on tap (the
-  // per-row trash + single-row confirm are hidden; the header trash takes
-  // over). Stays open across deletes — the modal IS the workbench.
-  const [selectionMode, setSelectionMode] = useState(false);
+  // Multi-select state. There's no explicit "selection mode" toggle — each
+  // row carries its own subtle circle selector that's always present, so
+  // ticking one is the entry into bulk delete. The header trash button
+  // appears only when selectedIds is non-empty (no competing X buttons,
+  // no two-step "enter selection mode" gesture).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [confirmingBulk, setConfirmingBulk] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -125,12 +124,11 @@ export function SessionsDrawer({
   }
 
   // rowPressProps wraps a row's main click button with the long-press
-  // gesture: a sustained touch enters multi-select mode AND seeds the
-  // selection with this row (so the count starts at 1 — subsequent taps
-  // on other rows add to it). The matching click is swallowed so the
-  // long-press doesn't also fire the row's onClick → switch-session.
-  // Movement beyond ~8px cancels — keeps a real scroll from being
-  // mis-read as a press.
+  // gesture: a sustained touch toggles the row into the selection set
+  // (shortcut to tapping the per-row circle selector). The matching
+  // click is swallowed so the long-press doesn't also fire the row's
+  // onClick → switch-session. Movement beyond ~8px cancels — keeps a
+  // real scroll from being mis-read as a press.
   function rowPressProps(id: string, onTap: () => void) {
     return {
       onPointerDown: (e: React.PointerEvent) => {
@@ -140,7 +138,7 @@ export function SessionsDrawer({
         clearPressTimer();
         pressTimerRef.current = setTimeout(() => {
           pressFiredRef.current = true;
-          enterSelectionMode(id);
+          toggleSelected(id);
           if (typeof navigator !== "undefined" && "vibrate" in navigator) {
             try {
               navigator.vibrate(10);
@@ -196,34 +194,17 @@ export function SessionsDrawer({
 
   useRealtime("mem_sessions", refresh);
 
-  // Reset per-row + selection-mode state when the drawer closes —
-  // otherwise reopening could land mid-confirm or with stale selections.
-  // Also clean up any straggling long-press timer on unmount.
+  // Reset transient state when the drawer closes — otherwise reopening
+  // could land mid-confirm or with stale selections. Also clean up any
+  // straggling long-press timer on unmount.
   useEffect(() => {
     if (!open) {
       setConfirmingId(null);
-      setSelectionMode(false);
       setSelectedIds(new Set());
       setConfirmingBulk(false);
     }
   }, [open]);
   useEffect(() => () => clearPressTimer(), []);
-
-  function enterSelectionMode(seedId?: string) {
-    // Clear any single-row affordance that might be in flight — the boss
-    // is shifting modes. If a seed id is supplied (the row that triggered
-    // long-press), it goes in as the first selection so the header count
-    // starts at 1 and subsequent taps on other rows add to it.
-    setConfirmingId(null);
-    setSelectionMode(true);
-    if (seedId) setSelectedIds(new Set([seedId]));
-  }
-
-  function exitSelectionMode() {
-    setSelectionMode(false);
-    setSelectedIds(new Set());
-    setConfirmingBulk(false);
-  }
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -255,7 +236,8 @@ export function SessionsDrawer({
       }
     }
     setBulkDeleting(false);
-    exitSelectionMode();
+    setSelectedIds(new Set());
+    setConfirmingBulk(false);
   }
 
   async function doDelete(id: string) {
@@ -323,58 +305,27 @@ export function SessionsDrawer({
     setOpen(false);
   }
 
-  // Right-aligned controls injected into the modal/drawer header. The
-  // trash icon IS the entry point — click it once to enter selection
-  // mode (rows become tap-to-select), click it again with selections to
-  // confirm + delete the batch. An X next to it exits selection mode.
-  // Dialog's auto-rendered close X sits to the right of all this on desktop.
-  const headerControls = selectionMode ? (
-    <div className="flex shrink-0 items-center gap-1">
-      <span
-        className="px-1 text-xs tabular-nums text-muted-foreground"
-        aria-live="polite"
-      >
-        {selectedIds.size} selected
-      </span>
+  // Header trash control. Hidden when nothing is selected — keeps the
+  // header clean and avoids competing with the modal's own close X.
+  // Shows up the moment any row is ticked, in destructive style with
+  // the count, and opens the bulk-confirm strip on click.
+  const headerControls =
+    selectedIds.size > 0 ? (
       <Button
         type="button"
         variant="destructive"
         size="sm"
         onClick={() => setConfirmingBulk(true)}
-        disabled={selectedIds.size === 0 || bulkDeleting}
+        disabled={bulkDeleting}
         aria-label={`Delete ${selectedIds.size} selected session${selectedIds.size === 1 ? "" : "s"}`}
         title="Delete selected"
-        className="h-9 gap-1.5 px-2.5"
+        className="h-9 shrink-0 gap-1.5 px-2.5"
       >
         <Trash2 className="size-4" />
+        <span className="font-mono text-xs tabular-nums">{selectedIds.size}</span>
         <span className="hidden sm:inline">Delete</span>
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={exitSelectionMode}
-        disabled={bulkDeleting}
-        aria-label="Cancel selection"
-        title="Cancel selection"
-        className="size-9"
-      >
-        <XIcon className="size-4" />
-      </Button>
-    </div>
-  ) : (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={() => enterSelectionMode()}
-      aria-label="Delete sessions"
-      title="Delete sessions"
-      className="size-9 shrink-0 text-muted-foreground hover:bg-danger/10 hover:text-danger"
-    >
-      <Trash2 className="size-4" />
-    </Button>
-  );
+    ) : null;
 
   const body = (
     <>
@@ -476,48 +427,26 @@ export function SessionsDrawer({
                       )}
                     </>
                   );
+                  // Show the persistent circle selector whenever it'd
+                  // be useful: any time the batch is non-empty, or a
+                  // hovered row (so first-time discovery is "hover and
+                  // see the circle"), or this row is itself selected
+                  // (so it never disappears while ticked).
+                  const showSelector = selectedIds.size > 0 || isSelected;
                   return (
                     <li
                       key={s.id}
                       className={cn(
-                        // `group` so the per-row trash can fade in on
-                        // hover (desktop). Touch reveal is driven by
-                        // `trashRevealed`. The current-session ring stays
-                        // in every mode so the boss never loses context.
+                        // `group` so the per-row trash + circle selector
+                        // can fade in on hover (desktop). The
+                        // current-session ring stays in every state so
+                        // the boss never loses context.
                         "group rounded-lg",
                         s.id === currentId && "bg-accent/60 ring-1 ring-info",
+                        isSelected && "bg-danger/5",
                       )}
                     >
-                      {selectionMode ? (
-                        // Selection mode — the whole row is a toggle.
-                        // Per-row trash + single-row confirm hide; the
-                        // header trash handles the batch.
-                        <button
-                          type="button"
-                          onClick={() => toggleSelected(s.id)}
-                          aria-pressed={isSelected}
-                          aria-label={`${isSelected ? "Unselect" : "Select"} ${displayName}`}
-                          className={cn(
-                            "flex w-full min-h-12 items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors select-none",
-                            isSelected
-                              ? "bg-danger/10 hover:bg-danger/15"
-                              : "hover:bg-accent",
-                          )}
-                        >
-                          {rowMeta}
-                          <span
-                            className={cn(
-                              "ml-1 inline-flex size-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-                              isSelected
-                                ? "border-danger bg-danger text-background"
-                                : "border-border bg-background text-transparent",
-                            )}
-                            aria-hidden
-                          >
-                            <Check className="size-3.5" />
-                          </span>
-                        </button>
-                      ) : isConfirming ? (
+                      {isConfirming ? (
                         // Inline single-row confirm — keeps the gesture
                         // tight and reads the same on phone or desktop.
                         <div className="flex min-h-12 items-center gap-2 px-3 py-2">
@@ -549,6 +478,40 @@ export function SessionsDrawer({
                         </div>
                       ) : (
                         <div className="flex items-center gap-1 pr-1">
+                          {/* Circle selector — always rendered so its
+                              click target is stable, but only visually
+                              present (opacity-100) once a batch is
+                              forming, on hover (desktop discovery), or
+                              when this row is itself selected. Tapping
+                              it toggles selection without navigating. */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSelected(s.id);
+                            }}
+                            aria-pressed={isSelected}
+                            aria-label={`${isSelected ? "Unselect" : "Select"} ${displayName}`}
+                            title={isSelected ? "Unselect" : "Select"}
+                            className={cn(
+                              "inline-flex size-11 shrink-0 items-center justify-center rounded-md transition-opacity",
+                              showSelector
+                                ? "opacity-100"
+                                : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "inline-flex size-5 items-center justify-center rounded-full border-2 transition-colors",
+                                isSelected
+                                  ? "border-danger bg-danger text-background"
+                                  : "border-muted-foreground/40 bg-background text-transparent",
+                              )}
+                              aria-hidden
+                            >
+                              <Check className="size-3" />
+                            </span>
+                          </button>
                           <button
                             type="button"
                             {...rowPressProps(s.id, () => handleSelect(s.id))}
@@ -558,12 +521,11 @@ export function SessionsDrawer({
                           >
                             {rowMeta}
                           </button>
-                          {/* Per-row trash — desktop quick-delete. On a
-                              hover-capable pointer it fades in via
-                              group-hover; keyboard users see it via
+                          {/* Per-row trash — desktop quick-delete via
+                              hover; keyboard users see it via
                               focus-visible. On touch the path is
-                              long-press → enter selection mode (the
-                              header trash handles the action), so this
+                              long-press → adds to selection + header
+                              trash handles the action, so this
                               affordance stays cleanly desktop-only. */}
                           <button
                             type="button"
