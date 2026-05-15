@@ -332,15 +332,15 @@ export function SessionsDrawer({
   const body = (
     <>
       <div className="px-4 pb-2 pt-1">
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1 sm:max-w-md">
             <SearchInput
               value={q}
               onValueChange={setQ}
               placeholder="Search by name, framework, or id…"
             />
           </div>
-          <Button onClick={handleNew} className="shrink-0" aria-label="Start a new session">
+          <Button onClick={handleNew} className="ml-auto shrink-0" aria-label="Start a new session">
             <Plus className="size-4" />
             <span className="hidden sm:inline">New</span>
           </Button>
