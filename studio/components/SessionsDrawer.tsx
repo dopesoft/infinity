@@ -124,11 +124,13 @@ export function SessionsDrawer({
   }
 
   // rowPressProps wraps a row's main click button with the long-press
-  // gesture: a sustained touch toggles the row into the selection set
-  // (shortcut to tapping the per-row circle selector). The matching
+  // gesture: a sustained touch opens the row's single-row delete
+  // confirm (same UI the desktop hover-trash triggers). The matching
   // click is swallowed so the long-press doesn't also fire the row's
-  // onClick → switch-session. Movement beyond ~8px cancels — keeps a
-  // real scroll from being mis-read as a press.
+  // onClick → switch-session. Multi-select stays on the always-visible
+  // per-row circle on mobile so a long-press is never confused with
+  // "tap to open." Movement beyond ~8px cancels — keeps a real scroll
+  // from being mis-read as a press.
   function rowPressProps(id: string, onTap: () => void) {
     return {
       onPointerDown: (e: React.PointerEvent) => {
@@ -138,7 +140,7 @@ export function SessionsDrawer({
         clearPressTimer();
         pressTimerRef.current = setTimeout(() => {
           pressFiredRef.current = true;
-          toggleSelected(id);
+          setConfirmingId(id);
           if (typeof navigator !== "undefined" && "vibrate" in navigator) {
             try {
               navigator.vibrate(10);
@@ -495,6 +497,12 @@ export function SessionsDrawer({
                             title={isSelected ? "Unselect" : "Select"}
                             className={cn(
                               "inline-flex size-11 shrink-0 items-center justify-center rounded-md transition-opacity",
+                              // Always-on on touch devices (no hover to
+                              // discover with). On hover-capable
+                              // pointers, fade in on hover OR when
+                              // there's already a batch / this row is
+                              // ticked.
+                              "[@media(hover:none)]:opacity-100",
                               showSelector
                                 ? "opacity-100"
                                 : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",

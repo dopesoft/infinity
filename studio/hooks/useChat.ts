@@ -544,6 +544,45 @@ export function useChat() {
                 createdAt: Date.now(),
               });
             }
+            // Silent-turn rescue: an agent that ran tool calls but
+            // produced no final text leaves an empty bubble (or no
+            // bubble at all). Either way the UX goes quiet for the
+            // boss — they typed something, waited minutes, and got
+            // nothing visible. Surface a clear "no reply" marker so
+            // the chat never just stops mid-air.
+            if (!interrupted) {
+              const last = next[next.length - 1];
+              const visibleText =
+                last && last.role === "assistant"
+                  ? last.text.trim()
+                  : "";
+              const hasAssistantText = !!visibleText;
+              if (!hasAssistantText) {
+                const placeholder: ChatMessage = {
+                  id: makeId(),
+                  role: "assistant",
+                  text: "",
+                  error:
+                    "Turn ended without a reply. Tool calls (if any) ran above — ask a follow-up to continue.",
+                  inputTokens: inputT,
+                  outputTokens: outputT,
+                  latencyMs: latency,
+                  createdAt: Date.now(),
+                };
+                if (
+                  last &&
+                  last.role === "assistant" &&
+                  !last.text.trim() &&
+                  !last.error
+                ) {
+                  // Reuse the empty finalized bubble in place rather
+                  // than stacking a sibling marker.
+                  next[next.length - 1] = { ...last, ...placeholder, id: last.id };
+                } else {
+                  next.push(placeholder);
+                }
+              }
+            }
             return next;
           });
           turnStartRef.current = null;

@@ -190,10 +190,16 @@ export function DashboardClient() {
 
   return (
     <TabFrame>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-touch">
+      {/* min-w-0 + overflow-x-hidden keep the dashboard page-locked on
+          mobile: any card with wider-than-viewport content (heartbeat
+          artifact JSON, long titles, etc.) gets clipped at the page
+          edge instead of pushing the whole page horizontally and
+          breaking the fixed-composer / fixed-header invariant the rest
+          of the app relies on. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden scroll-touch">
         <DashboardHeader badgeCount={needYouCount} search={search} onSearchChange={setSearch} />
 
-        <main className="mx-auto w-full max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
+        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
           {/* TODAY row — collapses to fewer columns if any sub-section is off. */}
           {(s.pursuits || s.todos || s.upcoming) && (
             <div className="grid gap-4 sm:gap-5 lg:grid-cols-3">

@@ -65,14 +65,18 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
   return (
     <div
       className={cn(
-        "rounded-xl border bg-card text-card-foreground transition-colors",
+        // min-w-0 + max-w-full + overflow-hidden so a long single token
+        // in the thinking trace (URL, hash, code path) can't push the
+        // block past the chat column's width on mobile. The chat column
+        // itself is min-w-0, but the constraint needs to propagate down.
+        "min-w-0 max-w-full overflow-hidden rounded-xl border bg-card text-card-foreground transition-colors",
         isPending && "border-info/40",
       )}
     >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left"
         aria-expanded={open}
       >
         <Brain
@@ -103,12 +107,16 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
       </button>
 
       {open && hasContent && (
-        <div className="border-t px-3 py-2">
-          <div className="relative">
+        <div className="min-w-0 border-t px-3 py-2">
+          <div className="relative min-w-0">
             <div
               ref={previewRef}
               className={cn(
-                "max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted-foreground scroll-touch sm:text-xs",
+                // [overflow-wrap:anywhere] forces break on any character
+                // (not just at word boundaries), which is what we need
+                // for the long unwrappable tokens that show up in
+                // thinking traces (file paths, URLs, hashes).
+                "max-h-40 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-mono text-[11px] leading-snug text-muted-foreground scroll-touch sm:text-xs",
                 isPending && "thinking-fade-mask",
               )}
             >
