@@ -101,10 +101,14 @@ func (d *Delegate) Schema() map[string]any {
 }
 
 const (
-	delegateDefaultMaxIter  = 20
-	delegateMaxIterCeiling  = 40
-	delegateDefaultTimeout  = 180 * time.Second
-	delegateTimeoutCeiling  = 600 * time.Second
+	// Sub-agent iteration budget. Was 20/40 — too tight once you account
+	// for tool discovery overhead inside the child loop. Bumped so a
+	// delegated multi-step task (find → act → verify) doesn't hit the
+	// wall before reporting back.
+	delegateDefaultMaxIter  = 40
+	delegateMaxIterCeiling  = 80
+	delegateDefaultTimeout  = 300 * time.Second
+	delegateTimeoutCeiling  = 900 * time.Second
 	delegateSessionIDPrefix = "delegate:"
 )
 

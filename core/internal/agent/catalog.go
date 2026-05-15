@@ -14,9 +14,18 @@ import (
 const catalogBlockHeader = `<tool_catalog>
 The following tools exist but their JSON schemas are NOT in your current
 toolset to save context. They are real and callable. Discover candidates
-with tool_search("query") and bring them online with load_tools(["name"]).
-Prefer this two-step over guessing the schema or asking the user. After
-the work is done, unload_tools to keep the active surface tight.
+with the native tool_search("query") (NOT claude_code__ToolSearch or any
+other MCP-namespaced variant — those only index a different registry and
+will return empty matches for Infinity native tools like surface_update,
+remember, recall, skill_create, delegate, etc.). Bring matches online
+with load_tools(["name"]). Prefer this two-step over guessing the schema
+or asking the user. After the work is done, unload_tools to keep the
+active surface tight.
+
+If a task is "fix/dismiss/update an item on the dashboard", the tool you
+want is surface_update — call load_tools(["surface_update"]) and then
+surface_update({id: "<the item id>", status: "dismissed"}). Don't burn
+iterations searching for it; it's listed below.
 
 Format: name - short description.
 `

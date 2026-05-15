@@ -303,7 +303,21 @@ type Config struct {
 
 func New(cfg Config) *Loop {
 	if cfg.MaxToolIterations <= 0 {
-		cfg.MaxToolIterations = 8
+		// Default headroom. 8 was the old value and it was too tight —
+		// the agent routinely burns 3–5 iterations on tool discovery
+		// (skills_discover, tool_search, load_tools) before any real
+		// work happens, and a single multi-step task (delete, verify,
+		// confirm) eats 4–6 more. 50 lets the loop actually finish the
+		// kind of "do this until it's done" task the boss expects to
+		// just work, without becoming so loose it spins forever — token
+		// budget + auto-compact still bound the worst case. Override
+		// with INFINITY_MAX_TOOL_ITERATIONS for tighter or looser caps.
+		cfg.MaxToolIterations = 50
+	}
+	if v := strings.TrimSpace(os.Getenv("INFINITY_MAX_TOOL_ITERATIONS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxToolIterations = n
+		}
 	}
 	if cfg.SystemPrompt == "" {
 		cfg.SystemPrompt = defaultSystemPrompt
