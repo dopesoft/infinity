@@ -91,17 +91,27 @@ export function WorkspaceMobile({
 
       {/* Swipeable content area. We render one mode at a time and use
           AnimatePresence for the cross-fade. The drag handler is on the
-          motion.div itself — small horizontal drag → cycles modes. */}
+          motion.div itself — small horizontal drag → cycles modes.
+
+          `touch-pan-y` on the motion.div hands vertical pans back to the
+          browser, so the chat's scroller actually receives the gesture
+          instead of framer-motion eating it. Without this, any touch
+          with a slight horizontal component would be claimed by the
+          drag listener and the conversation wouldn't scroll. Combined
+          with `dragDirectionLock`, framer commits to whichever axis the
+          gesture starts on — so a vertical scroll stays a scroll and a
+          horizontal swipe still cycles modes. */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={mode}
-            className="absolute inset-0 flex min-h-0 flex-col"
+            className="absolute inset-0 flex min-h-0 flex-col touch-pan-y"
             initial={{ opacity: 0, x: 24 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -24 }}
             transition={{ duration: 0.18, ease: "easeOut" }}
             drag="x"
+            dragDirectionLock
             dragConstraints={{ left: 0, right: 0 }}
             dragElastic={0.18}
             onDragEnd={handleDragEnd}

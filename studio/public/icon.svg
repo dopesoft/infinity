@@ -1,11 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Favicon + PWA "any" icon. Uses the exact lucide-react Infinity
+       glyph that <TabFrame> renders at the top of the app, so the tab
+       icon, the home-screen install icon, and the in-app brand all read
+       as the same mark. Black rounded square at radius 96 keeps the
+       iOS-style app-tile look on desktop tabs. -->
   <rect width="512" height="512" rx="96" fill="#000000"/>
-  <path
-    d="M 130 256 Q 130 180 200 180 Q 256 180 256 256 Q 256 332 312 332 Q 382 332 382 256 Q 382 180 312 180 Q 256 180 256 256 Q 256 332 200 332 Q 130 332 130 256 Z"
+  <g
+    transform="translate(88 88) scale(14)"
     fill="none"
     stroke="#FFFFFF"
-    stroke-width="32"
+    stroke-width="2"
     stroke-linecap="round"
     stroke-linejoin="round"
-  />
+  >
+    <path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8"/>
+  </g>
 </svg>

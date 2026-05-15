@@ -1,14 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Maskable icon: safe zone is 40% radius around center. The infinity
-       glyph sits well within that zone so any platform-specific mask
-       (circle, squircle, rounded square) crops cleanly. -->
+  <!-- Maskable icon. Safe zone is the inner ~80% of the canvas; the
+       infinity glyph sits well within it so any platform-specific mask
+       (circle, squircle, rounded square) crops cleanly. Same lucide
+       Infinity glyph as icon.svg + apple-touch-icon.svg so every
+       install surface shows the same mark. -->
   <rect width="512" height="512" fill="#000000"/>
-  <path
-    d="M 175 256 Q 175 200 220 200 Q 256 200 256 256 Q 256 312 292 312 Q 337 312 337 256 Q 337 200 292 200 Q 256 200 256 256 Q 256 312 220 312 Q 175 312 175 256 Z"
+  <g
+    transform="translate(112 112) scale(12)"
     fill="none"
     stroke="#FFFFFF"
-    stroke-width="26"
+    stroke-width="2"
     stroke-linecap="round"
     stroke-linejoin="round"
-  />
+  >
+    <path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8"/>
+  </g>
 </svg>
