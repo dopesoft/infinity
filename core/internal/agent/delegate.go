@@ -150,6 +150,10 @@ func (d *Delegate) Execute(ctx context.Context, input map[string]any) (string, e
 
 	brief, _ := input["context_brief"].(string)
 	persona, _ := input["persona"].(string)
+	// Any model string (full id, tier nickname like "haiku"/"sonnet", or
+	// the wrong provider's name) is normalized inside the LLM provider's
+	// Stream() — see normalize{Anthropic,OpenAI}Model and the OAuth
+	// retry-on-400 path. Pass through unchanged.
 	model, _ := input["model"].(string)
 
 	allowedRaw, _ := input["allowed_tools"].([]any)
@@ -377,3 +381,4 @@ func (d *DelegateParallel) Execute(ctx context.Context, input map[string]any) (s
 	b, _ := json.Marshal(map[string]any{"results": results})
 	return string(b), nil
 }
+

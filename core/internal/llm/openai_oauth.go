@@ -370,33 +370,40 @@ func (o *OpenAIOAuth) Stream(
 
 	effectiveModel := o.model
 	if model != "" {
-		effectiveModel = model
+		if normalized := normalizeOpenAIModel(model); normalized != "" {
+			effectiveModel = normalized
+		}
+		// Unknown name stays as the configured default; if the model
+		// *also* turns out to be one the account can't serve, the
+		// retry-on-400 path below catches it.
 	}
 
-	body := buildResponsesRequest(effectiveModel, system, messages, tools)
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return resp, err
+	httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
+
+	// Self-heal: if Codex rejected the per-call model override (typical
+	// reasons: it's an Anthropic nickname like "haiku", a deprecated id,
+	// or a model the boss's plan doesn't expose), retry ONCE with the
+	// provider's configured default so an upstream bad guess never tanks
+	// the whole turn. Anything else surfaces as before.
+	if attemptErr == nil && httpResp.StatusCode == 400 && effectiveModel != o.model && o.model != "" {
+		raw, _ := io.ReadAll(httpResp.Body)
+		httpResp.Body.Close()
+		bodyStr := string(raw)
+		if looksLikeModelRejection(bodyStr) {
+			unknownOAIEventLog.Printf(
+				"openai_oauth: model %q rejected, retrying with default %q (reason: %s)",
+				effectiveModel, o.model, truncateOAuth(bodyStr, 200),
+			)
+			httpResp, attemptErr = o.attemptStream(ctx, tok, o.model, system, messages, tools)
+		} else {
+			// Re-emit the original body for the non-retry path below.
+			httpResp.Body = io.NopCloser(bytes.NewReader(raw))
+		}
 	}
 
-	endpoint := strings.TrimRight(o.apiBase, "/") + "/responses"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return resp, err
-	}
-	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	if tok.AccountID != "" {
-		req.Header.Set("chatgpt-account-id", tok.AccountID)
-	}
-	req.Header.Set("User-Agent", "infinity-core/1 (openai_oauth)")
-
-	httpResp, err := o.httpClient.Do(req)
-	if err != nil {
-		emit(out, StreamEvent{Kind: StreamError, Err: err.Error()})
-		return resp, err
+	if attemptErr != nil {
+		emit(out, StreamEvent{Kind: StreamError, Err: attemptErr.Error()})
+		return resp, attemptErr
 	}
 	defer httpResp.Body.Close()
 
@@ -408,6 +415,62 @@ func (o *OpenAIOAuth) Stream(
 	}
 
 	return readResponsesSSE(httpResp.Body, out)
+}
+
+// attemptStream issues a single /responses request for the given model
+// and returns the raw HTTP response. Pulled out of Stream so the caller
+// can inspect the status, decide whether to retry with a different
+// model, and reissue without duplicating header / payload assembly.
+func (o *OpenAIOAuth) attemptStream(
+	ctx context.Context,
+	tok OAuthToken,
+	model, system string,
+	messages []Message,
+	tools []ToolDef,
+) (*http.Response, error) {
+	body := buildResponsesRequest(model, system, messages, tools)
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(o.apiBase, "/") + "/responses"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	if tok.AccountID != "" {
+		req.Header.Set("chatgpt-account-id", tok.AccountID)
+	}
+	req.Header.Set("User-Agent", "infinity-core/1 (openai_oauth)")
+	return o.httpClient.Do(req)
+}
+
+// looksLikeModelRejection identifies a 400 body whose root cause is the
+// model name (rather than e.g. malformed payload). Codex returns a few
+// distinct phrasings — "is not supported when using Codex with a ChatGPT
+// account", "model_not_found", "does not exist", "invalid model" — so we
+// match on the common substrings. Conservative on purpose: a false
+// positive just means we retry with the default once.
+func looksLikeModelRejection(body string) bool {
+	if body == "" {
+		return false
+	}
+	b := strings.ToLower(body)
+	switch {
+	case strings.Contains(b, "model_not_found"),
+		strings.Contains(b, "does not exist"),
+		strings.Contains(b, "invalid model"),
+		strings.Contains(b, "is not supported"),
+		strings.Contains(b, "no such model"),
+		strings.Contains(b, "unknown model"),
+		strings.Contains(b, "unsupported model"):
+		return true
+	}
+	return false
 }
 
 // buildResponsesRequest assembles the JSON payload for /responses. Messages

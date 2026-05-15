@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -90,7 +91,12 @@ func (a *Anthropic) Stream(
 	// already plumbs back to the user.
 	effectiveModel := a.model
 	if model != "" {
-		effectiveModel = model
+		if normalized := normalizeAnthropicModel(model); normalized != "" {
+			effectiveModel = normalized
+		}
+		// Unrecognized names (e.g. "gpt-5", "o3") silently fall back to
+		// the boot-time default instead of erroring at the API. The agent
+		// passing the wrong nickname should never tank the whole turn.
 	}
 	apiMessages := make([]anthropic.MessageParam, 0, len(messages))
 	for _, m := range messages {
@@ -203,6 +209,33 @@ func (a *Anthropic) Stream(
 	emit(out, StreamEvent{Kind: StreamComplete, StopReason: resp.StopReason, Usage: &resp.Usage})
 
 	return resp, nil
+}
+
+// normalizeAnthropicModel maps known nicknames + full ids onto canonical
+// Anthropic model strings. Returns "" if the input doesn't look like
+// anything this provider can serve, so the caller can fall back to its
+// own default. Keeps the delegate tool resilient to whatever shorthand
+// the agent decides to pass on a given turn.
+func normalizeAnthropicModel(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return ""
+	}
+	// Pass-through for any full id already in the Claude namespace.
+	if strings.HasPrefix(m, "claude-") {
+		return model
+	}
+	// Tier nicknames map to the current generation. Update these in lock
+	// step with the model knowledge cutoff section of CLAUDE.md.
+	switch m {
+	case "haiku":
+		return "claude-haiku-4-5-20251001"
+	case "sonnet":
+		return "claude-sonnet-4-6"
+	case "opus":
+		return "claude-opus-4-7"
+	}
+	return ""
 }
 
 func emit(ch chan<- StreamEvent, ev StreamEvent) {

@@ -104,23 +104,25 @@ export function ConversationStream({
               // tool-call card.
               SKILL_TOOL_NAMES.has(m.toolCall?.name ?? "") ? (
                 <div className="flex justify-start">
-                  <div className="w-full min-w-0 max-w-full sm:w-3/4">
+                  <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                     <SkillProposalCard message={m} />
                   </div>
                 </div>
               ) : (
-                // ToolCallCard wraps to a left-anchored 50% so it doesn't pretend
-                // to be the conversation. Same width as ThinkingBlock for visual
-                // rhythm — both are "system" feedback, not chat.
+                // Tool/Thinking/Context cards all share the same left-
+                // anchored max-w-[80%] as the assistant ChatBubble so the
+                // "agent voice" column reads as one consistent rail —
+                // earlier slim widths (1/2 / 3/4) made long INPUT/OUTPUT
+                // payloads unreadable, especially the indented JSON.
                 <div className="flex justify-start">
-                  <div className="w-full min-w-0 max-w-full sm:w-1/2">
+                  <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                     <ToolCallCard message={m} />
                   </div>
                 </div>
               )
             ) : m.role === "thinking" ? (
               <div className="flex justify-start">
-                <div className="w-full min-w-0 max-w-full sm:w-3/4">
+                <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                   <ThinkingBlock message={m} />
                 </div>
               </div>
@@ -129,7 +131,7 @@ export function ConversationStream({
               // (same rhythm as the thinking / skill cards) so it reads as
               // "something the boss brought in", not a typed user message.
               <div className="flex justify-start">
-                <div className="w-full min-w-0 max-w-full sm:w-3/4">
+                <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                   <DashboardContextCard message={m} onQuickReply={onQuickReply} />
                 </div>
               </div>

@@ -38,7 +38,12 @@ func (o *OpenAI) Stream(
 ) (Response, error) {
 	effectiveModel := o.model
 	if model != "" {
-		effectiveModel = model
+		if normalized := normalizeOpenAIModel(model); normalized != "" {
+			effectiveModel = normalized
+		}
+		// Unknown nickname (e.g. "haiku"/"sonnet") silently falls back to
+		// the configured default so an upstream bad guess can't break the
+		// turn.
 	}
 	apiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1)
 	if system != "" {
@@ -149,6 +154,37 @@ func toFunctionParameters(schema map[string]any) shared.FunctionParameters {
 		out[k] = v
 	}
 	return out
+}
+
+// normalizeOpenAIModel maps full ids + nicknames onto canonical OpenAI
+// model strings. Returns "" if the input doesn't look like something
+// this provider can serve, so the caller can fall back to its own
+// default. Mirrors normalizeAnthropicModel on the other side so the
+// delegate tool can pass either tier shorthand or a full id without
+// caring which provider is wired up.
+func normalizeOpenAIModel(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return ""
+	}
+	// Pass-through for any full id in the OpenAI namespace.
+	if strings.HasPrefix(m, "gpt-") || strings.HasPrefix(m, "o1") ||
+		strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") ||
+		strings.HasPrefix(m, "chatgpt-") {
+		return model
+	}
+	// Map Anthropic tier nicknames onto the closest OpenAI tier so an
+	// agent that learned "haiku for cheap" doesn't tank when the loop is
+	// on OpenAI. Adjust these in lock step with the OpenAI lineup.
+	switch m {
+	case "haiku", "cheap", "small", "mini":
+		return "gpt-5-mini"
+	case "sonnet", "default", "medium":
+		return "gpt-5"
+	case "opus", "premium", "large":
+		return "gpt-5"
+	}
+	return ""
 }
 
 var _ ssestream.Stream[openai.ChatCompletionChunk] // keep import for clarity
