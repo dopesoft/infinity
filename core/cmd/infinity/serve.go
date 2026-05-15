@@ -296,14 +296,23 @@ func serveCmd() *cobra.Command {
 			// can pick the right account when a tool exposes per-account
 			// `connected_account_id` parameters. Started later so the
 			// background refresh ticker is tied to the serve context.
-			var connectorsCache *connectors.Cache
+			//
+			// composioKeyFn is shared across the cache, the execute client,
+			// and the toolkit-verb registrar so a Railway env hot-swap
+			// propagates everywhere without restart.
+			composioKeyFn := func() string {
+				if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
+					return v
+				}
+				return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY"))
+			}
+			var (
+				connectorsCache *connectors.Cache
+				composioExec    *connectors.ExecuteClient
+			)
 			if pool != nil {
-				connectorsCache = connectors.New(pool, func() string {
-					if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
-						return v
-					}
-					return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY"))
-				})
+				connectorsCache = connectors.New(pool, composioKeyFn)
+				composioExec = connectors.NewExecuteClient(composioKeyFn)
 			}
 
 			// Persisted token usage. Migration 013 added the columns;
@@ -479,14 +488,8 @@ func serveCmd() *cobra.Command {
 			// same admin/consumer key resolution the connectors cache uses
 			// so a Railway env swap propagates without restart.
 			var connectorPoller *connectors.Poller
-			if pool != nil {
-				execClient := connectors.NewExecuteClient(func() string {
-					if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
-						return v
-					}
-					return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY"))
-				})
-				connectorPoller = connectors.NewPoller(pool, execClient, pipeline)
+			if pool != nil && composioExec != nil {
+				connectorPoller = connectors.NewPoller(pool, composioExec, pipeline)
 				fmt.Println("  connector poller: ready (composio tools.execute)")
 			}
 
@@ -693,6 +696,54 @@ func serveCmd() *cobra.Command {
 			if connectorsCache != nil {
 				connectorsCache.Start(ctx)
 				defer connectorsCache.Stop()
+			}
+
+			// Pre-register every Composio toolkit verb the boss has
+			// CONNECTED as a dormant tool in the registry — so the agent
+			// finds `composio__GMAIL_SEND_EMAIL` etc. via the normal
+			// `tool_search` + `load_tools` path instead of being forced
+			// into the MCP gateway's SEARCH_TOOLS + MULTI_EXECUTE dance
+			// (which is what produced empty replies / Python repr leaks
+			// when the model gave up and ran REMOTE_WORKBENCH). The
+			// catalog block collapses each toolkit to one line, so 100+
+			// new dormant entries cost ~10 prompt lines, not 100. Per-turn
+			// active-set schema cost stays bounded by load_tools.
+			// Composio verb sync: stateful diff between connected
+			// toolkits (cache snapshot) and registered verbs. First
+			// pass at boot brings everything online dormant; the
+			// cache's onChange callback keeps it live thereafter,
+			// so when the boss connects a new toolkit via Settings
+			// → Connectors its verbs appear in the agent's catalog
+			// within one cache refresh (~60s) — no redeploy, no
+			// restart. Disconnecting an account removes its verbs
+			// the same way. Runtime adaptation, per Rule #1.
+			if connectorsCache != nil && composioExec != nil {
+				verbSync := &tools.ComposioVerbSync{
+					Reg:   registry,
+					Cache: connectorsCache,
+					Exec:  composioExec,
+					KeyFn: composioKeyFn,
+				}
+				syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+				added, _, toolkits, err := verbSync.Sync(syncCtx)
+				syncCancel()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: composio verb sync: %v\n", err)
+				}
+				if added > 0 {
+					fmt.Printf("  composio: registered %d verbs across %d toolkit(s) (dormant in catalog)\n", added, toolkits)
+				}
+				// Subscribe to cache changes so future toolkit
+				// connect/disconnect events trigger a re-sync.
+				// Each onChange runs in its own goroutine — the
+				// sync's mutex serializes overlapping fires.
+				connectorsCache.SetOnChange(func() {
+					reCtx, reCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer reCancel()
+					if _, _, _, err := verbSync.Sync(reCtx); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: composio verb resync: %v\n", err)
+					}
+				})
 			}
 
 			errCh := make(chan error, 1)

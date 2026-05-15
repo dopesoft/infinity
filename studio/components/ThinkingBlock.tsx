@@ -79,13 +79,23 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
         className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left"
         aria-expanded={open}
       >
-        <Brain
-          className={cn(
-            "size-4 shrink-0",
-            isPending ? "text-info animate-pulse" : "text-muted-foreground",
-          )}
-          aria-hidden
-        />
+        {/* Live-activity indicator: a pulsing blue dot while the agent
+            is thinking, so the boss has an unmistakable "Jarvis is doing
+            something right now" signal at a glance. Collapses to the
+            Brain glyph once the trace is final. The ping ring uses
+            position-relative + position-absolute for the canonical
+            tailwind double-element pulse. */}
+        {isPending ? (
+          <span
+            className="relative inline-flex size-2.5 shrink-0"
+            aria-hidden
+          >
+            <span className="absolute inset-0 inline-flex animate-ping rounded-full bg-info opacity-60" />
+            <span className="relative inline-flex size-2.5 rounded-full bg-info" />
+          </span>
+        ) : (
+          <Brain className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        )}
         <span
           className={cn(
             "whitespace-nowrap text-xs sm:text-sm",

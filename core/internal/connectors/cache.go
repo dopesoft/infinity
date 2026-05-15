@@ -64,6 +64,15 @@ type Cache struct {
 	lastRefresh time.Time
 	lastErr     string
 
+	// onChange fires after a successful Refresh whenever the set of
+	// (toolkit_slug → connected account count) changed since the last
+	// snapshot. The toolkit-verb registrar subscribes to this so a new
+	// Composio connection lights up the agent's tool catalog without
+	// waiting for a redeploy — runtime adaptation is the point.
+	onChangeMu sync.Mutex
+	onChange   func()
+	lastShape  map[string]int
+
 	cancel context.CancelFunc
 }
 
@@ -151,7 +160,57 @@ func (c *Cache) Refresh(ctx context.Context) error {
 	c.lastRefresh = time.Now()
 	c.lastErr = ""
 	c.mu.Unlock()
+
+	// Snapshot the shape (toolkit → active-account count) and fire
+	// onChange if it diverges from the last seen shape. Cheap diff
+	// keeps a noop refresh from doing real work on the subscriber.
+	shape := make(map[string]int, len(byToolkit))
+	for slug, accs := range byToolkit {
+		active := 0
+		for _, a := range accs {
+			if strings.EqualFold(a.Status, "ACTIVE") {
+				active++
+			}
+		}
+		if active > 0 {
+			shape[slug] = active
+		}
+	}
+	c.onChangeMu.Lock()
+	changed := !sameShape(c.lastShape, shape)
+	c.lastShape = shape
+	cb := c.onChange
+	c.onChangeMu.Unlock()
+	if changed && cb != nil {
+		// Async so a slow subscriber can't stall the refresh ticker.
+		go cb()
+	}
 	return nil
+}
+
+// SetOnChange wires a callback fired after Refresh whenever the set of
+// connected toolkits (or per-toolkit active-account counts) actually
+// changes. Idempotent: passing nil clears the subscription. The
+// callback runs in its own goroutine so a slow subscriber never blocks
+// the refresh ticker.
+func (c *Cache) SetOnChange(fn func()) {
+	c.onChangeMu.Lock()
+	c.onChange = fn
+	c.onChangeMu.Unlock()
+}
+
+// sameShape returns true when the two toolkit→count maps are identical.
+// Used by Refresh to decide whether to fire the onChange callback.
+func sameShape(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Cache) recordErr(msg string) {
@@ -396,7 +455,8 @@ func (c *Cache) SystemPromptBlock() string {
 
 	var b strings.Builder
 	b.WriteString("<connected_accounts>\n")
-	b.WriteString("The boss has authenticated the following SaaS accounts. When you call a tool that supports per-account routing, pass the matching `connected_account_id`. Prefer the alias the boss assigned over the raw identity hint.\n\n")
+	b.WriteString("The boss has authenticated the following SaaS accounts via Composio. Every verb of each connected toolkit is already in your <tool_catalog> as `composio__TOOLKIT_VERB` — discover with `tool_search(\"send gmail\")`, bring online with `load_tools([\"composio__GMAIL_SEND_EMAIL\"])`, then call it directly. The gateway tools (`composio__COMPOSIO_SEARCH_TOOLS`, `composio__COMPOSIO_MULTI_EXECUTE_TOOL`) are a fallback for toolkits whose verbs failed to pre-register; do not reach for `composio__COMPOSIO_REMOTE_WORKBENCH` / `_BASH_TOOL` for anything a real toolkit verb covers.\n\n")
+	b.WriteString("Pass `connected_account_id` to every Composio verb that hits an authenticated upstream. When there's exactly one account for a toolkit it's auto-resolved; with multiple accounts (e.g. personal + work Gmail) you must pick — match the boss's intent against the alias (\"send from work\" → alias=work → that id). If the intent is ambiguous, ask before sending.\n\n")
 	for _, slug := range slugs {
 		accs := c.byToolkit[slug]
 		if len(accs) == 0 {
