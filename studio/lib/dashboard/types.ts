@@ -28,6 +28,7 @@ export type Pursuit = {
   progress?: { current: number; target: number; unit?: string };
   dueAt?: string; // ISO date for goals/quarterly
   status?: "on_track" | "slow" | "at_risk" | "ahead";
+  createdAt?: string; // ISO timestamp the pursuit was created
 };
 
 // ── Todos ────────────────────────────────────────────────────────────────────

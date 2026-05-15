@@ -29,7 +29,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// RegisterDashboardTools wires every dashboard mutation as a native tool.
+// RegisterDashboardTools wires every dashboard mutation as a native tool
+// AND its matching list tool. Every table the agent can write to needs a
+// read counterpart — without one, "dismiss the X" requests force the
+// agent to ask the boss for ids it has no way to see.
 func RegisterDashboardTools(r *Registry, pool *pgxpool.Pool) {
 	if r == nil || pool == nil {
 		return
@@ -37,11 +40,15 @@ func RegisterDashboardTools(r *Registry, pool *pgxpool.Pool) {
 	r.Register(&taskCreate{pool: pool})
 	r.Register(&taskUpdate{pool: pool})
 	r.Register(&taskDone{pool: pool})
+	r.Register(&taskList{pool: pool})
 	r.Register(&pursuitCreate{pool: pool})
 	r.Register(&pursuitCheckin{pool: pool})
+	r.Register(&pursuitList{pool: pool})
 	r.Register(&followupSnooze{pool: pool})
 	r.Register(&followupDismiss{pool: pool})
+	r.Register(&followupList{pool: pool})
 	r.Register(&savedAdd{pool: pool})
+	r.Register(&savedList{pool: pool})
 }
 
 // ── task_create ────────────────────────────────────────────────────────────
@@ -436,6 +443,214 @@ func (t *savedAdd) Execute(ctx context.Context, in map[string]any) (string, erro
 		return "", err
 	}
 	return fmt.Sprintf(`{"ok":true,"id":"%s"}`, id), nil
+}
+
+// ── task_list ──────────────────────────────────────────────────────────────
+
+type taskList struct{ pool *pgxpool.Pool }
+
+func (t *taskList) Name() string { return "task_list" }
+func (t *taskList) Description() string {
+	return "List todos on the dashboard with their ids. Use this BEFORE task_update / " +
+		"task_done — ids are not shown in the UI. Filter by status (default 'open') " +
+		"and limit (default 100). Returns id, title, status, priority, due_at, created_at."
+}
+func (t *taskList) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string", "enum": []string{"open", "done", "dropped", "all"}, "default": "open"},
+			"limit":  map[string]any{"type": "integer", "default": 100},
+		},
+	}
+}
+func (t *taskList) Execute(ctx context.Context, in map[string]any) (string, error) {
+	status := strDefault(in, "status", "open")
+	limit := 100
+	if v, ok := numFloat(in["limit"]); ok && v > 0 {
+		limit = int(v)
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := `SELECT id::text, title, status, priority,
+	             COALESCE(to_char(due_at,'YYYY-MM-DD"T"HH24:MI:SSOF'), ''),
+	             to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF')
+	        FROM mem_tasks`
+	args := []any{}
+	if status != "all" {
+		q += ` WHERE status = $1`
+		args = append(args, status)
+	}
+	q += ` ORDER BY priority DESC, created_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
+	return queryRowsAsJSON(ctx, t.pool, q, args,
+		[]string{"id", "title", "status", "priority", "due_at", "created_at"})
+}
+
+// ── pursuit_list ───────────────────────────────────────────────────────────
+
+type pursuitList struct{ pool *pgxpool.Pool }
+
+func (t *pursuitList) Name() string { return "pursuit_list" }
+func (t *pursuitList) Description() string {
+	return "List Pursuits (habits + goals) on the dashboard with their ids. Use " +
+		"this BEFORE pursuit_checkin — ids are not shown in the UI. Returns id, " +
+		"title, cadence, current_value, target_value, unit, streak_days, done_today."
+}
+func (t *pursuitList) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"cadence": map[string]any{"type": "string", "enum": []string{"daily", "weekly", "goal", "quarterly", "all"}, "default": "all"},
+			"limit":   map[string]any{"type": "integer", "default": 100},
+		},
+	}
+}
+func (t *pursuitList) Execute(ctx context.Context, in map[string]any) (string, error) {
+	cadence := strDefault(in, "cadence", "all")
+	limit := 100
+	if v, ok := numFloat(in["limit"]); ok && v > 0 {
+		limit = int(v)
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := `SELECT id::text, title, cadence,
+	             COALESCE(current_value::text,''), COALESCE(target_value::text,''),
+	             COALESCE(unit,''), COALESCE(streak_days, 0)::text,
+	             COALESCE(done_today, false)::text
+	        FROM mem_pursuits`
+	args := []any{}
+	if cadence != "all" {
+		q += ` WHERE cadence = $1`
+		args = append(args, cadence)
+	}
+	q += ` ORDER BY created_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
+	return queryRowsAsJSON(ctx, t.pool, q, args,
+		[]string{"id", "title", "cadence", "current_value", "target_value", "unit", "streak_days", "done_today"})
+}
+
+// ── followup_list ──────────────────────────────────────────────────────────
+
+type followupList struct{ pool *pgxpool.Pool }
+
+func (t *followupList) Name() string { return "followup_list" }
+func (t *followupList) Description() string {
+	return "List follow-ups on the dashboard with their ids. Use this BEFORE " +
+		"followup_snooze / followup_dismiss — ids are not shown in the UI. " +
+		"Filter by status (default 'open'). Returns id, source, account, " +
+		"from_name, subject, preview, status, unread, received_at."
+}
+func (t *followupList) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string", "enum": []string{"open", "snoozed", "done", "all"}, "default": "open"},
+			"limit":  map[string]any{"type": "integer", "default": 100},
+		},
+	}
+}
+func (t *followupList) Execute(ctx context.Context, in map[string]any) (string, error) {
+	status := strDefault(in, "status", "open")
+	limit := 100
+	if v, ok := numFloat(in["limit"]); ok && v > 0 {
+		limit = int(v)
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := `SELECT id::text, source, account, from_name, subject, preview,
+	             status, COALESCE(unread,false)::text,
+	             to_char(received_at,'YYYY-MM-DD"T"HH24:MI:SSOF')
+	        FROM mem_followups`
+	args := []any{}
+	if status != "all" {
+		q += ` WHERE status = $1`
+		args = append(args, status)
+	}
+	q += ` ORDER BY received_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
+	return queryRowsAsJSON(ctx, t.pool, q, args,
+		[]string{"id", "source", "account", "from_name", "subject", "preview", "status", "unread", "received_at"})
+}
+
+// ── saved_list ─────────────────────────────────────────────────────────────
+
+type savedList struct{ pool *pgxpool.Pool }
+
+func (t *savedList) Name() string { return "saved_list" }
+func (t *savedList) Description() string {
+	return "List items on the Saved shelf with their ids. Use this BEFORE any " +
+		"future saved_update / saved_delete (and to recall what the boss saved). " +
+		"Filter by kind (article/link/note/quote)."
+}
+func (t *savedList) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"kind":  map[string]any{"type": "string", "enum": []string{"article", "link", "note", "quote", "all"}, "default": "all"},
+			"limit": map[string]any{"type": "integer", "default": 100},
+		},
+	}
+}
+func (t *savedList) Execute(ctx context.Context, in map[string]any) (string, error) {
+	kind := strDefault(in, "kind", "all")
+	limit := 100
+	if v, ok := numFloat(in["limit"]); ok && v > 0 {
+		limit = int(v)
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := `SELECT id::text, kind, title, COALESCE(url,''),
+	             COALESCE(source_label,''),
+	             to_char(saved_at,'YYYY-MM-DD"T"HH24:MI:SSOF')
+	        FROM mem_saved`
+	args := []any{}
+	if kind != "all" {
+		q += ` WHERE kind = $1`
+		args = append(args, kind)
+	}
+	q += ` ORDER BY saved_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
+	return queryRowsAsJSON(ctx, t.pool, q, args,
+		[]string{"id", "kind", "title", "url", "source_label", "saved_at"})
+}
+
+// queryRowsAsJSON runs a SELECT of TEXT-castable columns and emits one
+// JSON object per row, keyed by the supplied column names. Kept small
+// and column-list-driven so adding a new list tool stays a 20-line
+// affair — the recurring "agent needs to see what it can write to"
+// pattern doesn't deserve a bespoke struct each time.
+func queryRowsAsJSON(ctx context.Context, pool *pgxpool.Pool, q string, args []any, cols []string) (string, error) {
+	rows, err := pool.Query(ctx, q, args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0, 64)
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			var s string
+			vals[i] = &s
+			ptrs[i] = vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return "", err
+		}
+		obj := map[string]any{}
+		for i, c := range cols {
+			if sp, ok := vals[i].(*string); ok {
+				obj[c] = *sp
+			}
+		}
+		out = append(out, obj)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	b, _ := json.Marshal(map[string]any{"count": len(out), "items": out})
+	return string(b), nil
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

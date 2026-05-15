@@ -21,8 +21,9 @@ import (
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
 
-// RegisterSurfaceTools wires surface_item + surface_update. No-op when
-// pool is nil so chat-only / no-DB deployments don't break registration.
+// RegisterSurfaceTools wires surface_item + surface_update + surface_list.
+// No-op when pool is nil so chat-only / no-DB deployments don't break
+// registration.
 func RegisterSurfaceTools(r *Registry, pool *pgxpool.Pool) {
 	if r == nil || pool == nil {
 		return
@@ -30,6 +31,7 @@ func RegisterSurfaceTools(r *Registry, pool *pgxpool.Pool) {
 	store := surface.NewStore(pool, nil)
 	r.Register(&surfaceItemTool{store: store})
 	r.Register(&surfaceUpdateTool{store: store})
+	r.Register(&surfaceListTool{store: store})
 }
 
 // ── surface_item ────────────────────────────────────────────────────────────
@@ -156,5 +158,102 @@ func (t *surfaceUpdateTool) Execute(ctx context.Context, in map[string]any) (str
 		return "", err
 	}
 	out, _ := json.Marshal(map[string]any{"ok": true, "id": id})
+	return string(out), nil
+}
+
+// ── surface_list ────────────────────────────────────────────────────────────
+//
+// Without this, the agent has no way to enumerate dashboard items by id,
+// so a request like "delete all the remaining questions" forces it to
+// ask the boss to copy/paste IDs that aren't even shown in the UI. With
+// surface_list, the agent can: list → identify by surface/kind/title →
+// loop surface_update({id, status:"dismissed"}) over each. Read-only,
+// safe to register everywhere.
+
+type surfaceListTool struct{ store *surface.Store }
+
+func (t *surfaceListTool) Name() string { return "surface_list" }
+func (t *surfaceListTool) Description() string {
+	return "List items currently on the boss's dashboard with their ids. Use " +
+		"this BEFORE surface_update when the boss asks to dismiss, snooze, or " +
+		"re-rank items — you need the actual item ids and they are not shown " +
+		"in the UI. Optional `surface` filter (e.g. 'questions', 'followups', " +
+		"'alerts', 'digest', 'insights') narrows to one dashboard region; " +
+		"omit it to see everything open across surfaces. Returns id, surface, " +
+		"kind, title, subtitle, importance, status, created_at."
+}
+func (t *surfaceListTool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"surface": map[string]any{
+				"type":        "string",
+				"description": "Optional surface name to filter by (e.g. 'questions'). Omit to list across all surfaces.",
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "Max items to return (default 100, max 500).",
+				"default":     100,
+			},
+		},
+	}
+}
+func (t *surfaceListTool) Execute(ctx context.Context, in map[string]any) (string, error) {
+	surfaceName := strString(in, "surface")
+	limit := 100
+	if v, ok := in["limit"].(float64); ok && v > 0 {
+		limit = int(v)
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	var (
+		items []*surface.Item
+		err   error
+	)
+	if surfaceName != "" {
+		items, err = t.store.ListBySurface(ctx, surfaceName, limit)
+	} else {
+		items, err = t.store.ListOpen(ctx, limit)
+	}
+	if err != nil {
+		return "", fmt.Errorf("surface_list: %w", err)
+	}
+
+	type row struct {
+		ID         string `json:"id"`
+		Surface    string `json:"surface"`
+		Kind       string `json:"kind"`
+		Title      string `json:"title"`
+		Subtitle   string `json:"subtitle,omitempty"`
+		Importance *int   `json:"importance,omitempty"`
+		Status     string `json:"status"`
+		CreatedAt  string `json:"created_at"`
+	}
+	rows := make([]row, 0, len(items))
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		r := row{
+			ID:        it.ID,
+			Surface:   it.Surface,
+			Kind:      it.Kind,
+			Title:     it.Title,
+			Subtitle:  it.Subtitle,
+			Status:    string(it.Status),
+			CreatedAt: it.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		if it.Importance != nil {
+			v := *it.Importance
+			r.Importance = &v
+		}
+		rows = append(rows, r)
+	}
+	out, _ := json.Marshal(map[string]any{
+		"count": len(rows),
+		"items": rows,
+	})
 	return string(out), nil
 }

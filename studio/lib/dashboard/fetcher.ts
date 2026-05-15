@@ -89,7 +89,7 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
 // nested under `progress` for habits-without-progress to not carry a
 // stub object. Pull the structured shape together here.
 function mapPursuit(
-  p: Pick<Pursuit, "id" | "title" | "cadence" | "doneToday" | "doneAt" | "streakDays" | "dueAt" | "status"> & {
+  p: Pick<Pursuit, "id" | "title" | "cadence" | "doneToday" | "doneAt" | "streakDays" | "dueAt" | "status" | "createdAt"> & {
     currentValue?: number | null;
     targetValue?: number | null;
     unit?: string | null;

@@ -22,10 +22,29 @@ with load_tools(["name"]). Prefer this two-step over guessing the schema
 or asking the user. After the work is done, unload_tools to keep the
 active surface tight.
 
-If a task is "fix/dismiss/update an item on the dashboard", the tool you
-want is surface_update — call load_tools(["surface_update"]) and then
-surface_update({id: "<the item id>", status: "dismissed"}). Don't burn
-iterations searching for it; it's listed below.
+NEVER ask the boss for record ids — they are NOT shown in the UI. Every
+domain where you can mutate has a matching list tool; call the list tool
+yourself FIRST to obtain ids, then act. Pattern by domain:
+
+  Dashboard surface items (questions, followups, alerts, digest, insights):
+    surface_list → surface_update({id, status:"dismissed"})
+  Tasks/todos:
+    task_list → task_update / task_done
+  Pursuits (habits + goals):
+    pursuit_list → pursuit_checkin
+  Follow-ups (gmail/slack/linear):
+    followup_list → followup_snooze / followup_dismiss
+  Saved shelf:
+    saved_list (read-only for now)
+  Cron / routines:
+    cron_list → cron_pause / cron_delete / cron_run_now
+  Workflows:
+    workflow_list / workflow_status → workflow_resume / workflow_cancel
+  Memory:
+    recall → forget
+
+Load both tools at once (load_tools(["X_list","X_update"])) — saves an
+iteration vs loading them one at a time.
 
 Format: name - short description.
 `

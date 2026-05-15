@@ -484,6 +484,14 @@ function PursuitBody({ p }: { p: Pursuit }) {
           </p>
         </ContextBlock>
       )}
+      {p.createdAt ? (
+        <p
+          className="pt-2 font-mono text-[11px] uppercase tracking-wider text-muted-foreground"
+          suppressHydrationWarning
+        >
+          created {relTime(p.createdAt)}
+        </p>
+      ) : null}
     </div>
   );
 }

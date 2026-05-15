@@ -80,6 +80,7 @@ type Pursuit struct {
 	Unit         *string    `json:"unit,omitempty"`
 	DueAt        *time.Time `json:"dueAt,omitempty"`
 	Status       *string    `json:"status,omitempty"`
+	CreatedAt    *time.Time `json:"createdAt,omitempty"`
 }
 
 type Todo struct {
@@ -318,7 +319,7 @@ func (a *API) loadPursuits(ctx context.Context) ([]Pursuit, error) {
 	}
 	rows, err := a.Pool.Query(ctx, `
 		SELECT id, title, cadence, done_today, done_at, streak_days,
-		       current_value, target_value, unit, due_at, status
+		       current_value, target_value, unit, due_at, status, created_at
 		FROM mem_pursuits
 		ORDER BY
 			CASE cadence WHEN 'daily' THEN 0 WHEN 'weekly' THEN 1 ELSE 2 END,
@@ -334,7 +335,7 @@ func (a *API) loadPursuits(ctx context.Context) ([]Pursuit, error) {
 		var status *string
 		if err := rows.Scan(
 			&p.ID, &p.Title, &p.Cadence, &p.DoneToday, &p.DoneAt, &p.StreakDays,
-			&p.CurrentValue, &p.TargetValue, &p.Unit, &p.DueAt, &status,
+			&p.CurrentValue, &p.TargetValue, &p.Unit, &p.DueAt, &status, &p.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
