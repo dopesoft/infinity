@@ -567,6 +567,39 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			if call := decodePendingCall(evt.Item); call != nil {
 				pending[call.ID] = call
 			}
+		case "response.output_item.done":
+			// Fallback path: some Responses-API model variants (and partial
+			// streams under load) finalize an output item without first
+			// emitting per-token deltas. The final `output_item.done` event
+			// carries the complete item, so we mine it for any text or
+			// function call we haven't already surfaced — without this the
+			// turn appears empty in the UI even though the model replied.
+			if text := decodeMessageText(evt.Item); text != "" {
+				if !strings.HasSuffix(resp.Text, text) {
+					delta := strings.TrimPrefix(text, resp.Text)
+					if delta != "" {
+						resp.Text += delta
+						emit(out, StreamEvent{Kind: StreamText, TextDelta: delta})
+					}
+				}
+			}
+			if call := decodePendingCall(evt.Item); call != nil {
+				if pc, ok := pending[call.ID]; ok {
+					if call.Arguments != "" {
+						pc.Arguments = call.Arguments
+					}
+					tc := finalizeToolCall(pc)
+					if !toolCallAlreadyEmitted(resp.ToolCalls, tc.ID) {
+						resp.ToolCalls = append(resp.ToolCalls, tc)
+						emit(out, StreamEvent{Kind: StreamToolCall, ToolCall: &tc})
+					}
+					delete(pending, call.ID)
+				} else if !toolCallAlreadyEmitted(resp.ToolCalls, call.ID) {
+					tc := finalizeToolCall(call)
+					resp.ToolCalls = append(resp.ToolCalls, tc)
+					emit(out, StreamEvent{Kind: StreamToolCall, ToolCall: &tc})
+				}
+			}
 		case "response.function_call_arguments.delta":
 			if pc := pending[evt.ItemID]; pc != nil {
 				pc.Arguments += evt.Delta
@@ -581,6 +614,20 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 				emit(out, StreamEvent{Kind: StreamToolCall, ToolCall: &tc})
 				delete(pending, evt.ItemID)
 			}
+		case
+			// Lifecycle events that carry no payload we need to act on.
+			// Acknowledging them keeps the unknown-event log focused on
+			// genuine surprises rather than steady-state noise.
+			"response.created",
+			"response.in_progress",
+			"response.content_part.added",
+			"response.content_part.done",
+			"response.output_text.done",
+			"response.reasoning_summary_part.added",
+			"response.reasoning_summary_part.done",
+			"response.reasoning_summary_text.done",
+			"response.reasoning.done":
+			// no-op
 		case "response.completed":
 			if usage := decodeUsage(evt.Response); usage != nil {
 				resp.Usage = *usage
@@ -661,6 +708,53 @@ func finalizeToolCall(pc *pendingToolCall) ToolCall {
 		tc.Input = map[string]any{}
 	}
 	return tc
+}
+
+// decodeMessageText pulls the concatenated assistant text out of an
+// `output_item.done` payload. The Responses API ships message items as
+// `{"type":"message","content":[{"type":"output_text","text":"…"}, …]}`,
+// so we walk the content array and join every output_text segment. Any
+// non-message item type (function_call, reasoning) returns the empty
+// string — those are handled by their own decoders.
+func decodeMessageText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var item struct {
+		Type    string `json:"type"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return ""
+	}
+	if item.Type != "message" {
+		return ""
+	}
+	var b strings.Builder
+	for _, c := range item.Content {
+		if c.Type == "output_text" && c.Text != "" {
+			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
+}
+
+// toolCallAlreadyEmitted prevents the `output_item.done` fallback from
+// double-appending a tool call that was already finalized via the
+// `function_call_arguments.done` event in the normal streaming path.
+func toolCallAlreadyEmitted(calls []ToolCall, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, c := range calls {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeUsage(raw json.RawMessage) *TokenUsage {

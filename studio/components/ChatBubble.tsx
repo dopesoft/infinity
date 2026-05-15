@@ -163,49 +163,62 @@ export function ChatBubble({
           </div>
         </div>
       ) : (
-        // Agent bubble — a touch darker than the surrounding muted column
-        // bg so it reads as a distinct surface in both modes. Proactive
-        // bubbles (heartbeat-initiated) get a subtle accent border + an
-        // origin badge so the boss can tell the agent spoke first.
-        <div
-          className={cn(
-            "min-w-0 max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
-            message.proactive && "border border-info/40",
+        // Agent row — pulsing dot OUTSIDE the bubble (left edge), bubble
+        // on the right. The dot signals "Jarvis is still working on this
+        // reply" even after the ThinkingBlock has collapsed, without
+        // crowding the bubble's text content. items-start so the dot
+        // anchors to the top of the bubble; a 12px top offset lines it up
+        // with the first line of body text rather than the rounded corner.
+        <div className="flex w-full min-w-0 max-w-full items-start gap-2">
+          {message.pending && (
+            <span
+              className="relative mt-3 inline-flex size-2.5 shrink-0"
+              aria-hidden
+            >
+              <span className="absolute inset-0 inline-flex animate-ping rounded-full bg-info opacity-60" />
+              <span className="relative inline-flex size-2.5 rounded-full bg-info" />
+            </span>
           )}
-        >
-          {message.proactive && (
-            <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-info">
-              <Sparkles className="size-3" />
-              <span>
-                {message.proactiveKind
-                  ? `heartbeat · ${message.proactiveKind}`
-                  : "heartbeat"}
-              </span>
+          {/* Agent bubble — a touch darker than the surrounding muted
+              column bg so it reads as a distinct surface in both modes.
+              Proactive bubbles (heartbeat-initiated) get a subtle accent
+              border + origin badge so the boss can tell the agent spoke
+              first. */}
+          <div
+            className={cn(
+              "min-w-0 max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
+              message.proactive && "border border-info/40",
+            )}
+          >
+            {message.proactive && (
+              <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-info">
+                <Sparkles className="size-3" />
+                <span>
+                  {message.proactiveKind
+                    ? `heartbeat · ${message.proactiveKind}`
+                    : "heartbeat"}
+                </span>
+              </div>
+            )}
+            <div className="min-w-0 max-w-full">
+              {message.text ? <Markdown text={message.text} /> : null}
             </div>
-          )}
-          <div className="min-w-0 max-w-full">
-            {message.text ? (
-              <Markdown text={message.text} />
-            ) : null}
-            {message.pending && (
-              <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
+            {message.interrupted && (
+              <div className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-danger/80">
+                <Undo2 className="size-3" />
+                <span>{message.text ? "interrupted" : "stopped before reply"}</span>
+              </div>
+            )}
+            {/* Proactive curiosity findings get the one-tap "Approve & fix"
+                row — it tells the agent to act on the finding right here in
+                this conversation and confirm what it changed. */}
+            {message.proactive && message.curiosityId && (
+              <FindingActions
+                curiosityId={message.curiosityId}
+                onSend={onQuickReply}
+              />
             )}
           </div>
-          {message.interrupted && (
-            <div className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-danger/80">
-              <Undo2 className="size-3" />
-              <span>{message.text ? "interrupted" : "stopped before reply"}</span>
-            </div>
-          )}
-          {/* Proactive curiosity findings get the one-tap "Approve & fix"
-              row — it tells the agent to act on the finding right here in
-              this conversation and confirm what it changed. */}
-          {message.proactive && message.curiosityId && (
-            <FindingActions
-              curiosityId={message.curiosityId}
-              onSend={onQuickReply}
-            />
-          )}
         </div>
       )}
 
