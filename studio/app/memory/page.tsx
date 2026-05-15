@@ -165,9 +165,9 @@ export default function MemoryPage() {
               e.preventDefault();
               runSearch(query);
             }}
-            className="mx-auto flex w-full items-center gap-3 sm:max-w-2xl sm:pt-4"
+            className="mx-auto flex w-full items-center gap-5 sm:max-w-2xl sm:pt-4"
           >
-            <div className="min-w-0 flex-1 sm:max-w-md">
+            <div className="min-w-0 flex-1">
               <SearchInput
                 value={query}
                 onValueChange={setQuery}
@@ -187,7 +187,7 @@ export default function MemoryPage() {
               disabled={searching}
               aria-label="Search"
               title="Search"
-              className="ml-auto h-11 w-11 shrink-0 bg-transparent px-0 text-foreground hover:bg-accent hover:text-foreground sm:w-auto sm:gap-1.5 sm:bg-primary sm:px-4 sm:text-primary-foreground sm:hover:bg-primary/90"
+              className="h-9 w-9 shrink-0 bg-transparent px-0 text-foreground hover:bg-accent hover:text-foreground sm:w-auto sm:gap-1.5 sm:bg-primary sm:px-4 sm:text-primary-foreground sm:hover:bg-primary/90"
             >
               <Search className="size-4 sm:hidden" aria-hidden />
               <span className="hidden sm:inline">

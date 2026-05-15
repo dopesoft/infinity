@@ -47,7 +47,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, Props>(
           placeholder={placeholder}
           inputMode="search"
           enterKeyHint="search"
-          className={cn("h-11 min-h-11 pl-9", value && !hideClear && "pr-9", className)}
+          className={cn("pl-9", value && !hideClear && "pr-9", className)}
           {...rest}
         />
         {value && !hideClear && (
