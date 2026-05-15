@@ -140,6 +140,29 @@ func serveCmd() *cobra.Command {
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					tools.RegisterSkillTools(registry, p)
 					tools.RegisterDashboardTools(registry, p)
+					// Curiosity questions tools (question_list / question_decide).
+					// The "Questions" card on the dashboard is backed by
+					// mem_curiosity_questions, NOT mem_surface_items — without
+					// these the agent can't dismiss the items rendered there.
+					tools.RegisterCuriosityTools(registry, p)
+					// system_map — runtime introspection. Pinned + always-
+					// available so the agent never guesses which list/
+					// mutate tool maps to which surface.
+					tools.RegisterSystemMap(registry, p)
+					// domain_hint_add / _list — the agent extends the
+					// system_map topology itself, persisted to
+					// mem_domain_hints. Closes the autonomy loop on
+					// introspection: a new irregular table needs no Go
+					// edit, just one domain_hint_add call.
+					tools.RegisterDomainHintTools(registry, p)
+					// mem_substrate — mem_list / mem_act / action_register
+					// / action_list. The generic, bounded read/write
+					// surface over every mem_* table. Combined with
+					// system_map this is the AGI substrate: any new
+					// mem_X table becomes fully actionable from chat
+					// the moment its action schemas are registered.
+					// Zero new Go tools per domain.
+					tools.RegisterMemSubstrate(registry, p)
 					// Generic dashboard surface contract (Rule #1 substrate):
 					// surface_item / surface_update. The standard boundary any
 					// skill recipe / connector / cron writes through to put a

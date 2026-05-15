@@ -18,6 +18,54 @@ type Tool interface {
 	Execute(ctx context.Context, input map[string]any) (string, error)
 }
 
+// ReadOnlyTool is an OPTIONAL extension interface. Tools that implement
+// it declare themselves explicitly as reads (true) or mutations (false),
+// killing the system_map heuristic that classified by name suffix. The
+// default — when a tool does NOT implement it — is still the suffix
+// heuristic, so existing tools continue to work without changes.
+//
+// Implement on any new tool whose name doesn't match the `_list /
+// _search / _get / _status / _history` convention but is nevertheless
+// a read.
+type ReadOnlyTool interface {
+	Tool
+	ReadOnly() bool
+}
+
+// IsReadOnly returns the read/mutate classification for a tool, using
+// the explicit interface if implemented and falling back to the suffix
+// heuristic otherwise. Used by system_map to bucket tools into
+// list_tools vs mutate_tools.
+func IsReadOnly(t Tool) bool {
+	if rt, ok := t.(ReadOnlyTool); ok {
+		return rt.ReadOnly()
+	}
+	return isListLikeName(t.Name())
+}
+
+// isListLikeName is the suffix-based fallback. Kept here (not in
+// system_map.go) so any caller can use the same classification.
+func isListLikeName(name string) bool {
+	suffixes := []string{"_list", "_search", "_get", "_status", "_history", "_recall", "_discover"}
+	for _, s := range suffixes {
+		if hasSuffix(name, s) {
+			return true
+		}
+	}
+	switch name {
+	case "recall", "skills_list", "skills_history", "skills_discover",
+		"workflow_list", "workflow_status", "cron_list", "extension_list",
+		"goal_list", "entity_search", "entity_get", "budget_status":
+		return true
+	}
+	return false
+}
+
+// hasSuffix is a tiny local helper to keep this file dep-free.
+func hasSuffix(s, sfx string) bool {
+	return len(s) >= len(sfx) && s[len(s)-len(sfx):] == sfx
+}
+
 type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
@@ -54,6 +102,22 @@ func (r *Registry) Names() []string {
 		out = append(out, n)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// All returns a snapshot of every registered tool as a (name → Tool)
+// map. Snapshot semantics: the returned map is a copy, so callers can
+// iterate without holding the registry lock. Used by system_map and
+// any other introspection path that needs both names and types in one
+// pass — avoids the Names() + Get(name) round-trip that the v1 impl
+// used.
+func (r *Registry) All() map[string]Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]Tool, len(r.tools))
+	for n, t := range r.tools {
+		out[n] = t
+	}
 	return out
 }
 

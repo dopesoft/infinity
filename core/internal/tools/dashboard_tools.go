@@ -449,7 +449,8 @@ func (t *savedAdd) Execute(ctx context.Context, in map[string]any) (string, erro
 
 type taskList struct{ pool *pgxpool.Pool }
 
-func (t *taskList) Name() string { return "task_list" }
+func (t *taskList) Name() string   { return "task_list" }
+func (t *taskList) ReadOnly() bool { return true }
 func (t *taskList) Description() string {
 	return "List todos on the dashboard with their ids. Use this BEFORE task_update / " +
 		"task_done — ids are not shown in the UI. Filter by status (default 'open') " +
@@ -491,7 +492,8 @@ func (t *taskList) Execute(ctx context.Context, in map[string]any) (string, erro
 
 type pursuitList struct{ pool *pgxpool.Pool }
 
-func (t *pursuitList) Name() string { return "pursuit_list" }
+func (t *pursuitList) Name() string   { return "pursuit_list" }
+func (t *pursuitList) ReadOnly() bool { return true }
 func (t *pursuitList) Description() string {
 	return "List Pursuits (habits + goals) on the dashboard with their ids. Use " +
 		"this BEFORE pursuit_checkin — ids are not shown in the UI. Returns id, " +
@@ -534,7 +536,8 @@ func (t *pursuitList) Execute(ctx context.Context, in map[string]any) (string, e
 
 type followupList struct{ pool *pgxpool.Pool }
 
-func (t *followupList) Name() string { return "followup_list" }
+func (t *followupList) Name() string   { return "followup_list" }
+func (t *followupList) ReadOnly() bool { return true }
 func (t *followupList) Description() string {
 	return "List follow-ups on the dashboard with their ids. Use this BEFORE " +
 		"followup_snooze / followup_dismiss — ids are not shown in the UI. " +
@@ -577,7 +580,8 @@ func (t *followupList) Execute(ctx context.Context, in map[string]any) (string, 
 
 type savedList struct{ pool *pgxpool.Pool }
 
-func (t *savedList) Name() string { return "saved_list" }
+func (t *savedList) Name() string   { return "saved_list" }
+func (t *savedList) ReadOnly() bool { return true }
 func (t *savedList) Description() string {
 	return "List items on the Saved shelf with their ids. Use this BEFORE any " +
 		"future saved_update / saved_delete (and to recall what the boss saved). " +

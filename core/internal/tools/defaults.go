@@ -35,6 +35,22 @@ func CorePinnedTools() []string {
 		"delegate",
 		"memory_search",
 		"memory_recall",
+		// system_map is the agent's introspection of "which UI surface is
+		// backed by which table is operated on by which tool". Pinned so
+		// the agent can resolve any "do X on my dashboard / queue / list"
+		// request without prompt-level memorization. Lightweight, read-
+		// only, cheap to keep loaded.
+		"system_map",
+		// domain_hint_add lets the agent extend system_map's topology
+		// without a deploy. Pinned alongside system_map so the loop is
+		// closed in one turn — introspect, learn, persist.
+		"domain_hint_add",
+		// mem_substrate — generic read/write over any mem_* table.
+		// Pinned so the agent can act on any newly-discovered surface
+		// in a single iteration without first calling load_tools.
+		"mem_list",
+		"mem_act",
+		"action_register",
 	}
 }
 

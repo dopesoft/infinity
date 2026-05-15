@@ -13,38 +13,38 @@ import (
 // via tool_search → load_tools, not a phantom.
 const catalogBlockHeader = `<tool_catalog>
 The following tools exist but their JSON schemas are NOT in your current
-toolset to save context. They are real and callable. Discover candidates
-with the native tool_search("query") (NOT claude_code__ToolSearch or any
-other MCP-namespaced variant — those only index a different registry and
-will return empty matches for Infinity native tools like surface_update,
-remember, recall, skill_create, delegate, etc.). Bring matches online
-with load_tools(["name"]). Prefer this two-step over guessing the schema
-or asking the user. After the work is done, unload_tools to keep the
-active surface tight.
+toolset to save context. They are real and callable.
 
-NEVER ask the boss for record ids — they are NOT shown in the UI. Every
-domain where you can mutate has a matching list tool; call the list tool
-yourself FIRST to obtain ids, then act. Pattern by domain:
+Primitives (pinned, always available):
+  - system_map() — runtime topology. Lists every backing table, its
+    list_tools, mutate_tools, registered actions, live open_count, AND
+    the gaps where a tool is missing. Use this FIRST for any task about
+    user-facing data ("dismiss my X", "what's on my dashboard", "act on
+    the queue"). No prompt-level memorisation.
+  - mem_list({table}) / mem_act({table, action, ids}) — GENERIC reader
+    and bounded-action mutator over ANY mem_* table. Pair these with
+    system_map for one-shot dismissals on any surface, even ones that
+    have no bespoke list/mutate tool yet. The action vocabulary is
+    bounded by mem_action_schemas (set_status / set_timestamp /
+    set_null / set_bool) — no raw SQL.
+  - action_register({table, action, op, column, value?}) — extend
+    mem_act's vocabulary at runtime. New table, new action → one
+    register call, no deploy.
+  - domain_hint_add({table, tool_prefix}) — extend system_map's
+    topology when a new mem_X has irregular tool naming.
+  - tool_search("query") — search the dormant catalog for non-surface
+    capabilities (web_search, delegate, claude_code__*). NOT
+    claude_code__ToolSearch — that indexes a different registry.
 
-  Dashboard surface items (questions, followups, alerts, digest, insights):
-    surface_list → surface_update({id, status:"dismissed"})
-  Tasks/todos:
-    task_list → task_update / task_done
-  Pursuits (habits + goals):
-    pursuit_list → pursuit_checkin
-  Follow-ups (gmail/slack/linear):
-    followup_list → followup_snooze / followup_dismiss
-  Saved shelf:
-    saved_list (read-only for now)
-  Cron / routines:
-    cron_list → cron_pause / cron_delete / cron_run_now
-  Workflows:
-    workflow_list / workflow_status → workflow_resume / workflow_cancel
-  Memory:
-    recall → forget
+Bring dormant tools online with load_tools(["name1","name2"]).
+NEVER ask the boss for record ids; ids aren't shown in the UI —
+system_map + mem_list give you everything you need.
 
-Load both tools at once (load_tools(["X_list","X_update"])) — saves an
-iteration vs loading them one at a time.
+Self-extension flow when you hit a gap:
+  1. system_map() — see the missing list_tool or mutate_tool.
+  2. mem_list({table}) — read works on ANY mem_* table out of the box.
+  3. If you need a new action verb, action_register(...) — persisted.
+  4. mem_act({table, action, ids}) — apply.
 
 Format: name - short description.
 `

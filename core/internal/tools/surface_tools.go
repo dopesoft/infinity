@@ -172,7 +172,8 @@ func (t *surfaceUpdateTool) Execute(ctx context.Context, in map[string]any) (str
 
 type surfaceListTool struct{ store *surface.Store }
 
-func (t *surfaceListTool) Name() string { return "surface_list" }
+func (t *surfaceListTool) Name() string   { return "surface_list" }
+func (t *surfaceListTool) ReadOnly() bool { return true }
 func (t *surfaceListTool) Description() string {
 	return "List items currently on the boss's dashboard with their ids. Use " +
 		"this BEFORE surface_update when the boss asks to dismiss, snooze, or " +

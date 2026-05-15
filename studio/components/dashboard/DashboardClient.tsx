@@ -123,6 +123,7 @@ export function DashboardClient() {
       "mem_saved",
       "mem_trust_contracts",
       "mem_heartbeat_findings",
+      "mem_curiosity_questions",
     ],
     () => void load(),
   );
