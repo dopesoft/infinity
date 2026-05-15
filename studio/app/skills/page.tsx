@@ -176,7 +176,7 @@ export default function SkillsPage() {
           </aside>
           <aside
             className={cn(
-              "min-h-0 flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
+              "min-h-0 w-full flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:flex-none lg:shrink-0 lg:border-b-0 lg:border-r",
               showDetail ? "hidden lg:flex" : "flex",
             )}
           >
@@ -231,7 +231,7 @@ export default function SkillsPage() {
 
           <section
             className={cn(
-              "min-h-0 flex-1 flex-col bg-background",
+              "min-h-0 min-w-0 flex-1 flex-col bg-background",
               showDetail ? "flex" : "hidden lg:flex",
             )}
           >

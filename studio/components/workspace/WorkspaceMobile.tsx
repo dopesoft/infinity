@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { motion, AnimatePresence, type PanInfo } from "framer-motion";
+import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { MessageSquare, Files, LayoutPanelLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WorkspaceChatColumn } from "@/components/workspace/WorkspaceChatColumn";
@@ -13,8 +13,6 @@ import { useCanvasStore } from "@/lib/canvas/store";
 type ChatHook = ReturnType<typeof useChat>;
 
 export type WorkspaceMode = "chat" | "files" | "canvas";
-
-const MODES: WorkspaceMode[] = ["chat", "files", "canvas"];
 
 /**
  * WorkspaceMobile — the phone-first manifestation of the unified workspace.
@@ -41,31 +39,14 @@ export function WorkspaceMobile({
   onModeChange: (m: WorkspaceMode) => void;
 }) {
   const store = useCanvasStore();
-  const idx = MODES.indexOf(mode);
 
-  const handleDragEnd = useCallback(
-    (_: unknown, info: PanInfo) => {
-      // Threshold tuned for thumb swipes: ~70px or 350px/s.
-      const dx = info.offset.x;
-      const vx = info.velocity.x;
-      const COMMIT = 70;
-      const VELOCITY = 350;
-      const triggered = Math.abs(dx) > COMMIT || Math.abs(vx) > VELOCITY;
-      if (!triggered) return;
-      // Right-drag (positive dx) → previous mode; left-drag → next mode.
-      const goingPrev = dx > 0;
-      const next = goingPrev ? Math.max(0, idx - 1) : Math.min(MODES.length - 1, idx + 1);
-      if (next !== idx) onModeChange(MODES[next]);
-    },
-    [idx, onModeChange],
-  );
-
-  const handleFileOpen = useCallback(() => {
+  function handleFileOpen() {
     onModeChange("canvas");
-  }, [onModeChange]);
+  }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden">
+
       {/* Sticky pills below header */}
       <div className="sticky top-0 z-20 flex shrink-0 items-center justify-center gap-1 border-b bg-background/95 px-3 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <ModePill
@@ -89,32 +70,27 @@ export function WorkspaceMobile({
         />
       </div>
 
-      {/* Swipeable content area. We render one mode at a time and use
-          AnimatePresence for the cross-fade. The drag handler is on the
-          motion.div itself — small horizontal drag → cycles modes.
-
-          `touch-pan-y` on the motion.div hands vertical pans back to the
-          browser, so the chat's scroller actually receives the gesture
-          instead of framer-motion eating it. Without this, any touch
-          with a slight horizontal component would be claimed by the
-          drag listener and the conversation wouldn't scroll. Combined
-          with `dragDirectionLock`, framer commits to whichever axis the
-          gesture starts on — so a vertical scroll stays a scroll and a
-          horizontal swipe still cycles modes. */}
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      {/* Content area. One mode at a time with an opacity-only cross-fade.
+          The swipe-to-switch gesture was REMOVED — framer-motion's drag
+          consumed pointer events that should have been scrolls (the
+          conversation wouldn't scroll under it) AND its dragElastic
+          translated the panel horizontally on incidental movement,
+          which is what caused the "page shifted right when the
+          thinking indicator appeared" symptom. The pills at the top
+          are the sole way to switch modes; they're already
+          one-tap-from-anywhere and don't fight the touch surface
+          underneath. `overflow-x-hidden` + `min-w-0` on the wrapper
+          is a belt-and-suspenders against any descendant trying to
+          extend past the viewport again. */}
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={mode}
-            className="absolute inset-0 flex min-h-0 flex-col touch-pan-y"
-            initial={{ opacity: 0, x: 24 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -24 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-            drag="x"
-            dragDirectionLock
-            dragConstraints={{ left: 0, right: 0 }}
-            dragElastic={0.18}
-            onDragEnd={handleDragEnd}
+            className="absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-x-hidden"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
           >
             {mode === "chat" && <WorkspaceChatColumn chat={chat} />}
             {mode === "files" && (
@@ -183,7 +159,8 @@ export function useWorkspaceMode(initial: WorkspaceMode = "chat") {
     if (typeof window === "undefined") return;
     function onJump(e: Event) {
       const ce = e as CustomEvent<{ mode?: WorkspaceMode }>;
-      if (ce.detail?.mode && MODES.includes(ce.detail.mode)) setMode(ce.detail.mode);
+      const m = ce.detail?.mode;
+      if (m === "chat" || m === "files" || m === "canvas") setMode(m);
     }
     window.addEventListener("workspace:set-mode", onJump);
     return () => window.removeEventListener("workspace:set-mode", onJump);

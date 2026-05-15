@@ -41,7 +41,15 @@ export function WorkspaceChatColumn({
   }, [chat.messages.length, ref]);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col">
+    // overflow-x-hidden here is the page-level guard: even if a child
+    // somewhere has runaway intrinsic width (a tool result with an
+    // unwrapped long string, a code block, an over-eager textarea),
+    // the chat column clips it instead of pushing the whole page
+    // horizontally and exposing the chat input / conversation as
+    // "shifted right" on mobile. The descendants that need to scroll
+    // their own content (the conversation, code blocks) handle that
+    // inside themselves.
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden">
       <CodingSessionBanner sessionId={chat.sessionId} />
       {/* Outer wrapper must be a flex container so ConversationStream's
           empty state (which uses flex-1 to vertically center its content)

@@ -544,12 +544,18 @@ export function useChat() {
                 createdAt: Date.now(),
               });
             }
-            // Silent-turn rescue: an agent that ran tool calls but
-            // produced no final text leaves an empty bubble (or no
-            // bubble at all). Either way the UX goes quiet for the
-            // boss — they typed something, waited minutes, and got
-            // nothing visible. Surface a clear "no reply" marker so
-            // the chat never just stops mid-air.
+            // Silent-turn rescue: when a turn completes with no
+            // visible assistant text, surface a clear marker so the
+            // chat never just stops mid-air. Phrase the marker
+            // honestly based on what we know:
+            //  - had tool messages in this turn → tools ran, model
+            //    just didn't follow up with prose. Asking "what did
+            //    you find?" continues naturally.
+            //  - output_tokens === 0 → model emitted literally
+            //    nothing. Refusal, transient API issue, or upstream
+            //    interrupt. Rephrasing usually unsticks it.
+            //  - otherwise → generic, with the usage numbers so the
+            //    pattern is debuggable if it recurs.
             if (!interrupted) {
               const last = next[next.length - 1];
               const visibleText =
@@ -558,12 +564,34 @@ export function useChat() {
                   : "";
               const hasAssistantText = !!visibleText;
               if (!hasAssistantText) {
+                // Did this turn produce any tool activity? Walk back
+                // from the end until we hit the user message that
+                // started the turn; any tool entries we cross mean
+                // tools did run.
+                let toolsRanThisTurn = false;
+                for (let i = next.length - 1; i >= 0; i--) {
+                  const m = next[i];
+                  if (m.role === "user") break;
+                  if (m.role === "tool") {
+                    toolsRanThisTurn = true;
+                    break;
+                  }
+                }
+                let errorText: string;
+                if (toolsRanThisTurn) {
+                  errorText =
+                    "Tools ran above but Jarvis didn't follow up with a reply. Ask \"what did you find?\" to continue.";
+                } else if (outputT === 0) {
+                  errorText =
+                    "Jarvis didn't emit anything this turn (0 output tokens) — likely a transient API hiccup or a soft refusal. Try rephrasing.";
+                } else {
+                  errorText = `Turn ended without a visible reply (${outputT} output tokens). Ask a follow-up to continue.`;
+                }
                 const placeholder: ChatMessage = {
                   id: makeId(),
                   role: "assistant",
                   text: "",
-                  error:
-                    "Turn ended without a reply. Tool calls (if any) ran above — ask a follow-up to continue.",
+                  error: errorText,
                   inputTokens: inputT,
                   outputTokens: outputT,
                   latencyMs: latency,

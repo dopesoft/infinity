@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,34 @@ import (
 	"sync"
 	"time"
 )
+
+// unknownOAIEventOnce tracks event types we've already logged so a
+// long-running stream doesn't drown the logs in duplicate warnings.
+// Stdout (info-level) on first sighting, silent thereafter.
+var (
+	unknownOAIEventMu   sync.Mutex
+	unknownOAIEventSeen = map[string]struct{}{}
+	unknownOAIEventLog  = log.New(os.Stdout, "", log.LstdFlags)
+)
+
+// logUnknownOAIEvent prints the SSE event type the first time we
+// encounter it. Useful when OpenAI ships a new reasoning-event variant
+// and the ThinkingBlock goes silent — the next deploy's logs show
+// exactly which event name we missed so the handler can be extended.
+func logUnknownOAIEvent(t string) {
+	if t == "" {
+		return
+	}
+	unknownOAIEventMu.Lock()
+	_, seen := unknownOAIEventSeen[t]
+	if !seen {
+		unknownOAIEventSeen[t] = struct{}{}
+	}
+	unknownOAIEventMu.Unlock()
+	if !seen {
+		unknownOAIEventLog.Printf("openai_oauth: unhandled stream event %q", t)
+	}
+}
 
 // OpenAIOAuth is an LLM provider that authenticates via the standard
 // "Sign in with ChatGPT" PKCE flow (the same one Codex CLI uses) and routes
@@ -562,6 +591,23 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			emit(out, StreamEvent{Kind: StreamError, Err: errMsg})
 			emit(out, StreamEvent{Kind: StreamComplete, StopReason: "error"})
 			return resp, errors.New(errMsg)
+		default:
+			// Reasoning-bearing events have shifted across model generations
+			// (gpt-5-* families especially), and OpenAI keeps shipping new
+			// event names that carry the summary text. Anything ending in
+			// `.delta` whose path contains "reasoning" is a reasoning chunk
+			// — surface it so the ThinkingBlock fills in even on new
+			// variants we haven't explicitly listed above. The narrow
+			// substring guard avoids surfacing unrelated `.delta` events
+			// (function_call_arguments etc. are handled in their own
+			// cases). Unknown non-reasoning events are logged once-per
+			// type to keep the next mismatch trivial to diagnose.
+			t := evt.Type
+			if strings.Contains(t, "reasoning") && strings.HasSuffix(t, ".delta") && evt.Delta != "" {
+				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: evt.Delta})
+				break
+			}
+			logUnknownOAIEvent(t)
 		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {

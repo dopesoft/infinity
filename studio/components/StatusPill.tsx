@@ -52,6 +52,12 @@ export function StatusPill({
   className?: string;
 }) {
   const cfg = stateConfig[state];
+  // Thinking gets a louder pulse: a real ping-ring around a solid dot,
+  // not just an animate-pulse opacity tick. Stays visible for the ENTIRE
+  // turn (thinking → tool calls → streaming) because chat.isStreaming
+  // drives the state, not just the local ThinkingBlock — so the boss can
+  // glance at the header and know Jarvis is still working.
+  const isThinking = state === "thinking";
   return (
     <span
       className={cn(
@@ -61,7 +67,14 @@ export function StatusPill({
         className,
       )}
     >
-      <span className={cn("size-1.5 rounded-full", cfg.dot)} />
+      {isThinking ? (
+        <span className="relative inline-flex size-2 shrink-0" aria-hidden>
+          <span className="absolute inset-0 inline-flex animate-ping rounded-full bg-info opacity-70" />
+          <span className="relative inline-flex size-2 rounded-full bg-info" />
+        </span>
+      ) : (
+        <span className={cn("size-1.5 rounded-full", cfg.dot)} aria-hidden />
+      )}
       <span>{cfg.label}</span>
       {cfg.sub ? (
         <>

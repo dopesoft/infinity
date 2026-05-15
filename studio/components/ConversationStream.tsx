@@ -90,7 +90,10 @@ export function ConversationStream({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 min-w-0 space-y-3 overflow-y-auto px-3 py-3 scroll-touch sm:px-4"
+        // pb-6 gives the last message (often the thinking bubble) clear
+        // breathing room before the composer — otherwise auto-scroll
+        // pins it flush against the prompt input with zero padding.
+        className="flex-1 min-w-0 space-y-3 overflow-y-auto px-3 pt-3 pb-6 scroll-touch sm:px-4"
       >
         {messages.map((m) => (
           <div key={m.id} className="min-w-0 max-w-full" data-message>
