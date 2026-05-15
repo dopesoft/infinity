@@ -128,6 +128,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			       s.last_run_at,
 			       COALESCE((SELECT COUNT(*) FROM mem_observations o WHERE o.session_id = s.id), 0) AS msg_count
 			  FROM mem_sessions s
+			 WHERE s.deleted_at IS NULL
 			 ORDER BY s.started_at DESC
 			 LIMIT $1
 		`, limit)

@@ -264,6 +264,22 @@ export type SessionMessageDTO = {
   curiosity_id?: string;
 };
 
+// deleteSession soft-deletes a session via POST /api/sessions/{id}/delete.
+// The row is tombstoned (deleted_at = NOW()), its observations stay so
+// memories built from them remain grounded, and the list / messages /
+// hydrate endpoints all filter it out. Returns true on success, false on
+// any failure — callers can still optimistically remove the row.
+export async function deleteSession(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/sessions/${encodeURIComponent(id)}/delete`, {
+      method: "POST",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export const fetchSessionMessages = (id: string, signal?: AbortSignal) =>
   getJSON<SessionMessageDTO[]>(`/api/sessions/${encodeURIComponent(id)}/messages`, signal);
 

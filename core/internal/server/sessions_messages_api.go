@@ -63,6 +63,9 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	case "project":
 		s.handleSessionProject(w, r, id)
 		return
+	case "delete":
+		s.handleSessionDelete(w, r, id)
+		return
 	default:
 		http.NotFound(w, r)
 		return
@@ -78,6 +81,9 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		FROM mem_observations
 		WHERE session_id = $1
 		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+		  AND EXISTS (
+		    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
+		  )
 		ORDER BY created_at ASC
 		LIMIT 500
 	`, id)
@@ -148,6 +154,9 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 		FROM mem_observations
 		WHERE session_id = $1
 		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+		  AND EXISTS (
+		    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
+		  )
 		ORDER BY created_at ASC
 		LIMIT 50
 	`, sessionID)
@@ -327,6 +336,51 @@ func (s *Server) handleSessionProject(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "ok"})
+}
+
+// handleSessionDelete serves POST /api/sessions/{id}/delete. Soft delete:
+// stamps deleted_at, hides the session from the list / messages / hydrate
+// paths, but never removes mem_observations (memories built from those
+// observations stay grounded in their source). Any in-flight turn for the
+// session is cancelled and the in-memory loop session is evicted so a
+// subsequent WS frame can't accidentally write back into a tombstoned row.
+//
+// Idempotent: a re-delete of an already-deleted (or non-existent) session
+// returns 200 with `deleted: false` and changes nothing.
+func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.pool == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "db pool not configured"})
+		return
+	}
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE mem_sessions
+		   SET deleted_at = NOW(),
+		       ended_at   = COALESCE(ended_at, NOW())
+		 WHERE id = $1::uuid
+		   AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	deleted := tag.RowsAffected() > 0
+
+	if deleted {
+		// Drop any in-flight turn for this session so it can't keep
+		// streaming into a tombstoned row, and evict the in-memory
+		// session so a follow-up WS frame doesn't resurrect it.
+		s.interruptTurn(id)
+		if s.loop != nil {
+			s.loop.ClearSession(id)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": deleted})
 }
 
 // itoa is a tiny strconv.Itoa shadow that keeps the imports of this file
