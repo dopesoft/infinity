@@ -17,6 +17,7 @@ import { MemoryFooter } from "./MemoryFooter";
 import { ObjectViewer } from "./ObjectViewer";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
 import { fetchDashboard } from "@/lib/dashboard/fetcher";
+import { useRealtime } from "@/lib/realtime/provider";
 import type {
   ActivityEvent,
   Approval,
@@ -72,11 +73,17 @@ export function DashboardClient() {
   // grouped by `surface` key. A new surface the agent invents renders here
   // automatically — no new state field, no new card component.
   const [surfaceItems, setSurfaceItems] = useState<Record<string, SurfaceItem[]>>({});
+  // `loading` covers both the first paint and every realtime-driven
+  // refetch. The header spinner reads from this so the boss can see the
+  // page is in flight instead of staring at empty cards. Initial value
+  // is true so the spinner shows immediately while the first fetch
+  // hasn't resolved yet.
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    void (async () => {
-      const data = await fetchDashboard(ctl.signal);
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    try {
+      const data = await fetchDashboard(signal);
       if (!data) return;
       setPursuits(data.pursuits ?? []);
       setTodos(data.todos ?? []);
@@ -89,9 +96,36 @@ export function DashboardClient() {
       setReflection(data.reflection ?? null);
       setSurfaceItems(data.surfaceItems ?? {});
       if (data.memoryStats) setMemoryStats(data.memoryStats);
-    })();
-    return () => ctl.abort();
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    const ctl = new AbortController();
+    void load(ctl.signal);
+    return () => ctl.abort();
+  }, [load]);
+
+  // Realtime subscriptions — when the agent dismisses a follow-up,
+  // checks in on a pursuit, completes a task, or surfaces a new item,
+  // the dashboard re-fetches in the background. Without this the page
+  // was a snapshot from page load that only updated on hard refresh,
+  // which is why dismissals felt like they "didn't take" — the row was
+  // already flipped in Postgres, the UI just never heard about it.
+  useRealtime(
+    [
+      "mem_surface_items",
+      "mem_tasks",
+      "mem_pursuits",
+      "mem_pursuit_checkins",
+      "mem_followups",
+      "mem_saved",
+      "mem_trust_contracts",
+      "mem_heartbeat_findings",
+    ],
+    () => void load(),
+  );
 
   const [search, setSearch] = useState("");
   const [viewing, setViewing] = useState<DashboardItem | null>(null);
@@ -197,7 +231,12 @@ export function DashboardClient() {
           breaking the fixed-composer / fixed-header invariant the rest
           of the app relies on. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden scroll-touch">
-        <DashboardHeader badgeCount={needYouCount} search={search} onSearchChange={setSearch} />
+        <DashboardHeader
+          badgeCount={needYouCount}
+          search={search}
+          onSearchChange={setSearch}
+          loading={loading}
+        />
 
         <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
           {/* TODAY row — collapses to fewer columns if any sub-section is off. */}

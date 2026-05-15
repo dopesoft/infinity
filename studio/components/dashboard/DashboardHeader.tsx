@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Search, Sparkles, X } from "lucide-react";
+import { Loader2, Search, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { todayHeader } from "@/lib/dashboard/format";
 
@@ -21,10 +21,15 @@ export function DashboardHeader({
   badgeCount,
   search,
   onSearchChange,
+  loading = false,
 }: {
   badgeCount: number;
   search: string;
   onSearchChange: (v: string) => void;
+  // True while the dashboard is fetching/refetching its data. Surfaces a
+  // small spinner next to the "need you" badge so the boss can tell the
+  // page is in flight instead of staring at empty cards wondering.
+  loading?: boolean;
 }) {
   const { title, sub } = todayHeader();
   return (
@@ -53,13 +58,25 @@ export function DashboardHeader({
             <span suppressHydrationWarning>{sub}</span>
           </div>
         </div>
-        {badgeCount > 0 ? (
-          <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/40 bg-rose-400/10 px-2.5 py-1 text-[11px] font-medium text-rose-400">
-            <Sparkles className="size-3" aria-hidden />
-            <span className="font-mono">{badgeCount}</span>
-            <span className="hidden sm:inline">need you</span>
-          </div>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {badgeCount > 0 ? (
+            <div className="flex items-center gap-1.5 rounded-full border border-rose-400/40 bg-rose-400/10 px-2.5 py-1 text-[11px] font-medium text-rose-400">
+              <Sparkles className="size-3" aria-hidden />
+              <span className="font-mono">{badgeCount}</span>
+              <span className="hidden sm:inline">need you</span>
+            </div>
+          ) : null}
+          {loading ? (
+            <span
+              className="inline-flex items-center text-muted-foreground"
+              aria-live="polite"
+              aria-label="Loading dashboard"
+              title="Loading dashboard"
+            >
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div className="relative">
