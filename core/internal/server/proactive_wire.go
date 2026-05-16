@@ -155,14 +155,13 @@ func (s *Server) onHeartbeatFinding(ctx context.Context, f proactive.Finding) {
 
 // shouldSurfaceFinding decides whether a finding earns an interruption.
 // pre_approved is the explicit "you can speak about this without asking"
-// flag set on the finding upstream. kind=surprise / curiosity are the
-// designed delight surfaces; kind=security is a safety surface. Other
-// kinds (outcome, pattern, self_heal) stay quiet by default to avoid
-// nag fatigue — the boss can still see them in the Heartbeat tab.
+// flag set on the finding upstream. We still gate pre-approved findings
+// by kind because some are meant for dashboard / heartbeat visibility,
+// not live chat interruption. kind=surprise / curiosity are the designed
+// delight surfaces; kind=security is a safety surface. Other kinds
+// (outcome, pattern, self_heal) stay quiet by default to avoid nag
+// fatigue — the boss can still see them in the Heartbeat tab.
 func shouldSurfaceFinding(f proactive.Finding) bool {
-	if f.PreApproved {
-		return true
-	}
 	switch f.Kind {
 	case "surprise", "curiosity", "security":
 		return true
