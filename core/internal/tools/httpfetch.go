@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const defaultHTTPFetchAllowedDomains = "*.github.com,raw.githubusercontent.com,*.anthropic.com,*.arxiv.org,*.openai.com,*.wikipedia.org,*.wikimedia.org,*.nytimes.com,*.reuters.com,*.apnews.com,*.youtube.com,*.youtu.be,*.vimeo.com,*.eventbrite.com,*.ticketmaster.com,*.seatgeek.com,*.visitfrisco.com,*.friscotexas.gov,*.dallasnews.com,*.texasmonthly.com"
+
 type HTTPFetch struct {
 	allowed []string
 	client  *http.Client
@@ -21,7 +23,7 @@ type HTTPFetch struct {
 func NewHTTPFetchFromEnv() (*HTTPFetch, error) {
 	raw := strings.TrimSpace(os.Getenv("HTTP_FETCH_ALLOWED_DOMAINS"))
 	if raw == "" {
-		return nil, errors.New("HTTP_FETCH_ALLOWED_DOMAINS not set")
+		raw = defaultHTTPFetchAllowedDomains
 	}
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
