@@ -247,3 +247,48 @@ export type BridgeWorkspaceGitStatus = {
 
 export const fetchBridgeWorkspaceGitStatus = (signal?: AbortSignal) =>
   getJSON<BridgeWorkspaceGitStatus>("/api/bridge/workspace/git-status", signal);
+
+// ---- Library (mem_artifacts grouped) -------------------------------------
+//
+// The Files tab IS the library — `<LibrarySection>` at the top renders this
+// tree above the real filesystem view. Click a project entry → swap
+// store.root + session.project_path. Click a media entry → open via
+// storage_path (R2/Supabase URL).
+
+export type LibraryEntry = {
+  id: string;
+  name: string;
+  description?: string;
+  virtual_path: string;
+  storage_kind: "filesystem" | "object_store" | "postgres" | "inline";
+  storage_path?: string;
+  storage_mime?: string;
+  github_url?: string;
+  bridge?: "mac" | "cloud";
+  tags: string[];
+  created_at: string;
+};
+
+export type LibraryGroup = {
+  kind: string; // project | image | audio | video | document | dataset | memory | other
+  count: number;
+  entries: LibraryEntry[];
+};
+
+export type LibraryTree = {
+  groups: LibraryGroup[];
+};
+
+export const fetchLibraryTree = (signal?: AbortSignal) =>
+  getJSON<LibraryTree>("/api/library/tree", signal);
+
+// Persist a session's project_path so the Files tree auto-scopes on the
+// next render and Jarvis knows which project this session is bound to.
+export const setSessionProjectPath = (
+  sessionId: string,
+  projectPath: string,
+) =>
+  postJSON<{ ok: boolean }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/project`,
+    { project_path: projectPath },
+  );

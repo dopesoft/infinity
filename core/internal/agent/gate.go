@@ -86,18 +86,24 @@ func IsComposioTool(name string) bool {
 }
 
 // IsBridgeTool reports whether a tool is one of the generic bridge
-// primitives (fs_*, bash_run, git_*). These route per-session via the
-// bridge.Router and operate on either the Mac filesystem (when Mac is
-// the active bridge) or the Railway workspace volume (when Cloud is
-// active). They run as Jarvis's direct file/bash/git verbs — no
-// sub-agent — so the Trust queue is the only safety layer; gate them
-// just like the claude_code__* mutators.
+// primitives (fs_*, bash_run, git_*) OR a higher-level bridge-backed
+// orchestration tool like project_create. These all route per-session
+// via the bridge.Router and operate on either the Mac filesystem (when
+// Mac is the active bridge) or the Railway workspace volume (when
+// Cloud is active). They run as Jarvis's direct file/bash/git verbs —
+// no sub-agent — so the Trust queue is the only safety layer; gate
+// them just like the claude_code__* mutators.
+//
+// project_create gets atomically gated at this level so the boss
+// approves once per project bootstrap; the internal bash + GitHub-API
+// calls don't re-prompt.
 func IsBridgeTool(name string) bool {
 	switch name {
 	case "fs_read", "fs_ls", "fs_save", "fs_edit",
 		"bash_run",
 		"git_status", "git_diff", "git_stage", "git_commit",
-		"git_push", "git_pull":
+		"git_push", "git_pull",
+		"project_create":
 		return true
 	}
 	return false

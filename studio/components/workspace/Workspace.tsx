@@ -18,6 +18,7 @@ import {
 } from "@/lib/canvas/useCurrentProject";
 import { useWebSocket } from "@/lib/ws/provider";
 import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
+import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
@@ -45,26 +46,44 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   const current = useCurrentProject();
   const { mode, setMode } = useWorkspaceMode("chat");
 
+  // Server-configured fallback path (INFINITY_DEFAULT_PROJECT_PATH on
+  // core). Sessions without their own project_path land here — typically
+  // the Jarvis repo — so chat-only sessions don't sit in an empty "set
+  // workspace root first" state. Also pre-warms the cloud bridge from
+  // Railway App Sleeping (fire-and-forget).
+  const [defaultProjectPath, setDefaultProjectPath] = useState<string>("");
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      const cfg = await fetchCanvasConfig(ac.signal);
+      if (cfg?.default_project_path) setDefaultProjectPath(cfg.default_project_path);
+    })();
+    void fetchBridgeStatus(ac.signal).catch(() => {});
+    return () => ac.abort();
+  }, []);
+
   // Project = session lifecycle. When the active session changes its
   // project_path, re-scope the canvas store. When the session has no
-  // project, blank the root so the file tree shows the empty state. Wait
-  // for the initial fetch to complete so we don't blow away a hydrating
-  // root on first render.
+  // project AND no configured default, blank the root so the file tree
+  // shows the empty state. Wait for the initial fetch to complete so we
+  // don't blow away a hydrating root on first render.
   const projectPath = current.session?.project_path?.trim() ?? "";
   useEffect(() => {
     if (current.loading) return;
-    if (projectPath) {
-      if (projectPath !== store.root) {
-        store.setRoot(projectPath);
+    const next = projectPath || defaultProjectPath;
+    if (next) {
+      if (next !== store.root) {
+        store.setRoot(next);
         store.closeAllFiles();
         store.clearDirty();
       }
     } else if (store.root) {
+      // No session project AND no configured default — wipe.
       store.setRoot("");
       store.closeAllFiles();
       store.clearDirty();
     }
-  }, [projectPath, current.loading, store]);
+  }, [projectPath, defaultProjectPath, current.loading, store]);
 
   // Mark files dirty as the agent edits them, filtered by sessionId so a
   // stale tab from another session doesn't paint phantom changes.

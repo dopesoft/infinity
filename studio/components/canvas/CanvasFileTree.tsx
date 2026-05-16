@@ -21,6 +21,7 @@ import { fetchCanvasFSList, fetchCanvasDebug, type FSEntry } from "@/lib/canvas/
 import { DeployStatusRow } from "@/components/canvas/DeployStatusRow";
 import { BridgeSourceRow } from "@/components/canvas/BridgeSourceRow";
 import { CloudWorkspaceStalenessRow } from "@/components/canvas/CloudWorkspaceStalenessRow";
+import { LibrarySection } from "@/components/canvas/LibrarySection";
 import { cn } from "@/lib/utils";
 
 /**
@@ -229,6 +230,11 @@ export function CanvasFileTree({
           behind origin/<branch>. Renders only when the active bridge
           for this session is Cloud AND the workspace is behind. */}
       <CloudWorkspaceStalenessRow sessionId={projectCtx?.sessionId || null} />
+      {/* Library — mem_artifacts grouped by kind. Lives INSIDE the
+          Files tab (not a separate /library route) so the boss has one
+          place to browse everything Jarvis has made. Click a project →
+          tree below auto-scopes. Click an image → opens viewer. */}
+      <LibrarySection sessionId={projectCtx?.sessionId || null} />
       {/* py-0 here — the 4px of vertical padding used to push the empty
           state ~4px lower than the chat / canvas equivalents. When files
           ARE populated, the rows have their own row-padding so this top

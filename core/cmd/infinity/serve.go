@@ -187,6 +187,12 @@ func serveCmd() *cobra.Command {
 					activeBridgeRouter = bridge.NewRouter(macBridge, cloudBridge)
 					activeBridgePrefs = tools.NewDBPreferenceFetcher(p)
 					tools.RegisterBridgeTools(registry, activeBridgeRouter, activeBridgePrefs)
+					// Generic artifact CRUD + high-level project_create.
+					// project_create is the boss-asked-for end-to-end
+					// app-bootstrap tool; it routes through the bridge
+					// internally and indexes itself into mem_artifacts.
+					tools.RegisterArtifactTools(registry, p)
+					tools.RegisterProjectTools(registry, p, activeBridgeRouter, activeBridgePrefs)
 					macStatusStr := "unset"
 					if macURL != "" {
 						macStatusStr = "configured"

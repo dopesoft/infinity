@@ -42,7 +42,7 @@ func NewBridgeGate(trust *TrustStore) *BridgeGate {
 		trust:     trust,
 		autoAllow: parseToolSet(os.Getenv("INFINITY_BRIDGE_AUTOAPPROVE")),
 		alwaysGate: parseToolSet(envOr("INFINITY_BRIDGE_BLOCK",
-			"fs_save,fs_edit,bash_run,git_commit,git_push,git_pull,git_stage")),
+			"fs_save,fs_edit,bash_run,git_commit,git_push,git_pull,git_stage,project_create")),
 		ttl: loadApprovalTTL(),
 	}
 }
@@ -202,6 +202,26 @@ func summariseBridgeCall(toolName string, input map[string]any) string {
 		return "git_pull"
 	case "git_stage":
 		return "git_stage"
+	case "project_create":
+		name, _ := input["name"].(string)
+		tmpl, _ := input["template"].(string)
+		if tmpl == "" {
+			tmpl = "empty"
+		}
+		github, _ := input["create_github"].(bool)
+		if name == "" {
+			name = "(unnamed)"
+		}
+		ghBit := ""
+		if github {
+			priv, _ := input["private"].(bool)
+			visibility := "public"
+			if priv {
+				visibility = "private"
+			}
+			ghBit = " + new " + visibility + " GitHub repo"
+		}
+		return "project_create: " + name + " (" + tmpl + ")" + ghBit
 	}
 	return toolName
 }

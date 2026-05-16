@@ -51,7 +51,14 @@ function LivePageInner() {
     const ac = new AbortController();
     fetchCanvasConfig(ac.signal).then((cfg) => {
       if (!cfg) return;
-      if (!store.root && cfg.root) store.setRoot(cfg.root);
+      // Prefer the server-configured default project path (typically the
+      // Jarvis repo) over the broader canvas root. This is the first-paint
+      // value; <Workspace>'s per-session effect re-asserts it once the
+      // session's project_path has been resolved.
+      if (!store.root) {
+        const initial = cfg.default_project_path || cfg.root;
+        if (initial) store.setRoot(initial);
+      }
       if (!store.previewUrl && cfg.preview_url) store.setPreviewUrl(cfg.preview_url);
       store.setBridgeOk(cfg.mac_bridge_ok);
     });

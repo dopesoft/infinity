@@ -308,6 +308,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bridge/session/", s.handleBridgeSession)
 	// Cloud workspace staleness: cloud bridge's local HEAD vs origin/<branch>.
 	mux.HandleFunc("/api/bridge/workspace/git-status", s.handleBridgeWorkspaceGitStatus)
+
+	// Library — mem_artifacts grouped by kind. The Files tab IS the library;
+	// this powers the collapsible section at the top.
+	mux.HandleFunc("/api/library/tree", s.handleLibraryTree)
 }
 
 func (s *Server) Start() error {
