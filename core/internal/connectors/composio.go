@@ -40,6 +40,7 @@ const composioExecuteBase = "https://backend.composio.dev/api/v3"
 type ExecuteRequest struct {
 	Slug               string         `json:"-"` // path param, not body
 	ConnectedAccountID string         `json:"connected_account_id,omitempty"`
+	EntityID           string         `json:"entity_id,omitempty"`
 	UserID             string         `json:"user_id,omitempty"`
 	Arguments          map[string]any `json:"arguments,omitempty"`
 }
