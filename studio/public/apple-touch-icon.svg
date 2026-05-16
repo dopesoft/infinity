@@ -1,13 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
-  <!-- iOS home-screen icon when the PWA is installed via Safari → Add to
-       Home Screen. iOS clips this with its own rounded-square mask, so we
-       fill the canvas flat. Same lucide Infinity glyph as the in-app
-       brand so the home-screen tile matches the favicon and the header. -->
-  <rect width="180" height="180" fill="#000000"/>
+  <!-- iOS home-screen icon (SVG fallback — the PNG variant is the
+       primary, referenced from app/layout.tsx). White background + black
+       glyph to match the boss-supplied brand. -->
+  <rect width="180" height="180" fill="#FFFFFF"/>
   <g
     transform="translate(30 30) scale(5)"
     fill="none"
-    stroke="#FFFFFF"
+    stroke="#000000"
     stroke-width="2"
     stroke-linecap="round"
     stroke-linejoin="round"

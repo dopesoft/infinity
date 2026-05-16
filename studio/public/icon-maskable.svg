@@ -1,14 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!-- Maskable icon. Safe zone is the inner ~80% of the canvas; the
-       infinity glyph sits well within it so any platform-specific mask
-       (circle, squircle, rounded square) crops cleanly. Same lucide
-       Infinity glyph as icon.svg + apple-touch-icon.svg so every
-       install surface shows the same mark. -->
-  <rect width="512" height="512" fill="#000000"/>
+       glyph sits within it so any platform-specific mask (circle, squircle,
+       rounded square) crops cleanly. White background + black glyph. -->
+  <rect width="512" height="512" fill="#FFFFFF"/>
   <g
     transform="translate(112 112) scale(12)"
     fill="none"
-    stroke="#FFFFFF"
+    stroke="#000000"
     stroke-width="2"
     stroke-linecap="round"
     stroke-linejoin="round"
