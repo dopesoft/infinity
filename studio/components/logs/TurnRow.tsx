@@ -1,7 +1,8 @@
 "use client";
 
+import { type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Clock, Wrench } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Clock, type LucideIcon, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TurnStatusPip } from "./TurnStatusPip";
 import type { TurnRowDTO } from "@/lib/api";
@@ -43,10 +44,7 @@ function formatLatency(ms: number): string {
 
 export function TurnRow({ turn }: { turn: TurnRowDTO }) {
   const router = useRouter();
-  const tokens =
-    turn.input_tokens || turn.output_tokens
-      ? `${turn.input_tokens.toLocaleString()} → ${turn.output_tokens.toLocaleString()}`
-      : "";
+  const hasTokens = !!(turn.input_tokens || turn.output_tokens);
   return (
     <button
       type="button"
@@ -86,19 +84,51 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
       )}
 
       {/* bottom meta */}
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
         {turn.tool_call_count > 0 && (
-          <span className="inline-flex items-center gap-1">
-            <Wrench className="size-3" aria-hidden />
+          <MetricChip icon={Wrench} title="Tool calls">
             {turn.tool_call_count}
-          </span>
+          </MetricChip>
         )}
-        {tokens && <span>{tokens} tok</span>}
-        {turn.latency_ms > 0 && <span>{formatLatency(turn.latency_ms)}</span>}
+        {hasTokens && (
+          <MetricChip icon={ArrowDownToLine} title="Input tokens (prompt sent to model)">
+            {turn.input_tokens.toLocaleString()}
+          </MetricChip>
+        )}
+        {hasTokens && (
+          <MetricChip icon={ArrowUpFromLine} title="Output tokens (model reply)">
+            {turn.output_tokens.toLocaleString()}
+          </MetricChip>
+        )}
+        {turn.latency_ms > 0 && (
+          <MetricChip icon={Clock} title="Latency">
+            {formatLatency(turn.latency_ms)}
+          </MetricChip>
+        )}
         {turn.error && (
           <span className="truncate text-danger normal-case tracking-normal">{turn.error}</span>
         )}
       </div>
     </button>
+  );
+}
+
+function MetricChip({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon?: LucideIcon;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      title={title}
+      className="inline-flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-foreground/80"
+    >
+      {Icon && <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+      <span className="truncate">{children}</span>
+    </span>
   );
 }

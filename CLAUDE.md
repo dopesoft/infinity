@@ -24,7 +24,7 @@ Anything less is just a pile of code, and a pile of code is not what we are buil
 
 Corollary, made explicit because it kept getting missed: **when a feature obviously needs *something extra* for the agent to behave AGI-like the first time the boss tries it, build that thing in the same PR — don't propose it after. You decide the form. Don't ask.**
 
-The form is whatever actually closes the loop. Pick the smallest thing that works:
+The form is whatever actually closes the loop best. Optimize for the boss's functionality, not for code size:
 
 | Form | Use when |
 |---|---|
@@ -36,13 +36,13 @@ The form is whatever actually closes the loop. Pick the smallest thing that work
 | **Migration / schema change** | When persistence shape matters — a new column, a new table, an index for a hot query. Always paired with whatever Go / skill / prompt uses it. |
 | **Studio surface** (existing card, sub-tab) | Only when there's something visual the boss needs. Prefer extending an existing card over a new one (see "Consolidate similar surfaces" memory). |
 
-**Concrete test on every build:** *for the agent to behave AGI-like the first time the boss tries this feature, what's the smallest thing I need to add beyond the building block I'm already writing?* Whatever it is — prompt, skill, memory rule, checklist, combination — **ship it in the same PR**. The boss should never have to ask "now make it smart." If you can see it would close the loop, the answer is do it now.
+**Concrete test on every build:** *for the agent to behave AGI-like the first time the boss tries this feature, what gives him the best result — and what combination of forms gets us there?* Whatever it is — prompt, skill, memory rule, checklist, schema, combination of all of them — **ship it in the same PR**. The boss should never have to ask "now make it smart." If you can see what closes the loop with the best functionality, do it now. Don't trim the answer to "smallest"; trim it to "right."
 
 **Reference (right way):** the connector-identity feature shipped (a) a generic tool `connector_identity_set` for the write-back, (b) a generic store (`connectors_identities` blob in `infinity_meta`) for the persistence, (c) a system-prompt nudge in `cache.SystemPromptBlock` so the agent sees what's missing every turn, (d) a heartbeat checklist (`proactive.ConnectorIdentityChecklist`) so the loop fires autonomously without a user prompt, AND (e) a default skill (migration `033`) carrying the actual cognition for *how* to find each toolkit's profile verb. Five pieces, one PR, all generic. The skill exists because the recipe is genuinely multi-step LLM cognition; the other four are infra that doesn't need a skill.
 
 **Reference (wrong way, fixed same session):** the same feature was initially scaffolded with a Go path to hardcode `GMAIL_GET_PROFILE` for Gmail. That would have committed Infinity to a new Go branch for every toolkit (Slack `AUTH_TEST`, GitHub `GET_AUTHENTICATED_USER`, …) — death by per-vendor wiring. Wrong form for this work.
 
-If you find yourself writing the sentence "we could also ship this as a [skill|prompt update|memory rule|checklist]" or "I'd recommend doing X next" in your reply to the boss — **stop, decide if it actually belongs in this PR, do it if yes, then reply with it done**. Surface tradeoffs only when the form choice is genuinely ambiguous; when it's obvious, just pick.
+If you find yourself writing the sentence "we could also ship this as a [skill|prompt update|memory rule|checklist]" or "I'd recommend doing X next" in your reply to the boss — **stop, decide what gives him the best functionality, do that in this PR, then reply with it done**. Surface tradeoffs only when the form choice is genuinely ambiguous; when it's obvious, just pick — and pick for *quality*, not for *minimal diff*.
 
 ## What this is
 

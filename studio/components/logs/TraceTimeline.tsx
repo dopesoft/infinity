@@ -103,32 +103,32 @@ export function TraceTimeline({ events, selectedId, onSelect }: Props) {
         const isSelected = selectedId === e.id;
         const isChild = e.kind === "prediction" || e.kind === "gate";
         return (
-          <button
-            key={e.id}
-            type="button"
-            onClick={() => onSelect(e)}
-            className={cn(
-              "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-              "hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-info",
-              isSelected && "bg-accent/60 ring-1 ring-info/40",
-              isChild && "ml-4",
-            )}
-          >
-            <Icon className={cn("mt-0.5 size-3.5 shrink-0", colorFor(e.kind))} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-medium text-foreground">{labelFor(e)}</div>
-              {e.surprise !== undefined && e.surprise !== null && (
-                <div className="text-[10px] text-muted-foreground">
-                  surprise {e.surprise.toFixed(2)}
-                </div>
+          <div key={e.id} className={isChild ? "pl-4" : undefined}>
+            <button
+              type="button"
+              onClick={() => onSelect(e)}
+              className={cn(
+                "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                "hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-info",
+                isSelected && "bg-accent/60 ring-1 ring-info/40",
               )}
-              {e.tool_call_id && e.kind !== "tool_call" && (
-                <div className="truncate text-[10px] text-muted-foreground">
-                  {e.tool_call_id.slice(0, 12)}…
-                </div>
-              )}
-            </div>
-          </button>
+            >
+              <Icon className={cn("mt-0.5 size-3.5 shrink-0", colorFor(e.kind))} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium text-foreground">{labelFor(e)}</div>
+                {e.surprise !== undefined && e.surprise !== null && (
+                  <div className="text-[10px] text-muted-foreground">
+                    surprise {e.surprise.toFixed(2)}
+                  </div>
+                )}
+                {e.tool_call_id && e.kind !== "tool_call" && (
+                  <div className="truncate text-[10px] text-muted-foreground">
+                    {e.tool_call_id.slice(0, 12)}…
+                  </div>
+                )}
+              </div>
+            </button>
+          </div>
         );
       })}
     </div>

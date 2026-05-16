@@ -1,8 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowLeft,
+  ArrowUpFromLine,
+  Clock,
+  Cpu,
+  type LucideIcon,
+  RefreshCw,
+  Square,
+  Wrench,
+} from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,11 +64,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   const turn = detail?.turn;
   const events = detail?.events ?? [];
 
-  const tokenSummary = useMemo(() => {
-    if (!turn) return "";
-    if (!turn.input_tokens && !turn.output_tokens) return "";
-    return `${turn.input_tokens.toLocaleString()} → ${turn.output_tokens.toLocaleString()}`;
-  }, [turn]);
+  const hasTokens = !!(turn?.input_tokens || turn?.output_tokens);
 
   const latencyLabel = useMemo(() => {
     if (!turn?.latency_ms) return "";
@@ -116,17 +122,42 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                   <span className="text-muted-foreground">(resumed turn — no fresh prompt)</span>
                 )}
               </h1>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-                {turn.model && <span className="break-all">{turn.model}</span>}
-                {turn.session_name && <span className="truncate">· {turn.session_name}</span>}
-                {turn.tool_call_count > 0 && (
-                  <span>
-                    · {turn.tool_call_count} {turn.tool_call_count === 1 ? "tool" : "tools"}
-                  </span>
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                {turn.model && (
+                  <MetricChip icon={Cpu} title="Model">
+                    <span className="break-all">{turn.model}</span>
+                  </MetricChip>
                 )}
-                {tokenSummary && <span>· {tokenSummary} tok</span>}
-                {latencyLabel && <span>· {latencyLabel}</span>}
-                {turn.stop_reason && <span>· {turn.stop_reason}</span>}
+                {turn.session_name && (
+                  <MetricChip title="Session">
+                    <span className="truncate">{turn.session_name}</span>
+                  </MetricChip>
+                )}
+                {turn.tool_call_count > 0 && (
+                  <MetricChip icon={Wrench} title="Tool calls">
+                    {turn.tool_call_count}
+                  </MetricChip>
+                )}
+                {hasTokens && (
+                  <MetricChip icon={ArrowDownToLine} title="Input tokens (prompt sent to model)">
+                    {turn.input_tokens.toLocaleString()}
+                  </MetricChip>
+                )}
+                {hasTokens && (
+                  <MetricChip icon={ArrowUpFromLine} title="Output tokens (model reply)">
+                    {turn.output_tokens.toLocaleString()}
+                  </MetricChip>
+                )}
+                {latencyLabel && (
+                  <MetricChip icon={Clock} title="Latency">
+                    {latencyLabel}
+                  </MetricChip>
+                )}
+                {turn.stop_reason && (
+                  <MetricChip icon={Square} title="Stop reason">
+                    {turn.stop_reason}
+                  </MetricChip>
+                )}
               </div>
               {turn.error && (
                 <div className="rounded-md border border-danger/40 bg-danger/10 px-2 py-1 text-[11px] text-danger break-words">
@@ -147,7 +178,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
 
           {detail && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-              <aside className="min-w-0 lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)] lg:overflow-y-auto">
+              <aside className="min-w-0 lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)] lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:pr-1 lg:[scrollbar-gutter:stable]">
                 <div className="mb-2 flex items-center gap-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                     timeline
@@ -185,5 +216,25 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
         </div>
       </div>
     </TabFrame>
+  );
+}
+
+function MetricChip({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon?: LucideIcon;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      title={title}
+      className="inline-flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-foreground/80"
+    >
+      {Icon && <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+      <span className="truncate">{children}</span>
+    </span>
   );
 }
