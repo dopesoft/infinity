@@ -47,7 +47,13 @@ const DrawerContent = React.forwardRef<
       ref={ref}
       aria-describedby={ariaDescribedBy ?? undefined}
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto max-h-[92dvh] flex-col rounded-t-2xl border-t bg-popover text-popover-foreground pb-safe",
+        // `overflow-hidden` + `min-w-0` are NON-NEGOTIABLE defaults.
+        // Without them, long unbroken content inside the drawer body
+        // (URLs, JSON args, diff lines, email subjects) can push the
+        // drawer wider than the viewport on mobile, and the entire page
+        // gains horizontal scroll past the right edge. This is the
+        // universal mobile-overflow trap — fix it at the primitive.
+        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto min-w-0 max-h-[92dvh] flex-col overflow-hidden rounded-t-2xl border-t bg-popover text-popover-foreground pb-safe",
         className,
       )}
       {...props}

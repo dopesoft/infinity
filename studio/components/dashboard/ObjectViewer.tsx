@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -15,7 +14,6 @@ import {
   Circle,
   Clock4,
   ExternalLink,
-  Eye,
   FileCode,
   Flame,
   Hash,
@@ -34,20 +32,18 @@ import {
   X,
 } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+  ResponsiveModal,
+  ResponsiveModalHeader,
+} from "@/components/ui/responsive-modal";
 import {
-  Drawer,
-  DrawerContent,
-  DrawerTitle,
-  DrawerDescription,
-} from "@/components/ui/drawer";
+  ModalCode,
+  ModalDl,
+  ModalPre,
+  ModalSection,
+  ModalUrl,
+} from "@/components/ui/modal-content";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, relTime } from "@/lib/dashboard/format";
-import { useIsDesktop } from "@/lib/dashboard/use-is-desktop";
 import { seedSession } from "@/lib/dashboard/seed";
 import { decideCodeProposal, decideTrust } from "@/lib/api";
 import type {
@@ -83,41 +79,36 @@ export function ObjectViewer({
   onClose: () => void;
   onResolved?: (item: DashboardItem) => void;
 }) {
-  // Only one primitive mounts at a time. Rendering both means both
-  // portals stack their overlays at <body> level (each with backdrop-blur)
-  // and the modal looks washed out behind the second overlay. matchMedia
-  // gives us a single source of truth for which primitive to mount.
-  const isDesktop = useIsDesktop();
   const open = item !== null;
-  if (isDesktop) {
-    return (
-      <Dialog open={open} onOpenChange={(o) => (!o ? onClose() : null)}>
-        <DialogContent className="flex max-h-[90dvh] w-[min(96vw,640px)] max-w-none flex-col overflow-hidden p-0">
-          <DialogTitle className="sr-only">{item ? getViewerTitle(item) : "Item"}</DialogTitle>
-          <DialogDescription className="sr-only">
-            {item ? getViewerKindLabel(item) : ""}
-          </DialogDescription>
-          <AnimatePresence mode="wait">
-            {item ? <ViewerBody key={getViewerKey(item)} item={item} onResolved={onResolved} /> : null}
-          </AnimatePresence>
-        </DialogContent>
-      </Dialog>
-    );
-  }
+  // All overflow / Dialog-vs-Drawer / a11y handling is owned by
+  // ResponsiveModal. ObjectViewer just composes the header, body, and
+  // footer slots — same shape it would have in either form.
   return (
-    <Drawer open={open} onOpenChange={(o) => (!o ? onClose() : null)}>
-      <DrawerContent>
-        <DrawerTitle className="sr-only">{item ? getViewerTitle(item) : "Item"}</DrawerTitle>
-        <DrawerDescription className="sr-only">
-          {item ? getViewerKindLabel(item) : ""}
-        </DrawerDescription>
-        <AnimatePresence mode="wait">
-          {item ? (
-            <ViewerBody key={getViewerKey(item)} item={item} layout="drawer" onResolved={onResolved} />
-          ) : null}
-        </AnimatePresence>
-      </DrawerContent>
-    </Drawer>
+    <ResponsiveModal
+      open={open}
+      onOpenChange={(o) => (!o ? onClose() : null)}
+      size="lg"
+      title={item ? getViewerTitle(item) : "Item"}
+      description={item ? getViewerKindLabel(item) : undefined}
+      header={item ? <ItemHeader item={item} /> : undefined}
+      footer={item ? <ViewerActions item={item} onResolved={onResolved} /> : undefined}
+    >
+      <AnimatePresence mode="wait">
+        {item ? <ViewerBody key={getViewerKey(item)} item={item} /> : null}
+      </AnimatePresence>
+    </ResponsiveModal>
+  );
+}
+
+function ItemHeader({ item }: { item: DashboardItem }) {
+  const { Icon, label, tone } = headerMeta(item);
+  return (
+    <ResponsiveModalHeader
+      icon={<Icon className="size-4" aria-hidden />}
+      eyebrow={label}
+      title={getViewerTitle(item)}
+      tone={tone}
+    />
   );
 }
 
@@ -162,68 +153,19 @@ function surfaceKindLabel(surface: string): string {
   return `${t} item`;
 }
 
-function ViewerBody({
-  item,
-  onResolved,
-  layout = "dialog",
-}: {
-  item: DashboardItem;
-  onResolved?: (item: DashboardItem) => void;
-  layout?: "dialog" | "drawer";
-}) {
-  // No `onClose` here — Dialog/Drawer wrappers in ObjectViewer drive the
-  // close action via their own onOpenChange. The X icon that used to
-  // sit in the header moved out when the seeded-session CTA rewrite
-  // shifted the close affordance to the modal chrome.
+function ViewerBody({ item }: { item: DashboardItem }) {
+  // ResponsiveModalBody is the scroll container; this wrapper only owns
+  // the per-item enter/exit motion under AnimatePresence.
   return (
     <motion.div
-      initial={{ opacity: 0, y: layout === "drawer" ? 0 : 4 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.18, ease: [0.2, 0.7, 0.2, 1] }}
-      className="flex h-full max-h-full min-h-0 flex-col"
+      className="min-w-0 max-w-full"
     >
-      <ViewerHeader item={item} layout={layout} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 scroll-touch sm:px-5">
-        <ViewerContent item={item} />
-      </div>
-      <ViewerActions item={item} onResolved={onResolved} />
+      <ViewerContent item={item} />
     </motion.div>
-  );
-}
-
-function ViewerHeader({
-  item,
-  layout,
-}: {
-  item: DashboardItem;
-  layout: "dialog" | "drawer";
-}) {
-  const { Icon, label, tone } = headerMeta(item);
-  return (
-    <header
-      className={cn(
-        "flex items-center gap-2 border-b px-4 sm:px-5",
-        layout === "drawer" ? "pb-3 pt-3" : "pb-3 pt-4",
-      )}
-    >
-      <span
-        className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-md border",
-          tone,
-        )}
-      >
-        <Icon className="size-4" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-          {label}
-        </p>
-        <h2 className="truncate text-base font-semibold tracking-tight text-foreground">
-          {getViewerTitle(item)}
-        </h2>
-      </div>
-    </header>
   );
 }
 
@@ -349,7 +291,7 @@ function ViewerActions({
   }
 
   return (
-    <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 py-4 sm:px-5 sm:py-4 pb-safe">
+    <>
       {renderSecondary()}
       <button
         type="button"
@@ -361,7 +303,7 @@ function ViewerActions({
         Discuss with Jarvis
         <ArrowRight className="size-3.5" aria-hidden />
       </button>
-    </footer>
+    </>
   );
 }
 
@@ -417,27 +359,6 @@ function ViewerContent({ item }: { item: DashboardItem }) {
   }
 }
 
-function ContextBlock({
-  children,
-  meta,
-}: {
-  children: React.ReactNode;
-  meta?: React.ReactNode;
-}) {
-  return (
-    <div className="mt-4 rounded-lg border bg-muted/30">
-      <header className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2">
-        <Eye className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-          Context
-        </span>
-        {meta ? <span className="ml-auto text-[11px] text-muted-foreground">{meta}</span> : null}
-      </header>
-      <div className="p-3 text-[13px] leading-relaxed">{children}</div>
-    </div>
-  );
-}
-
 // ── Pursuit ───────────────────────────────────────────────────────────────
 function PursuitBody({ p }: { p: Pursuit }) {
   return (
@@ -458,7 +379,7 @@ function PursuitBody({ p }: { p: Pursuit }) {
         ) : null}
       </div>
       {p.progress ? (
-        <ContextBlock meta={`${p.progress.current}/${p.progress.target} ${p.progress.unit ?? ""}`}>
+        <ModalSection meta={`${p.progress.current}/${p.progress.target} ${p.progress.unit ?? ""}`}>
           <div className="space-y-2">
             <div className="h-2 overflow-hidden rounded-full bg-muted">
               <div
@@ -471,9 +392,9 @@ function PursuitBody({ p }: { p: Pursuit }) {
               {p.progress.unit ?? "units"}.
             </p>
           </div>
-        </ContextBlock>
+        </ModalSection>
       ) : (
-        <ContextBlock meta={p.doneToday ? "today: done" : "today: open"}>
+        <ModalSection meta={p.doneToday ? "today: done" : "today: open"}>
           <p className="text-muted-foreground">
             {p.doneToday
               ? `Checked in today${p.doneAt ? ` at ${clockTime(p.doneAt)}` : ""}.`
@@ -482,7 +403,7 @@ function PursuitBody({ p }: { p: Pursuit }) {
               ? ` Current streak is ${p.streakDays} day${p.streakDays === 1 ? "" : "s"}.`
               : ""}
           </p>
-        </ContextBlock>
+        </ModalSection>
       )}
       {p.createdAt ? (
         <p
@@ -527,14 +448,14 @@ function TodoBody({ t }: { t: Todo }) {
           </span>
         ) : null}
       </div>
-      <ContextBlock>
+      <ModalSection>
         <p className="text-foreground/85">{t.title}</p>
         {t.source === "agent" ? (
           <p className="mt-2 text-[12px] text-muted-foreground">
             Jarvis created this todo based on your recent activity. Discuss to ask why.
           </p>
         ) : null}
-      </ContextBlock>
+      </ModalSection>
     </div>
   );
 }
@@ -560,7 +481,7 @@ function EventBody({ e }: { e: CalendarEvent }) {
         </p>
       ) : null}
       {e.prep.length > 0 ? (
-        <ContextBlock meta={`${openPrep.length}/${e.prep.length} prep open`}>
+        <ModalSection meta={`${openPrep.length}/${e.prep.length} prep open`}>
           <ul className="space-y-2">
             {e.prep.map((p) => (
               <li key={p.id} className="flex items-start gap-2">
@@ -585,7 +506,7 @@ function EventBody({ e }: { e: CalendarEvent }) {
               </li>
             ))}
           </ul>
-        </ContextBlock>
+        </ModalSection>
       ) : (
         <p className="text-[12px] text-muted-foreground">
           No prep items for this event — Jarvis didn&apos;t flag anything you need to do beforehand.
@@ -608,9 +529,9 @@ function ReflectionBody({ r }: { r: Reflection }) {
         </span>
         <span className="font-mono">· {r.evidenceCount} sources</span>
       </div>
-      <ContextBlock>
+      <ModalSection>
         <p className="leading-relaxed text-foreground/90">{r.body}</p>
-      </ContextBlock>
+      </ModalSection>
     </div>
   );
 }
@@ -647,16 +568,14 @@ function ApprovalBody({ a }: { a: Approval }) {
       ) : null}
 
       {a.toolCall ? (
-        <ContextBlock meta={a.toolCall.name}>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-foreground">
-            {JSON.stringify(a.toolCall.args, null, 2)}
-          </pre>
-        </ContextBlock>
+        <ModalSection meta={a.toolCall.name}>
+          <ModalPre mono>{JSON.stringify(a.toolCall.args, null, 2)}</ModalPre>
+        </ModalSection>
       ) : null}
 
       {a.diff ? (
-        <ContextBlock meta={a.filePath ?? "patch"}>
-          <pre className="overflow-x-auto whitespace-pre font-mono text-[11px] leading-relaxed">
+        <ModalSection meta={a.filePath ?? "patch"}>
+          <ModalCode>
             {a.diff.split("\n").map((line, i) => {
               const cls = line.startsWith("+++") || line.startsWith("---")
                 ? "text-muted-foreground"
@@ -673,17 +592,17 @@ function ApprovalBody({ a }: { a: Approval }) {
                 </span>
               );
             })}
-          </pre>
-        </ContextBlock>
+          </ModalCode>
+        </ModalSection>
       ) : null}
 
       {a.question ? (
-        <ContextBlock meta="Jarvis asks">
+        <ModalSection meta="Jarvis asks">
           <p className="text-[13px] leading-relaxed text-foreground/90">{a.question}</p>
           {a.context ? (
             <p className="mt-2 text-[11px] italic text-muted-foreground">{a.context}</p>
           ) : null}
-        </ContextBlock>
+        </ModalSection>
       ) : null}
     </div>
   );
@@ -716,17 +635,21 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           <p className="text-[13px] text-foreground/85">Subject: {f.subject}</p>
         ) : null}
       </div>
-      <ContextBlock meta={f.threadUrl ? <a href={f.threadUrl} className="hover:underline" target="_blank" rel="noreferrer">open in {f.source} <ExternalLink className="inline size-3" /></a> : null}>
-        <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground/90">
-          {f.body ?? f.preview}
-        </pre>
-      </ContextBlock>
+      <ModalSection
+        meta={
+          f.threadUrl ? (
+            <ModalUrl href={f.threadUrl} icon={<ExternalLink className="size-3" aria-hidden />}>
+              open in {f.source}
+            </ModalUrl>
+          ) : null
+        }
+      >
+        <ModalPre>{f.body ?? f.preview}</ModalPre>
+      </ModalSection>
       {f.draft ? (
-        <ContextBlock meta="Jarvis drafted">
-          <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground/90">
-            {f.draft}
-          </pre>
-        </ContextBlock>
+        <ModalSection meta="Jarvis drafted">
+          <ModalPre>{f.draft}</ModalPre>
+        </ModalSection>
       ) : null}
     </div>
   );
@@ -769,36 +692,24 @@ function SurfaceBody({ item }: { item: SurfaceItem }) {
         <p className="text-[12px] italic text-muted-foreground">{item.importanceReason}</p>
       ) : null}
       {item.body ? (
-        <ContextBlock>
-          <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground/90">
-            {item.body}
-          </pre>
-        </ContextBlock>
+        <ModalSection>
+          <ModalPre>{item.body}</ModalPre>
+        </ModalSection>
       ) : null}
       {metaEntries.length > 0 ? (
-        <ContextBlock meta="metadata">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
-            {metaEntries.map(([k, v]) => (
-              <React.Fragment key={k}>
-                <dt className="font-mono text-muted-foreground">{k}</dt>
-                <dd className="break-words text-foreground/85">
-                  {typeof v === "string" ? v : JSON.stringify(v)}
-                </dd>
-              </React.Fragment>
-            ))}
-          </dl>
-        </ContextBlock>
+        <ModalSection meta="metadata">
+          <ModalDl
+            entries={metaEntries.map(([k, v]) => ({
+              k,
+              v: typeof v === "string" ? v : JSON.stringify(v),
+            }))}
+          />
+        </ModalSection>
       ) : null}
       {item.url ? (
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-[12px] text-info hover:underline"
-        >
-          <ExternalLink className="size-3.5" aria-hidden />
+        <ModalUrl href={item.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
           {item.url}
-        </a>
+        </ModalUrl>
       ) : null}
     </div>
   );
@@ -819,22 +730,18 @@ function SavedBody({ s }: { s: Saved }) {
           · saved {relTime(s.savedAt)}
         </span>
       </div>
-      {s.source ? <p className="text-[12px] text-muted-foreground">{s.source}</p> : null}
+      {s.source ? (
+        <p className="break-words text-[12px] text-muted-foreground">{s.source}</p>
+      ) : null}
       {s.body ? (
-        <ContextBlock>
-          <p className="whitespace-pre-wrap break-words text-foreground/90">{s.body}</p>
-        </ContextBlock>
+        <ModalSection>
+          <ModalPre>{s.body}</ModalPre>
+        </ModalSection>
       ) : null}
       {s.url ? (
-        <a
-          href={s.url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-[12px] text-info hover:underline"
-        >
-          <ExternalLink className="size-3.5" aria-hidden />
+        <ModalUrl href={s.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
           {s.url}
-        </a>
+        </ModalUrl>
       ) : null}
     </div>
   );
@@ -858,7 +765,7 @@ function WorkBody({ w }: { w: WorkItem }) {
       {w.subtitle ? (
         <p className="text-[13px] leading-relaxed text-foreground/85">{w.subtitle}</p>
       ) : null}
-      <ContextBlock>
+      <ModalSection>
         <dl className="grid grid-cols-2 gap-y-1 text-[12px]">
           {w.scheduledFor ? (
             <Row label="scheduled" value={clockTime(w.scheduledFor)} />
@@ -866,12 +773,12 @@ function WorkBody({ w }: { w: WorkItem }) {
           {w.startedAt ? <Row label="started" value={clockTime(w.startedAt)} /> : null}
           {w.finishedAt ? <Row label="finished" value={clockTime(w.finishedAt)} /> : null}
         </dl>
-      </ContextBlock>
+      </ModalSection>
 
       {/* Workflow runs carry their step state-machine inline — the Kanban
           card IS the workflow view. Tap any column, see the steps. */}
       {w.kind === "workflow" && w.workflowSteps && w.workflowSteps.length > 0 ? (
-        <ContextBlock
+        <ModalSection
           meta={`${w.workflowSteps.length} step${w.workflowSteps.length === 1 ? "" : "s"}`}
         >
           <ol className="space-y-2">
@@ -912,17 +819,17 @@ function WorkBody({ w }: { w: WorkItem }) {
               </li>
             ))}
           </ol>
-        </ContextBlock>
+        </ModalSection>
       ) : null}
 
       {w.detailHref ? (
-        <Link
+        <ModalUrl
           href={w.detailHref}
-          className="inline-flex items-center gap-1 text-[12px] text-info hover:underline"
+          external={false}
+          icon={<ExternalLink className="size-3.5" aria-hidden />}
         >
-          <ExternalLink className="size-3.5" aria-hidden />
           open in {w.detailHref}
-        </Link>
+        </ModalUrl>
       ) : null}
     </div>
   );

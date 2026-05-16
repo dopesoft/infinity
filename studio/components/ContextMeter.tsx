@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
-import { useMediaQuery } from "@/lib/use-media-query";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { useGlobalModel } from "@/lib/use-model";
 import { resolveModelEntry } from "@/lib/models-catalog";
 import {
@@ -22,7 +20,6 @@ import { cn } from "@/lib/utils";
 export function ContextMeter({ sessionId }: { sessionId?: string }) {
   const [data, setData] = useState<ContextUsageDTO | null>(null);
   const [open, setOpen] = useState(false);
-  const isDesktop = useMediaQuery("(min-width: 1024px)");
   // Subscribe to the same model broadcast Settings + the chip use — when
   // the active model or provider changes, we re-fetch immediately so the
   // meter never lags the actual runtime.
@@ -74,29 +71,9 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
         <Ring pct={pct} />
       </button>
 
-      {isDesktop ? (
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogContent className="max-w-md gap-0 p-0">
-            <DialogHeader>
-              <DialogTitle>Context usage</DialogTitle>
-            </DialogHeader>
-            <div className="px-4 pb-4 pt-1">
-              <UsageBody data={data} />
-            </div>
-          </DialogContent>
-        </Dialog>
-      ) : (
-        <Drawer open={open} onOpenChange={setOpen}>
-          <DrawerContent>
-            <DrawerHeader className="text-left">
-              <DrawerTitle>Context usage</DrawerTitle>
-            </DrawerHeader>
-            <div className="px-4 pb-6 pt-1">
-              <UsageBody data={data} />
-            </div>
-          </DrawerContent>
-        </Drawer>
-      )}
+      <ResponsiveModal open={open} onOpenChange={setOpen} size="sm" title="Context usage">
+        <UsageBody data={data} />
+      </ResponsiveModal>
     </>
   );
 }

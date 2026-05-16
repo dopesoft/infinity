@@ -53,9 +53,12 @@ const DialogContent = React.forwardRef<
         //   • centered, fixed width
         //   • backdrop dims everything behind it (DialogOverlay)
         //   • motion = plain opacity fade only. No slide, no zoom, no scale.
+        //   • `overflow-hidden` + `min-w-0` are NON-NEGOTIABLE defaults so
+        //     no descendant (wide pre, long URL, JSON dump) can push the
+        //     dialog past `max-w-lg` and the viewport.
         // The translate-1/2's are *layout*, not animation — they center
         // the content. Pure opacity transition handles the entrance.
-        "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-popover p-0 text-popover-foreground shadow-lg",
+        "fixed left-1/2 top-1/2 z-50 w-full min-w-0 max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-popover p-0 text-popover-foreground shadow-lg",
         "transition-opacity duration-100",
         "data-[state=closed]:opacity-0 data-[state=open]:opacity-100",
         className,
