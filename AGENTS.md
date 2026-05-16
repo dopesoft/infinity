@@ -44,6 +44,57 @@ If you find yourself writing "we could also ship this as a [skill|prompt update|
 
 ---
 
+## Rule #2 — reuse-first componentization (the UI version of Rule #1)
+
+**Same idea as Rule #1, applied to Studio.** Studio is ONE product, not a pile of one-off React files. Before you build any UI surface — modal, drawer, card, list row, form, button cluster, header, footer — check `studio/components/ui/`, `studio/components/dashboard/`, and `studio/components/` for an existing primitive. The default is reuse; freehand is the exception that needs justification.
+
+- **Use the primitive as-is** if it fits.
+- **Extend the primitive** (new prop / variant / slot) and migrate every existing consumer in the SAME PR if it almost fits.
+- **Build a new primitive** under `studio/components/ui/` or `studio/components/<domain>/` (with the same overflow / safe-area / typography discipline as the neighbours) and route every consumer through it from day one if nothing fits.
+
+**Never** copy-paste an existing component into a new file "for now." There is no "later." Forking a primitive in a consumer file is the bug pattern that re-introduced the same mobile overflow three sessions in a row.
+
+### Modal-specific contract — this is the one that keeps breaking
+
+Every preview / info / action surface routes through **`<ResponsiveModal>`** from [`studio/components/ui/responsive-modal.tsx`](studio/components/ui/responsive-modal.tsx). NOT raw `<Dialog>` or `<Drawer>`. The primitive owns Dialog-vs-Drawer, a11y, the full overflow chain, the pinned footer with `pb-safe`, and the `sm` / `md` / `lg` size scale.
+
+Inside a modal body, NEVER reach for bare `<pre>`, `<a href={url}>`, `<dl>`, or hand-rolled context cards. Use the primitives in [`studio/components/ui/modal-content.tsx`](studio/components/ui/modal-content.tsx):
+
+- **`<ModalSection meta="…">`** — labeled context card. Replaces every "ContextBlock"-style hand-roll.
+- **`<ModalPre>`** — wrapping prose / JSON. Breaks long tokens.
+- **`<ModalCode>`** — whitespace-preserving diff / code, scrolls internally.
+- **`<ModalUrl href={…}>`** — bare URL link with `break-all` and pinned icon. Long URLs wrap instead of escaping the viewport.
+- **`<ModalDl entries={…}>`** — key/value metadata grid with the right `minmax(0, …)` clamps.
+- **`<ModalChips>`** — eyebrow chip row that wraps on mobile.
+
+Raw `<Dialog>` and `<Drawer>` from `dialog.tsx` / `drawer.tsx` are only allowed for **persistent navigation drawers** (`MobileNav`, `SessionsDrawer`, canvas git panel). Everything modal-shaped goes through `ResponsiveModal`.
+
+### Other primitive families — same rule applies
+
+- **Dashboard cards / list rows:** route through `Section` + `TileCard` from [`studio/components/dashboard/Section.tsx`](studio/components/dashboard/Section.tsx). They already carry `min-w-0 max-w-full overflow-hidden`.
+- **Buttons:** use the `<Button>` primitive. Never raw `<button className="h-10 …">`.
+- **Form fields:** use the shadcn `<Input>` / `<Textarea>` primitives — they already enforce 16px iOS font, `inputMode`, and the focus ring.
+- **Grids:** every responsive grid declares `grid-cols-1` as the default. `lg:grid-cols-N` alone causes mobile overflow because the implicit track sizes to `max-content`.
+
+### Anti-patterns that are bugs, not preferences
+
+- Importing `<Dialog>` or `<Drawer>` for a new modal-style surface.
+- `<pre>` / `<dl>` / `<a href={url}>` inside a modal body.
+- `useIsDesktop()` + `Dialog`/`Drawer` switch in a consumer (that's `ResponsiveModal`'s job).
+- A bespoke wrapper component that lives next to its only caller.
+- Two utilities with the same name in different folders (we had two `useIsDesktop` files until 2026-05-16; deleted on consolidation).
+- "I'll make it work for this one screen first and refactor later." There is no later.
+
+**Pre-commit check before any Studio change:**
+1. Did I add a new file that reimplements something an existing primitive already does? → delete the new file, use the primitive.
+2. Did I import `<Dialog>` or `<Drawer>` for a modal-style surface? → swap for `<ResponsiveModal>`.
+3. Did I write a bare `<pre>`, `<a href={url}>`, or `<dl>` inside a modal body? → swap for `ModalPre` / `ModalUrl` / `ModalDl`.
+4. Did I write a `useIsDesktop()` + breakpoint branch in a consumer to render a different shell? → push that into the primitive.
+
+When primitives own the discipline, each consumer becomes trivially correct. When discipline lives in the consumer, the next consumer copies the buggy version and the bug ships.
+
+---
+
 ## Operating rules
 
 These apply to every task in this repo unless explicitly overridden. Bias: caution over speed on non-trivial work.

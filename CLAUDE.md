@@ -141,6 +141,43 @@ Non-negotiable rules:
 - **When debugging `relation does not exist` (SQLSTATE 42P01) errors, FIRST run the migrator.** Don't write fix code, don't propose schema changes, don't speculate — run `infinity migrate` and check the output. The fix is usually that someone forgot to apply.
 - **If asked "are migrations applied?" the only acceptable answer is the output of `infinity migrate` run just now.** Anything else is a guess and guessing on this question has already caused production data loss equivalents (silent feature breakage for weeks). If you cannot run the migrator in the current session, say so explicitly — do not assert.
 
+### Reuse-first componentization — extend the primitive, don't re-roll it
+
+**This is the same idea as Rule #1 applied to UI.** Studio is a single product, not a pile of one-off React files. Every modal, drawer, card, list row, form, button cluster, etc. must be a **named, reused primitive** with its own discipline baked in — not hand-rolled in each consumer. The recurring failure is the opposite: a new screen reaches for raw `<Dialog>` / `<Drawer>` / `<pre>` / `<a href>` / bare grid, copies whatever the last screen did, and silently drops a constraint (`min-w-0`, `break-all`, `pb-safe`, `dvh`, `truncate` chain). The boss then catches the same bug three times in a row in different components. This rule exists to make that physically harder.
+
+**The contract.** Before you build a UI surface, search the primitives directory:
+
+```bash
+ls studio/components/ui/         # base primitives (button, dialog, drawer, tabs, responsive-modal, modal-content, …)
+ls studio/components/dashboard/  # dashboard primitives (Section, TileCard, …)
+ls studio/components/            # higher-level shared widgets (TabFrame, MobileNav, ChatBubble, …)
+```
+
+If a primitive fits, **use it as-is**. If it almost fits, **extend the primitive** (add a variant, a prop, a sub-component) so every existing consumer benefits — don't fork a copy. If nothing fits and you genuinely need a new shape, **create a primitive in `studio/components/ui/` or `studio/components/<domain>/`** and route every consumer through it from day one. A new bespoke wrapper that lives next to its only caller is wrong — that's how the per-screen world gets recreated.
+
+**Modal-specific contract (this kept burning us).** For ANY preview / info / action surface that is "modal-like":
+
+- Use **`<ResponsiveModal>`** from [`studio/components/ui/responsive-modal.tsx`](studio/components/ui/responsive-modal.tsx). Do NOT import `<Dialog>` or `<Drawer>` directly. `ResponsiveModal` owns the Dialog-vs-Drawer split, the a11y title/description, the overflow chain (`overflow-hidden min-w-0 max-w-full` at every level), the pinned footer, `pb-safe`, the size scale (`sm` / `md` / `lg`).
+- Use **`<ResponsiveModalHeader>`** when you need an icon + eyebrow + title row. Don't hand-roll header chrome — the default header in `ResponsiveModal` and the optional `ResponsiveModalHeader` cover every case we've needed.
+- For body content use the primitives in [`studio/components/ui/modal-content.tsx`](studio/components/ui/modal-content.tsx): **`<ModalSection>`** (labeled context card), **`<ModalPre>`** (wrapping prose/JSON), **`<ModalCode>`** (whitespace-preserving diff/code with internal scroll), **`<ModalUrl>`** (bare URL with `break-all` and pinned icon), **`<ModalDl>`** (key/value metadata grid), **`<ModalChips>`** (eyebrow chip row). NEVER reach for a bare `<pre>`, `<a href={someUrl}>`, or `<dl>` inside a modal body — that's the smell that re-introduced mobile overflow three times.
+- Only `<Dialog>` and `<Drawer>` primitives directly are still allowed for **non-modal** drawers: the global nav drawer (`MobileNav`), the sessions drawer (`SessionsDrawer`), the canvas git panel. These are persistent navigation, not previews. Everything else routes through `ResponsiveModal`.
+
+**The same rule applies to other categories.** When you add a dashboard card or list row, route it through `Section` + `TileCard` from [`studio/components/dashboard/Section.tsx`](studio/components/dashboard/Section.tsx) which already carry `min-w-0 max-w-full overflow-hidden`. When you add a button cluster, use the `<Button>` primitive — never raw `<button className="h-10 …">`. When you add a form field, use the shadcn `<Input>` / `<Textarea>` primitives — they already enforce 16px iOS font, `inputMode`, the focus ring.
+
+**The test before you build a UI surface:**
+1. Does an existing primitive fit? → use it.
+2. Does an existing primitive almost fit? → extend it (new prop/variant/slot) and migrate every existing consumer in the same PR.
+3. Genuinely new shape? → build it in `studio/components/ui/` or `studio/components/<domain>/` with the same overflow / safe-area / typography discipline as the surrounding primitives, then route every consumer through it from day one.
+
+**Anti-patterns that are bugs, not preferences:**
+- Importing `<Dialog>` or `<Drawer>` from `@/components/ui/dialog` or `@/components/ui/drawer` in a new modal-style surface. Use `<ResponsiveModal>` instead.
+- A `<pre>`, `<dl>`, or bare `<a href={url}>` inside any modal body. Use `ModalPre` / `ModalDl` / `ModalUrl`.
+- A `useIsDesktop()` + `Dialog`/`Drawer` switch in a consumer. That logic belongs in the primitive.
+- A "I'll just make it work for this one screen first and refactor later" copy of an existing primitive. There is no "later" — refactor in this PR or use the primitive as-is.
+- Two hooks/utilities with the same name in different folders (we had two `useIsDesktop` files until 2026-05-16). Consolidate to one.
+
+**Why this rule exists.** When primitives own the discipline (overflow, safe area, typography, a11y, motion), each consumer becomes trivially correct. When discipline lives in the consumer, the next consumer copies a buggy version and the bug ships. Reuse-first is how we keep mobile responsive, keep a11y intact, and keep the codebase from drifting into 30 different snowflake versions of the same surface.
+
 ### Mobile-first responsiveness — iOS Safari + Chrome are the primary targets
 
 The user lives on their phone. Every UI change must be designed for mobile first and verified at 375px. These rules are non-negotiable:

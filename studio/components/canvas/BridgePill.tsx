@@ -2,22 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, RefreshCw, X } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@/components/ui/drawer";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
-import { useIsDesktop } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 import {
   fetchBridgeSession,
@@ -58,7 +44,6 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
   const [toast, setToast] = useState<string | null>(null);
   const previousKindRef = useRef<"mac" | "cloud" | undefined>(undefined);
   const sawFirstLoadRef = useRef(false);
-  const isDesktop = useIsDesktop();
 
   // Global status — fetched once on mount, refreshable.
   useEffect(() => {
@@ -200,31 +185,15 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
 
   return (
     <>
-      {isDesktop ? (
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>{triggerNode}</DialogTrigger>
-          <DialogContent className="max-w-md gap-0 p-0">
-            <DialogHeader className="px-4 pb-2 pt-4">
-              <DialogTitle className="text-sm font-semibold">
-                Bridge for this session
-              </DialogTitle>
-            </DialogHeader>
-            <div className="px-4 pb-4">{body}</div>
-          </DialogContent>
-        </Dialog>
-      ) : (
-        <Drawer open={open} onOpenChange={setOpen}>
-          <DrawerTrigger asChild>{triggerNode}</DrawerTrigger>
-          <DrawerContent>
-            <DrawerHeader className="px-4 pb-2 pt-2">
-              <DrawerTitle className="text-sm font-semibold">
-                Bridge for this session
-              </DrawerTitle>
-            </DrawerHeader>
-            <div className="px-4 pb-6">{body}</div>
-          </DrawerContent>
-        </Drawer>
-      )}
+      <span onClick={() => setOpen(true)}>{triggerNode}</span>
+      <ResponsiveModal
+        open={open}
+        onOpenChange={setOpen}
+        size="sm"
+        title="Bridge for this session"
+      >
+        {body}
+      </ResponsiveModal>
       {toast && <BridgeSwapToast text={toast} onDismiss={() => setToast(null)} />}
     </>
   );
