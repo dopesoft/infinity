@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,18 +12,42 @@ import (
 	"github.com/dopesoft/infinity/core/internal/proactive"
 )
 
-// broadcastFindings tracks curiosity IDs we've already pushed to chat
-// this process. The heartbeat keeps re-listing every OPEN curiosity
-// question on every tick, so without this guard the same finding would
-// surface as a duplicate card every interval. The first approve/dismiss
-// flips mem_curiosity_questions.status away from 'open' and the question
-// stops appearing in future ticks naturally; this map keeps the
-// intervening ticks from spamming a second card.
+// broadcastFindings tracks fingerprints of findings we've already pushed
+// to chat this process. The heartbeat re-evaluates its checklist every
+// tick (default every 2 minutes) and re-emits identical findings for any
+// condition that hasn't been resolved yet — open curiosity questions,
+// active connected_accounts still missing identity, an open pattern, an
+// overdue outcome. Without dedup the boss gets the same chat bubble every
+// two minutes until the underlying state changes.
+//
+// Key shape:
+//   curiosity findings → "cur:<id>"        (existing semantics)
+//   everything else    → "fp:<sha256 of Kind|Source|Title>"
+//
+// Once a fingerprint is seen, identical findings stay silent in chat
+// until the process restarts or the underlying condition resolves. The
+// finding still lands in mem_heartbeat_findings (the persistence path
+// in heartbeat.go is unconditional) so the Heartbeat tab continues to
+// show the full history.
 //
 // In-memory by design: a process restart re-broadcasts at most once per
-// open question, which is acceptable. If we ever need stricter semantics
-// the right home is a `last_surfaced_at` column on mem_curiosity_questions.
-var broadcastFindings sync.Map // map[curiosityID]struct{}
+// open finding, which is acceptable. If we ever need stricter semantics
+// the right home is a `last_surfaced_at` column on mem_heartbeat_findings
+// keyed by the same fingerprint.
+var broadcastFindings sync.Map // map[string]struct{}
+
+// findingFingerprint returns the dedup key for f. Curiosity findings
+// keep their existing per-question key; everything else hashes the
+// content fields that meaningfully identify the finding so a tick that
+// produces the byte-identical "N accounts need identity" surprise twice
+// only speaks once.
+func findingFingerprint(f proactive.Finding) string {
+	if f.CuriosityID != "" {
+		return "cur:" + f.CuriosityID
+	}
+	h := sha256.Sum256([]byte(f.Kind + "|" + f.Source + "|" + f.Title))
+	return "fp:" + hex.EncodeToString(h[:12])
+}
 
 // registerSession marks a WS connection as active under sessionID and binds
 // it to a send function. The heartbeat broadcaster calls send when a finding
@@ -131,15 +157,14 @@ func (s *Server) onHeartbeatFinding(ctx context.Context, f proactive.Finding) {
 	if !shouldSurfaceFinding(f) {
 		return
 	}
-	// Drop duplicates: a curiosity question that's already shown up in
-	// chat this process stays on screen until the boss decides — surfacing
-	// a second card on the next tick is pure noise. Findings without a
-	// curiosity_id (security / pre-approved surfaces) fall through to the
-	// broadcast unchanged.
-	if f.CuriosityID != "" {
-		if _, already := broadcastFindings.LoadOrStore(f.CuriosityID, struct{}{}); already {
-			return
-		}
+	// Drop duplicates: every finding gets a stable fingerprint so a
+	// heartbeat checklist that keeps surfacing the same condition (open
+	// curiosity question, unresolved connector identity, overdue outcome)
+	// stays silent in chat after the first surfacing. The DB-side history
+	// continues to populate so the Heartbeat tab shows every tick.
+	fp := findingFingerprint(f)
+	if _, already := broadcastFindings.LoadOrStore(fp, struct{}{}); already {
+		return
 	}
 	text := formatFindingForChat(f)
 	if text == "" {

@@ -140,7 +140,7 @@ export default function GymPage() {
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <PageTabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-              <PageTabsList columns={5}>
+              <PageTabsList scrollable>
                 {TABS.map((t) => (
                   <PageTabsTrigger key={t} value={t}>
                     {tabLabel(t)}

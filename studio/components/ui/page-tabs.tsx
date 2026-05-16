@@ -26,6 +26,16 @@
  *   FilterPill      h-8 px-3.5 rounded-full font-mono text-[11px] uppercase
  *   FilterPillRow   gap-2 py-1, horizontal-scroll on mobile, flex-wrap on sm+
  *
+ * Layout decision tree (pick exactly one):
+ *   • `columns={2|3}` with short text-only labels (e.g. "Cron" / "Sentinels")
+ *     → full-width equal-cell grid on mobile, inline on sm+. Looks crisp.
+ *   • `scrollable` for ANY of: 4+ tabs, labels with count badges, labels with
+ *     variable-length text. Horizontal-scroll on mobile (no squishing, no
+ *     clipping); inline-flex on sm+. THIS IS THE DEFAULT FOR ANYTHING WITH
+ *     COUNTS — `columns={N}` + count badges crushes the labels on a 375px
+ *     viewport. If you're unsure, use `scrollable`.
+ *   • Neither prop → inline-flex everywhere (caller controls width).
+ *
  * Don't deviate from these; if a page needs a different look, change them
  * here so every screen moves together.
  */
@@ -48,14 +58,33 @@ const COLUMN_LAYOUTS: Record<number, string> = {
   6: "grid w-full grid-cols-6 sm:inline-flex sm:w-auto",
 };
 
+// Horizontal-scroll mode for mobile: inline-flex with overflow-x-auto, every
+// trigger pinned `shrink-0` so labels (incl. count badges) never get crushed.
+// Snap proximity is gentle enough to glance but still helps land on a tab.
+// no-scrollbar + scroll-touch keep it native-feeling on iOS. On sm+ we go
+// back to inline-flex with overflow visible — desktop has room.
+const SCROLLABLE_LAYOUT =
+  "inline-flex w-full max-w-full justify-start overflow-x-auto scroll-touch snap-x snap-proximity no-scrollbar [&>*]:shrink-0 [&>*]:snap-start sm:w-auto sm:max-w-none sm:overflow-visible";
+
 export const PageTabsList = React.forwardRef<
   React.ElementRef<typeof TabsList>,
-  React.ComponentPropsWithoutRef<typeof TabsList> & { columns?: number }
->(({ className, columns, children, ...props }, ref) => {
-  // If `columns` is provided, force a full-width grid on mobile with that many
-  // equal columns; collapse to inline-flex on sm+. If not provided we default
+  React.ComponentPropsWithoutRef<typeof TabsList> & {
+    columns?: number;
+    scrollable?: boolean;
+  }
+>(({ className, columns, scrollable, children, ...props }, ref) => {
+  // Precedence: `scrollable` wins over `columns`. If neither is set we default
   // to inline-flex everywhere (caller can still pass classes via className).
-  const layout = columns ? COLUMN_LAYOUTS[columns] ?? "inline-flex" : "inline-flex";
+  // `columns` is only safe for 2–3 short text-only labels — anything with a
+  // count badge or 4+ tabs squishes on mobile (375px / 6 ≈ 62px per cell).
+  let layout: string;
+  if (scrollable) {
+    layout = SCROLLABLE_LAYOUT;
+  } else if (columns) {
+    layout = COLUMN_LAYOUTS[columns] ?? "inline-flex";
+  } else {
+    layout = "inline-flex";
+  }
   return (
     <TabsList ref={ref} className={cn("h-9", layout, className)} {...props}>
       {children}

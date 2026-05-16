@@ -136,7 +136,7 @@ export default function LogsPage() {
               onValueChange={(v) => setStatusFilter(v as StatusFilter)}
               className="w-full"
             >
-              <PageTabsList columns={6}>
+              <PageTabsList scrollable>
                 {STATUS_FILTERS.map((s) => (
                   <PageTabsTrigger key={s} value={s} className="gap-1.5">
                     <span>{STATUS_LABELS[s]}</span>

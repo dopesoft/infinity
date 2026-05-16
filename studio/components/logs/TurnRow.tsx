@@ -34,6 +34,10 @@ function formatTime(iso?: string): string {
   });
 }
 
+function shortTurnId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
 function formatLatency(ms: number): string {
   if (!ms || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -85,6 +89,9 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
 
       {/* bottom meta */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+        <MetricChip title={`turn id ${turn.id}`}>
+          <span className="select-all">{shortTurnId(turn.id)}</span>
+        </MetricChip>
         {turn.tool_call_count > 0 && (
           <MetricChip icon={Wrench} title="Tool calls">
             {turn.tool_call_count}

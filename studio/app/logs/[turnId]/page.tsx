@@ -6,7 +6,9 @@ import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowUpFromLine,
+  Check,
   Clock,
+  Copy,
   Cpu,
   type LucideIcon,
   RefreshCw,
@@ -37,6 +39,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   const [selected, setSelected] = useState<TraceEventDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [mobileShowDetail, setMobileShowDetail] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleSelect = useCallback((e: TraceEventDTO) => {
     setSelected(e);
@@ -72,6 +75,35 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
 
   const hasTokens = !!(turn?.input_tokens || turn?.output_tokens);
 
+  const onCopyRun = useCallback(async () => {
+    if (!detail) return;
+    const text = serializeTurnForPaste(detail);
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* If clipboard write fails (older Safari, denied permission), open
+       * the serialized text in a new window so the boss can copy it
+       * manually. Better than a silent no-op. */
+      const w = window.open("", "_blank");
+      if (w) {
+        w.document.body.innerText = text;
+      }
+    }
+  }, [detail]);
+
   const latencyLabel = useMemo(() => {
     if (!turn?.latency_ms) return "";
     const s = turn.latency_ms / 1000;
@@ -99,6 +131,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
             <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               turn
             </span>
+            <TurnIdChip turnId={turnId} />
             {turn && (
               <>
                 <TurnStatusPip status={turn.status} />
@@ -111,11 +144,27 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
               type="button"
               variant="ghost"
               size="sm"
+              onClick={() => void onCopyRun()}
+              disabled={!detail}
+              aria-label="Copy full run as markdown"
+              title="Copy full run (paste to Jarvis or Claude)"
+              className="ml-auto h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
+            >
+              {copied ? (
+                <Check className="size-4 text-success" aria-hidden />
+              ) : (
+                <Copy className="size-4" aria-hidden />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => void load()}
               disabled={loading}
               aria-label="Refresh"
               title="Refresh"
-              className="ml-auto h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
+              className="h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
             >
               <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
             </Button>
@@ -304,6 +353,76 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   );
 }
 
+// serializeTurnForPaste flattens a TraceDetailDTO into a single Markdown
+// blob suitable for pasting into another LLM session — Claude, Jarvis, or
+// any future tooling. The shape mirrors what Jarvis itself returns from
+// `trace_inspect(turn_id)` so the boss and an outside agent see the
+// same content with the same labels.
+function serializeTurnForPaste(detail: TraceDetailDTO): string {
+  const { turn, events } = detail;
+  const out: string[] = [];
+  out.push(`# Turn ${turn.id}`);
+  out.push("");
+  out.push(`- session: ${turn.session_id}${turn.session_name ? ` (${turn.session_name})` : ""}`);
+  if (turn.model) out.push(`- model: ${turn.model}`);
+  out.push(`- status: ${turn.status}`);
+  if (turn.stop_reason) out.push(`- stop_reason: ${turn.stop_reason}`);
+  out.push(`- started_at: ${turn.started_at}`);
+  if (turn.ended_at) out.push(`- ended_at: ${turn.ended_at}`);
+  if (turn.latency_ms) out.push(`- latency_ms: ${turn.latency_ms}`);
+  if (turn.input_tokens || turn.output_tokens) {
+    out.push(`- tokens: in=${turn.input_tokens} out=${turn.output_tokens}`);
+  }
+  if (turn.tool_call_count) out.push(`- tool_calls: ${turn.tool_call_count}`);
+  if (turn.error) out.push(`- error: ${turn.error}`);
+  if (turn.summary) {
+    out.push("");
+    out.push("## summary");
+    out.push(turn.summary);
+  }
+  if (turn.user_text) {
+    out.push("");
+    out.push("## user");
+    out.push("```");
+    out.push(turn.user_text);
+    out.push("```");
+  }
+  out.push("");
+  out.push(`## events (${events.length})`);
+  for (const ev of events) {
+    out.push("");
+    const headerBits = [ev.kind];
+    if (ev.tool_name) headerBits.push(ev.tool_name);
+    if (ev.hook_name) headerBits.push(`hook:${ev.hook_name}`);
+    out.push(`### [${ev.timestamp}] ${headerBits.join(" · ")}`);
+    if (ev.tool_call_id) out.push(`- tool_call_id: ${ev.tool_call_id}`);
+    if (ev.reason) out.push(`- reason: ${ev.reason}`);
+    if (typeof ev.surprise === "number") out.push(`- surprise: ${ev.surprise.toFixed(3)}`);
+    const blocks: Array<{ label: string; body: string }> = [];
+    if (ev.input) blocks.push({ label: "input", body: ev.input });
+    if (ev.expected) blocks.push({ label: "expected", body: ev.expected });
+    if (ev.actual) blocks.push({ label: "actual", body: ev.actual });
+    if (ev.output) blocks.push({ label: "output", body: ev.output });
+    if (ev.error) blocks.push({ label: "error", body: ev.error });
+    if (ev.raw_text) blocks.push({ label: "text", body: ev.raw_text });
+    for (const b of blocks) {
+      out.push("");
+      out.push(`**${b.label}**`);
+      out.push("```");
+      out.push(b.body);
+      out.push("```");
+    }
+  }
+  if (turn.assistant_text) {
+    out.push("");
+    out.push("## assistant (final reply)");
+    out.push("```");
+    out.push(turn.assistant_text);
+    out.push("```");
+  }
+  return out.join("\n");
+}
+
 function MetricChip({
   icon: Icon,
   title,
@@ -321,5 +440,38 @@ function MetricChip({
       {Icon && <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
       <span className="truncate">{children}</span>
     </span>
+  );
+}
+
+// TurnIdChip renders the canonical turn UUID short-form with the full id
+// in title + tap-to-copy, so the boss can drop the same identifier into
+// chat with Jarvis ("trace_inspect <id>") or paste it back into Claude.
+function TurnIdChip({ turnId }: { turnId: string }) {
+  const [copied, setCopied] = useState(false);
+  const short = turnId.length > 12 ? `${turnId.slice(0, 8)}…${turnId.slice(-4)}` : turnId;
+  const onClick = async () => {
+    try {
+      await navigator.clipboard.writeText(turnId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* ignore — most browsers grant clipboard on user gesture */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void onClick()}
+      title={`turn ${turnId} — tap to copy`}
+      aria-label={`Copy turn id ${turnId}`}
+      className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-foreground/80 hover:bg-muted hover:text-foreground transition-colors"
+    >
+      <span className="select-all">{short}</span>
+      {copied ? (
+        <Check className="size-3 text-success" aria-hidden />
+      ) : (
+        <Copy className="size-3 text-muted-foreground" aria-hidden />
+      )}
+    </button>
   );
 }

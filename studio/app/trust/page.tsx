@@ -93,7 +93,7 @@ export default function TrustPage() {
             onValueChange={(v) => setStatusFilter(v as StatusFilter)}
             className="w-full"
           >
-            <PageTabsList columns={6}>
+            <PageTabsList scrollable>
               {STATUS_FILTERS.map((s) => (
                 <PageTabsTrigger key={s} value={s}>
                   {s}

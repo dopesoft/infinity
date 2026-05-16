@@ -206,7 +206,7 @@ export default function MemoryPage() {
               }}
               className="w-full"
             >
-              <PageTabsList columns={5}>
+              <PageTabsList scrollable>
                 {VIEWS.map((v) => {
                   const count =
                     v === "memories"
