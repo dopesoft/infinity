@@ -174,9 +174,20 @@ func (v *composioVerb) Execute(ctx context.Context, input map[string]any) (strin
 			return "", fmt.Errorf("connected_account_id required: %d %s accounts connected — pass one of %v (see <connected_accounts>)", len(accs), v.toolkitSlug, hints)
 		}
 	}
+
+	account, err := v.accountByID(accountID)
+	if err != nil {
+		return "", err
+	}
+	entityID := strings.TrimSpace(account.UserID)
+	if entityID == "" {
+		return "", fmt.Errorf("connected account %s is missing Composio entity binding (user_id); reconnect it or patch the account registry", accountID)
+	}
+
 	resp, err := v.exec.Execute(ctx, connectors.ExecuteRequest{
 		Slug:               v.slug,
 		ConnectedAccountID: accountID,
+		EntityID:           entityID,
 		Arguments:          args,
 	})
 	if err != nil {
@@ -192,6 +203,20 @@ func (v *composioVerb) Execute(ctx context.Context, input map[string]any) (strin
 		return "{}", nil
 	}
 	return string(resp.Data), nil
+}
+
+func (v *composioVerb) accountByID(accountID string) (*connectors.Account, error) {
+	if v == nil || v.cache == nil {
+		return nil, fmt.Errorf("composio verb cache not configured")
+	}
+	for _, accs := range v.cache.AccountsByToolkit() {
+		for _, a := range accs {
+			if a != nil && a.ID == accountID {
+				return a, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("connected account %s not found in cache", accountID)
 }
 
 // buildComposioVerbSchema augments a Composio verb's native
@@ -322,24 +347,22 @@ func (s *ComposioVerbSync) Sync(ctx context.Context) (added, removed, toolkitsAc
 			}
 			continue
 		}
-		names := make([]string, 0, len(defs))
+		toolNames := make([]string, 0, len(defs))
 		for _, d := range defs {
-			t := &composioVerb{
+			name := "composio__" + d.Slug
+			s.Reg.Register(&composioVerb{
 				slug:        d.Slug,
-				toolkitSlug: slug,
+				toolkitSlug: strings.ToLower(slug),
 				desc:        strings.TrimSpace(d.Description),
-				schema:      buildComposioVerbSchema(slug, d.InputParameters),
+				schema:      buildComposioVerbSchema(strings.ToLower(slug), d.InputParameters),
 				cache:       s.Cache,
 				exec:        s.Exec,
-			}
-			s.Reg.Register(t)
-			names = append(names, t.Name())
+			})
+			toolNames = append(toolNames, name)
 		}
-		s.registered[slug] = names
-		added += len(names)
-		s.info().Printf("composio: hot-reload registered %d verbs for %s", len(names), slug)
+		s.registered[slug] = toolNames
+		added += len(toolNames)
+		s.info().Printf("composio: hot-reload registered %d verbs for %s", len(toolNames), slug)
 	}
-
-	toolkitsActive = len(s.registered)
-	return added, removed, toolkitsActive, firstErr
+	return added, removed, len(wantActive), firstErr
 }
