@@ -50,6 +50,12 @@ type ObservationInput struct {
 	RawText    string
 	Embedding  []float32
 	Importance int
+	// TurnID groups the observation under a /logs trace row. Optional —
+	// rows that predate the mem_turns migration or come from hook paths
+	// without a turn context (steered messages, voice turns) leave it
+	// empty and join their session via the (session_id, created_at)
+	// fallback the trace API uses.
+	TurnID string
 }
 
 func (s *Store) InsertObservation(ctx context.Context, in ObservationInput) (string, error) {
@@ -68,12 +74,16 @@ func (s *Store) InsertObservation(ctx context.Context, in ObservationInput) (str
 		emb = pgvector.NewVector(in.Embedding)
 	}
 
+	var turnArg any
+	if t := strings.TrimSpace(in.TurnID); t != "" {
+		turnArg = t
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO mem_observations (id, session_id, hook_name, payload, raw_text, embedding, fts_doc, importance)
+		INSERT INTO mem_observations (id, session_id, hook_name, payload, raw_text, embedding, fts_doc, importance, turn_id)
 		VALUES ($1, $2, $3, $4::jsonb, $5, $6,
 		        to_tsvector(COALESCE(current_setting('infinity.search_config', true), 'english')::regconfig, COALESCE($5, '')),
-		        $7)
-	`, id, in.SessionID, in.HookName, string(payloadJSON), nullable(in.RawText), emb, importance)
+		        $7, NULLIF($8::text, '')::uuid)
+	`, id, in.SessionID, in.HookName, string(payloadJSON), nullable(in.RawText), emb, importance, turnArg)
 	if err != nil {
 		return "", fmt.Errorf("insert observation: %w", err)
 	}

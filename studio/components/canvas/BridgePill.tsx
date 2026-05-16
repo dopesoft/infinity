@@ -150,10 +150,10 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
       aria-label="Bridge for this session"
       title={pill.title}
       className={cn(
-        // 44x44 minimum tap target without ballooning the visual chip —
-        // padding + min-w get us the touch area while the chip itself
-        // stays compact.
-        "inline-flex h-9 min-w-11 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+        // Compact pill — sits in the top bar next to other small status
+        // chips. Padding + gap chosen so the longest label ("Connecting…")
+        // breathes away from the rounded border instead of kissing it.
+        "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[10px] font-medium transition-colors",
         "hover:bg-accent/60",
         pill.toneClasses.border,
         pill.toneClasses.bg,
@@ -163,7 +163,7 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
     >
       <span
         className={cn(
-          "inline-block size-2 shrink-0 rounded-full",
+          "inline-block size-1.5 shrink-0 rounded-full",
           pill.toneClasses.dot,
           pill.spin && "animate-pulse",
         )}
@@ -177,11 +177,11 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
   if (!sessionId) {
     return (
       <span
-        className="inline-flex h-9 min-w-11 items-center gap-1.5 rounded-full border border-border/60 px-2.5 text-[11px] font-medium text-muted-foreground"
+        className="inline-flex h-7 items-center gap-1 rounded-full border border-border/60 px-2 text-[10px] font-medium text-muted-foreground"
         aria-label="No session"
         title="No active session"
       >
-        <span className="inline-block size-2 rounded-full bg-muted-foreground/40" aria-hidden />
+        <span className="inline-block size-1.5 rounded-full bg-muted-foreground/40" aria-hidden />
         <span className="font-mono tracking-tight">—</span>
       </span>
     );

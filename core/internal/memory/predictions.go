@@ -33,6 +33,14 @@ func NewPredictionStore(pool *pgxpool.Pool) *PredictionStore {
 // same ID later passed to Resolve. Returns the row id (uuid) for caller
 // instrumentation; empty when the store is disabled or input invalid.
 func (p *PredictionStore) Record(ctx context.Context, sessionID, toolCallID, toolName, expected string, input map[string]any) (string, error) {
+	return p.RecordWithTurn(ctx, sessionID, "", toolCallID, toolName, expected, input)
+}
+
+// RecordWithTurn is Record but with an explicit turn_id so the /logs trace
+// view can show predictions as paired pre/post events alongside their
+// triggering tool call. turnID may be empty — that path matches the old
+// Record behavior exactly.
+func (p *PredictionStore) RecordWithTurn(ctx context.Context, sessionID, turnID, toolCallID, toolName, expected string, input map[string]any) (string, error) {
 	if p == nil || p.pool == nil {
 		return "", nil
 	}
@@ -48,11 +56,16 @@ func (p *PredictionStore) Record(ctx context.Context, sessionID, toolCallID, too
 	if s := strings.TrimSpace(sessionID); s != "" {
 		sessionArg = s
 	}
+	var turnArg any
+	if t := strings.TrimSpace(turnID); t != "" {
+		turnArg = t
+	}
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO mem_predictions
-		  (id, session_id, tool_call_id, tool_name, tool_input, expected)
-		VALUES ($1::uuid, NULLIF($2::text, '')::uuid, $3, $4, $5::jsonb, $6)
-	`, id, sessionArg, toolCallID, toolName, string(inputJSON), expected)
+		  (id, session_id, tool_call_id, tool_name, tool_input, expected, turn_id)
+		VALUES ($1::uuid, NULLIF($2::text, '')::uuid, $3, $4, $5::jsonb, $6,
+		        NULLIF($7::text, '')::uuid)
+	`, id, sessionArg, toolCallID, toolName, string(inputJSON), expected, turnArg)
 	if err != nil {
 		return "", err
 	}

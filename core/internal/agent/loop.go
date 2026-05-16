@@ -178,6 +178,32 @@ type HookEmitter interface {
 	Emit(name string, sessionID, project, text string, payload map[string]any)
 }
 
+// TurnRecorder is the LangSmith-style trace persistence boundary. The loop
+// opens a row at turn entry, threads the returned turn_id through every
+// `fireHook` payload, increments the tool-call counter on each PreToolUse,
+// and closes the row with the final outcome on TaskCompleted. Implemented
+// by *memory.TurnStore — decoupled so the agent package doesn't pull pgx.
+// Nil-safe: when unset, the loop simply never writes to mem_turns and the
+// /logs UI shows nothing for those sessions.
+type TurnRecorder interface {
+	Open(ctx context.Context, sessionID, userText, model string) (string, error)
+	Close(ctx context.Context, turnID string, fields TurnCloseFields) error
+	IncrementToolCalls(ctx context.Context, turnID string) error
+}
+
+// TurnCloseFields mirrors memory.CloseFields but lives in the agent package
+// so the recorder interface doesn't drag memory imports here.
+type TurnCloseFields struct {
+	AssistantText string
+	StopReason    string
+	InputTokens   int
+	OutputTokens  int
+	ToolCallCount int
+	Status        string
+	Error         string
+	Summary       string
+}
+
 // SessionNamer is the optional Haiku-driven auto-namer. The loop notifies it
 // after the first complete assistant turn in a session; the namer decides
 // (cheap DB check) whether the row needs a name and fires Haiku async.
@@ -211,6 +237,11 @@ type Loop struct {
 	gate     ToolGate
 	namer    SessionNamer
 	accounts AccountResolver
+
+	// turnsMu guards turns. Hot-swappable via SetTurnRecorder so wiring
+	// order at boot doesn't matter; the loop just no-ops on nil.
+	turnsMu sync.RWMutex
+	turns   TurnRecorder
 
 	// usageStore persists session token counters so the context meter
 	// survives restarts. Nil-safe: when unset the loop simply doesn't
@@ -297,6 +328,7 @@ type Config struct {
 	Namer             SessionNamer
 	Accounts          AccountResolver
 	UsageStore        UsageStore
+	Turns             TurnRecorder
 	SystemPrompt      string
 	MaxToolIterations int
 }
@@ -348,7 +380,23 @@ func New(cfg Config) *Loop {
 		sessions:             make(map[string]*Session),
 		autoCompactThreshold: threshold,
 		usageStore:           cfg.UsageStore,
+		turns:                cfg.Turns,
 	}
+}
+
+// SetTurnRecorder installs (or replaces) the LangSmith-style trace recorder
+// used by the agent loop. Safe to call after agent.New() since the loop
+// snapshots the recorder under an RWMutex on every Run.
+func (l *Loop) SetTurnRecorder(r TurnRecorder) {
+	l.turnsMu.Lock()
+	defer l.turnsMu.Unlock()
+	l.turns = r
+}
+
+func (l *Loop) turnRecorder() TurnRecorder {
+	l.turnsMu.RLock()
+	defer l.turnsMu.RUnlock()
+	return l.turns
 }
 
 // SetUsageStore installs (or replaces) the persistence backing for
@@ -561,6 +609,35 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	}
 
 	s := l.GetOrCreateSession(sessionID)
+
+	// Open a mem_turns row for this turn. The id flows into every
+	// fireHook payload below as `turn_id` so capture.go can stamp it on
+	// observations; the close call lands on every exit path (success,
+	// interrupt, error, iteration cap). turnID empty → recorder unwired
+	// → all the threading no-ops cleanly.
+	var turnID string
+	turnText := userMsg
+	if turnText == "" {
+		// Resume path: surface the seeded text from the last user message
+		// in the session so /logs has something to render in the row.
+		if msgs := s.Snapshot(); len(msgs) > 0 {
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].Role == llm.RoleUser && strings.TrimSpace(msgs[i].Content) != "" {
+					turnText = msgs[i].Content
+					break
+				}
+			}
+		}
+	}
+	if rec := l.turnRecorder(); rec != nil {
+		if id, err := rec.Open(ctx, s.ID, turnText, model); err == nil {
+			turnID = id
+		} else {
+			log.Printf("turn open: session=%s err=%v", s.ID, err)
+		}
+	}
+	toolCallCount := 0
+
 	// An empty userMsg is the "resume" path: run one turn against the
 	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
 	// session whose opening turn is the DashboardSeed context block) without
@@ -568,7 +645,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// UserPromptSubmit hook.
 	if userMsg != "" {
 		s.Append(llm.Message{Role: llm.RoleUser, Content: userMsg})
-		l.fireHook("UserPromptSubmit", s.ID, s.Project, userMsg, nil)
+		l.fireHookT(turnID, "UserPromptSubmit", s.ID, s.Project, userMsg, nil)
 	}
 
 	systemPrompt := l.systemPrompt
@@ -611,6 +688,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		select {
 		case <-ctx.Done():
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
+			l.closeTurn(context.Background(), turnID, TurnCloseFields{
+				StopReason:    "interrupted",
+				Status:        "interrupted",
+				ToolCallCount: toolCallCount,
+				Summary:       summarizeReply("", toolCallCount),
+			})
 			return nil
 		default:
 		}
@@ -680,23 +763,58 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				partial := strings.TrimSpace(partialText.String())
 				if partial != "" {
 					s.Append(llm.Message{Role: llm.RoleAssistant, Content: partial})
-					l.fireHook("TaskCompleted", s.ID, s.Project, partial, map[string]any{
+					l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, partial, map[string]any{
 						"interrupted": true,
 					})
 				}
 				emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
+				l.closeTurn(context.Background(), turnID, TurnCloseFields{
+					AssistantText: partial,
+					StopReason:    "interrupted",
+					Status:        "interrupted",
+					InputTokens:   resp.Usage.Input,
+					OutputTokens:  resp.Usage.Output,
+					ToolCallCount: toolCallCount,
+					Summary:       summarizeReply(partial, toolCallCount),
+				})
 				return nil
 			}
 			emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: streamErr.Error()})
+			l.closeTurn(context.Background(), turnID, TurnCloseFields{
+				AssistantText: strings.TrimSpace(partialText.String()),
+				StopReason:    "error",
+				Status:        "errored",
+				InputTokens:   resp.Usage.Input,
+				OutputTokens:  resp.Usage.Output,
+				ToolCallCount: toolCallCount,
+				Error:         streamErr.Error(),
+				Summary:       summarizeReply("", toolCallCount),
+			})
 			return streamErr
 		}
 
 		if len(resp.ToolCalls) == 0 {
 			s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, Usage: &resp.Usage, StopReason: resp.StopReason})
-			l.fireHook("TaskCompleted", s.ID, s.Project, resp.Text, map[string]any{
+			l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, resp.Text, map[string]any{
 				"input_tokens":  resp.Usage.Input,
 				"output_tokens": resp.Usage.Output,
+			})
+			// Status reflects what the boss sees: empty reply with no tool
+			// work is a confused decode; empty reply with tool work is a
+			// "did stuff but didn't summarise" path; non-empty is ok.
+			status := "ok"
+			if strings.TrimSpace(resp.Text) == "" {
+				status = "empty"
+			}
+			l.closeTurn(context.Background(), turnID, TurnCloseFields{
+				AssistantText: resp.Text,
+				StopReason:    resp.StopReason,
+				Status:        status,
+				InputTokens:   resp.Usage.Input,
+				OutputTokens:  resp.Usage.Output,
+				ToolCallCount: toolCallCount,
+				Summary:       summarizeReply(resp.Text, toolCallCount),
 			})
 			// Auto-name the session after the first complete exchange.
 			// MaybeName is cheap when the session is already named (one
@@ -717,7 +835,17 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()
-			l.fireHook("PreToolUse", s.ID, s.Project, tc.Name, map[string]any{
+			toolCallCount++
+			if rec := l.turnRecorder(); rec != nil && turnID != "" {
+				// Best-effort bump on the in-flight row so /logs reflects
+				// the running count even while the turn is mid-stream.
+				go func(id string) {
+					cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cancel()
+					_ = rec.IncrementToolCalls(cctx, id)
+				}(turnID)
+			}
+			l.fireHookT(turnID, "PreToolUse", s.ID, s.Project, tc.Name, map[string]any{
 				"name":         tc.Name,
 				"input":        tc.Input,
 				"tool_call_id": tc.ID,
@@ -768,7 +896,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				if timeout <= 0 {
 					timeout = 15 * time.Minute
 				}
-				l.fireHook("ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
+				l.fireHookT(turnID, "ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
 					"name":        tc.Name,
 					"input":       tc.Input,
 					"reason":      decision.Reason,
@@ -789,7 +917,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			default:
 				endedAt = time.Now().UTC()
 				output = formatGatedOutput(tc.Name, decision)
-				l.fireHook("ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
+				l.fireHookT(turnID, "ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
 					"name":        tc.Name,
 					"input":       tc.Input,
 					"reason":      decision.Reason,
@@ -819,7 +947,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			if isErr {
 				hookName = "PostToolUseFailure"
 			}
-			l.fireHook(hookName, s.ID, s.Project, tc.Name+": "+output, map[string]any{
+			l.fireHookT(turnID, hookName, s.ID, s.Project, tc.Name+": "+output, map[string]any{
 				"name":         tc.Name,
 				"input":        tc.Input,
 				"output":       output,
@@ -837,6 +965,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 	err := errors.New("agent loop exceeded maximum tool iterations")
 	emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: err.Error()})
+	l.closeTurn(context.Background(), turnID, TurnCloseFields{
+		StopReason:    "iteration_cap",
+		Status:        "errored",
+		ToolCallCount: toolCallCount,
+		Error:         err.Error(),
+		Summary:       summarizeReply("", toolCallCount),
+	})
 	return err
 }
 
@@ -845,6 +980,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 // the WS path fires for a normal message. Called between iterations so the
 // next LLM call sees the steer input alongside the original prompt and any
 // intermediate tool results. Empty/whitespace strings are dropped.
+//
+// Steered messages do NOT get a turn_id stamped because they belong to
+// whichever turn is in flight on the receiving session — we don't track
+// that here cleanly, and the missing turn_id on the resulting observation
+// only means it joins the turn via the (session_id, created_at) fallback
+// path the trace API already uses for old rows.
 func (l *Loop) drainSteer(ch <-chan string, s *Session) {
 	if ch == nil || s == nil {
 		return
@@ -874,6 +1015,71 @@ func (l *Loop) fireHook(name, sessionID, project, text string, payload map[strin
 		return
 	}
 	l.hooks.Emit(name, sessionID, project, text, payload)
+}
+
+// fireHookT is fireHook but with a turn_id auto-injected into the payload
+// so capture.go / predict.go can stamp it on the mem_observations /
+// mem_predictions row. When turnID is empty (no recorder wired) the
+// payload is left untouched.
+func (l *Loop) fireHookT(turnID, name, sessionID, project, text string, payload map[string]any) {
+	if l.hooks == nil {
+		return
+	}
+	if turnID != "" {
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		// Don't clobber an explicit turn_id the caller already set.
+		if _, ok := payload["turn_id"]; !ok {
+			payload["turn_id"] = turnID
+		}
+	}
+	l.hooks.Emit(name, sessionID, project, text, payload)
+}
+
+// closeTurn stamps the final outcome on the mem_turns row. Safe to call with
+// empty turnID (no-op when the recorder isn't wired or the open failed).
+// Runs synchronously because the row needs to flip status before the next
+// turn might tail it — the operation is a single indexed UPDATE so it's
+// sub-ms in practice.
+func (l *Loop) closeTurn(ctx context.Context, turnID string, fields TurnCloseFields) {
+	rec := l.turnRecorder()
+	if rec == nil || turnID == "" {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := rec.Close(cctx, turnID, fields); err != nil {
+		log.Printf("turn close: id=%s err=%v", turnID, err)
+	}
+}
+
+// summarizeReply builds the short summary the /logs list view renders. For
+// successful turns it's the first ~140 chars of the assistant reply; for
+// empty replies (model returned no text — usually a tool-only iteration
+// cap or a confused decode) it's a synthetic marker so the row is still
+// readable. Trims whitespace and collapses newlines.
+func summarizeReply(text string, toolCalls int) string {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		if toolCalls > 0 {
+			return fmt.Sprintf("(no reply — %d tool call%s)", toolCalls, plural(toolCalls))
+		}
+		return "(no reply)"
+	}
+	t = strings.ReplaceAll(t, "\n", " ")
+	t = strings.Join(strings.Fields(t), " ")
+	if len(t) > 140 {
+		t = t[:140] + "…"
+	}
+	return t
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func emit(ch chan<- RunEvent, ev RunEvent) {

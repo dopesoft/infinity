@@ -141,6 +141,11 @@ func serveCmd() *cobra.Command {
 					hooks.NewPredictionRecorder(predictions).Register(pipeline)
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
+					// LangSmith-style trace tools — read mem_turns +
+					// mem_observations + mem_predictions per turn so the
+					// self-improve-from-finding skill can diagnose from
+					// real evidence, not summaries.
+					tools.RegisterTraceTools(registry, p)
 					tools.RegisterSkillTools(registry, p)
 					tools.RegisterDashboardTools(registry, p)
 					// Curiosity questions tools (question_list / question_decide).
@@ -471,6 +476,12 @@ func serveCmd() *cobra.Command {
 					registry.Register(&agent.CompactContext{Loop: loop, Compactor: convCompactor})
 					loop.SetCompactor(convCompactor)
 				}
+				// LangSmith-style turn tracing — opens a mem_turns row at
+				// turn entry, threads turn_id into every fireHook payload,
+				// closes the row on TaskCompleted / interrupt / error.
+				if pool != nil {
+					loop.SetTurnRecorder(turnRecorderAdapter{store: memory.NewTurnStore(pool)})
+				}
 			}
 
 			// Durable workflow engine — Phase 2 substrate. The agent
@@ -740,6 +751,10 @@ func serveCmd() *cobra.Command {
 				fmt.Println("  dashboard: aggregator wired")
 			}
 
+			var turnStore *memory.TurnStore
+			if pool != nil {
+				turnStore = memory.NewTurnStore(pool)
+			}
 			srv := server.New(server.Config{
 				Addr:           addr,
 				Version:        version,
@@ -768,6 +783,7 @@ func serveCmd() *cobra.Command {
 				DashboardAPI:   dashboardAPI,
 				BridgeRouter:   activeBridgeRouter,
 				BridgePrefs:    activeBridgePrefs,
+				Turns:          turnStore,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -863,6 +879,31 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address (or use $PORT)")
 	cmd.Flags().StringVar(&mcpConfig, "mcp-config", "", "path to MCP server registry (default: $MCP_CONFIG or core/config/mcp.yaml)")
 	return cmd
+}
+
+// turnRecorderAdapter bridges *memory.TurnStore → agent.TurnRecorder. The
+// agent package can't import memory directly (would pull pgx into the
+// loop-pure boundary), so we translate the field structs here. Stateless
+// pass-through with zero copy overhead on the success path.
+type turnRecorderAdapter struct{ store *memory.TurnStore }
+
+func (a turnRecorderAdapter) Open(ctx context.Context, sessionID, userText, model string) (string, error) {
+	return a.store.Open(ctx, sessionID, userText, model)
+}
+func (a turnRecorderAdapter) Close(ctx context.Context, turnID string, f agent.TurnCloseFields) error {
+	return a.store.Close(ctx, turnID, memory.CloseFields{
+		AssistantText: f.AssistantText,
+		StopReason:    f.StopReason,
+		InputTokens:   f.InputTokens,
+		OutputTokens:  f.OutputTokens,
+		ToolCallCount: f.ToolCallCount,
+		Status:        f.Status,
+		Error:         f.Error,
+		Summary:       f.Summary,
+	})
+}
+func (a turnRecorderAdapter) IncrementToolCalls(ctx context.Context, turnID string) error {
+	return a.store.IncrementToolCalls(ctx, turnID)
 }
 
 // cronSchedulerAdapter bridges *cron.Scheduler → tools.CronScheduler.

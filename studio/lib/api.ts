@@ -1397,3 +1397,65 @@ export async function recordVoiceTurn(args: {
     return false;
   }
 }
+
+// ---- Logs / traces (LangSmith-style turn-by-turn) -------------------------
+
+export type TraceStatus = "in_flight" | "ok" | "empty" | "errored" | "interrupted";
+
+export type TurnRowDTO = {
+  id: string;
+  session_id: string;
+  session_name?: string;
+  user_text: string;
+  assistant_text?: string;
+  model?: string;
+  status: TraceStatus;
+  stop_reason?: string;
+  summary?: string;
+  error?: string;
+  started_at: string;
+  ended_at?: string;
+  input_tokens: number;
+  output_tokens: number;
+  tool_call_count: number;
+  latency_ms: number;
+};
+
+export type TraceEventDTO = {
+  id: string;
+  kind: string; // user | thinking | tool_call | tool_result | tool_error | gate | prediction | assistant | session_start | session_end | ...
+  source: "observation" | "prediction" | "trust_contract";
+  timestamp: string;
+  hook_name?: string;
+  tool_name?: string;
+  tool_call_id?: string;
+  input?: string;
+  output?: string;
+  expected?: string;
+  actual?: string;
+  error?: string;
+  reason?: string;
+  raw_text?: string;
+  surprise?: number;
+  payload?: Record<string, unknown>;
+};
+
+export type TraceDetailDTO = {
+  turn: TurnRowDTO;
+  events: TraceEventDTO[];
+};
+
+export const fetchTraces = (
+  opts: { sessionId?: string; status?: TraceStatus; limit?: number } = {},
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams();
+  if (opts.sessionId) qs.set("session_id", opts.sessionId);
+  if (opts.status) qs.set("status", opts.status);
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return getJSON<TurnRowDTO[]>(`/api/traces${suffix}`, signal);
+};
+
+export const fetchTraceDetail = (turnId: string, signal?: AbortSignal) =>
+  getJSON<TraceDetailDTO>(`/api/traces/${encodeURIComponent(turnId)}`, signal);

@@ -52,7 +52,8 @@ func (p *PredictionRecorder) handlePre(ctx context.Context, ev Event) error {
 	if expected == "" {
 		return nil
 	}
-	if _, err := p.store.Record(ctx, ev.SessionID, callID, toolName, expected, input); err != nil {
+	turnID, _ := ev.Payload["turn_id"].(string)
+	if _, err := p.store.RecordWithTurn(ctx, ev.SessionID, turnID, callID, toolName, expected, input); err != nil {
 		return fmt.Errorf("predict.record %s: %w", toolName, err)
 	}
 	return nil

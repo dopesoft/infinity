@@ -105,6 +105,10 @@ type Config struct {
 	// session id; used both by the tool-side router pick and the API
 	// endpoints that surface "what would this session use right now."
 	BridgePrefs tools.PreferenceFetcher
+	// Turns is the LangSmith-style trace store backing /api/traces and the
+	// trace_* agent tools. Nil-safe — endpoints return empty / 503 cleanly
+	// when no DB is wired.
+	Turns *memory.TurnStore
 }
 
 type Server struct {
@@ -133,6 +137,7 @@ type Server struct {
 
 	bridgeRouter *bridge.Router
 	bridgePrefs  tools.PreferenceFetcher
+	turnStore    *memory.TurnStore
 
 	// turnsMu guards the per-session in-flight turn registry. Lookups
 	// happen on every WS frame so we keep the critical sections trivial
@@ -178,6 +183,7 @@ func New(cfg Config) *Server {
 		activeSessions: make(map[string]func(wsServerEvent)),
 		bridgeRouter:   cfg.BridgeRouter,
 		bridgePrefs:    cfg.BridgePrefs,
+		turnStore:      cfg.Turns,
 	}
 	if s.heartbeat != nil {
 		s.heartbeat.SetOnFinding(s.onHeartbeatFinding)
@@ -312,6 +318,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// Library — mem_artifacts grouped by kind. The Files tab IS the library;
 	// this powers the collapsible section at the top.
 	mux.HandleFunc("/api/library/tree", s.handleLibraryTree)
+
+	// LangSmith-style turn-by-turn traces. /api/traces lists rows; the
+	// trailing-slash variant matches /api/traces/<turn_id> for detail.
+	mux.HandleFunc("/api/traces", s.handleTracesList)
+	mux.HandleFunc("/api/traces/", s.handleTraceDetail)
 }
 
 func (s *Server) Start() error {

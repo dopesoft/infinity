@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   type LucideIcon,
   MessageSquare,
+  ScrollText,
   Settings,
   ShieldCheck,
   Wrench,
@@ -47,5 +48,6 @@ export const NAV_OVERFLOW: NavTab[] = [
   { href: "/trust", label: "Trust", Icon: ShieldCheck },
   { href: "/cron", label: "Cron", Icon: Clock },
   { href: "/code-proposals", label: "Code", Icon: FileCode },
+  { href: "/logs", label: "Logs", Icon: ScrollText },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];

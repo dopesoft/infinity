@@ -92,6 +92,11 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 		emb, _ = c.embedder.Embed(ctx, cleaned)
 	}
 
+	// turn_id flows through the payload from the agent loop's fireHookT
+	// helper. Pulled out + stamped onto the observation so /logs detail
+	// pages can rebuild the timeline by joining on turn_id.
+	turnID, _ := ev.Payload["turn_id"].(string)
+
 	obsID, err := c.store.InsertObservation(ctx, memory.ObservationInput{
 		SessionID:  sessionID,
 		HookName:   string(ev.Name),
@@ -99,6 +104,7 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 		RawText:    cleaned,
 		Embedding:  emb,
 		Importance: importanceFor(ev.Name),
+		TurnID:     turnID,
 	})
 	if err != nil {
 		return fmt.Errorf("insert observation: %w", err)
