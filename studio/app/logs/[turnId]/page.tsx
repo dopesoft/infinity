@@ -36,6 +36,12 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   const [detail, setDetail] = useState<TraceDetailDTO | null>(null);
   const [selected, setSelected] = useState<TraceEventDTO | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mobileShowDetail, setMobileShowDetail] = useState(false);
+
+  const handleSelect = useCallback((e: TraceEventDTO) => {
+    setSelected(e);
+    setMobileShowDetail(true);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -178,7 +184,12 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
 
           {detail && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-              <aside className="flex min-w-0 flex-col lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)]">
+              <aside
+                className={cn(
+                  "flex min-w-0 flex-col lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)]",
+                  mobileShowDetail ? "hidden lg:flex" : "flex",
+                )}
+              >
                 <div className="mb-2 flex shrink-0 items-center gap-2 lg:border-b lg:border-border lg:pb-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                     timeline
@@ -190,28 +201,80 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     {events.length}
                   </Badge>
                 </div>
-                <div className="min-h-0 flex-1 lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:pr-1 lg:pt-1 lg:[scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                <div className="min-h-0 flex-1 px-1 pt-1 lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:[scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
                   <TraceTimeline
                     events={events}
                     selectedId={selected?.id ?? null}
-                    onSelect={setSelected}
+                    onSelect={handleSelect}
                   />
                 </div>
               </aside>
-              <section className="min-w-0">
-                <TraceEventDetail event={selected} />
-                {turn?.assistant_text && selected?.kind !== "assistant" && (
-                  <div className="mt-4">
-                    <div className="mb-2 flex items-center gap-2">
-                      <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                        final reply
-                      </span>
-                    </div>
-                    <pre className="max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground">
-                      {turn.assistant_text}
-                    </pre>
-                  </div>
+              <section
+                className={cn(
+                  "flex min-w-0 flex-col lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)]",
+                  mobileShowDetail ? "flex" : "hidden lg:flex",
                 )}
+              >
+                <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2 border-b border-border pb-2 lg:border-b">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setMobileShowDetail(false)}
+                    className="-ml-2 h-7 shrink-0 gap-1 px-2 text-muted-foreground hover:text-foreground lg:hidden"
+                  >
+                    <ArrowLeft className="size-4" />
+                    <span className="text-xs">Timeline</span>
+                  </Button>
+                  {selected ? (
+                    <>
+                      <Badge variant="secondary" className="h-5 font-mono text-[10px] uppercase">
+                        {selected.kind}
+                      </Badge>
+                      {selected.tool_name && (
+                        <span className="font-mono text-xs text-foreground break-all">
+                          {selected.tool_name}
+                        </span>
+                      )}
+                      {selected.source && selected.source !== "observation" && (
+                        <Badge variant="outline" className="h-5 font-mono text-[10px] uppercase">
+                          {selected.source}
+                        </Badge>
+                      )}
+                      <span
+                        className="ml-auto font-mono text-[10px] text-muted-foreground"
+                        suppressHydrationWarning
+                      >
+                        {(() => {
+                          try {
+                            return new Date(selected.timestamp).toLocaleString();
+                          } catch {
+                            return selected.timestamp;
+                          }
+                        })()}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                      event
+                    </span>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 px-1 pt-1 lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:[scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                  <TraceEventDetail event={selected} />
+                  {turn?.assistant_text && selected?.kind !== "assistant" && (
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                          final reply
+                        </span>
+                      </div>
+                      <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground">
+                        {turn.assistant_text}
+                      </pre>
+                    </div>
+                  )}
+                </div>
               </section>
             </div>
           )}

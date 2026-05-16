@@ -1,22 +1,36 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, Cpu, MessageSquare, ShieldAlert, Sparkles, Wrench, XCircle } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronRight,
+  Cpu,
+  MessageSquare,
+  ShieldAlert,
+  Sparkles,
+  Wrench,
+  XCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TraceEventDTO } from "@/lib/api";
 
 /* TraceTimeline — slim left sidebar listing every event in a turn.
  *
- * One `<button>` per event. Selected event gets the info ring. The icon +
- * label combo gives the boss a glanceable vertical map of "what happened
- * this turn": user prompt → tool call → tool result → assistant reply →
- * complete. Predictions render as a child line under their matching tool
- * call so the eye reads them as annotation, not interrupt.
+ * Events group into parent + annotations: any `prediction` / `gate` event
+ * that follows a parent (tool_call, user, assistant, …) is treated as a
+ * child and rendered indented underneath. Parents with children get a
+ * chevron that toggles the group; the row body itself still selects.
  */
 type Props = {
   events: TraceEventDTO[];
   selectedId: string | null;
   onSelect: (e: TraceEventDTO) => void;
 };
+
+function isChildKind(kind: string): boolean {
+  return kind === "prediction" || kind === "gate";
+}
 
 function iconFor(kind: string) {
   switch (kind) {
@@ -88,7 +102,30 @@ function colorFor(kind: string): string {
   }
 }
 
+type Group = { parent: TraceEventDTO; children: TraceEventDTO[] };
+
 export function TraceTimeline({ events, selectedId, onSelect }: Props) {
+  const groups = useMemo<Group[]>(() => {
+    const out: Group[] = [];
+    for (const e of events) {
+      if (isChildKind(e.kind) && out.length > 0) {
+        out[out.length - 1].children.push(e);
+      } else {
+        out.push({ parent: e, children: [] });
+      }
+    }
+    return out;
+  }, [events]);
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   if (!events.length) {
     return (
       <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
@@ -96,41 +133,102 @@ export function TraceTimeline({ events, selectedId, onSelect }: Props) {
       </div>
     );
   }
+
   return (
     <div className="space-y-1">
-      {events.map((e) => {
-        const Icon = iconFor(e.kind);
-        const isSelected = selectedId === e.id;
-        const isChild = e.kind === "prediction" || e.kind === "gate";
+      {groups.map((g) => {
+        const hasChildren = g.children.length > 0;
+        const isCollapsed = collapsed.has(g.parent.id);
         return (
-          <div key={e.id} className={isChild ? "pl-4" : undefined}>
-            <button
-              type="button"
-              onClick={() => onSelect(e)}
-              className={cn(
-                "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-                "hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-info",
-                isSelected && "bg-accent/60 ring-1 ring-info/40",
-              )}
-            >
-              <Icon className={cn("mt-0.5 size-3.5 shrink-0", colorFor(e.kind))} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium text-foreground">{labelFor(e)}</div>
-                {e.surprise !== undefined && e.surprise !== null && (
-                  <div className="text-[10px] text-muted-foreground">
-                    surprise {e.surprise.toFixed(2)}
-                  </div>
-                )}
-                {e.tool_call_id && e.kind !== "tool_call" && (
-                  <div className="truncate text-[10px] text-muted-foreground">
-                    {e.tool_call_id.slice(0, 12)}…
-                  </div>
-                )}
-              </div>
-            </button>
-          </div>
+          <Fragment key={g.parent.id}>
+            <Row
+              event={g.parent}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              chevron={
+                hasChildren
+                  ? { expanded: !isCollapsed, count: g.children.length, onClick: () => toggle(g.parent.id) }
+                  : undefined
+              }
+            />
+            {hasChildren && !isCollapsed &&
+              g.children.map((c) => (
+                <div key={c.id} className="pl-4">
+                  <Row event={c} selectedId={selectedId} onSelect={onSelect} />
+                </div>
+              ))}
+          </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+function Row({
+  event,
+  selectedId,
+  onSelect,
+  chevron,
+}: {
+  event: TraceEventDTO;
+  selectedId: string | null;
+  onSelect: (e: TraceEventDTO) => void;
+  chevron?: { expanded: boolean; count: number; onClick: () => void };
+}) {
+  const Icon = iconFor(event.kind);
+  const isSelected = selectedId === event.id;
+  return (
+    <div className="flex items-stretch gap-1">
+      {chevron ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            chevron.onClick();
+          }}
+          aria-label={chevron.expanded ? "Collapse" : "Expand"}
+          aria-expanded={chevron.expanded}
+          className="flex w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-info"
+        >
+          <ChevronRight
+            className={cn("size-3 transition-transform", chevron.expanded && "rotate-90")}
+            aria-hidden
+          />
+        </button>
+      ) : (
+        <span className="w-4 shrink-0" aria-hidden />
+      )}
+      <button
+        type="button"
+        onClick={() => onSelect(event)}
+        className={cn(
+          "flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+          "hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-info",
+          isSelected && "bg-accent/60 ring-1 ring-info/40",
+        )}
+      >
+        <Icon className={cn("mt-0.5 size-3.5 shrink-0", colorFor(event.kind))} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate font-medium text-foreground">{labelFor(event)}</span>
+            {chevron && !chevron.expanded && chevron.count > 0 && (
+              <span className="shrink-0 rounded-full bg-muted px-1.5 py-0 font-mono text-[9px] leading-4 text-muted-foreground">
+                +{chevron.count}
+              </span>
+            )}
+          </div>
+          {event.surprise !== undefined && event.surprise !== null && (
+            <div className="text-[10px] text-muted-foreground">
+              surprise {event.surprise.toFixed(2)}
+            </div>
+          )}
+          {event.tool_call_id && event.kind !== "tool_call" && (
+            <div className="truncate text-[10px] text-muted-foreground">
+              {event.tool_call_id.slice(0, 12)}…
+            </div>
+          )}
+        </div>
+      </button>
     </div>
   );
 }
