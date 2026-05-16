@@ -188,7 +188,7 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
 
   return (
     <div className="space-y-2 rounded-xl border bg-card p-3">
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <Input placeholder="name (kebab-case)" value={name} onChange={(e) => setName(e.target.value)} />
         <Input placeholder="schedule (cron)" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
         <Input
@@ -373,7 +373,7 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
 
   return (
     <div className="space-y-2 rounded-xl border bg-card p-3">
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <Input placeholder="name (kebab-case)" value={name} onChange={(e) => setName(e.target.value)} />
         <select
           value={watchType}

@@ -240,9 +240,14 @@ export function DashboardClient() {
         />
 
         <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
-          {/* TODAY row — collapses to fewer columns if any sub-section is off. */}
+          {/* TODAY row — collapses to fewer columns if any sub-section is off.
+              `grid-cols-1` is REQUIRED as the default — without it, the
+              implicit grid column sizes to `max-content`, letting any
+              long unbroken text (question title, email subject) blow the
+              column past the viewport on mobile. With `minmax(0, 1fr)`
+              the column is clamped and the `truncate` chain works. */}
           {(s.pursuits || s.todos || s.upcoming) && (
-            <div className="grid gap-4 sm:gap-5 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
               {s.pursuits && (
                 <PursuitsCard
                   pursuits={filtered.pursuits}
@@ -261,7 +266,7 @@ export function DashboardClient() {
               `surface_item`, each rendered by one generic SurfaceCard. A new
               surface the agent invents appears here with zero new code. */}
           {Object.keys(filtered.surfaceItems).length > 0 && (
-            <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
               {Object.entries(filtered.surfaceItems).map(([surfaceKey, items], i) => (
                 <SurfaceCard
                   key={surfaceKey}
@@ -279,7 +284,7 @@ export function DashboardClient() {
           )}
 
           {(s.approvals || s.followups) && (
-            <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
               {s.approvals && (
                 <ApprovalsCard approvals={filtered.approvals} onOpen={openViewer} />
               )}

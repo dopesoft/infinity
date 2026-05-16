@@ -44,7 +44,7 @@ export function Section({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, delay, ease: [0.2, 0.7, 0.2, 1] }}
-      className={cn("space-y-2.5", className)}
+      className={cn("min-w-0 max-w-full space-y-2.5", className)}
     >
       <header className="flex items-end justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -100,7 +100,7 @@ export const TileCard = React.forwardRef<
       ref={ref}
       type="button"
       className={cn(
-        "group relative flex w-full items-center gap-2.5 rounded-lg border p-3 text-left transition-all duration-200",
+        "group relative flex w-full min-w-0 max-w-full items-center gap-2.5 overflow-hidden rounded-lg border p-3 text-left transition-all duration-200",
         "hover:-translate-y-px hover:shadow-[0_2px_10px_-4px_hsl(var(--foreground)/0.15)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
         "active:translate-y-0",

@@ -213,7 +213,7 @@ export default function GymPage() {
 function Overview({ gym, loading }: { gym: GymSnapshotDTO | null; loading: boolean }) {
   const latest = gym?.runs?.[0];
   return (
-    <div className="grid gap-3 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
       <Panel title="loop" icon={<Dumbbell className="size-4" />}>
         <TimelineRow label="training examples" value={String(gym?.summary.examples ?? 0)} />
         <TimelineRow label="dataset runs" value={String(gym?.summary.runs ?? 0)} />
