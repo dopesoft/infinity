@@ -178,8 +178,8 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
 
           {detail && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-              <aside className="min-w-0 lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)] lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:pr-1 lg:[scrollbar-gutter:stable]">
-                <div className="mb-2 flex items-center gap-2">
+              <aside className="flex min-w-0 flex-col lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)]">
+                <div className="mb-2 flex shrink-0 items-center gap-2 lg:border-b lg:border-border lg:pb-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                     timeline
                   </span>
@@ -190,11 +190,13 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     {events.length}
                   </Badge>
                 </div>
-                <TraceTimeline
-                  events={events}
-                  selectedId={selected?.id ?? null}
-                  onSelect={setSelected}
-                />
+                <div className="min-h-0 flex-1 lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:pr-1 lg:pt-1 lg:[scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                  <TraceTimeline
+                    events={events}
+                    selectedId={selected?.id ?? null}
+                    onSelect={setSelected}
+                  />
+                </div>
               </aside>
               <section className="min-w-0">
                 <TraceEventDetail event={selected} />
