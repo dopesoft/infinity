@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TurnStatusPip } from "@/components/logs/TurnStatusPip";
 import { TraceTimeline } from "@/components/logs/TraceTimeline";
-import { TraceEventDetail } from "@/components/logs/TraceEventDetail";
+import { TraceEventDetail, TraceMetadata } from "@/components/logs/TraceEventDetail";
 import { cn } from "@/lib/utils";
 import { fetchTraceDetail, type TraceDetailDTO, type TraceEventDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
@@ -174,23 +174,28 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
           )}
         </div>
 
-        {/* Body — same px-3 py-3 sm:px-4 rhythm as the list page. */}
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 scroll-touch sm:px-4">
+        {/* Body — flex column. Headers row + body grid both share the same
+           `lg:grid-cols-[240px_minmax(0,1fr)_280px]` template so the seamless
+           border-b under the header row aligns perfectly with the columns
+           underneath. */}
+        <div className="flex min-h-0 flex-1 flex-col px-3 sm:px-4">
           {!detail && !loading && (
-            <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+            <div className="mt-3 rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
               Turn not found.
             </div>
           )}
 
           {detail && (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-              <aside
-                className={cn(
-                  "flex min-w-0 flex-col lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)]",
-                  mobileShowDetail ? "hidden lg:flex" : "flex",
-                )}
-              >
-                <div className="mb-2 flex shrink-0 items-center gap-2 lg:border-b lg:border-border lg:pb-2">
+            <>
+              {/* Header row — one parent, one border-b: seamless across both columns. */}
+              <div className="grid grid-cols-1 gap-x-4 border-b border-border pb-2 pt-3 lg:grid-cols-[240px_minmax(0,1fr)_280px]">
+                {/* Timeline header */}
+                <div
+                  className={cn(
+                    "flex items-center gap-2",
+                    mobileShowDetail ? "hidden lg:flex" : "flex",
+                  )}
+                >
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                     timeline
                   </span>
@@ -201,21 +206,13 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     {events.length}
                   </Badge>
                 </div>
-                <div className="min-h-0 flex-1 px-1 pt-1 lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:[scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
-                  <TraceTimeline
-                    events={events}
-                    selectedId={selected?.id ?? null}
-                    onSelect={handleSelect}
-                  />
-                </div>
-              </aside>
-              <section
-                className={cn(
-                  "flex min-w-0 flex-col lg:sticky lg:top-3 lg:max-h-[calc(100dvh-160px)]",
-                  mobileShowDetail ? "flex" : "hidden lg:flex",
-                )}
-              >
-                <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2 border-b border-border pb-2 lg:border-b">
+                {/* Event header (body column) */}
+                <div
+                  className={cn(
+                    "flex flex-wrap items-center gap-2",
+                    mobileShowDetail ? "flex" : "hidden lg:flex",
+                  )}
+                >
                   <Button
                     type="button"
                     variant="ghost"
@@ -236,23 +233,6 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                           {selected.tool_name}
                         </span>
                       )}
-                      {selected.source && selected.source !== "observation" && (
-                        <Badge variant="outline" className="h-5 font-mono text-[10px] uppercase">
-                          {selected.source}
-                        </Badge>
-                      )}
-                      <span
-                        className="ml-auto font-mono text-[10px] text-muted-foreground"
-                        suppressHydrationWarning
-                      >
-                        {(() => {
-                          try {
-                            return new Date(selected.timestamp).toLocaleString();
-                          } catch {
-                            return selected.timestamp;
-                          }
-                        })()}
-                      </span>
                     </>
                   ) : (
                     <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
@@ -260,23 +240,63 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     </span>
                   )}
                 </div>
-                <div className="min-h-0 flex-1 px-1 pt-1 lg:overflow-y-auto lg:overflow-x-hidden lg:pb-4 lg:[scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
-                  <TraceEventDetail event={selected} />
-                  {turn?.assistant_text && selected?.kind !== "assistant" && (
-                    <div className="mt-4">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                          final reply
-                        </span>
-                      </div>
-                      <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground">
-                        {turn.assistant_text}
-                      </pre>
-                    </div>
-                  )}
+                {/* Metadata header (right column, lg+ only) */}
+                <div className="hidden lg:flex lg:items-center lg:gap-2">
+                  <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    metadata
+                  </span>
                 </div>
-              </section>
-            </div>
+              </div>
+
+              {/* Body grid — same column template. Each panel has its own scroll. */}
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 pb-3 pt-2 lg:grid-cols-[240px_minmax(0,1fr)_280px]">
+                <aside
+                  className={cn(
+                    "flex min-w-0 min-h-0 flex-col",
+                    mobileShowDetail ? "hidden lg:flex" : "flex",
+                  )}
+                >
+                  <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                    <TraceTimeline
+                      events={events}
+                      selectedId={selected?.id ?? null}
+                      onSelect={handleSelect}
+                    />
+                  </div>
+                </aside>
+                <section
+                  className={cn(
+                    "flex min-w-0 min-h-0 flex-col",
+                    mobileShowDetail ? "flex" : "hidden lg:flex",
+                  )}
+                >
+                  <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                    <TraceEventDetail event={selected} />
+                    {turn?.assistant_text && selected?.kind !== "assistant" && (
+                      <div className="mt-4">
+                        <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Final reply
+                        </div>
+                        <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground">
+                          {turn.assistant_text}
+                        </pre>
+                      </div>
+                    )}
+                    {/* Mobile-only metadata at bottom of body, since the right
+                       column is desktop-only. */}
+                    <div className="mt-4 lg:hidden">
+                      <TraceMetadata event={selected} />
+                    </div>
+                  </div>
+                </section>
+                {/* Metadata column — desktop only. */}
+                <aside className="hidden min-w-0 min-h-0 lg:flex lg:flex-col">
+                  <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                    <TraceMetadata event={selected} />
+                  </div>
+                </aside>
+              </div>
+            </>
           )}
         </div>
       </div>
