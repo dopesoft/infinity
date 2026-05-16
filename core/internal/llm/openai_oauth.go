@@ -100,7 +100,14 @@ const (
 
 func NewOpenAIOAuth(store *OAuthStore, model string) *OpenAIOAuth {
 	if model == "" {
-		model = "gpt-5"
+		// Default to the Codex roster — ChatGPT-account OAuth (the
+		// subscription path) rejects plain "gpt-5" with
+		//   The 'gpt-5' model is not supported when using Codex with
+		//   a ChatGPT account.
+		// gpt-5-codex is the canonical Codex CLI default and is what
+		// the subscription plan actually exposes. Override via
+		// LLM_MODEL_OPENAI_OAUTH if you want the smaller codex-mini.
+		model = "gpt-5-codex"
 	}
 	return &OpenAIOAuth{
 		store:       store,
@@ -370,12 +377,22 @@ func (o *OpenAIOAuth) Stream(
 
 	effectiveModel := o.model
 	if model != "" {
-		if normalized := normalizeOpenAIModel(model); normalized != "" {
+		// OAuth path serves the Codex roster, NOT the API's full
+		// gpt-5 / gpt-5-mini lineup. We have our own normalizer so a
+		// per-call "haiku" or "gpt-5" from a sub-agent maps to
+		// gpt-5-codex / codex-mini-latest instead of a model the
+		// subscription plan can't actually run.
+		if normalized := normalizeCodexModel(model); normalized != "" {
 			effectiveModel = normalized
 		}
 		// Unknown name stays as the configured default; if the model
 		// *also* turns out to be one the account can't serve, the
 		// retry-on-400 path below catches it.
+	}
+	// Defense in depth: even o.model could be wrong if someone set
+	// LLM_MODEL_OPENAI_OAUTH=gpt-5 manually. Final-mile normalize.
+	if codex := normalizeCodexModel(effectiveModel); codex != "" {
+		effectiveModel = codex
 	}
 
 	httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
@@ -844,4 +861,59 @@ func truncateOAuth(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// normalizeCodexModel maps a model id / nickname onto the Codex roster
+// served via ChatGPT-account OAuth. The OAuth path REJECTS plain
+// "gpt-5" / "gpt-5-mini" etc. with HTTP 400; only the codex-tagged
+// variants are exposed to subscription clients.
+//
+// Mapping table (deliberately conservative — when in doubt, return
+// gpt-5-codex which is the standard Codex CLI default and supports
+// tool use + the largest context window the subscription plan offers):
+//
+//	gpt-5, gpt-5-codex, codex-large, opus, premium, large,
+//	sonnet, default, medium                    → gpt-5-codex
+//	gpt-5-mini, codex-mini-latest, codex-mini,
+//	haiku, cheap, small, mini                  → codex-mini-latest
+//	o4-mini, o3-mini                           → codex-mini-latest
+//	chatgpt-*, o1-*                            → pass through (special-case
+//	                                              ids the subscription serves
+//	                                              directly when they exist)
+//
+// Returns "" if the input doesn't look like anything the OAuth path
+// can serve — caller falls back to o.model (which we've already
+// final-mile-normalized above).
+func normalizeCodexModel(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return ""
+	}
+	// Already a Codex-roster id → pass through.
+	if strings.HasPrefix(m, "gpt-5-codex") ||
+		strings.HasPrefix(m, "codex-mini") ||
+		strings.HasPrefix(m, "codex-large") ||
+		strings.HasPrefix(m, "chatgpt-") {
+		return model
+	}
+	// Tier nicknames + the un-suffixed gpt-5 ids that 400 against the
+	// OAuth path get remapped to the closest Codex variant.
+	switch {
+	case strings.HasPrefix(m, "gpt-5-mini"),
+		strings.HasPrefix(m, "o4-mini"),
+		strings.HasPrefix(m, "o3-mini"):
+		return "codex-mini-latest"
+	case strings.HasPrefix(m, "gpt-5"):
+		return "gpt-5-codex"
+	}
+	switch m {
+	case "haiku", "cheap", "small", "mini":
+		return "codex-mini-latest"
+	case "sonnet", "default", "medium",
+		"opus", "premium", "large":
+		return "gpt-5-codex"
+	}
+	// Unknown — let the caller decide. The retry-on-400 path will
+	// fall back to o.model, which we've also final-mile normalized.
+	return ""
 }

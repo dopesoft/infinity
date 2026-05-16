@@ -85,6 +85,24 @@ func IsComposioTool(name string) bool {
 	return strings.HasPrefix(name, "composio__")
 }
 
+// IsBridgeTool reports whether a tool is one of the generic bridge
+// primitives (fs_*, bash_run, git_*). These route per-session via the
+// bridge.Router and operate on either the Mac filesystem (when Mac is
+// the active bridge) or the Railway workspace volume (when Cloud is
+// active). They run as Jarvis's direct file/bash/git verbs — no
+// sub-agent — so the Trust queue is the only safety layer; gate them
+// just like the claude_code__* mutators.
+func IsBridgeTool(name string) bool {
+	switch name {
+	case "fs_read", "fs_ls", "fs_save", "fs_edit",
+		"bash_run",
+		"git_status", "git_diff", "git_stage", "git_commit",
+		"git_push", "git_pull":
+		return true
+	}
+	return false
+}
+
 // GateChain composes multiple ToolGate implementations into one. Each call
 // to Authorize walks the chain in order: the first gate that returns a
 // non-allow decision wins. Gates that don't recognise the tool name MUST

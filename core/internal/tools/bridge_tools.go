@@ -441,6 +441,14 @@ func (t *bridgeGitCommit) Execute(ctx context.Context, in map[string]any) (strin
 	if err != nil {
 		return "", fmt.Errorf("git_commit: %s", why)
 	}
+	// Per-session branching: when commits land on the Cloud bridge,
+	// auto-route them onto a session-named branch so Jarvis's work
+	// is attributable + revertable without polluting main. Mac
+	// commits use whatever branch the boss has checked out — he's
+	// the human in that loop.
+	if b.Name() == bridge.KindCloud {
+		ensureSessionBranch(ctx, b, strString(in, "repo"), SessionIDFromContext(ctx))
+	}
 	body, status, ok := b.Post(ctx, "/git/commit", map[string]any{
 		"repo":    strString(in, "repo"),
 		"message": strString(in, "message"),
@@ -449,6 +457,90 @@ func (t *bridgeGitCommit) Execute(ctx context.Context, in map[string]any) (strin
 		return "", fmt.Errorf("git_commit via %s failed (status=%d): %s", b.Name(), status, string(body))
 	}
 	return formatBridgeResult(b, body), nil
+}
+
+// ensureSessionBranch makes sure the cloud bridge's working tree is
+// checked out on `jarvis/session-<shortid>` before the next commit.
+// Idempotent: if the branch already exists and is current, no-op.
+//
+// We do this via /bash so we don't have to bake branching primitives
+// into the workspace service. Cheap (<50ms) and runs once per session-
+// commit cycle.
+func ensureSessionBranch(ctx context.Context, b bridge.Bridge, repo, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	short := sessionID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	branch := "jarvis/session-" + short
+	cmd := "git rev-parse --abbrev-ref HEAD"
+	repoPath := repo
+	if repoPath == "" {
+		repoPath = "."
+	}
+	// Probe current branch.
+	probe, status, ok := b.Post(ctx, "/bash", map[string]any{
+		"cmd":         cmd,
+		"cwd":         repoPath,
+		"timeout_sec": 5,
+	})
+	if !ok || status >= 300 {
+		return // best-effort; let the commit fail noisily if the tree is bad
+	}
+	if extractJSONFieldFast(string(probe), "output") != "" {
+		current := extractJSONFieldFast(string(probe), "output")
+		// Trim trailing newline.
+		for strings.HasSuffix(current, "\n") || strings.HasSuffix(current, " ") {
+			current = current[:len(current)-1]
+		}
+		if current == branch {
+			return // already on it
+		}
+	}
+	// Create or switch. `git switch -c <branch> 2>/dev/null || git switch <branch>`
+	// — first form succeeds on first call, second on subsequent calls.
+	switchCmd := fmt.Sprintf(
+		"git switch -c %s 2>/dev/null || git switch %s",
+		shellQuote(branch), shellQuote(branch),
+	)
+	_, _, _ = b.Post(ctx, "/bash", map[string]any{
+		"cmd":         switchCmd,
+		"cwd":         repoPath,
+		"timeout_sec": 5,
+	})
+}
+
+func shellQuote(s string) string {
+	// Single-quote for bash, escaping any embedded single-quotes via the
+	// classic '"'"' dance.
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// extractJSONFieldFast is a single-key string extractor — duplicated
+// from the server package's helper because importing it would create
+// a cycle (server imports tools). Tiny enough that copy is fine.
+func extractJSONFieldFast(raw, key string) string {
+	idx := strings.Index(raw, "\""+key+"\"")
+	if idx < 0 {
+		return ""
+	}
+	colon := strings.Index(raw[idx:], ":")
+	if colon < 0 {
+		return ""
+	}
+	rest := raw[idx+colon+1:]
+	rest = strings.TrimLeft(rest, " \t\n\r")
+	if !strings.HasPrefix(rest, "\"") {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, "\"")
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
 }
 
 type bridgeGitPush struct {

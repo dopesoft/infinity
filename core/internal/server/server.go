@@ -306,6 +306,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
 	mux.HandleFunc("/api/bridge/refresh", s.handleBridgeRefresh)
 	mux.HandleFunc("/api/bridge/session/", s.handleBridgeSession)
+	// Cloud workspace staleness: cloud bridge's local HEAD vs origin/<branch>.
+	mux.HandleFunc("/api/bridge/workspace/git-status", s.handleBridgeWorkspaceGitStatus)
 }
 
 func (s *Server) Start() error {

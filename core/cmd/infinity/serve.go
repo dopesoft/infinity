@@ -444,6 +444,7 @@ func serveCmd() *cobra.Command {
 						proactive.NewClaudeCodeGate(earlyTrust),
 						proactive.NewGitHubGate(earlyTrust),
 						proactive.NewComposioGate(earlyTrust),
+						proactive.NewBridgeGate(earlyTrust),
 					)
 				}
 				loop = agent.New(cfg)

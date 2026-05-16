@@ -20,6 +20,7 @@ import { useProjectContext } from "@/lib/canvas/useCurrentProject";
 import { fetchCanvasFSList, fetchCanvasDebug, type FSEntry } from "@/lib/canvas/api";
 import { DeployStatusRow } from "@/components/canvas/DeployStatusRow";
 import { BridgeSourceRow } from "@/components/canvas/BridgeSourceRow";
+import { CloudWorkspaceStalenessRow } from "@/components/canvas/CloudWorkspaceStalenessRow";
 import { cn } from "@/lib/utils";
 
 /**
@@ -223,6 +224,11 @@ export function CanvasFileTree({
           rendered (Mac vs Cloud). Same visual mass as DeployStatusRow.
           Hidden when the bridge is unconfigured or no active kind yet. */}
       <BridgeSourceRow sessionId={projectCtx?.sessionId || null} />
+      {/* Cloud-workspace staleness. Same shape as DeployStatusRow but
+          for the Railway workspace volume's local checkout being
+          behind origin/<branch>. Renders only when the active bridge
+          for this session is Cloud AND the workspace is behind. */}
+      <CloudWorkspaceStalenessRow sessionId={projectCtx?.sessionId || null} />
       {/* py-0 here — the 4px of vertical padding used to push the empty
           state ~4px lower than the chat / canvas equivalents. When files
           ARE populated, the rows have their own row-padding so this top

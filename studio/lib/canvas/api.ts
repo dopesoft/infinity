@@ -231,3 +231,19 @@ export const setBridgePreference = (
 
 export const refreshBridgeStatus = () =>
   postJSON<BridgeStatus>("/api/bridge/refresh", {});
+
+// Cloud-workspace git staleness — answers "is the Railway workspace
+// volume's local checkout behind main on GitHub?" Same shape question
+// as DeployStatus but pointed at the cloud bridge's working tree, not
+// at Core's own binary.
+export type BridgeWorkspaceGitStatus = {
+  branch: string;
+  local_sha: string;
+  remote_sha: string;
+  behind: boolean;
+  commits_behind: number;
+  repo: string;
+};
+
+export const fetchBridgeWorkspaceGitStatus = (signal?: AbortSignal) =>
+  getJSON<BridgeWorkspaceGitStatus>("/api/bridge/workspace/git-status", signal);
