@@ -58,8 +58,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
     const supabase = getSupabaseBrowserClient();
 
-    // Tables to subscribe to. Adding a table here without also bumping the
-    // 008_realtime publication migration silently no-ops on the wire.
+    // Tables to subscribe to. Adding a table here without also bumping a
+    // realtime publication migration silently no-ops on the wire.
     const TABLES = [
       "mem_sessions",
       "mem_observations",
@@ -81,6 +81,22 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       "mem_lessons",
       "mem_session_state",
       "mem_working_buffer",
+      "mem_curiosity_questions",
+      "mem_reflections",
+      "mem_predictions",
+      "mem_code_proposals",
+      "mem_surface_items",
+      "mem_tasks",
+      "mem_pursuits",
+      "mem_pursuit_checkins",
+      "mem_followups",
+      "mem_saved",
+      "mem_training_examples",
+      "mem_distillation_datasets",
+      "mem_distillation_runs",
+      "mem_model_adapters",
+      "mem_adapter_evals",
+      "mem_policy_routes",
     ] as const;
 
     let channel = supabase.channel("infinity-realtime");
