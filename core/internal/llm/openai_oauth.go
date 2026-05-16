@@ -561,7 +561,7 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 		"store":  false,
 	}
 	if openAIModelSupportsBuiltInWebSearch(model) {
-		body["tools"] = []map[string]any{{"type": "web_search_preview"}}
+		body["tools"] = []map[string]any{{"type": "web_search"}}
 	}
 	if system != "" {
 		body["instructions"] = system
@@ -601,12 +601,20 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 	return body
 }
 
+// openAIModelSupportsBuiltInWebSearch reports whether the model served via
+// the ChatGPT-account OAuth path (chatgpt.com/backend-api/codex/responses)
+// accepts the built-in `web_search` tool. The Codex backend uses the bare
+// name `web_search` — NOT `web_search_preview`, which is the public
+// api.openai.com Responses API spelling and is rejected here with
+// `Unsupported tool type`. The codex roster (gpt-5*, codex-mini-latest,
+// chatgpt-* aliases) all support it; older API-only families do not ride
+// the OAuth path so they're excluded.
 func openAIModelSupportsBuiltInWebSearch(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
 		return false
 	}
-	if strings.HasPrefix(m, "gpt-5") || strings.HasPrefix(m, "gpt-4.1") || strings.HasPrefix(m, "gpt-4o") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "chatgpt-") {
+	if strings.HasPrefix(m, "gpt-5") || strings.HasPrefix(m, "codex-") || strings.HasPrefix(m, "chatgpt-") {
 		return true
 	}
 	return false
