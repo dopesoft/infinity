@@ -58,7 +58,7 @@ Format: name - short description.
 // composio__TOOLKIT_* family shows as a single entry pointing the model
 // at tool_search for the specific verb. Other dormant tools render
 // individually since they're long-tail not catalog-tail.
-func buildToolCatalogBlock(reg *tools.Registry, active *tools.ActiveSet) string {
+func buildToolCatalogBlock(reg *tools.Registry, active *tools.ActiveSet, hidden map[string]struct{}) string {
 	if reg == nil || active == nil {
 		return ""
 	}
@@ -73,6 +73,13 @@ func buildToolCatalogBlock(reg *tools.Registry, active *tools.ActiveSet) string 
 	composioToolkits := map[string]int{}
 	regular := make([]tools.CatalogEntry, 0, len(dormant))
 	for _, d := range dormant {
+		// Honor the per-session hidden set so tools we're filtering out
+		// of schemas (e.g. claude_code__* on Cloud) also disappear from
+		// the catalog — otherwise the model wastes turns on
+		// tool_search/load_tools for things it can't use.
+		if _, drop := hidden[d.Name]; drop {
+			continue
+		}
 		if strings.HasPrefix(d.Name, "composio__") {
 			tail := strings.TrimPrefix(d.Name, "composio__")
 			toolkit := tail

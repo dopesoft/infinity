@@ -60,7 +60,7 @@ func (m *MemoryProvider) BuildSystemPrefix(ctx context.Context, sessionID, query
 		b.WriteString("Filesystem: the boss's local Mac checkout. Commits authored as the boss's git identity.\n")
 	case active.Name() == KindCloud:
 		b.WriteString(fmt.Sprintf("Active: Cloud (%s)\n", why))
-		b.WriteString("Tools: only the generic bridge primitives work — `fs_read`, `fs_ls`, `fs_save`, `fs_edit`, `bash_run`, `git_status`, `git_diff`, `git_stage`, `git_commit`, `git_push`, `git_pull`. `claude_code__*` tools will fail (Mac is offline). YOU are the only brain here — your own cognition (ChatGPT subscription via openai_oauth) covers all the decisions; no metered API spend.\n")
+		b.WriteString("Tools: use the generic bridge primitives — `fs_read`, `fs_ls`, `fs_save`, `fs_edit`, `bash_run`, `git_status`, `git_diff`, `git_stage`, `git_commit`, `git_push`, `git_pull`. The `claude_code__*` schemas are intentionally not present this turn: those tools edit the boss's Mac filesystem, not this Cloud workspace volume, and calling them here would silently change the wrong tree. YOU are the only brain here — your own cognition (ChatGPT subscription via openai_oauth) covers all the decisions; no metered API spend.\n")
 		b.WriteString("Filesystem: the Railway workspace volume. Commits authored as 'Jarvis Cloud <jarvis@dopesoft.io>' — diff-able from the boss's Mac commits.\n")
 		b.WriteString("Sync: when the boss wants to continue on his Mac, push to GitHub and have him `git pull` there. Same in reverse.\n")
 	}

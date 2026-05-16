@@ -561,7 +561,16 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 		"store":  false,
 	}
 	if openAIModelSupportsBuiltInWebSearch(model) {
-		body["tools"] = []map[string]any{{"type": "web_search_preview"}}
+		// IMPORTANT: must be "web_search", NOT "web_search_preview".
+		// The Codex backend (chatgpt.com/backend-api/codex/responses)
+		// rejects "web_search_preview" with 400 "Unsupported tool type"
+		// — that string is the public api.openai.com/v1/responses name.
+		// Verified against openai/codex tool_spec.rs:
+		//   #[serde(rename = "web_search")] WebSearch { ... }
+		// DO NOT REVERT TO `web_search_preview` — it will 400 every
+		// request because this `tools` array is sent on every turn,
+		// not just web-search turns.
+		body["tools"] = []map[string]any{{"type": "web_search"}}
 	}
 	if system != "" {
 		body["instructions"] = system
@@ -603,13 +612,13 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 
 // openAIModelSupportsBuiltInWebSearch reports whether the model served via
 // the ChatGPT-account OAuth path (chatgpt.com/backend-api/codex/responses)
-// accepts OpenAI's built-in web search tool. The current Responses API docs
-// show `web_search` as the generally available tool and `web_search_preview`
-// as the earlier preview variant. Use the preview variant on this OAuth path
-// until direct verification proves the GA type is accepted by Codex too.
-// The codex roster (gpt-5*, codex-mini-latest, chatgpt-* aliases) all support
-// built-in web search; older API-only families do not ride the OAuth path so
-// they're excluded.
+// accepts OpenAI's built-in web search tool. The Codex backend expects the
+// bare name `"web_search"` (NOT `"web_search_preview"`, which is the public
+// api.openai.com Responses API spelling — Codex 400s with "Unsupported tool
+// type" on that). Verified against openai/codex tool_spec.rs (#[serde(rename
+// = "web_search")]). The codex roster (gpt-5*, codex-mini-latest, chatgpt-*
+// aliases) all support built-in web search; older API-only families do not
+// ride the OAuth path so they're excluded.
 func openAIModelSupportsBuiltInWebSearch(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {

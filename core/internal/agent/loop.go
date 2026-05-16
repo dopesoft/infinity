@@ -269,6 +269,48 @@ type Loop struct {
 	// 120_000 (roughly 60% of a 200K window) so we compact before the
 	// next turn starts to bloat further. Tune via INFINITY_AUTO_COMPACT_AT.
 	autoCompactThreshold int
+
+	// toolVisibility is the per-turn hook that decides which tool names
+	// to hide from the model for a given session. Guarded by providerMu
+	// (shares the same hot-swap lock as the LLM provider — both are
+	// per-turn snapshots read once per iteration). Nil-safe.
+	toolVisibility ToolVisibilityFunc
+}
+
+// hiddenForSession reads the visibility hook under providerMu and
+// returns the set of tool names to drop from this turn. Returns an
+// empty map (not nil) when no hook is wired so call sites can iterate
+// without a nil check.
+func (l *Loop) hiddenForSession(ctx context.Context, sessionID string) map[string]struct{} {
+	if l == nil {
+		return map[string]struct{}{}
+	}
+	l.providerMu.RLock()
+	fn := l.toolVisibility
+	l.providerMu.RUnlock()
+	if fn == nil {
+		return map[string]struct{}{}
+	}
+	out := fn(ctx, sessionID)
+	if out == nil {
+		return map[string]struct{}{}
+	}
+	return out
+}
+
+// filterToolNames drops any name present in hidden. Order-preserving.
+func filterToolNames(names []string, hidden map[string]struct{}) []string {
+	if len(hidden) == 0 {
+		return names
+	}
+	out := names[:0:0]
+	for _, n := range names {
+		if _, drop := hidden[n]; drop {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // SetCompactor installs the conversation compactor used by the auto-
@@ -331,7 +373,21 @@ type Config struct {
 	Turns             TurnRecorder
 	SystemPrompt      string
 	MaxToolIterations int
+	// ToolVisibility, when set, decides per-turn which tool names the
+	// model is allowed to *see*. The hook returns a set of tool names to
+	// hide for the given session — those tools are dropped from both the
+	// schema bundle sent to the LLM and the dormant catalog block in the
+	// system prompt. Used today by the bridge layer to hide
+	// `claude_code__*` (Mac-only) tools when the session is routed to the
+	// Cloud workspace, so the model can't accidentally edit the wrong
+	// filesystem. Nil-safe: when unset every tool stays visible.
+	ToolVisibility ToolVisibilityFunc
 }
+
+// ToolVisibilityFunc returns the names that should be hidden from the
+// model for this session+turn. Run each iteration; cheap because the
+// underlying bridge state is already cached.
+type ToolVisibilityFunc func(ctx context.Context, sessionID string) map[string]struct{}
 
 func New(cfg Config) *Loop {
 	if cfg.MaxToolIterations <= 0 {
@@ -381,7 +437,20 @@ func New(cfg Config) *Loop {
 		autoCompactThreshold: threshold,
 		usageStore:           cfg.UsageStore,
 		turns:                cfg.Turns,
+		toolVisibility:       cfg.ToolVisibility,
 	}
+}
+
+// SetToolVisibility installs (or replaces) the per-turn tool visibility
+// hook. Safe to call after agent.New() since the loop snapshots the
+// callback under the providerMu lock on every iteration.
+func (l *Loop) SetToolVisibility(fn ToolVisibilityFunc) {
+	if l == nil {
+		return
+	}
+	l.providerMu.Lock()
+	l.toolVisibility = fn
+	l.providerMu.Unlock()
 }
 
 // SetTurnRecorder installs (or replaces) the LangSmith-style trace recorder
@@ -481,11 +550,17 @@ func (l *Loop) Hooks() HookEmitter {
 // instructions — the model needs to know the long-tail tool surface
 // exists and can be brought online via tool_search → load_tools, exactly
 // like in text mode.
+//
+// The voice path doesn't have a sessionID handy on construction (the
+// realtime session is initialised before any turn), so we render the
+// catalog without the per-session hidden filter. Acceptable trade-off:
+// the catalog over-lists by claude_code__* on Cloud sessions for voice,
+// but the schema bundle (live text path) does honor the filter.
 func (l *Loop) ToolCatalogBlock(active *tools.ActiveSet) string {
 	if l == nil {
 		return ""
 	}
-	return buildToolCatalogBlock(l.tools, active)
+	return buildToolCatalogBlock(l.tools, active, nil)
 }
 
 func (l *Loop) GetOrCreateSession(id string) *Session {
@@ -663,10 +738,16 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
+	// Snapshot the per-session hidden-tools set once per turn — used to
+	// drop tools the bridge layer (or any other policy) has decided the
+	// model must not see this turn. Today: hides `claude_code__*` on
+	// Cloud-routed sessions so the model can't accidentally edit the
+	// Mac filesystem when working in the Cloud workspace.
+	hidden := l.hiddenForSession(ctx, s.ID)
 	// Prepend the dormant tool catalog so the model knows what exists
 	// even when it doesn't have the schema in hand. Cheap (~30 tokens
 	// per entry) and unlocks the tool_search → load_tools loop.
-	if catalog := buildToolCatalogBlock(l.tools, s.Active); catalog != "" {
+	if catalog := buildToolCatalogBlock(l.tools, s.Active, hidden); catalog != "" {
 		systemPrompt = catalog + "\n\n" + systemPrompt
 	}
 	// Prepend the connected-accounts overlay so the model can route to
@@ -717,7 +798,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// set — the dormant long tail lives in the system-prompt catalog
 		// block and surfaces via tool_search. This is the core Phase-1
 		// context-budget win.
-		toolDefs := l.tools.DefinitionsFor(s.Active.Names())
+		//
+		// Apply the per-turn visibility filter so e.g. claude_code__*
+		// schemas don't reach the model when the session is routed to
+		// Cloud. Refreshed each iteration because the bridge can flip
+		// mid-session (Mac comes back online, boss flips preference).
+		visibleNames := filterToolNames(s.Active.Names(), l.hiddenForSession(ctx, s.ID))
+		toolDefs := l.tools.DefinitionsFor(visibleNames)
 		go func() {
 			defer close(streamDone)
 			resp, streamErr = provider.Stream(ctx, model, systemPrompt, s.Snapshot(), toolDefs, llmEvents)

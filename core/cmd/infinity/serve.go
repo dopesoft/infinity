@@ -489,6 +489,16 @@ func serveCmd() *cobra.Command {
 				if pool != nil {
 					loop.SetTurnRecorder(turnRecorderAdapter{store: memory.NewTurnStore(pool)})
 				}
+				// Tool visibility — hide claude_code__* on Cloud-routed
+				// sessions so the model can't accidentally edit the Mac
+				// filesystem when working in the Cloud workspace. The
+				// nudges in the bridge system-prompt overlay were not
+				// enough; the only reliable fix is making the schemas
+				// physically invisible to the model. Mac sessions see
+				// the full toolset unchanged.
+				if activeBridgeRouter != nil {
+					loop.SetToolVisibility(makeBridgeToolVisibility(activeBridgeRouter, activeBridgePrefs))
+				}
 			}
 
 			// Durable workflow engine — Phase 2 substrate. The agent
@@ -908,6 +918,85 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address (or use $PORT)")
 	cmd.Flags().StringVar(&mcpConfig, "mcp-config", "", "path to MCP server registry (default: $MCP_CONFIG or core/config/mcp.yaml)")
 	return cmd
+}
+
+// makeBridgeToolVisibility returns an agent.ToolVisibilityFunc that hides
+// the Mac-only `claude_code__*` toolset from the model when the session's
+// active bridge is the Cloud workspace. This is the structural fix for
+// the long-standing failure mode where the model would happily call
+// `claude_code__Edit` on a Cloud-routed session and silently edit the
+// boss's Mac filesystem instead of the workspace volume he was looking
+// at. The system-prompt overlay was nudging against this; making the
+// schemas physically invisible is the only reliable solution.
+//
+// Mac sessions, or sessions where the bridge selection is indeterminate
+// (no router state, no preference, errored router), see the full
+// toolset unchanged — the filter only ACTS when we're confident Cloud
+// is in charge.
+func makeBridgeToolVisibility(router *bridge.Router, prefs tools.PreferenceFetcher) agent.ToolVisibilityFunc {
+	if router == nil {
+		return nil
+	}
+	return func(ctx context.Context, sessionID string) map[string]struct{} {
+		pref := bridge.PrefAuto
+		if prefs != nil {
+			pref = prefs(ctx, sessionID)
+		}
+		active, _, err := router.For(ctx, pref)
+		if err != nil || active == nil {
+			return nil
+		}
+		if active.Name() != bridge.KindCloud {
+			return nil
+		}
+		// Hide the entire claude_code__* family. Names match the
+		// MCP-registered tool ids in tools/defaults.go DefaultLoadedTools
+		// plus the dormant catalog (Agent/Grep/Glob/LS/NotebookEdit/etc).
+		// We use a name-prefix match via the registry's catalog rather
+		// than a hardcoded list — that way any new claude_code__X tool
+		// added later inherits the filter automatically.
+		hidden := map[string]struct{}{}
+		for _, n := range allClaudeCodeToolNames {
+			hidden[n] = struct{}{}
+		}
+		return hidden
+	}
+}
+
+// allClaudeCodeToolNames enumerates the claude_code__* tool ids the MCP
+// proxy registers on boot (see Railway log line "mcp: claude_code
+// connected (26 tools)"). Hardcoding the list keeps the visibility
+// filter dependency-free; if the proxy adds a new verb, list it here.
+var allClaudeCodeToolNames = []string{
+	"claude_code__Agent",
+	"claude_code__AskUserQuestion",
+	"claude_code__Bash",
+	"claude_code__CronCreate",
+	"claude_code__CronDelete",
+	"claude_code__CronList",
+	"claude_code__Edit",
+	"claude_code__EnterPlanMode",
+	"claude_code__EnterWorktree",
+	"claude_code__ExitPlanMode",
+	"claude_code__ExitWorktree",
+	"claude_code__Glob",
+	"claude_code__Grep",
+	"claude_code__LS",
+	"claude_code__Monitor",
+	"claude_code__NotebookEdit",
+	"claude_code__PushNotification",
+	"claude_code__Read",
+	"claude_code__RemoteTrigger",
+	"claude_code__ScheduleWakeup",
+	"claude_code__ShareOnboardingGuide",
+	"claude_code__Skill",
+	"claude_code__TaskOutput",
+	"claude_code__TaskStop",
+	"claude_code__TodoWrite",
+	"claude_code__ToolSearch",
+	"claude_code__WebFetch",
+	"claude_code__WebSearch",
+	"claude_code__Write",
 }
 
 // turnRecorderAdapter bridges *memory.TurnStore → agent.TurnRecorder. The
