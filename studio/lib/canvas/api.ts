@@ -248,6 +248,25 @@ export type BridgeWorkspaceGitStatus = {
 export const fetchBridgeWorkspaceGitStatus = (signal?: AbortSignal) =>
   getJSON<BridgeWorkspaceGitStatus>("/api/bridge/workspace/git-status", signal);
 
+// Trigger a fast-forward `git pull` on the cloud workspace and return
+// the fresh status. Server-side runs `git pull --ff-only` via the
+// bridge's /bash endpoint — safe because it refuses any merge that
+// would require a non-fast-forward (no chance of clobbering local
+// edits). On a clean ephemeral workspace this is exactly what makes
+// the staleness banner disappear.
+export type BridgeWorkspaceGitPullResult = {
+  ok: boolean;
+  output?: string;
+  status?: BridgeWorkspaceGitStatus;
+  error?: string;
+};
+
+export const pullBridgeWorkspace = () =>
+  postJSON<BridgeWorkspaceGitPullResult>(
+    "/api/bridge/workspace/git-pull",
+    {},
+  );
+
 // ---- Library (mem_artifacts grouped) -------------------------------------
 //
 // The Files tab IS the library — `<LibrarySection>` at the top renders this

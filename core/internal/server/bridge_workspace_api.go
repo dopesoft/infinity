@@ -85,6 +85,73 @@ func (s *Server) handleBridgeWorkspaceGitStatus(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, out)
 }
 
+// POST /api/bridge/workspace/git-pull
+//
+// One-shot fast-forward pull on the cloud workspace, called when the
+// boss taps the refresh icon on the staleness banner. We use
+// `git pull --ff-only` so a workspace that has drifted (rebase in
+// progress, local commits) refuses rather than silently merging — the
+// banner then continues to surface staleness and the agent can be
+// asked to reconcile. On a clean ephemeral checkout (the steady
+// state) it just advances HEAD and the banner disappears on the
+// follow-up status read.
+//
+// Returns the fresh status alongside the bash output so Studio can
+// update the row without a second roundtrip.
+func (s *Server) handleBridgeWorkspaceGitPull(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.bridgeRouter == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "bridge router not configured"})
+		return
+	}
+	st := s.bridgeRouter.Snapshot()
+	if !st.CloudHealthy {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "cloud bridge offline"})
+		return
+	}
+	cloud, _, err := s.bridgeRouter.For(r.Context(), bridge.PrefCloud)
+	if err != nil || cloud == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "cloud bridge unavailable"})
+		return
+	}
+
+	body, status, ok := cloud.Post(r.Context(), "/bash", map[string]any{
+		"cmd":         "git pull --ff-only",
+		"timeout_sec": 60,
+	})
+	pullOut := strings.TrimSpace(extractJSONField(string(body), "output"))
+	if !ok || status >= 300 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"ok":     false,
+			"output": pullOut,
+			"error":  "pull failed",
+		})
+		return
+	}
+
+	// Re-read status so the UI updates in one roundtrip.
+	localSHA, branch := readWorkspaceHead(r.Context(), cloud)
+	remote := fetchRemoteHead(r.Context(), branch)
+	fresh := workspaceGitStatus{
+		Branch:    branch,
+		LocalSHA:  localSHA,
+		RemoteSHA: remote,
+		Repo:      globalDeployTracker.owner + "/" + globalDeployTracker.repo,
+	}
+	if remote != "" && remote != localSHA {
+		fresh.Behind = true
+		fresh.CommitsBehind = globalDeployTracker.fetchCompareAheadBy(r.Context(), localSHA, remote)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"output": pullOut,
+		"status": fresh,
+	})
+}
+
 // readWorkspaceHead asks the cloud bridge for its working tree's HEAD
 // SHA + current branch in one /bash call. We do this through /bash
 // rather than adding a bespoke endpoint to the workspace service so

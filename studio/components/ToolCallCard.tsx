@@ -96,7 +96,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
   }
 
   return (
-    <div className="rounded-xl border bg-card text-card-foreground">
+    <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card text-card-foreground">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -119,7 +119,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
       {open && (
         <div className="space-y-2 border-t px-3 py-2">
           <Section title="Input">
-            <pre className="overflow-x-auto whitespace-pre rounded-md bg-muted p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs">
+            <pre className="min-w-0 max-w-full overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-[11px] leading-snug sm:text-xs">
               {JSON.stringify(call.input ?? {}, null, 2)}
             </pre>
           </Section>
@@ -132,7 +132,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
                   command runs immediately — the output shows up right here.
                 </p>
                 {call.preview ? (
-                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/70 p-2 font-mono text-[11px] text-muted-foreground scroll-touch sm:text-xs">
+                  <pre className="mt-2 min-w-0 max-w-full max-h-32 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted/70 p-2 font-mono text-[11px] text-muted-foreground scroll-touch sm:text-xs">
                     {call.preview}
                   </pre>
                 ) : null}
@@ -186,7 +186,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
               ) : (
                 <pre
                   className={cn(
-                    "max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs",
+                    "min-w-0 max-w-full max-h-72 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs",
                     // Gated rows: tinted background but TEXT IN FOREGROUND
                     // (never the all-white warning-foreground which is
                     // unreadable on the creme bg). The amber accent comes
@@ -241,7 +241,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function DiffPre({ text }: { text: string }) {
   const lines = text.split("\n");
   return (
-    <pre className="max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs">
+    <pre className="min-w-0 max-w-full max-h-72 overflow-y-auto overflow-x-hidden rounded-md bg-muted p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs">
       {lines.map((line, i) => {
         let cls = "";
         if (line.startsWith("+++") || line.startsWith("---")) cls = "text-muted-foreground";
@@ -249,7 +249,7 @@ function DiffPre({ text }: { text: string }) {
         else if (line.startsWith("+")) cls = "bg-success/10 text-success";
         else if (line.startsWith("-")) cls = "bg-danger/10 text-danger";
         return (
-          <div key={i} className={cn("whitespace-pre-wrap break-words px-1", cls)}>
+          <div key={i} className={cn("whitespace-pre-wrap break-all px-1", cls)}>
             {line || " "}
           </div>
         );

@@ -314,6 +314,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bridge/session/", s.handleBridgeSession)
 	// Cloud workspace staleness: cloud bridge's local HEAD vs origin/<branch>.
 	mux.HandleFunc("/api/bridge/workspace/git-status", s.handleBridgeWorkspaceGitStatus)
+	// Cloud workspace git-pull: ff-only pull so the staleness banner
+	// resolves with one tap from Studio.
+	mux.HandleFunc("/api/bridge/workspace/git-pull", s.handleBridgeWorkspaceGitPull)
 
 	// Library — mem_artifacts grouped by kind. The Files tab IS the library;
 	// this powers the collapsible section at the top.
