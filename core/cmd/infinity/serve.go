@@ -389,6 +389,12 @@ func serveCmd() *cobra.Command {
 			if pool != nil {
 				connectorsCache = connectors.New(pool, composioKeyFn)
 				composioExec = connectors.NewExecuteClient(composioKeyFn)
+				// connector_identity_set — generic write-back the agent
+				// uses after it has resolved an account's real upstream
+				// identity (Gmail's emailAddress, Slack's handle, etc.).
+				// Zero toolkit knowledge in Go; the system prompt nudges
+				// the agent to discover the right verb on its own.
+				tools.RegisterConnectorTools(registry, connectorsCache)
 			}
 
 			// Persisted token usage. Migration 013 added the columns;
@@ -552,6 +558,15 @@ func serveCmd() *cobra.Command {
 						// they render on the dashboard with zero bespoke
 						// Studio code. Rule #1 applied to the substrate itself.
 						proactive.SubstrateSurfaceChecklist(pool),
+						// Connector identities: count active Composio accounts
+						// missing their real upstream identity and emit a
+						// finding pointing at the `resolve-connector-identities`
+						// skill. The skill carries the toolkit-agnostic
+						// cognition (find the profile verb, call it, persist).
+						// Together they close the loop: connect a new account
+						// → next heartbeat tick notices → skill fires → identity
+						// shows in every later turn. Zero per-toolkit Go code.
+						proactive.ConnectorIdentityChecklist(connectorsCache),
 					))
 				heartbeat.Start(cmd.Context())
 				if a, ok := provider.(*llm.Anthropic); ok {

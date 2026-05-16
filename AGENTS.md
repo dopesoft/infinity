@@ -20,6 +20,30 @@ The test: *could the agent have assembled this itself from a natural-language re
 
 ---
 
+## Rule #1a — ship AGI-out-of-the-box in the same PR; you pick the form
+
+Corollary of Rule #1, made explicit because it kept getting missed: **when a feature obviously needs *something extra* for the agent to behave AGI-like the first time the boss tries it, build that thing in the same PR — don't propose it after. You decide the form. Don't ask.**
+
+The form is whatever actually closes the loop. Pick the smallest thing that works:
+
+- **Generic Go building block** (tool, contract, queue, writer) — deterministic infra with no judgment. Per Rule #1: zero per-vendor branches.
+- **System-prompt update** — a persistent nudge that applies every turn (in `cache.SystemPromptBlock`, `soul.txt`, the agent loop's per-turn overlay). Costs zero tokens beyond the prompt.
+- **Default skill** (`mem_skills` row + `SKILL.md`) — a multi-step recipe the agent follows when the situation recurs (catalog search → call verbs → persist → report). Seed via `core/db/migrations/NNN_seed_*_skill.sql` mirroring `023_seed_self_improve_skill.sql` (three idempotent INSERTs).
+- **Procedural memory rule** — `mem_memories` row with `tier='procedural'`, retrieved via RRF when relevant. Cheaper than a full skill when the lesson is one sentence.
+- **Heartbeat checklist** (function in `core/internal/proactive/`) — periodic deterministic check that emits Findings. Pairs naturally with a skill: checklist notices, skill resolves.
+- **Migration / schema change** — when persistence shape matters. Always paired with whatever Go / skill / prompt uses it.
+- **Studio surface** — only when there's something visual the boss needs. Prefer extending an existing card over a new one.
+
+**Concrete test on every build:** *for the agent to behave AGI-like the first time the boss tries this feature, what's the smallest thing I need to add beyond the building block I'm already writing?* Whatever it is — prompt, skill, memory rule, checklist, combo — **ship it in the same PR**. The boss should never have to ask "now make it smart." If you can see it would close the loop, do it now.
+
+**Reference (right way, 2026-05-16):** the connector-identity feature shipped (a) a generic tool `connector_identity_set`, (b) a generic store (`connectors_identities` blob in `infinity_meta`), (c) a system-prompt nudge, (d) a heartbeat checklist, AND (e) the default skill in migration `033`. Five pieces, one PR, all generic. The skill exists because the recipe is genuinely multi-step LLM cognition; the other four are infra that doesn't need a skill.
+
+**Reference (wrong way, caught and fixed before merge):** the same feature was initially scaffolded with a Go path to hardcode `GMAIL_GET_PROFILE` for Gmail — would have committed Infinity to a new Go branch for every toolkit. Wrong form for this work; the cognition belonged in a SKILL.md.
+
+If you find yourself writing "we could also ship this as a [skill|prompt update|memory rule|checklist]" or "I'd recommend doing X next" in a reply — **stop, decide if it belongs in this PR, do it if yes, then reply with it done**. Surface tradeoffs only when the form choice is genuinely ambiguous; when it's obvious, pick.
+
+---
+
 ## Operating rules
 
 These apply to every task in this repo unless explicitly overridden. Bias: caution over speed on non-trivial work.

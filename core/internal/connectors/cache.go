@@ -46,6 +46,18 @@ type Account struct {
 // pure overhead.
 const MetaKey = "connectors_aliases"
 
+// IdentityMetaKey is the infinity_meta row that caches the real OAuth
+// identity per connected_account (e.g. Gmail's emailAddress). Composio's
+// /connected_accounts list response often omits the upstream identity —
+// for Gmail you have to call GMAIL_GET_PROFILE to learn the email — so
+// we fetch lazily on the first Refresh after a new account appears,
+// cache forever, and overlay onto every system-prompt render.
+//
+// Why persist: re-fetching on every boot is wasted REST calls (one per
+// connected account, every container start). The OAuth identity doesn't
+// change without a disconnect/reconnect, so a permanent cache is correct.
+const IdentityMetaKey = "connectors_identities"
+
 // Cache is the live "what's connected" snapshot. Concurrent-safe via
 // RWMutex; refresh happens in the background ticker plus on explicit
 // Refresh() (called after Connect/Disconnect to avoid the cache-stale
@@ -61,6 +73,14 @@ type Cache struct {
 	mu          sync.RWMutex
 	byToolkit   map[string][]*Account
 	aliases     map[string]string
+	// identities is the agent-discovered overlay: account_id → real
+	// upstream identity (email / handle / username). Written by the
+	// generic `connector_identity_set` tool — Composio's list response
+	// doesn't reliably include OAuth identity, but the agent has every
+	// toolkit's verbs and can call e.g. GMAIL_GET_PROFILE / slack auth.test
+	// / github__get_me itself, then persist the result here. Generic
+	// store; zero toolkit-specific Go.
+	identities  map[string]string
 	lastRefresh time.Time
 	lastErr     string
 
@@ -88,6 +108,7 @@ func New(pool *pgxpool.Pool, adminKey func() string) *Cache {
 		refresh:    60 * time.Second,
 		byToolkit:  make(map[string][]*Account),
 		aliases:    make(map[string]string),
+		identities: make(map[string]string),
 	}
 }
 
@@ -132,15 +153,26 @@ func (c *Cache) Refresh(ctx context.Context) error {
 		c.recordErr("alias load: " + err.Error())
 		// Continue — we can still refresh the account list, just without alias overlay.
 	}
+	identities, err := c.loadIdentities(ctx)
+	if err != nil {
+		c.recordErr("identity load: " + err.Error())
+		// Continue — identity overlay is optional.
+	}
 	accounts, err := c.loadAccounts(ctx)
 	if err != nil {
 		c.recordErr("composio list: " + err.Error())
 		return err
 	}
-	// Apply alias overlay before storing.
+	// Apply alias + identity overlays before storing. Listing-side
+	// identity (extractIdentityHint) is a default; persisted identity
+	// (set by the agent via connector_identity_set) wins when present
+	// because it's the canonical truth confirmed against the upstream.
 	for _, a := range accounts {
 		if v, ok := aliases[a.ID]; ok {
 			a.Alias = v
+		}
+		if v, ok := identities[a.ID]; ok && v != "" {
+			a.IdentityHint = v
 		}
 	}
 
@@ -157,6 +189,7 @@ func (c *Cache) Refresh(ctx context.Context) error {
 	c.mu.Lock()
 	c.byToolkit = byToolkit
 	c.aliases = aliases
+	c.identities = identities
 	c.lastRefresh = time.Now()
 	c.lastErr = ""
 	c.mu.Unlock()
@@ -299,6 +332,90 @@ func (c *Cache) Aliases() map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// SetIdentity upserts the agent-discovered upstream identity for a
+// connected_account (e.g. Gmail's emailAddress, Slack's user handle,
+// GitHub's login). Called by the generic `connector_identity_set` tool.
+// Generic — no toolkit-specific code lives here; the agent decides what
+// verb to call to learn the identity and writes the result back here.
+func (c *Cache) SetIdentity(ctx context.Context, accountID, identity string) error {
+	if strings.TrimSpace(accountID) == "" {
+		return fmt.Errorf("account id required")
+	}
+	identity = strings.TrimSpace(identity)
+	c.mu.Lock()
+	if c.identities == nil {
+		c.identities = make(map[string]string)
+	}
+	if identity == "" {
+		delete(c.identities, accountID)
+	} else {
+		c.identities[accountID] = identity
+	}
+	snapshot := make(map[string]string, len(c.identities))
+	for k, v := range c.identities {
+		snapshot[k] = v
+	}
+	// Update the live by-toolkit overlay so callers reading right after
+	// SetIdentity see the new value without waiting for Refresh.
+	for _, accs := range c.byToolkit {
+		for _, a := range accs {
+			if a.ID == accountID {
+				a.IdentityHint = identity
+			}
+		}
+	}
+	c.mu.Unlock()
+	return c.saveIdentities(ctx, snapshot)
+}
+
+// Identities returns a copy of the identity map (account_id → identity).
+func (c *Cache) Identities() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]string, len(c.identities))
+	for k, v := range c.identities {
+		out[k] = v
+	}
+	return out
+}
+
+// loadIdentities reads the persisted identity blob. Same pattern as
+// loadAliases — JSON in a single infinity_meta row.
+func (c *Cache) loadIdentities(ctx context.Context) (map[string]string, error) {
+	out := make(map[string]string)
+	if c.pool == nil {
+		return out, nil
+	}
+	var raw string
+	err := c.pool.QueryRow(ctx, `SELECT value FROM infinity_meta WHERE key = $1`, IdentityMetaKey).Scan(&raw)
+	if err != nil {
+		return out, nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return out, nil
+	}
+	if jerr := json.Unmarshal([]byte(raw), &out); jerr != nil {
+		return out, fmt.Errorf("identity blob malformed: %w", jerr)
+	}
+	return out, nil
+}
+
+func (c *Cache) saveIdentities(ctx context.Context, m map[string]string) error {
+	if c.pool == nil {
+		return fmt.Errorf("no db pool")
+	}
+	b, _ := json.Marshal(m)
+	_, err := c.pool.Exec(ctx, `
+		INSERT INTO infinity_meta (key, value, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+	`, IdentityMetaKey, string(b))
+	if err != nil {
+		return fmt.Errorf("save identities: %w", err)
+	}
+	return nil
 }
 
 // loadAliases reads the alias JSON blob from infinity_meta. Missing
@@ -453,10 +570,29 @@ func (c *Cache) SystemPromptBlock() string {
 	}
 	sort.Strings(slugs)
 
+	// Detect any account missing its real upstream identity so we can
+	// tell the agent to self-resolve. The list is rendered inline below
+	// each toolkit so the instruction is right next to the data.
+	missingIdentity := false
+	for _, accs := range c.byToolkit {
+		for _, a := range accs {
+			if a.IdentityHint == "" {
+				missingIdentity = true
+				break
+			}
+		}
+		if missingIdentity {
+			break
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString("<connected_accounts>\n")
 	b.WriteString("The boss has authenticated the following SaaS accounts via Composio. Every verb of each connected toolkit is already in your <tool_catalog> as `composio__TOOLKIT_VERB` — discover with `tool_search(\"send gmail\")`, bring online with `load_tools([\"composio__GMAIL_SEND_EMAIL\"])`, then call it directly. The gateway tools (`composio__COMPOSIO_SEARCH_TOOLS`, `composio__COMPOSIO_MULTI_EXECUTE_TOOL`) are a fallback for toolkits whose verbs failed to pre-register; do not reach for `composio__COMPOSIO_REMOTE_WORKBENCH` / `_BASH_TOOL` for anything a real toolkit verb covers.\n\n")
-	b.WriteString("Pass `connected_account_id` to every Composio verb that hits an authenticated upstream. When there's exactly one account for a toolkit it's auto-resolved; with multiple accounts (e.g. personal + work Gmail) you must pick — match the boss's intent against the alias (\"send from work\" → alias=work → that id). If the intent is ambiguous, ask before sending.\n\n")
+	b.WriteString("Pass `connected_account_id` to every Composio verb that hits an authenticated upstream. When there's exactly one account for a toolkit it's auto-resolved; with multiple accounts (e.g. personal + work Gmail) you must pick — match the boss's intent against the alias (\"send from work\" → alias=work → that id) AND the `identity` (the real email/handle) so you can answer questions like \"which email did I connect for work?\" without guessing. If the intent is ambiguous, ask before sending.\n\n")
+	if missingIdentity {
+		b.WriteString("Some accounts below have no `identity` yet — meaning you don't yet know the real email/handle/login behind each `ca_*` id. Run the `resolve-connector-identities` skill now (via `skills_invoke({name:\"resolve-connector-identities\"})`) — it carries the generic, toolkit-agnostic recipe (find the toolkit's profile verb, call it with the connected_account_id, extract the canonical handle, persist via `connector_identity_set`). One run resolves every account; results persist to `infinity_meta` so future turns render `identity=\"...\"` automatically and no further calls are needed. Do this proactively the first time you see a missing identity.\n\n")
+	}
 	for _, slug := range slugs {
 		accs := c.byToolkit[slug]
 		if len(accs) == 0 {
