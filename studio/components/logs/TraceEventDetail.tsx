@@ -25,6 +25,16 @@ function tryPretty(maybeJSON: string): string {
 }
 
 export function TraceEventDetail({ event }: { event: TraceEventDTO | null }) {
+  // Hooks must run on every render — early return lives below them.
+  const ts = useMemo(() => {
+    if (!event) return "";
+    try {
+      return new Date(event.timestamp).toLocaleString();
+    } catch {
+      return event.timestamp;
+    }
+  }, [event]);
+
   if (!event) {
     return (
       <div className="rounded-md border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
@@ -32,14 +42,6 @@ export function TraceEventDetail({ event }: { event: TraceEventDTO | null }) {
       </div>
     );
   }
-
-  const ts = useMemo(() => {
-    try {
-      return new Date(event.timestamp).toLocaleString();
-    } catch {
-      return event.timestamp;
-    }
-  }, [event.timestamp]);
 
   return (
     <div className="space-y-4">

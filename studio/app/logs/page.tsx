@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
@@ -11,7 +11,7 @@ import {
   PageTabsTrigger,
 } from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
-import { fetchTraces, type TraceStatus, type TurnRowDTO } from "@/lib/api";
+import { fetchTraces, type TurnRowDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 import { TurnRow } from "@/components/logs/TurnRow";
 
