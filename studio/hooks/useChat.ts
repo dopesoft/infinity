@@ -674,7 +674,14 @@ export function useChat() {
            * as a regular assistant bubble so the transcript reads
            * naturally — the `proactive` flag lets the bubble surface a
            * subtle origin badge ("heartbeat: surprise", etc.) without
-           * altering the conversation flow. */
+           * altering the conversation flow.
+           *
+           * Actionable system findings should not pollute the live chat
+           * transcript. They belong in dashboard / heartbeat surfaces
+           * unless they are genuinely conversational. */
+          if (ev.finding_kind === "surprise" && !ev.curiosity_id) {
+            break;
+          }
           clearWatchdog();
           setMessages((prev) => [
             ...closePendingThinking(prev),

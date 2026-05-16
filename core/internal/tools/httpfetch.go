@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,15 +15,14 @@ import (
 )
 
 type HTTPFetch struct {
-	allowed []string
-	client  *http.Client
+	allowed         []string
+	enforceAllowlist bool
+	client          *http.Client
 }
 
 func NewHTTPFetchFromEnv() (*HTTPFetch, error) {
 	raw := strings.TrimSpace(os.Getenv("HTTP_FETCH_ALLOWED_DOMAINS"))
-	if raw == "" {
-		return nil, errors.New("HTTP_FETCH_ALLOWED_DOMAINS not set")
-	}
+	enforce := raw != ""
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -32,8 +32,9 @@ func NewHTTPFetchFromEnv() (*HTTPFetch, error) {
 		}
 	}
 	return &HTTPFetch{
-		allowed: out,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		allowed:          out,
+		enforceAllowlist: enforce,
+		client:           &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
 
@@ -62,8 +63,8 @@ func (h *HTTPFetch) Execute(ctx context.Context, input map[string]any) (string, 
 		return "", fmt.Errorf("invalid url: %w", err)
 	}
 	host := strings.ToLower(parsed.Hostname())
-	if !h.matches(host) {
-		return "", fmt.Errorf("host %q not in allowlist", host)
+	if err := validateHTTPFetchTarget(parsed, host, h.enforceAllowlist, h.allowed); err != nil {
+		return "", err
 	}
 
 	method, _ := input["method"].(string)
@@ -104,6 +105,64 @@ func (h *HTTPFetch) matches(host string) bool {
 			return true
 		}
 		if strings.HasPrefix(pattern, "*.") && strings.HasSuffix(host, strings.TrimPrefix(pattern, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateHTTPFetchTarget(parsed *url.URL, host string, enforceAllowlist bool, allowed []string) error {
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("unsupported scheme %q", parsed.Scheme)
+	}
+	if host == "" {
+		return errors.New("url host is required")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("host %q blocked by network policy", host)
+		}
+	} else {
+		if isBlockedHostname(host) {
+			return fmt.Errorf("host %q blocked by network policy", host)
+		}
+	}
+	if enforceAllowlist {
+		for _, pattern := range allowed {
+			if pattern == host {
+				return nil
+			}
+			ok, _ := path.Match(pattern, host)
+			if ok {
+				return nil
+			}
+			if strings.HasPrefix(pattern, "*.") && strings.HasSuffix(host, strings.TrimPrefix(pattern, "*")) {
+				return nil
+			}
+		}
+		return fmt.Errorf("host %q not in allowlist", host)
+	}
+	return nil
+}
+
+func isBlockedHostname(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "localhost" || h == "metadata.google.internal" || h == "169.254.169.254" || h == "0.0.0.0" {
+		return true
+	}
+	if strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	return false
+}
+
+func isBlockedIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		if v4[0] == 169 && v4[1] == 254 {
 			return true
 		}
 	}

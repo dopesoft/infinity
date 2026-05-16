@@ -560,6 +560,9 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 		"stream": true,
 		"store":  false,
 	}
+	if openAIModelSupportsBuiltInWebSearch(model) {
+		body["tools"] = []map[string]any{{"type": "web_search_preview"}}
+	}
 	if system != "" {
 		body["instructions"] = system
 	}
@@ -589,9 +592,24 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 				"parameters":  schema,
 			})
 		}
-		body["tools"] = apiTools
+		if existing, ok := body["tools"].([]map[string]any); ok {
+			body["tools"] = append(existing, apiTools...)
+		} else {
+			body["tools"] = apiTools
+		}
 	}
 	return body
+}
+
+func openAIModelSupportsBuiltInWebSearch(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return false
+	}
+	if strings.HasPrefix(m, "gpt-5") || strings.HasPrefix(m, "gpt-4.1") || strings.HasPrefix(m, "gpt-4o") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "chatgpt-") {
+		return true
+	}
+	return false
 }
 
 // modelSupportsReasoning identifies the OpenAI model families that emit

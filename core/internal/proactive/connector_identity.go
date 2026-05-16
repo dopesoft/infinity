@@ -47,12 +47,18 @@ func ConnectorIdentityChecklist(cache *connectors.Cache) Checklist {
 			return nil, nil
 		}
 		title := fmt.Sprintf("%d connected account(s) need identity resolution", missing)
-		detail := "Run the `resolve-connector-identities` skill (skills_invoke). It calls each toolkit's profile verb once per unresolved account, extracts the canonical email/handle/login, and persists via connector_identity_set. After this runs, every later turn renders the identity in <connected_accounts> automatically — no further calls needed. Idempotent and safe to run unattended."
+		detail := strings.Join([]string{
+			"action: run `resolve-connector-identities` via `skills_invoke({name:\"resolve-connector-identities\"})`",
+			"why: it calls each toolkit's profile verb once per unresolved active account, extracts the canonical email/handle/login, and persists via connector_identity_set",
+			"result: after it runs, later turns render the real identity in <connected_accounts> automatically",
+			"safety: idempotent and safe to run unattended",
+		}, "\n")
 		return []Finding{{
-			Kind:        "curiosity",
+			Kind:        "surprise",
 			Title:       title,
 			Detail:      detail,
 			PreApproved: true,
+			Source:      "connector_identity_resolution",
 		}}, nil
 	}
 }
