@@ -69,6 +69,11 @@ export type CanvasConfig = {
   root_is_set: boolean;
   preview_url?: string;
   mac_bridge_ok: boolean;
+  // Bridge-configured fallback project_path. When a session has no
+  // project_path attached, Studio uses this so the Files / Git panels
+  // default to Jarvis's own codebase instead of a blank "set workspace
+  // root first" state.
+  default_project_path?: string;
 };
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null> {
@@ -97,6 +102,23 @@ async function postJSON<T>(path: string, body: unknown): Promise<T | null> {
 
 export const fetchCanvasConfig = (signal?: AbortSignal) =>
   getJSON<CanvasConfig>("/api/canvas/config", signal);
+
+// Deploy-staleness snapshot. Core polls GitHub main HEAD every 5 min and
+// compares to RAILWAY_GIT_COMMIT_SHA. Studio surfaces the gap in the
+// Canvas Files column so Jarvis (and the boss) know when a fresher
+// build is on its way.
+export type DeployStatus = {
+  running_sha: string;
+  latest_sha: string;
+  behind: boolean;
+  commits_behind: number;
+  branch: string;
+  repo: string;
+  checked_at: string;
+};
+
+export const fetchDeployStatus = (signal?: AbortSignal) =>
+  getJSON<DeployStatus>("/api/deploy/status", signal);
 
 // Diagnostic — dumps tool registration + each LS strategy's raw output.
 // Surfaced via a button in the Files tab's empty state so the boss can
@@ -162,3 +184,50 @@ export const canvasGitPull = (input: {
   branch?: string;
   session_id?: string;
 }) => postJSON<GitMutationResponse>(`/api/canvas/git/pull`, input);
+
+// ---- Bridge (Mac vs Cloud workspace) --------------------------------------
+//
+// The router on Core decides per-session whether a `bridge_*` tool call
+// goes to the home Mac (Anthropic Max-subscription Claude Code) or to the
+// Railway-hosted workspace container (ChatGPT subscription, no metered
+// API). Studio surfaces the active choice via a persistent pill in the
+// session header.
+
+export type BridgeStatus = {
+  configured: boolean;
+  mac_healthy: boolean;
+  cloud_healthy: boolean;
+  mac_url?: string;
+  cloud_url?: string;
+  checked_at?: string;
+};
+
+export type BridgeSessionView = {
+  session_id: string;
+  preference: "auto" | "mac" | "cloud";
+  active_kind?: "mac" | "cloud";
+  active_url?: string;
+  why_active?: string;
+  bridge_error?: string;
+};
+
+export const fetchBridgeStatus = (signal?: AbortSignal) =>
+  getJSON<BridgeStatus>("/api/bridge/status", signal);
+
+export const fetchBridgeSession = (id: string, signal?: AbortSignal) =>
+  getJSON<BridgeSessionView>(
+    `/api/bridge/session/${encodeURIComponent(id)}`,
+    signal,
+  );
+
+export const setBridgePreference = (
+  id: string,
+  preference: "auto" | "mac" | "cloud",
+) =>
+  postJSON<BridgeSessionView>(
+    `/api/bridge/session/${encodeURIComponent(id)}`,
+    { preference },
+  );
+
+export const refreshBridgeStatus = () =>
+  postJSON<BridgeStatus>("/api/bridge/refresh", {});

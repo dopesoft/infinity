@@ -6,6 +6,7 @@
 #   studio service  → root directory = studio/
 #   gepa service    → root directory = docker/gepa/   (Phase-6 skill optimizer)
 #   plasticity      → root directory = docker/plasticity/ (Gym worker)
+#   workspace       → root directory = docker/workspace/ (cloud bridge — files + bash + git)
 #   embed sidecar   → root directory = .              (uses docker/embed.Dockerfile)
 #
 # Postgres: use Supabase or Neon for the database — both have pgvector
@@ -64,6 +65,34 @@ name = "plasticity"
 
 [services.source]
 rootDirectory = "docker/plasticity"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+
+[services.deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+
+# workspace — Jarvis's cloud filesystem bridge. Same five-primitive
+# protocol as the Mac bridge (fs/save, fs/edit, bash, git/*). No LLM
+# inside — Core does cognition via ChatGPT subscription OAuth. Volume
+# mounted at /workspace persists across deploys and App Sleeping.
+#
+# Required env vars (set in Railway dashboard):
+#   WORKSPACE_BRIDGE_TOKEN  shared bearer Core attaches to every call
+#   GITHUB_TOKEN            PAT scoped to repo:write so `git push` works
+#   GIT_USER_NAME           default "Jarvis Cloud"
+#   GIT_USER_EMAIL          default "jarvis@dopesoft.io"
+#
+# Enable App Sleeping in the Railway service settings so it scales to
+# zero when idle; Studio pre-warms via /health on Canvas mount.
+[[services]]
+name = "workspace"
+
+[services.source]
+rootDirectory = "docker/workspace"
 
 [services.build]
 dockerfilePath = "Dockerfile"

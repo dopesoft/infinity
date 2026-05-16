@@ -8,6 +8,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
@@ -94,6 +95,16 @@ type Config struct {
 	// (pursuits, todos, calendar, follow-ups, saved, memory stats).
 	// Nil-safe: Studio falls back to its local mock when missing.
 	DashboardAPI *dashboard.API
+	// BridgeRouter decides per session whether fs/bash/git ops land on
+	// the Mac bridge (Cloudflare tunnel to home Mac) or the Cloud bridge
+	// (docker/workspace on Railway private net). Nil-safe — when unset
+	// the bridge_* tools error cleanly and the /api/bridge endpoints
+	// return offline status.
+	BridgeRouter *bridge.Router
+	// BridgePrefs resolves mem_sessions.bridge_preference for a given
+	// session id; used both by the tool-side router pick and the API
+	// endpoints that surface "what would this session use right now."
+	BridgePrefs tools.PreferenceFetcher
 }
 
 type Server struct {
@@ -119,6 +130,9 @@ type Server struct {
 	wal       *proactive.WAL
 	buffer    *proactive.WorkingBuffer
 	heartbeat *proactive.Heartbeat
+
+	bridgeRouter *bridge.Router
+	bridgePrefs  tools.PreferenceFetcher
 
 	// turnsMu guards the per-session in-flight turn registry. Lookups
 	// happen on every WS frame so we keep the critical sections trivial
@@ -162,6 +176,8 @@ func New(cfg Config) *Server {
 		buffer:         cfg.WorkingBuffer,
 		heartbeat:      cfg.Heartbeat,
 		activeSessions: make(map[string]func(wsServerEvent)),
+		bridgeRouter:   cfg.BridgeRouter,
+		bridgePrefs:    cfg.BridgePrefs,
 	}
 	if s.heartbeat != nil {
 		s.heartbeat.SetOnFinding(s.onHeartbeatFinding)
@@ -281,9 +297,21 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/voice/session", s.handleVoiceSession)
 	mux.HandleFunc("/api/voice/tool", s.handleVoiceTool)
 	mux.HandleFunc("/api/voice/turn", s.handleVoiceTurn)
+
+	// "Is the running binary behind main?" detection. Compares the
+	// RAILWAY_GIT_COMMIT_SHA env (set per deploy) to GitHub's main HEAD.
+	mux.HandleFunc("/api/deploy/status", s.handleDeployStatus)
+
+	// Bridge layer: status, per-session preference, manual refresh.
+	mux.HandleFunc("/api/bridge/status", s.handleBridgeStatus)
+	mux.HandleFunc("/api/bridge/refresh", s.handleBridgeRefresh)
+	mux.HandleFunc("/api/bridge/session/", s.handleBridgeSession)
 }
 
 func (s *Server) Start() error {
+	// Kick off deploy-staleness polling. 5-min ticker; soft-fails on
+	// GitHub rate limits / transient errors so it never crashes serve.
+	startDeployPoller(context.Background())
 	err := s.http.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
 		return err

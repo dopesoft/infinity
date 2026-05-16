@@ -16,7 +16,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useProjectContext } from "@/lib/canvas/useCurrentProject";
 import { fetchCanvasFSList, fetchCanvasDebug, type FSEntry } from "@/lib/canvas/api";
+import { DeployStatusRow } from "@/components/canvas/DeployStatusRow";
+import { BridgeSourceRow } from "@/components/canvas/BridgeSourceRow";
 import { cn } from "@/lib/utils";
 
 /**
@@ -69,6 +72,7 @@ export function CanvasFileTree({
   onFileOpen?: (path: string) => void;
 } = {}) {
   const store = useCanvasStore();
+  const projectCtx = useProjectContext();
   const [root, setRoot] = useState<Node | null>(null);
   const [filter, setFilter] = useState("");
 
@@ -211,6 +215,14 @@ export function CanvasFileTree({
           </>
         )}
       </div>
+      {/* Deploy-staleness banner sits between the filter row and the tree.
+          Renders only when Jarvis's running binary is behind main, or for
+          a brief beat after catching up so the boss sees the green tick. */}
+      <DeployStatusRow />
+      {/* Source label — declares which bridge owns the filesystem currently
+          rendered (Mac vs Cloud). Same visual mass as DeployStatusRow.
+          Hidden when the bridge is unconfigured or no active kind yet. */}
+      <BridgeSourceRow sessionId={projectCtx?.sessionId || null} />
       {/* py-0 here — the 4px of vertical padding used to push the empty
           state ~4px lower than the chat / canvas equivalents. When files
           ARE populated, the rows have their own row-padding so this top

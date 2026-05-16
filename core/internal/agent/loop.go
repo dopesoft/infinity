@@ -754,7 +754,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// Inject the session's ActiveSet so session-aware tools
 				// (load_tools / unload_tools / compact_context) can
 				// mutate the right session's loaded list.
-				toolCtx := tools.WithActiveSet(ctx, s.Active)
+				toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
 				output, execErr = l.tools.Execute(toolCtx, tc)
 				endedAt = time.Now().UTC()
 
@@ -776,7 +776,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				})
 				approved, reason := l.gate.WaitForDecision(ctx, decision.ContractID, timeout)
 				if approved {
-					toolCtx := tools.WithActiveSet(ctx, s.Active)
+					toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
 					output, execErr = l.tools.Execute(toolCtx, tc)
 				} else {
 					if reason == "" {

@@ -66,6 +66,18 @@ func canvasRoot() string {
 	return "/"
 }
 
+// canvasDefaultProjectPath returns the path Studio should use when a session
+// has no project_path attached. Set INFINITY_DEFAULT_PROJECT_PATH to the
+// Jarvis repo so chat-only sessions default to "working on yourself" instead
+// of forcing the boss to set a workspace root every time. Empty string means
+// "leave the panel blank" (legacy behaviour).
+func canvasDefaultProjectPath() string {
+	if v := strings.TrimSpace(os.Getenv("INFINITY_DEFAULT_PROJECT_PATH")); v != "" {
+		return filepath.Clean(v)
+	}
+	return ""
+}
+
 // resolveCanvasPath joins a user-supplied path against the canvas root and
 // validates that it stays inside the root. Returns (cleanedAbs, ok).
 // The cleaned path is always absolute and never has a trailing slash.
@@ -1346,18 +1358,20 @@ func (s *Server) waitForTrustDecision(ctx context.Context, id string, timeout ti
 // ---- Canvas config (workspace root, defaults) ------------------------------
 
 type canvasConfigResponse struct {
-	Root        string `json:"root"`
-	RootIsSet   bool   `json:"root_is_set"`
-	PreviewURL  string `json:"preview_url,omitempty"`
-	MacBridgeOK bool   `json:"mac_bridge_ok"`
+	Root               string `json:"root"`
+	RootIsSet          bool   `json:"root_is_set"`
+	PreviewURL         string `json:"preview_url,omitempty"`
+	MacBridgeOK        bool   `json:"mac_bridge_ok"`
+	DefaultProjectPath string `json:"default_project_path,omitempty"`
 }
 
 func (s *Server) handleCanvasConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, canvasConfigResponse{
-		Root:        canvasRoot(),
-		RootIsSet:   strings.TrimSpace(os.Getenv("INFINITY_CANVAS_ROOT")) != "",
-		PreviewURL:  strings.TrimSpace(os.Getenv("INFINITY_CANVAS_PREVIEW_URL")),
-		MacBridgeOK: s.macBridgeAvailable(),
+		Root:               canvasRoot(),
+		RootIsSet:          strings.TrimSpace(os.Getenv("INFINITY_CANVAS_ROOT")) != "",
+		PreviewURL:         strings.TrimSpace(os.Getenv("INFINITY_CANVAS_PREVIEW_URL")),
+		MacBridgeOK:        s.macBridgeAvailable(),
+		DefaultProjectPath: canvasDefaultProjectPath(),
 	})
 }
 

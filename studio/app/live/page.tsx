@@ -5,6 +5,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { SessionHeader } from "@/components/SessionHeader";
 import { InfoModal } from "@/components/workspace/InfoModal";
 import { Workspace } from "@/components/workspace/Workspace";
+import { BridgePill } from "@/components/canvas/BridgePill";
 import { CanvasStoreProvider, useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasConfig } from "@/lib/canvas/api";
 import { fetchSessions } from "@/lib/api";
@@ -109,11 +110,14 @@ function LivePageInner() {
           onSwitch={chat.switchSession}
           onRewind={undefined}
           extraActions={
-            <InfoModal
-              messages={chat.messages}
-              usedTokens={usedTokens}
-              wsConnected={chat.status === "connected"}
-            />
+            <>
+              <BridgePill sessionId={chat.sessionId || null} />
+              <InfoModal
+                messages={chat.messages}
+                usedTokens={usedTokens}
+                wsConnected={chat.status === "connected"}
+              />
+            </>
           }
         />
         <Workspace chat={chat} />

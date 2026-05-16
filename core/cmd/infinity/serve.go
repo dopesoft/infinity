@@ -12,6 +12,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/config"
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
@@ -74,14 +75,16 @@ func serveCmd() *cobra.Command {
 
 			// Memory + hooks + tools wiring (best-effort).
 			var (
-				pool        *pgxpool.Pool
-				store       *memory.Store
-				searcher    *memory.Searcher
-				compressor  *memory.Compressor
-				procedural  *memory.ProceduralStore
-				pipeline    *hooks.Pipeline
-				embedder    embed.Embedder
-				llmRegistry *llm.Registry
+				pool               *pgxpool.Pool
+				store              *memory.Store
+				searcher           *memory.Searcher
+				compressor         *memory.Compressor
+				procedural         *memory.ProceduralStore
+				pipeline           *hooks.Pipeline
+				embedder           embed.Embedder
+				llmRegistry        *llm.Registry
+				activeBridgeRouter *bridge.Router
+				activeBridgePrefs  tools.PreferenceFetcher
 			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -155,6 +158,44 @@ func serveCmd() *cobra.Command {
 					// introspection: a new irregular table needs no Go
 					// edit, just one domain_hint_add call.
 					tools.RegisterDomainHintTools(registry, p)
+					// Bridge router + primitive tools. The router decides
+					// per session whether fs/bash/git ops land on the Mac
+					// bridge (Cloudflare tunnel to home Mac, also home of
+					// the Anthropic-Max-billed Claude Code sub-agent) or
+					// the Cloud bridge (docker/workspace on Railway private
+					// net, no sub-agent — Jarvis's own cognition via
+					// ChatGPT subscription handles everything). Auto-route
+					// prefers Mac when its /health responds. The fs_/bash_/
+					// git_ tool names work uniformly across both bridges.
+					macURL := strings.TrimSpace(os.Getenv("CLAUDE_CODE_TUNNEL_URL"))
+					cloudURL := strings.TrimSpace(os.Getenv("WORKSPACE_BRIDGE_URL"))
+					if cloudURL == "" && strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != "" {
+						// Sensible default on Railway: hit the sibling
+						// service over the private network. Override by
+						// setting the env explicitly.
+						cloudURL = "http://workspace.railway.internal:8080"
+					}
+					macBridge := bridge.NewMacBridge(
+						macURL,
+						os.Getenv("CF_ACCESS_CLIENT_ID"),
+						os.Getenv("CF_ACCESS_CLIENT_SECRET"),
+					)
+					cloudBridge := bridge.NewCloudBridge(
+						cloudURL,
+						os.Getenv("WORKSPACE_BRIDGE_TOKEN"),
+					)
+					activeBridgeRouter = bridge.NewRouter(macBridge, cloudBridge)
+					activeBridgePrefs = tools.NewDBPreferenceFetcher(p)
+					tools.RegisterBridgeTools(registry, activeBridgeRouter, activeBridgePrefs)
+					macStatusStr := "unset"
+					if macURL != "" {
+						macStatusStr = "configured"
+					}
+					cloudStatusStr := "unset"
+					if cloudURL != "" {
+						cloudStatusStr = "configured"
+					}
+					fmt.Printf("  bridges: mac=%s cloud=%s\n", macStatusStr, cloudStatusStr)
 					// mem_substrate — mem_list / mem_act / action_register
 					// / action_list. The generic, bounded read/write
 					// surface over every mem_* table. Combined with
@@ -370,6 +411,16 @@ func serveCmd() *cobra.Command {
 				}
 				if honchoClient.Enabled() {
 					memProviders = append(memProviders, honcho.NewMemoryProvider(honchoClient))
+				}
+				// Bridge overlay — emits "Active bridge: Mac/Cloud, here's
+				// what tools work right now" every turn so Jarvis answers
+				// device questions truthfully and picks the right tool the
+				// first time.
+				if activeBridgeRouter != nil {
+					memProviders = append(memProviders, &bridge.MemoryProvider{
+						Router: activeBridgeRouter,
+						Prefs:  bridge.PrefFetcher(activeBridgePrefs),
+					})
 				}
 				if len(memProviders) > 0 {
 					cfg.Memory = agent.NewCompositeMemory(memProviders...)
@@ -708,6 +759,8 @@ func serveCmd() *cobra.Command {
 				Voice:          voiceMinter,
 				PushAPI:        pushAPI,
 				DashboardAPI:   dashboardAPI,
+				BridgeRouter:   activeBridgeRouter,
+				BridgePrefs:    activeBridgePrefs,
 			})
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

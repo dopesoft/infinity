@@ -12,6 +12,28 @@ import "context"
 // keeps the Tool interface a single shape and avoids forcing every tool
 // implementation to plumb session arguments it doesn't need.
 type sessionContextKey struct{}
+type sessionIDContextKey struct{}
+
+// WithSessionID stashes the current session's ID in ctx. Used by tools
+// that need to query session-scoped state (e.g., the bridge tools need
+// mem_sessions.bridge_preference). The loop should call this before
+// invoking any tool.
+func WithSessionID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionIDContextKey{}, id)
+}
+
+// SessionIDFromContext returns the current session ID, or "" when
+// unset (CLI invocations, tests).
+func SessionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(sessionIDContextKey{}).(string)
+	return v
+}
 
 // WithActiveSet returns a derived context carrying the ActiveSet pointer
 // for the session that's about to execute a tool. The agent loop calls

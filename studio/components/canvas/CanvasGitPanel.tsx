@@ -84,8 +84,15 @@ export function CanvasGitPanel({
   }, [store.root]);
 
   useEffect(() => {
+    // When the workspace root clears (session has no project_path —
+    // see CanvasFrame), drop any stale status so the panel can't
+    // show ghost entries / counts alongside the "Set a workspace
+    // root first" banner. Also stop the poll until root returns.
+    if (!store.root) {
+      setStatus(null);
+      return;
+    }
     void refresh();
-    if (!store.root) return;
     const id = setInterval(() => void refresh(), STATUS_POLL_MS);
     return () => clearInterval(id);
   }, [refresh, store.root]);
@@ -211,7 +218,7 @@ export function CanvasGitPanel({
           size="sm"
           variant="ghost"
           className="h-8 justify-start gap-1.5"
-          disabled={!!busy || (status?.entries ?? []).length === 0}
+          disabled={!store.root || !!busy || (status?.entries ?? []).length === 0}
           onClick={() => void onStageAll()}
         >
           {busy === "stage" ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
@@ -222,7 +229,7 @@ export function CanvasGitPanel({
           size="sm"
           variant="ghost"
           className="h-8 justify-start gap-1.5"
-          disabled={!!busy || staged.length === 0}
+          disabled={!store.root || !!busy || staged.length === 0}
           onClick={() => setCommitOpen(true)}
         >
           <GitCommit className="size-3.5" />
@@ -233,7 +240,7 @@ export function CanvasGitPanel({
           size="sm"
           variant="ghost"
           className="h-8 justify-start gap-1.5"
-          disabled={!!busy}
+          disabled={!store.root || !!busy}
           onClick={() => void onPush()}
         >
           {busy === "push" ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowUpFromLine className="size-3.5" />}
@@ -244,7 +251,7 @@ export function CanvasGitPanel({
           size="sm"
           variant="ghost"
           className="h-8 justify-start gap-1.5"
-          disabled={!!busy}
+          disabled={!store.root || !!busy}
           onClick={() => void onPull()}
         >
           {busy === "pull" ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />}
@@ -281,9 +288,9 @@ export function CanvasGitPanel({
             Working tree clean.
           </div>
         )}
-        {staged.length > 0 && <GitGroup title="Staged" entries={staged} repo={store.root} onOpen={openFile} />}
-        {unstaged.length > 0 && <GitGroup title="Changes" entries={unstaged} repo={store.root} onOpen={openFile} />}
-        {untracked.length > 0 && <GitGroup title="Untracked" entries={untracked} repo={store.root} onOpen={openFile} />}
+        {store.root && staged.length > 0 && <GitGroup title="Staged" entries={staged} repo={store.root} onOpen={openFile} />}
+        {store.root && unstaged.length > 0 && <GitGroup title="Changes" entries={unstaged} repo={store.root} onOpen={openFile} />}
+        {store.root && untracked.length > 0 && <GitGroup title="Untracked" entries={untracked} repo={store.root} onOpen={openFile} />}
       </div>
 
       {/* Commit modal — Dialog on desktop, Drawer on mobile per project convention. */}

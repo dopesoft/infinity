@@ -14,6 +14,7 @@ import { CanvasComposer } from "@/components/canvas/CanvasComposer";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useCurrentProject, CurrentProjectProvider } from "@/lib/canvas/useCurrentProject";
 import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
+import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
 import { useWebSocket } from "@/lib/ws/provider";
 import type { useChat } from "@/hooks/useChat";
 
@@ -44,12 +45,32 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   const current = useCurrentProject();
   const [mobileTab, setMobileTab] = useState<"files" | "git" | "editor">("files");
 
+  // Server-configured fallback path (INFINITY_DEFAULT_PROJECT_PATH on
+  // core). Sessions without their own project_path land here instead
+  // of being blanked, so chat-only sessions default to "working on
+  // Jarvis itself." Fetched once per mount; cheap, cached.
+  const [defaultProjectPath, setDefaultProjectPath] = useState<string>("");
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      const cfg = await fetchCanvasConfig(ac.signal);
+      if (cfg?.default_project_path) setDefaultProjectPath(cfg.default_project_path);
+    })();
+    // Pre-warm the cloud workspace from Railway App Sleeping. Fire-and-forget;
+    // we don't care about the result here — the BridgePill / BridgeSourceRow
+    // do their own status fetches. The goal is just to wake the container
+    // so the first user-driven `bridge_*` call doesn't pay the cold-start.
+    void fetchBridgeStatus(ac.signal).catch(() => {});
+    return () => ac.abort();
+  }, []);
+
   // Project = session. The file tree, git panel, and preview re-scope
-  // to whatever project_path the current session points at. Crucially:
-  // when the session has NO project_path, the tree blanks out entirely
-  // (clearing store.root) so Canvas doesn't leak the workspace folder
-  // into chat-only sessions. The boss should see "no app yet — tell the
-  // agent what to build" instead of `~/Dev` everywhere.
+  // to whatever project_path the current session points at. When the
+  // session has no project_path, fall back to `defaultProjectPath`
+  // (typically the Jarvis repo) so the panels never sit in an empty
+  // "set workspace root first" state — that's not how an automated
+  // system should work. Per-session paths still win for actual app
+  // projects.
   //
   // We wait until `useCurrentProject` finishes its initial fetch
   // (`current.loading === false`) so we don't blank a manually-configured
@@ -57,19 +78,20 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   const projectPath = current.session?.project_path?.trim() ?? "";
   useEffect(() => {
     if (current.loading) return;
-    if (projectPath) {
-      if (projectPath !== store.root) {
-        store.setRoot(projectPath);
+    const next = projectPath || defaultProjectPath;
+    if (next) {
+      if (next !== store.root) {
+        store.setRoot(next);
         store.closeAllFiles();
         store.clearDirty();
       }
     } else if (store.root) {
-      // Non-project session — wipe the scope.
+      // No session project AND no configured default — wipe.
       store.setRoot("");
       store.closeAllFiles();
       store.clearDirty();
     }
-  }, [projectPath, current.loading, store]);
+  }, [projectPath, defaultProjectPath, current.loading, store]);
   // Mount gate — react-resizable-panels reads layout from localStorage on
   // first paint (via autoSaveId). The server has no localStorage and
   // renders defaultSize, while the client renders the saved size → React

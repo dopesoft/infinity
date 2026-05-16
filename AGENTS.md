@@ -20,6 +20,25 @@ The test: *could the agent have assembled this itself from a natural-language re
 
 ---
 
+## Operating rules
+
+These apply to every task in this repo unless explicitly overridden. Bias: caution over speed on non-trivial work.
+
+1. **Think before coding.** State assumptions explicitly. Ask rather than guess. Push back when a simpler approach exists. Stop when confused.
+2. **Simplicity first.** Minimum code that solves the problem. Nothing speculative. No abstractions for single-use code.
+3. **Surgical changes.** Touch only what you must. Don't improve adjacent code. Match existing style. Don't refactor what isn't broken.
+4. **Goal-driven execution.** Define success criteria up front and loop until verified. Strong success criteria let you loop independently.
+5. **Use the model only for judgment calls.** Use for classification, drafting, summarization, extraction. Do NOT use for routing, retries, deterministic transforms. If code can answer, code answers.
+6. **Token budgets are not advisory.** Per-task: 4,000 tokens. Per-session: 30,000 tokens. If you're approaching the budget, summarize and start fresh. Surface the breach — do not silently overrun.
+7. **Surface conflicts, don't average them.** If two patterns contradict, pick one (more recent / more tested), explain why, and flag the other for cleanup.
+8. **Read before you write.** Before adding code, read exports, immediate callers, and shared utilities. If you don't understand why existing code is structured a certain way, ask.
+9. **Tests verify intent, not just behavior.** Tests must encode WHY behavior matters, not just WHAT it does. A test that can't fail when business logic changes is wrong.
+10. **Checkpoint after every significant step.** Summarize what was done, what's verified, what's left. Don't continue from a state you can't describe back.
+11. **Match the codebase's conventions, even if you disagree.** Conformance > taste inside the codebase. If you think a convention is harmful, surface it — don't fork silently.
+12. **Fail loud.** "Completed" is wrong if anything was skipped silently. "Tests pass" is wrong if any were skipped. Default to surfacing uncertainty, not hiding it.
+
+---
+
 ## Migrations — verify, never assert
 
 **Burned us on 2026-05-13.** Prod silently ran without migrations 011 (AGI loops), 012 (OpenAI OAuth), 013 (session usage), and 014 (dashboard) for weeks. Dashboard endpoints logged `relation "mem_tasks" does not exist`; AGI-loop features had nowhere to write. A prior agent session had told the boss "all migrations applied" without checking. That was a lie by omission and it cost real time.
