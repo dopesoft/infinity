@@ -40,11 +40,12 @@ DrawerOverlay.displayName = "DrawerOverlay";
 const DrawerContent = React.forwardRef<
   React.ElementRef<typeof VaulPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof VaulPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, "aria-describedby": ariaDescribedBy, ...props }, ref) => (
   <DrawerPortal>
     <DrawerOverlay />
     <VaulPrimitive.Content
       ref={ref}
+      aria-describedby={ariaDescribedBy ?? undefined}
       className={cn(
         "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto max-h-[92dvh] flex-col rounded-t-2xl border-t bg-popover text-popover-foreground pb-safe",
         className,

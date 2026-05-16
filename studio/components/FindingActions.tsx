@@ -34,25 +34,38 @@ function useHandledOutcome(id: string | undefined): FindingOutcome | null {
   return id ? handledFindings.get(id) ?? null : null;
 }
 
-// The canned reply "Approve & fix" sends into the current session. The
-// recipe lives in the `self-improve-from-finding` skill (a default skill
-// shipped with Infinity); this string is the trigger that tells the
-// agent to run it. The wording is deliberately imperative + names the
-// specific tool calls because earlier softer phrasing
-// ("use your skill to fix this") let the model paraphrase the steps
-// without actually executing them — reporting on the finding rather
-// than applying a change. The skill's trigger phrases still match this
-// text so the suggestion prefix kicks in too.
-const APPROVE_INSTRUCTION =
-  "Approved — fix this finding now. Steps you MUST execute, in order:\n" +
-  "1. Call `skills_invoke` with `name: \"self-improve-from-finding\"` to load the recipe.\n" +
-  "2. Follow it: diagnose the root cause, then make a real artifact change with " +
-  "`skill_create` (rework the relevant skill, same name + bumped version) or " +
-  "`memory_write` (procedural-tier rule) — don't just describe what you'd do.\n" +
-  "3. Verify the change against the original evidence (re-read the new skill body / " +
-  "`memory_recall` the rule).\n" +
-  "4. Reply with the artifact name (e.g. \"reworked composio-search to v1.1.0\") and " +
-  "the one-sentence root cause. If a tool call failed, say so — don't paper over it.";
+// approveInstruction builds the canned reply "Approve & fix" sends into
+// the current session. The recipe lives in the `self-improve-from-finding`
+// skill (a default skill shipped with Infinity); this text is the trigger
+// that tells the agent to run it. CRITICAL: we include the specific
+// curiosity_id of THIS finding so when the boss approves three cards
+// the agent gets three distinct prompts and works on them one at a
+// time instead of three identical "fix the finding" messages with no
+// way to tell which is which.
+function approveInstruction(curiosityId: string): string {
+  const idLine = curiosityId
+    ? `Finding id: \`${curiosityId}\`\n\n`
+    : "";
+  return (
+    idLine +
+    "Approved — fix this specific finding now. Steps you MUST execute, in order:\n" +
+    "1. Call `question_list` (filter to this id if helpful) so you have the exact " +
+    "expectation, the actual result, and which tool surprised you. Operate on THIS " +
+    "finding only — if multiple Approve & fix prompts come in, treat each as its " +
+    "own task and don't conflate them.\n" +
+    "2. Call `skills_invoke` with `name: \"self-improve-from-finding\"` to load the recipe.\n" +
+    "3. Follow it: diagnose the root cause for this specific finding, then make a " +
+    "real artifact change with `skill_create` (rework the relevant skill, same name + " +
+    "bumped version) or `memory_write` (procedural-tier rule) — don't just describe " +
+    "what you'd do.\n" +
+    "4. Verify the change against the original evidence for THIS finding (re-read the " +
+    "new skill body / `memory_recall` the rule).\n" +
+    "5. Call `question_decide` with this finding's id and `decision: \"answered\"` so " +
+    "it leaves the open list.\n" +
+    "6. Reply with the finding id, the artifact name (e.g. \"reworked composio-search " +
+    "to v1.1.0\"), and the one-sentence root cause. If a tool call failed, say so."
+  );
+}
 
 // FindingActions is the "Approve & fix" / "Dismiss" row shown on heartbeat
 // finding cards (the seeded DashboardContextCard and the inline proactive
@@ -83,7 +96,7 @@ export function FindingActions({
     setState("working");
     // Fire the turn first — the visible "Jarvis is fixing it" feedback
     // matters more than the bookkeeping write, which is best-effort.
-    onSend?.(APPROVE_INSTRUCTION);
+    onSend?.(approveInstruction(curiosityId));
     if (curiosityId) {
       void decideCuriosityQuestion(curiosityId, "approved");
       markHandled(curiosityId, "approved");

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowUpRightFromSquare,
@@ -189,6 +189,42 @@ export function CanvasFileTab({
     registerInfinityThemes(monaco);
   }, []);
 
+  // Track live editor instances so we can detach their models on unmount.
+  // Without this, when the tab unmounts (route change, mode switch, canvas
+  // close) Monaco disposes the underlying TextModel before the
+  // DiffEditorWidget gets to reset its model, throwing "TextModel got
+  // disposed before DiffEditorWidget model got reset".
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const editorRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleEditorMount = useCallback((editor: any) => {
+    editorRef.current = editor;
+  }, []);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleDiffEditorMount = useCallback((editor: any) => {
+    editorRef.current = editor;
+  }, []);
+  useEffect(() => {
+    return () => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      try {
+        if (typeof ed.getModel === "function" && typeof ed.setModel === "function") {
+          const m = ed.getModel();
+          // DiffEditor: getModel returns { original, modified }
+          if (m && "original" in m && "modified" in m) {
+            ed.setModel(null);
+          } else {
+            ed.setModel(null);
+          }
+        }
+      } catch {
+        // Editor already torn down; ignore.
+      }
+      editorRef.current = null;
+    };
+  }, []);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Mode bar */}
@@ -230,6 +266,7 @@ export function CanvasFileTab({
                 original={originalContent}
                 modified={currentContent}
                 beforeMount={handleEditorWillMount}
+                onMount={handleDiffEditorMount}
                 options={{
                   readOnly: true,
                   originalEditable: false,
@@ -251,6 +288,7 @@ export function CanvasFileTab({
                 value={currentContent}
                 onChange={(v) => setCurrentContent(v ?? "")}
                 beforeMount={handleEditorWillMount}
+                onMount={handleEditorMount}
                 options={{
                   fontSize: 13,
                   minimap: { enabled: false },

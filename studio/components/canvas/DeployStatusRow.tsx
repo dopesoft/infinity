@@ -50,15 +50,14 @@ export function DeployStatusRow() {
   };
 
   if (!status.behind) {
-    // Subtle up-to-date row — confirms Jarvis pulled the latest. Hides
-    // itself after a brief moment via the parent's poll cycle; visible
-    // immediately after a successful catch-up.
+    // Subtle up-to-date row — confirms Railway is running the latest main.
+    // We used to show the running commit SHA here, but a 7-char hash is
+    // meaningless without context — say "Railway" so the boss knows what
+    // the green check is confirming.
     return (
       <div className="flex shrink-0 items-center gap-2 border-b bg-success/5 px-3 py-1.5 text-[11px] text-success">
         <Check className="size-3.5" aria-hidden />
-        <span className="font-mono">
-          Up to date — {shortSHA(status.running_sha)}
-        </span>
+        <span>Railway is up to date</span>
       </div>
     );
   }
@@ -67,15 +66,12 @@ export function DeployStatusRow() {
     <div className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning">
       <Loader2 className="size-3.5 animate-spin" aria-hidden />
       <span className="min-w-0 flex-1 truncate">
-        Behind by{" "}
+        Railway is behind by{" "}
         <span className="font-semibold">
           {status.commits_behind || "≥1"} commit
           {status.commits_behind === 1 ? "" : "s"}
         </span>{" "}
-        — waiting for Railway to redeploy{" "}
-        <span className="font-mono opacity-70">
-          ({shortSHA(status.running_sha)} → {shortSHA(status.latest_sha)})
-        </span>
+        — waiting for redeploy
       </span>
       <button
         type="button"
@@ -94,6 +90,3 @@ export function DeployStatusRow() {
   );
 }
 
-function shortSHA(sha: string): string {
-  return sha ? sha.slice(0, 7) : "—";
-}

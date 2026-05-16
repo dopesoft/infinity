@@ -48,6 +48,30 @@ func logUnknownOAIEvent(t string) {
 	}
 }
 
+// debugLogSeenEvent logs EVERY distinct event type once per process —
+// handled and unhandled alike — so we can verify the reasoning stream
+// shape from the prod logs without instrumenting the call site every
+// time. Gated on INFINITY_OAI_DEBUG_EVENTS=true so the steady state
+// stays quiet.
+func debugLogSeenEvent(t string) {
+	if t == "" {
+		return
+	}
+	if os.Getenv("INFINITY_OAI_DEBUG_EVENTS") != "true" {
+		return
+	}
+	unknownOAIEventMu.Lock()
+	key := "seen:" + t
+	_, seen := unknownOAIEventSeen[key]
+	if !seen {
+		unknownOAIEventSeen[key] = struct{}{}
+	}
+	unknownOAIEventMu.Unlock()
+	if !seen {
+		unknownOAIEventLog.Printf("openai_oauth: stream event seen %q", t)
+	}
+}
+
 // OpenAIOAuth is an LLM provider that authenticates via the standard
 // "Sign in with ChatGPT" PKCE flow (the same one Codex CLI uses) and routes
 // inference through `chatgpt.com/backend-api/codex/responses` so requests
@@ -619,6 +643,7 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 		if err := json.Unmarshal([]byte(raw), &evt); err != nil {
 			continue
 		}
+		debugLogSeenEvent(evt.Type)
 
 		switch evt.Type {
 		case "response.output_text.delta":
@@ -726,9 +751,20 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			// cases). Unknown non-reasoning events are logged once-per
 			// type to keep the next mismatch trivial to diagnose.
 			t := evt.Type
-			if strings.Contains(t, "reasoning") && strings.HasSuffix(t, ".delta") && evt.Delta != "" {
-				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: evt.Delta})
-				break
+			// Widen the net for reasoning-shaped events. OpenAI has
+			// shipped reasoning content under "reasoning", "thinking",
+			// "summary" — any *.delta with a Delta payload AND one of
+			// those keywords is treated as thinking content. Better to
+			// over-surface (you see the model's chain-of-thought
+			// summary) than under-surface (empty bubble).
+			if strings.HasSuffix(t, ".delta") && evt.Delta != "" {
+				if strings.Contains(t, "reasoning") ||
+					strings.Contains(t, "thinking") ||
+					strings.Contains(t, "thought") ||
+					strings.Contains(t, "summary") {
+					emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: evt.Delta})
+					break
+				}
 			}
 			logUnknownOAIEvent(t)
 		}

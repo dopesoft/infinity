@@ -37,11 +37,17 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, "aria-describedby": ariaDescribedBy, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      // Radix warns when no aria-describedby and no <DialogDescription> is
+      // present. Most Studio dialogs are simple (title + body) and don't
+      // carry a description. Default to undefined to opt out of the
+      // warning per Radix's documented escape hatch; callers that DO have
+      // a description pass aria-describedby explicitly and it overrides.
+      aria-describedby={ariaDescribedBy ?? undefined}
       className={cn(
         // Canonical Studio modal:
         //   • centered, fixed width

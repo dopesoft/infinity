@@ -184,11 +184,14 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 		if err := rows.Scan(&id, &tool, &expected, &actual); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Tool %s returned something unexpected — should I rework the prompt around it?", tool)
+		if shouldSuppressHighSurpriseQuestion(tool, expected, actual) {
+			continue
+		}
+		question := fmt.Sprintf("Tool %s returned something unexpected, should I rework the prompt around it?", tool)
 		// Structured, un-escaped, one concept per line so both the
 		// Heartbeat tab and the chat formatter can render it cleanly.
 		// oneLine collapses embedded whitespace so each value stays on a
-		// single line — the chat formatter splits on "\n" to label parts.
+		// single line, the chat formatter splits on "\n" to label parts.
 		rationale := fmt.Sprintf("expected: %s\nactual: %s",
 			clipShort(oneLine(expected), 240), clipShort(oneLine(actual), 240))
 		if c.insertQuestion(ctx, question, rationale, "high_surprise", []string{id}, 7) {
@@ -196,6 +199,57 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 		}
 	}
 	return n, rows.Err()
+}
+
+// shouldSuppressHighSurpriseQuestion filters out prediction misses that
+// aren't actually worth surfacing as a "should I rework the prompt?"
+// card. Two common false positives:
+//
+//   1. Empty-collection returns. `{"count":0,"items":[]}` /
+//      `[]` / `{}` mean "the tool worked fine, there was just nothing
+//      to return." Not a prompt-rework signal — the boss doesn't need
+//      a heartbeat card for an empty list.
+//
+//   2. Expected == actual after normalisation. The prediction matched
+//      reality; the surprise scorer triggered on whitespace / case /
+//      JSON-key ordering noise rather than semantic divergence.
+//
+// Returns true when the question SHOULD be suppressed (don't create
+// a curiosity row). The caller continues to the next surprise row.
+func shouldSuppressHighSurpriseQuestion(tool, expected, actual string) bool {
+	a := strings.TrimSpace(actual)
+	if a == "" || a == "{}" || a == "[]" || a == "null" {
+		return true
+	}
+	// Empty-collection patterns the agent's tools commonly return:
+	// {"count":0,"items":[]}, {"items":[]}, {"results":[]}, etc.
+	// Strip whitespace and check for the canonical empty shapes.
+	compact := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\n' || r == '\t' || r == '\r' {
+			return -1
+		}
+		return r
+	}, a)
+	emptyShapes := []string{
+		`{"count":0,"items":[]}`,
+		`{"items":[]}`,
+		`{"results":[]}`,
+		`{"rows":[]}`,
+		`{"entries":[]}`,
+		`{"data":[]}`,
+		`{"count":0}`,
+	}
+	for _, shape := range emptyShapes {
+		if compact == shape {
+			return true
+		}
+	}
+	// Whitespace-collapsed equality with expected → no real surprise.
+	e := strings.TrimSpace(expected)
+	if e != "" && oneLine(e) == oneLine(a) {
+		return true
+	}
+	return false
 }
 
 // insertQuestion tries to write a row to mem_curiosity_questions. The unique

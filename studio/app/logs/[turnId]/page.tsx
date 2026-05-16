@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
@@ -20,8 +20,8 @@ import { useRealtime } from "@/lib/realtime/provider";
  * same px-3/sm:px-4 padding. Mobile (<lg): timeline stacks above the
  * detail pane. Desktop: timeline rail sticky on the left.
  */
-export default function LogDetailPage({ params }: { params: Promise<{ turnId: string }> }) {
-  const { turnId } = use(params);
+export default function LogDetailPage({ params }: { params: { turnId: string } }) {
+  const { turnId } = params;
   const router = useRouter();
   const [detail, setDetail] = useState<TraceDetailDTO | null>(null);
   const [selected, setSelected] = useState<TraceEventDTO | null>(null);
