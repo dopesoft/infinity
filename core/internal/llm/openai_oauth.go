@@ -375,24 +375,20 @@ func (o *OpenAIOAuth) Stream(
 		return resp, err
 	}
 
+	// Respect the configured model. The boss's Settings choice (or
+	// the per-call override from a sub-agent) is the truth. We only
+	// translate tier *nicknames* like "haiku" / "sonnet" that come
+	// from cross-provider routing — real model ids pass through to
+	// OpenAI untouched, even if the OAuth path doesn't serve them.
+	// The retry-on-400 below catches genuine "model not supported"
+	// errors and falls back to o.model; we do not second-guess.
 	effectiveModel := o.model
 	if model != "" {
-		// OAuth path serves the Codex roster, NOT the API's full
-		// gpt-5 / gpt-5-mini lineup. We have our own normalizer so a
-		// per-call "haiku" or "gpt-5" from a sub-agent maps to
-		// gpt-5-codex / codex-mini-latest instead of a model the
-		// subscription plan can't actually run.
-		if normalized := normalizeCodexModel(model); normalized != "" {
-			effectiveModel = normalized
+		if nickname := tierNicknameToCodex(model); nickname != "" {
+			effectiveModel = nickname
+		} else {
+			effectiveModel = model
 		}
-		// Unknown name stays as the configured default; if the model
-		// *also* turns out to be one the account can't serve, the
-		// retry-on-400 path below catches it.
-	}
-	// Defense in depth: even o.model could be wrong if someone set
-	// LLM_MODEL_OPENAI_OAUTH=gpt-5 manually. Final-mile normalize.
-	if codex := normalizeCodexModel(effectiveModel); codex != "" {
-		effectiveModel = codex
 	}
 
 	httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
@@ -863,49 +859,19 @@ func truncateOAuth(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// normalizeCodexModel maps a model id / nickname onto the Codex roster
-// served via ChatGPT-account OAuth. The OAuth path REJECTS plain
-// "gpt-5" / "gpt-5-mini" etc. with HTTP 400; only the codex-tagged
-// variants are exposed to subscription clients.
+// tierNicknameToCodex maps cross-provider tier nicknames ONLY.
 //
-// Mapping table (deliberately conservative — when in doubt, return
-// gpt-5-codex which is the standard Codex CLI default and supports
-// tool use + the largest context window the subscription plan offers):
+// "haiku" / "small" / "cheap" / "mini" — keywords sub-agents pass for
+// cheap reasoning when they don't know which provider is wired. On the
+// OpenAI OAuth path those translate to codex-mini-latest. "sonnet" /
+// "opus" / "default" map to gpt-5-codex. Real model ids (anything with
+// a "gpt-" or "o[1-9]" prefix, a dot, or anything that looks like an
+// actual OpenAI model id) pass through with "" so the caller keeps
+// the boss's exact choice. Settings ARE the truth.
 //
-//	gpt-5, gpt-5-codex, codex-large, opus, premium, large,
-//	sonnet, default, medium                    → gpt-5-codex
-//	gpt-5-mini, codex-mini-latest, codex-mini,
-//	haiku, cheap, small, mini                  → codex-mini-latest
-//	o4-mini, o3-mini                           → codex-mini-latest
-//	chatgpt-*, o1-*                            → pass through (special-case
-//	                                              ids the subscription serves
-//	                                              directly when they exist)
-//
-// Returns "" if the input doesn't look like anything the OAuth path
-// can serve — caller falls back to o.model (which we've already
-// final-mile-normalized above).
-func normalizeCodexModel(model string) string {
+// Returns "" when the input isn't a nickname this helper should touch.
+func tierNicknameToCodex(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
-	if m == "" {
-		return ""
-	}
-	// Already a Codex-roster id → pass through.
-	if strings.HasPrefix(m, "gpt-5-codex") ||
-		strings.HasPrefix(m, "codex-mini") ||
-		strings.HasPrefix(m, "codex-large") ||
-		strings.HasPrefix(m, "chatgpt-") {
-		return model
-	}
-	// Tier nicknames + the un-suffixed gpt-5 ids that 400 against the
-	// OAuth path get remapped to the closest Codex variant.
-	switch {
-	case strings.HasPrefix(m, "gpt-5-mini"),
-		strings.HasPrefix(m, "o4-mini"),
-		strings.HasPrefix(m, "o3-mini"):
-		return "codex-mini-latest"
-	case strings.HasPrefix(m, "gpt-5"):
-		return "gpt-5-codex"
-	}
 	switch m {
 	case "haiku", "cheap", "small", "mini":
 		return "codex-mini-latest"
@@ -913,7 +879,5 @@ func normalizeCodexModel(model string) string {
 		"opus", "premium", "large":
 		return "gpt-5-codex"
 	}
-	// Unknown — let the caller decide. The retry-on-400 path will
-	// fall back to o.model, which we've also final-mile normalized.
 	return ""
 }

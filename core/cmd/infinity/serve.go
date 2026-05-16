@@ -75,16 +75,17 @@ func serveCmd() *cobra.Command {
 
 			// Memory + hooks + tools wiring (best-effort).
 			var (
-				pool               *pgxpool.Pool
-				store              *memory.Store
-				searcher           *memory.Searcher
-				compressor         *memory.Compressor
-				procedural         *memory.ProceduralStore
-				pipeline           *hooks.Pipeline
-				embedder           embed.Embedder
-				llmRegistry        *llm.Registry
-				activeBridgeRouter *bridge.Router
-				activeBridgePrefs  tools.PreferenceFetcher
+				pool                  *pgxpool.Pool
+				store                 *memory.Store
+				searcher              *memory.Searcher
+				compressor            *memory.Compressor
+				procedural            *memory.ProceduralStore
+				pipeline              *hooks.Pipeline
+				embedder              embed.Embedder
+				llmRegistry           *llm.Registry
+				activeBridgeRouter    *bridge.Router
+				activeBridgePrefs     tools.PreferenceFetcher
+				notifySkillPromoted   func(name, description string)
 			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -644,17 +645,24 @@ func serveCmd() *cobra.Command {
 					// mem_code_proposals for review in Studio.
 					pipeline.RegisterFunc("voyager.source_extract", voyagerMgr.OnSessionEndSource, hooks.SessionEnd)
 				}
-				// Promotion → procedural memory: every promoted skill writes
-				// a procedural-tier memory so the agent retrieves it through
-				// the same RRF pathway as semantic facts. CoALA's procedural
-				// tier, activated.
-				if procedural != nil {
-					voyagerMgr.OnSkillPromoted(func(ctx context.Context, name, description, skillMD string) {
+				// Promotion → (procedural memory + live chat bubble).
+				// One callback handles both side-effects:
+				//   1. UpsertFromSkill on the procedural tier (CoALA).
+				//   2. notifySkillPromoted, late-bound to the server's
+				//      BroadcastSkillPromoted so the chat surface gets a
+				//      "🤖 skill learned" bubble in real time. The server
+				//      doesn't exist yet at this point — we bind the var
+				//      below right after server.New().
+				voyagerMgr.OnSkillPromoted(func(ctx context.Context, name, description, skillMD string) {
+					if procedural != nil {
 						if err := procedural.UpsertFromSkill(ctx, name, description, skillMD, 7); err != nil {
 							fmt.Fprintf(os.Stderr, "warning: procedural upsert %s: %v\n", name, err)
 						}
-					})
-				}
+					}
+					if notifySkillPromoted != nil {
+						notifySkillPromoted(name, description)
+					}
+				})
 				voyagerAPI = voyager.NewAPI(voyagerMgr)
 				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
 
@@ -785,6 +793,12 @@ func serveCmd() *cobra.Command {
 				BridgePrefs:    activeBridgePrefs,
 				Turns:          turnStore,
 			})
+
+			// Late-bind the Voyager auto-promote → chat-bubble notifier. The
+			// callback was registered earlier (so we don't drop events that
+			// arrive before this point) but its target needed the server
+			// instance to exist.
+			notifySkillPromoted = srv.BroadcastSkillPromoted
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()

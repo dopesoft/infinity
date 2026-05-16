@@ -82,6 +82,42 @@ func (s *Server) broadcastProactive(ev wsServerEvent) {
 	}
 }
 
+// BroadcastSkillPromoted surfaces a Voyager-auto-promoted skill as a
+// chat bubble in every active session. Wired from serve.go alongside
+// the procedural-memory write-through so the boss sees:
+//
+//   🤖 skill learned
+//   I just created a skill called "create_habit_pursuit" — when you
+//   ask me to set up another habit like this, I'll know exactly what
+//   to do.
+//
+// Renders through the same proactive_message path as heartbeat
+// findings; finding_kind="skill_promoted" tells Studio to swap in the
+// robot icon and "skill learned" label.
+func (s *Server) BroadcastSkillPromoted(name, description string) {
+	if s == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	description = strings.TrimSpace(description)
+	tail := "I'll know exactly what to do."
+	if description != "" {
+		// Trim trailing punctuation so we can chain cleanly into "when…".
+		desc := strings.TrimRight(description, " .!?")
+		tail = desc + " — next time it comes up, I'll know what to do."
+	}
+	text := "**Skill learned: `" + name + "`**\n\n" +
+		"I just taught myself a new skill from how this work went. " + tail
+	s.broadcastProactive(wsServerEvent{
+		Type:        "proactive_message",
+		Text:        text,
+		FindingKind: "skill_promoted",
+	})
+}
+
 // onHeartbeatFinding is wired in New() as the heartbeat's per-finding
 // callback. We filter aggressively because most findings are diagnostic
 // (logged but not noteworthy enough to interrupt). Only kinds the user

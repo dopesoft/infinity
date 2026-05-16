@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, CornerDownRight, Copy, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
+import { Bot, Check, CornerDownRight, Copy, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -188,9 +188,17 @@ export function ChatBubble({
             className={cn(
               "min-w-0 max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
               message.proactive && "border border-info/40",
+              message.proactiveKind === "skill_promoted" &&
+                "border-success/40 bg-success/5 dark:bg-success/10",
             )}
           >
-            {message.proactive && (
+            {message.proactive && message.proactiveKind === "skill_promoted" && (
+              <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-success">
+                <Bot className="size-3" />
+                <span>skill learned</span>
+              </div>
+            )}
+            {message.proactive && message.proactiveKind !== "skill_promoted" && (
               <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-info">
                 <Sparkles className="size-3" />
                 <span>
