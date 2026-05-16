@@ -93,6 +93,18 @@ func confirmTableExists(ctx context.Context, pool *pgxpool.Pool, name string) er
 	return nil
 }
 
+func tableHasColumn(ctx context.Context, pool *pgxpool.Pool, table, column string) (bool, error) {
+	var n int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		 WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+	`, table, column).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ── mem_list ───────────────────────────────────────────────────────────────
 
 type memList struct{ pool *pgxpool.Pool }
@@ -294,14 +306,27 @@ func (t *memAct) Execute(ctx context.Context, in map[string]any) (string, error)
 		if value == nil {
 			return "", fmt.Errorf("set_status requires value in schema")
 		}
-		tag, e := t.pool.Exec(ctx,
-			"UPDATE "+quoteIdent(table)+" SET "+quoteIdent(column)+" = $1, updated_at = COALESCE(updated_at, NOW()) WHERE id::text = ANY($2)",
-			*value, ids,
-		)
-		if e != nil {
+		if hasUpdatedAt, e := tableHasColumn(ctx, t.pool, table, "updated_at"); e != nil {
 			return "", e
+		} else if hasUpdatedAt {
+			tag, e := t.pool.Exec(ctx,
+				"UPDATE "+quoteIdent(table)+" SET "+quoteIdent(column)+" = $1, updated_at = NOW() WHERE id::text = ANY($2)",
+				*value, ids,
+			)
+			if e != nil {
+				return "", e
+			}
+			ct = tag.RowsAffected()
+		} else {
+			tag, e := t.pool.Exec(ctx,
+				"UPDATE "+quoteIdent(table)+" SET "+quoteIdent(column)+" = $1 WHERE id::text = ANY($2)",
+				*value, ids,
+			)
+			if e != nil {
+				return "", e
+			}
+			ct = tag.RowsAffected()
 		}
-		ct = tag.RowsAffected()
 	case "set_timestamp":
 		tag, e := t.pool.Exec(ctx,
 			"UPDATE "+quoteIdent(table)+" SET "+quoteIdent(column)+" = NOW() WHERE id::text = ANY($1)",
