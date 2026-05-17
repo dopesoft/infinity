@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,12 +39,18 @@ func (s *Store) UpsertSkill(ctx context.Context, sk *Skill) error {
 	}
 	defer tx.Rollback(ctx)
 
+	importance := normalizeImportance(sk.Importance)
+	reason := sk.ImportanceReason
+	if sk.Importance <= 0 {
+		importance = inferImportance(sk.Name, sk.Description, "", sk.Body)
+		reason = inferImportanceReason(sk.Name, sk.Description, "", sk.Body)
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO mem_skills
 		  (name, description, risk_level, network_egress, trigger_phrases, inputs, outputs,
-		   confidence, status, source, last_evolved, updated_at)
+		   confidence, status, source, last_evolved, importance, importance_reason, updated_at)
 		VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10,
-		        NULLIF($11,'')::timestamptz, NOW())
+		        NULLIF($11,'')::timestamptz, $12, $13, NOW())
 		ON CONFLICT (name) DO UPDATE SET
 		  description = EXCLUDED.description,
 		  risk_level  = EXCLUDED.risk_level,
@@ -54,9 +61,11 @@ func (s *Store) UpsertSkill(ctx context.Context, sk *Skill) error {
 		  confidence = EXCLUDED.confidence,
 		  source = EXCLUDED.source,
 		  last_evolved = EXCLUDED.last_evolved,
+		  importance = EXCLUDED.importance,
+		  importance_reason = EXCLUDED.importance_reason,
 		  updated_at = NOW()
 	`, sk.Name, sk.Description, string(sk.RiskLevel), egress, triggers, inputs, outputs,
-		sk.Confidence, string(sk.Status), string(sk.Source), sk.LastEvolved)
+		sk.Confidence, string(sk.Status), string(sk.Source), sk.LastEvolved, importance, reason)
 	if err != nil {
 		return fmt.Errorf("upsert mem_skills: %w", err)
 	}
@@ -90,6 +99,12 @@ func (s *Store) UpsertSkill(ctx context.Context, sk *Skill) error {
 // a skill is too risky to auto-activate (anything above risk_level=low, or
 // anything carrying an executable implementation). Returns the proposal id.
 func (s *Store) InsertProposal(ctx context.Context, name, description, reasoning, skillMD, riskLevel string) (string, error) {
+	return s.InsertProposalWithImportance(ctx, name, description, reasoning, skillMD, riskLevel,
+		inferImportance(name, description, reasoning, skillMD),
+		inferImportanceReason(name, description, reasoning, skillMD))
+}
+
+func (s *Store) InsertProposalWithImportance(ctx context.Context, name, description, reasoning, skillMD, riskLevel string, importance int, importanceReason string) (string, error) {
 	if s == nil || s.pool == nil {
 		return "", errors.New("skills: no store configured")
 	}
@@ -99,9 +114,9 @@ func (s *Store) InsertProposal(ctx context.Context, name, description, reasoning
 	id := uuid.NewString()
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_skill_proposals
-			(id, name, description, reasoning, skill_md, risk_level, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'candidate', NOW())
-	`, id, name, description, reasoning, skillMD, riskLevel)
+			(id, name, description, reasoning, skill_md, risk_level, importance, importance_reason, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'candidate', NOW())
+	`, id, name, description, reasoning, skillMD, riskLevel, normalizeImportance(importance), importanceReason)
 	if err != nil {
 		return "", fmt.Errorf("skills: insert proposal: %w", err)
 	}
@@ -298,7 +313,7 @@ func (s *Store) ListSummaries(ctx context.Context) ([]SkillSummary, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 		  s.name, COALESCE(a.active_version, ''), s.description, s.risk_level, s.confidence,
-		  s.source, s.status, s.network_egress::text,
+		  s.source, s.status, s.network_egress::text, COALESCE(s.importance, 50), COALESCE(s.importance_reason, ''),
 		  (SELECT MAX(started_at) FROM mem_skill_runs r WHERE r.skill_name = s.name) AS last_run,
 		  COALESCE((
 		     SELECT AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END)
@@ -308,7 +323,7 @@ func (s *Store) ListSummaries(ctx context.Context) ([]SkillSummary, error) {
 		  ), 0)::float8 AS success_rate
 		FROM mem_skills s
 		LEFT JOIN mem_skill_active a ON a.skill_name = s.name
-		ORDER BY s.name
+		ORDER BY COALESCE(s.importance, 50) DESC, s.name
 	`)
 	if err != nil {
 		return nil, err
@@ -319,11 +334,62 @@ func (s *Store) ListSummaries(ctx context.Context) ([]SkillSummary, error) {
 		var x SkillSummary
 		var egressJSON string
 		if err := rows.Scan(&x.Name, &x.Version, &x.Description, &x.RiskLevel, &x.Confidence,
-			&x.Source, &x.Status, &egressJSON, &x.LastRunAt, &x.SuccessRate); err != nil {
+			&x.Source, &x.Status, &egressJSON, &x.Importance, &x.ImportanceReason, &x.LastRunAt, &x.SuccessRate); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(egressJSON), &x.NetworkEgress)
 		out = append(out, x)
 	}
 	return out, rows.Err()
+}
+
+func normalizeImportance(v int) int {
+	if v <= 0 {
+		return 50
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+func inferImportance(name, description, reasoning, body string) int {
+	hay := strings.ToLower(name + " " + description + " " + reasoning + " " + body)
+	switch {
+	case containsAny(hay, "self-improve", "autoskill", "repair", "evolve-skill", "propose-skill", "memory-ground", "procedural", "reflection", "curiosity", "surprise", "world model", "connector identit"):
+		return 95
+	case containsAny(hay, "triage", "follow up", "dashboard", "surface", "inbox", "gmail", "schedule", "deadline", "open loop"):
+		return 85
+	case containsAny(hay, "scaffold", "build app", "vite", "nextjs", "swift", "capacitor"):
+		return 65
+	default:
+		return 60
+	}
+}
+
+func inferImportanceReason(name, description, reasoning, body string) string {
+	hay := strings.ToLower(name + " " + description + " " + reasoning + " " + body)
+	switch {
+	case containsAny(hay, "self-improve", "autoskill", "repair", "evolve-skill", "propose-skill"):
+		return "Core self-improvement loop: turns failures, drift, or repeated patterns into better skills."
+	case containsAny(hay, "memory-ground", "procedural", "reflection", "curiosity", "surprise", "world model"):
+		return "Core cognition loop: improves memory, reflection, or learning behavior across turns."
+	case containsAny(hay, "connector identit", "account identit"):
+		return "Core tool reliability loop: keeps connected accounts understandable and routable."
+	case containsAny(hay, "triage", "follow up", "dashboard", "surface", "inbox", "gmail", "schedule", "deadline", "open loop"):
+		return "Executive-assistant automation: notices and surfaces work without waiting for a prompt."
+	case containsAny(hay, "scaffold", "build app", "vite", "nextjs", "swift", "capacitor"):
+		return "Useful coding/build capability, but not part of the agent cognition core."
+	default:
+		return "General reusable skill."
+	}
+}
+
+func containsAny(s string, needles ...string) bool {
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
 }

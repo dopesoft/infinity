@@ -157,14 +157,14 @@ type SurfaceItem struct {
 }
 
 type Saved struct {
-	ID              string    `json:"id"`
-	Kind            string    `json:"kind"`
-	Title           string    `json:"title"`
-	Body            string    `json:"body,omitempty"`
-	URL             string    `json:"url,omitempty"`
-	Source          string    `json:"source,omitempty"`
-	ReadingMinutes  *int      `json:"readingMinutes,omitempty"`
-	SavedAt         time.Time `json:"savedAt"`
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	Title          string    `json:"title"`
+	Body           string    `json:"body,omitempty"`
+	URL            string    `json:"url,omitempty"`
+	Source         string    `json:"source,omitempty"`
+	ReadingMinutes *int      `json:"readingMinutes,omitempty"`
+	SavedAt        time.Time `json:"savedAt"`
 }
 
 type MemoryStats struct {
@@ -184,7 +184,7 @@ type Reflection struct {
 
 type Approval struct {
 	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`              // trust_bash | trust_edit | trust_write | code_proposal | curiosity
+	Kind      string    `json:"kind"` // trust_bash | trust_edit | trust_write | code_proposal | curiosity
 	Title     string    `json:"title"`
 	Subtitle  string    `json:"subtitle,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -494,6 +494,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 	if err != nil {
 		// Best-effort: connector rows alone are still useful.
 		a.Logger.Warn("dashboard: followups surface merge", "err", err)
+		sortFollowUpsNewest(out)
 		return out, nil
 	}
 	defer srows.Close()
@@ -539,7 +540,17 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		}
 		out = append(out, f)
 	}
-	return out, srows.Err()
+	if err := srows.Err(); err != nil {
+		return out, err
+	}
+	sortFollowUpsNewest(out)
+	return out, nil
+}
+
+func sortFollowUpsNewest(items []FollowUp) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].ReceivedAt.After(items[j].ReceivedAt)
+	})
 }
 
 // strFromMeta returns the first string-valued key from a metadata map.
@@ -1010,13 +1021,13 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 //
 // Column policy:
 //   - queued    → enabled crons with next_run_at > now, plus voyager
-//                 skill proposals still awaiting verifier decision.
+//     skill proposals still awaiting verifier decision.
 //   - running   → enabled sentinels (always watching), plus skill runs
-//                 in-flight (started but not ended).
+//     in-flight (started but not ended).
 //   - awaiting  → pending trust contracts + candidate code proposals.
-//                 These also appear in Approvals - that's intentional;
-//                 the Kanban is a *status board*, the Approvals card is
-//                 the decision surface.
+//     These also appear in Approvals - that's intentional;
+//     the Kanban is a *status board*, the Approvals card is
+//     the decision surface.
 //   - done      → today's completed cron runs + completed skill runs.
 func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	if a.Pool == nil {
@@ -1036,9 +1047,9 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	if err == nil {
 		for cronQRows.Next() {
 			var (
-				id, name             string
-				natural, schedule    *string
-				nextRunAt            time.Time
+				id, name          string
+				natural, schedule *string
+				nextRunAt         time.Time
 			)
 			if err := cronQRows.Scan(&id, &name, &natural, &schedule, &nextRunAt); err != nil {
 				cronQRows.Close()
@@ -1253,10 +1264,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	if err == nil {
 		for cronDoneRows.Next() {
 			var (
-				id, name      string
-				lastRunAt     time.Time
-				status        *string
-				durationMs    *int
+				id, name   string
+				lastRunAt  time.Time
+				status     *string
+				durationMs *int
 			)
 			if err := cronDoneRows.Scan(&id, &name, &lastRunAt, &status, &durationMs); err != nil {
 				cronDoneRows.Close()

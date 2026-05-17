@@ -292,10 +292,10 @@ func (m *Manager) insertFrontierProposal(ctx context.Context, skillName, version
 	var id string
 	err := m.pool.QueryRow(ctx, `
 		INSERT INTO mem_skill_proposals
-		  (name, description, reasoning, skill_md, risk_level, test_pass_rate,
+		  (name, description, reasoning, skill_md, risk_level, importance, importance_reason, test_pass_rate,
 		   status, parent_skill, parent_version,
 		   frontier_run_id, score, pareto_rank, gepa_metadata)
-		VALUES ($1, $2, $3, $4, 'medium', $5, 'candidate', $1, NULLIF($6, ''),
+		VALUES ($1, $2, $3, $4, 'medium', 90, 'GEPA optimization for an existing skill; review because it can improve autonomous behavior.', $5, 'candidate', $1, NULLIF($6, ''),
 		        $7::uuid, $5, $8, $9::jsonb)
 		RETURNING id::text
 	`,

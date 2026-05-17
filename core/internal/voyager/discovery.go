@@ -119,8 +119,8 @@ func (m *Manager) recordTripletProposal(tools [3]string) {
 	// Idempotent on (name) so repeat detections only update timestamps.
 	_, _ = m.pool.Exec(ctx, `
 		INSERT INTO mem_skill_proposals
-		  (name, description, reasoning, skill_md, risk_level, status)
-		VALUES ($1, $2, $3, '', 'low', 'candidate')
+		  (name, description, reasoning, skill_md, risk_level, importance, importance_reason, status)
+		VALUES ($1, $2, $3, '', 'low', 70, 'Repeated tool triplet; review for reusable workflow automation value.', 'candidate')
 		ON CONFLICT DO NOTHING
 	`, name, desc, reasoning)
 }

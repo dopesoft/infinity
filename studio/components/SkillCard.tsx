@@ -52,6 +52,9 @@ export function SkillCard({
       </p>
       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
         <RiskBadge level={skill.risk_level} />
+        <span className="rounded-full bg-info/10 px-1.5 py-0.5 font-mono uppercase text-info">
+          imp {skill.importance ?? 50}
+        </span>
         <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 font-mono uppercase text-muted-foreground">
           <Globe className="size-2.5" aria-hidden />
           {networkEgress}

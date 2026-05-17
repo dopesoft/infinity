@@ -216,7 +216,10 @@ function ProposalRow({
               {proposal.parent_skill || proposal.name}
             </code>
             <span className={cn("rounded-full border px-1.5 py-0.5 text-[10px] font-mono uppercase", RISK_STYLES[proposal.risk_level] ?? RISK_STYLES.low)}>
-              {proposal.risk_level}
+              risk {proposal.risk_level}
+            </span>
+            <span className="rounded-full bg-info/15 px-1.5 py-0.5 font-mono text-[10px] text-info">
+              imp {proposal.importance ?? 50}
             </span>
             {proposal.proposal_kind === "draft" && (
               <span className="rounded-full bg-info/15 px-1.5 py-0.5 font-mono text-[10px] text-info">
@@ -266,6 +269,9 @@ function ProposalModal({
 }) {
   const entries = [
     { k: "kind", v: proposal.proposal_kind || (proposal.frontier_run_id ? "frontier" : "standalone") },
+    { k: "execution risk", v: proposal.risk_level },
+    { k: "importance", v: proposal.importance ?? 50 },
+    { k: "importance reason", v: proposal.importance_reason || "-" },
     { k: "revision", v: proposal.revision ?? 1 },
     { k: "parent", v: proposal.parent_skill || "-" },
     { k: "frontier", v: proposal.frontier_run_id || "-" },

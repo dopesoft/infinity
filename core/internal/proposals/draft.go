@@ -37,13 +37,15 @@ import (
 // columns of mem_skill_proposals the caller controls. The Sample /
 // reasoning entry is what lands in changes_log per merge.
 type CandidateDraft struct {
-	Name        string // skill name (canonical phrasing)
-	ParentSkill string // existing skill being refined; "" for brand-new
-	Description string
-	Reasoning   string // refreshed-then-appended to changes_log
-	SkillMD     string // proposed body
-	RiskLevel   string // low | medium | high | critical
-	Source      string // "extractor" | "optimizer" | "agent" | etc.
+	Name             string // skill name (canonical phrasing)
+	ParentSkill      string // existing skill being refined; "" for brand-new
+	Description      string
+	Reasoning        string // refreshed-then-appended to changes_log
+	SkillMD          string // proposed body
+	RiskLevel        string // low | medium | high | critical
+	Importance       int    // strategic value 0-100; distinct from execution risk
+	ImportanceReason string
+	Source           string // "extractor" | "optimizer" | "agent" | etc.
 }
 
 // UpsertResult captures what UpsertCandidate did. IsNew=true means a
@@ -207,14 +209,16 @@ func UpsertCandidate(
 		       description    = COALESCE(NULLIF($3, ''), description),
 		       reasoning      = $4,
 		       risk_level     = $5,
-		       changes_log    = changes_log || $6::jsonb,
+		       importance     = GREATEST(COALESCE(importance, 50), $6),
+		       importance_reason = COALESCE(NULLIF($7, ''), importance_reason),
+		       changes_log    = changes_log || $8::jsonb,
 		       revision       = revision + 1,
-		       conflicts      = COALESCE($7::jsonb, conflicts),
+		       conflicts      = COALESCE($9::jsonb, conflicts),
 		       last_merged_at = NOW()
 		 WHERE id = $1
 		 RETURNING id::text, revision
 	`, existing.ID, mergedBody, truncate(d.Description, 200),
-		truncate(d.Reasoning, 500), strings.ToLower(d.RiskLevel),
+		truncate(d.Reasoning, 500), strings.ToLower(d.RiskLevel), normalizeImportance(d.Importance), d.ImportanceReason,
 		string(entryJSON), nullableJSON(conflictsJSON)).Scan(&id, &revision)
 	if err != nil {
 		return nil, fmt.Errorf("merge update: %w", err)
@@ -262,14 +266,16 @@ func GetOpenCandidate(
 }
 
 type existingCandidate struct {
-	ID          string
-	Name        string
-	SkillMD     string
-	Description string
-	Reasoning   string
-	RiskLevel   string
-	Revision    int
-	ChangesLog  []map[string]any
+	ID               string
+	Name             string
+	SkillMD          string
+	Description      string
+	Reasoning        string
+	RiskLevel        string
+	Importance       int
+	ImportanceReason string
+	Revision         int
+	ChangesLog       []map[string]any
 }
 
 func loadOpenCandidate(ctx context.Context, pool *pgxpool.Pool, parentSkill string) (*existingCandidate, bool, error) {
@@ -283,12 +289,13 @@ func loadOpenCandidate(ctx context.Context, pool *pgxpool.Pool, parentSkill stri
 	err := pool.QueryRow(ctx, `
 		SELECT id::text, name, COALESCE(skill_md,''), COALESCE(description,''),
 		       COALESCE(reasoning,''), COALESCE(risk_level,'low'),
+		       COALESCE(importance, 50), COALESCE(importance_reason, ''),
 		       revision, COALESCE(changes_log, '[]'::jsonb)
 		  FROM mem_skill_proposals
 		 WHERE parent_skill = $1 AND status = 'candidate' AND proposal_kind = 'draft'
 		 LIMIT 1
 	`, parentSkill).Scan(&c.ID, &c.Name, &c.SkillMD, &c.Description,
-		&c.Reasoning, &c.RiskLevel, &c.Revision, &changesRaw)
+		&c.Reasoning, &c.RiskLevel, &c.Importance, &c.ImportanceReason, &c.Revision, &changesRaw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, nil
@@ -328,12 +335,12 @@ func insertFreshProposal(ctx context.Context, pool *pgxpool.Pool, d CandidateDra
 	var id string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO mem_skill_proposals
-		  (name, description, reasoning, skill_md, risk_level, status,
+		  (name, description, reasoning, skill_md, risk_level, importance, importance_reason, status,
 		   parent_skill, changes_log, revision, conflicts, proposal_kind)
-		VALUES ($1, $2, $3, $4, $5, 'candidate', $6, $7::jsonb, 1, COALESCE($8::jsonb, '[]'::jsonb), $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'candidate', $8, $9::jsonb, 1, COALESCE($10::jsonb, '[]'::jsonb), $11)
 		RETURNING id::text
 	`, d.Name, truncate(d.Description, 200), truncate(d.Reasoning, 500),
-		d.SkillMD, strings.ToLower(d.RiskLevel), parentSkill,
+		d.SkillMD, strings.ToLower(d.RiskLevel), normalizeImportance(d.Importance), d.ImportanceReason, parentSkill,
 		changesLog, nullableJSON(conflictsJSON), proposalKind).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("insert fresh proposal: %w", err)
@@ -450,4 +457,14 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func normalizeImportance(v int) int {
+	if v <= 0 {
+		return 50
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }

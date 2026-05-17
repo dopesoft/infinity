@@ -114,6 +114,9 @@ export function SkillDetail({
           </h3>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <RiskBadge level={selected.risk_level} />
+            <Badge variant="outline" className="font-mono">
+              importance {selected.importance ?? 50}
+            </Badge>
             <Badge variant="outline" className="font-mono">v{selected.version}</Badge>
             <Badge variant="secondary" className="font-mono">{selected.source}</Badge>
             {selected.network_egress?.length ? (
@@ -186,6 +189,14 @@ export function SkillDetail({
                   ) : (
                     <p className="text-sm text-muted-foreground">none</p>
                   )}
+                </Section>
+                <Section title="Strategic importance">
+                  <p className="text-sm text-muted-foreground">
+                    {selected.importance_reason || "General reusable skill."}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Risk is execution danger. Importance is how central this skill is to autonomous behavior.
+                  </p>
                 </Section>
               </>
             )}

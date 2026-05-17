@@ -489,6 +489,8 @@ export type SkillProposalDTO = {
   reasoning: string;
   skill_md: string;
   risk_level: "low" | "medium" | "high" | "critical";
+  importance: number;
+  importance_reason?: string;
   test_pass_rate: number;
   status: "candidate" | "promoted" | "rejected";
   parent_skill?: string;
@@ -618,6 +620,8 @@ export type SkillSummaryDTO = {
   description: string;
   risk_level: SkillRiskLevel;
   confidence: number;
+  importance: number;
+  importance_reason?: string;
   source: SkillSource;
   status: SkillStatus;
   network_egress: string[];
@@ -643,6 +647,8 @@ export type SkillDTO = {
   risk_level: SkillRiskLevel;
   network_egress: string[];
   confidence: number;
+  importance: number;
+  importance_reason?: string;
   last_evolved?: string;
   body: string;
   impl_path?: string;

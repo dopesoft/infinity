@@ -31,23 +31,23 @@ import { RunIndicator } from "@/lib/runs";
 export default function CronPage() {
   return (
     <TabFrame>
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-safe scroll-touch">
         <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
           <h1 className="text-base font-semibold tracking-tight text-foreground">
             Cron
           </h1>
         </div>
-        <Tabs defaultValue="cron" className="flex min-h-0 flex-1 flex-col">
+        <Tabs defaultValue="cron" className="flex flex-col">
           <div className="px-4 pb-3 sm:px-6 lg:px-8">
             <PageTabsList columns={2}>
               <PageTabsTrigger value="cron">Cron</PageTabsTrigger>
               <PageTabsTrigger value="sentinel">Sentinels</PageTabsTrigger>
             </PageTabsList>
           </div>
-          <TabsContent value="cron" className="flex min-h-0 flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8">
+          <TabsContent value="cron" className="flex flex-col px-4 py-5 sm:px-6 lg:px-8">
             <CronSection />
           </TabsContent>
-          <TabsContent value="sentinel" className="flex min-h-0 flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8">
+          <TabsContent value="sentinel" className="flex flex-col px-4 py-5 sm:px-6 lg:px-8">
             <SentinelSection />
           </TabsContent>
         </Tabs>
@@ -85,7 +85,7 @@ function CronSection() {
   useRealtime("mem_crons", load);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PageSectionHeader title="scheduled jobs" count={items.length}>
         <HeaderAction
           icon={<Plus className="size-4" />}
@@ -110,7 +110,7 @@ function CronSection() {
         />
       )}
 
-      <ul className="flex flex-col gap-2 overflow-y-auto scroll-touch">
+      <ul className="flex flex-col gap-2">
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {loading ? "Loading…" : "No crons yet."}
@@ -292,7 +292,7 @@ function SentinelSection() {
   }, []);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PageSectionHeader title="sentinels" count={items.length}>
         <HeaderAction
           icon={<Plus className="size-4" />}
@@ -315,7 +315,7 @@ function SentinelSection() {
           }}
         />
       )}
-      <ul className="flex flex-col gap-2 overflow-y-auto scroll-touch">
+      <ul className="flex flex-col gap-2">
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {loading ? "Loading…" : "No sentinels yet."}

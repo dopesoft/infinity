@@ -20,8 +20,8 @@ func SuggestionPrefix(matches []Match) string {
 	b.WriteString("These installed skills might be relevant to the user's message. ")
 	b.WriteString("You may invoke any of them via skills.invoke; you decide whether the match is real.\n\n")
 	for _, m := range matches {
-		fmt.Fprintf(&b, "- **%s** (v%s, risk=%s, score=%.2f) - %s\n",
-			m.Skill.Name, m.Skill.Version, m.Skill.RiskLevel, m.Score, m.Skill.Description)
+		fmt.Fprintf(&b, "- **%s** (v%s, risk=%s, importance=%d, score=%.2f) - %s\n",
+			m.Skill.Name, m.Skill.Version, m.Skill.RiskLevel, m.Skill.Importance, m.Score, m.Skill.Description)
 	}
 	return b.String()
 }

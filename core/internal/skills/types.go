@@ -80,16 +80,18 @@ type Frontmatter struct {
 
 // Skill is the runtime view of a skill - frontmatter + body + provenance.
 type Skill struct {
-	Name           string    `json:"name"`
-	Version        string    `json:"version"`
-	Description    string    `json:"description"`
-	TriggerPhrases []string  `json:"trigger_phrases"`
-	Inputs         []IODef   `json:"inputs"`
-	Outputs        []IODef   `json:"outputs"`
-	RiskLevel      RiskLevel `json:"risk_level"`
-	NetworkEgress  []string  `json:"network_egress"` // empty = none
-	Confidence     float64   `json:"confidence"`
-	LastEvolved    string    `json:"last_evolved,omitempty"`
+	Name             string    `json:"name"`
+	Version          string    `json:"version"`
+	Description      string    `json:"description"`
+	TriggerPhrases   []string  `json:"trigger_phrases"`
+	Inputs           []IODef   `json:"inputs"`
+	Outputs          []IODef   `json:"outputs"`
+	RiskLevel        RiskLevel `json:"risk_level"`
+	NetworkEgress    []string  `json:"network_egress"` // empty = none
+	Confidence       float64   `json:"confidence"`
+	Importance       int       `json:"importance"`
+	ImportanceReason string    `json:"importance_reason,omitempty"`
+	LastEvolved      string    `json:"last_evolved,omitempty"`
 
 	Body         string `json:"body"`
 	ImplPath     string `json:"impl_path,omitempty"` // optional implementation file
@@ -104,16 +106,18 @@ type Skill struct {
 // SkillSummary is the row shape returned by skills.list and the Studio
 // Skills tab list view.
 type SkillSummary struct {
-	Name          string     `json:"name"`
-	Version       string     `json:"version"`
-	Description   string     `json:"description"`
-	RiskLevel     RiskLevel  `json:"risk_level"`
-	Confidence    float64    `json:"confidence"`
-	Source        Source     `json:"source"`
-	Status        Status     `json:"status"`
-	NetworkEgress []string   `json:"network_egress"`
-	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
-	SuccessRate   float64    `json:"success_rate"`
+	Name             string     `json:"name"`
+	Version          string     `json:"version"`
+	Description      string     `json:"description"`
+	RiskLevel        RiskLevel  `json:"risk_level"`
+	Confidence       float64    `json:"confidence"`
+	Source           Source     `json:"source"`
+	Status           Status     `json:"status"`
+	NetworkEgress    []string   `json:"network_egress"`
+	Importance       int        `json:"importance"`
+	ImportanceReason string     `json:"importance_reason,omitempty"`
+	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+	SuccessRate      float64    `json:"success_rate"`
 }
 
 // Match is a skill matched by trigger fuzzy-matching against a user message.

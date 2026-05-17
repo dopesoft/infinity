@@ -82,9 +82,20 @@ func (t *skillProposeTool) Schema() map[string]any {
 				"description": "Natural-language phrases that should fire this skill.",
 			},
 			"risk_level": map[string]any{
-				"type":    "string",
-				"enum":    []string{"low", "medium", "high", "critical"},
-				"default": "low",
+				"type":        "string",
+				"enum":        []string{"low", "medium", "high", "critical"},
+				"default":     "low",
+				"description": "Execution risk/sandbox level, NOT importance. low = prompt-only recipe, safe to run. medium+ = writes files, calls paid/external APIs, sends messages, or changes external state.",
+			},
+			"importance": map[string]any{
+				"type":        "integer",
+				"minimum":     0,
+				"maximum":     100,
+				"description": "Strategic value to Infinity's AGI behavior. Use 90-100 for core memory/self-improvement/proactivity/tool-reliability skills even when risk_level is low.",
+			},
+			"importance_reason": map[string]any{
+				"type":        "string",
+				"description": "One sentence explaining why this skill is strategically important or routine.",
 			},
 		},
 		"required": []string{"name", "description", "skill_md"},
@@ -110,24 +121,35 @@ func (t *skillProposeTool) Execute(ctx context.Context, input map[string]any) (s
 	if risk == "" {
 		risk = "low"
 	}
+	importance := intFrom(input, "importance")
+	if importance <= 0 {
+		importance = inferSkillImportance(name, desc, reasoning, skillMD)
+	}
+	importanceReason, _ := input["importance_reason"].(string)
+	importanceReason = strings.TrimSpace(importanceReason)
+	if importanceReason == "" {
+		importanceReason = inferSkillImportanceReason(name, desc, reasoning, skillMD)
+	}
 
 	id := uuid.NewString()
 	_, err := t.pool.Exec(ctx, `
 		INSERT INTO mem_skill_proposals
-			(id, name, description, reasoning, skill_md, risk_level, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'candidate', NOW())
-	`, id, name, desc, reasoning, skillMD, risk)
+			(id, name, description, reasoning, skill_md, risk_level, importance, importance_reason, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'candidate', NOW())
+	`, id, name, desc, reasoning, skillMD, risk, importance, importanceReason)
 	if err != nil {
 		return "", fmt.Errorf("insert proposal: %w", err)
 	}
 
 	out, _ := json.Marshal(map[string]any{
-		"status":      "proposed",
-		"id":          id,
-		"name":        name,
-		"description": desc,
-		"reasoning":   reasoning,
-		"risk_level":  risk,
+		"status":            "proposed",
+		"id":                id,
+		"name":              name,
+		"description":       desc,
+		"reasoning":         reasoning,
+		"risk_level":        risk,
+		"importance":        importance,
+		"importance_reason": importanceReason,
 		"message": fmt.Sprintf(
 			"Proposed candidate skill %q. The boss will see it in the Skills tab to promote or reject.",
 			name,
@@ -197,13 +219,15 @@ func (t *skillOptimizeTool) Execute(ctx context.Context, input map[string]any) (
 	// partial unique index. Conflicts the merge flags come back in the
 	// result and bubble up to the boss via the chat card.
 	res, err := proposals.UpsertCandidate(ctx, t.pool, t.drafter, slog.Default(), proposals.CandidateDraft{
-		Name:        parent + "-update",
-		ParentSkill: parent,
-		Description: "Updated SKILL.md for " + parent,
-		Reasoning:   reasoning,
-		SkillMD:     skillMD,
-		RiskLevel:   "low",
-		Source:      "agent",
+		Name:             parent + "-update",
+		ParentSkill:      parent,
+		Description:      "Updated SKILL.md for " + parent,
+		Reasoning:        reasoning,
+		SkillMD:          skillMD,
+		RiskLevel:        "low",
+		Importance:       inferSkillImportance(parent, "Updated SKILL.md for "+parent, reasoning, skillMD),
+		ImportanceReason: inferSkillImportanceReason(parent, "Updated SKILL.md for "+parent, reasoning, skillMD),
+		Source:           "agent",
 	})
 	if err != nil {
 		return "", fmt.Errorf("upsert proposal: %w", err)
@@ -280,15 +304,68 @@ func (t *skillProposalGetTool) Execute(ctx context.Context, input map[string]any
 	}
 	b, _ := json.Marshal(map[string]any{
 		"open_candidate": map[string]any{
-			"id":           cand.ID,
-			"name":         cand.Name,
-			"revision":     cand.Revision,
-			"description":  cand.Description,
-			"reasoning":    cand.Reasoning,
-			"risk_level":   cand.RiskLevel,
-			"skill_md":     cand.SkillMD,
-			"changes_log":  cand.ChangesLog,
+			"id":                cand.ID,
+			"name":              cand.Name,
+			"revision":          cand.Revision,
+			"description":       cand.Description,
+			"reasoning":         cand.Reasoning,
+			"risk_level":        cand.RiskLevel,
+			"importance":        cand.Importance,
+			"importance_reason": cand.ImportanceReason,
+			"skill_md":          cand.SkillMD,
+			"changes_log":       cand.ChangesLog,
 		},
 	})
 	return string(b), nil
+}
+
+func intFrom(in map[string]any, key string) int {
+	if v, ok := in[key].(float64); ok {
+		return int(v)
+	}
+	if v, ok := in[key].(int); ok {
+		return v
+	}
+	return 0
+}
+
+func inferSkillImportance(name, description, reasoning, body string) int {
+	hay := strings.ToLower(name + " " + description + " " + reasoning + " " + body)
+	switch {
+	case skillHasAny(hay, "self-improve", "autoskill", "repair", "evolve-skill", "propose-skill", "memory-ground", "procedural", "reflection", "curiosity", "surprise", "world model", "connector identit"):
+		return 95
+	case skillHasAny(hay, "triage", "follow up", "dashboard", "surface", "inbox", "gmail", "schedule", "deadline", "open loop"):
+		return 85
+	case skillHasAny(hay, "scaffold", "build app", "vite", "nextjs", "swift", "capacitor"):
+		return 65
+	default:
+		return 60
+	}
+}
+
+func inferSkillImportanceReason(name, description, reasoning, body string) string {
+	hay := strings.ToLower(name + " " + description + " " + reasoning + " " + body)
+	switch {
+	case skillHasAny(hay, "self-improve", "autoskill", "repair", "evolve-skill", "propose-skill"):
+		return "Core self-improvement loop: turns failures, drift, or repeated patterns into better skills."
+	case skillHasAny(hay, "memory-ground", "procedural", "reflection", "curiosity", "surprise", "world model"):
+		return "Core cognition loop: improves memory, reflection, or learning behavior across turns."
+	case skillHasAny(hay, "connector identit", "account identit"):
+		return "Core tool reliability loop: keeps connected accounts understandable and routable."
+	case skillHasAny(hay, "triage", "follow up", "dashboard", "surface", "inbox", "gmail", "schedule", "deadline", "open loop"):
+		return "Executive-assistant automation: notices and surfaces work without waiting for a prompt."
+	case skillHasAny(hay, "scaffold", "build app", "vite", "nextjs", "swift", "capacitor"):
+		return "Useful coding/build capability, but not part of the agent cognition core."
+	default:
+		return "General reusable skill."
+	}
+}
+
+func skillHasAny(s string, needles ...string) bool {
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
 }

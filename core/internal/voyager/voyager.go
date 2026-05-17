@@ -144,6 +144,8 @@ type ProposalDTO struct {
 	Reasoning        string           `json:"reasoning"`
 	SkillMD          string           `json:"skill_md"`
 	RiskLevel        string           `json:"risk_level"`
+	Importance       int              `json:"importance"`
+	ImportanceReason string           `json:"importance_reason,omitempty"`
 	TestPassRate     float64          `json:"test_pass_rate"`
 	Status           string           `json:"status"` // candidate | promoted | rejected
 	ParentSkill      string           `json:"parent_skill,omitempty"`
@@ -183,6 +185,7 @@ func (m *Manager) ListProposalsFiltered(ctx context.Context, filters ProposalFil
 	}
 	q := `
 		SELECT id::text, name, description, reasoning, skill_md, risk_level,
+		       COALESCE(importance, 50), COALESCE(importance_reason, ''),
 		       test_pass_rate, status,
 		       COALESCE(parent_skill, ''), COALESCE(parent_version, ''),
 		       COALESCE(proposal_kind, ''), COALESCE(revision, 1),
@@ -217,7 +220,7 @@ func (m *Manager) ListProposalsFiltered(ctx context.Context, filters ProposalFil
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
-	q += ` ORDER BY created_at DESC LIMIT $` + itoa(len(args)+1)
+	q += ` ORDER BY COALESCE(importance, 50) DESC, created_at DESC LIMIT $` + itoa(len(args)+1)
 	args = append(args, limit)
 
 	rows, err := m.pool.Query(ctx, q, args...)
@@ -232,7 +235,7 @@ func (m *Manager) ListProposalsFiltered(ctx context.Context, filters ProposalFil
 		var lastMerged *time.Time
 		var changesRaw, conflictsRaw, metaRaw []byte
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Reasoning, &p.SkillMD, &p.RiskLevel,
-			&p.TestPassRate, &p.Status, &p.ParentSkill, &p.ParentVersion,
+			&p.Importance, &p.ImportanceReason, &p.TestPassRate, &p.Status, &p.ParentSkill, &p.ParentVersion,
 			&p.ProposalKind, &p.Revision, &changesRaw, &conflictsRaw,
 			&p.FrontierRunID, &p.Score, &p.ParetoRank, &metaRaw,
 			&p.ParentProposalID, &p.CreatedAt, &decided, &lastMerged); err != nil {
@@ -259,14 +262,17 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 	}
 
 	if decision == "promoted" {
-		var name, skillMD, description, riskLevel string
+		var name, skillMD, description, riskLevel, importanceReason string
+		var importance int
 		err := m.pool.QueryRow(ctx, `
 			SELECT name,
 			       COALESCE(skill_md, ''),
 			       COALESCE(description, ''),
-			       COALESCE(risk_level, 'low')
+			       COALESCE(risk_level, 'low'),
+			       COALESCE(importance, 50),
+			       COALESCE(importance_reason, '')
 			  FROM mem_skill_proposals WHERE id = $1
-		`, id).Scan(&name, &skillMD, &description, &riskLevel)
+		`, id).Scan(&name, &skillMD, &description, &riskLevel, &importance, &importanceReason)
 		if err != nil {
 			return err
 		}
@@ -278,7 +284,7 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 		// re-syncs disk to match active rows in Postgres, so even if
 		// the disk write is lost we recover automatically.
 		version := nextVersionStamp()
-		if err := m.persistSkillToDB(ctx, name, version, skillMD, description, riskLevel); err != nil {
+		if err := m.persistSkillToDB(ctx, name, version, skillMD, description, riskLevel, importance, importanceReason); err != nil {
 			return err
 		}
 		if err := m.writeSkillToDisk(name, skillMD); err != nil {
@@ -324,12 +330,15 @@ func (m *Manager) writeSkillToDisk(name, skillMD string) error {
 // generated at runtime - Railway's ephemeral container filesystem can
 // disappear on every push, but these Postgres rows persist forever and
 // are re-materialized to disk on the next boot.
-func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, description, riskLevel string) error {
+func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, description, riskLevel string, importance int, importanceReason string) error {
 	if m == nil || m.pool == nil {
 		return errors.New("voyager: no database pool")
 	}
 	if riskLevel == "" {
 		riskLevel = "low"
+	}
+	if importance <= 0 {
+		importance = 50
 	}
 	tx, err := m.pool.Begin(ctx)
 	if err != nil {
@@ -340,11 +349,13 @@ func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, 
 	// 1. Upsert the catalog row. Source = auto_evolved so we can filter
 	//    in Studio (e.g. "show me everything Voyager built me").
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO mem_skills (name, description, risk_level, status, source, last_evolved, updated_at)
-		VALUES ($1, $2, $3, 'active', 'auto_evolved', NOW(), NOW())
+		INSERT INTO mem_skills (name, description, risk_level, importance, importance_reason, status, source, last_evolved, updated_at)
+		VALUES ($1, $2, $3, $4, $5, 'active', 'auto_evolved', NOW(), NOW())
 		ON CONFLICT (name) DO UPDATE
 		   SET description  = EXCLUDED.description,
 		       risk_level   = EXCLUDED.risk_level,
+		       importance   = EXCLUDED.importance,
+		       importance_reason = EXCLUDED.importance_reason,
 		       status       = 'active',
 		       source       = CASE
 		                        WHEN mem_skills.source = 'manual' THEN 'manual'
@@ -352,7 +363,7 @@ func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, 
 		                      END,
 		       last_evolved = NOW(),
 		       updated_at   = NOW()
-	`, name, description, riskLevel); err != nil {
+	`, name, description, riskLevel, importance, importanceReason); err != nil {
 		return fmt.Errorf("upsert mem_skills: %w", err)
 	}
 

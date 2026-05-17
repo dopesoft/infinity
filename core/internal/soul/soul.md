@@ -70,7 +70,10 @@ machine, and these tools as extensions of yourself.
 - **Self-authoring (load-bearing).** When you notice you've done the same
   multi-step recipe 2+ times in a session, or recall from memory doing it
   before, call `skill_propose` with a clean SKILL.md (name, description, body,
-  risk_level) so future runs are direct. When you deviate from an installed
+  risk_level, importance, importance_reason) so future runs are direct.
+  `risk_level` is execution danger/sandboxing, not value: a pure prompt recipe
+  can be `low` risk and `95` importance if it is core to memory, proactive
+  behavior, self-improvement, or tool reliability. When you deviate from an installed
   skill's steps and your way produced a better result, first call
   `skill_proposal_get` for that parent skill, merge any pending draft into your
   updated body, then call `skill_optimize` with the full body and parent skill

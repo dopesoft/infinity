@@ -169,20 +169,33 @@ Return ONLY a JSON object in this exact shape - no commentary, no code fences:
   "description": "<=120 chars, what the skill does",
   "reasoning": "1-2 sentences: why this session crystallizes into a reusable skill",
   "risk_level": "low|medium|high|critical",
+  "importance": 0-100,
+  "importance_reason": "one sentence explaining strategic value",
   "skill_md": "---\nname: <name>\nversion: '0.1.0'\ndescription: <description>\ntrigger_phrases: ['phrase1', 'phrase2']\ninputs: []\noutputs: []\nrisk_level: <risk>\nnetwork_egress: 'none'\nconfidence: 0.5\n---\n\n# <Title>\n\n## When to use\n\n## Steps\n\n1. ...\n2. ...\n\n## Notes"
 }
 
 If the session is a one-off chat, debugging digression, or anything not worth crystallizing, return:
-{"name":"","description":"","reasoning":"not a generalizable procedure","risk_level":"low","skill_md":""}
+{"name":"","description":"","reasoning":"not a generalizable procedure","risk_level":"low","importance":0,"importance_reason":"","skill_md":""}
+
+Risk level is execution danger, not value:
+- low = prompt-only recipe; can still be strategically fundamental
+- medium/high/critical = writes files, calls paid/external APIs, sends messages, changes external state, or needs stricter sandboxing
+
+Importance is strategic value:
+- 90-100 = core AGI loop: memory grounding, self-improvement, proactivity, tool reliability, executive open-loop tracking
+- 70-89 = useful recurring executive/coding workflow
+- 40-69 = convenience or narrow workflow
 
 Never invent capabilities. The skill must reflect what actually happened.`
 
 type draftResult struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Reasoning   string `json:"reasoning"`
-	RiskLevel   string `json:"risk_level"`
-	SkillMD     string `json:"skill_md"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Reasoning        string `json:"reasoning"`
+	RiskLevel        string `json:"risk_level"`
+	Importance       int    `json:"importance"`
+	ImportanceReason string `json:"importance_reason"`
+	SkillMD          string `json:"skill_md"`
 }
 
 func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stats sessionStats) error {
@@ -215,15 +228,21 @@ func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stat
 	if draft.RiskLevel == "" {
 		draft.RiskLevel = "low"
 	}
+	if draft.Importance <= 0 {
+		draft.Importance = inferProposalImportance(draft.Name, draft.Description, draft.Reasoning, draft.SkillMD)
+	}
+	if strings.TrimSpace(draft.ImportanceReason) == "" {
+		draft.ImportanceReason = inferProposalImportanceReason(draft.Name, draft.Description, draft.Reasoning, draft.SkillMD)
+	}
 
 	var proposalID string
 	err = m.pool.QueryRow(ctx, `
 		INSERT INTO mem_skill_proposals
-		  (name, description, reasoning, skill_md, risk_level, status)
-		VALUES ($1, $2, $3, $4, $5, 'candidate')
+		  (name, description, reasoning, skill_md, risk_level, importance, importance_reason, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'candidate')
 		RETURNING id::text
 	`, draft.Name, truncate(draft.Description, 200), truncate(draft.Reasoning, 500),
-		draft.SkillMD, strings.ToLower(draft.RiskLevel)).Scan(&proposalID)
+		draft.SkillMD, strings.ToLower(draft.RiskLevel), draft.Importance, draft.ImportanceReason).Scan(&proposalID)
 	if err != nil {
 		return fmt.Errorf("insert proposal: %w", err)
 	}
@@ -242,8 +261,8 @@ func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stat
 func (m *Manager) insertProposalStub(ctx context.Context, sessionID string, stats sessionStats) error {
 	_, err := m.pool.Exec(ctx, `
 		INSERT INTO mem_skill_proposals
-		  (name, description, reasoning, skill_md, risk_level, status)
-		VALUES ($1, $2, $3, $4, 'low', 'candidate')
+		  (name, description, reasoning, skill_md, risk_level, importance, importance_reason, status)
+		VALUES ($1, $2, $3, $4, 'low', 70, 'Repeated tool/session pattern detected; review for reusable automation value.', 'candidate')
 	`,
 		fmt.Sprintf("session_pattern_%d", time.Now().Unix()),
 		"Skill-worthy session detected (LLM unavailable for drafting)",
@@ -284,6 +303,47 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func inferProposalImportance(name, description, reasoning, body string) int {
+	hay := strings.ToLower(name + " " + description + " " + reasoning + " " + body)
+	switch {
+	case hasAny(hay, "self-improve", "autoskill", "repair", "evolve-skill", "propose-skill", "memory-ground", "procedural", "reflection", "curiosity", "surprise", "world model", "connector identit"):
+		return 95
+	case hasAny(hay, "triage", "follow up", "dashboard", "surface", "inbox", "gmail", "schedule", "deadline", "open loop"):
+		return 85
+	case hasAny(hay, "scaffold", "build app", "vite", "nextjs", "swift", "capacitor"):
+		return 65
+	default:
+		return 60
+	}
+}
+
+func inferProposalImportanceReason(name, description, reasoning, body string) string {
+	hay := strings.ToLower(name + " " + description + " " + reasoning + " " + body)
+	switch {
+	case hasAny(hay, "self-improve", "autoskill", "repair", "evolve-skill", "propose-skill"):
+		return "Core self-improvement loop: turns failures, drift, or repeated patterns into better skills."
+	case hasAny(hay, "memory-ground", "procedural", "reflection", "curiosity", "surprise", "world model"):
+		return "Core cognition loop: improves memory, reflection, or learning behavior across turns."
+	case hasAny(hay, "connector identit", "account identit"):
+		return "Core tool reliability loop: keeps connected accounts understandable and routable."
+	case hasAny(hay, "triage", "follow up", "dashboard", "surface", "inbox", "gmail", "schedule", "deadline", "open loop"):
+		return "Executive-assistant automation: notices and surfaces work without waiting for a prompt."
+	case hasAny(hay, "scaffold", "build app", "vite", "nextjs", "swift", "capacitor"):
+		return "Useful coding/build capability, but not part of the agent cognition core."
+	default:
+		return "General reusable skill."
+	}
+}
+
+func hasAny(s string, needles ...string) bool {
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
 }
 
 func envOr(k, def string) string {

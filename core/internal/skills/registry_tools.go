@@ -50,12 +50,14 @@ func (t *listTool) Execute(ctx context.Context, _ map[string]any) (string, error
 	out := make([]map[string]any, 0, len(all))
 	for _, s := range all {
 		out = append(out, map[string]any{
-			"name":           s.Name,
-			"version":        s.Version,
-			"description":    s.Description,
-			"risk_level":     s.RiskLevel,
-			"confidence":     s.Confidence,
-			"network_egress": s.NetworkEgress,
+			"name":              s.Name,
+			"version":           s.Version,
+			"description":       s.Description,
+			"risk_level":        s.RiskLevel,
+			"importance":        s.Importance,
+			"importance_reason": s.ImportanceReason,
+			"confidence":        s.Confidence,
+			"network_egress":    s.NetworkEgress,
 		})
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
@@ -304,7 +306,17 @@ func (t *skillCreateTool) Schema() map[string]any {
 			"risk_level": map[string]any{
 				"type":        "string",
 				"enum":        []string{"low", "medium", "high", "critical"},
-				"description": "low = pure recipe, goes live immediately. medium+ = filed as a candidate for boss approval. Default low.",
+				"description": "Execution risk/sandbox level, NOT importance. low = pure prompt recipe and can still be strategically fundamental. medium+ = writes files, calls paid/external APIs, sends messages, or changes external state.",
+			},
+			"importance": map[string]any{
+				"type":        "integer",
+				"minimum":     0,
+				"maximum":     100,
+				"description": "Strategic value to Infinity's AGI behavior. Use 90-100 for core memory/self-improvement/proactivity/tool-reliability skills even when risk_level is low.",
+			},
+			"importance_reason": map[string]any{
+				"type":        "string",
+				"description": "One sentence explaining why this skill is strategically important or routine.",
 			},
 			"reasoning": map[string]any{
 				"type":        "string",
@@ -337,6 +349,15 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 		return "", fmt.Errorf("skill_create: invalid risk_level %q", risk)
 	}
 	reasoning, _ := in["reasoning"].(string)
+	importance := intFromMap(in, "importance")
+	if importance <= 0 {
+		importance = inferImportance(name, desc, reasoning, body)
+	}
+	importanceReason, _ := in["importance_reason"].(string)
+	importanceReason = strings.TrimSpace(importanceReason)
+	if importanceReason == "" {
+		importanceReason = inferImportanceReason(name, desc, reasoning, body)
+	}
 	var triggers []string
 	if raw, ok := in["trigger_phrases"].([]any); ok {
 		for _, v := range raw {
@@ -350,24 +371,28 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 	// filed as a candidate for the boss to approve in the Skills tab.
 	if risk == RiskLow {
 		sk := &Skill{
-			Name:           name,
-			Version:        "1.0.0",
-			Description:    desc,
-			TriggerPhrases: triggers,
-			RiskLevel:      RiskLow,
-			Confidence:     0.6,
-			Body:           strings.TrimSpace(body),
-			Source:         SourceAgent,
-			Status:         StatusActive,
+			Name:             name,
+			Version:          "1.0.0",
+			Description:      desc,
+			TriggerPhrases:   triggers,
+			RiskLevel:        RiskLow,
+			Importance:       importance,
+			ImportanceReason: importanceReason,
+			Confidence:       0.6,
+			Body:             strings.TrimSpace(body),
+			Source:           SourceAgent,
+			Status:           StatusActive,
 		}
 		if err := t.r.Put(ctx, sk); err != nil {
 			return "", err
 		}
 		out, _ := json.Marshal(map[string]any{
-			"status":  "live",
-			"name":    name,
-			"version": sk.Version,
-			"message": fmt.Sprintf("Skill %q is live now - invoke it with skills_invoke. It persists across restarts.", name),
+			"status":            "live",
+			"name":              name,
+			"version":           sk.Version,
+			"importance":        importance,
+			"importance_reason": importanceReason,
+			"message":           fmt.Sprintf("Skill %q is live now - invoke it with skills_invoke. It persists across restarts.", name),
 		})
 		return string(out), nil
 	}
@@ -376,16 +401,18 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 	if t.r.store == nil {
 		return "", errors.New("skill_create: medium+ risk skills need a database (no Store configured)")
 	}
-	id, err := t.r.store.InsertProposal(ctx, name, desc, reasoning, strings.TrimSpace(body), string(risk))
+	id, err := t.r.store.InsertProposalWithImportance(ctx, name, desc, reasoning, strings.TrimSpace(body), string(risk), importance, importanceReason)
 	if err != nil {
 		return "", err
 	}
 	out, _ := json.Marshal(map[string]any{
-		"status":     "pending",
-		"id":         id,
-		"name":       name,
-		"risk_level": string(risk),
-		"message":    fmt.Sprintf("Skill %q filed as a candidate (risk=%s). The boss promotes it in the Skills tab.", name, risk),
+		"status":            "pending",
+		"id":                id,
+		"name":              name,
+		"risk_level":        string(risk),
+		"importance":        importance,
+		"importance_reason": importanceReason,
+		"message":           fmt.Sprintf("Skill %q filed as a candidate (risk=%s). The boss promotes it in the Skills tab.", name, risk),
 	})
 	return string(out), nil
 }
@@ -414,4 +441,14 @@ func validSkillName(s string) bool {
 		}
 	}
 	return true
+}
+
+func intFromMap(in map[string]any, key string) int {
+	if v, ok := in[key].(float64); ok {
+		return int(v)
+	}
+	if v, ok := in[key].(int); ok {
+		return v
+	}
+	return 0
 }
