@@ -44,6 +44,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("/api/dashboard", a.handleDashboard)
+	mux.HandleFunc("/api/followups/dismiss", a.handleFollowupDismiss)
 }
 
 // Response is the single payload returned to Studio. Each section is a
@@ -123,6 +124,16 @@ type FollowUp struct {
 	Draft      string    `json:"draft,omitempty"`
 	Unread     bool      `json:"unread"`
 	ReceivedAt time.Time `json:"receivedAt"`
+	// Origin discriminates which table this row came from so the dismiss
+	// endpoint hits the right store. "followup" → mem_followups, "surface"
+	// → mem_surface_items (the agent surfaced it via surface_item with
+	// surface='followups' / 'inbox' / 'email').
+	Origin string `json:"origin"`
+	// Metadata is the generic chip carrier (account / intent / mode /
+	// classification / anything else the agent attached). Studio renders
+	// chips for known keys when present; unknown keys are ignored at the
+	// chip layer but still visible in the ObjectViewer.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // SurfaceItem mirrors core/internal/surface.Item - one row of the generic
@@ -412,10 +423,28 @@ func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
 	return out, rows.Err()
 }
 
+// followupSurfaceKeys are the surface names that route an agent-surfaced
+// item into the Follow-ups card instead of spawning its own generic
+// SurfaceCard. The dashboard treats these as semantically equivalent
+// ("the boss has a message waiting on them"), and loadSurface excludes
+// the same set from the generic-card rendering path so we never
+// double-render.
+var followupSurfaceKeys = []string{"followups", "inbox", "email"}
+
+func isFollowupSurface(key string) bool {
+	for _, k := range followupSurfaceKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
+	// (1) Connector-fed rows from mem_followups (Gmail poller, etc).
 	rows, err := a.Pool.Query(ctx, `
 		SELECT id, source, account, from_name, subject, preview, body, thread_url,
-		       draft, unread, received_at
+		       draft, unread, received_at, COALESCE(metadata, '{}'::jsonb)
 		FROM mem_followups
 		WHERE status = 'open'
 		   OR (status = 'snoozed' AND snoozed_until < NOW())
@@ -428,16 +457,149 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 	defer rows.Close()
 	var out []FollowUp
 	for rows.Next() {
-		var f FollowUp
+		var (
+			f       FollowUp
+			metaRaw []byte
+		)
 		if err := rows.Scan(
 			&f.ID, &f.Source, &f.Account, &f.From, &f.Subject,
 			&f.Preview, &f.Body, &f.ThreadURL, &f.Draft, &f.Unread, &f.ReceivedAt,
+			&metaRaw,
 		); err != nil {
 			return nil, err
 		}
+		f.Origin = "followup"
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &f.Metadata)
+		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+
+	// (2) Agent-surfaced items the recipe dropped into surface='followups'
+	// (or aliases). Same card, same chips, same dismiss path - Rule #1
+	// says one surface concept, one place to render.
+	srows, err := a.Pool.Query(ctx, `
+		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
+		       title, subtitle, body, COALESCE(url,''),
+		       COALESCE(metadata, '{}'::jsonb), created_at
+		FROM mem_surface_items
+		WHERE surface = ANY($1::text[])
+		  AND (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
+		ORDER BY importance DESC NULLS LAST, created_at DESC
+		LIMIT 50
+	`, followupSurfaceKeys)
+	if err != nil {
+		// Best-effort: connector rows alone are still useful.
+		a.Logger.Warn("dashboard: followups surface merge", "err", err)
+		return out, nil
+	}
+	defer srows.Close()
+	for srows.Next() {
+		var (
+			id, surface, kind, source, extID string
+			title, subtitle, body, url       string
+			metaRaw                          []byte
+			createdAt                        time.Time
+		)
+		if err := srows.Scan(&id, &surface, &kind, &source, &extID,
+			&title, &subtitle, &body, &url, &metaRaw, &createdAt); err != nil {
+			return out, err
+		}
+		var meta map[string]any
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &meta)
+		}
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		// Pull display fields out of metadata when the producer set them;
+		// otherwise derive from title/source so a row always renders.
+		from := strFromMeta(meta, "from", "from_name", "sender")
+		if from == "" {
+			from = title
+		}
+		account := strFromMeta(meta, "account", "mailbox")
+		f := FollowUp{
+			ID:         id,
+			Source:     sourceFromMeta(source, kind, meta),
+			Account:    account,
+			From:       from,
+			Subject:    firstNonEmpty(strFromMeta(meta, "subject"), title),
+			Preview:    firstNonEmpty(subtitle, strFromMeta(meta, "preview")),
+			Body:       body,
+			ThreadURL:  firstNonEmpty(url, strFromMeta(meta, "thread_url", "url")),
+			Draft:      strFromMeta(meta, "draft"),
+			Unread:     true,
+			ReceivedAt: createdAt,
+			Origin:     "surface",
+			Metadata:   meta,
+		}
+		out = append(out, f)
+	}
+	return out, srows.Err()
+}
+
+// strFromMeta returns the first string-valued key from a metadata map.
+// Robust to JSON unmarshalling quirks (json.Number, nested null).
+func strFromMeta(m map[string]any, keys ...string) string {
+	if m == nil {
+		return ""
+	}
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// sourceFromMeta picks the best "source" label for the FollowUp shape.
+// Prefer explicit metadata.source ("gmail"), else derive from the
+// surface-item.source ("gmail-triage" → "gmail"), else fall back to
+// the agent-supplied kind ("email" → "email"), else "other".
+func sourceFromMeta(source, kind string, meta map[string]any) string {
+	if s := strFromMeta(meta, "source"); s != "" {
+		return s
+	}
+	if source != "" {
+		// gmail-triage / slack-poll → gmail / slack
+		if i := indexAny(source, "-_"); i > 0 {
+			return source[:i]
+		}
+		return source
+	}
+	if kind == "email" {
+		return "gmail"
+	}
+	if kind != "" {
+		return kind
+	}
+	return "other"
+}
+
+func indexAny(s, chars string) int {
+	for i, r := range s {
+		for _, c := range chars {
+			if r == c {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // loadSurface reads the generic surface contract (mem_surface_items) and
@@ -445,16 +607,19 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 // with one generic SurfaceCard - a new surface the agent invents appears
 // on the dashboard with zero backend changes.
 func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error) {
+	// Skip follow-up-aliased surfaces here - they get folded into the
+	// Follow-ups card by loadFollowUps, and rendering them generically
+	// too would double the row.
 	rows, err := a.Pool.Query(ctx, `
 		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''), importance,
 		       importance_reason, metadata, status, created_at
 		FROM mem_surface_items
-		WHERE status = 'open'
-		   OR (status = 'snoozed' AND snoozed_until < NOW())
+		WHERE (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
+		  AND surface <> ALL($1::text[])
 		ORDER BY surface, importance DESC NULLS LAST, created_at DESC
 		LIMIT 200
-	`)
+	`, followupSurfaceKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -1319,6 +1484,77 @@ func splitTitleBody(text string) (title, body string) {
 		return t, ""
 	}
 	return t[:78] + "…", t[78:]
+}
+
+// handleFollowupDismiss is the Studio-facing dismiss endpoint behind the
+// "Dismiss" button on a follow-up. Body shape:
+//
+//	{ "id": "<row id>", "origin": "followup" | "surface" }
+//
+// origin discriminates the underlying table: "followup" → mem_followups
+// (sets status='dismissed', dismissed_at=NOW()), "surface" → the generic
+// surface store (mem_surface_items, status='dismissed' via the same
+// shape the surface_update tool uses). Either way the row never comes
+// back: the connector poller's ON CONFLICT DO NOTHING preserves the
+// dismissed lifecycle on re-poll, and the surface store's upsert never
+// overwrites status either.
+func (a *API) handleFollowupDismiss(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no pool")
+		return
+	}
+	var body struct {
+		ID     string `json:"id"`
+		Origin string `json:"origin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad body")
+		return
+	}
+	body.ID = strings.TrimSpace(body.ID)
+	body.Origin = strings.TrimSpace(strings.ToLower(body.Origin))
+	if body.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	if body.Origin == "" {
+		body.Origin = "followup"
+	}
+	ctx := r.Context()
+	switch body.Origin {
+	case "followup":
+		if _, err := a.Pool.Exec(ctx, `
+			UPDATE mem_followups
+			   SET status       = 'dismissed',
+			       unread       = false,
+			       decided_at   = NOW(),
+			       dismissed_at = NOW()
+			 WHERE id::text = $1
+		`, body.ID); err != nil {
+			a.Logger.Warn("followup dismiss: followup row", "id", body.ID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "dismiss failed")
+			return
+		}
+	case "surface":
+		if _, err := a.Pool.Exec(ctx, `
+			UPDATE mem_surface_items
+			   SET status     = 'dismissed',
+			       updated_at = NOW()
+			 WHERE id::text = $1
+		`, body.ID); err != nil {
+			a.Logger.Warn("followup dismiss: surface row", "id", body.ID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "dismiss failed")
+			return
+		}
+	default:
+		writeErr(w, http.StatusBadRequest, "unknown origin")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

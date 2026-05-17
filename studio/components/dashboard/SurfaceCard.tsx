@@ -2,6 +2,7 @@
 
 import { CircleDot } from "lucide-react";
 import { Section, TileCard } from "./Section";
+import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import { extractFromSender, parseLabeledBody } from "@/lib/dashboard/parseBody";
@@ -61,12 +62,12 @@ export function SurfaceCard({
       badge={items.length}
       action={meta?.action}
     >
-      <div className="space-y-2">
-        {items.length === 0 ? (
-          <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-            Nothing surfaced here yet.
-          </div>
-        ) : (
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
+          Nothing surfaced here yet.
+        </div>
+      ) : (
+        <ScrollList max={4}>
           <ul className="space-y-1.5">
             {items.map((it) => (
               <li key={it.id}>
@@ -77,8 +78,8 @@ export function SurfaceCard({
               </li>
             ))}
           </ul>
-        )}
-      </div>
+        </ScrollList>
+      )}
     </Section>
   );
 }

@@ -360,13 +360,20 @@ type followupDismiss struct{ pool *pgxpool.Pool }
 
 func (t *followupDismiss) Name() string { return "followup_dismiss" }
 func (t *followupDismiss) Description() string {
-	return "Mark a follow-up as handled (the boss replied, or it's no longer relevant)."
+	return "Resolve a follow-up. Pass `outcome='replied'` (default) when the " +
+		"boss replied and the row should leave the dashboard but may resurface " +
+		"if the thread continues. Pass `outcome='dismissed'` when the boss " +
+		"explicitly told you to drop it - the row is hidden permanently, the " +
+		"connector poller's ON CONFLICT DO NOTHING means it never comes back."
 }
 func (t *followupDismiss) Schema() map[string]any {
 	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"id": map[string]any{"type": "string"}},
-		"required":   []string{"id"},
+		"type": "object",
+		"properties": map[string]any{
+			"id":      map[string]any{"type": "string"},
+			"outcome": map[string]any{"type": "string", "enum": []string{"replied", "dismissed"}, "default": "replied"},
+		},
+		"required": []string{"id"},
 	}
 }
 func (t *followupDismiss) Execute(ctx context.Context, in map[string]any) (string, error) {
@@ -374,14 +381,23 @@ func (t *followupDismiss) Execute(ctx context.Context, in map[string]any) (strin
 	if id == "" {
 		return "", errors.New("id required")
 	}
+	outcome := strDefault(in, "outcome", "replied")
+	status := "done"
+	if outcome == "dismissed" {
+		status = "dismissed"
+	}
 	_, err := t.pool.Exec(ctx, `
-		UPDATE mem_followups SET status = 'done', unread = false, decided_at = NOW()
-		WHERE id = $1
-	`, id)
+		UPDATE mem_followups
+		   SET status       = $2,
+		       unread       = false,
+		       decided_at   = NOW(),
+		       dismissed_at = CASE WHEN $2 = 'dismissed' THEN NOW() ELSE dismissed_at END
+		 WHERE id = $1
+	`, id, status)
 	if err != nil {
 		return "", err
 	}
-	return `{"ok":true}`, nil
+	return `{"ok":true,"outcome":"` + outcome + `"}`, nil
 }
 
 // ── saved_add ──────────────────────────────────────────────────────────────

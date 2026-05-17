@@ -2,6 +2,7 @@
 
 import { AlertTriangle, FileCode, HelpCircle, Terminal } from "lucide-react";
 import { Section, TileCard } from "./Section";
+import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import type { Approval, ApprovalKind, DashboardItem } from "@/lib/dashboard/types";
@@ -32,12 +33,12 @@ export function ApprovalsCard({
       delay={0.25}
       badge={approvals.length}
     >
-      <div className="space-y-2">
-        {approvals.length === 0 ? (
-          <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-            {emptyText}
-          </div>
-        ) : (
+      {approvals.length === 0 ? (
+        <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
+          {emptyText}
+        </div>
+      ) : (
+        <ScrollList max={4}>
           <ul className="space-y-2">
             {approvals.map((a) => (
               <li key={a.id}>
@@ -45,8 +46,8 @@ export function ApprovalsCard({
               </li>
             ))}
           </ul>
-        )}
-      </div>
+        </ScrollList>
+      )}
     </Section>
   );
 }

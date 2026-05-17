@@ -136,13 +136,21 @@ export function DashboardClient() {
   const openViewer = useCallback((item: DashboardItem) => setViewing(item), []);
   const closeViewer = useCallback(() => setViewing(null), []);
   const resolveViewerItem = useCallback((item: DashboardItem) => {
-    if (item.kind !== "approval") return;
-    const id = item.data.id;
-    setApprovals((prev) => prev.filter((a) => a.id !== id));
-    setWork((prev) =>
-      prev.filter((w) => w.id !== `trust-${id}` && w.id !== `code-${id}`),
-    );
-    setViewing(null);
+    if (item.kind === "approval") {
+      const id = item.data.id;
+      setApprovals((prev) => prev.filter((a) => a.id !== id));
+      setWork((prev) =>
+        prev.filter((w) => w.id !== `trust-${id}` && w.id !== `code-${id}`),
+      );
+      setViewing(null);
+      return;
+    }
+    if (item.kind === "followup") {
+      const id = item.data.id;
+      setFollowUps((prev) => prev.filter((f) => f.id !== id));
+      setViewing(null);
+      return;
+    }
   }, []);
 
   const toggleHabit = useCallback((id: string) => {

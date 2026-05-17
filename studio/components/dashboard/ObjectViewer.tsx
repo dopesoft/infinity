@@ -27,7 +27,9 @@ import {
   Sparkles,
   Target,
   Terminal,
+  X,
 } from "lucide-react";
+import { authedFetch } from "@/lib/api";
 import {
   ResponsiveModal,
   ResponsiveModalHeader,
@@ -222,17 +224,38 @@ function ViewerBody({ item }: { item: DashboardItem }) {
 
 function ViewerActions({
   item,
+  onResolved,
 }: {
   item: DashboardItem;
-  // onResolved was the old inline-action hook; preview-only mode (per
-  // the IA defrag) doesn't need it since every action navigates away.
   onResolved?: (item: DashboardItem) => void;
 }) {
   // Every item gets a "Discuss with Jarvis" primary CTA. Kind-specific
   // secondary actions are preview-only "Open in <surface>" deep-links
-  // (per the IA defrag), no inline approve/reject here anymore.
+  // (per the IA defrag), no inline approve/reject here anymore. The
+  // one exception: follow-ups also get a "Dismiss" button so the boss
+  // can drop a row without opening a chat for it — and dismissals are
+  // durable (status='dismissed' is preserved by the connector poller's
+  // ON CONFLICT DO NOTHING, so re-polled threads don't resurface).
   const router = useRouter();
   const [seeding, setSeeding] = React.useState(false);
+  const [dismissing, setDismissing] = React.useState(false);
+
+  async function dismissFollowup() {
+    if (item.kind !== "followup") return;
+    const id = item.data.id;
+    const origin = item.data.origin ?? "followup";
+    setDismissing(true);
+    try {
+      const res = await authedFetch("/api/followups/dismiss", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, origin }),
+      });
+      if (res.ok && onResolved) onResolved(item);
+    } finally {
+      setDismissing(false);
+    }
+  }
 
   async function discuss() {
     const id = (item.data as { id?: string }).id ?? "";
@@ -280,6 +303,23 @@ function ViewerActions({
       // Heartbeat findings + curiosity questions surface in Activity.
       // All actionable in Lab Fix-this.
       return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
+    }
+    if (item.kind === "followup") {
+      // Dismiss sits next to Discuss for follow-ups so the boss can
+      // drop a row in one tap. Persistence is server-side (status =
+      // 'dismissed' on mem_followups or mem_surface_items); the poller
+      // re-poll path won't resurface it.
+      return (
+        <button
+          type="button"
+          onClick={dismissFollowup}
+          disabled={dismissing}
+          className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+        >
+          <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+          {dismissing ? "Dismissing..." : "Dismiss"}
+        </button>
+      );
     }
     return null;
   }

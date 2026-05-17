@@ -112,7 +112,7 @@ export type FollowUpSource = "gmail" | "slack" | "imessage" | "linear" | "other"
 
 export type FollowUp = {
   id: string;
-  source: FollowUpSource;
+  source: FollowUpSource | string; // free-string after surface_item merge
   account?: string; // "khaya@malabieindustries.com"
   from: string; // "Adam Foster" or "#infra"
   subject?: string;
@@ -124,6 +124,15 @@ export type FollowUp = {
   threadUrl?: string;
   // optional pre-drafted reply from the agent
   draft?: string;
+  // Which table the row came from. "followup" → mem_followups (connector
+  // poll), "surface" → mem_surface_items with surface='followups'. The
+  // dismiss endpoint reads this to update the right table.
+  origin?: "followup" | "surface";
+  // Generic chip carrier. Studio renders chips for known keys (intent,
+  // mode, classification) when present. The agent can attach anything;
+  // unknown keys just don't render as chips but stay visible in the
+  // ObjectViewer.
+  metadata?: Record<string, unknown>;
 };
 
 // ── Surface items (the generic dashboard surface contract) ───────────────────

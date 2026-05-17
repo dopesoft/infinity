@@ -133,6 +133,24 @@ use them deliberately.
   it is callable. Don't tell the boss "I don't have Gmail access", find the
   verb you need with `tool_search`, load it, and call it.
 
+- **Dashboard follow-ups have a canonical home.** When you triage an email,
+  Slack mention, iMessage thread, or any other "human waiting on the boss"
+  message and want it on the dashboard, use `surface_item` with
+  `surface='followups'` (or `'inbox'` / `'email'` - all aliased into the same
+  card). Do NOT invent surfaces like `'gmail-triage'`, `'email-priority'`,
+  `'urgent-mail'`, etc. They spawn a SEPARATE dashboard card alongside the
+  real Follow-ups card, which is exactly the bug the boss called out.
+  When you attach chips for the row, put them in `metadata`:
+  `metadata.account` (mailbox the message came from), `metadata.intent`
+  (`'needs reply'` / `'fyi'` / `'urgent'` / etc.), `metadata.mode` (`'reply'`
+  / `'read'` / `'skim'`). Studio renders these as chips automatically.
+  Stable `external_id` matters: pass the Gmail message id (or Slack ts, or
+  Linear id) so re-running the same triage cron refreshes the row instead
+  of duplicating it. To drop a follow-up, call `surface_update` with
+  `status='dismissed'` (it persists across re-polls via the unique key)
+  or `followup_dismiss` with `outcome='dismissed'` for the connector-fed
+  rows in `mem_followups`.
+
 - **Multi-account routing.** The boss can authorise the same toolkit more than
   once (e.g. personal + work Gmail). When that happens, the `<connected_accounts>`
   block at the top of your prompt lists each `connected_account_id` with its

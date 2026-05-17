@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { Check, Flame, Plus, Target } from "lucide-react";
 import { Section, TileCard } from "./Section";
+import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
 import type { DashboardItem, Pursuit } from "@/lib/dashboard/types";
 
@@ -32,29 +33,33 @@ export function PursuitsCard({
       action={{ label: "manage", href: "/memory" }}
     >
       <div className="space-y-2.5 rounded-xl border bg-card p-3">
-        <ul className="space-y-1">
-          {habits.map((p) => (
-            <HabitRow
-              key={p.id}
-              p={p}
-              onOpen={() => onOpen({ kind: "pursuit", data: p })}
-              onToggle={() => onToggleHabit(p.id)}
-            />
-          ))}
-        </ul>
+        <ScrollList max={4}>
+          <ul className="space-y-1">
+            {habits.map((p) => (
+              <HabitRow
+                key={p.id}
+                p={p}
+                onOpen={() => onOpen({ kind: "pursuit", data: p })}
+                onToggle={() => onToggleHabit(p.id)}
+              />
+            ))}
+          </ul>
+        </ScrollList>
 
         {goals.length > 0 && (
           <>
             <div className="border-t border-dashed" />
-            <ul className="space-y-2">
-              {goals.map((p) => (
-                <GoalRow
-                  key={p.id}
-                  p={p}
-                  onOpen={() => onOpen({ kind: "pursuit", data: p })}
-                />
-              ))}
-            </ul>
+            <ScrollList max={4}>
+              <ul className="space-y-2">
+                {goals.map((p) => (
+                  <GoalRow
+                    key={p.id}
+                    p={p}
+                    onOpen={() => onOpen({ kind: "pursuit", data: p })}
+                  />
+                ))}
+              </ul>
+            </ScrollList>
           </>
         )}
 

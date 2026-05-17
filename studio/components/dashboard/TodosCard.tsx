@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { CheckCheck, Circle, ListTodo, Plus, Sparkles } from "lucide-react";
 import { Section } from "./Section";
+import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
 import { dayLabel } from "@/lib/dashboard/format";
 import type { DashboardItem, Todo } from "@/lib/dashboard/types";
@@ -34,16 +35,18 @@ export function TodosCard({
       action={doneCount > 0 ? { label: `${doneCount} done`, href: "/memory" } : undefined}
     >
       <div className="space-y-2 rounded-xl border bg-card p-3">
-        <ul className="space-y-1">
-          {open.map((t) => (
-            <TodoRow
-              key={t.id}
-              t={t}
-              onOpen={() => onOpen({ kind: "todo", data: t })}
-              onToggle={() => onToggle(t.id)}
-            />
-          ))}
-        </ul>
+        <ScrollList max={4}>
+          <ul className="space-y-1">
+            {open.map((t) => (
+              <TodoRow
+                key={t.id}
+                t={t}
+                onOpen={() => onOpen({ kind: "todo", data: t })}
+                onToggle={() => onToggle(t.id)}
+              />
+            ))}
+          </ul>
+        </ScrollList>
 
         <button
           type="button"
