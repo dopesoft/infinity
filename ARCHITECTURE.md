@@ -1,6 +1,6 @@
 # Infinity — architecture
 
-This document is the source of truth for how the running system is wired up. It reflects the codebase after the Coding-bridge / Honcho / GEPA work landed on top of Phase 4-7 substrate. Where the spec describes something we have not built yet, that's called out explicitly in the **Gaps** section at the end.
+This document is the source of truth for how the running system is wired up. It reflects the codebase after the nightly cognition / AutoSkill repair / container sandbox work landed on top of Phase 4-7 substrate. Phase status is verified against code as of this commit; production migration state is still only proven by running the migrator against the live DB. Where the spec describes something we have not built yet, that's called out explicitly in the **Gaps** section at the end.
 
 ## 1. Six Railway services + one database + one Mac
 
@@ -68,8 +68,9 @@ Each service has its own Dockerfile at the service root. `railway.toml` sets `ro
    hooks.NewPipeline()
    hooks.RegisterDefaults      → wires capture into all 12 event hooks
    memory.NewPredictionStore   → recorded by hooks.PredictionRecorder
-                                 (PreToolUse writes expected, PostToolUse
-                                 resolves with Jaccard surprise score)
+                                 (PreToolUse writes expected, with optional
+                                 Haiku drafting for expensive/high-risk tools;
+                                 PostToolUse resolves with Jaccard surprise)
    tools.RegisterMemoryTools   → remember, recall, forget
 4. honcho.FromEnv()            → optional dialectic peer client (HONCHO_BASE_URL)
    if enabled, register two hooks (UserPromptSubmit, TaskCompleted) that
@@ -209,7 +210,8 @@ core/
                                        on failure-rate threshold),
                        api.go (/status, /proposals, /code-proposals, /optimize)
     cron/              types, scheduler (robfig/cron/v3),
-                       executor_agent (cron→agent.Loop bridge), http
+                       executor_agent (cron→agent.Loop bridge),
+                       executor_system (typed maintenance jobs), http
     sentinel/          types, manager, dispatcher (Log + Skill), http
     server/            server, health, ws, api, memory_api, audit_api, gym_api
 
@@ -305,7 +307,7 @@ studio/
 | `/api/sentinels/:id` | DELETE | sentinel.API | delete |
 | `/api/sentinels/:id/trigger` | POST | sentinel.API | webhook entrypoint |
 | `/api/voyager/status` | GET | voyager.API | manager state + counters |
-| `/api/voyager/proposals?status=` | GET | voyager.API | list mem_skill_proposals |
+| `/api/voyager/proposals?status=&frontier=&parent_skill=&proposal_kind=` | GET | voyager.API | list mem_skill_proposals with draft/frontier metadata |
 | `/api/voyager/proposals/:id/decide` | POST | voyager.API | promote / reject |
 | `/api/voyager/optimize` | POST | voyager.API | trigger GEPA on `{ "skill": "<name>" }` |
 | `/api/voyager/code-proposals?status=` | GET | voyager.API | list mem_code_proposals (source-extractor output) |
@@ -483,11 +485,12 @@ The IntentFlow detector, WAL, and Working Buffer are wired into the WebSocket ha
 ## 9. Cron + Sentinels (Phase 6)
 
 ### Cron
-- `mem_crons` rows define schedule + target (prompt) + job_kind
+- `mem_crons` rows define schedule + target + job_kind
 - `cron.Scheduler` wraps `robfig/cron/v3` with UTC location and the standard 5-field parser
-- On each fire: `cron.AgentExecutor.ExecuteJob` runs the target prompt against `agent.Loop`
+- On each `agent` fire: `cron.AgentExecutor.ExecuteJob` runs the target prompt against `agent.Loop`
   - `system_event` → fixed session id `<name>-system`
   - `isolated_agent_turn` → fresh UUID per fire (writes to memory then dies)
+- On each `system_task` fire: `cron.SystemExecutor.ExecuteJob` dispatches typed internal jobs without going through a prompt. `nightly_cognition` calls `maintenance.RunNightlyCognition`, which runs reflection, optional compression, `ConsolidateNightly`, Gym extraction, stale cognitive sweep, and writes a `mem_surface_items` report.
 - `last_run_*` columns updated transactionally; `failure_count` resets on success
 
 ### Sentinels
@@ -792,6 +795,7 @@ hooks.PredictionRecorder.Register(pipeline) wires:
   PreToolUse hook:
     extractToolMeta(payload) → (name, tool_call_id, input)
     expected = heuristicPrediction(name, input)         ← zero LLM cost
+      OR gated Haiku draft for mutating/expensive/high-risk tools
     store.Record(session, call_id, name, expected, input)
       → INSERT mem_predictions
 
@@ -808,8 +812,10 @@ hooks.PredictionRecorder.Register(pipeline) wires:
 
 The agent loop emits `tool_call_id` on both Pre/Post payloads
 (loop.go:326 + 419) so the recorder can pair them. The Jaccard heuristic
-is intentionally crude — the *value* is the post-hoc score, not the
-prediction text. High-surprise rows (`surprise_score >= 0.8`) feed the
+stays intentionally cheap for read-only calls. The optional Haiku draft is
+reserved for calls where surprise is costly: mutating bridge tools,
+critical/high skill execution, workflow runs, connector writes, and expensive
+model/code actions. High-surprise rows (`surprise_score >= 0.8`) feed the
 curiosity scanner.
 
 ### 13.4 A-MEM auto-linking
@@ -1019,48 +1025,37 @@ Environment variables that matter:
 | 1 | Working text bot | ✅ all | — |
 | 2 | Tools + MCP + Settings MVP | ✅ all | Settings tab depth — Phase 7 |
 | 3 | Memory subsystem | ✅ all | Recall@10 benchmark fixture pending |
-| 4 | Skills system | ✅ schema, registry, process-jail, agent tools, HTTP API, Studio Skills tab | Container sandbox for high/critical risk · network egress enforcement at the HTTP transport · Tests sub-tab in Studio · "+ New skill" / Import buttons · Edit + Disable + dropdown export/fork/archive |
-| 5 | Proactive engine | ✅ IntentFlow detector, WAL, Working Buffer, Heartbeat, Trust queue, all schemas, HTTP APIs, Heartbeat + Trust Studio tabs; ✅ **Curiosity gap-scan** composed into heartbeat (low-confidence / contradictions / uncovered mentions / high-surprise predictions); ✅ IntentFlow + WAL + Buffer auto-fired from the WS handler | **Hierarchical memory access** struct (DepthFor exists; not wired) · **Compaction Recovery** flow on session start · Heartbeat checklist items: security scan, memory % · Live tab 3-column layout · Studio Heartbeat sub-tabs (Proactive tracker, Pattern recognition, Outcome journal, Curiosity loop, Surprise queue) · Phase 5 Studio components: ControlTokenBadge, IntentStream, ContextBudget, SuggestionCard, TrustGate · "Always allow this pattern" rules · bulk approve in Trust |
-| 6 | Voyager + Cron + Sentinels | ✅ Cron scheduler + Sentinel manager + Skill dispatcher + schemas + HTTP APIs + Studio Cron+Sentinels tab; ✅ **Voyager source extractor**; ✅ **GEPA Pareto frontier persistence** (per ICLR 2026 Oral); ✅ **Voyager autotrigger** — closes the failure→curriculum→skill→optimization cycle by auto-firing GEPA on skills past the failure threshold. | **Curriculum** generator · **Skill generator** (LLM-driven) · **Verifier** synthetic tests · **AutoSkill** failure-reflection-patch loop · Skill discovery hooks (regex pattern detection in observations) · Sentinel runtimes for non-webhook watch types (file_change, memory_event, external_api_poll, threshold) · Skills tab Candidate column population · Studio frontier-comparison view (render Pareto siblings side-by-side) · NaturalLanguageScheduleInput live parser · Verification log sub-tab · Auto-apply path for approved code proposals |
-| 7 | Polish | ✅ Audit log endpoint + viewer; ✅ Honcho dialectic peer modelling; ✅ Claude Code coding bridge (25 tools via MCP + CF Access); ✅ GEPA skill optimizer sidecar; ✅ custom domain `infinity.dopesoft.io` | Command palette (cmd+K, cmdk lib) · Sessions rewind · Skills Tests sub-tab · Settings 10-section depth · Memory tab knowledge graph viewer · Backup/export · `infinity restore` · Doctor full diagnostic suite · Light/dark + animation polish |
-| **AGI** | **Migration 011 — close the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Curiosity scanner** integrated into heartbeat; ✅ Studio Memory feeds for reflections + high-surprise predictions; ✅ curiosity approval / dismissal in Heartbeat; ✅ procedural-tier badge in Memory list | A-MEM graph visualization for top-K associative neighbours · LLM-driven prediction text on high-cost tool calls (Haiku, gated on cost heuristic) · Cross-session reflection chains (cluster N reflections → meta-lesson) |
+| 4 | Skills system | ✅ schema, registry, process-jail, Docker-backed container sandbox for high/critical risk, Trust gate for critical skills, agent tools, HTTP API, Studio Skills tab | Per-domain egress enforcement inside the sandbox network path · Tests sub-tab in Studio · "+ New skill" / Import buttons · Edit + Disable + dropdown export/fork/archive |
+| 5 | Proactive engine | ✅ IntentFlow detector, WAL, Working Buffer, compaction recovery on "where were we"/resume/summary turns, Heartbeat, Trust queue, all schemas, HTTP APIs, Heartbeat + Trust Studio tabs; ✅ **Curiosity gap-scan** composed into heartbeat with approval/dismissal, cooldown, staleness, dismissal-pattern procedural learning; ✅ IntentFlow + WAL + Buffer auto-fired from the WS handler | **Hierarchical memory access** struct (DepthFor exists; not wired) · Heartbeat checklist items: security scan, memory % · Live tab 3-column layout · Studio Heartbeat sub-tabs (Proactive tracker, Pattern recognition, Outcome journal, Curiosity loop, Surprise queue) · Phase 5 Studio components: ControlTokenBadge, IntentStream, ContextBudget, SuggestionCard, TrustGate · "Always allow this pattern" rules · bulk approve in Trust |
+| 6 | Voyager + Cron + Sentinels | ✅ Cron scheduler + agent executor + `system_task` executor; ✅ seeded `nightly-cognition` cron; ✅ Sentinel manager + Skill dispatcher + schemas + HTTP APIs + Studio Cron+Sentinels tab; ✅ **Voyager source extractor**; ✅ **GEPA Pareto frontier persistence**; ✅ proposal API exposes draft/frontier metadata and filters; ✅ Studio groups merged drafts, GEPA frontiers, and standalone candidates; ✅ AutoSkill repair recipe; ✅ **Voyager autotrigger** — closes the failure→curriculum→skill→optimization cycle by auto-firing GEPA on skills past the failure threshold. | **Curriculum** generator · **Skill generator** (LLM-driven) · **Verifier** synthetic tests · Skill discovery hooks (regex pattern detection in observations) · Sentinel runtimes for non-webhook watch types (file_change, memory_event, external_api_poll, threshold) · NaturalLanguageScheduleInput live parser · Verification log sub-tab · Auto-apply path for approved code proposals |
+| 7 | Polish | ✅ Audit log endpoint + viewer; ✅ Honcho dialectic peer modelling; ✅ Claude Code coding bridge (25 tools via MCP + CF Access); ✅ GEPA skill optimizer sidecar; ✅ custom domain `infinity.dopesoft.io`; ✅ Memory tab graph/procedural/reflection/prediction surfaces | Command palette (cmd+K, cmdk lib) · Sessions rewind · Skills Tests sub-tab · Settings 10-section depth · Backup/export · `infinity restore` · Doctor full diagnostic suite · Light/dark + animation polish |
+| **AGI** | **Migration 011 + 043/044 — close and schedule the AGI loops** | ✅ **Procedural memory tier (CoALA)** — promoted skills materialize as `tier='procedural'` rows; ✅ **Reflection / metacognition** — `infinity reflect` + `mem_reflections` (MAR critic persona); ✅ **Predict-then-act** — `mem_predictions` paired Pre/Post with Jaccard surprise scoring and gated Haiku prediction text for expensive/high-risk tools; ✅ **A-MEM auto-linking** — top-4 'associative' edges at compress time; ✅ **Sleep-time consolidation** — 8-op nightly regime with contradiction resolution + edge pruning + procedural reweight; ✅ **Nightly cognition cron** runs reflect/compress/consolidate/Gym/stale sweep/report through typed Go functions; ✅ **Curiosity scanner** integrated into heartbeat; ✅ Studio Memory feeds for reflections + high-surprise predictions + graph + procedural filter/badges; ✅ curiosity approval/dismissal in Heartbeat; ✅ GEPA frontier comparison in Skills | Cross-session reflection chains (cluster N reflections → meta-lesson) |
 | **Substrate** | **Migrations 016–021 — the assembly substrate (§18)** | ✅ **Generic surface contract** (`mem_surface_items` + `surface_item`/`surface_update`); ✅ **Skill self-authoring loop** (`skill_create` → live registry, durable across restarts); ✅ **Durable workflow engine** (`mem_workflows`/`_runs`/`_steps` + background worker — retries, checkpoints, resume-on-restart, dependency-aware scheduling); ✅ **Runtime self-extension** (`mem_extensions` — agent wires MCP servers + REST-API tools live); ✅ **Verification** (`mem_evals` scorecards with regression detection + `workflow_validate`); ✅ **World model + agent goals** (`mem_entities`/`_links`/`mem_agent_goals` + autonomous-pursuit heartbeat); ✅ **Initiative + economics** (`mem_notifications` urgency policy + `mem_cost_events` budget rollup) | Sandboxed dry-run execution of workflows · automatic per-LLM-call cost capture · multi-dependency (DAG) workflow scheduling · full-registry browse views in Studio (extensions / evals / entities are agent-tool-queryable today) |
-| **Gym** | **Migration 022 — plasticity control surface** | ✅ Plasticity metadata schema (`mem_training_examples`, datasets, runs, adapters, adapter evals, policy routes); ✅ `core/internal/plasticity` read store; ✅ deterministic example extraction from evals/reflections/high-surprise predictions; ✅ prompt-path reflex provider injects top Gym lessons into the agent through `CompositeMemory`; ✅ `/api/gym` + POST extract action; ✅ `infinity gym extract`; ✅ Studio `/gym` page with overview, datasets, adapters, routes, and combined audit ledger; ✅ `/audit` redirects to Gym audit tab; ✅ `docker/plasticity` Railway sidecar skeleton | Nightly extraction scheduling · sidecar train/eval implementation · eval replay / adapter promotion Trust contracts · learned policy router integration · object-storage artifact backend |
+| **Gym** | **Migration 022 — plasticity control surface** | ✅ Plasticity metadata schema (`mem_training_examples`, datasets, runs, adapters, adapter evals, policy routes); ✅ `core/internal/plasticity` read store; ✅ deterministic example extraction from evals/reflections/high-surprise predictions; ✅ nightly extraction through `nightly-cognition`; ✅ prompt-path reflex provider injects top Gym lessons into the agent through `CompositeMemory`; ✅ `/api/gym` + POST extract action; ✅ `infinity gym extract`; ✅ Studio `/gym` page with overview, datasets, adapters, routes, and combined audit ledger; ✅ `/audit` redirects to Gym audit tab; ✅ `docker/plasticity` Railway sidecar skeleton | sidecar train/eval implementation · eval replay / adapter promotion Trust contracts · learned policy router integration · object-storage artifact backend |
 | 8 | Voice | ✅ **GPT Realtime over WebRTC** — `core/internal/voice/realtime.go` mints short-lived OpenAI `client_secret`s; the browser does the WebRTC SDP exchange P2P with `api.openai.com` (audio never touches Core); tool calls round-trip through `/api/voice/tool` so voice has the same registry + Trust gate as text, and `/api/voice/turn` fires the same memory-capture hooks. Model `gpt-realtime-1.5`, server-VAD barge-in, live transcription. nil-safe — `/api/voice/*` returns 503 when `OPENAI_API_KEY` is unset. | Studio mic-button polish · wake-word activation (currently tap-to-talk) |
 
 ## 17. Next-session priorities
 
-The AGI-loop substrate (migration 011) is in place — every loop runs
-automatically once the binary boots. The next layer of work is mostly
-Studio surfaces + scheduling polish:
+The AGI-loop substrate is now scheduled and reviewable: nightly cognition
+uses the `system_task` cron path, AutoSkill repair is a seeded recipe,
+proposal metadata is first-class in API/Studio, high/critical skills have a
+container path, and compaction recovery is wired into session start.
 
-1. **Finish AGI-loop Studio depth.** `/memory` now has Reflections and
-   Predictions feeds, `/heartbeat` can approve/dismiss curiosity questions,
-   and procedural memories carry their tier badge. Remaining surface work:
-   A-MEM graph visualization for top-K associative neighbours and
-   cross-session reflection chains.
-2. **Schedule the loops via cron.** `infinity reflect` and `infinity
-   consolidate` should both run nightly. Either set a Railway cron job
-   or add a `mem_crons` row pointing at the existing `agent.Loop`-driven
-   isolated-turn target. The Voyager autotrigger is the only loop that's
-   wired to its own goroutine; the other two are CLI-invoked.
-3. **Compaction Recovery.** On session start, if the user message
-   contains a `<summary>` tag or matches "where were we", read
-   `mem_working_buffer` + `mem_session_state` and surface a "recovered
-   from buffer" message.
-4. **Container sandbox.** `core/internal/skills/sandbox_container.go`
-   with `docker/docker/client`. Unblocks high/critical-risk skills.
-5. **Pareto frontier comparison UI.** Studio render of N candidates
-   sharing a `frontier_run_id` side-by-side, with promote/reject per
-   row. Backed by the existing `/api/voyager/proposals?status=candidate`
-   endpoint — add a `?frontier=<id>` filter.
-6. **LLM-driven prediction text** for high-cost tool calls. The current
-   `heuristicPrediction` is rule-based and free; a per-call Haiku call
-   gated on a difficulty heuristic would sharpen the surprise signal on
-   the calls that matter most.
+Focused follow-ups:
 
-Phases 4-7 + AGI substrate is feature-complete enough that each gap
-above is a focused, scoped follow-up — no architectural rework needed.
+1. **Cross-session reflection chains.** Cluster related `mem_reflections`
+   into meta-lessons so the boss can see how Jarvis changed its mind over
+   weeks, not just one session.
+2. **Sandbox network enforcement.** The container path disables network by
+   default and records the declared allowlist; per-domain egress still needs
+   a proxy or network policy layer because Docker's basic bridge mode cannot
+   enforce host allowlists by itself.
+3. **Skills quality surfaces.** Add the Tests sub-tab, verification log,
+   and synthetic verifier flow so proposed skills carry runnable acceptance
+   checks before promotion.
+4. **Sentinel runtimes beyond webhooks.** Implement file_change,
+   memory_event, external_api_poll, and threshold watchers against the
+   existing schema and dispatcher.
 
 ---
 

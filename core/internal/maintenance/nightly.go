@@ -1,0 +1,208 @@
+// Package maintenance owns deterministic background maintenance jobs.
+//
+// These jobs are substrate, not cognition: they call existing typed loops
+// (reflection, consolidation, Gym extraction) and write a generic surface
+// report. The agent can reason over the report later, but this runner does
+// not embed judgment in Go.
+package maintenance
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/plasticity"
+	"github.com/dopesoft/infinity/core/internal/surface"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type Deps struct {
+	Pool       *pgxpool.Pool
+	Reflector  *memory.Reflector
+	Compressor *memory.Compressor
+	Surface    *surface.Store
+	Logger     *slog.Logger
+}
+
+type Options struct {
+	ReflectWindow time.Duration `json:"reflect_window"`
+	ReflectLimit  int           `json:"reflect_limit"`
+	Compress      bool          `json:"compress"`
+	CompressBatch int           `json:"compress_batch"`
+	GymLimit      int           `json:"gym_limit"`
+}
+
+type Report struct {
+	StartedAt              time.Time                `json:"started_at"`
+	EndedAt                time.Time                `json:"ended_at"`
+	ReflectedSessions      int                      `json:"reflected_sessions"`
+	CompressedObservations int                      `json:"compressed_observations"`
+	Consolidate            memory.ConsolidateReport `json:"consolidate"`
+	TrainingExamples       plasticity.ExtractResult `json:"training_examples"`
+	Errors                 []string                 `json:"errors,omitempty"`
+	Options                Options                  `json:"options"`
+}
+
+func DefaultOptions() Options {
+	return Options{
+		ReflectWindow: 24 * time.Hour,
+		ReflectLimit:  20,
+		Compress:      true,
+		CompressBatch: 50,
+		GymLimit:      100,
+	}
+}
+
+func ParseOptions(raw json.RawMessage) Options {
+	opts := DefaultOptions()
+	if len(raw) == 0 {
+		return opts
+	}
+	var in struct {
+		ReflectWindow string `json:"reflect_window"`
+		ReflectLimit  int    `json:"reflect_limit"`
+		Compress      *bool  `json:"compress"`
+		CompressBatch int    `json:"compress_batch"`
+		GymLimit      int    `json:"gym_limit"`
+	}
+	if json.Unmarshal(raw, &in) != nil {
+		return opts
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(in.ReflectWindow)); err == nil && d > 0 {
+		opts.ReflectWindow = d
+	}
+	if in.ReflectLimit > 0 {
+		opts.ReflectLimit = in.ReflectLimit
+	}
+	if in.Compress != nil {
+		opts.Compress = *in.Compress
+	}
+	if in.CompressBatch > 0 {
+		opts.CompressBatch = in.CompressBatch
+	}
+	if in.GymLimit > 0 {
+		opts.GymLimit = in.GymLimit
+	}
+	return opts
+}
+
+func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, error) {
+	if opts.ReflectWindow <= 0 {
+		opts = DefaultOptions()
+	}
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	report := Report{
+		StartedAt: time.Now().UTC(),
+		Options:   opts,
+	}
+	addErr := func(stage string, err error) {
+		if err == nil {
+			return
+		}
+		msg := stage + ": " + err.Error()
+		report.Errors = append(report.Errors, msg)
+		deps.Logger.Warn("nightly cognition stage failed", "stage", stage, "err", err)
+	}
+
+	if deps.Reflector != nil {
+		n, err := deps.Reflector.ReflectRecent(ctx, opts.ReflectWindow, opts.ReflectLimit)
+		if err != nil {
+			addErr("reflect", err)
+		} else {
+			report.ReflectedSessions = n
+		}
+	}
+
+	if opts.Compress && deps.Compressor != nil {
+		n, err := deps.Compressor.CompressNewObservations(ctx, opts.CompressBatch)
+		if err != nil {
+			addErr("compress", err)
+		} else {
+			report.CompressedObservations = n
+		}
+	}
+
+	if deps.Pool != nil {
+		rep, err := memory.ConsolidateNightly(ctx, deps.Pool)
+		if err != nil {
+			addErr("consolidate", err)
+		} else {
+			report.Consolidate = rep
+		}
+		extract, err := plasticity.NewStore(deps.Pool).ExtractExamples(ctx, opts.GymLimit)
+		if err != nil {
+			addErr("gym_extract", err)
+		} else {
+			report.TrainingExamples = extract
+		}
+	}
+
+	report.EndedAt = time.Now().UTC()
+	if err := writeSurfaceReport(ctx, deps.Surface, report); err != nil {
+		addErr("surface_report", err)
+	}
+	if len(report.Errors) > 0 {
+		return report, fmt.Errorf("nightly cognition completed with %d error(s)", len(report.Errors))
+	}
+	return report, nil
+}
+
+func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report) error {
+	if store == nil {
+		return nil
+	}
+	importance := 5
+	reason := "nightly cognition completed with no significant changes"
+	if changed(report) {
+		importance = 7
+		reason = "nightly cognition changed memory, lessons, or training examples"
+	}
+	if len(report.Errors) > 0 {
+		importance = 9
+		reason = "one or more nightly cognition stages failed"
+	}
+	body := fmt.Sprintf(
+		"Reflected %d session(s), compressed %d observation(s), inserted %d training example(s).",
+		report.ReflectedSessions,
+		report.CompressedObservations,
+		report.TrainingExamples.Inserted,
+	)
+	_, err := store.Upsert(ctx, &surface.Item{
+		Surface:          "system",
+		Kind:             "insight",
+		Source:           "nightly-cognition",
+		ExternalID:       "nightly-cognition:last",
+		Title:            "Nightly cognition complete",
+		Subtitle:         report.EndedAt.Format(time.RFC3339),
+		Body:             body,
+		Importance:       &importance,
+		ImportanceReason: reason,
+		Metadata: map[string]any{
+			"report": report,
+		},
+		Status: surface.StatusOpen,
+	})
+	return err
+}
+
+func changed(r Report) bool {
+	return r.ReflectedSessions > 0 ||
+		r.CompressedObservations > 0 ||
+		r.TrainingExamples.Inserted > 0 ||
+		r.Consolidate.ClustersFound > 0 ||
+		r.Consolidate.ContradictionsFound > 0 ||
+		r.Consolidate.AssociativePruned > 0 ||
+		r.Consolidate.WeakAssocPurged > 0 ||
+		r.Consolidate.ProceduralReweighted > 0 ||
+		r.Consolidate.Forget.TTLExpired > 0 ||
+		r.Consolidate.Forget.LowValue > 0 ||
+		r.Consolidate.Forget.OverProjectCap > 0 ||
+		r.Consolidate.Forget.ObsTraceTrimmed > 0 ||
+		r.Consolidate.Forget.ObsConversationTrimmed > 0
+}

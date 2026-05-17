@@ -212,15 +212,15 @@ Full wiring, schema, HTTP API, and source-of-truth boot sequence in [ARCHITECTUR
 | 1 | Working text bot | ✅ |
 | 2 | Tools + MCP + Settings MVP | ✅ |
 | 3 | Memory: relational + vector + graph, RRF retrieval, hooks, compression, provenance | ✅ |
-| 4 | Skills: filesystem loader, sandbox tiers, agent tools, HTTP API | ✅ substrate · container sandbox WIP |
+| 4 | Skills: filesystem loader, sandbox tiers, container sandbox for high/critical, agent tools, HTTP API | ✅ substrate |
 | 5 | Proactive: intent detection, working buffer, heartbeat, trust queue, curiosity scan | ✅ |
-| 6 | Cron + Sentinels + Voyager + GEPA + Pareto frontier + autotrigger | ✅ closed-loop self-evolution |
+| 6 | Cron + Sentinels + Voyager + GEPA + Pareto frontier + autotrigger + nightly cognition | ✅ closed-loop self-evolution |
 | 7 | Polish + coding bridge + peer modelling + custom domain | ✅ |
 | **Learning** | Reflection · prediction · associative links · sleep consolidation · procedural tier · curiosity | ✅ |
 | **Substrate** | The assembly substrate — generic surface contract · runtime skill-authoring · durable workflow engine · runtime self-extension · eval scorecards · world model + agent goals · initiative + economics | ✅ |
 | 8 | Voice — GPT Realtime over WebRTC, full-duplex, tool calls through the same gate as text | ✅ |
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the per-phase gap list.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the per-phase gap list. Phase status is verified against code as of this commit; production migration state is only proven by migrator output.
 
 ---
 
@@ -264,7 +264,7 @@ That's it. Talk to it. Watch the Memory tab fill up.
 
 ### Wake the learning loops
 
-Two background jobs that make Infinity get sharper. Run them on a cron, or fire them manually whenever you want to compound:
+Infinity seeds a `nightly-cognition` `system_task` cron that reflects recent sessions, consolidates memory, optionally compresses observations, extracts Gym examples, sweeps stale cognitive surfaces, and writes a visible report. You can still fire the individual loops manually whenever you want to compound immediately:
 
 ```sh
 # Replay yesterday's sessions, score them, save the lessons. ~$0.01/session.

@@ -142,6 +142,17 @@ The Go written across Phase 1 is **substrate only**: a table, a store, two
 tools, a registry method, a generic card. The *cognition* — the triage
 rubric — lives in a skill body the agent wrote, versioned and improvable.
 
+### System-task cron
+
+Cron can also dispatch typed internal maintenance jobs through
+`job_kind='system_task'`. This is for deterministic substrate work that should
+not consume an agent turn. The shipped example is `nightly-cognition`: a
+seeded cron row runs `maintenance.RunNightlyCognition`, which calls reflection,
+optional compression, consolidation, Gym extraction, stale cognitive cleanup,
+and writes one generic surface report. The cognition still lives in skills and
+memories; the system-task path only schedules and composes existing generic
+building blocks.
+
 ---
 
 ## Phase 2 — durable workflows + the job queue

@@ -16,6 +16,15 @@ champion.
   sharing a `frontier_run_id` + per-candidate `pareto_rank` and `score`.
 - **`SampleFromFrontier(skill)`** — weighted draw for runtime A/B on
   individual calls without permanent promotion.
+- **First-class proposal metadata** — `/api/voyager/proposals` exposes
+  `proposal_kind`, `revision`, `changes_log`, `conflicts`,
+  `frontier_run_id`, `score`, `pareto_rank`, `gepa_metadata`,
+  `last_merged_at`, and `parent_proposal_id`, with filters for
+  `frontier`, `parent_skill`, `proposal_kind`, and `status`.
+- **Studio frontier review** — Candidate Skills groups merged drafts,
+  GEPA frontiers, and standalone candidates instead of rendering one flat
+  pile. Frontier siblings show rank/score side by side with promote/reject
+  actions per candidate.
 - **Voyager autotrigger** — background ticker in `core/internal/voyager/
   autotrigger.go` watches `mem_skill_runs` and fires `/api/voyager/optimize`
   for any skill past the failure-rate threshold. **This is the close-the-
@@ -88,7 +97,8 @@ What happens:
    sharing the run id, each with its `pareto_rank` and `score`.
 6. Response is `OptimizeResult{ frontier_run_id, skill_name, calls,
    candidates: [{proposal_id, score, pareto_rank, rationale, ...}] }`.
-7. The boss reviews the frontier in Studio and promotes the winning
+7. The boss reviews the grouped frontier in Studio, or filters directly with
+   `GET /api/voyager/proposals?frontier=<uuid>`, and promotes the winning
    rank(s) via the existing `/api/voyager/proposals/<id>/decide` path.
 8. On promotion, Voyager writes the new `SKILL.md` to disk, reloads the
    registry, and fires the `OnSkillPromoted` callback → procedural-tier

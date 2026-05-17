@@ -18,11 +18,21 @@ import (
 // The recorder runs entirely async on the pipeline's goroutine. It never
 // blocks the agent loop. Failures are logged + dropped.
 type PredictionRecorder struct {
-	store *memory.PredictionStore
+	store   *memory.PredictionStore
+	drafter PredictionDrafter
+	model   string
 }
 
 func NewPredictionRecorder(store *memory.PredictionStore) *PredictionRecorder {
 	return &PredictionRecorder{store: store}
+}
+
+type PredictionDrafter interface {
+	Draft(ctx context.Context, model, system, userPrompt string, maxTokens int64) (string, error)
+}
+
+func NewPredictionRecorderWithDrafter(store *memory.PredictionStore, drafter PredictionDrafter, model string) *PredictionRecorder {
+	return &PredictionRecorder{store: store, drafter: drafter, model: model}
 }
 
 // Register wires both ends. Call from RegisterDefaults or serve.go after the
@@ -49,6 +59,11 @@ func (p *PredictionRecorder) handlePre(ctx context.Context, ev Event) error {
 		return nil
 	}
 	expected := heuristicPrediction(toolName, input)
+	if p.drafter != nil && shouldDraftPrediction(toolName) {
+		if drafted, err := p.draftPrediction(ctx, toolName, input); err == nil && strings.TrimSpace(drafted) != "" {
+			expected = strings.TrimSpace(drafted)
+		}
+	}
 	if expected == "" {
 		return nil
 	}
@@ -133,6 +148,33 @@ func heuristicPrediction(toolName string, input map[string]any) string {
 	default:
 		return fmt.Sprintf("expect %s to return a usable result for %s", toolName, short)
 	}
+}
+
+func shouldDraftPrediction(toolName string) bool {
+	lower := strings.ToLower(toolName)
+	return strings.HasPrefix(lower, "bridge_") ||
+		strings.HasPrefix(lower, "claude_code__") ||
+		strings.HasPrefix(lower, "github__") ||
+		strings.Contains(lower, "workflow") ||
+		strings.Contains(lower, "skills_invoke") ||
+		strings.Contains(lower, "write") ||
+		strings.Contains(lower, "edit") ||
+		strings.Contains(lower, "bash") ||
+		strings.Contains(lower, "exec")
+}
+
+const predictionSystem = `You predict the likely result of one high-risk tool call.
+
+Return one short sentence only. State the concrete expected success condition.
+Do not include markdown or caveats.`
+
+func (p *PredictionRecorder) draftPrediction(ctx context.Context, toolName string, input map[string]any) (string, error) {
+	model := p.model
+	if model == "" {
+		model = "claude-haiku-4-5-20251001"
+	}
+	prompt := fmt.Sprintf("Tool: %s\nInput: %s\nExpected result:", toolName, jsonShort(input))
+	return p.drafter.Draft(ctx, model, predictionSystem, prompt, 120)
 }
 
 func jsonShort(v any) string {

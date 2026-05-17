@@ -123,10 +123,10 @@ func (api *API) handleOptimize(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusDTO struct {
-	Enabled          bool   `json:"enabled"`
-	Status           string `json:"status"`
-	OpenSessions     int    `json:"open_sessions"`
-	TrackedTriplets  int    `json:"tracked_triplets"`
+	Enabled         bool   `json:"enabled"`
+	Status          string `json:"status"`
+	OpenSessions    int    `json:"open_sessions"`
+	TrackedTriplets int    `json:"tracked_triplets"`
 }
 
 func (api *API) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -151,9 +151,15 @@ func (api *API) handleProposals(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []ProposalDTO{})
 		return
 	}
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	q := r.URL.Query()
+	filters := ProposalFilters{
+		Status:       strings.TrimSpace(q.Get("status")),
+		Frontier:     strings.TrimSpace(q.Get("frontier")),
+		ParentSkill:  strings.TrimSpace(q.Get("parent_skill")),
+		ProposalKind: strings.TrimSpace(q.Get("proposal_kind")),
+	}
 	limit := 50
-	props, err := api.m.ListProposals(r.Context(), status, limit)
+	props, err := api.m.ListProposalsFiltered(r.Context(), filters, limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

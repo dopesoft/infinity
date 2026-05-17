@@ -79,6 +79,7 @@ func DefaultLoadedTools() []string {
 		// tool names to render an inline Approve/Edit/Dismiss card, so
 		// they need to be available without a tool_search round-trip.
 		"skill_propose",
+		"skill_proposal_get",
 		"skill_optimize",
 	}
 }

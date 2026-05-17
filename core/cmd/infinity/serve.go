@@ -26,6 +26,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/maintenance"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
@@ -84,6 +85,7 @@ func serveCmd() *cobra.Command {
 				store               *memory.Store
 				searcher            *memory.Searcher
 				compressor          *memory.Compressor
+				reflector           *memory.Reflector
 				procedural          *memory.ProceduralStore
 				pipeline            *hooks.Pipeline
 				embedder            embed.Embedder
@@ -184,6 +186,8 @@ func serveCmd() *cobra.Command {
 						summarizerModel := os.Getenv("LLM_SUMMARIZE_MODEL")
 						summarizer := llm.NewAnthropicSummarizer(a, summarizerModel)
 						compressor = memory.NewCompressor(p, embedder, memory.NewSummarizer(summarizer))
+						critic := llm.NewAnthropicCritic(a, os.Getenv("INFINITY_REFLECT_MODEL"))
+						reflector = memory.NewReflector(p, embedder, memory.NewCritic(critic))
 					}
 
 					pipeline = hooks.NewPipeline()
@@ -195,7 +199,11 @@ func serveCmd() *cobra.Command {
 					// curriculum. JEPA discipline without a generative world
 					// model - see core/internal/memory/predictions.go.
 					predictions := memory.NewPredictionStore(p)
-					hooks.NewPredictionRecorder(predictions).Register(pipeline)
+					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
+						hooks.NewPredictionRecorderWithDrafter(predictions, a, os.Getenv("INFINITY_PREDICTION_MODEL")).Register(pipeline)
+					} else {
+						hooks.NewPredictionRecorder(predictions).Register(pipeline)
+					}
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					// LangSmith-style trace tools - read mem_turns +
@@ -629,6 +637,9 @@ func serveCmd() *cobra.Command {
 				} else {
 					trustStore = proactive.NewTrustStore(pool)
 				}
+				if skillRunner != nil {
+					skillRunner.SetRiskGate(skillRiskGate{trust: trustStore})
+				}
 				heartbeat = proactive.NewHeartbeat(pool, heartbeatInterval(),
 					proactive.ComposeChecklists(
 						proactive.DefaultChecklist(pool),
@@ -760,7 +771,14 @@ func serveCmd() *cobra.Command {
 				if connectorPoller != nil {
 					connectorExec = cron.NewConnectorExecutor(connectorPoller)
 				}
-				cronScheduler = cron.New(pool, cron.NewCompositeExecutor(agentExec, connectorExec))
+				systemExec := cron.NewSystemExecutor(maintenance.Deps{
+					Pool:       pool,
+					Reflector:  reflector,
+					Compressor: compressor,
+					Surface:    surface.NewStore(pool, slog.Default()),
+					Logger:     slog.Default(),
+				})
+				cronScheduler = cron.New(pool, cron.NewCompositeExecutor(agentExec, connectorExec, systemExec))
 				if err := cronScheduler.Start(cmd.Context()); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: cron start: %v\n", err)
 				}

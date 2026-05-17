@@ -24,6 +24,7 @@ package voyager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -85,10 +86,10 @@ type tripletCounter struct {
 // Config wires the Manager. LLM is required for extraction/verification;
 // without it the manager falls back to discovery-only and skips Haiku passes.
 type Config struct {
-	Pool        *pgxpool.Pool
-	LLM         *llm.Anthropic
-	Skills      *skills.Registry
-	SkillsRoot  string
+	Pool       *pgxpool.Pool
+	LLM        *llm.Anthropic
+	Skills     *skills.Registry
+	SkillsRoot string
 }
 
 func New(cfg Config) *Manager {
@@ -137,22 +138,43 @@ func (m *Manager) Status() string {
 
 // ProposalDTO is the wire shape returned by the API.
 type ProposalDTO struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description"`
-	Reasoning     string    `json:"reasoning"`
-	SkillMD       string    `json:"skill_md"`
-	RiskLevel     string    `json:"risk_level"`
-	TestPassRate  float64   `json:"test_pass_rate"`
-	Status        string    `json:"status"` // candidate | promoted | rejected
-	ParentSkill   string    `json:"parent_skill,omitempty"`
-	ParentVersion string    `json:"parent_version,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	Description      string           `json:"description"`
+	Reasoning        string           `json:"reasoning"`
+	SkillMD          string           `json:"skill_md"`
+	RiskLevel        string           `json:"risk_level"`
+	TestPassRate     float64          `json:"test_pass_rate"`
+	Status           string           `json:"status"` // candidate | promoted | rejected
+	ParentSkill      string           `json:"parent_skill,omitempty"`
+	ParentVersion    string           `json:"parent_version,omitempty"`
+	ProposalKind     string           `json:"proposal_kind,omitempty"`
+	Revision         int              `json:"revision,omitempty"`
+	ChangesLog       []map[string]any `json:"changes_log,omitempty"`
+	Conflicts        []string         `json:"conflicts,omitempty"`
+	FrontierRunID    string           `json:"frontier_run_id,omitempty"`
+	Score            float64          `json:"score,omitempty"`
+	ParetoRank       int              `json:"pareto_rank,omitempty"`
+	GEPAMetadata     map[string]any   `json:"gepa_metadata,omitempty"`
+	ParentProposalID string           `json:"parent_proposal_id,omitempty"`
+	CreatedAt        time.Time        `json:"created_at"`
+	DecidedAt        *time.Time       `json:"decided_at,omitempty"`
+	LastMergedAt     *time.Time       `json:"last_merged_at,omitempty"`
+}
+
+type ProposalFilters struct {
+	Status       string
+	Frontier     string
+	ParentSkill  string
+	ProposalKind string
 }
 
 // ListProposals returns proposals filtered by status. Empty status = all.
 func (m *Manager) ListProposals(ctx context.Context, status string, limit int) ([]ProposalDTO, error) {
+	return m.ListProposalsFiltered(ctx, ProposalFilters{Status: status}, limit)
+}
+
+func (m *Manager) ListProposalsFiltered(ctx context.Context, filters ProposalFilters, limit int) ([]ProposalDTO, error) {
 	if m == nil || m.pool == nil {
 		return []ProposalDTO{}, nil
 	}
@@ -163,13 +185,37 @@ func (m *Manager) ListProposals(ctx context.Context, status string, limit int) (
 		SELECT id::text, name, description, reasoning, skill_md, risk_level,
 		       test_pass_rate, status,
 		       COALESCE(parent_skill, ''), COALESCE(parent_version, ''),
-		       created_at, decided_at
+		       COALESCE(proposal_kind, ''), COALESCE(revision, 1),
+		       COALESCE(changes_log, '[]'::jsonb),
+		       COALESCE(conflicts, '[]'::jsonb),
+		       COALESCE(frontier_run_id::text, ''),
+		       COALESCE(score, 0),
+		       COALESCE(pareto_rank, 0),
+		       COALESCE(gepa_metadata, '{}'::jsonb),
+		       COALESCE(parent_proposal_id::text, ''),
+		       created_at, decided_at, last_merged_at
 		FROM mem_skill_proposals
 	`
 	args := []any{}
-	if status != "" {
-		q += ` WHERE status = $1`
-		args = append(args, status)
+	var where []string
+	if filters.Status != "" {
+		args = append(args, filters.Status)
+		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if filters.Frontier != "" {
+		args = append(args, filters.Frontier)
+		where = append(where, fmt.Sprintf("frontier_run_id = $%d::uuid", len(args)))
+	}
+	if filters.ParentSkill != "" {
+		args = append(args, filters.ParentSkill)
+		where = append(where, fmt.Sprintf("parent_skill = $%d", len(args)))
+	}
+	if filters.ProposalKind != "" {
+		args = append(args, filters.ProposalKind)
+		where = append(where, fmt.Sprintf("proposal_kind = $%d", len(args)))
+	}
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
 	q += ` ORDER BY created_at DESC LIMIT $` + itoa(len(args)+1)
 	args = append(args, limit)
@@ -183,11 +229,20 @@ func (m *Manager) ListProposals(ctx context.Context, status string, limit int) (
 	for rows.Next() {
 		var p ProposalDTO
 		var decided *time.Time
+		var lastMerged *time.Time
+		var changesRaw, conflictsRaw, metaRaw []byte
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Reasoning, &p.SkillMD, &p.RiskLevel,
-			&p.TestPassRate, &p.Status, &p.ParentSkill, &p.ParentVersion, &p.CreatedAt, &decided); err != nil {
+			&p.TestPassRate, &p.Status, &p.ParentSkill, &p.ParentVersion,
+			&p.ProposalKind, &p.Revision, &changesRaw, &conflictsRaw,
+			&p.FrontierRunID, &p.Score, &p.ParetoRank, &metaRaw,
+			&p.ParentProposalID, &p.CreatedAt, &decided, &lastMerged); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal(changesRaw, &p.ChangesLog)
+		_ = json.Unmarshal(conflictsRaw, &p.Conflicts)
+		_ = json.Unmarshal(metaRaw, &p.GEPAMetadata)
 		p.DecidedAt = decided
+		p.LastMergedAt = lastMerged
 		out = append(out, p)
 	}
 	return out, rows.Err()

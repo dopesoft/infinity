@@ -17,16 +17,24 @@ import (
 //   - low / medium → in-process jail (rlimits, env filter)
 //   - high          → container (TODO: container runtime not yet wired)
 //   - critical      → container + Trust Contract gate (gated by Trust Contract)
-//
-// We ship the in-process tier and hard-fail on high/critical until
-// the Docker client lands. The frontend surfaces this clearly.
 type Runner struct {
 	registry *Registry
 	store    *Store
+	riskGate RiskGate
 }
 
 func NewRunner(reg *Registry, store *Store) *Runner {
 	return &Runner{registry: reg, store: store}
+}
+
+type RiskGate interface {
+	AuthorizeCriticalSkill(ctx context.Context, sessionID string, skill *Skill, args map[string]any) (bool, string)
+}
+
+func (r *Runner) SetRiskGate(g RiskGate) {
+	if r != nil {
+		r.riskGate = g
+	}
 }
 
 // Invoke executes a skill by name with the given args. The trigger source is
@@ -59,9 +67,21 @@ func (r *Runner) Invoke(ctx context.Context, sessionID, name string, args map[st
 		switch skill.RiskLevel {
 		case RiskLow, RiskMedium:
 			res, runRow, invErr = r.runInProcess(ctx, skill, args, sessionID, triggerSource)
-		case RiskHigh, RiskCritical:
-			res = Result{Stderr: "container sandbox not yet wired"}
-			invErr = errors.New("high/critical-risk skills require the container sandbox (container sandbox)")
+		case RiskHigh:
+			res, runRow, invErr = r.runContainer(ctx, skill, args, sessionID, triggerSource)
+		case RiskCritical:
+			if r.riskGate == nil {
+				res = Result{Stderr: "critical skill requires Trust approval but no risk gate is configured"}
+				invErr = errors.New("critical skill requires Trust approval")
+				break
+			}
+			allowed, reason := r.riskGate.AuthorizeCriticalSkill(ctx, sessionID, skill, args)
+			if !allowed {
+				res = Result{Stderr: reason}
+				invErr = errors.New(reason)
+				break
+			}
+			res, runRow, invErr = r.runContainer(ctx, skill, args, sessionID, triggerSource)
 		default:
 			invErr = fmt.Errorf("invalid risk_level: %s", skill.RiskLevel)
 		}
@@ -121,6 +141,42 @@ func (r *Runner) runInProcess(ctx context.Context, skill *Skill, args map[string
 		EndedAt:       &endedAt,
 	}
 
+	if r.store != nil {
+		if id, err := r.store.RecordRun(ctx, run); err == nil {
+			run.ID = id
+		}
+	}
+	return res, run, runErr
+}
+
+func (r *Runner) runContainer(ctx context.Context, skill *Skill, args map[string]any, sessionID, triggerSource string) (Result, *Run, error) {
+	cmd, err := buildCommand(skill, args)
+	if err != nil {
+		return Result{}, nil, err
+	}
+	opts := SandboxOpts{
+		Timeout:      timeoutFor(skill),
+		MemoryMB:     512,
+		CPULimit:     1.0,
+		AllowedEnv:   defaultAllowedEnv(skill),
+		NetworkAllow: skill.NetworkEgress,
+		WorkDir:      skill.Path,
+	}
+	res, runErr := RunContainerSandbox(ctx, cmd, opts)
+
+	endedAt := time.Now().UTC()
+	run := &Run{
+		SkillName:     skill.Name,
+		Version:       skill.Version,
+		SessionID:     sessionID,
+		TriggerSource: triggerSource,
+		Input:         args,
+		Output:        res.Stdout,
+		Success:       res.Success && runErr == nil,
+		DurationMS:    res.DurationMS,
+		StartedAt:     endedAt.Add(-time.Duration(res.DurationMS) * time.Millisecond),
+		EndedAt:       &endedAt,
+	}
 	if r.store != nil {
 		if id, err := r.store.RecordRun(ctx, run); err == nil {
 			run.ID = id

@@ -478,8 +478,18 @@ export type SkillProposalDTO = {
   status: "candidate" | "promoted" | "rejected";
   parent_skill?: string;
   parent_version?: string;
+  proposal_kind?: "draft" | "standalone" | string;
+  revision?: number;
+  changes_log?: Array<Record<string, unknown>>;
+  conflicts?: string[];
+  frontier_run_id?: string;
+  score?: number;
+  pareto_rank?: number;
+  gepa_metadata?: Record<string, unknown>;
+  parent_proposal_id?: string;
   created_at: string;
   decided_at?: string | null;
+  last_merged_at?: string | null;
 };
 
 export const fetchVoyagerStatus = (signal?: AbortSignal) =>
@@ -500,11 +510,18 @@ export type NavCountsDTO = {
 export const fetchNavCounts = (signal?: AbortSignal) =>
   getJSON<NavCountsDTO>("/api/nav/counts", signal);
 
-export const fetchSkillProposals = (status = "candidate", signal?: AbortSignal) =>
-  getJSON<SkillProposalDTO[]>(
-    `/api/voyager/proposals?status=${encodeURIComponent(status)}`,
-    signal,
-  );
+export const fetchSkillProposals = (
+  status = "candidate",
+  signal?: AbortSignal,
+  filters?: { frontier?: string; parent_skill?: string; proposal_kind?: string },
+) => {
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  if (filters?.frontier) qs.set("frontier", filters.frontier);
+  if (filters?.parent_skill) qs.set("parent_skill", filters.parent_skill);
+  if (filters?.proposal_kind) qs.set("proposal_kind", filters.proposal_kind);
+  return getJSON<SkillProposalDTO[]>(`/api/voyager/proposals?${qs.toString()}`, signal);
+};
 
 export async function decideSkillProposal(id: string, decision: "promoted" | "rejected"): Promise<boolean> {
   try {

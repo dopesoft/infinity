@@ -337,6 +337,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	// timeout so a wedged provider doesn't pin a goroutine forever.
 	ctxWithUser := context.WithValue(base, auth.ContextKey{}, userID)
 	turnCtx, cancel := context.WithTimeout(ctxWithUser, 5*time.Minute)
+	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
 	// Route every WS frame through the live session binding rather than
 	// the connection-bound closure the handler captured. See
 	// sessionSender for the no-op-on-disconnect contract.
@@ -365,7 +366,10 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 			}
 			s.turnsMu.Unlock()
 		}()
-		s.runTurn(turnCtx, sessionID, content, model, state.steer, send)
+		s.runTurn(turnCtx, sessionID, runContent, model, state.steer, send)
+		if recovered && s.buffer != nil {
+			_ = s.buffer.Clear(context.Background(), sessionID)
+		}
 	}()
 }
 
