@@ -17,6 +17,7 @@ import (
 //	entity_link    - connect two entities with a typed relation
 //	entity_get     - read one entity + its links
 //	entity_search  - find entities by kind / text
+//	worldmodel_extract - extract entities from recent observations
 //	goal_set       - create or replace one of the agent's own goals
 //	goal_update    - record progress / re-plan / mark blocked
 //	goal_list      - list the agent's goals
@@ -30,9 +31,38 @@ func RegisterTools(reg *tools.Registry, store *Store) {
 	reg.Register(&entityLinkTool{store: store})
 	reg.Register(&entityGetTool{store: store})
 	reg.Register(&entitySearchTool{store: store})
+	reg.Register(&worldModelExtractTool{store: store})
 	reg.Register(&goalSetTool{store: store})
 	reg.Register(&goalUpdateTool{store: store})
 	reg.Register(&goalListTool{store: store})
+}
+
+// ── worldmodel_extract ───────────────────────────────────────────────────────
+
+type worldModelExtractTool struct{ store *Store }
+
+func (t *worldModelExtractTool) Name() string { return "worldmodel_extract" }
+func (t *worldModelExtractTool) Description() string {
+	return "Extract durable entities and open loops from recent memory observations into the world model. " +
+		"Use after connector pulls, long sessions, or nightly maintenance so people, projects, accounts, and commitments stay current."
+}
+func (t *worldModelExtractTool) Schema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "Recent observations to scan. Default 100."}},
+	}
+}
+func (t *worldModelExtractTool) Execute(ctx context.Context, in map[string]any) (string, error) {
+	limit := 0
+	if v, ok := in["limit"].(float64); ok {
+		limit = int(v)
+	}
+	report, err := t.store.ExtractFromRecentObservations(ctx, limit)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(report)
+	return string(out), nil
 }
 
 // ── entity_upsert ───────────────────────────────────────────────────────────

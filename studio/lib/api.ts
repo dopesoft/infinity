@@ -194,6 +194,18 @@ export type ReflectionDTO = {
   created_at: string;
 };
 
+export type ReflectionChainDTO = {
+  id: string;
+  topic: string;
+  lesson: string;
+  source_reflection_ids: string[];
+  occurrences: number;
+  confidence: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  updated_at: string;
+};
+
 export type PredictionDTO = {
   id: string;
   session_id?: string;
@@ -329,6 +341,9 @@ export const fetchObservations = (signal?: AbortSignal) =>
 
 export const fetchReflections = (signal?: AbortSignal) =>
   getJSON<ReflectionDTO[]>("/api/memory/reflections", signal);
+
+export const fetchReflectionChains = (signal?: AbortSignal) =>
+  getJSON<ReflectionChainDTO[]>("/api/memory/reflection-chains", signal);
 
 export const fetchPredictions = (signal?: AbortSignal) =>
   getJSON<PredictionDTO[]>("/api/memory/predictions", signal);
@@ -651,6 +666,18 @@ export type SkillRunDTO = {
   ended_at?: string | null;
 };
 
+export type SkillTestDTO = {
+  id: string;
+  skill_name: string;
+  description: string;
+  inputs: Record<string, unknown>;
+  expected: string;
+  last_run_at?: string | null;
+  last_passed?: boolean | null;
+  source: string;
+  created_at: string;
+};
+
 export const fetchSkills = (signal?: AbortSignal) =>
   getJSON<SkillSummaryDTO[]>("/api/skills", signal);
 
@@ -662,6 +689,21 @@ export const fetchSkillRuns = (name: string, limit = 25, signal?: AbortSignal) =
     `/api/skills/${encodeURIComponent(name)}/runs?limit=${limit}`,
     signal,
   );
+
+export const fetchSkillTests = (name: string, signal?: AbortSignal) =>
+  getJSON<SkillTestDTO[]>(`/api/skills/${encodeURIComponent(name)}/tests`, signal);
+
+export async function generateSkillTests(name: string): Promise<SkillTestDTO[] | null> {
+  try {
+    const res = await authedFetch(`/api/skills/${encodeURIComponent(name)}/tests/generate`, {
+      method: "POST",
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as SkillTestDTO[];
+  } catch {
+    return null;
+  }
+}
 
 export async function reloadSkills(): Promise<{ count: number; errors: unknown[] } | null> {
   try {

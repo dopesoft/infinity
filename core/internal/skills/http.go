@@ -23,11 +23,13 @@ func NewAPI(reg *Registry, runner *Runner, store *Store) *API {
 // Routes registers skill endpoints on the provided mux. Path prefix is
 // `/api/skills` - matches the Studio client.
 //
-//   GET    /api/skills              → list summaries
-//   GET    /api/skills/:name        → detail
-//   GET    /api/skills/:name/runs   → recent runs (?limit=)
-//   POST   /api/skills/:name/invoke → manual invoke
-//   POST   /api/skills/reload       → re-walk the filesystem
+//	GET    /api/skills              → list summaries
+//	GET    /api/skills/:name        → detail
+//	GET    /api/skills/:name/runs   → recent runs (?limit=)
+//	GET    /api/skills/:name/tests  → verifier tests
+//	POST   /api/skills/:name/tests/generate → synthetic verifier
+//	POST   /api/skills/:name/invoke → manual invoke
+//	POST   /api/skills/reload       → re-walk the filesystem
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/skills", a.handleList)
 	mux.HandleFunc("/api/skills/reload", a.handleReload)
@@ -101,6 +103,10 @@ func (a *API) handleSkillScoped(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, skill)
 	case len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet:
 		a.handleRuns(w, r, name)
+	case len(parts) == 2 && parts[1] == "tests" && r.Method == http.MethodGet:
+		a.handleTests(w, r, skill)
+	case len(parts) == 3 && parts[1] == "tests" && parts[2] == "generate" && r.Method == http.MethodPost:
+		a.handleGenerateTests(w, r, skill)
 	case len(parts) == 2 && parts[1] == "invoke" && r.Method == http.MethodPost:
 		a.handleInvoke(w, r, name)
 	default:
@@ -125,6 +131,32 @@ func (a *API) handleRuns(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+func (a *API) handleTests(w http.ResponseWriter, r *http.Request, skill *Skill) {
+	if a.store == nil {
+		writeJSON(w, http.StatusOK, []TestCase{})
+		return
+	}
+	tests, err := a.store.ListTests(r.Context(), skill.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tests)
+}
+
+func (a *API) handleGenerateTests(w http.ResponseWriter, r *http.Request, skill *Skill) {
+	if a.store == nil {
+		writeJSON(w, http.StatusOK, []TestCase{})
+		return
+	}
+	tests, err := a.store.GenerateSyntheticTests(r.Context(), skill)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tests)
 }
 
 type invokeReq struct {

@@ -19,6 +19,7 @@ type Engine struct {
 	interval     time.Duration
 	surfacer     CheckpointSurfacer
 	evalRecorder EvalRecorder
+	costRecorder CostRecorder
 }
 
 // CheckpointSurfacer lets the engine put a checkpoint in front of the boss
@@ -33,6 +34,10 @@ type CheckpointSurfacer interface {
 // serve.go provides the implementation. outcome is "success" or "failure".
 type EvalRecorder interface {
 	RecordRun(ctx context.Context, run *Run, outcome, note string)
+}
+
+type CostRecorder interface {
+	RecordWorkflow(ctx context.Context, run *Run, estimatedUSD float64, note string)
 }
 
 func NewEngine(store *Store, executor Executor, logger *slog.Logger) *Engine {
@@ -61,6 +66,11 @@ func (e *Engine) WithEvalRecorder(r EvalRecorder) *Engine {
 	return e
 }
 
+func (e *Engine) WithCostRecorder(r CostRecorder) *Engine {
+	e.costRecorder = r
+	return e
+}
+
 // finishRun moves a run to a terminal status and records the outcome.
 func (e *Engine) finishRun(ctx context.Context, run *Run, status RunStatus, note string) {
 	_ = e.store.SetRunStatus(ctx, run.ID, status, note)
@@ -70,6 +80,10 @@ func (e *Engine) finishRun(ctx context.Context, run *Run, status RunStatus, note
 			outcome = "failure"
 		}
 		e.evalRecorder.RecordRun(ctx, run, outcome, note)
+	}
+	if e.costRecorder != nil {
+		rehearsal := RehearseSteps(runStepDefs(run))
+		e.costRecorder.RecordWorkflow(ctx, run, rehearsal.EstimatedCostUSD, note)
 	}
 }
 
@@ -214,6 +228,22 @@ func anyFailed(run *Run) bool {
 		}
 	}
 	return false
+}
+
+func runStepDefs(run *Run) []StepDef {
+	if run == nil {
+		return nil
+	}
+	out := make([]StepDef, 0, len(run.Steps))
+	for _, st := range run.Steps {
+		out = append(out, StepDef{
+			Name:        st.Name,
+			Kind:        st.Kind,
+			Spec:        st.Spec,
+			MaxAttempts: st.MaxAttempts,
+		})
+	}
+	return out
 }
 
 // resolveSpec walks a step spec and substitutes {{input.KEY}} and

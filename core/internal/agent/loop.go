@@ -204,6 +204,10 @@ type TurnCloseFields struct {
 	Summary       string
 }
 
+type CostRecorder interface {
+	RecordCost(ctx context.Context, category, subject string, costUSD float64, units string, quantity float64, note string) error
+}
+
 // SessionNamer is the optional Haiku-driven auto-namer. The loop notifies it
 // after the first complete assistant turn in a session; the namer decides
 // (cheap DB check) whether the row needs a name and fires Haiku async.
@@ -249,6 +253,9 @@ type Loop struct {
 	// behavior (0% after restart).
 	usageStoreMu sync.RWMutex
 	usageStore   UsageStore
+
+	costMu sync.RWMutex
+	costs  CostRecorder
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -398,6 +405,56 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 	}()
 }
 
+func (l *Loop) recordLLMCost(provider llm.Provider, model string, usage llm.TokenUsage) {
+	rec := l.costRecorder()
+	if rec == nil || (usage.Input == 0 && usage.Output == 0) {
+		return
+	}
+	subject := strings.TrimSpace(model)
+	if subject == "" && provider != nil {
+		subject = provider.Model()
+	}
+	if provider != nil {
+		subject = provider.Name() + ":" + subject
+	}
+	tokens := usage.Input + usage.Output
+	cost := estimateLLMCostUSD(tokens)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = rec.RecordCost(ctx, "llm", subject, cost, "tokens", float64(tokens), "automatic token usage capture")
+	}()
+}
+
+func (l *Loop) recordToolCost(name string, d time.Duration, execErr error) {
+	rec := l.costRecorder()
+	if rec == nil {
+		return
+	}
+	note := "automatic tool call capture"
+	if execErr != nil {
+		note = "automatic failed tool call capture"
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = rec.RecordCost(ctx, "tool", name, 0, "milliseconds", float64(d.Milliseconds()), note)
+	}()
+}
+
+func estimateLLMCostUSD(tokens int) float64 {
+	if tokens <= 0 {
+		return 0
+	}
+	rate := 0.0
+	if v := strings.TrimSpace(os.Getenv("INFINITY_LLM_COST_PER_1K")); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 {
+			rate = parsed
+		}
+	}
+	return float64(tokens) / 1000 * rate
+}
+
 type Config struct {
 	LLM               llm.Provider
 	Tools             *tools.Registry
@@ -409,6 +466,7 @@ type Config struct {
 	Accounts          AccountResolver
 	UsageStore        UsageStore
 	Turns             TurnRecorder
+	Costs             CostRecorder
 	SystemPrompt      string
 	MaxToolIterations int
 	// ToolVisibility, when set, decides per-turn which tool names the
@@ -475,6 +533,7 @@ func New(cfg Config) *Loop {
 		autoCompactThreshold: threshold,
 		usageStore:           cfg.UsageStore,
 		turns:                cfg.Turns,
+		costs:                cfg.Costs,
 		toolVisibility:       cfg.ToolVisibility,
 	}
 }
@@ -498,6 +557,24 @@ func (l *Loop) SetTurnRecorder(r TurnRecorder) {
 	l.turnsMu.Lock()
 	defer l.turnsMu.Unlock()
 	l.turns = r
+}
+
+func (l *Loop) SetCostRecorder(r CostRecorder) {
+	if l == nil {
+		return
+	}
+	l.costMu.Lock()
+	l.costs = r
+	l.costMu.Unlock()
+}
+
+func (l *Loop) costRecorder() CostRecorder {
+	if l == nil {
+		return nil
+	}
+	l.costMu.RLock()
+	defer l.costMu.RUnlock()
+	return l.costs
 }
 
 func (l *Loop) turnRecorder() TurnRecorder {
@@ -895,6 +972,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				}
 			}()
 		}
+		l.recordLLMCost(provider, model, resp.Usage)
 
 		if streamErr != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
@@ -1023,6 +1101,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
 				output, execErr = l.tools.Execute(toolCtx, tc)
 				endedAt = time.Now().UTC()
+				l.recordToolCost(tc.Name, endedAt.Sub(startedAt), execErr)
 
 			case decision.WaitForApproval && decision.ContractID != "":
 				// Block on the gate's wait-for-approval channel. The
@@ -1044,6 +1123,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				if approved {
 					toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
 					output, execErr = l.tools.Execute(toolCtx, tc)
+					l.recordToolCost(tc.Name, time.Since(startedAt), execErr)
 				} else {
 					if reason == "" {
 						reason = "denied or expired"

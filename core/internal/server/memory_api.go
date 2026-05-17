@@ -107,6 +107,22 @@ func (s *Server) handleMemoryReflections(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, rows)
 }
 
+// /api/memory/reflection-chains - cross-session metacognitive meta-lessons.
+func (s *Server) handleMemoryReflectionChains(w http.ResponseWriter, r *http.Request) {
+	if s.pool == nil {
+		writeJSON(w, http.StatusOK, []memory.ReflectionChain{})
+		return
+	}
+	limit := intQuery(r, "limit", 25)
+	reflector := memory.NewReflector(s.pool, embed.NewStub(), nil)
+	rows, err := reflector.ReflectionChains(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 // /api/memory/predictions - high-surprise predict-then-act rows.
 func (s *Server) handleMemoryPredictions(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {

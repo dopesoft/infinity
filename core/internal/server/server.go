@@ -269,6 +269,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/observations", s.handleObservations)
 	mux.HandleFunc("/api/memory/memories", s.handleMemoryList)
 	mux.HandleFunc("/api/memory/reflections", s.handleMemoryReflections)
+	mux.HandleFunc("/api/memory/reflection-chains", s.handleMemoryReflectionChains)
 	mux.HandleFunc("/api/memory/predictions", s.handleMemoryPredictions)
 	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)

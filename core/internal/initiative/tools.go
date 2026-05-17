@@ -9,8 +9,9 @@ import (
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
-// RegisterTools wires the four agent-facing initiative + economics tools:
+// RegisterTools wires the agent-facing initiative + economics tools:
 //
+//	intervention_score  - decide ignore/digest/surface/push/approve
 //	notify              - reach the boss, urgency-routed
 //	notification_digest - flush batched low-urgency notifications
 //	cost_record         - log a cost-incurring event
@@ -21,10 +22,53 @@ func RegisterTools(reg *tools.Registry, notifier *Notifier, store *Store) {
 	if reg == nil || notifier == nil || store == nil {
 		return
 	}
+	reg.Register(&interventionScoreTool{})
 	reg.Register(&notifyTool{notifier: notifier})
 	reg.Register(&notificationDigestTool{notifier: notifier})
 	reg.Register(&costRecordTool{store: store})
 	reg.Register(&budgetStatusTool{store: store})
+}
+
+// ── intervention_score ───────────────────────────────────────────────────────
+
+type interventionScoreTool struct{}
+
+func (t *interventionScoreTool) Name() string { return "intervention_score" }
+func (t *interventionScoreTool) Description() string {
+	return "Decide how proactive to be for a finding or opportunity. Pass " +
+		"value, urgency, confidence, interruption_cost, and risk as 0..1 estimates. " +
+		"Returns ignore, digest, surface, push, or approve plus the urgency to use " +
+		"with notify. Use this before notifying the boss or launching proactive work."
+}
+func (t *interventionScoreTool) Schema() map[string]any {
+	num := func(desc string) map[string]any {
+		return map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": desc}
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"value":             num("Expected upside if handled."),
+			"urgency":           num("Time pressure."),
+			"confidence":        num("How sure the agent is."),
+			"interruption_cost": num("How annoying/noisy it would be to interrupt."),
+			"risk":              num("Privacy, money, external side-effect, or reputation risk."),
+			"reason":            map[string]any{"type": "string", "description": "One-line context for the decision."},
+		},
+		"required": []string{"value", "urgency", "confidence"},
+	}
+}
+func (t *interventionScoreTool) Execute(ctx context.Context, in map[string]any) (string, error) {
+	_ = ctx
+	decision := ScoreIntervention(Intervention{
+		Value:            initFloat(in, "value"),
+		Urgency:          initFloat(in, "urgency"),
+		Confidence:       initFloat(in, "confidence"),
+		InterruptionCost: initFloat(in, "interruption_cost"),
+		Risk:             initFloat(in, "risk"),
+		Reason:           initStr(in, "reason"),
+	})
+	out, _ := json.MarshalIndent(decision, "", "  ")
+	return string(out), nil
 }
 
 // ── notify ──────────────────────────────────────────────────────────────────
@@ -181,4 +225,11 @@ func initStr(in map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+func initFloat(in map[string]any, key string) float64 {
+	if v, ok := in[key].(float64); ok {
+		return v
+	}
+	return 0
 }

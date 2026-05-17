@@ -18,6 +18,24 @@ type initiativeDeliverer struct {
 	surface *surface.Store
 }
 
+type costRecorder struct {
+	store *initiative.Store
+}
+
+func (r costRecorder) RecordCost(ctx context.Context, category, subject string, costUSD float64, units string, quantity float64, note string) error {
+	if r.store == nil {
+		return nil
+	}
+	return r.store.RecordCost(ctx, &initiative.CostEvent{
+		Category: category,
+		Subject:  subject,
+		CostUSD:  costUSD,
+		Units:    units,
+		Quantity: quantity,
+		Note:     note,
+	})
+}
+
 // Push delivers an urgent notification to the boss's phone via Web Push.
 // A nil Sender is safe - the Notifier still logs the notification.
 func (d *initiativeDeliverer) Push(ctx context.Context, n initiative.Notification) error {

@@ -476,8 +476,10 @@ func serveCmd() *cobra.Command {
 			// survives Railway container rotation. Nil-safe in the
 			// agent loop, so we only build when the pool exists.
 			var usageStore *sessions.UsagePersistence
+			var initStore *initiative.Store
 			if pool != nil {
 				usageStore = sessions.NewUsagePersistence(pool)
+				initStore = initiative.NewStore(pool, slog.Default())
 			}
 
 			var loop *agent.Loop
@@ -488,6 +490,9 @@ func serveCmd() *cobra.Command {
 				}
 				if usageStore != nil {
 					cfg.UsageStore = usageStore
+				}
+				if initStore != nil {
+					cfg.Costs = costRecorder{store: initStore}
 				}
 				// Compose memory providers: Infinity's RRF searcher always
 				// runs first, Honcho's peer representation folds in second
@@ -611,6 +616,9 @@ func serveCmd() *cobra.Command {
 				wfEngine = wfEngine.WithEvalRecorder(
 					&workflowEvalRecorder{store: eval.NewStore(pool, slog.Default())},
 				)
+				if initStore != nil {
+					wfEngine = wfEngine.WithCostRecorder(workflowCostRecorder{store: initStore})
+				}
 				wfEngine.Start(cmd.Context())
 				fmt.Printf("  workflows: engine started (durable, resumable)\n")
 			}
@@ -791,6 +799,7 @@ func serveCmd() *cobra.Command {
 				}
 				sentinelMgr = sentinel.NewManager(pool, dispatcher)
 				_ = sentinelMgr.Reload(cmd.Context())
+				sentinelMgr.Start(cmd.Context())
 				sentinelAPI = sentinel.NewAPI(sentinelMgr)
 				fmt.Printf("  cron+sentinel: ready (cron=%v, sentinels=%d)\n",
 					cronScheduler != nil, len(sentinelMgr.List()))
@@ -911,8 +920,7 @@ func serveCmd() *cobra.Command {
 			// low-priority updates (notification_digest), and tracks what it
 			// spends (cost_record / budget_status). Wired here, after the
 			// push Sender exists, so urgent notifications can reach the phone.
-			if pool != nil {
-				initStore := initiative.NewStore(pool, slog.Default())
+			if pool != nil && initStore != nil {
 				initDeliverer := &initiativeDeliverer{
 					sender:  pushSender,
 					surface: surface.NewStore(pool, slog.Default()),

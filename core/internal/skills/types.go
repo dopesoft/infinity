@@ -91,36 +91,36 @@ type Skill struct {
 	Confidence     float64   `json:"confidence"`
 	LastEvolved    string    `json:"last_evolved,omitempty"`
 
-	Body           string `json:"body"`
-	ImplPath       string `json:"impl_path,omitempty"` // optional implementation file
-	ImplLanguage   string `json:"impl_language,omitempty"`
+	Body         string `json:"body"`
+	ImplPath     string `json:"impl_path,omitempty"` // optional implementation file
+	ImplLanguage string `json:"impl_language,omitempty"`
 
-	Source     Source    `json:"source"`
-	Status     Status    `json:"status"`
-	Path       string    `json:"path,omitempty"`
-	LoadedAt   time.Time `json:"loaded_at,omitempty"`
+	Source   Source    `json:"source"`
+	Status   Status    `json:"status"`
+	Path     string    `json:"path,omitempty"`
+	LoadedAt time.Time `json:"loaded_at,omitempty"`
 }
 
 // SkillSummary is the row shape returned by skills.list and the Studio
 // Skills tab list view.
 type SkillSummary struct {
-	Name        string    `json:"name"`
-	Version     string    `json:"version"`
-	Description string    `json:"description"`
-	RiskLevel   RiskLevel `json:"risk_level"`
-	Confidence  float64   `json:"confidence"`
-	Source      Source    `json:"source"`
-	Status      Status    `json:"status"`
-	NetworkEgress []string `json:"network_egress"`
-	LastRunAt   *time.Time `json:"last_run_at,omitempty"`
-	SuccessRate float64    `json:"success_rate"`
+	Name          string     `json:"name"`
+	Version       string     `json:"version"`
+	Description   string     `json:"description"`
+	RiskLevel     RiskLevel  `json:"risk_level"`
+	Confidence    float64    `json:"confidence"`
+	Source        Source     `json:"source"`
+	Status        Status     `json:"status"`
+	NetworkEgress []string   `json:"network_egress"`
+	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
+	SuccessRate   float64    `json:"success_rate"`
 }
 
 // Match is a skill matched by trigger fuzzy-matching against a user message.
 type Match struct {
-	Skill *Skill  `json:"skill"`
-	Score float64 `json:"score"`
-	Phrase string `json:"phrase"`
+	Skill  *Skill  `json:"skill"`
+	Score  float64 `json:"score"`
+	Phrase string  `json:"phrase"`
 }
 
 // SandboxOpts is what the runner hands to a sandbox tier.
@@ -135,25 +135,37 @@ type SandboxOpts struct {
 
 // Result is the execution result of a skill run.
 type Result struct {
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr,omitempty"`
-	ExitCode  int    `json:"exit_code"`
-	DurationMS int64 `json:"duration_ms"`
-	Success   bool   `json:"success"`
+	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr,omitempty"`
+	ExitCode   int    `json:"exit_code"`
+	DurationMS int64  `json:"duration_ms"`
+	Success    bool   `json:"success"`
 }
 
 // Run is the durable record of a single skill execution. Persisted to
 // mem_skill_runs for the run-history view.
 type Run struct {
-	ID            string    `json:"id"`
-	SkillName     string    `json:"skill_name"`
-	Version       string    `json:"version,omitempty"`
-	SessionID     string    `json:"session_id,omitempty"`
-	TriggerSource string    `json:"trigger_source"`
+	ID            string         `json:"id"`
+	SkillName     string         `json:"skill_name"`
+	Version       string         `json:"version,omitempty"`
+	SessionID     string         `json:"session_id,omitempty"`
+	TriggerSource string         `json:"trigger_source"`
 	Input         map[string]any `json:"input"`
-	Output        string    `json:"output"`
-	Success       bool      `json:"success"`
-	DurationMS    int64     `json:"duration_ms"`
-	StartedAt     time.Time `json:"started_at"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
+	Output        string         `json:"output"`
+	Success       bool           `json:"success"`
+	DurationMS    int64          `json:"duration_ms"`
+	StartedAt     time.Time      `json:"started_at"`
+	EndedAt       *time.Time     `json:"ended_at,omitempty"`
+}
+
+type TestCase struct {
+	ID          string         `json:"id"`
+	SkillName   string         `json:"skill_name"`
+	Description string         `json:"description"`
+	Inputs      map[string]any `json:"inputs"`
+	Expected    string         `json:"expected"`
+	LastRunAt   *time.Time     `json:"last_run_at,omitempty"`
+	LastPassed  *bool          `json:"last_passed,omitempty"`
+	Source      string         `json:"source"`
+	CreatedAt   time.Time      `json:"created_at"`
 }

@@ -344,8 +344,8 @@ func (t *workflowValidateTool) Description() string {
 	return "Statically check a workflow's step list before you run it - kinds are " +
 		"valid, each step's spec carries what its kind needs, and every " +
 		"{{steps.N.output}} reference points at an earlier step. Pass `workflow` " +
-		"(a saved name) or inline `steps`. Returns the problems found, or confirms " +
-		"the assembly is well-formed. Cheap insurance - run it before workflow_run."
+		"(a saved name) or inline `steps`. Also returns a no-side-effect rehearsal: " +
+		"likely permissions, side effects, checkpoint advice, and rough cost."
 }
 func (t *workflowValidateTool) Schema() map[string]any {
 	return map[string]any{
@@ -375,10 +375,12 @@ func (t *workflowValidateTool) Execute(ctx context.Context, in map[string]any) (
 		steps = parsed
 	}
 	problems := workflow.ValidateSteps(steps)
+	rehearsal := workflow.RehearseSteps(steps)
 	out, _ := json.Marshal(map[string]any{
-		"ok":       len(problems) == 0,
-		"steps":    len(steps),
-		"problems": problems,
+		"ok":        len(problems) == 0,
+		"steps":     len(steps),
+		"problems":  problems,
+		"rehearsal": rehearsal,
 		"message": map[bool]string{
 			true:  "Well-formed - safe to run.",
 			false: fmt.Sprintf("%d problem(s) found - fix before running.", len(problems)),

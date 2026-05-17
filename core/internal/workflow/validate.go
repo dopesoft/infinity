@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 var stepRefRe = regexp.MustCompile(`\{\{steps\.(\d+)\.output\}\}`)
@@ -50,6 +51,96 @@ func ValidateSteps(steps []StepDef) []string {
 		}
 	}
 	return problems
+}
+
+type Rehearsal struct {
+	Steps            int              `json:"steps"`
+	EstimatedCostUSD float64          `json:"estimated_cost_usd"`
+	RiskLevel        string           `json:"risk_level"`
+	SideEffects      []string         `json:"side_effects,omitempty"`
+	Permissions      []string         `json:"permissions,omitempty"`
+	CheckpointAdvice []string         `json:"checkpoint_advice,omitempty"`
+	ExpectedFlow     []map[string]any `json:"expected_flow"`
+}
+
+// RehearseSteps is a no-side-effect dry run. It does not call tools; it gives
+// the agent a pre-flight map of likely risk, permissions, checkpoint placement,
+// and rough cost so long workflows do not launch blind.
+func RehearseSteps(steps []StepDef) Rehearsal {
+	out := Rehearsal{Steps: len(steps), RiskLevel: "low"}
+	risk := 0
+	hasCheckpoint := false
+	seen := map[string]bool{}
+	add := func(dst *[]string, v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		*dst = append(*dst, v)
+	}
+	for i, st := range steps {
+		item := map[string]any{"index": i, "kind": string(st.Kind), "name": st.Name}
+		switch st.Kind {
+		case KindCheckpoint:
+			hasCheckpoint = true
+			item["expected"] = "pause for boss approval"
+		case KindAgent:
+			out.EstimatedCostUSD += 0.02
+			item["expected"] = "run an agent turn"
+		case KindSkill:
+			skill, _ := st.Spec["skill"].(string)
+			out.EstimatedCostUSD += 0.01
+			item["skill"] = skill
+			item["expected"] = "invoke skill recipe"
+			if looksSideEffectful(skill) {
+				risk += 2
+				add(&out.SideEffects, "skill:"+skill)
+			}
+		case KindTool:
+			tool, _ := st.Spec["tool"].(string)
+			item["tool"] = tool
+			item["expected"] = "invoke tool"
+			switch {
+			case strings.Contains(tool, "search") || strings.Contains(tool, "fetch") || strings.Contains(tool, "list") || strings.Contains(tool, "get"):
+				out.EstimatedCostUSD += 0.001
+			default:
+				out.EstimatedCostUSD += 0.005
+			}
+			if looksSideEffectful(tool) {
+				risk += 2
+				add(&out.SideEffects, "tool:"+tool)
+			}
+			if strings.Contains(tool, "github") || strings.Contains(tool, "gmail") || strings.Contains(tool, "composio") || strings.Contains(tool, "connector") {
+				add(&out.Permissions, tool)
+			}
+		}
+		out.ExpectedFlow = append(out.ExpectedFlow, item)
+	}
+	switch {
+	case risk >= 4:
+		out.RiskLevel = "high"
+	case risk >= 2:
+		out.RiskLevel = "medium"
+	}
+	if risk > 0 && !hasCheckpoint {
+		out.CheckpointAdvice = append(out.CheckpointAdvice, "Add a checkpoint before the first side-effectful step.")
+	}
+	if len(out.ExpectedFlow) > 6 {
+		out.CheckpointAdvice = append(out.CheckpointAdvice, "Long workflow: add a midpoint checkpoint or progress surface.")
+	}
+	out.EstimatedCostUSD = float64(int(out.EstimatedCostUSD*1000+0.5)) / 1000
+	return out
+}
+
+func looksSideEffectful(name string) bool {
+	n := strings.ToLower(name)
+	for _, word := range []string{"send", "post", "write", "edit", "delete", "commit", "merge", "push", "purchase", "update", "create", "remove", "approve"} {
+		if strings.Contains(n, word) {
+			return true
+		}
+	}
+	return false
 }
 
 func collectStepRefs(v any) []string {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/eval"
+	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -194,5 +195,26 @@ func (r *workflowEvalRecorder) RecordRun(ctx context.Context, run *workflow.Run,
 		Outcome:     o,
 		Notes:       note,
 		Source:      "engine",
+	})
+}
+
+type workflowCostRecorder struct {
+	store *initiative.Store
+}
+
+func (r workflowCostRecorder) RecordWorkflow(ctx context.Context, run *workflow.Run, estimatedUSD float64, note string) {
+	if r.store == nil || run == nil {
+		return
+	}
+	if note == "" {
+		note = "automatic workflow completion capture"
+	}
+	_ = r.store.RecordCost(ctx, &initiative.CostEvent{
+		Category: "workflow",
+		Subject:  run.WorkflowName,
+		CostUSD:  estimatedUSD,
+		Units:    "steps",
+		Quantity: float64(len(run.Steps)),
+		Note:     note,
 	})
 }

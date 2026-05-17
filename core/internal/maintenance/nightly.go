@@ -17,6 +17,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/surface"
+	"github.com/dopesoft/infinity/core/internal/worldmodel"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -40,9 +41,11 @@ type Report struct {
 	StartedAt              time.Time                `json:"started_at"`
 	EndedAt                time.Time                `json:"ended_at"`
 	ReflectedSessions      int                      `json:"reflected_sessions"`
+	ReflectionChains       int                      `json:"reflection_chains"`
 	CompressedObservations int                      `json:"compressed_observations"`
 	Consolidate            memory.ConsolidateReport `json:"consolidate"`
 	TrainingExamples       plasticity.ExtractResult `json:"training_examples"`
+	WorldModel             worldmodel.ExtractReport `json:"world_model"`
 	Errors                 []string                 `json:"errors,omitempty"`
 	Options                Options                  `json:"options"`
 }
@@ -117,6 +120,12 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 		} else {
 			report.ReflectedSessions = n
 		}
+		chains, err := deps.Reflector.BuildReflectionChains(ctx, 200)
+		if err != nil {
+			addErr("reflection_chains", err)
+		} else {
+			report.ReflectionChains = chains
+		}
 	}
 
 	if opts.Compress && deps.Compressor != nil {
@@ -140,6 +149,12 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 			addErr("gym_extract", err)
 		} else {
 			report.TrainingExamples = extract
+		}
+		world, err := worldmodel.NewStore(deps.Pool, deps.Logger).ExtractFromRecentObservations(ctx, 100)
+		if err != nil {
+			addErr("worldmodel_extract", err)
+		} else {
+			report.WorldModel = world
 		}
 	}
 
@@ -168,10 +183,12 @@ func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report
 		reason = "one or more nightly cognition stages failed"
 	}
 	body := fmt.Sprintf(
-		"Reflected %d session(s), compressed %d observation(s), inserted %d training example(s).",
+		"Reflected %d session(s), updated %d reflection chain(s), compressed %d observation(s), inserted %d training example(s), upserted %d world-model entit(ies).",
 		report.ReflectedSessions,
+		report.ReflectionChains,
 		report.CompressedObservations,
 		report.TrainingExamples.Inserted,
+		report.WorldModel.Upserted,
 	)
 	_, err := store.Upsert(ctx, &surface.Item{
 		Surface:          "system",
@@ -193,8 +210,10 @@ func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report
 
 func changed(r Report) bool {
 	return r.ReflectedSessions > 0 ||
+		r.ReflectionChains > 0 ||
 		r.CompressedObservations > 0 ||
 		r.TrainingExamples.Inserted > 0 ||
+		r.WorldModel.Upserted > 0 ||
 		r.Consolidate.ClustersFound > 0 ||
 		r.Consolidate.ContradictionsFound > 0 ||
 		r.Consolidate.AssociativePruned > 0 ||

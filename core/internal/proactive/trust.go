@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/auth"
@@ -65,6 +66,7 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 	if c.Status == "" {
 		c.Status = "pending"
 	}
+	enrichSideEffectContract(c)
 	action, _ := json.Marshal(c.ActionSpec)
 	risk, _ := json.Marshal(c.RiskAssessment)
 	cited := c.CitedMemoryIDs
@@ -112,6 +114,69 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 		}
 	}
 	return c.ID, err
+}
+
+func enrichSideEffectContract(c *TrustContract) {
+	if c == nil {
+		return
+	}
+	if c.ActionSpec == nil {
+		c.ActionSpec = map[string]any{}
+	}
+	if c.RiskAssessment == nil {
+		c.RiskAssessment = map[string]any{}
+	}
+	tool, _ := c.ActionSpec["tool"].(string)
+	if tool == "" {
+		tool, _ = c.ActionSpec["name"].(string)
+	}
+	input, _ := json.Marshal(c.ActionSpec["input"])
+	hay := strings.ToLower(tool + " " + string(input) + " " + c.Title + " " + c.Reasoning)
+	sideEffect := sideEffectKind(hay)
+	if sideEffect == "" {
+		return
+	}
+	c.ActionSpec["side_effect_kind"] = sideEffect
+	c.ActionSpec["receipt_required"] = true
+	c.ActionSpec["rollback_required"] = rollbackHint(sideEffect)
+	c.RiskAssessment["side_effect_kind"] = sideEffect
+	c.RiskAssessment["receipt_required"] = "Capture the target, before/after state or external id, timestamp, and tool output."
+	c.RiskAssessment["rollback_hint"] = rollbackHint(sideEffect)
+	if !strings.Contains(c.Preview, "Receipt required:") {
+		c.Preview = strings.TrimSpace(c.Preview + "\n\nReceipt required: capture target, before/after state or external id, timestamp, and tool output.\nRollback: " + rollbackHint(sideEffect))
+	}
+}
+
+func sideEffectKind(hay string) string {
+	for kind, terms := range map[string][]string{
+		"delete":   {"delete", "remove", "drop", "truncate"},
+		"send":     {"send", "email", "message", "post", "publish"},
+		"purchase": {"purchase", "buy", "checkout", "subscribe", "charge"},
+		"code":     {"edit", "write", "commit", "push", "merge"},
+		"update":   {"update", "set", "rename", "approve", "create"},
+	} {
+		for _, term := range terms {
+			if strings.Contains(hay, term) {
+				return kind
+			}
+		}
+	}
+	return ""
+}
+
+func rollbackHint(kind string) string {
+	switch kind {
+	case "delete":
+		return "Prefer soft delete; record ids and restore path before approval."
+	case "send":
+		return "Draft first when possible; after send, record message id and follow-up correction path."
+	case "purchase":
+		return "Record receipt/order id, refund/cancel URL, and cancellation window."
+	case "code":
+		return "Record files/commands changed and the inverse patch or revert command."
+	default:
+		return "Record the prior value, new value, external id, and exact undo step where available."
+	}
 }
 
 func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]TrustContract, error) {

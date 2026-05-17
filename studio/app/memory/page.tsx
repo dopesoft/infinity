@@ -26,12 +26,14 @@ import {
   fetchMemoryCounts,
   fetchObservations,
   fetchPredictions,
+  fetchReflectionChains,
   fetchReflections,
   searchMemory,
   type MemoryCounts,
   type MemoryDTO,
   type ObservationDTO,
   type PredictionDTO,
+  type ReflectionChainDTO,
   type ReflectionDTO,
   type SearchResult,
 } from "@/lib/api";
@@ -41,7 +43,7 @@ type ListItem = ObservationDTO | SearchResult | MemoryDTO;
 const TIERS = ["all", "working", "episodic", "semantic", "procedural"] as const;
 type TierFilter = (typeof TIERS)[number];
 
-const VIEWS = ["memories", "observations", "reflections", "predictions", "graph"] as const;
+const VIEWS = ["memories", "observations", "reflections", "chains", "predictions", "graph"] as const;
 type View = (typeof VIEWS)[number];
 
 export default function MemoryPage() {
@@ -55,6 +57,7 @@ export default function MemoryPage() {
   const [view, setView] = useState<View>("memories");
   const [tier, setTier] = useState<TierFilter>("all");
   const [reflections, setReflections] = useState<ReflectionDTO[]>([]);
+  const [reflectionChains, setReflectionChains] = useState<ReflectionChainDTO[]>([]);
   const [predictions, setPredictions] = useState<PredictionDTO[]>([]);
 
   async function loadDefault(viewArg: View = view, tierArg: TierFilter = tier) {
@@ -63,6 +66,7 @@ export default function MemoryPage() {
     const c = await fetchMemoryCounts();
     setCounts(c);
     setReflections([]);
+    setReflectionChains([]);
     setPredictions([]);
     if (viewArg === "graph") {
       // Graph view manages its own data fetch in KnowledgeGraphPanel.
@@ -77,6 +81,10 @@ export default function MemoryPage() {
       const rows = await fetchReflections();
       setItems([]);
       setReflections(rows ?? []);
+    } else if (viewArg === "chains") {
+      const rows = await fetchReflectionChains();
+      setItems([]);
+      setReflectionChains(rows ?? []);
     } else {
       const rows = await fetchPredictions();
       setItems([]);
@@ -93,7 +101,7 @@ export default function MemoryPage() {
   // Live updates: re-run the active list query whenever observations or
   // memories change, but only when the user isn't actively searching (a
   // realtime push during search would clobber their results).
-  useRealtime(["mem_observations", "mem_memories", "mem_reflections", "mem_predictions"], () => {
+  useRealtime(["mem_observations", "mem_memories", "mem_reflections", "mem_reflection_chains", "mem_predictions"], () => {
     if (query.trim()) return;
     loadDefault();
   });
@@ -114,9 +122,10 @@ export default function MemoryPage() {
 
   const filteredCount = useMemo(() => {
     if (view === "reflections") return reflections.length;
+    if (view === "chains") return reflectionChains.length;
     if (view === "predictions") return predictions.length;
     return items.length;
-  }, [items.length, predictions.length, reflections.length, view]);
+  }, [items.length, predictions.length, reflectionChains.length, reflections.length, view]);
 
   return (
     <TabFrame>
@@ -215,9 +224,11 @@ export default function MemoryPage() {
                         ? (counts?.observations ?? null)
                         : v === "reflections"
                           ? reflections.length
-                          : v === "predictions"
-                            ? predictions.length
-                            : (counts?.graph_nodes ?? null);
+                          : v === "chains"
+                            ? reflectionChains.length
+                            : v === "predictions"
+                              ? predictions.length
+                              : (counts?.graph_nodes ?? null);
                   return (
                     <PageTabsTrigger key={v} value={v} className="gap-1">
                       <span>{tabLabel(v)}</span>
@@ -305,6 +316,16 @@ export default function MemoryPage() {
                     ) : (
                       reflections.map((it) => <ReflectionRow key={it.id} item={it} />)
                     )
+                  ) : view === "chains" ? (
+                    reflectionChains.length === 0 ? (
+                      <EmptyState
+                        icon={Sparkles}
+                        title={loading ? "Loading…" : "No reflection chains yet"}
+                        description="Chains appear when the same lesson repeats across multiple reflected sessions."
+                      />
+                    ) : (
+                      reflectionChains.map((it) => <ReflectionChainRow key={it.id} item={it} />)
+                    )
                   ) : view === "predictions" ? (
                     predictions.length === 0 ? (
                       <EmptyState
@@ -367,7 +388,7 @@ export default function MemoryPage() {
                 </div>
               </aside>
 
-              {view !== "reflections" && view !== "predictions" && (
+              {view !== "reflections" && view !== "chains" && view !== "predictions" && (
                 <section
                   className={cn(
                     "min-h-0 flex-1 flex-col bg-background",
@@ -423,6 +444,31 @@ function ReflectionRow({ item }: { item: ReflectionDTO }) {
           ))}
         </ul>
       )}
+    </article>
+  );
+}
+
+function ReflectionChainRow({ item }: { item: ReflectionChainDTO }) {
+  return (
+    <article className="rounded-xl border bg-card px-3 py-3">
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1 font-mono uppercase text-tier-procedural">
+          <Sparkles className="size-3" aria-hidden />
+          chain · {item.occurrences} sessions
+        </span>
+        <time dateTime={item.updated_at} suppressHydrationWarning>
+          {new Date(item.updated_at).toLocaleString()}
+        </time>
+      </div>
+      <p className="mt-2 line-clamp-4 break-words text-sm">{item.lesson || "-"}</p>
+      <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
+        <span className="rounded-full bg-tier-procedural/10 px-2 py-0.5 font-mono text-tier-procedural">
+          confidence {(item.confidence * 100).toFixed(0)}%
+        </span>
+        <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-muted-foreground">
+          {item.topic}
+        </span>
+      </div>
     </article>
   );
 }

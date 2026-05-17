@@ -78,6 +78,61 @@ type Budget struct {
 	Note         string             `json:"note"`
 }
 
+// Intervention is the generic "should I bother the boss?" decision shape.
+// The agent supplies its estimates; deterministic policy maps them to a
+// channel so proactivity is consistent and auditable across skills/workflows.
+type Intervention struct {
+	Value            float64 `json:"value"`             // expected upside 0..1
+	Urgency          float64 `json:"urgency"`           // time pressure 0..1
+	Confidence       float64 `json:"confidence"`        // how sure the agent is 0..1
+	InterruptionCost float64 `json:"interruption_cost"` // how annoying/noisy this is 0..1
+	Risk             float64 `json:"risk"`              // side-effect/privacy risk 0..1
+	Reason           string  `json:"reason"`
+}
+
+type InterventionDecision struct {
+	Score   float64 `json:"score"`
+	Action  string  `json:"action"`  // ignore | digest | surface | push | approve
+	Urgency Urgency `json:"urgency"` // low | normal | urgent
+	Reason  string  `json:"reason"`
+}
+
+func ScoreIntervention(in Intervention) InterventionDecision {
+	value := clamp01(in.Value)
+	urgency := clamp01(in.Urgency)
+	confidence := clamp01(in.Confidence)
+	interrupt := clamp01(in.InterruptionCost)
+	risk := clamp01(in.Risk)
+	score := round2((0.35 * value) + (0.25 * urgency) + (0.25 * confidence) - (0.10 * interrupt) - (0.05 * risk))
+	d := InterventionDecision{Score: score, Action: "surface", Urgency: UrgencyNormal}
+	switch {
+	case risk >= 0.65:
+		d.Action = "approve"
+		d.Urgency = UrgencyNormal
+		d.Reason = "Risk is high enough that the next step needs Trust approval."
+	case score < 0.25:
+		d.Action = "ignore"
+		d.Urgency = UrgencyLow
+		d.Reason = "Expected value is too low for an interruption or dashboard item."
+	case score < 0.45:
+		d.Action = "digest"
+		d.Urgency = UrgencyLow
+		d.Reason = "Worth remembering, but not worth interrupting."
+	case score >= 0.72 && urgency >= 0.55 && confidence >= 0.55:
+		d.Action = "push"
+		d.Urgency = UrgencyUrgent
+		d.Reason = "High-value, time-sensitive, and confident enough to interrupt."
+	default:
+		d.Action = "surface"
+		d.Urgency = UrgencyNormal
+		d.Reason = "Worth surfacing on the dashboard without an immediate push."
+	}
+	if strings.TrimSpace(in.Reason) != "" {
+		d.Reason = strings.TrimSpace(in.Reason) + " " + d.Reason
+	}
+	return d
+}
+
 // Deliverer is how the initiative package reaches the boss without
 // importing the push / surface packages. serve.go provides the impl
 // (push.Sender for Push, surface.Store for Surface).
@@ -351,4 +406,14 @@ func (n *Notifier) Digest(ctx context.Context) (int, error) {
 
 func round2(f float64) float64 {
 	return float64(int(f*100+0.5)) / 100
+}
+
+func clamp01(f float64) float64 {
+	if f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
 }

@@ -10,10 +10,13 @@ import { EmptyState } from "@/components/EmptyState";
 import {
   fetchSkill,
   fetchSkillRuns,
+  fetchSkillTests,
+  generateSkillTests,
   invokeSkill,
   type SkillDTO,
   type SkillRunDTO,
   type SkillSummaryDTO,
+  type SkillTestDTO,
 } from "@/lib/api";
 
 export function SkillDetail({
@@ -25,6 +28,7 @@ export function SkillDetail({
 }) {
   const [skill, setSkill] = useState<SkillDTO | null>(null);
   const [runs, setRuns] = useState<SkillRunDTO[]>([]);
+  const [tests, setTests] = useState<SkillTestDTO[]>([]);
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
   const [argsText, setArgsText] = useState("{}");
@@ -32,12 +36,14 @@ export function SkillDetail({
   useEffect(() => {
     setSkill(null);
     setRuns([]);
+    setTests([]);
     setRunResult(null);
     setArgsText("{}");
     if (!selected) return;
     const ctrl = new AbortController();
     fetchSkill(selected.name, ctrl.signal).then((s) => s && setSkill(s));
     fetchSkillRuns(selected.name, 25, ctrl.signal).then((r) => r && setRuns(r));
+    fetchSkillTests(selected.name, ctrl.signal).then((t) => t && setTests(t));
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.name]);
@@ -56,6 +62,18 @@ export function SkillDetail({
     if (!selected) return;
     const r = await fetchSkillRuns(selected.name, 25);
     if (r) setRuns(r);
+  }
+
+  async function refreshTests() {
+    if (!selected) return;
+    const t = await fetchSkillTests(selected.name);
+    if (t) setTests(t);
+  }
+
+  async function generateTests() {
+    if (!selected) return;
+    const t = await generateSkillTests(selected.name);
+    if (t) setTests((prev) => [...t, ...prev]);
   }
 
   async function run() {
@@ -117,6 +135,7 @@ export function SkillDetail({
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="run">Run</TabsTrigger>
+            <TabsTrigger value="tests">Tests</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
             <TabsTrigger value="code">Code</TabsTrigger>
           </TabsList>
@@ -227,6 +246,43 @@ export function SkillDetail({
                         {r.output}
                       </pre>
                     )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </TabsContent>
+
+          <TabsContent value="tests" className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">{tests.length} verifier tests</p>
+              <div className="flex gap-1">
+                <Button size="sm" variant="ghost" onClick={refreshTests}>
+                  <RefreshCw className="size-4" />
+                </Button>
+                <Button size="sm" onClick={generateTests}>
+                  Generate
+                </Button>
+              </div>
+            </div>
+            {tests.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No verifier tests yet. Generate a smoke test before relying on this skill.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {tests.map((t) => (
+                  <li key={t.id} className="rounded-md border bg-card p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                      <span className="font-mono">{t.source}</span>
+                      <span className="font-mono">
+                        {t.last_passed == null ? "not run" : t.last_passed ? "passed" : "failed"}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-medium">{t.description}</p>
+                    <p className="mt-1 text-muted-foreground">{t.expected}</p>
+                    <pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted/60 p-2 font-mono">
+                      {JSON.stringify(t.inputs ?? {}, null, 2)}
+                    </pre>
                   </li>
                 ))}
               </ul>

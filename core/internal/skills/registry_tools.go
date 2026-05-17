@@ -14,25 +14,31 @@ import (
 // Runner. The agent can always reach for these regardless of which skills
 // happen to be installed.
 //
-//   skills_list      - enumerate installed skills
-//   skills_invoke    - execute a skill by name
-//   skills_discover  - fuzzy search over trigger phrases / descriptions
-//   skills_history   - recent runs of a single skill
-//   skill_create     - author a NEW skill and make it live (self-authoring)
+//	skills_list      - enumerate installed skills
+//	skills_invoke    - execute a skill by name
+//	skills_discover  - fuzzy search over trigger phrases / descriptions
+//	skills_history   - recent runs of a single skill
+//	skill_create     - author a NEW skill and make it live (self-authoring)
+//	skill_tests      - list verifier tests for a skill
+//	skill_test_generate - create synthetic verifier tests
 func RegisterTools(reg *tools.Registry, registry *Registry, runner *Runner) {
 	reg.Register(&listTool{r: registry})
 	reg.Register(&invokeTool{r: registry, runner: runner})
 	reg.Register(&discoverTool{r: registry})
 	reg.Register(&historyTool{r: registry})
 	reg.Register(&skillCreateTool{r: registry})
+	reg.Register(&skillTestsTool{r: registry})
+	reg.Register(&skillTestGenerateTool{r: registry})
 }
 
 // ---- skills.list -----------------------------------------------------------
 
 type listTool struct{ r *Registry }
 
-func (t *listTool) Name() string        { return "skills_list" }
-func (t *listTool) Description() string { return "List every installed skill with risk level + confidence." }
+func (t *listTool) Name() string { return "skills_list" }
+func (t *listTool) Description() string {
+	return "List every installed skill with risk level + confidence."
+}
 func (t *listTool) Schema() map[string]any {
 	return map[string]any{
 		"type":       "object",
@@ -44,11 +50,11 @@ func (t *listTool) Execute(ctx context.Context, _ map[string]any) (string, error
 	out := make([]map[string]any, 0, len(all))
 	for _, s := range all {
 		out = append(out, map[string]any{
-			"name":        s.Name,
-			"version":     s.Version,
-			"description": s.Description,
-			"risk_level":  s.RiskLevel,
-			"confidence":  s.Confidence,
+			"name":           s.Name,
+			"version":        s.Version,
+			"description":    s.Description,
+			"risk_level":     s.RiskLevel,
+			"confidence":     s.Confidence,
 			"network_egress": s.NetworkEgress,
 		})
 	}
@@ -136,11 +142,11 @@ func (t *discoverTool) Execute(ctx context.Context, in map[string]any) (string, 
 	out := make([]map[string]any, 0, len(matches))
 	for _, m := range matches {
 		out = append(out, map[string]any{
-			"name":        m.Skill.Name,
-			"version":     m.Skill.Version,
-			"description": m.Skill.Description,
-			"risk_level":  m.Skill.RiskLevel,
-			"score":       m.Score,
+			"name":           m.Skill.Name,
+			"version":        m.Skill.Version,
+			"description":    m.Skill.Description,
+			"risk_level":     m.Skill.RiskLevel,
+			"score":          m.Score,
 			"matched_phrase": m.Phrase,
 		})
 	}
@@ -152,8 +158,10 @@ func (t *discoverTool) Execute(ctx context.Context, in map[string]any) (string, 
 
 type historyTool struct{ r *Registry }
 
-func (t *historyTool) Name() string        { return "skills_history" }
-func (t *historyTool) Description() string { return "Recent runs of a skill (success/duration/output)." }
+func (t *historyTool) Name() string { return "skills_history" }
+func (t *historyTool) Description() string {
+	return "Recent runs of a skill (success/duration/output)."
+}
 func (t *historyTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -182,6 +190,68 @@ func (t *historyTool) Execute(ctx context.Context, in map[string]any) (string, e
 		return "", err
 	}
 	b, _ := json.MarshalIndent(runs, "", "  ")
+	return string(b), nil
+}
+
+// ---- skill tests ------------------------------------------------------------
+
+type skillTestsTool struct{ r *Registry }
+
+func (t *skillTestsTool) Name() string { return "skill_tests" }
+func (t *skillTestsTool) Description() string {
+	return "List verifier tests for a skill. Use this before trusting, evolving, or promoting a skill."
+}
+func (t *skillTestsTool) Schema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"name": map[string]any{"type": "string"}},
+		"required":   []any{"name"},
+	}
+}
+func (t *skillTestsTool) Execute(ctx context.Context, in map[string]any) (string, error) {
+	name, _ := in["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("skill_tests: name is required")
+	}
+	if t.r.store == nil {
+		return "skill tests unavailable (no database configured)", nil
+	}
+	tests, err := t.r.store.ListTests(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	b, _ := json.MarshalIndent(tests, "", "  ")
+	return string(b), nil
+}
+
+type skillTestGenerateTool struct{ r *Registry }
+
+func (t *skillTestGenerateTool) Name() string { return "skill_test_generate" }
+func (t *skillTestGenerateTool) Description() string {
+	return "Generate a synthetic smoke verifier for a skill from its declared inputs and description. " +
+		"This gives Voyager/GEPA and the boss an acceptance target before promotion."
+}
+func (t *skillTestGenerateTool) Schema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"name": map[string]any{"type": "string"}},
+		"required":   []any{"name"},
+	}
+}
+func (t *skillTestGenerateTool) Execute(ctx context.Context, in map[string]any) (string, error) {
+	name, _ := in["name"].(string)
+	skill, ok := t.r.Get(name)
+	if !ok {
+		return "", fmt.Errorf("unknown skill: %s", name)
+	}
+	if t.r.store == nil {
+		return "skill test generation unavailable (no database configured)", nil
+	}
+	tests, err := t.r.store.GenerateSyntheticTests(ctx, skill)
+	if err != nil {
+		return "", err
+	}
+	b, _ := json.MarshalIndent(tests, "", "  ")
 	return string(b), nil
 }
 

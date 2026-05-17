@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -203,6 +204,89 @@ func (s *Store) SuccessRate(ctx context.Context, name string, lastN int) (rate f
 		return 0, 0, nil, err
 	}
 	return rate, total, last, nil
+}
+
+func (s *Store) UpsertTest(ctx context.Context, skillName, description string, inputs map[string]any, expected, source string) (string, error) {
+	if s == nil || s.pool == nil {
+		return "", errors.New("skills: no store configured")
+	}
+	if source == "" {
+		source = "synthetic"
+	}
+	raw, _ := json.Marshal(inputs)
+	id := uuid.NewString()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO mem_skill_tests (id, skill_name, description, inputs, expected, source)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+	`, id, skillName, description, string(raw), expected, source)
+	if err != nil {
+		return "", fmt.Errorf("skills: insert test: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Store) ListTests(ctx context.Context, skillName string) ([]TestCase, error) {
+	if s == nil || s.pool == nil {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, skill_name, description, inputs, expected,
+		       last_run_at, last_passed, source, created_at
+		  FROM mem_skill_tests
+		 WHERE skill_name = $1
+		 ORDER BY created_at DESC
+	`, skillName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TestCase
+	for rows.Next() {
+		var tc TestCase
+		var raw []byte
+		if err := rows.Scan(&tc.ID, &tc.SkillName, &tc.Description, &raw, &tc.Expected,
+			&tc.LastRunAt, &tc.LastPassed, &tc.Source, &tc.CreatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(raw, &tc.Inputs)
+		out = append(out, tc)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GenerateSyntheticTests(ctx context.Context, sk *Skill) ([]TestCase, error) {
+	if sk == nil {
+		return nil, errors.New("skills: skill required")
+	}
+	inputs := map[string]any{}
+	for _, in := range sk.Inputs {
+		if in.Default != nil {
+			inputs[in.Name] = in.Default
+			continue
+		}
+		switch in.Type {
+		case "int", "integer":
+			inputs[in.Name] = 1
+		case "float", "number":
+			inputs[in.Name] = 1.0
+		case "bool", "boolean":
+			inputs[in.Name] = true
+		case "object":
+			inputs[in.Name] = map[string]any{}
+		default:
+			inputs[in.Name] = "example"
+		}
+	}
+	expected := "The skill should complete without errors and produce output aligned with its description: " + sk.Description
+	desc := "Synthetic smoke test for " + sk.Name
+	id, err := s.UpsertTest(ctx, sk.Name, desc, inputs, expected, "synthetic")
+	if err != nil {
+		return nil, err
+	}
+	return []TestCase{{
+		ID: id, SkillName: sk.Name, Description: desc, Inputs: inputs,
+		Expected: expected, Source: "synthetic", CreatedAt: time.Now().UTC(),
+	}}, nil
 }
 
 // ListSummaries returns a denormalised list view: skill row + last_run_at +
