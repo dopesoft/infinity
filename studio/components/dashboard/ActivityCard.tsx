@@ -134,14 +134,21 @@ function Row({
             aria-hidden
           />
           <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-2">
+            <div className="flex min-w-0 items-baseline gap-2">
               <span
-                className="font-mono text-[10px] text-muted-foreground"
+                // shrink-0 + whitespace-nowrap so "2m ago" / "5h ago"
+                // never fold onto two lines when the title is long.
+                // On mobile the activity column is narrow and without
+                // these the timestamp was wrapping ("2m\nago") which
+                // looked broken.
+                className="shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
                 suppressHydrationWarning
               >
                 {e.future ? clockTime(e.at) : relTime(e.at)}
               </span>
-              <span className="truncate text-[13px] font-medium text-foreground">{e.title}</span>
+              <span className="min-w-0 truncate text-[13px] font-medium text-foreground">
+                {e.title}
+              </span>
             </div>
             {e.detail ? (
               <p className="mt-0.5 line-clamp-1 break-words text-[11px] text-muted-foreground">

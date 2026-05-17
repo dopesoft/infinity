@@ -86,7 +86,10 @@ function ApprovalRow({ a, onClick }: { a: Approval; onClick: () => void }) {
           >
             {meta.label}
           </span>
-          <span className="font-mono text-[10px] text-muted-foreground" suppressHydrationWarning>
+          <span
+            className="shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
+            suppressHydrationWarning
+          >
             · {relTime(a.createdAt)}
           </span>
         </div>

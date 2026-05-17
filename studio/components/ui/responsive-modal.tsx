@@ -103,7 +103,13 @@ export function ResponsiveModal({
         {children}
       </div>
       {footer ? (
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 py-3 sm:px-5 pb-safe">
+        // Pinned action bar. `pt-3` is the always-on top breathing
+        // room above the buttons; `pb-safe` is now sane (max(safe,
+        // 0.75rem)) so the buttons get matching bottom space on every
+        // viewport — no more buttons glued to the modal's bottom
+        // border on desktop. `gap-2` separates stacked actions when
+        // they wrap on a narrow viewport.
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 pt-3 sm:px-5 pb-safe">
           {footer}
         </div>
       ) : null}

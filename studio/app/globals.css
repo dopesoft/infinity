@@ -187,16 +187,28 @@
     min-height: var(--app-height);
   }
 
-  /* Safe-area utilities. Use these on every fixed/sticky surface. */
+  /* Safe-area utilities. Use these on every fixed/sticky surface.
+   *
+   * Each utility takes the LARGER of (a) the OS safe-area inset and
+   * (b) a sane base padding. The base matters because env(safe-area-*)
+   * resolves to 0px on desktop and on phones in landscape — so the
+   * naive `padding: env(safe-area-inset-bottom)` form collapses to 0
+   * and a footer action bar ends up flush against the modal border.
+   *
+   * Base values match the de-facto consumer (modal footer / sticky
+   * action bar) so callers don't have to reach for a custom
+   * `pb-[max(env(...),N)]` arbitrary class. Stacking with `py-N` is
+   * order-dependent (last wins), so this utility being last in the
+   * className still produces correct padding regardless. */
   .pb-safe {
-    padding-bottom: max(env(safe-area-inset-bottom), 0px);
+    padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
   }
   .pt-safe {
-    padding-top: max(env(safe-area-inset-top), 0px);
+    padding-top: max(env(safe-area-inset-top), 0.75rem);
   }
   .px-safe {
-    padding-left: max(env(safe-area-inset-left), 0px);
-    padding-right: max(env(safe-area-inset-right), 0px);
+    padding-left: max(env(safe-area-inset-left), 0.75rem);
+    padding-right: max(env(safe-area-inset-right), 0.75rem);
   }
 
   /* iOS-Safari-friendly momentum scrolling + contained overscroll. */

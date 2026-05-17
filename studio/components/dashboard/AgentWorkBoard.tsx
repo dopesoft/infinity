@@ -109,11 +109,24 @@ export function AgentWorkBoard({
         ))}
       </div>
 
-      {/* Mobile: horizontal-swipe carousel */}
+      {/* Mobile: horizontal-swipe carousel.
+       *
+       * No edge-bleed (-mx-3): the first card MUST start at the same
+       * x-position as every other dashboard card so the section reads
+       * as part of the page, not a stray rail glued to the viewport
+       * edge. Parent `<main>` carries px-3 on mobile / px-4 on sm+;
+       * the rail inherits that padding, the first card lands at the
+       * same inset as the SAVED / ACTIVITY cards above it.
+       *
+       * `snap-x snap-proximity` is gentler than mandatory — desktop
+       * trackpads and resized viewports between sm and lg often fight
+       * snap-mandatory because the user wants to scroll partway to
+       * peek the next column, and mandatory yanks it back. Proximity
+       * still snaps when you let go near a boundary. */}
       <div className="space-y-2 lg:hidden">
         <div
           ref={trackRef}
-          className="-mx-3 flex snap-x snap-mandatory overflow-x-auto px-3 pb-1 scroll-touch no-scrollbar"
+          className="flex snap-x snap-proximity overflow-x-auto pb-1 scroll-touch no-scrollbar"
           onScroll={(e) => {
             const el = e.currentTarget;
             const w = el.clientWidth;

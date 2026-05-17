@@ -43,7 +43,7 @@ export function ReflectionCard({
               Jarvis noticed
             </span>
             <span
-              className="ml-auto font-mono text-[10px] text-muted-foreground"
+              className="ml-auto shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
               suppressHydrationWarning
             >
               {relTime(reflection.capturedAt)}
