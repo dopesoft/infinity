@@ -270,6 +270,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/fs/save", s.handleCanvasFSSave)
 	mux.HandleFunc("/api/canvas/git/status", s.handleCanvasGitStatus)
 	mux.HandleFunc("/api/canvas/git/diff", s.handleCanvasGitDiff)
+	mux.HandleFunc("/api/canvas/git/show", s.handleCanvasGitShow)
 	mux.HandleFunc("/api/canvas/git/stage", s.handleCanvasGitStage)
 	mux.HandleFunc("/api/canvas/git/commit", s.handleCanvasGitCommit)
 	mux.HandleFunc("/api/canvas/git/push", s.handleCanvasGitPush)

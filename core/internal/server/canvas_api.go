@@ -819,11 +819,15 @@ func detectLanguage(path string) string {
 	case ".ts", ".mts", ".cts":
 		return "typescript"
 	case ".tsx":
-		return "typescript"
+		// Monaco distinguishes JSX-aware vs plain TS. Returning "typescript"
+		// here made Monaco's TS service parse `<Component>` as a `<` comparison
+		// operator, producing fake squiggles like "Operator '<' cannot be
+		// applied to types 'boolean' and 'RegExp'" on every JSX tag.
+		return "typescriptreact"
 	case ".js", ".mjs", ".cjs":
 		return "javascript"
 	case ".jsx":
-		return "javascript"
+		return "javascriptreact"
 	case ".py":
 		return "python"
 	case ".rs":
@@ -1107,6 +1111,91 @@ func (s *Server) handleCanvasGitDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, gitDiffResponse{Path: path, Staged: staged, Diff: out})
+}
+
+type gitShowResponse struct {
+	Path    string `json:"path"`
+	Ref     string `json:"ref"`
+	Content string `json:"content"`
+	// Found = false when the path exists on disk but isn't tracked at the
+	// requested ref (e.g. a brand-new file Jarvis just added that hasn't
+	// been committed yet). The client treats this as "original side of
+	// the diff is empty" — the whole file shows as additions.
+	Found bool `json:"found"`
+}
+
+// handleCanvasGitShow returns the contents of a file at a specific git ref
+// (defaults to HEAD). Powers the diff view's "original" side when the boss
+// opens a file Jarvis edited — Monaco's DiffEditor needs the pre-edit
+// version to render real diff hunks, but the on-disk content already has
+// Jarvis's changes applied so the FS read alone produces an empty diff.
+//
+// Repo root is auto-discovered by walking up from the file looking for a
+// .git entry; the boss can have multiple project repos under the canvas
+// root and we shouldn't make the frontend track which one any given path
+// belongs to.
+func (s *Server) handleCanvasGitShow(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	resolved, ok := resolveCanvasPath(path)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
+		return
+	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		ref = "HEAD"
+	}
+	// Refs we accept are simple identifiers: HEAD, branch names, short or
+	// full SHAs. Reject anything with shell metacharacters so a hostile
+	// query can't smuggle a command through the bash gate's
+	// `git show <ref>:<path>` construction.
+	for _, bad := range []string{";", "&&", "||", "|", "`", "$(", ">", "<", " ", "\n", "\r"} {
+		if strings.Contains(ref, bad) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ref"})
+			return
+		}
+	}
+
+	repoRoot, relPath, found := findRepoRoot(resolved)
+	if !found {
+		writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: "", Found: false})
+		return
+	}
+	cmd := "git -C " + shellQuote(repoRoot) + " show " + shellQuote(ref+":"+relPath)
+	out, err := s.runReadOnlyBash(r.Context(), cmd)
+	if err != nil {
+		// File isn't tracked at this ref (new file Jarvis just added,
+		// rename, etc.) — return empty content so the diff shows the
+		// whole file as additions rather than failing the request.
+		writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: "", Found: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: out, Found: true})
+}
+
+// findRepoRoot walks up from absPath until it finds a directory containing
+// .git (file or directory — submodules use a .git file pointing elsewhere).
+// Returns the repo root, the path relative to that root, and ok=true when
+// found. Stops at filesystem root or the canvas-root boundary.
+func findRepoRoot(absPath string) (root string, relPath string, ok bool) {
+	dir := absPath
+	if fi, err := os.Stat(absPath); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(absPath)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			rel, err := filepath.Rel(dir, absPath)
+			if err != nil {
+				return "", "", false
+			}
+			return dir, filepath.ToSlash(rel), true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", "", false
+		}
+		dir = parent
+	}
 }
 
 // runReadOnlyBash invokes claude_code__Bash for a vetted read-only command.

@@ -165,6 +165,28 @@ export const fetchCanvasGitDiff = (
   return getJSON<GitDiffResponse>(`/api/canvas/git/diff?${qs.toString()}`, signal);
 };
 
+export type GitShowResponse = {
+  path: string;
+  ref: string;
+  content: string;
+  found: boolean;
+};
+
+// Fetch a file's contents at a specific git ref (defaults to HEAD on the
+// server). Used as the "original" side of the diff editor when the boss
+// opens a file Jarvis edited — we need the pre-edit version to render
+// real hunks. found=false means the file isn't tracked at that ref
+// (new file), and the caller should treat the original side as empty.
+export const fetchCanvasGitShow = (
+  path: string,
+  ref?: string,
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams({ path });
+  if (ref) qs.set("ref", ref);
+  return getJSON<GitShowResponse>(`/api/canvas/git/show?${qs.toString()}`, signal);
+};
+
 export const canvasGitStage = (input: { repo: string; paths?: string[]; session_id?: string }) =>
   postJSON<GitMutationResponse>(`/api/canvas/git/stage`, input);
 

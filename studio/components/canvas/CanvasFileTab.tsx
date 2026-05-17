@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { fetchCanvasFSRead, saveCanvasFile } from "@/lib/canvas/api";
+import { fetchCanvasFSRead, fetchCanvasGitShow, saveCanvasFile } from "@/lib/canvas/api";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
 import { INFINITY_DARK, INFINITY_LIGHT, registerInfinityThemes } from "@/lib/canvas/monaco-theme";
 import { cn } from "@/lib/utils";
@@ -69,10 +69,22 @@ export function CanvasFileTab({
   sessionId: string;
 }) {
   const store = useCanvasStore();
-  const isDirtyOnLoad = store.dirtyPaths.has(path);
-  const [mode, setMode] = useState<Mode>(isDirtyOnLoad ? "diff" : "edit");
+  const isDirty = store.dirtyPaths.has(path);
+  const [mode, setMode] = useState<Mode>(isDirty ? "diff" : "edit");
+  // originalContent is the LEFT side of the diff editor. For a clean
+  // file it equals on-disk (so diff vs your unsaved edits makes sense).
+  // For a file Jarvis touched (dirty), it must instead be the version
+  // at git HEAD — otherwise both sides are identical (Jarvis already
+  // wrote to disk) and the diff renders empty.
   const [originalContent, setOriginalContent] = useState<string | null>(null);
   const [currentContent, setCurrentContent] = useState<string | null>(null);
+  // diskBaseline holds the on-disk content captured at load time. We
+  // keep this separately from originalContent so the Edit-mode "is
+  // modified" calculation always compares your Monaco buffer against
+  // what's actually on disk, regardless of what the diff editor uses
+  // as its "original" side.
+  const [diskBaseline, setDiskBaseline] = useState<string | null>(null);
+  const [diffSource, setDiffSource] = useState<"head" | "disk">(isDirty ? "head" : "disk");
   const [baseSha, setBaseSha] = useState<string>("");
   const [language, setLanguage] = useState<string>("plaintext");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -85,9 +97,15 @@ export function CanvasFileTab({
   const editorTheme = useEditorTheme();
 
   // Load (or reload) the file. Bumping reloadKey forces a fresh fetch.
+  // When the file is dirty (Jarvis touched it this session) we ALSO
+  // fetch the HEAD version in parallel so the diff editor can show
+  // git HEAD vs working tree — the real "what did Jarvis change"
+  // comparison. The two fetches race but settle independently so the
+  // editor can render the disk version immediately and swap in the
+  // HEAD baseline as soon as it arrives.
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
-    if (!isActive && originalContent !== null) return; // Don't fetch background tabs.
+    if (!isActive && diskBaseline !== null) return; // Don't fetch background tabs.
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
@@ -98,21 +116,43 @@ export function CanvasFileTab({
         setLoadError("Could not read file (mac bridge unreachable?)");
         return;
       }
-      setOriginalContent(r.content);
+      setDiskBaseline(r.content);
       setCurrentContent(r.content);
       setBaseSha(r.sha);
       setLanguage(r.language || "plaintext");
+      // For clean files the diff baseline is just the disk content.
+      // Dirty files overwrite this once git/show resolves below.
+      if (!isDirty) {
+        setOriginalContent(r.content);
+        setDiffSource("disk");
+      }
     });
+    if (isDirty) {
+      fetchCanvasGitShow(path).then((r) => {
+        if (cancelled) return;
+        if (!r) return;
+        // Use HEAD as the diff baseline regardless of `found` — when
+        // not found (untracked / brand-new file Jarvis just added),
+        // r.content is "" and the diff renders the whole file as
+        // additions, which is exactly correct.
+        setOriginalContent(r.content);
+        setDiffSource("head");
+      });
+    }
     return () => {
       cancelled = true;
     };
     // Reload on path change or explicit reload trigger.
-  }, [path, reloadKey, isActive, originalContent]);
+  }, [path, reloadKey, isActive, diskBaseline, isDirty]);
 
+  // "Modified" means the Monaco buffer diverges from what's on disk
+  // (i.e. the boss made unsaved edits). It is NOT the same as
+  // dirty-from-Jarvis: a file Jarvis edited is on-disk-current but the
+  // boss hasn't typed anything → save button stays disabled.
   const isModified = useMemo(() => {
-    if (originalContent === null || currentContent === null) return false;
-    return currentContent !== originalContent;
-  }, [originalContent, currentContent]);
+    if (diskBaseline === null || currentContent === null) return false;
+    return currentContent !== diskBaseline;
+  }, [diskBaseline, currentContent]);
 
   const onSave = useCallback(async () => {
     if (currentContent === null) return;
@@ -153,10 +193,13 @@ export function CanvasFileTab({
       const approved = contracts.find((c) => c.id === saveState.contractId);
       if (approved) {
         setSaveState({ status: "saved" });
-        // After approval, the backend will have written the file. Refresh
-        // the buffer's "original" so subsequent edits diff against the
-        // newly-saved version, not the pre-save version.
-        setOriginalContent(currentContent);
+        // After approval, the backend has written the file. Reset
+        // diskBaseline so isModified clears (Save button disables),
+        // and refresh originalContent unless the diff editor is
+        // pinned to HEAD (in which case Jarvis's still-uncommitted
+        // changes should keep showing as additions on top).
+        setDiskBaseline(currentContent);
+        if (diffSource !== "head") setOriginalContent(currentContent);
       } else {
         // Also poll 'denied' so a rejection flips the badge.
         const denied = await fetchTrustContracts("denied");
@@ -169,7 +212,7 @@ export function CanvasFileTab({
       cancelled = true;
       clearInterval(id);
     };
-  }, [saveState.status, saveState.contractId, currentContent]);
+  }, [saveState.status, saveState.contractId, currentContent, diffSource]);
 
   // Keyboard: Cmd/Ctrl+S to save. Active only when the tab is in focus.
   useEffect(() => {
@@ -308,8 +351,28 @@ export function CanvasFileTab({
       <div className="flex h-7 shrink-0 items-center gap-2 border-t bg-muted/20 px-2 text-[10px] text-muted-foreground dark:bg-zinc-900/40">
         <span className="font-mono uppercase">{language}</span>
         <span className="text-muted-foreground/40">·</span>
+        {mode === "diff" && (
+          <>
+            <span
+              className="font-mono"
+              title={
+                diffSource === "head"
+                  ? "Diff is HEAD (left) → working tree (right) — Jarvis's uncommitted edits"
+                  : "Diff is on-disk (left) → your unsaved edits (right)"
+              }
+            >
+              vs {diffSource === "head" ? "HEAD" : "disk"}
+            </span>
+            <span className="text-muted-foreground/40">·</span>
+          </>
+        )}
         {saveState.status === "idle" && isModified && <span className="text-warning">Modified</span>}
-        {saveState.status === "idle" && !isModified && <span>Clean</span>}
+        {saveState.status === "idle" && !isModified && isDirty && diffSource === "head" && (
+          <span className="text-warning" title="Jarvis edited this file this session — not yet committed">
+            Jarvis-edited
+          </span>
+        )}
+        {saveState.status === "idle" && !isModified && !(isDirty && diffSource === "head") && <span>Clean</span>}
         {saveState.status === "saving" && (
           <span className="flex items-center gap-1">
             <Loader2 className="size-3 animate-spin" /> Saving…
