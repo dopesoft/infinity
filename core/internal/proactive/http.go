@@ -41,6 +41,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/heartbeat/findings", a.handleHeartbeatFindings)
 	mux.HandleFunc("/api/heartbeat/findings/", a.handleHeartbeatFindingScoped)
 	mux.HandleFunc("/api/curiosity/questions/", a.handleCuriosityScoped)
+	mux.HandleFunc("/api/curiosity/bulk-dismiss", a.handleCuriosityBulkDismiss)
 	mux.HandleFunc("/api/trust-contracts", a.handleTrustList)
 	mux.HandleFunc("/api/trust-contracts/", a.handleTrustScoped)
 	mux.HandleFunc("/api/intent/recent", a.handleIntentRecent)
@@ -128,11 +129,11 @@ func (a *API) handleHeartbeatFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
 	q := `
-		SELECT f.id::text, f.heartbeat_id::text,
+		SELECT f.id::text, COALESCE(f.heartbeat_id::text, ''),
 		       COALESCE(cq.id::text, ''),
-		       h.started_at, f.kind, f.title, COALESCE(f.detail, ''), f.pre_approved
+		       COALESCE(h.started_at, f.created_at), f.kind, f.title, COALESCE(f.detail, ''), f.pre_approved
 		  FROM mem_heartbeat_findings f
-		  JOIN mem_heartbeats h ON h.id = f.heartbeat_id
+		  LEFT JOIN mem_heartbeats h ON h.id = f.heartbeat_id
 		  LEFT JOIN mem_curiosity_questions cq
 		    ON f.kind = 'curiosity'
 		   AND cq.status = 'open'
@@ -193,14 +194,18 @@ func (a *API) handleHeartbeatFindingScoped(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	// Pull the (kind, title) for this id so we can dismiss every
-	// duplicate that the feed's DISTINCT ON might otherwise keep
-	// rendering. Without this, dismissing one row of a count-varying
-	// finding stream still leaves the older copies visible.
-	var kind, title string
+	// Pull (kind, title, source_tag) for this id so dismiss can:
+	//  - close every row sharing this kind+title (legacy duplicate
+	//    cleanup for rows from before migration 040)
+	//  - cool the entire source_tag for 24h so no detector re-emits
+	//    the same topic in that window (CoolSourceTag)
+	//  - feed the LearningHub so repeated dismissals of the same
+	//    pattern_key crystallize into procedural memory (Opt 1)
+	var kind, title, sourceTag string
 	if err := a.pool.QueryRow(r.Context(), `
-		SELECT kind, title FROM mem_heartbeat_findings WHERE id = $1::uuid
-	`, id).Scan(&kind, &title); err != nil {
+		SELECT kind, title, COALESCE(source_tag,'')
+		  FROM mem_heartbeat_findings WHERE id = $1::uuid
+	`, id).Scan(&kind, &title, &sourceTag); err != nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -209,6 +214,10 @@ func (a *API) handleHeartbeatFindingScoped(w http.ResponseWriter, r *http.Reques
 		   SET status = 'dismissed', resolved_at = NOW()
 		 WHERE kind = $1 AND title = $2 AND status = 'open'
 	`, kind, title)
+	CoolSourceTag(r.Context(), a.pool, "mem_heartbeat_findings", sourceTag)
+	if Hub != nil {
+		Hub.RecordDismissal(r.Context(), sourceTag, title)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -255,7 +264,107 @@ func (a *API) handleCuriosityScoped(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// When the boss dismisses (or approves) a question, cool the whole
+	// source_tag for 24h so no detector re-emits the same topic during
+	// that window. The cooldown precheck in UpsertQuestion enforces
+	// silence regardless of which detector tries next. Additionally,
+	// dismissals feed the LearningHub so repeated dismissals of the
+	// same pattern_key promote into procedural memory (Opt 1).
+	if body.Decision == "dismissed" || body.Decision == "approved" {
+		var tag, qtitle string
+		_ = a.pool.QueryRow(r.Context(), `
+			SELECT COALESCE(source_tag,''), COALESCE(question,'')
+			  FROM mem_curiosity_questions WHERE id = $1::uuid
+		`, parts[0]).Scan(&tag, &qtitle)
+		CoolSourceTag(r.Context(), a.pool, "mem_curiosity_questions", tag)
+		if body.Decision == "dismissed" && Hub != nil {
+			Hub.RecordDismissal(r.Context(), tag, qtitle)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": body.Decision})
+}
+
+// handleCuriosityBulkDismiss processes the dashboard's "Clear all"
+// affordance. Accepts a JSON body { "ids": ["...", "..."] } and
+// dismisses each, cooling every source_tag involved. Single endpoint
+// so the Studio side can send one request instead of fanning out.
+//
+// Idempotent: ids that don't exist or are already dismissed are
+// skipped silently. Returns { dismissed: N, cooled_tags: M }.
+func (a *API) handleCuriosityBulkDismiss(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.pool == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"dismissed": 0})
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	if len(body.IDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"dismissed": 0})
+		return
+	}
+	// Pull source_tags + question titles before dismissing so we can
+	// cool each AND feed the LearningHub.
+	rows, err := a.pool.Query(r.Context(), `
+		SELECT id::text, COALESCE(source_tag,''), COALESCE(question,'')
+		  FROM mem_curiosity_questions
+		 WHERE id = ANY($1::uuid[]) AND status = 'open'
+	`, body.IDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type pair struct{ id, tag, title string }
+	var batch []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.id, &p.tag, &p.title); err == nil {
+			batch = append(batch, p)
+		}
+	}
+	rows.Close()
+	if len(batch) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"dismissed": 0})
+		return
+	}
+	ids := make([]string, 0, len(batch))
+	tagSet := map[string]struct{}{}
+	for _, p := range batch {
+		ids = append(ids, p.id)
+		if p.tag != "" {
+			tagSet[p.tag] = struct{}{}
+		}
+	}
+	_, _ = a.pool.Exec(r.Context(), `
+		UPDATE mem_curiosity_questions
+		   SET status = 'dismissed', resolved_at = NOW()
+		 WHERE id = ANY($1::uuid[])
+	`, ids)
+	for tag := range tagSet {
+		CoolSourceTag(r.Context(), a.pool, "mem_curiosity_questions", tag)
+	}
+	// Feed every dismissal to the LearningHub. A bulk-dismiss of 8
+	// rows sharing a pattern_key is the STRONGEST learning signal we
+	// get from the boss - the per-pattern count crosses the promotion
+	// threshold in a single request and a procedural memory lands
+	// immediately. Future detector emissions in that pattern_key are
+	// suppressed by the IsPatternSuppressed gate.
+	if Hub != nil {
+		for _, p := range batch {
+			Hub.RecordDismissal(r.Context(), p.tag, p.title)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"dismissed":   len(ids),
+		"cooled_tags": len(tagSet),
+	})
 }
 
 func (a *API) handleHeartbeatRun(w http.ResponseWriter, r *http.Request) {

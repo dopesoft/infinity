@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,8 +13,8 @@ import (
 
 	"github.com/dopesoft/infinity/core/config"
 	"github.com/dopesoft/infinity/core/internal/agent"
-	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
@@ -28,6 +29,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/proposals"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
@@ -38,6 +40,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/triage"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/dopesoft/infinity/core/internal/workflow"
@@ -77,17 +80,17 @@ func serveCmd() *cobra.Command {
 
 			// Memory + hooks + tools wiring (best-effort).
 			var (
-				pool                  *pgxpool.Pool
-				store                 *memory.Store
-				searcher              *memory.Searcher
-				compressor            *memory.Compressor
-				procedural            *memory.ProceduralStore
-				pipeline              *hooks.Pipeline
-				embedder              embed.Embedder
-				llmRegistry           *llm.Registry
-				activeBridgeRouter    *bridge.Router
-				activeBridgePrefs     tools.PreferenceFetcher
-				notifySkillPromoted   func(name, description string)
+				pool                *pgxpool.Pool
+				store               *memory.Store
+				searcher            *memory.Searcher
+				compressor          *memory.Compressor
+				procedural          *memory.ProceduralStore
+				pipeline            *hooks.Pipeline
+				embedder            embed.Embedder
+				llmRegistry         *llm.Registry
+				activeBridgeRouter  *bridge.Router
+				activeBridgePrefs   tools.PreferenceFetcher
+				notifySkillPromoted func(name, description string)
 			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -103,6 +106,43 @@ func serveCmd() *cobra.Command {
 					searcher = memory.NewSearcher(p, embedder)
 					procedural = memory.NewProceduralStore(p, embedder)
 					searcher.AttachProcedural(procedural)
+
+					// Learning hub - turns dashboard interactions into
+					// procedural memories. When the boss bulk-dismisses
+					// N+ questions in the same pattern_key, a row in
+					// mem_memories tier='procedural' lands with
+					// "don't emit X-class without a fundamentally new
+					// signal" content. Detectors consult the hub via
+					// IsPatternSuppressed before emitting; the agent's
+					// system prompt also surfaces the memory via RRF so
+					// reasoning naturally avoids the topic. Single
+					// package-level hub so the proactive package's emit
+					// + dismiss endpoints don't have to be re-wired.
+					proactive.SetHub(proactive.NewLearningHub(p, procedural, slog.Default()))
+
+					// Defense-in-depth: also sweep stale questions/findings
+					// during nightly consolidation. Heartbeat already does
+					// this every tick (minutes); this catches the
+					// degenerate case where heartbeat is paused for some
+					// reason. Single source of cleanup truth.
+					proactive.RegisterAsConsolidateHook(memory.RegisterConsolidateHook, slog.Default())
+
+					// Opt 7: every UpsertCandidate writes a mem_memories
+					// twin (tier='working') for the draft body. Embedded,
+					// auto-linked via A-MEM associative edges. Agent
+					// reasoning can RRF-recall "I have a pending refinement
+					// to gmail_triage that adds retries" mid-turn instead
+					// of forgetting drafts exist between sessions.
+					proposals.SetDraftMemoryWriter(memory.NewSkillDraftMemoryWriter(p, embedder, slog.Default()))
+
+					// Opt 3: when skill_optimize produces a merge with
+					// flagged conflicts, hand (existing | proposed |
+					// merged) to a Haiku critic for an empirical pick
+					// instead of blindly trusting the merge. Same
+					// Anthropic provider the merge itself uses.
+					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
+						proposals.SetMergeEvaluator(proposals.NewHaikuMergeEvaluator(a, slog.Default()))
+					}
 					// runs.SetGlobal arms the server-tracked progress
 					// substrate (mem_runs). Every long action across the
 					// codebase resolves runs.Track via this global; if
@@ -163,7 +203,17 @@ func serveCmd() *cobra.Command {
 					// self-improve-from-finding skill can diagnose from
 					// real evidence, not summaries.
 					tools.RegisterTraceTools(registry, p)
-					tools.RegisterSkillTools(registry, p)
+					// Pass the Haiku drafter so skill_optimize can MERGE
+					// the new body into any existing open candidate for
+					// the same parent_skill (one active draft per skill,
+					// per migration 039). nil-safe: without an Anthropic
+					// provider, skill_optimize still upserts but the
+					// merge degrades to "latest body wins."
+					var skillDrafter tools.SkillToolsDrafter
+					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
+						skillDrafter = a
+					}
+					tools.RegisterSkillTools(registry, p, skillDrafter)
 					tools.RegisterDashboardTools(registry, p)
 					// Curiosity questions tools (question_list / question_decide).
 					// The "Questions" card on the dashboard is backed by
@@ -615,7 +665,17 @@ func serveCmd() *cobra.Command {
 						// Fix this tab with an Approve-and-fix path. Dedupe is
 						// the schema-level unique index on (question) WHERE
 						// status='open' so re-runs across ticks are idempotent.
-						proactive.HealingChecklist(pool),
+						proactive.HealingChecklist(pool, func() bool {
+							// Mac-bridge probe: when the boss is on cloud and the
+							// Mac is asleep, every claude_code__* tool call fails.
+							// The healer uses this to skip those failures so the
+							// dashboard doesn't fill up with "fs_read failed N
+							// times" curiosity questions for expected outages.
+							if activeBridgeRouter == nil {
+								return false
+							}
+							return activeBridgeRouter.MacBridgeHealthy()
+						}),
 						// Skill self-authoring: detect repeated multi-step
 						// recipes the agent runs but hasn't crystallized into a
 						// skill, and detect divergent (successful) paths the
@@ -660,7 +720,21 @@ func serveCmd() *cobra.Command {
 			var connectorPoller *connectors.Poller
 			if pool != nil && composioExec != nil {
 				connectorPoller = connectors.NewPoller(pool, composioExec, pipeline)
-				fmt.Println("  connector poller: ready (composio tools.execute)")
+				// Wire the followup triager so newly-polled emails get
+				// metadata.intent / mode / classification chips populated
+				// asynchronously - same Gmail cron, one extra Haiku call
+				// per inbound message. Anthropic-only for now (mirrors the
+				// IntentFlow detector + Haiku summarizer constraint); other
+				// providers degrade to no-classification, row still lands.
+				if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
+					connectorPoller.SetTriager(triage.New(triage.Config{
+						Provider: a,
+						Model:    os.Getenv("INFINITY_TRIAGE_MODEL"),
+					}))
+					fmt.Println("  connector poller: ready (composio tools.execute, +triage)")
+				} else {
+					fmt.Println("  connector poller: ready (composio tools.execute, no triage)")
+				}
 			}
 
 			// Cron scheduler + Sentinel manager. Both degrade gracefully when
@@ -680,7 +754,7 @@ func serveCmd() *cobra.Command {
 					// Active-model selection is the loop's job (see
 					// SetActiveModelFn above) - cron just hands the
 					// loop a session and prompt, no settings plumbing.
-					agentExec = cron.NewAgentExecutor(loop)
+					agentExec = cron.NewAgentExecutor(loop, pool)
 				}
 				var connectorExec cron.Executor
 				if connectorPoller != nil {
@@ -940,6 +1014,17 @@ func serveCmd() *cobra.Command {
 				})
 			}
 
+			// Memory maintenance ticker. Heartbeat + voyager autotrigger run
+			// constantly, each turn generating PreToolUse/PostToolUse rows. With no
+			// scheduled prune, mem_observations grows by ~500-1000/day. This runs
+			// the same ConsolidateNightly pass the CLI exposes - decay, hot-reset,
+			// auto-forget (including observation retention via pruneObservations).
+			// Fires 30s after boot to clean up any startup-time backlog, then
+			// every 6h. Override via INFINITY_CONSOLIDATE_INTERVAL.
+			if pool != nil {
+				go runMaintenanceTicker(ctx, pool)
+			}
+
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Start() }()
 
@@ -1144,6 +1229,55 @@ func (s skillInvoker) InvokeSkill(ctx context.Context, name string, args map[str
 	}
 	res, _, err := s.runner.Invoke(ctx, "", name, args, "sentinel")
 	return res.Stdout, err
+}
+
+// runMaintenanceTicker runs ConsolidateNightly on an interval so observation
+// pruning happens without depending on a manual `infinity consolidate` call or
+// an external cron. Failures log to stdout but never kill the server.
+func runMaintenanceTicker(ctx context.Context, pool *pgxpool.Pool) {
+	interval := 6 * time.Hour
+	if v := strings.TrimSpace(os.Getenv("INFINITY_CONSOLIDATE_INTERVAL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			interval = d
+		}
+	}
+	infoLog := log.New(os.Stdout, "", log.LstdFlags)
+
+	runOnce := func() {
+		runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		report, err := memory.ConsolidateNightly(runCtx, pool)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "maintenance: consolidate: %v\n", err)
+			return
+		}
+		infoLog.Printf("maintenance: consolidate decayed=%d hot_reset=%d clusters=%d contradictions=%d assoc_pruned=%d weak_purged=%d procedural=%d obs_trace=%d obs_convo=%d ttl=%d low_value=%d",
+			report.Decayed, report.HotReset, report.ClustersFound,
+			report.ContradictionsFound, report.AssociativePruned,
+			report.WeakAssocPurged, report.ProceduralReweighted,
+			report.Forget.ObsTraceTrimmed, report.Forget.ObsConversationTrimmed,
+			report.Forget.TTLExpired, report.Forget.LowValue,
+		)
+	}
+
+	// First pass shortly after boot so a fresh deploy sweeps any backlog.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+	runOnce()
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			runOnce()
+		}
+	}
 }
 
 // heartbeatInterval reads $INFINITY_HEARTBEAT_INTERVAL (Go duration form,

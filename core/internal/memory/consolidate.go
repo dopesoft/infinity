@@ -7,6 +7,27 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ExtraConsolidateHook is the open seam for other packages to register
+// work that should run as part of the sleep-time pass. The proactive
+// package's SweepStaleness registers here so question/finding cleanup
+// runs even if the heartbeat is paused. Each hook is called with the
+// pool inside ConsolidateNightly's overall context.
+//
+// Registering happens at boot; we don't lock the slice because writes
+// happen exactly once during serve.go init and reads happen during
+// scheduled consolidation.
+var ExtraConsolidateHooks []func(ctx context.Context, pool *pgxpool.Pool)
+
+// RegisterConsolidateHook adds a hook to be run as the LAST stage of
+// every ConsolidateNightly pass. Safe to call from any package's init
+// or serve.go boot. nil hooks are skipped.
+func RegisterConsolidateHook(fn func(ctx context.Context, pool *pgxpool.Pool)) {
+	if fn == nil {
+		return
+	}
+	ExtraConsolidateHooks = append(ExtraConsolidateHooks, fn)
+}
+
 // ConsolidateReport summarizes what a sleep-time pass did. Each field is a
 // count of rows touched by that operation - handy for observability + the
 // Studio Memory tab's "last consolidation" line.
@@ -190,5 +211,13 @@ func ConsolidateNightly(ctx context.Context, pool *pgxpool.Pool) (ConsolidateRep
 		return report, fmt.Errorf("auto-forget: %w", err)
 	}
 	report.Forget = freport
+
+	// 9. Extra hooks - proactive package registers SweepStaleness here
+	// so question/finding cleanup also runs as part of the nightly
+	// pass (defense in depth: if the heartbeat is paused, this still
+	// keeps the dashboard tidy).
+	for _, hook := range ExtraConsolidateHooks {
+		hook(ctx, pool)
+	}
 	return report, nil
 }

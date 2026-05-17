@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/hooks"
+	"github.com/dopesoft/infinity/core/internal/triage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -76,6 +77,7 @@ type Poller struct {
 	pool     *pgxpool.Pool
 	exec     *ExecuteClient
 	pipeline *hooks.Pipeline
+	triager  *triage.Triager
 	logger   *slog.Logger
 }
 
@@ -86,6 +88,19 @@ func NewPoller(pool *pgxpool.Pool, exec *ExecuteClient, pipeline *hooks.Pipeline
 		pipeline: pipeline,
 		logger:   slog.Default().With("component", "connector_poller"),
 	}
+}
+
+// SetTriager wires in the optional follow-up classifier. When non-nil,
+// every newly-inserted followup row gets classified asynchronously and
+// its metadata.intent / mode / classification chips fill in within a
+// few seconds. Nil triager (no LLM provider) skips classification - row
+// still lands on the dashboard, chips just don't appear. Safe to call
+// after NewPoller; the poller stores the pointer and reads it per row.
+func (p *Poller) SetTriager(t *triage.Triager) {
+	if p == nil {
+		return
+	}
+	p.triager = t
 }
 
 // PollResult is what a Poll call returns. Counts are populated even on
@@ -232,11 +247,67 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 		}
 		if tag.RowsAffected() > 0 {
 			written++
+			// Fire triage classification asynchronously. The row is
+			// already live on the dashboard with just the account
+			// chip; this fills in intent / mode / classification
+			// within a few seconds via realtime. Empty body? Skip -
+			// the classifier has nothing to work with and the chips
+			// stay absent rather than wrong.
+			if p.triager != nil && strings.TrimSpace(body)+strings.TrimSpace(preview)+strings.TrimSpace(subject) != "" {
+				go p.triageOne(source, remoteID, subject, fromName, firstNonEmpty(body, preview))
+			}
 		} else {
 			skipped++
 		}
 	}
 	return
+}
+
+// triageOne runs in its own goroutine; never blocks the poll. Uses a
+// background context with a generous timeout so the classifier can
+// finish even if the parent poll context cancels (the row is already
+// committed; we just want chips to populate when Haiku replies).
+func (p *Poller) triageOne(source, remoteID, subject, from, body string) {
+	if p == nil || p.triager == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dec := p.triager.Classify(ctx, subject, from, body)
+	if dec.Intent == "" && dec.Mode == "" && dec.Classification == "" {
+		return
+	}
+	patch := map[string]any{}
+	if dec.Intent != "" {
+		patch["intent"] = dec.Intent
+	}
+	if dec.Mode != "" {
+		patch["mode"] = dec.Mode
+	}
+	if dec.Classification != "" {
+		patch["classification"] = dec.Classification
+	}
+	patchJSON, err := json.Marshal(patch)
+	if err != nil {
+		return
+	}
+	// Merge over existing metadata (`metadata || patch`) so any keys
+	// the agent or another recipe already attached survive. Targeted
+	// by (source, source_ref->>'remote_id') which is the row's unique
+	// key per the poller's own ON CONFLICT clause.
+	_, _ = p.pool.Exec(ctx, `
+		UPDATE mem_followups
+		   SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+		 WHERE source = $1
+		   AND source_ref->>'remote_id' = $2
+	`, source, remoteID, string(patchJSON))
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }
 
 // ── Calendar (Google Calendar and friends) ────────────────────────────────

@@ -121,11 +121,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// connCtx is the lifetime of this WebSocket. Every turn started from
-	// this connection inherits it so a disconnect (browser close, network
-	// flap, reconnect) tears down all in-flight turns from this socket.
-	// The turn loop itself observes ctx.Done() and emits a clean
-	// `complete{stop_reason: "interrupted"}` rather than a bare error.
+	// connCtx is only for connection-scoped side work (WAL extraction,
+	// intent classification). Agent turns deliberately do not inherit it;
+	// startTurn detaches them so browser backgrounding or a reconnect
+	// cannot cancel the response the boss is waiting on.
 	connCtx, cancelConn := context.WithCancel(r.Context())
 	defer cancelConn()
 

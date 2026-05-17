@@ -64,6 +64,16 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 		return nil
 	}
 
+	// Skip persisting events whose only purpose is to fan out to other
+	// listeners (predict recorder, voyager session-end, etc). These rows
+	// either duplicate state already on mem_sessions/mem_turns or have no
+	// retrieval value, and at 30-min heartbeat × N tool calls per turn they
+	// dominate mem_observations row count. The pipeline still emits them,
+	// so non-capture hooks downstream are unaffected.
+	if !shouldCaptureObservation(ev.Name) {
+		return nil
+	}
+
 	raw := strings.TrimSpace(ev.Text)
 	if raw == "" {
 		raw = previewPayload(ev.Payload)
@@ -125,6 +135,20 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 	}
 
 	return nil
+}
+
+// shouldCaptureObservation filters out events that have no retrieval or audit
+// value beyond what mem_sessions / mem_turns / mem_trust_contracts already
+// carry. The pipeline still fires every event so subscribed hooks
+// (PredictionRecorder, Voyager extractor, IntentFlow) run as before; only
+// the row-write into mem_observations is suppressed.
+func shouldCaptureObservation(name EventName) bool {
+	switch name {
+	case SessionStart, SessionEnd, Stop, Notification, PreCompact,
+		SubagentStart, SubagentStop:
+		return false
+	}
+	return true
 }
 
 // shouldCompress filters out high-volume, low-value events to keep Haiku

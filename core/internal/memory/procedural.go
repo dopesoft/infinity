@@ -104,6 +104,74 @@ func (p *ProceduralStore) UpsertFromSkill(ctx context.Context, skillName, descri
 	return err
 }
 
+// UpsertDismissalProcedural writes (or refreshes) a procedural-memory
+// row that captures a "boss keeps dismissing X-class questions"
+// pattern. Title is keyed on the dismissal pattern so re-promotions
+// update in place. Returns the memory id - used by LearningHub to
+// back-reference into mem_dismissal_patterns.procedural_memory_id.
+//
+// Identical shape to UpsertFromSkill, just with a different title
+// namespace ("dismissal:" vs "skill:") so the procedural tier holds
+// both kinds without collision.
+func (p *ProceduralStore) UpsertDismissalProcedural(ctx context.Context, title, content string, importance int) (string, error) {
+	if p == nil || p.pool == nil {
+		return "", errors.New("procedural store: no pool")
+	}
+	if strings.TrimSpace(title) == "" {
+		return "", errors.New("procedural store: empty title")
+	}
+	if importance < 1 || importance > 10 {
+		importance = 7
+	}
+	emb, err := p.embedder.Embed(ctx, title+"\n"+content)
+	if err != nil {
+		emb = nil
+	}
+	var embArg any
+	if emb != nil {
+		embArg = pgvector.NewVector(emb)
+	}
+
+	var existingID string
+	err = p.pool.QueryRow(ctx, `
+		SELECT id::text FROM mem_memories
+		 WHERE tier = 'procedural' AND status = 'active' AND title = $1
+		 LIMIT 1
+	`, title).Scan(&existingID)
+	if err == nil && existingID != "" {
+		_, err = p.pool.Exec(ctx, `
+			UPDATE mem_memories
+			   SET content          = $2,
+			       importance       = $3,
+			       embedding        = $4,
+			       fts_doc          = to_tsvector('english', COALESCE($1, '') || ' ' || COALESCE($2, '')),
+			       strength         = 1.0,
+			       updated_at       = NOW(),
+			       last_accessed_at = NOW()
+			 WHERE id = $5::uuid
+		`, title, content, importance, embArg, existingID)
+		if err != nil {
+			return "", err
+		}
+		return existingID, nil
+	}
+
+	id := uuid.NewString()
+	_, err = p.pool.Exec(ctx, `
+		INSERT INTO mem_memories
+		  (id, title, content, tier, version, status, strength, importance, embedding, fts_doc,
+		   created_at, updated_at, last_accessed_at)
+		VALUES
+		  ($1::uuid, $2, $3, 'procedural', 1, 'active', 1.0, $4, $5,
+		   to_tsvector('english', COALESCE($2, '') || ' ' || COALESCE($3, '')),
+		   NOW(), NOW(), NOW())
+	`, id, title, content, importance, embArg)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // MarkSkillArchived flips an active procedural memory for a skill to
 // archived. Called by the skills.Decide path when a skill is rejected or
 // retired so the agent stops pulling its procedural row.

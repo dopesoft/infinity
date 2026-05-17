@@ -3,6 +3,7 @@ package proactive
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -14,13 +15,13 @@ import (
 // goroutine started in cmd/infinity/serve.go.
 //
 // The checklist (lifted from Hal):
-//   • Proactive tracker: any overdue behaviours?
-//   • Pattern check: any repeated user requests to automate?
-//   • Outcome check: decisions older than 7 days needing follow-up?
-//   • Security: any error / injection signal in recent logs?
-//   • Self-healing: errors in the run log → diagnose
-//   • Memory: context %% - trigger danger zone if >60%
-//   • Surprise: what could I build right now that would delight my human?
+//   - Proactive tracker: any overdue behaviours?
+//   - Pattern check: any repeated user requests to automate?
+//   - Outcome check: decisions older than 7 days needing follow-up?
+//   - Security: any error / injection signal in recent logs?
+//   - Self-healing: errors in the run log → diagnose
+//   - Memory: context %% - trigger danger zone if >60%
+//   - Surprise: what could I build right now that would delight my human?
 //
 // Initial cut ships a *substrate*: the ticker, the persistence, and a hookable
 // runner that calls a user-supplied Checklist. A future pass plugs in the curriculum
@@ -164,6 +165,13 @@ func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	// Staleness sweep BEFORE the detectors run: any stale 'open' rows
+	// flip to 'dismissed' per the tiered TTL policy so the dashboard
+	// self-cleans on every tick. Doing this first means freshly-emitted
+	// findings can never get caught in the same sweep that's clearing
+	// out stale stuff. See staleness.go for the TTL table.
+	SweepStaleness(cctx, h.pool, slog.Default())
+
 	findings, err := h.checklist(cctx, h)
 	end := h.clock()
 	dur := end.Sub(start)
@@ -182,23 +190,20 @@ func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
 			 WHERE id = $1::uuid
 		`, hbID, end, dur.Milliseconds(), len(findings), summary, status)
 		for _, f := range findings {
-			// Auto-supersede any earlier open finding with the same
-			// source_tag - that's the count-varying case
-			// ("4 accounts" -> "2 accounts" finding pair). Schema's
-			// migration 034 added the status column; older rows that
-			// were backfilled to 'resolved' aren't touched.
-			if f.SourceTag != "" {
-				_, _ = h.pool.Exec(ctx, `
-					UPDATE mem_heartbeat_findings
-					   SET status = 'resolved', resolved_at = NOW()
-					 WHERE source_tag = $1 AND status = 'open'
-				`, f.SourceTag)
-			}
-			_, _ = h.pool.Exec(ctx, `
-				INSERT INTO mem_heartbeat_findings
-				  (heartbeat_id, kind, title, detail, pre_approved, source_tag)
-				VALUES ($1::uuid, $2, $3, $4, $5, $6)
-			`, hbID, f.Kind, f.Title, f.Detail, f.PreApproved, f.SourceTag)
+			// Compound merge via UpsertFinding: same source_tag updates
+			// the existing open row in place (occurrences_count++,
+			// evidence_log gets the latest sample, detail refreshes).
+			// No more "4 accounts → 2 accounts" double-row pattern.
+			_, _, _, _ = UpsertFinding(ctx, h.pool, slog.Default(), FindingDraft{
+				Kind:        f.Kind,
+				Source:      f.Source,
+				SourceTag:   f.SourceTag,
+				Title:       f.Title,
+				Detail:      f.Detail,
+				Sample:      f.Detail,
+				HeartbeatID: hbID,
+				PreApproved: f.PreApproved,
+			})
 			if cb := h.callback(); cb != nil {
 				cb(ctx, f)
 			}

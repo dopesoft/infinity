@@ -3,6 +3,7 @@ package proactive
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -41,17 +42,31 @@ const cronErrorPrefix = "error"
 const repeatedErrorThreshold = 3
 const repeatedErrorWindow = "24 hours"
 
+// MacBridgeProbe is the optional callback the healer uses to find out
+// whether the Mac bridge is currently reachable. When the probe is
+// non-nil and returns false, scanRepeatedToolErrors skips claude_code__*
+// failures and auto-resolves any open questions for them - those
+// failures are EXPECTED when the boss is on cloud, and re-emitting
+// "fs_read failed N times" curiosity questions every heartbeat tick is
+// pure noise. Nil probe disables the guard (same behavior as before
+// migration 040).
+type MacBridgeProbe func() bool
+
 // HealingChecklist returns a Checklist function that runs both
 // scanners and emits Findings for any newly-detected problem. Compose
 // with DefaultChecklist + CuriosityChecklist via ComposeChecklists.
-func HealingChecklist(pool *pgxpool.Pool) Checklist {
+//
+// macBridgeHealthy is an optional callback used to short-circuit the
+// repeated-tool-error scanner when the Mac bridge is offline. Pass
+// `nil` to disable the guard (legacy behavior).
+func HealingChecklist(pool *pgxpool.Pool, macBridgeHealthy MacBridgeProbe) Checklist {
 	return func(ctx context.Context, _ *Heartbeat) ([]Finding, error) {
 		if pool == nil {
 			return nil, nil
 		}
 		var findings []Finding
 		findings = append(findings, scanCronFailures(ctx, pool)...)
-		findings = append(findings, scanRepeatedToolErrors(ctx, pool)...)
+		findings = append(findings, scanRepeatedToolErrors(ctx, pool, macBridgeHealthy)...)
 		return findings, nil
 	}
 }
@@ -109,16 +124,21 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 				lastRun.UTC().Format(time.RFC3339), rationale)
 		}
 		tag := "cron_failure:" + id
-		// Supersede any older open question for the same cron whose
-		// title varies (e.g. error message changed) before inserting.
-		ResolveQuestionsBySourceTag(ctx, pool, tag)
-		inserted := insertHealingQuestionWithTag(ctx, pool,
-			question, rationale, "cron_failure", tag, []string{id}, 9)
-		if !inserted {
-			// Already-open question for this cron with identical text.
-			// Skip the Finding so heartbeat noise stays low.
-			continue
-		}
+		// Compound merge via UpsertQuestion: same source_tag updates the
+		// existing open row in place (occurrences_count++, evidence_log
+		// gets the latest sample, rationale refreshes, importance
+		// escalates if changed). No more "title varied so a new row
+		// appeared" duplication.
+		_, _, _, _ = UpsertQuestion(ctx, pool, slog.Default(), QuestionDraft{
+			Question:   question,
+			Rationale:  rationale,
+			SourceKind: "cron_failure",
+			SourceTag:  tag,
+			SourceIDs:  []string{id},
+			Importance: 9,
+			Sample:     rationale,
+			Expected:   fmt.Sprintf("cron %q passes on next run after intervention", name),
+		})
 		out = append(out, Finding{
 			Kind:      "self_heal",
 			Source:    "cron_failure",
@@ -130,7 +150,29 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 	return out
 }
 
-func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
+func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHealthy MacBridgeProbe) []Finding {
+	// Bridge-offline guard: when the Mac bridge is down, every
+	// claude_code__* tool fails. Those failures don't represent the
+	// agent doing something wrong - they represent the boss being on
+	// cloud while the Mac is asleep. Emitting "fs_read failed N times"
+	// curiosity questions every tick is just spam. So when the probe
+	// reports false, (a) we resolve any open repeated_tool_error rows
+	// for claude_code__* tools with reason 'bridge_offline', and (b) we
+	// filter those failures out of the freshness query below so no
+	// new rows are inserted for them.
+	macUp := macBridgeHealthy == nil || macBridgeHealthy()
+	if pool != nil && !macUp {
+		_, _ = pool.Exec(ctx, `
+			UPDATE mem_curiosity_questions
+			   SET status = 'dismissed',
+			       resolved_at = NOW(),
+			       resolved_reason = 'bridge_offline',
+			       auto_dismissed_at = NOW()
+			 WHERE status = 'open'
+			   AND source_tag LIKE 'repeated_tool_error:claude_code__%'
+		`)
+	}
+
 	// First sweep: any tool whose old 'repeated_tool_error:<tool>' open
 	// question exists but has zero recent failures in the window is
 	// cleared. Keeps the dashboard honest when a tool stabilizes.
@@ -150,10 +192,19 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			   )
 		`)
 	}
+
+	// Build the freshness query. When the bridge is offline, exclude
+	// claude_code__* tools - those failures are expected noise.
+	toolExclusion := ""
+	if !macUp {
+		toolExclusion = "AND COALESCE(payload->>'name','') NOT LIKE 'claude_code__%'"
+	}
 	// Group PostToolUseFailure observations by tool name (extracted from
 	// the JSON payload). A tool that fails THRESHOLD+ times in WINDOW
 	// gets one curiosity question; the sample error is the most recent
-	// occurrence so the rationale carries something actionable.
+	// occurrence so the rationale carries something actionable. When
+	// the Mac bridge is offline, claude_code__* failures are excluded
+	// at the query level via toolExclusion.
 	rows, err := pool.Query(ctx, `
 		WITH failures AS (
 			SELECT
@@ -164,6 +215,7 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			 WHERE hook_name = 'PostToolUseFailure'
 			   AND created_at > NOW() - INTERVAL '`+repeatedErrorWindow+`'
 			   AND COALESCE(payload->>'name','') <> ''
+			   `+toolExclusion+`
 		),
 		grouped AS (
 			SELECT
@@ -194,18 +246,28 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
 		if err := rows.Scan(&tool, &hits, &lastSeen, &sample); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Tool %q has failed %d times in the last 24h. Fix it?", tool, hits)
+		// Canonical question phrasing - stays constant across merges.
+		// Detail/occurrences_count carry the latest count via the
+		// evidence_log, so we no longer have to bake "N times" into the
+		// title (which would create count-varying duplicates).
+		question := fmt.Sprintf("Tool %q keeps failing. Fix it?", tool)
 		rationale := fmt.Sprintf("Most recent failure %s\n\n%s",
 			lastSeen.UTC().Format(time.RFC3339), truncate(sample, 600))
 		tag := "repeated_tool_error:" + tool
-		// Supersede count-varying older questions for the same tool
-		// ("3 times" -> "6 times") before inserting the fresh one.
-		ResolveQuestionsBySourceTag(ctx, pool, tag)
-		inserted := insertHealingQuestionWithTag(ctx, pool,
-			question, rationale, "repeated_tool_error", tag, nil, 8)
-		if !inserted {
-			continue
-		}
+		_, _, _, _ = UpsertQuestion(ctx, pool, slog.Default(), QuestionDraft{
+			Question:   question,
+			Rationale:  rationale,
+			SourceKind: "repeated_tool_error",
+			SourceTag:  tag,
+			Importance: 8,
+			Sample:     fmt.Sprintf("hits=%d last=%s sample=%s", hits, lastSeen.UTC().Format(time.RFC3339), truncate(sample, 200)),
+			// Pre prediction: when the boss approves the fix-this
+			// affordance, the agent's intervention should clear this
+			// specific failure mode within ~5 turns. Post-resolution
+			// surprise scoring (when the agent reports its outcome)
+			// feeds Voyager curriculum if the fix didn't actually work.
+			Expected: fmt.Sprintf("tool=%q failures drop to zero within 5 turns after intervention", tool),
+		})
 		out = append(out, Finding{
 			Kind:      "self_heal",
 			Source:    "repeated_tool_error",

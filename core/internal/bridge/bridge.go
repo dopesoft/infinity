@@ -249,6 +249,21 @@ func NewRouter(mac, cloud Bridge) *Router {
 	}
 }
 
+// MacBridgeHealthy returns true when the Mac bridge is currently
+// reachable. Lightweight accessor over the cached Status - safe to
+// call from healers / detectors that want to filter out claude_code__*
+// failures while the bridge is offline (those failures are expected
+// when the boss is on cloud, and re-emitting "fs_read failed N times"
+// curiosity questions for them is just noise). Nil Router returns
+// false; nil mac bridge returns false.
+func (r *Router) MacBridgeHealthy() bool {
+	if r == nil || r.mac == nil {
+		return false
+	}
+	st := r.Refresh(context.Background())
+	return st.MacHealthy
+}
+
 // For returns the bridge that should serve a session given its
 // preference. Returns (bridge, why, error). Why is a short reason
 // string suitable for surfacing to the agent's system prompt.

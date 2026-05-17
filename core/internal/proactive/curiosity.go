@@ -3,6 +3,7 @@ package proactive
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -252,24 +253,31 @@ func shouldSuppressHighSurpriseQuestion(tool, expected, actual string) bool {
 	return false
 }
 
-// insertQuestion tries to write a row to mem_curiosity_questions. The unique
-// index on (question) WHERE status='open' makes this idempotent - duplicate
-// inserts no-op. Returns true when a new row was written.
+// insertQuestion tries to write a row to mem_curiosity_questions. Routes
+// through UpsertQuestion so duplicate topics merge into the existing
+// open draft (occurrences_count++, evidence_log gets a new entry,
+// importance escalates if needed) instead of generating fresh rows.
+//
+// The synthesized source_tag is "<kind>:<first source id>" - stable
+// enough that re-firing the same detector on the same memory pair
+// hits the same row. Detectors without source IDs fall back to a
+// kind-only tag, accepting that they'll all merge under one row if
+// the question text is genuinely the same.
 func (c *CuriosityScan) insertQuestion(ctx context.Context, question, rationale, kind string, sourceIDs []string, importance int) bool {
-	if strings.TrimSpace(question) == "" {
-		return false
+	tag := kind
+	if len(sourceIDs) > 0 {
+		tag = kind + ":" + sourceIDs[0]
 	}
-	tag, err := c.pool.Exec(ctx, `
-		INSERT INTO mem_curiosity_questions
-		  (question, rationale, source_kind, source_ids, importance, status)
-		VALUES ($1, $2, $3, $4::uuid[], $5, 'open')
-		ON CONFLICT DO NOTHING
-	`, question, rationale, kind, uuidArray(sourceIDs), importance)
-	if err != nil {
-		fmt.Printf("[curiosity] insert: %v\n", err)
-		return false
-	}
-	return tag.RowsAffected() > 0
+	_, isNew, _, _ := UpsertQuestion(ctx, c.pool, slog.Default(), QuestionDraft{
+		Question:   question,
+		Rationale:  rationale,
+		SourceKind: kind,
+		SourceTag:  tag,
+		SourceIDs:  sourceIDs,
+		Importance: importance,
+		Sample:     rationale,
+	})
+	return isNew
 }
 
 // ListOpen returns the open questions, newest first. Used by the heartbeat

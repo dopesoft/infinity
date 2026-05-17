@@ -5,11 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/dopesoft/infinity/core/internal/proposals"
 )
+
+// Drafter is the minimal LLM interface skill_optimize needs to run a
+// Haiku merge when more than one open candidate exists for the same
+// parent_skill. nil-safe - without a drafter, merges fall back to
+// "latest body wins, append reasoning to changes_log" (still no dupe
+// rows, just no LLM-flagged conflicts).
+type SkillToolsDrafter interface {
+	Draft(ctx context.Context, model, system, userPrompt string, maxTokens int64) (string, error)
+}
 
 // RegisterSkillTools wires the agent-callable skill-pipeline tools.
 //
@@ -22,12 +34,13 @@ import (
 //     edit suggestion, not a Pareto search result.)
 //
 // No-op when pool is nil. Skills don't need an embedder.
-func RegisterSkillTools(r *Registry, pool *pgxpool.Pool) {
+func RegisterSkillTools(r *Registry, pool *pgxpool.Pool, drafter SkillToolsDrafter) {
 	if r == nil || pool == nil {
 		return
 	}
 	r.Register(&skillProposeTool{pool: pool})
-	r.Register(&skillOptimizeTool{pool: pool})
+	r.Register(&skillOptimizeTool{pool: pool, drafter: drafter})
+	r.Register(&skillProposalGetTool{pool: pool})
 }
 
 // ── skill_propose ───────────────────────────────────────────────────────────
@@ -126,15 +139,21 @@ func (t *skillProposeTool) Execute(ctx context.Context, input map[string]any) (s
 // ── skill_optimize ──────────────────────────────────────────────────────────
 
 type skillOptimizeTool struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	drafter SkillToolsDrafter
 }
 
 func (t *skillOptimizeTool) Name() string { return "skill_optimize" }
 func (t *skillOptimizeTool) Description() string {
 	return "Suggest an update to an existing skill. Call when you've noticed " +
 		"that the current SKILL.md is missing a step, has stale info, or could be " +
-		"sharper based on this session. Drops a candidate tagged as parent_skill " +
-		"so the diff is reviewable in the Skills tab."
+		"sharper based on this session. There is ONE active draft per parent_skill: " +
+		"if a pending candidate already exists, your new body is MERGED into the " +
+		"existing draft (occurrences accumulate, conflicts surface as warnings). " +
+		"Before you call this for an existing skill, use `skill_proposal_get` to " +
+		"see what's already pending so you can produce a body that incorporates " +
+		"BOTH your new change AND the prior pending edits. Returns the proposal " +
+		"id, revision number, and any conflicts the merge flagged."
 }
 func (t *skillOptimizeTool) Schema() map[string]any {
 	return map[string]any{
@@ -172,25 +191,104 @@ func (t *skillOptimizeTool) Execute(ctx context.Context, input map[string]any) (
 		return "", errors.New("reasoning is required")
 	}
 
-	id := uuid.NewString()
-	_, err := t.pool.Exec(ctx, `
-		INSERT INTO mem_skill_proposals
-			(id, name, description, reasoning, skill_md, risk_level, status,
-			 parent_skill, created_at)
-		VALUES ($1, $2, $3, $4, $5, 'low', 'candidate', $6, NOW())
-	`, id, parent+"-update", "Updated SKILL.md for "+parent, reasoning, skillMD, parent)
+	// Route through UpsertCandidate so the new body MERGES into the
+	// existing open candidate (if any) instead of stacking another row.
+	// One active draft per parent_skill, enforced by migration 039's
+	// partial unique index. Conflicts the merge flags come back in the
+	// result and bubble up to the boss via the chat card.
+	res, err := proposals.UpsertCandidate(ctx, t.pool, t.drafter, slog.Default(), proposals.CandidateDraft{
+		Name:        parent + "-update",
+		ParentSkill: parent,
+		Description: "Updated SKILL.md for " + parent,
+		Reasoning:   reasoning,
+		SkillMD:     skillMD,
+		RiskLevel:   "low",
+		Source:      "agent",
+	})
 	if err != nil {
-		return "", fmt.Errorf("insert update proposal: %w", err)
+		return "", fmt.Errorf("upsert proposal: %w", err)
+	}
+
+	msg := fmt.Sprintf("Proposed update for skill %q (v%d of pending draft). The boss reviews + applies in the Skills tab.",
+		parent, res.Revision)
+	if !res.IsNew {
+		msg = fmt.Sprintf("Merged update into the pending draft for skill %q (now v%d, %d total changes pending).",
+			parent, res.Revision, res.Revision)
+	}
+	if len(res.Conflicts) > 0 {
+		msg += fmt.Sprintf(" %d conflict(s) flagged for boss review.", len(res.Conflicts))
 	}
 
 	out, _ := json.Marshal(map[string]any{
 		"status":       "proposed",
-		"id":           id,
+		"id":           res.ID,
 		"parent_skill": parent,
-		"message": fmt.Sprintf(
-			"Proposed update for skill %q. The boss reviews + applies in the Skills tab.",
-			parent,
-		),
+		"revision":     res.Revision,
+		"is_new":       res.IsNew,
+		"conflicts":    res.Conflicts,
+		"message":      msg,
 	})
 	return string(out), nil
+}
+
+// ── skill_proposal_get ──────────────────────────────────────────────────────
+
+// skillProposalGetTool returns the current open candidate (if any) for a
+// parent_skill. Read-only. The agent calls this BEFORE skill_optimize to
+// see what's already pending so the new body it produces can incorporate
+// both the new change AND the prior pending edits - that's how a single
+// draft accumulates instead of getting overwritten on every call.
+type skillProposalGetTool struct {
+	pool *pgxpool.Pool
+}
+
+func (t *skillProposalGetTool) Name() string   { return "skill_proposal_get" }
+func (t *skillProposalGetTool) ReadOnly() bool { return true }
+func (t *skillProposalGetTool) Description() string {
+	return "Return the currently-open candidate proposal for a parent_skill, if " +
+		"any. Use BEFORE calling skill_optimize on an existing skill so you can " +
+		"see the pending body + changes_log and produce a new body that " +
+		"incorporates both your new change AND the prior pending edits. Returns " +
+		"the proposal id, revision, current body, changes_log, and any " +
+		"already-detected conflicts. Returns null when no draft is pending."
+}
+func (t *skillProposalGetTool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"parent_skill": map[string]any{
+				"type":        "string",
+				"description": "Name of the existing skill to look up the pending draft for.",
+			},
+		},
+		"required": []string{"parent_skill"},
+	}
+}
+func (t *skillProposalGetTool) Execute(ctx context.Context, input map[string]any) (string, error) {
+	parent, _ := input["parent_skill"].(string)
+	parent = strings.TrimSpace(parent)
+	if parent == "" {
+		return "", errors.New("parent_skill is required")
+	}
+	cand, found, err := proposals.GetOpenCandidate(ctx, t.pool, parent)
+	if err != nil {
+		return "", fmt.Errorf("get open candidate: %w", err)
+	}
+	if !found {
+		b, _ := json.Marshal(map[string]any{"open_candidate": nil})
+		return string(b), nil
+	}
+	b, _ := json.Marshal(map[string]any{
+		"open_candidate": map[string]any{
+			"id":           cand.ID,
+			"name":         cand.Name,
+			"revision":     cand.Revision,
+			"description":  cand.Description,
+			"reasoning":    cand.Reasoning,
+			"risk_level":   cand.RiskLevel,
+			"skill_md":     cand.SkillMD,
+			"changes_log":  cand.ChangesLog,
+		},
+	})
+	return string(b), nil
 }

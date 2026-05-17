@@ -235,6 +235,67 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 	return nil
 }
 
+// AutoLinkMemory is the standalone auto-link entry point - callable by
+// any package that writes to mem_memories outside the compressor path
+// (skill drafts, dashboard surface items, etc). Writes 'associative'
+// edges to up to k=4 nearest neighbours with cosine sim >= 0.65. The
+// caller supplies the freshly-written memory's id + its embedding;
+// we don't re-embed.
+//
+// Best-effort: a nil pool / empty emb / no neighbours all return nil.
+// This is the same body autoLinkNeighbours uses; the method receiver
+// version stays for the compressor's hot path.
+func AutoLinkMemory(ctx context.Context, pool *pgxpool.Pool, memID string, emb []float32) error {
+	if pool == nil || memID == "" || len(emb) == 0 {
+		return nil
+	}
+	const (
+		k        = 4
+		simFloor = 0.65
+	)
+	rows, err := pool.Query(ctx, `
+		SELECT id::text, 1 - (embedding <=> $1) AS sim
+		  FROM mem_memories
+		 WHERE id::text <> $2
+		   AND status = 'active'
+		   AND embedding IS NOT NULL
+		 ORDER BY embedding <=> $1 ASC
+		 LIMIT $3
+	`, pgvector.NewVector(emb), memID, k)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type pair struct {
+		id  string
+		sim float64
+	}
+	var hits []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.id, &p.sim); err != nil {
+			return err
+		}
+		if p.sim < simFloor {
+			continue
+		}
+		hits = append(hits, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, h := range hits {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO mem_relations (source_id, target_id, relation_type, confidence)
+			VALUES ($1::uuid, $2::uuid, 'associative', $3)
+			ON CONFLICT DO NOTHING
+		`, memID, h.id, h.sim); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // autoLinkNeighbours writes mem_relations rows of type 'associative' from
 // the freshly-written memory to its k nearest neighbours in embedding space.
 // We bound k at 4 - A-MEM's paper used k=5 but our schema doesn't dedupe so

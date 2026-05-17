@@ -77,23 +77,27 @@ export function ActivityCard({
   const firstPast = sorted.findIndex((e) => !e.future);
 
   return (
-    <Section title="Activity" Icon={Activity} delay={0.45} action={{ label: "open heartbeat", href: "/heartbeat" }}>
-      <div className="overflow-hidden rounded-xl border bg-card">
-        <ol className="relative max-h-[420px] overflow-y-auto px-4 py-3 scroll-touch">
-          <span
-            aria-hidden
-            className="absolute bottom-3 left-[22px] top-3 w-px bg-border"
+    <Section
+      title="Activity"
+      Icon={Activity}
+      delay={0.45}
+      action={{ label: "open heartbeat", href: "/heartbeat" }}
+      noPad
+    >
+      <ol className="relative max-h-[420px] overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
+        <span
+          aria-hidden
+          className="absolute bottom-3 left-[14px] top-3 w-px bg-border sm:left-[18px]"
+        />
+        {sorted.map((e, i) => (
+          <Row
+            key={e.id}
+            e={e}
+            showDivider={i === firstPast && i !== 0}
+            onClick={() => onOpen({ kind: "activity", data: e })}
           />
-          {sorted.map((e, i) => (
-            <Row
-              key={e.id}
-              e={e}
-              showDivider={i === firstPast && i !== 0}
-              onClick={() => onOpen({ kind: "activity", data: e })}
-            />
-          ))}
-        </ol>
-      </div>
+        ))}
+      </ol>
     </Section>
   );
 }
@@ -111,7 +115,7 @@ function Row({
   return (
     <>
       {showDivider ? (
-        <li className="relative my-2 flex items-center gap-2 pl-7">
+        <li className="relative my-2 flex items-center gap-2 pl-5 sm:pl-7">
           <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             now
           </span>
@@ -124,11 +128,11 @@ function Row({
           onClick={onClick}
           whileHover={{ x: 2 }}
           transition={{ duration: 0.12 }}
-          className="flex w-full items-start gap-3 rounded-md py-2 pl-7 pr-2 text-left transition-colors hover:bg-accent/40"
+          className="flex w-full items-start gap-2 rounded-md py-2 pl-5 pr-1 text-left transition-colors hover:bg-accent/40 sm:pl-7 sm:pr-2"
         >
           <span
             className={cn(
-              "absolute left-[18px] top-3.5 size-2 rounded-full ring-4 ring-card",
+              "absolute left-[10px] top-3.5 size-2 rounded-full ring-4 ring-card sm:left-[14px]",
               DOT_CLS[meta.tone],
             )}
             aria-hidden
@@ -138,9 +142,6 @@ function Row({
               <span
                 // shrink-0 + whitespace-nowrap so "2m ago" / "5h ago"
                 // never fold onto two lines when the title is long.
-                // On mobile the activity column is narrow and without
-                // these the timestamp was wrapping ("2m\nago") which
-                // looked broken.
                 className="shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
                 suppressHydrationWarning
               >

@@ -273,35 +273,87 @@ export function useChat() {
     }
   }, []);
 
+  const reconcileFromCore = useCallback(
+    async (signal?: AbortSignal): Promise<boolean> => {
+      if (!sessionId) return false;
+      const rows = await fetchSessionMessages(sessionId, signal);
+      if (!rows || rows.length === 0) return false;
+
+      const serverFinishedTurn = rows[rows.length - 1]?.role === "assistant";
+      setMessages((prev) => {
+        const next = mergeServerRows(prev, rows);
+        if (!serverFinishedTurn) return next;
+        // Server already has a completed assistant turn at the tail.
+        // Drop trailing live-only bubbles whose final frames landed on a
+        // dead/suspended browser connection.
+        while (next.length > 0) {
+          const last = next[next.length - 1];
+          if (last.role === "thinking" && last.pending) {
+            next.pop();
+            continue;
+          }
+          if (last.role === "assistant" && last.pending && !last.error) {
+            next.pop();
+            continue;
+          }
+          break;
+        }
+        return next;
+      });
+
+      if (serverFinishedTurn) {
+        turnStartRef.current = null;
+        setIsStreaming(false);
+        clearWatchdog();
+      }
+      return serverFinishedTurn;
+    },
+    [sessionId, clearWatchdog],
+  );
+
+  const showWatchdogReconnectError = useCallback(() => {
+    const error = "Agent went silent. Reconnecting and checking for the final reply.";
+    setMessages((prev) => {
+      const next = closePendingThinking(prev);
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].role === "assistant" && next[i].pending) {
+          next[i] = { ...next[i], pending: false, error };
+          return next;
+        }
+      }
+      next.push({
+        id: makeId(),
+        role: "assistant",
+        text: "",
+        error,
+        createdAt: Date.now(),
+      });
+      return next;
+    });
+    turnStartRef.current = null;
+    setIsStreaming(false);
+    ws.reconnect();
+  }, [ws]);
+
   const armWatchdog = useCallback(() => {
     clearWatchdog();
     watchdogRef.current = setTimeout(() => {
       watchdogRef.current = null;
-      setMessages((prev) => {
-        const next = closePendingThinking(prev);
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].role === "assistant" && next[i].pending) {
-            next[i] = {
-              ...next[i],
-              pending: false,
-              error: "Agent went silent. Tap reconnect or try again.",
-            };
-            return next;
-          }
-        }
-        next.push({
-          id: makeId(),
-          role: "assistant",
-          text: "",
-          error: "Agent went silent. Tap reconnect or try again.",
-          createdAt: Date.now(),
-        });
-        return next;
-      });
-      turnStartRef.current = null;
-      setIsStreaming(false);
+      // Backgrounded PWAs routinely pause timers and WebSockets. Do not
+      // turn that lifecycle state into a visible chat failure; the
+      // foreground handler below will reconnect and pull the durable turn.
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+
+      void reconcileFromCore()
+        .then((serverFinishedTurn) => {
+          if (serverFinishedTurn) return;
+          showWatchdogReconnectError();
+        })
+        .catch(showWatchdogReconnectError);
     }, TURN_WATCHDOG_MS);
-  }, [clearWatchdog]);
+  }, [clearWatchdog, reconcileFromCore, showWatchdogReconnectError]);
 
   // Fire one `resume` turn for a freshly-seeded session so the agent
   // replies to the dashboard context Discuss-with-Jarvis injected (the
@@ -396,9 +448,33 @@ export function useChat() {
 
   useEffect(() => () => clearWatchdog(), [clearWatchdog]);
 
+  // Browser lifecycle rehydration. Some mobile/PWA resumes keep the
+  // WebSocket object in OPEN state even though the stream died while the
+  // app was backgrounded; in that case ws.status never changes and the
+  // reconnect-only effect below would not run. On every foreground signal,
+  // force a fresh socket and reconcile against Core's persisted transcript.
+  useEffect(() => {
+    if (!sessionId) return;
+    const onForeground = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      ws.reconnect();
+      void reconcileFromCore().catch(() => {
+        /* Core may still be waking; WS reconnect will retry independently. */
+      });
+    };
+    window.addEventListener("pageshow", onForeground);
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      window.removeEventListener("pageshow", onForeground);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+    };
+  }, [sessionId, ws, reconcileFromCore]);
+
   // WS-reconnect rehydration. iOS Safari (and any flaky network) can kill
   // the WebSocket mid-turn. The agent finishes the turn and writes to
-  // mem_messages, but the `complete` frame never reaches us - the UI ends
+  // mem_observations, but the `complete` frame never reaches us - the UI ends
   // up stuck on "thinking forever" until the user nudges the agent.
   //
   // On every connect transition we re-fetch the session's messages from
@@ -417,41 +493,13 @@ export function useChat() {
     // server-side independent of the WS lifecycle (see ws.go startTurn),
     // so a turn the boss kicked off before backgrounding the app on iOS
     // Safari may have completed while disconnected. The server's
-    // mem_messages row is the source of truth; reconcile against it.
+    // mem_observations row is the source of truth; reconcile against it.
     const ac = new AbortController();
-    void fetchSessionMessages(sessionId, ac.signal).then((rows) => {
-      if (!rows || rows.length === 0) return;
-      const serverFinishedTurn =
-        rows[rows.length - 1]?.role === "assistant";
-      setMessages((prev) => {
-        const next = mergeServerRows(prev, rows);
-        if (!serverFinishedTurn) return next;
-        // Server already has a completed assistant turn at the tail.
-        // Drop trailing pending bubbles mergeServerRows preserved -
-        // the canonical reply replaced them and the `complete` frame
-        // landed on a now-dead WS.
-        while (next.length > 0) {
-          const last = next[next.length - 1];
-          if (last.role === "thinking" && last.pending) {
-            next.pop();
-            continue;
-          }
-          if (last.role === "assistant" && last.pending && !last.error) {
-            next.pop();
-            continue;
-          }
-          break;
-        }
-        return next;
-      });
-      if (serverFinishedTurn) {
-        turnStartRef.current = null;
-        setIsStreaming(false);
-        clearWatchdog();
-      }
+    void reconcileFromCore(ac.signal).catch(() => {
+      /* transient fetch failure; socket retry path remains active */
     });
     return () => ac.abort();
-  }, [ws.status, sessionId, clearWatchdog]);
+  }, [ws.status, sessionId, reconcileFromCore]);
 
   useEffect(() => {
     return ws.subscribe((ev: WSEvent) => {
