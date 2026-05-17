@@ -72,11 +72,56 @@ func (a *API) handlePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleScoped(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/crons/")
-	if id == "" {
+	tail := strings.TrimPrefix(r.URL.Path, "/api/crons/")
+	if tail == "" {
 		http.NotFound(w, r)
 		return
 	}
+	// /api/crons/:id/run → fire once immediately (Studio "Run now"
+	// button). Reuses scheduler.RunOnce so the run status writes back
+	// to mem_crons.last_run_* and surfaces in the agent-work feed the
+	// same as any scheduled fire.
+	if strings.HasSuffix(tail, "/run") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimSuffix(tail, "/run")
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		jobs, err := a.scheduler.List(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var found *Job
+		for i := range jobs {
+			if jobs[i].ID == id {
+				found = &jobs[i]
+				break
+			}
+		}
+		if found == nil {
+			http.NotFound(w, r)
+			return
+		}
+		runErr := a.scheduler.RunOnce(r.Context(), *found)
+		if runErr != nil {
+			// Report the failure but still 200 — the run completed
+			// with an error, the client wants to render it. Same
+			// semantics as a scheduled fire that errored.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":    false,
+				"error": runErr.Error(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	id := tail
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

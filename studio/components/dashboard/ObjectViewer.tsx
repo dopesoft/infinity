@@ -36,6 +36,7 @@ import {
   ResponsiveModalHeader,
 } from "@/components/ui/responsive-modal";
 import {
+  ModalChips,
   ModalCode,
   ModalDl,
   ModalPre,
@@ -749,9 +750,18 @@ function SavedBody({ s }: { s: Saved }) {
 
 // ── Work ──────────────────────────────────────────────────────────────────
 function WorkBody({ w }: { w: WorkItem }) {
+  // The subtitle is "agent-narrated outcome" — when it leads with
+  // "error" it's the failure message and deserves the danger-toned
+  // section. Otherwise it's neutral context above the metadata grid.
+  const isError = (w.subtitle ?? "").toLowerCase().startsWith("error");
+  const scheduleEntries: { k: string; v: React.ReactNode }[] = [];
+  if (w.scheduledFor) scheduleEntries.push({ k: "scheduled", v: clockTime(w.scheduledFor) });
+  if (w.startedAt) scheduleEntries.push({ k: "started", v: clockTime(w.startedAt) });
+  if (w.finishedAt) scheduleEntries.push({ k: "finished", v: clockTime(w.finishedAt) });
+
   return (
     <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <ModalChips>
         <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
           {w.column}
         </span>
@@ -761,24 +771,30 @@ function WorkBody({ w }: { w: WorkItem }) {
         {w.durationMs ? (
           <span className="font-mono">· {formatDuration(w.durationMs)}</span>
         ) : null}
-      </div>
+      </ModalChips>
+
+      {/* Subtitle either renders as the danger-toned Error card (cron
+          failure / workflow step error) or as a neutral Output card.
+          Either way it goes inside a ModalSection so the padding,
+          overflow, and break-word discipline come from the primitive
+          rather than a hand-rolled <p>. */}
       {w.subtitle ? (
-        <p className="text-[13px] leading-relaxed text-foreground/85">{w.subtitle}</p>
+        <ModalSection label={isError ? "Error" : "Output"} tone={isError ? "error" : "default"}>
+          <ModalPre mono={isError}>{w.subtitle}</ModalPre>
+        </ModalSection>
       ) : null}
-      <ModalSection>
-        <dl className="grid grid-cols-2 gap-y-1 text-[12px]">
-          {w.scheduledFor ? (
-            <Row label="scheduled" value={clockTime(w.scheduledFor)} />
-          ) : null}
-          {w.startedAt ? <Row label="started" value={clockTime(w.startedAt)} /> : null}
-          {w.finishedAt ? <Row label="finished" value={clockTime(w.finishedAt)} /> : null}
-        </dl>
-      </ModalSection>
+
+      {scheduleEntries.length > 0 ? (
+        <ModalSection label="Schedule">
+          <ModalDl entries={scheduleEntries} />
+        </ModalSection>
+      ) : null}
 
       {/* Workflow runs carry their step state-machine inline — the Kanban
           card IS the workflow view. Tap any column, see the steps. */}
       {w.kind === "workflow" && w.workflowSteps && w.workflowSteps.length > 0 ? (
         <ModalSection
+          label="Steps"
           meta={`${w.workflowSteps.length} step${w.workflowSteps.length === 1 ? "" : "s"}`}
         >
           <ol className="space-y-2">
@@ -868,16 +884,6 @@ function workflowStepText(status: string): string {
   }
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <>
-      <dt className="font-mono uppercase tracking-wider text-muted-foreground">{label}</dt>
-      <dd className="text-right font-mono text-foreground" suppressHydrationWarning>
-        {value}
-      </dd>
-    </>
-  );
-}
 
 // ── Activity ──────────────────────────────────────────────────────────────
 function ActivityBody({ e }: { e: ActivityEv }) {

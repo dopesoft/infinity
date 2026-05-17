@@ -933,6 +933,25 @@ export async function deleteCron(id: string): Promise<boolean> {
   }
 }
 
+// triggerCron fires a cron job immediately, regardless of its schedule.
+// The next regular fire still happens at the cron-expression's next
+// tick. Use this to test a freshly-edited job before its schedule rolls
+// around — the run goes through the full agent loop, writes to mem_turns,
+// surfaces in the agent-work feed exactly like a scheduled fire, and
+// updates last_run_status so failures are visible. Returns { ok, error? }
+// when reachable, null when the request itself failed.
+export async function triggerCron(
+  id: string,
+): Promise<{ ok: boolean; error?: string } | null> {
+  try {
+    const res = await authedFetch(`/api/crons/${id}/run`, { method: "POST" });
+    if (!res.ok) return null;
+    return (await res.json()) as { ok: boolean; error?: string };
+  } catch {
+    return null;
+  }
+}
+
 export type SentinelDTO = {
   id: string;
   name: string;

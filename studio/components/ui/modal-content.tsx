@@ -1,8 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Eye } from "lucide-react";
+import { AlertCircle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+export type ModalSectionTone = "default" | "error" | "warning" | "success";
 
 /* Modal body content primitives — the standardized building blocks every
  * <ResponsiveModal> body should compose from. They exist because freehand
@@ -18,28 +20,87 @@ import { cn } from "@/lib/utils";
 
 /** Labeled context block — the "card-within-a-modal" surface used for
  *  body content, JSON payloads, diffs, drafts, etc. Replaces the
- *  inlined ContextBlock that lived in ObjectViewer. */
+ *  inlined ContextBlock that lived in ObjectViewer.
+ *
+ *  Props:
+ *    label   — eyebrow text (default "Context"). Pass "Error" / "Schedule"
+ *              / "Output" / "Steps" so cards self-describe.
+ *    tone    — color hint. default | error | warning | success. Tints
+ *              the border + header background so errors visually
+ *              stand out without the consumer hand-rolling color
+ *              classes. Pairs with a matching icon swap (alert icon
+ *              for error/warning, eye for everything else).
+ *    icon    — override the leading icon (rare). Defaults follow tone.
+ *    meta    — right-aligned eyebrow (timestamp, count, etc.).
+ */
 export function ModalSection({
+  label = "Context",
+  tone = "default",
+  icon,
   meta,
   children,
   className,
 }: {
-  /** Right-aligned label/eyebrow in the header. Strings get truncated. */
+  label?: string;
+  tone?: ModalSectionTone;
+  icon?: React.ReactNode;
   meta?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
 }) {
+  const toneClasses = (() => {
+    switch (tone) {
+      case "error":
+        return {
+          frame: "border-danger/40 bg-danger/5",
+          header: "border-danger/30 bg-danger/10",
+          label: "text-danger",
+        };
+      case "warning":
+        return {
+          frame: "border-warning/40 bg-warning/5",
+          header: "border-warning/30 bg-warning/10",
+          label: "text-warning",
+        };
+      case "success":
+        return {
+          frame: "border-success/40 bg-success/5",
+          header: "border-success/30 bg-success/10",
+          label: "text-success",
+        };
+      default:
+        return {
+          frame: "bg-muted/30",
+          header: "bg-muted/40",
+          label: "text-muted-foreground",
+        };
+    }
+  })();
+  const defaultIcon =
+    tone === "error" || tone === "warning" ? (
+      <AlertCircle className={cn("size-3.5 shrink-0", toneClasses.label)} aria-hidden />
+    ) : (
+      <Eye className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+    );
   return (
     <div
       className={cn(
-        "mt-4 min-w-0 max-w-full overflow-hidden rounded-lg border bg-muted/30",
+        "mt-4 min-w-0 max-w-full overflow-hidden rounded-lg border",
+        toneClasses.frame,
         className,
       )}
     >
-      <header className="flex min-w-0 items-center gap-2 border-b bg-muted/40 px-3 py-2">
-        <Eye className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-          Context
+      <header
+        className={cn("flex min-w-0 items-center gap-2 border-b px-3 py-2", toneClasses.header)}
+      >
+        {icon ?? defaultIcon}
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-[0.16em]",
+            toneClasses.label,
+          )}
+        >
+          {label}
         </span>
         {meta ? (
           <span className="ml-auto min-w-0 truncate text-[11px] text-muted-foreground">

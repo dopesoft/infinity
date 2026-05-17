@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Clock, Loader2, Play, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,7 @@ import {
   deleteCron,
   deleteSentinel,
   previewCron,
+  triggerCron,
   type CronJobDTO,
   type SentinelDTO,
 } from "@/lib/api";
@@ -53,6 +54,28 @@ function CronSection() {
   const [items, setItems] = useState<CronJobDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  // Per-row trigger state for the "Run now" button. Keyed by cron id so
+  // many buttons can be tracked independently without re-rendering
+  // siblings. Cleared automatically when the parent reloads.
+  const [runState, setRunState] = useState<
+    Record<string, { status: "running" | "ok" | "error"; error?: string }>
+  >({});
+
+  async function runNow(id: string) {
+    setRunState((s) => ({ ...s, [id]: { status: "running" } }));
+    const res = await triggerCron(id);
+    if (!res) {
+      setRunState((s) => ({ ...s, [id]: { status: "error", error: "Request failed" } }));
+      return;
+    }
+    if (!res.ok) {
+      setRunState((s) => ({ ...s, [id]: { status: "error", error: res.error ?? "Run failed" } }));
+    } else {
+      setRunState((s) => ({ ...s, [id]: { status: "ok" } }));
+    }
+    // Reload so last_run_at + last_run_status reflect the fire.
+    void load();
+  }
 
   async function load() {
     setLoading(true);
@@ -97,7 +120,9 @@ function CronSection() {
             {loading ? "Loading…" : "No crons yet."}
           </p>
         ) : (
-          items.map((j) => (
+          items.map((j) => {
+            const run = runState[j.id];
+            return (
             <li key={j.id} className="rounded-xl border bg-card px-3 py-2">
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <code className="truncate font-mono text-foreground">{j.name}</code>
@@ -122,23 +147,51 @@ function CronSection() {
                     last {new Date(j.last_run_at).toLocaleString()}
                   </span>
                 )}
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="ml-auto"
-                  onClick={async () => {
-                    if (confirm(`Delete cron "${j.name}"?`)) {
-                      await deleteCron(j.id);
-                      void load();
-                    }
-                  }}
-                  aria-label="Delete"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+                <div className="ml-auto flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 gap-1 px-2 text-[11px]"
+                    onClick={() => void runNow(j.id)}
+                    disabled={run?.status === "running"}
+                    title="Fire this cron immediately, regardless of schedule. The next regular fire still happens on the cron expression's next tick."
+                    aria-label="Run now"
+                  >
+                    {run?.status === "running" ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Play className="size-3.5" />
+                    )}
+                    Run now
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={async () => {
+                      if (confirm(`Delete cron "${j.name}"?`)) {
+                        await deleteCron(j.id);
+                        void load();
+                      }
+                    }}
+                    aria-label="Delete"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
               </div>
+              {run?.status === "error" && (
+                <p className="mt-1.5 break-words rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
+                  {run.error}
+                </p>
+              )}
+              {run?.status === "ok" && (
+                <p className="mt-1.5 rounded-md border border-success/40 bg-success/5 px-2 py-1 text-[11px] text-success">
+                  Fired successfully. Check the agent-work feed for the run details.
+                </p>
+              )}
             </li>
-          ))
+            );
+          })
         )}
       </ul>
     </div>
