@@ -616,6 +616,19 @@ func serveCmd() *cobra.Command {
 						// the schema-level unique index on (question) WHERE
 						// status='open' so re-runs across ticks are idempotent.
 						proactive.HealingChecklist(pool),
+						// Skill self-authoring: detect repeated multi-step
+						// recipes the agent runs but hasn't crystallized into a
+						// skill, and detect divergent (successful) paths the
+						// boss steered when an installed skill fired. Each
+						// detection surfaces as a curiosity question in /lab
+						// Fix-this with an Approve-and-fix path that routes to
+						// the propose-skill-from-pattern or
+						// evolve-skill-from-deviation default skill (migration
+						// 037), which calls skill_propose / skill_optimize -
+						// rendered inline in chat by SkillProposalCard. Closes
+						// the AGI loop: notice -> propose -> approve -> install
+						// without leaving chat.
+						proactive.SkillAuthoringChecklist(pool),
 					))
 				heartbeat.Start(cmd.Context())
 				if a, ok := provider.(*llm.Anthropic); ok {

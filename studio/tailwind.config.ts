@@ -60,6 +60,7 @@ const config: Config = {
         success: { DEFAULT: "hsl(var(--success))", foreground: "hsl(var(--success-foreground))" },
         warning: { DEFAULT: "hsl(var(--warning))", foreground: "hsl(var(--warning-foreground))" },
         danger: { DEFAULT: "hsl(var(--danger))", foreground: "hsl(var(--danger-foreground))" },
+        brand: { DEFAULT: "hsl(var(--brand))", foreground: "hsl(var(--brand-foreground))" },
         tier: {
           working: "hsl(var(--tier-working))",
           episodic: "hsl(var(--tier-episodic))",
@@ -78,9 +79,14 @@ const config: Config = {
           "0%": { backgroundColor: "hsl(var(--info) / 0.18)" },
           "100%": { backgroundColor: "transparent" },
         },
+        "pulse-soft": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.55" },
+        },
       },
       animation: {
         "highlight-flash": "highlight-flash 300ms ease-out",
+        "pulse-soft": "pulse-soft 1.8s ease-in-out infinite",
       },
     },
   },

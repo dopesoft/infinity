@@ -53,17 +53,12 @@ export function ConversationStream({
 
   if (messages.length === 0) {
     return (
-      // Shared empty-state shape across the workspace columns: icon in a
-      // muted circle, semibold title, soft sub-copy. Centered vertically so
-      // it lines up with the Canvas-preview empty state in the rightmost
-      // column.
-      // Anchored ~224px from the column top so it visually aligns with the
-      // Files / Preview empty states next door. Those columns sit ~84px
-      // below their column edge (tabs + filter / tabs + URL bar); the chat
-      // column has no header above it, so we fake the same offset here.
+      // The stream area excludes the composer, while Files / Preview
+      // do not have a bottom composer taking space. Nudge the desktop
+      // empty state down so the placeholders line up across columns.
       <div
         ref={scrollRef}
-        className="flex h-full flex-col items-center justify-start gap-3 p-6 pt-56 text-center"
+        className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center lg:translate-y-[6.5rem]"
       >
         <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
           <Sparkles className="size-5" aria-hidden />
@@ -71,9 +66,7 @@ export function ConversationStream({
         <div className="max-w-md space-y-1">
           <h3 className="text-sm font-semibold">A fresh session</h3>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Tell Infinity what you want to build, write, or talk through. An app,
-            a document, a spreadsheet, or just a thought. Anything material shows
-            up in the panels to the right.
+            Tell Jarvis what to build, write, or think through.
           </p>
         </div>
       </div>

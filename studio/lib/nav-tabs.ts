@@ -8,30 +8,27 @@ import {
   MessageSquare,
   ScrollText,
   Settings,
-  ShieldCheck,
   Wrench,
 } from "lucide-react";
 
 /**
  * Single source of truth for the primary nav.
  *
- * Live is the unified workspace (chat + files/git + canvas in a single
- * 3-column desktop layout, 3-mode mobile switcher). The old standalone
- * /canvas page redirects here.
+ * The boss's mental model (2026-05-16):
  *
- * `NAV_TABS` = primary tabs (top bar on desktop, top of mobile drawer).
- * `NAV_OVERFLOW` = secondary tabs (mobile drawer "More" section, desktop
+ *   Dashboard - info at a glance + agent notifications
+ *   Chat (Live) - where the agent works in the open; trust + skill
+ *                 proposals approved inline
+ *   Memory - the brain (read-only browse)
+ *   Skills - capabilities library, auto-authored or manual
+ *
+ * Everything else lives in the overflow (3-dot) menu. Trust is folded
+ * into Settings (audit + bulk pending); real-time approvals still come
+ * through Chat as inline ToolCallCard.
+ *
+ * `NAV_TABS` = primary (top bar on desktop, top of mobile drawer).
+ * `NAV_OVERFLOW` = secondary (mobile drawer "More" section, desktop
  * header overflow kebab). Deep-linkable but demoted.
- *
- * Settings stays out of NAV_TABS, it's an app-level action surfaced as its
- * own header button + mobile-drawer footer link.
- *
- * /lab replaces the old /gym and /code-proposals slots. It's the single
- * surface for "what Jarvis noticed, learned, and taught himself" - one
- * "Fix this" tab with actionable approve-and-fix proposals, one
- * "Lessons" tab showing the training examples that already inject into
- * every turn's prompt, and one "Skills evolved" tab for autonomously
- * promoted skills. The old pages redirect here.
  */
 export type NavTab = {
   href: string;
@@ -41,16 +38,15 @@ export type NavTab = {
 
 export const NAV_TABS: NavTab[] = [
   { href: "/", label: "Dashboard", Icon: LayoutDashboard },
-  { href: "/live", label: "Live", Icon: MessageSquare },
+  { href: "/live", label: "Chat", Icon: MessageSquare },
   { href: "/memory", label: "Memory", Icon: Brain },
-  { href: "/lab", label: "Lab", Icon: FlaskConical },
   { href: "/skills", label: "Skills", Icon: Wrench },
 ];
 
 export const NAV_OVERFLOW: NavTab[] = [
-  { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
-  { href: "/trust", label: "Trust", Icon: ShieldCheck },
+  { href: "/lab", label: "Lab", Icon: FlaskConical },
   { href: "/cron", label: "Cron", Icon: Clock },
+  { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
   { href: "/logs", label: "Logs", Icon: ScrollText },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];

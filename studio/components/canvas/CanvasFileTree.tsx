@@ -233,8 +233,13 @@ export function CanvasFileTree({
       {/* Library - mem_artifacts grouped by kind. Lives INSIDE the
           Files tab (not a separate /library route) so the boss has one
           place to browse everything Jarvis has made. Click a project →
-          tree below auto-scopes. Click an image → opens viewer. */}
-      <LibrarySection sessionId={projectCtx?.sessionId || null} />
+          tree below auto-scopes. Click an image → opens viewer.
+          Hidden when there's no project loaded so the empty state
+          centers in the full column rect, lining up with Chat +
+          Preview empty states across the canvas. */}
+      {store.root && (
+        <LibrarySection sessionId={projectCtx?.sessionId || null} />
+      )}
       {/* py-0 here - the 4px of vertical padding used to push the empty
           state ~4px lower than the chat / canvas equivalents. When files
           ARE populated, the rows have their own row-padding so this top
@@ -358,10 +363,11 @@ function NodeRow({
 
 function EmptyRoot() {
   return (
-    // Anchored ~140px from the top of the tree content area. Files column
-    // sits below the tabs (h-10) + filter (h-11), so the on-screen icon
-    // lands at ~224px from the column top, matching Chat + Canvas.
-    <div className="flex h-full flex-col items-center justify-start gap-3 p-6 pt-[8.75rem] text-center">
+    // Centered in the Files slot (which spans below the search bar
+    // down to the column bottom). Slight visual misalignment with the
+    // Chat empty state above is accepted in exchange for not breaking
+    // the layout with absolute escape hatches.
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
       <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <Sparkles className="size-5" aria-hidden />
       </span>

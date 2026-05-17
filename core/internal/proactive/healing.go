@@ -57,6 +57,27 @@ func HealingChecklist(pool *pgxpool.Pool) Checklist {
 }
 
 func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
+	// First sweep: every cron that is currently passing or disabled
+	// gets its prior 'cron_failure:<id>' open question(s) closed. That
+	// way the dashboard stops showing "Cron X is failing" after the
+	// boss already fixed the routing - even if the heartbeat doesn't
+	// have a fresh failure to emit this tick.
+	if pool != nil {
+		_, _ = pool.Exec(ctx, `
+			UPDATE mem_curiosity_questions q
+			   SET status = 'dismissed',
+			       resolved_at = NOW(),
+			       resolved_reason = 'condition_cleared'
+			 WHERE q.status = 'open'
+			   AND q.source_tag LIKE 'cron_failure:%'
+			   AND NOT EXISTS (
+			       SELECT 1 FROM mem_crons c
+			        WHERE 'cron_failure:' || c.id::text = q.source_tag
+			          AND COALESCE(c.enabled, TRUE) = TRUE
+			          AND COALESCE(c.last_run_status,'') LIKE 'error%'
+			   )
+		`)
+	}
 	rows, err := pool.Query(ctx, `
 		SELECT id::text,
 		       name,
@@ -87,30 +108,48 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			rationale = fmt.Sprintf("Last fired %s. %s",
 				lastRun.UTC().Format(time.RFC3339), rationale)
 		}
-		inserted := insertHealingQuestion(ctx, pool,
-			question, rationale, "cron_failure", []string{id}, 9)
+		tag := "cron_failure:" + id
+		// Supersede any older open question for the same cron whose
+		// title varies (e.g. error message changed) before inserting.
+		ResolveQuestionsBySourceTag(ctx, pool, tag)
+		inserted := insertHealingQuestionWithTag(ctx, pool,
+			question, rationale, "cron_failure", tag, []string{id}, 9)
 		if !inserted {
-			// Already-open question for this cron. Skip the Finding so
-			// heartbeat noise stays low; the previous tick already
-			// surfaced this and nothing has changed.
+			// Already-open question for this cron with identical text.
+			// Skip the Finding so heartbeat noise stays low.
 			continue
 		}
 		out = append(out, Finding{
-			Kind:   "self_heal",
-			Source: "cron_failure",
-			Title:  question,
-			Detail: rationale,
-			// Per-cron source_tag so the next tick's finding for the
-			// same cron supersedes this one even if the error message
-			// changes (e.g. routing fix lands and the same cron fails
-			// for a different reason).
-			SourceTag: "cron_failure:" + id,
+			Kind:      "self_heal",
+			Source:    "cron_failure",
+			Title:     question,
+			Detail:    rationale,
+			SourceTag: tag,
 		})
 	}
 	return out
 }
 
 func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
+	// First sweep: any tool whose old 'repeated_tool_error:<tool>' open
+	// question exists but has zero recent failures in the window is
+	// cleared. Keeps the dashboard honest when a tool stabilizes.
+	if pool != nil {
+		_, _ = pool.Exec(ctx, `
+			UPDATE mem_curiosity_questions q
+			   SET status = 'dismissed',
+			       resolved_at = NOW(),
+			       resolved_reason = 'condition_cleared'
+			 WHERE q.status = 'open'
+			   AND q.source_tag LIKE 'repeated_tool_error:%'
+			   AND NOT EXISTS (
+			       SELECT 1 FROM mem_observations o
+			        WHERE o.hook_name = 'PostToolUseFailure'
+			          AND o.created_at > NOW() - INTERVAL '`+repeatedErrorWindow+`'
+			          AND 'repeated_tool_error:' || COALESCE(o.payload->>'name','') = q.source_tag
+			   )
+		`)
+	}
 	// Group PostToolUseFailure observations by tool name (extracted from
 	// the JSON payload). A tool that fails THRESHOLD+ times in WINDOW
 	// gets one curiosity question; the sample error is the most recent
@@ -158,19 +197,21 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
 		question := fmt.Sprintf("Tool %q has failed %d times in the last 24h. Fix it?", tool, hits)
 		rationale := fmt.Sprintf("Most recent failure %s\n\n%s",
 			lastSeen.UTC().Format(time.RFC3339), truncate(sample, 600))
-		inserted := insertHealingQuestion(ctx, pool,
-			question, rationale, "repeated_tool_error", nil, 8)
+		tag := "repeated_tool_error:" + tool
+		// Supersede count-varying older questions for the same tool
+		// ("3 times" -> "6 times") before inserting the fresh one.
+		ResolveQuestionsBySourceTag(ctx, pool, tag)
+		inserted := insertHealingQuestionWithTag(ctx, pool,
+			question, rationale, "repeated_tool_error", tag, nil, 8)
 		if !inserted {
 			continue
 		}
 		out = append(out, Finding{
-			Kind:   "self_heal",
-			Source: "repeated_tool_error",
-			Title:  question,
-			Detail: rationale,
-			// Per-tool source_tag so the count-varying title
-			// ("3 times" -> "6 times") doesn't stack rows.
-			SourceTag: "repeated_tool_error:" + tool,
+			Kind:      "self_heal",
+			Source:    "repeated_tool_error",
+			Title:     question,
+			Detail:    rationale,
+			SourceTag: tag,
 		})
 	}
 	return out
@@ -181,10 +222,31 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
 // index on (question) WHERE status='open' so re-runs of the scan are
 // idempotent across heartbeat ticks. Returns true when a NEW row
 // landed so the caller can decide whether to emit a Finding.
+//
+// source_kind doubles as the source_tag prefix; callers that want
+// per-condition dedup (e.g. cron_failure for cron id X vs cron id Y)
+// should use insertHealingQuestionWithTag below instead.
 func insertHealingQuestion(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	question, rationale, sourceKind string,
+	sourceIDs []string,
+	importance int,
+) bool {
+	return insertHealingQuestionWithTag(ctx, pool, question, rationale, sourceKind, sourceKind, sourceIDs, importance)
+}
+
+// insertHealingQuestionWithTag is the load-bearing form. source_tag is
+// the stable identifier for "what condition this is about", e.g.
+// "cron_failure:<id>" or "repeated_tool_error:<tool>". When a later
+// tick's question for the same tag has different text (count varies,
+// error message changes), the schema lifecycle (migration 036) lets
+// ResolveQuestionsBySourceTag close the older row so the dashboard
+// stops piling up stale questions.
+func insertHealingQuestionWithTag(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	question, rationale, sourceKind, sourceTag string,
 	sourceIDs []string,
 	importance int,
 ) bool {
@@ -197,14 +259,33 @@ func insertHealingQuestion(
 	}
 	tag, err := pool.Exec(ctx, `
 		INSERT INTO mem_curiosity_questions
-		  (question, rationale, source_kind, source_ids, importance, status)
-		VALUES ($1, $2, $3, $4::uuid[], $5, 'open')
+		  (question, rationale, source_kind, source_ids, importance, status, source_tag)
+		VALUES ($1, $2, $3, $4::uuid[], $5, 'open', $6)
 		ON CONFLICT DO NOTHING
-	`, question, rationale, sourceKind, uuidArray(sourceIDs), importance)
+	`, question, rationale, sourceKind, uuidArray(sourceIDs), importance, sourceTag)
 	if err != nil {
 		return false
 	}
 	return tag.RowsAffected() > 0
+}
+
+// ResolveQuestionsBySourceTag marks every open curiosity question with
+// the given source_tag as dismissed with reason 'condition_cleared'.
+// Mirror of ResolveSourceTag for findings - lets a scanner explicitly
+// close questions when the underlying condition is no longer present
+// (e.g. the cron that was failing is now passing). No-op for empty tag
+// or nil pool.
+func ResolveQuestionsBySourceTag(ctx context.Context, pool *pgxpool.Pool, tag string) {
+	if pool == nil || tag == "" {
+		return
+	}
+	_, _ = pool.Exec(ctx, `
+		UPDATE mem_curiosity_questions
+		   SET status = 'dismissed',
+		       resolved_at = NOW(),
+		       resolved_reason = 'condition_cleared'
+		 WHERE source_tag = $1 AND status = 'open'
+	`, tag)
 }
 
 func truncate(s string, n int) string {

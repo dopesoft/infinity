@@ -47,6 +47,16 @@ export default function SkillsPage() {
     load();
   }, []);
 
+  // Honour ?tab=<status> so deep-links from /lab Recently fixed,
+  // dashboard, or the SkillProposalCard land on the right filter
+  // (Active by default; Candidate when the boss is here to triage).
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && (STATUS_FILTERS as readonly string[]).includes(requested)) {
+      setStatusFilter(requested as StatusFilter);
+    }
+  }, []);
+
   useRealtime(["mem_skills", "mem_skill_runs"], load);
 
   const filtered = useMemo(() => {

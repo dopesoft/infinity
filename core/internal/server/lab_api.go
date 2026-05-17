@@ -68,17 +68,29 @@ type labSkill struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type labResolved struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`     // curiosity | code_proposal | heartbeat_finding
+	Title          string    `json:"title"`
+	Source         string    `json:"source,omitempty"`
+	Outcome        string    `json:"outcome"`  // resolved | dismissed | approved | applied
+	OutcomeReason  string    `json:"outcome_reason,omitempty"`
+	ResolvedAt     time.Time `json:"resolved_at"`
+}
+
 type labResponse struct {
 	Proposals []labProposal `json:"proposals"`
+	Resolved  []labResolved `json:"resolved"`
 	Lessons   []labLesson   `json:"lessons"`
 	Skills    []labSkill    `json:"skills"`
 	Counts    labCounts     `json:"counts"`
 }
 
 type labCounts struct {
-	OpenProposals int `json:"open_proposals"`
-	Lessons       int `json:"lessons"`
-	EvolvedSkills int `json:"evolved_skills"`
+	OpenProposals    int `json:"open_proposals"`
+	RecentlyResolved int `json:"recently_resolved"`
+	Lessons          int `json:"lessons"`
+	EvolvedSkills    int `json:"evolved_skills"`
 }
 
 func (s *Server) handleLab(w http.ResponseWriter, r *http.Request) {
@@ -98,13 +110,102 @@ func (s *Server) handleLab(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	resp := labResponse{
 		Proposals: loadLabProposals(ctx, s.pool),
+		Resolved:  loadLabResolved(ctx, s.pool),
 		Lessons:   loadLabLessons(ctx, s.pool),
 		Skills:    loadLabSkills(ctx, s.pool),
 	}
 	resp.Counts.OpenProposals = len(resp.Proposals)
+	resp.Counts.RecentlyResolved = len(resp.Resolved)
 	resp.Counts.Lessons = len(resp.Lessons)
 	resp.Counts.EvolvedSkills = len(resp.Skills)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// loadLabResolved fetches the recently-closed curiosity questions,
+// heartbeat findings, and code proposals so Lab's Recently-fixed tab
+// can show "what was wrong + what I did about it" instead of just an
+// open-issue queue. Capped to the last 30 days so the page stays fast
+// even with a large archive.
+func loadLabResolved(ctx context.Context, pool *pgxpool.Pool) []labResolved {
+	out := make([]labResolved, 0, 60)
+	if rows, err := pool.Query(ctx, `
+		SELECT id::text,
+		       question,
+		       COALESCE(source_kind,''),
+		       status,
+		       COALESCE(resolved_reason,''),
+		       COALESCE(resolved_at, created_at) AS resolved_at
+		  FROM mem_curiosity_questions
+		 WHERE status IN ('dismissed','answered','approved')
+		   AND COALESCE(resolved_at, created_at) > NOW() - INTERVAL '30 days'
+		 ORDER BY COALESCE(resolved_at, created_at) DESC
+		 LIMIT 50
+	`); err == nil {
+		for rows.Next() {
+			var r labResolved
+			if err := rows.Scan(&r.ID, &r.Title, &r.Source, &r.Outcome, &r.OutcomeReason, &r.ResolvedAt); err == nil {
+				r.Kind = "curiosity"
+				out = append(out, r)
+			}
+		}
+		rows.Close()
+	}
+	if rows, err := pool.Query(ctx, `
+		SELECT id::text,
+		       title,
+		       COALESCE(kind,''),
+		       status,
+		       COALESCE(resolved_at, created_at) AS resolved_at
+		  FROM mem_heartbeat_findings
+		 WHERE status IN ('resolved','dismissed')
+		   AND COALESCE(resolved_at, created_at) > NOW() - INTERVAL '30 days'
+		 ORDER BY COALESCE(resolved_at, created_at) DESC
+		 LIMIT 50
+	`); err == nil {
+		for rows.Next() {
+			var r labResolved
+			if err := rows.Scan(&r.ID, &r.Title, &r.Source, &r.Outcome, &r.ResolvedAt); err == nil {
+				r.Kind = "heartbeat_finding"
+				out = append(out, r)
+			}
+		}
+		rows.Close()
+	}
+	if rows, err := pool.Query(ctx, `
+		SELECT id::text, title, status, decided_at
+		  FROM mem_code_proposals
+		 WHERE status IN ('approved','applied','rejected')
+		   AND COALESCE(decided_at, created_at) > NOW() - INTERVAL '30 days'
+		 ORDER BY COALESCE(decided_at, created_at) DESC
+		 LIMIT 50
+	`); err == nil {
+		for rows.Next() {
+			var r labResolved
+			if err := rows.Scan(&r.ID, &r.Title, &r.Outcome, &r.ResolvedAt); err == nil {
+				r.Kind = "code_proposal"
+				out = append(out, r)
+			}
+		}
+		rows.Close()
+	}
+	// Sort by resolved_at desc across the three sources. Simple insertion
+	// since each source returns at most 50 rows already sorted, the
+	// final list is small enough for an in-memory sort.
+	sortResolvedByRecency(out)
+	if len(out) > 80 {
+		out = out[:80]
+	}
+	return out
+}
+
+func sortResolvedByRecency(rs []labResolved) {
+	for i := 1; i < len(rs); i++ {
+		j := i
+		for j > 0 && rs[j-1].ResolvedAt.Before(rs[j].ResolvedAt) {
+			rs[j-1], rs[j] = rs[j], rs[j-1]
+			j--
+		}
+	}
 }
 
 func loadLabProposals(ctx context.Context, pool *pgxpool.Pool) []labProposal {

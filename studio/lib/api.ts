@@ -485,6 +485,21 @@ export type SkillProposalDTO = {
 export const fetchVoyagerStatus = (signal?: AbortSignal) =>
   getJSON<VoyagerStatusDTO>("/api/voyager/status", signal);
 
+export type NavCountsDTO = {
+  dashboard: number;
+  chat: number;
+  memory: number;
+  skills: number;
+  overflow: {
+    lab: number;
+    heartbeat: number;
+    logs: number;
+  };
+};
+
+export const fetchNavCounts = (signal?: AbortSignal) =>
+  getJSON<NavCountsDTO>("/api/nav/counts", signal);
+
 export const fetchSkillProposals = (status = "candidate", signal?: AbortSignal) =>
   getJSON<SkillProposalDTO[]>(
     `/api/voyager/proposals?status=${encodeURIComponent(status)}`,

@@ -54,6 +54,15 @@
     --danger: 0 84% 55%;
     --danger-foreground: 0 0% 100%;
 
+    /* Brand accent. Emerald reads "alive / healthy" - the agent's
+     * identity color. Used for active nav indicators, the agent-activity
+     * dot, the "installed" state on skill cards, success toasts, and
+     * the pulse indicator on the dashboard "needs you" badge. NOT used
+     * for primary buttons (which stay neutral so the page doesn't read
+     * green-on-green). */
+    --brand: 152 64% 38%;
+    --brand-foreground: 0 0% 100%;
+
     --tier-working: 0 0% 50%;
     --tier-episodic: 199 89% 50%;
     --tier-semantic: 217 91% 55%;
@@ -97,6 +106,11 @@
     --success: 142 71% 50%;
     --warning: 38 92% 55%;
     --danger: 0 84% 65%;
+
+    /* Brand on dark - slightly more luminous so it pops against true
+     * black without going neon. */
+    --brand: 152 64% 48%;
+    --brand-foreground: 0 0% 4%;
 
     --tier-working: 0 0% 65%;
     --tier-episodic: 199 89% 65%;

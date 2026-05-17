@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { NAV_TABS } from "@/lib/nav-tabs";
 import { useNavBadge } from "@/lib/nav-badges";
 
+/* Header tab nav. Calm pill-shaped chips, active tab gets a soft
+ * surface + brand dot. Counts ride on the right as a pill Badge. */
 export function TabNav() {
   const pathname = usePathname();
 
@@ -13,10 +16,11 @@ export function TabNav() {
     <nav
       role="tablist"
       aria-label="Primary"
-      className="flex items-center gap-1 rounded-lg bg-muted p-1 text-muted-foreground"
+      className="flex items-center gap-1 rounded-full border bg-card p-1"
     >
       {NAV_TABS.map((tab) => {
-        const active = pathname === tab.href || pathname?.startsWith(tab.href + "/");
+        const active =
+          pathname === tab.href || pathname?.startsWith(tab.href + "/");
         const Icon = tab.Icon;
         return (
           <Link
@@ -25,15 +29,15 @@ export function TabNav() {
             role="tab"
             aria-selected={active}
             className={cn(
-              "inline-flex min-h-9 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+              "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-medium transition-colors",
               active
-                ? "bg-background text-foreground shadow-sm"
-                : "hover:text-foreground",
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <Icon className="size-4 shrink-0" aria-hidden />
-            {tab.label}
-            <NavBadgeChip href={tab.href} />
+            <span>{tab.label}</span>
+            <NavBadgeChip href={tab.href} active={active} />
           </Link>
         );
       })}
@@ -41,19 +45,18 @@ export function TabNav() {
   );
 }
 
-// NavBadgeChip renders a small warning pill with the pending-action count
-// next to the tab label. Hidden when the count is 0 so quiet tabs stay
-// visually quiet. Uses the warning palette so it pops against the muted
-// inactive-tab background and the surface of the active tab equally.
-function NavBadgeChip({ href }: { href: string }) {
+function NavBadgeChip({ href, active }: { href: string; active?: boolean }) {
   const count = useNavBadge(href);
   if (count <= 0) return null;
   return (
-    <span
+    <Badge
+      variant={active ? "brand" : "pill"}
+      className={cn(
+        "ml-0.5 h-5 min-w-[20px] justify-center rounded-full px-1.5 font-mono text-[10px] font-semibold tabular-nums",
+      )}
       aria-label={`${count} pending`}
-      className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning/20 px-1 font-mono text-[10px] font-semibold leading-none text-warning"
     >
       {count > 99 ? "99+" : count}
-    </span>
+    </Badge>
   );
 }

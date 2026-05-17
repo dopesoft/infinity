@@ -260,6 +260,22 @@ export default function HeartbeatPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col bg-background">
+        {/* Plain-English explainer so the page reads as observability,
+            not as a queue. Every finding is actionable in /lab; this
+            page is purely "is the agent's nervous system alive?". */}
+        <div className="border-b px-3 py-2 sm:px-4">
+          <div className="mx-auto max-w-5xl rounded-lg border border-info/30 bg-info/5 px-3 py-2 text-[12px] leading-relaxed text-foreground/85">
+            <p>
+              <span className="font-semibold text-info">Heartbeat</span> is the
+              agent&apos;s nervous system. Every {formatInterval(intervalSeconds)} it
+              scans for problems and posts what it finds to{" "}
+              <a href="/lab?tab=open" className="font-semibold text-info hover:underline">
+                Lab
+              </a>
+              . This page is read-only - use Lab to act on anything that needs you.
+            </p>
+          </div>
+        </div>
         {/* Hero status card. Mobile-first: pulse + title/stats on top, action
             row spans full width below for 44px-min tap targets. sm+: actions
             float to the right of the header inline (same row). Never orphans

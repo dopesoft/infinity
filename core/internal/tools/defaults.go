@@ -73,6 +73,13 @@ func DefaultLoadedTools() []string {
 		"claude_code__Grep",
 		"claude_code__Glob",
 		"claude_code__LS",
+		// Skill self-authoring. These let the agent crystallize repeated
+		// multi-step recipes into named skills mid-conversation. The
+		// SkillProposalCard component in Studio pattern-matches these
+		// tool names to render an inline Approve/Edit/Dismiss card, so
+		// they need to be available without a tool_search round-trip.
+		"skill_propose",
+		"skill_optimize",
 	}
 }
 

@@ -80,14 +80,16 @@ export function MobileNav() {
 }
 
 // MobileNavBadgeChip - slightly bigger than the desktop chip because the
-// mobile drawer rows are wider and thumbs need a meatier target.
+// mobile drawer rows are wider and thumbs need a meatier target. Uses
+// the brand emerald palette in the drawer so unresolved work stays
+// visually consistent with how the desktop nav surfaces it.
 function MobileNavBadgeChip({ href }: { href: string }) {
   const count = useNavBadge(href);
   if (count <= 0) return null;
   return (
     <span
       aria-label={`${count} pending`}
-      className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-warning/20 px-1.5 font-mono text-[11px] font-semibold leading-none text-warning"
+      className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-brand/15 px-1.5 font-mono text-[11px] font-semibold leading-none text-brand"
     >
       {count > 99 ? "99+" : count}
     </span>

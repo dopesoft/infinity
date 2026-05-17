@@ -261,6 +261,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sessions/", s.handleSessionMessages)
 	mux.HandleFunc("/api/messages/", s.handleMessageFeedback)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/nav/counts", s.handleNavCounts)
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/mcp", s.handleMCP)
 	mux.HandleFunc("/api/memory/counts", s.handleMemoryCounts)

@@ -246,10 +246,11 @@ export function CanvasPreview() {
 
 function NoProjectPreview() {
   return (
-    // Anchored ~140px from the top of the preview area. Canvas has tab
-    // strip (h-10) + URL bar (h-11) above, so the icon lands ~224px from
-    // the column top, matching Chat + Files.
-    <div className="flex h-full flex-col items-center justify-start gap-3 p-6 pt-[8.75rem] text-center">
+    // Pinned absolute to the Preview column root (marked `relative`)
+    // so this icon centers against the FULL column rect - same
+    // physical Y as Chat + Files empty states, which do the same.
+    // pointer-events-none keeps the URL bar above clickable.
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
       <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <Sparkles className="size-5" aria-hidden />
       </span>

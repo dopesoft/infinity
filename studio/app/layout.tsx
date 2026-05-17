@@ -7,6 +7,7 @@ import { WebSocketProvider } from "@/lib/ws/provider";
 import { OnboardingGate } from "@/components/OnboardingGate";
 import { TrustToast } from "@/components/TrustToast";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 import { PWARegister } from "@/components/PWARegister";
 import "./globals.css";
 
@@ -77,6 +78,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <PWARegister />
                   <TrustToast />
                   <OnboardingGate>{children}</OnboardingGate>
+                  <Toaster />
+
                 </TooltipProvider>
               </WebSocketProvider>
             </NavBadgesProvider>

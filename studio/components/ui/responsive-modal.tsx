@@ -215,22 +215,48 @@ export function ResponsiveModalHeader({
   icon,
   eyebrow,
   title,
+  subtitle,
   trailing,
   tone,
+  titleSize = "default",
+  titleClamp = 1,
 }: {
   icon?: React.ReactNode;
+  /** Tiny uppercase kicker above the title. Optional - prefer `subtitle`
+   *  below the title for surface items, which reads much calmer than a
+   *  loud "SECTION NAME" cap row above a giant title. */
   eyebrow?: string;
   title: string;
+  /** Muted single-line meta strip rendered below the title (e.g.
+   *  "Follow-up · email · 21m ago"). Replaces the older pattern of a
+   *  chip-row underneath the header for kind/source/time metadata. */
+  subtitle?: React.ReactNode;
   trailing?: React.ReactNode;
   /** Tone classes for the icon chip (border + bg + text). Default = muted. */
   tone?: string;
+  /** "lg" bumps the title to text-lg + slightly heavier — used for
+   *  preview-style headers (FollowUps, Saved, Reflection) where the title
+   *  IS the hero. "default" keeps the original tighter sizing. */
+  titleSize?: "default" | "lg";
+  /** Max lines for the title before truncation. Default 1 keeps the older
+   *  tight header shape; 2 lets long subjects breathe (Untitled UI shape). */
+  titleClamp?: 1 | 2 | 3;
 }) {
+  const titleCls = cn(
+    "tracking-tight text-foreground",
+    titleSize === "lg" ? "text-[17px] font-semibold leading-snug" : "text-base font-semibold",
+    titleClamp === 1
+      ? "truncate"
+      : titleClamp === 2
+        ? "line-clamp-2 break-words"
+        : "line-clamp-3 break-words",
+  );
   return (
-    <header className="flex shrink-0 items-center gap-3 border-b px-4 pb-3 pt-4 sm:px-5">
+    <header className="flex shrink-0 items-start gap-3 border-b px-4 pb-3 pt-4 sm:px-5">
       {icon ? (
         <span
           className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-md border",
+            "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border",
             tone ?? "border-border bg-muted text-foreground",
           )}
         >
@@ -243,9 +269,10 @@ export function ResponsiveModalHeader({
             {eyebrow}
           </p>
         ) : null}
-        <h2 className="truncate text-base font-semibold tracking-tight text-foreground">
-          {title}
-        </h2>
+        <h2 className={titleCls}>{title}</h2>
+        {subtitle ? (
+          <p className="mt-1 truncate text-[12px] text-muted-foreground">{subtitle}</p>
+        ) : null}
       </div>
       {trailing ? <div className="shrink-0">{trailing}</div> : null}
     </header>

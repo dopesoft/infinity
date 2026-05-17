@@ -6,6 +6,8 @@ import {
   ArrowRight,
   BookOpen,
   Check,
+  CheckCircle2,
+  History,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -43,7 +45,7 @@ import { cn } from "@/lib/utils";
  *                    empty; populates as the auto-promotion fires).
  */
 
-type LabTab = "proposals" | "lessons" | "skills";
+type LabTab = "open" | "fixed" | "lessons";
 
 type LabProposal = {
   id: string;
@@ -77,11 +79,27 @@ type LabSkill = {
   updated_at: string;
 };
 
+type LabResolved = {
+  id: string;
+  kind: "curiosity" | "code_proposal" | "heartbeat_finding";
+  title: string;
+  source?: string;
+  outcome: string;
+  outcome_reason?: string;
+  resolved_at: string;
+};
+
 type LabSnapshot = {
   proposals: LabProposal[];
+  resolved: LabResolved[];
   lessons: LabLesson[];
   skills: LabSkill[];
-  counts: { open_proposals: number; lessons: number; evolved_skills: number };
+  counts: {
+    open_proposals: number;
+    recently_resolved: number;
+    lessons: number;
+    evolved_skills: number;
+  };
 };
 
 const SOURCE_LABEL: Record<string, { label: string; tone: "info" | "warning" | "danger" }> = {
@@ -95,15 +113,23 @@ const SOURCE_LABEL: Record<string, { label: string; tone: "info" | "warning" | "
 
 export default function LabPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<LabTab>("proposals");
+  const [tab, setTab] = useState<LabTab>("open");
   const [data, setData] = useState<LabSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<Record<string, "fixing" | "dismissing" | null>>({});
 
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab") as LabTab | null;
-    if (requested && ["proposals", "lessons", "skills"].includes(requested)) {
-      setTab(requested);
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    // Map legacy slugs forward so old links from email notifications,
+    // chat seeds, and bookmarks keep landing on the right tab.
+    const aliased =
+      requested === "proposals"
+        ? "open"
+        : requested === "skills"
+          ? null
+          : requested;
+    if (aliased && ["open", "fixed", "lessons"].includes(aliased)) {
+      setTab(aliased as LabTab);
     }
   }, []);
 
@@ -166,7 +192,8 @@ export default function LabPage() {
     }
   }
 
-  const counts = data?.counts ?? { open_proposals: 0, lessons: 0, evolved_skills: 0 };
+  const counts =
+    data?.counts ?? { open_proposals: 0, recently_resolved: 0, lessons: 0, evolved_skills: 0 };
 
   return (
     <TabFrame>
@@ -190,22 +217,22 @@ export default function LabPage() {
         <PageTabs value={tab} onValueChange={(v) => setTab(v as LabTab)} className="flex min-h-0 flex-1 flex-col">
           <div className="border-b px-3 pt-2 sm:px-4">
             <PageTabsList scrollable>
-              <PageTabsTrigger value="proposals" className="gap-1.5">
-                <span>Fix this</span>
+              <PageTabsTrigger value="open" className="gap-1.5">
+                <span>Open issues</span>
                 <CountChip n={counts.open_proposals} highlight={counts.open_proposals > 0} />
               </PageTabsTrigger>
-              <PageTabsTrigger value="lessons" className="gap-1.5">
-                <span>Lessons</span>
-                <CountChip n={counts.lessons} />
+              <PageTabsTrigger value="fixed" className="gap-1.5">
+                <span>Recently fixed</span>
+                <CountChip n={counts.recently_resolved} />
               </PageTabsTrigger>
-              <PageTabsTrigger value="skills" className="gap-1.5">
-                <span>Skills evolved</span>
-                <CountChip n={counts.evolved_skills} />
+              <PageTabsTrigger value="lessons" className="gap-1.5">
+                <span>Lessons learned</span>
+                <CountChip n={counts.lessons} />
               </PageTabsTrigger>
             </PageTabsList>
           </div>
 
-          <TabsContent value="proposals" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
+          <TabsContent value="open" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
             <ProposalsPane
               loading={loading}
               proposals={data?.proposals ?? []}
@@ -214,11 +241,11 @@ export default function LabPage() {
               onDismiss={dismissProposal}
             />
           </TabsContent>
+          <TabsContent value="fixed" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
+            <ResolvedPane loading={loading} resolved={data?.resolved ?? []} />
+          </TabsContent>
           <TabsContent value="lessons" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
             <LessonsPane loading={loading} lessons={data?.lessons ?? []} />
-          </TabsContent>
-          <TabsContent value="skills" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
-            <SkillsPane loading={loading} skills={data?.skills ?? []} />
           </TabsContent>
         </PageTabs>
       </div>
@@ -506,65 +533,100 @@ function LessonCard({ l }: { l: LabLesson }) {
   );
 }
 
-function SkillsPane({
+function ResolvedPane({
   loading,
-  skills,
+  resolved,
 }: {
   loading: boolean;
-  skills: LabSkill[];
+  resolved: LabResolved[];
 }) {
-  if (loading && skills.length === 0) {
+  if (loading && resolved.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" /> Loading
       </div>
     );
   }
-  if (skills.length === 0) {
+  if (resolved.length === 0) {
     return (
       <EmptyState
-        icon={Wrench}
-        title="No skills self-promoted yet"
-        description={
-          <>
-            When Jarvis solves a problem the same way 2 or 3 times, his
-            Voyager loop writes a skill (a named recipe like
-            &quot;triage gmail follow-ups&quot; or &quot;deploy core to
-            railway&quot;) and saves it. Future sessions can call that
-            skill by name instead of re-deriving the steps. This tab
-            shows skills he taught HIMSELF. Manually-authored skills
-            live in /skills.
-          </>
-        }
+        icon={History}
+        title="No recent fixes yet"
+        description="When Jarvis notices a problem and resolves it (or you dismiss it), the timeline shows up here. Goes back 30 days."
       />
     );
   }
   return (
     <ul className="space-y-2">
-      {skills.map((s) => (
-        <li key={s.id} className="rounded-lg border bg-card p-3">
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            <code className="truncate font-mono text-foreground">{s.name}</code>
-            <Badge variant="outline" className="font-mono uppercase">
-              v{s.version}
-            </Badge>
-            <Badge variant="success" className="font-mono uppercase">
-              {s.source}
-            </Badge>
-            <span
-              className="ml-auto shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
-              suppressHydrationWarning
-            >
-              {relTime(s.updated_at)}
-            </span>
-          </div>
-          {s.description ? (
-            <p className="mt-2 break-words text-[13px] leading-relaxed text-foreground/85">
-              {s.description}
+      {resolved.map((r) => {
+        const sourceMeta = r.source ? SOURCE_LABEL[r.source] : null;
+        const outcomeTone =
+          r.outcome === "approved" || r.outcome === "applied" || r.outcome === "resolved"
+            ? "success"
+            : "muted";
+        return (
+          <li
+            key={`${r.kind}:${r.id}`}
+            className="rounded-lg border bg-card p-3"
+          >
+            <div className="flex flex-wrap items-center gap-2 text-[10px]">
+              <Badge
+                variant={outcomeTone === "success" ? "success" : "outline"}
+                className="font-mono uppercase"
+              >
+                <CheckCircle2 className="mr-1 size-3" />
+                {r.outcome}
+              </Badge>
+              <Badge variant="outline" className="font-mono uppercase">
+                {LAB_KIND_LABEL[r.kind] ?? r.kind}
+              </Badge>
+              {sourceMeta ? (
+                <span
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+                    sourceMeta.tone === "danger" && "border-danger/40 bg-danger/5 text-danger",
+                    sourceMeta.tone === "warning" && "border-warning/40 bg-warning/5 text-warning",
+                    sourceMeta.tone === "info" && "border-info/40 bg-info/5 text-info",
+                  )}
+                >
+                  {sourceMeta.label}
+                </span>
+              ) : null}
+              <span
+                className="ml-auto shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
+                suppressHydrationWarning
+              >
+                {relTime(r.resolved_at)}
+              </span>
+            </div>
+            <p className="mt-2 break-words text-[13px] leading-snug text-foreground">
+              {r.title}
             </p>
-          ) : null}
-        </li>
-      ))}
+            {r.outcome_reason ? (
+              <p className="mt-1 break-words text-[12px] text-muted-foreground">
+                {prettyReason(r.outcome_reason)}
+              </p>
+            ) : null}
+          </li>
+        );
+      })}
     </ul>
   );
+}
+
+const LAB_KIND_LABEL: Record<string, string> = {
+  curiosity: "curiosity",
+  code_proposal: "code refactor",
+  heartbeat_finding: "heartbeat finding",
+};
+
+function prettyReason(s: string): string {
+  switch (s) {
+    case "condition_cleared":
+      return "Underlying condition cleared on its own.";
+    case "auto_backfill_036":
+      return "Cleaned up during the lifecycle backfill.";
+    default:
+      return s.replace(/_/g, " ");
+  }
 }

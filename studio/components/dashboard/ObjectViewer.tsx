@@ -12,7 +12,6 @@ import {
   Calendar,
   CheckCircle2,
   Circle,
-  Clock4,
   ExternalLink,
   FileCode,
   Flame,
@@ -28,8 +27,6 @@ import {
   Sparkles,
   Target,
   Terminal,
-  Trash2,
-  X,
 } from "lucide-react";
 import {
   ResponsiveModal,
@@ -39,6 +36,7 @@ import {
   ModalChips,
   ModalCode,
   ModalDl,
+  ModalField,
   ModalPre,
   ModalSection,
   ModalUrl,
@@ -46,7 +44,7 @@ import {
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
-import { decideCodeProposal, decideTrust, dismissHeartbeatFinding } from "@/lib/api";
+import { parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type {
   Approval,
   CalendarEvent,
@@ -103,6 +101,30 @@ export function ObjectViewer({
 
 function ItemHeader({ item }: { item: DashboardItem }) {
   const { Icon, label, tone } = headerMeta(item);
+  // Surface items, follow-ups, saved, and reflections render the "calm
+  // preview" header shape: no loud uppercase eyebrow above the title,
+  // title grows to 2 lines for long subjects, and the kind / source /
+  // time appear as a muted subtitle UNDER the title. Other kinds
+  // (approval, work, todo, event, pursuit) keep the original compact
+  // header where the eyebrow tells you what's about to happen.
+  const useCalmHeader =
+    item.kind === "surface" ||
+    item.kind === "followup" ||
+    item.kind === "saved" ||
+    item.kind === "reflection";
+
+  if (useCalmHeader) {
+    return (
+      <ResponsiveModalHeader
+        icon={<Icon className="size-4" aria-hidden />}
+        title={getViewerTitle(item)}
+        subtitle={calmSubtitle(item, label)}
+        tone={tone}
+        titleSize="lg"
+        titleClamp={2}
+      />
+    );
+  }
   return (
     <ResponsiveModalHeader
       icon={<Icon className="size-4" aria-hidden />}
@@ -111,6 +133,34 @@ function ItemHeader({ item }: { item: DashboardItem }) {
       tone={tone}
     />
   );
+}
+
+// calmSubtitle: builds the muted meta strip rendered under the hero
+// title for the calm header shape. Combines the kind label with the
+// most useful trailing meta (source + time + optional importance) in
+// interpunct form. Each segment is only included when it carries
+// signal; an unranked item never shows "imp 0", and a source-less
+// item just omits the "via" segment.
+function calmSubtitle(item: DashboardItem, kindLabel: string): React.ReactNode {
+  const parts: string[] = [kindLabel];
+  if (item.kind === "surface") {
+    const s = item.data;
+    if (s.source) parts.push(s.source);
+    parts.push(relTime(s.createdAt));
+    if (typeof s.importance === "number" && s.importance >= 50) {
+      parts.push(`imp ${s.importance}`);
+    }
+  } else if (item.kind === "followup") {
+    if (item.data.source) parts.push(item.data.source);
+    parts.push(relTime(item.data.receivedAt));
+  } else if (item.kind === "saved") {
+    if (item.data.kind) parts.push(item.data.kind);
+    parts.push(`saved ${relTime(item.data.savedAt)}`);
+  } else if (item.kind === "reflection") {
+    parts.push(`${item.data.evidenceCount} sources`);
+    parts.push(relTime(item.data.capturedAt));
+  }
+  return parts.join(" · ");
 }
 
 function getViewerKey(item: DashboardItem): string {
@@ -172,17 +222,17 @@ function ViewerBody({ item }: { item: DashboardItem }) {
 
 function ViewerActions({
   item,
-  onResolved,
 }: {
   item: DashboardItem;
+  // onResolved was the old inline-action hook; preview-only mode (per
+  // the IA defrag) doesn't need it since every action navigates away.
   onResolved?: (item: DashboardItem) => void;
 }) {
   // Every item gets a "Discuss with Jarvis" primary CTA. Kind-specific
-  // secondary actions (approve, reject, snooze, mark done, dismiss) live
-  // to the left of it.
+  // secondary actions are preview-only "Open in <surface>" deep-links
+  // (per the IA defrag), no inline approve/reject here anymore.
   const router = useRouter();
   const [seeding, setSeeding] = React.useState(false);
-  const [deciding, setDeciding] = React.useState<"approved" | "denied" | "snoozed" | "rejected" | null>(null);
 
   async function discuss() {
     const id = (item.data as { id?: string }).id ?? "";
@@ -201,124 +251,37 @@ function ViewerActions({
     }
   }
 
-  async function decideApproval(decision: "approved" | "denied" | "snoozed" | "rejected") {
-    if (item.kind !== "approval") return;
-    setDeciding(decision);
-    try {
-      let ok = false;
-      if (item.data.kind.startsWith("trust_")) {
-        ok = await decideTrust(item.data.id, decision === "rejected" ? "denied" : decision);
-      } else if (item.data.kind === "code_proposal") {
-        if (decision === "approved" || decision === "rejected") {
-          ok = await decideCodeProposal(item.data.id, decision);
-        }
-      }
-      if (ok) onResolved?.(item);
-    } finally {
-      setDeciding(null);
-    }
-  }
-
   function renderSecondary(): React.ReactNode {
-    switch (item.kind) {
-      case "approval":
-        if (item.data.kind.startsWith("trust_")) {
-          return (
-            <>
-              <SecondaryButton
-                tone="success"
-                Icon={CheckCircle2}
-                onClick={() => decideApproval("approved")}
-                disabled={deciding !== null}
-              >
-                Approve
-              </SecondaryButton>
-              <SecondaryButton
-                tone="danger"
-                Icon={X}
-                onClick={() => decideApproval("denied")}
-                disabled={deciding !== null}
-              >
-                Reject
-              </SecondaryButton>
-            </>
-          );
-        }
-        if (item.data.kind === "code_proposal") {
-          return (
-            <>
-              <SecondaryButton
-                tone="success"
-                Icon={CheckCircle2}
-                onClick={() => decideApproval("approved")}
-                disabled={deciding !== null}
-              >
-                Approve
-              </SecondaryButton>
-              <SecondaryButton
-                tone="danger"
-                Icon={X}
-                onClick={() => decideApproval("rejected")}
-                disabled={deciding !== null}
-              >
-                Reject
-              </SecondaryButton>
-            </>
-          );
-        }
-        return null;
-      case "todo":
-        return (
-          <SecondaryButton tone="success" Icon={CheckCircle2}>
-            Mark done
-          </SecondaryButton>
-        );
-      case "followup":
-        return (
-          <>
-            <SecondaryButton tone="muted" Icon={Clock4}>
-              Snooze
-            </SecondaryButton>
-            <SecondaryButton tone="muted" Icon={Trash2}>
-              Dismiss
-            </SecondaryButton>
-          </>
-        );
-      case "saved":
-        return <SecondaryButton tone="muted" Icon={Trash2}>Remove</SecondaryButton>;
-      case "activity": {
-        // Heartbeat findings carry an id prefixed with "hb-". Other
-        // activity rows (reflections, sentinel fires) don't have a
-        // dismiss path yet, so the button only renders when we know
-        // we can act on it. Dismissing closes EVERY open finding with
-        // the same (kind, title) on the server, so count-varying
-        // duplicates ("2 accounts" / "4 accounts") clear in one shot.
-        const id = item.data.id;
-        if (!id.startsWith("hb-")) return null;
-        return (
-          <SecondaryButton
-            tone="muted"
-            Icon={Trash2}
-            disabled={deciding !== null}
-            onClick={() => void dismissActivity(id.slice(3))}
-          >
-            Dismiss
-          </SecondaryButton>
-        );
-      }
-      default:
-        return null;
+    // Per the IA defrag (2026-05-16): dashboard rows for agent-originated
+    // items are PREVIEW-ONLY. Every action button has been pulled in
+    // favor of a single "Open in <canonical surface>" CTA so the boss
+    // never has to choose between three places to act on the same item.
+    //
+    //   trust_*       → Settings > Trust (audit + pending), real-time
+    //                   approval still lives inline in chat
+    //   code_proposal → /lab Open issues
+    //   activity (heartbeat finding) → /lab Open issues
+    //
+    // "Discuss with Jarvis" stays as the universal seeded-session path
+    // for items that warrant a conversation (todos, follow-ups, saved,
+    // pursuits, etc).
+    if (item.kind === "approval" && item.data.kind.startsWith("trust_")) {
+      return (
+        <OpenInButton
+          href="/settings?section=trust"
+          label="Open in Trust"
+        />
+      );
     }
-  }
-
-  async function dismissActivity(rawId: string) {
-    setDeciding("rejected");
-    try {
-      const ok = await dismissHeartbeatFinding(rawId);
-      if (ok) onResolved?.(item);
-    } finally {
-      setDeciding(null);
+    if (item.kind === "approval" && item.data.kind === "code_proposal") {
+      return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
     }
+    if (item.kind === "activity") {
+      // Heartbeat findings + curiosity questions surface in Activity.
+      // All actionable in Lab Fix-this.
+      return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
+    }
+    return null;
   }
 
   return (
@@ -338,37 +301,23 @@ function ViewerActions({
   );
 }
 
-function SecondaryButton({
-  Icon,
-  tone,
-  onClick,
-  disabled,
-  children,
-}: {
-  Icon: React.ComponentType<{ className?: string }>;
-  tone: "success" | "danger" | "muted";
-  onClick?: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
-}) {
-  const cls =
-    tone === "success"
-      ? "border-success/40 text-success hover:bg-success/10"
-      : tone === "danger"
-        ? "border-danger/40 text-danger hover:bg-danger/10"
-        : "border-border text-muted-foreground hover:bg-accent hover:text-foreground";
+// OpenInButton - the canonical "preview-only" CTA for agent-originated
+// dashboard rows. Routes the user to the canonical action surface so
+// dashboard stays a viewing surface and Lab/Settings/Chat stay the
+// places where work actually gets done. Closes the modal on click via
+// the parent's onClose by relying on Next router; the modal's
+// onOpenChange isn't called explicitly because navigating away from
+// the dashboard URL closes it naturally.
+function OpenInButton({ href, label }: { href: string; label: string }) {
+  const router = useRouter();
   return (
     <button
       type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "inline-flex h-10 items-center gap-1.5 rounded-md border bg-background px-3 text-[13px] font-medium transition-colors disabled:opacity-60",
-        cls,
-      )}
+      onClick={() => router.push(href)}
+      className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent"
     >
-      <Icon className="size-3.5" aria-hidden />
-      {children}
+      <ArrowRight className="size-3.5" aria-hidden />
+      {label}
     </button>
   );
 }
@@ -687,56 +636,67 @@ function FollowUpBody({ f }: { f: FollowUp }) {
 }
 
 // ── Surface item (generic surface contract) ───────────────────────────────
+//
+// Untitled UI labelled-rows shape. The old version was noisy:
+//   - chip row (kind · via X · time · importance) that duplicated the
+//     header's own meta
+//   - pipe-separated subtitle ("mr khaya | support@... | likely no
+//     reply") rendered as raw text
+//   - italic importanceReason floating between the subtitle and a
+//     faux-card holding the multi-line "Label: value" body as a single
+//     <pre> block
+//   - a second metadata <dl> at the bottom showing keys most users
+//     never need to see
+//
+// New version drops the chip row entirely (the header subtitle owns
+// kind/source/time/importance), drops the pipe subtitle, and parses
+// the labelled body into <ModalField> rows so each field name appears
+// in muted tracking-wide caps with its value on the right. The "why
+// it matters" sentence becomes a clean italic intro - no card around
+// it, just a paragraph. The url renders as a thin link at the bottom
+// only when present.
 function SurfaceBody({ item }: { item: SurfaceItem }) {
-  const metaEntries = Object.entries(item.metadata ?? {}).filter(
-    ([, v]) => v !== null && v !== undefined && v !== "",
+  const fields = parseLabeledBody(item.body);
+  // When the body parses cleanly into fields, drop the "Why it matters"
+  // duplicate from inline rendering since we render importanceReason
+  // above as a hero italic. Same for "Account" if it's already shown
+  // in the calm header subtitle - actually keep Account, the boss
+  // wants every contract field visible.
+  const visibleFields = fields.filter(
+    (f) => f.label.toLowerCase() !== "why it matters" || !item.importanceReason,
   );
+
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-          {item.kind}
-        </span>
-        <span className="font-mono">· via {item.source}</span>
-        <span className="font-mono" suppressHydrationWarning>
-          · {relTime(item.createdAt)}
-        </span>
-        {typeof item.importance === "number" ? (
-          <span
-            className={cn(
-              "font-mono uppercase tracking-wider",
-              item.importance >= 80
-                ? "text-danger"
-                : item.importance >= 50
-                  ? "text-info"
-                  : "text-muted-foreground",
-            )}
-          >
-            · importance {item.importance}
-          </span>
-        ) : null}
-      </div>
-      {item.subtitle ? (
-        <p className="text-[13px] text-foreground/85">{item.subtitle}</p>
-      ) : null}
+    <div className="space-y-4 pt-4">
       {item.importanceReason ? (
-        <p className="text-[12px] italic text-muted-foreground">{item.importanceReason}</p>
+        <p className="text-[13.5px] italic leading-relaxed text-muted-foreground">
+          {item.importanceReason}
+        </p>
       ) : null}
-      {item.body ? (
-        <ModalSection>
-          <ModalPre>{item.body}</ModalPre>
-        </ModalSection>
+
+      {visibleFields.length > 0 ? (
+        <div className="divide-y divide-border rounded-lg border bg-card">
+          <div className="px-4 sm:px-5">
+            {visibleFields.map((f) => (
+              <ModalField key={f.label} label={f.label}>
+                {f.value.split("\n").map((line, i, arr) => (
+                  <React.Fragment key={i}>
+                    {line}
+                    {i < arr.length - 1 ? <br /> : null}
+                  </React.Fragment>
+                ))}
+              </ModalField>
+            ))}
+          </div>
+        </div>
+      ) : item.body ? (
+        // Body didn't parse into labelled fields - render as prose so we
+        // still show what Jarvis wrote, without the faux-card chrome.
+        <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground/90">
+          {item.body}
+        </p>
       ) : null}
-      {metaEntries.length > 0 ? (
-        <ModalSection meta="metadata">
-          <ModalDl
-            entries={metaEntries.map(([k, v]) => ({
-              k,
-              v: typeof v === "string" ? v : JSON.stringify(v),
-            }))}
-          />
-        </ModalSection>
-      ) : null}
+
       {item.url ? (
         <ModalUrl href={item.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
           {item.url}

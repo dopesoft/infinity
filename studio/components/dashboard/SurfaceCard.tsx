@@ -1,20 +1,10 @@
 "use client";
 
-import {
-  AlertTriangle,
-  AtSign,
-  Calendar,
-  CheckSquare,
-  CircleDot,
-  FileText,
-  MessageCircle,
-  Sparkles,
-  TrendingUp,
-  type LucideIcon,
-} from "lucide-react";
+import { CircleDot } from "lucide-react";
 import { Section, TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
+import { extractFromSender, parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type { DashboardItem, SurfaceItem } from "@/lib/dashboard/types";
 
 /* SurfaceCard - the ONE generic renderer for the dashboard surface
@@ -27,20 +17,6 @@ import type { DashboardItem, SurfaceItem } from "@/lib/dashboard/types";
  * This is the Rule #1 payoff on the Studio side - the app adapts to
  * whatever the agent assembles.
  */
-
-// kind → icon. `kind` is free-form on the backend; anything unmapped
-// falls back to a neutral dot. Add a mapping here only when a kind earns
-// a clearer glyph - never block rendering on it.
-const KIND_ICON: Record<string, LucideIcon> = {
-  email: AtSign,
-  message: MessageCircle,
-  alert: AlertTriangle,
-  article: FileText,
-  metric: TrendingUp,
-  event: Calendar,
-  task: CheckSquare,
-  finding: Sparkles,
-};
 
 // A few well-known surfaces get a friendlier title + action link. The map
 // is a nicety, not a gate - an unknown surface still renders, with a
@@ -108,54 +84,71 @@ export function SurfaceCard({
 }
 
 function SurfaceRow({ item, onClick }: { item: SurfaceItem; onClick: () => void }) {
-  const Icon = KIND_ICON[item.kind] ?? CircleDot;
-  // 80+ → "Important" chip. 50-79 → "Notable" chip. Below that, or
-  // unranked → no chip. Importance is optional - an unranked item just
-  // renders without one.
+  // Untitled UI list-row pattern:
+  //   line 1: sender (parsed from body's "From:" field) · time on the right
+  //   line 2: subject (item.title) — the heaviest type weight
+  //   line 3: assistant-written one-liner (importanceReason) — the "why"
+  // Importance is a discrete signal only: a 2px colored left edge when
+  // imp >= 50. No avatar bubble, no IMPORTANT/NOTABLE pill, no chips,
+  // no star, no 3-dot menu, no tags. Tapping the row opens ObjectViewer
+  // (the only action). All "act on it" is funnelled through Discuss
+  // with Jarvis inside the modal.
   const imp = typeof item.importance === "number" ? item.importance : null;
-  const chip =
+  const edge =
     imp != null && imp >= 80
-      ? { label: "Important", cls: "bg-danger/15 text-danger" }
+      ? "border-l-2 border-l-danger"
       : imp != null && imp >= 50
-        ? { label: "Notable", cls: "bg-info/15 text-info" }
+        ? "border-l-2 border-l-info"
         : null;
+
+  // Sender comes from parsing the body's "From:" line. If parse misses,
+  // fall back to the source label ("gmail-triage" → "gmail") so the row
+  // still has a stable lead. Never show the noisy pipe-subtitle.
+  const parsed = parseLabeledBody(item.body);
+  const sender =
+    extractFromSender(parsed) ??
+    (item.source ? humaniseSource(item.source) : item.kind || "item");
+
+  // Preview line. Prefer the assistant-written "why" (importanceReason).
+  // Fall back to the first labelled body field's value, then to nothing.
+  // Never the raw multi-line body dump.
+  const preview =
+    item.importanceReason?.trim() ||
+    parsed.find((f) => f.label.toLowerCase() === "why it matters")?.value ||
+    parsed[0]?.value ||
+    "";
+
   return (
-    <TileCard onClick={onClick}>
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-muted-foreground">
-        <Icon className="size-4" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{item.title}</span>
-          {chip && (
-            <span
-              title={item.importanceReason || undefined}
-              className={cn(
-                "shrink-0 rounded-full px-1.5 py-px text-[10px] font-medium uppercase tracking-wide",
-                chip.cls,
-              )}
-            >
-              {chip.label}
-            </span>
-          )}
-          {item.subtitle ? (
-            <span className="hidden truncate text-xs text-muted-foreground sm:inline">
-              · {item.subtitle}
-            </span>
-          ) : null}
-          <span
-            className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground"
-            suppressHydrationWarning
-          >
-            {relTime(item.createdAt)}
-          </span>
-        </div>
-        {item.body ? (
-          <p className="line-clamp-1 break-words text-[12px] text-muted-foreground">
-            {item.body}
-          </p>
-        ) : null}
+    <TileCard
+      onClick={onClick}
+      className={cn("flex-col items-stretch gap-1.5 p-4 sm:p-4", edge)}
+    >
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+          {sender}
+        </span>
+        <span
+          className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+          suppressHydrationWarning
+        >
+          {relTime(item.createdAt)}
+        </span>
       </div>
+      <p className="line-clamp-2 break-words text-[14px] font-semibold leading-snug text-foreground">
+        {item.title}
+      </p>
+      {preview ? (
+        <p className="line-clamp-1 break-words text-[12.5px] text-muted-foreground">
+          {preview}
+        </p>
+      ) : null}
     </TileCard>
   );
+}
+
+// gmail-triage → "gmail". slack-triage → "slack". Falls back to the
+// source verbatim when no hyphen split is meaningful.
+function humaniseSource(s: string): string {
+  const head = s.split(/[-_]/)[0];
+  return head.length > 0 ? head : s;
 }

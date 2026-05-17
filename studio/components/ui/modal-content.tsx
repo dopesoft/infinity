@@ -219,6 +219,48 @@ export function ModalDl({
   );
 }
 
+/** Labeled inline row - the Untitled UI "From: <value>" pattern. Stacks
+ *  vertically on mobile (label on its own line above the value), shifts
+ *  to a two-column grid on sm+ (label left in a fixed column, value
+ *  right, wraps freely). Use these to render parsed key/value metadata
+ *  inside a modal body instead of crammed `<dl>` rows or pipe-separated
+ *  subtitles.
+ *
+ *  Compose multiple in a column wrapped in `<div className="divide-y divide-border">`
+ *  for hairline dividers between rows. The component itself does NOT
+ *  draw its own divider so the wrapper can control density (some bodies
+ *  want zero dividers + larger gaps).
+ *
+ *  Props:
+ *    label    - small uppercase tracking-wide muted label (e.g. "FROM").
+ *    children - the value content. Anything — plain text, a link node,
+ *               nested chips. Wraps freely; never overflows the modal. */
+export function ModalField({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "grid min-w-0 grid-cols-1 gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:gap-4 sm:py-3.5",
+        className,
+      )}
+    >
+      <div className="min-w-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:pt-px">
+        {label}
+      </div>
+      <div className="min-w-0 break-words text-[13px] leading-relaxed text-foreground/90">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /** Horizontal chip row - the standardized "eyebrow with badges" line that
  *  sits above the body content (kind, time, risk, etc.). Wraps on mobile. */
 export function ModalChips({

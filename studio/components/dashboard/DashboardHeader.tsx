@@ -44,7 +44,7 @@ export function DashboardHeader({
           <div className="flex shrink-0 items-center gap-2">
             <span
               aria-hidden
-              className="size-1.5 animate-pulse rounded-full bg-success shadow-[0_0_8px_hsl(var(--success))]"
+              className="size-1.5 animate-pulse rounded-full bg-brand shadow-[0_0_8px_hsl(var(--brand))]"
             />
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Jarvis
@@ -60,9 +60,9 @@ export function DashboardHeader({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {badgeCount > 0 ? (
-            <div className="flex items-center gap-1.5 rounded-full border border-rose-400/40 bg-rose-400/10 px-2.5 py-1 text-[11px] font-medium text-rose-400">
+            <div className="flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand/10 px-2.5 py-1 text-[11px] font-medium text-brand">
               <Sparkles className="size-3" aria-hidden />
-              <span className="font-mono">{badgeCount}</span>
+              <span className="font-mono tabular-nums">{badgeCount}</span>
               <span className="hidden sm:inline">need you</span>
             </div>
           ) : null}

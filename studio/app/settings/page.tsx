@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  ShieldCheck,
   Sliders,
   Unplug,
   Wrench,
@@ -33,6 +34,7 @@ import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { DashboardSettings } from "@/components/settings/DashboardSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
+import { TrustQueuePanel } from "@/components/TrustQueuePanel";
 import { cn } from "@/lib/utils";
 import {
   disconnectOpenAIOAuth,
@@ -56,7 +58,14 @@ import {
   type VendorId,
 } from "@/lib/models-catalog";
 
-type SectionId = "general" | "dashboard" | "notifications" | "tools" | "mcp" | "canvas";
+type SectionId =
+  | "general"
+  | "dashboard"
+  | "notifications"
+  | "tools"
+  | "mcp"
+  | "canvas"
+  | "trust";
 
 type SectionMeta = {
   id: SectionId;
@@ -67,6 +76,7 @@ type SectionMeta = {
 
 const SECTIONS: SectionMeta[] = [
   { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
+  { id: "trust", label: "Trust", description: "Approve high-risk actions Jarvis is asking for + audit what you've already trusted", icon: ShieldCheck },
   { id: "dashboard", label: "Dashboard", description: "Pick which Dashboard sections show on /", icon: LayoutDashboard },
   { id: "notifications", label: "Notifications", description: "iOS-style push notifications on iPhone + Mac", icon: Bell },
   { id: "mcp", label: "Connectors", description: "MCP servers + Composio integrations the agent can call", icon: Plug },
@@ -92,6 +102,20 @@ export default function SettingsPage() {
 
   useEffect(() => {
     refresh();
+  }, []);
+
+  // Honour ?section=<id> so deep-links from the redirected /trust
+  // page, dashboard, and notifications land on the right section.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("section");
+    if (
+      requested &&
+      ["general", "trust", "dashboard", "notifications", "tools", "mcp", "canvas"].includes(
+        requested,
+      )
+    ) {
+      setActive(requested as SectionId);
+    }
   }, []);
 
   const counts = useMemo<Partial<Record<SectionId, number>>>(
@@ -249,6 +273,8 @@ function SectionContent({
   switch (active) {
     case "general":
       return <GeneralSection status={status} />;
+    case "trust":
+      return <TrustSection />;
     case "dashboard":
       return <DashboardSettings />;
     case "notifications":
@@ -260,6 +286,18 @@ function SectionContent({
     case "canvas":
       return <CanvasSettings />;
   }
+}
+
+function TrustSection() {
+  return (
+    <div className="space-y-3">
+      <SectionHeader
+        title="Trust"
+        description="Real-time requests still pop up inline in Chat. This page is the audit / bulk-management surface."
+      />
+      <TrustQueuePanel />
+    </div>
+  );
 }
 
 function SectionHeader({ title, description }: { title: string; description: string }) {
