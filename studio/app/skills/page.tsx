@@ -100,7 +100,7 @@ export default function SkillsPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="space-y-3 border-b px-3 py-3 sm:px-4">
+        <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
           {/* No "skills (#)" header - the total moves into the tab chips
               below so each status tab carries its own filter-aware count. */}
 
@@ -178,7 +178,7 @@ export default function SkillsPage() {
               open so the list/detail switcheroo isn't crowded. */}
           <aside
             className={cn(
-              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto border-b bg-background px-3 py-3 scroll-touch lg:w-72 lg:border-b-0 lg:border-r",
+              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto bg-background px-4 py-4 scroll-touch sm:px-6 lg:w-72 lg:px-4 lg:border-r",
               showDetail ? "hidden lg:block" : "block",
             )}
           >
@@ -186,7 +186,7 @@ export default function SkillsPage() {
           </aside>
           <aside
             className={cn(
-              "min-h-0 w-full flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:flex-none lg:shrink-0 lg:border-b-0 lg:border-r",
+              "min-h-0 w-full flex-1 flex-col overflow-y-auto bg-background scroll-touch lg:w-80 lg:flex-none lg:shrink-0 lg:border-r",
               showDetail ? "hidden lg:flex" : "flex",
             )}
           >
@@ -248,7 +248,7 @@ export default function SkillsPage() {
             {showDetail && (
               <button
                 onClick={() => setShowDetail(false)}
-                className="border-b px-4 py-2 text-left text-xs text-muted-foreground lg:hidden"
+                className="px-4 py-2 text-left text-xs text-muted-foreground lg:hidden"
               >
                 ← back to list
               </button>

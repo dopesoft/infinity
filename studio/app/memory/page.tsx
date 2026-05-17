@@ -121,7 +121,7 @@ export default function MemoryPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="space-y-3 border-b px-3 py-3 sm:px-4">
+        <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
           {/* Mobile: horizontal snap-scroll row. sm+: grid. The negative
               margins + edge padding let cards scroll flush to the screen
               edge on mobile while keeping a clean inset on tablet/desktop. */}
@@ -267,7 +267,7 @@ export default function MemoryPage() {
           {view !== "graph" && view !== "reflections" && view !== "predictions" && (
             <aside
               className={cn(
-                "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto border-b bg-background px-3 py-3 scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
+                "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto bg-background px-4 py-4 scroll-touch sm:px-6 lg:w-80 lg:px-4 lg:border-r",
                 showDetail ? "hidden lg:block" : "block",
               )}
             >
@@ -281,7 +281,7 @@ export default function MemoryPage() {
             <>
               <aside
                 className={cn(
-                  "min-h-0 flex-1 flex-col overflow-y-auto border-b bg-background scroll-touch lg:w-80 lg:border-b-0 lg:border-r",
+                  "min-h-0 flex-1 flex-col overflow-y-auto bg-background scroll-touch lg:w-80 lg:border-r",
                   (view === "reflections" || view === "predictions")
                     ? "lg:w-full lg:border-r-0"
                     : showDetail
@@ -377,7 +377,7 @@ export default function MemoryPage() {
                   {showDetail && (
                     <button
                       onClick={() => setShowDetail(false)}
-                      className="border-b px-4 py-2 text-left text-xs text-muted-foreground lg:hidden"
+                      className="px-4 py-2 text-left text-xs text-muted-foreground lg:hidden"
                     >
                       ← back to list
                     </button>

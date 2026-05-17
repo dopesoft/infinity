@@ -126,17 +126,25 @@ export default function SettingsPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center justify-between gap-2 border-b px-3 py-2 sm:px-4">
-          <h1 className="text-sm font-semibold tracking-tight">Settings</h1>
-          <Button size="sm" variant="ghost" onClick={refresh} disabled={loading} className="gap-1.5">
-            <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-            <span className="hidden sm:inline">{loading ? "loading…" : "refresh"}</span>
+        <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
+          <h1 className="text-base font-semibold tracking-tight text-foreground">
+            Settings
+          </h1>
+          <Button
+            onClick={refresh}
+            disabled={loading}
+            size="icon"
+            variant="ghost"
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
           </Button>
         </div>
 
         {/* Mobile: section rail across the top, content below. */}
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
-          <nav className="no-scrollbar flex gap-1.5 overflow-x-auto scroll-touch border-b px-3 py-2">
+          <nav className="no-scrollbar flex gap-1.5 overflow-x-auto scroll-touch px-4 py-2 sm:px-6">
             {SECTIONS.map((s) => (
               <SectionPill
                 key={s.id}

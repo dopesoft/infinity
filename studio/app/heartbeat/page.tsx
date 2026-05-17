@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   decideCuriosityQuestion,
@@ -260,94 +261,62 @@ export default function HeartbeatPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col bg-background">
-        {/* Plain-English explainer so the page reads as observability,
-            not as a queue. Every finding is actionable in /lab; this
-            page is purely "is the agent's nervous system alive?". */}
-        <div className="border-b px-3 py-2 sm:px-4">
-          <div className="mx-auto max-w-5xl rounded-lg border border-info/30 bg-info/5 px-3 py-2 text-[12px] leading-relaxed text-foreground/85">
-            <p>
-              <span className="font-semibold text-info">Heartbeat</span> is the
-              agent&apos;s nervous system. Every {formatInterval(intervalSeconds)} it
-              scans for problems and posts what it finds to{" "}
-              <a href="/lab?tab=open" className="font-semibold text-info hover:underline">
-                Lab
-              </a>
-              . This page is read-only - use Lab to act on anything that needs you.
-            </p>
+        {/* Unified page header: title + status badge on left, actions
+            on right. Same padding rhythm as every other page. Stats
+            move into a compact strip below. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <h1 className="text-base font-semibold tracking-tight text-foreground">
+              Heartbeat
+            </h1>
+            <Badge
+              variant="outline"
+              className={cn(
+                "font-mono text-[10px]",
+                isAlive
+                  ? "border-brand/40 bg-brand/10 text-brand"
+                  : "border-muted-foreground/40 text-muted-foreground",
+              )}
+            >
+              {isAlive ? "alive" : "quiet"}
+            </Badge>
+            <span className="hidden text-xs text-muted-foreground sm:inline">
+              every {formatInterval(intervalSeconds)}
+              {lastRun ? (
+                <>
+                  {" · "}
+                  <span suppressHydrationWarning>{relTime(lastRun.started_at)}</span>
+                </>
+              ) : null}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button onClick={fireNow} disabled={running} size="sm" className="gap-1.5">
+              <Play className="size-3.5" aria-hidden />
+              {running ? "Pulsing…" : "Pulse now"}
+            </Button>
+            <Button
+              onClick={loadAll}
+              disabled={loading}
+              size="icon"
+              variant="ghost"
+              aria-label="Refresh"
+              title="Refresh"
+            >
+              <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
+            </Button>
           </div>
         </div>
-        {/* Hero status card. Mobile-first: pulse + title/stats on top, action
-            row spans full width below for 44px-min tap targets. sm+: actions
-            float to the right of the header inline (same row). Never orphans
-            the buttons - they're always anchored to a parent surface. */}
-        <div className="border-b bg-gradient-to-b from-background to-background/40 px-3 py-4 sm:px-4 sm:py-6">
-          <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-            <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
-              <PulseIndicator alive={isAlive} />
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:gap-x-3">
-                  <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-                    Heartbeat
-                  </h1>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "font-mono text-[10px]",
-                      isAlive
-                        ? "border-success/40 bg-success/10 text-success"
-                        : "border-muted-foreground/40 text-muted-foreground",
-                    )}
-                  >
-                    {isAlive ? "alive" : "quiet"}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    every {formatInterval(intervalSeconds)}
-                    {lastRun ? (
-                      <>
-                        {" · "}
-                        <span suppressHydrationWarning>{relTime(lastRun.started_at)}</span>
-                      </>
-                    ) : null}
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground sm:gap-x-4">
-                  <Stat icon={Activity} value={runs.length} label="runs" />
-                  <Stat icon={Sparkles} value={stats.findings24h} label="findings 24h" />
-                  <Stat icon={Zap} value={stats.intents24h} label="classified 24h" />
-                  {stats.surprises > 0 && (
-                    <Stat icon={Lightbulb} value={stats.surprises} label="surprises" />
-                  )}
-                  {stats.security > 0 && (
-                    <Stat icon={Shield} value={stats.security} label="security" />
-                  )}
-                </div>
-              </div>
-            </div>
-            {/* Action row. Full-width on mobile so Pulse now is a fat
-                primary CTA (44px+ tap target); shrinks to icon-on-right
-                on sm+. Refresh stays compact icon-only. */}
-            <div className="flex shrink-0 items-stretch gap-2">
-              <button
-                type="button"
-                onClick={fireNow}
-                disabled={running}
-                className="inline-flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60 sm:h-10 sm:flex-none sm:text-xs"
-              >
-                <Play className="size-4 sm:size-3.5" aria-hidden />
-                {running ? "Pulsing…" : "Pulse now"}
-              </button>
-              <button
-                type="button"
-                onClick={loadAll}
-                disabled={loading}
-                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 sm:size-10"
-                aria-label="Refresh"
-                title="Refresh"
-              >
-                <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
-              </button>
-            </div>
-          </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-4 text-[12px] text-muted-foreground sm:px-6 lg:px-8">
+          <Stat icon={Activity} value={runs.length} label="runs" />
+          <Stat icon={Sparkles} value={stats.findings24h} label="findings 24h" />
+          <Stat icon={Zap} value={stats.intents24h} label="classified 24h" />
+          {stats.surprises > 0 && (
+            <Stat icon={Lightbulb} value={stats.surprises} label="surprises" />
+          )}
+          {stats.security > 0 && (
+            <Stat icon={Shield} value={stats.security} label="security" />
+          )}
         </div>
 
         {/* Body: two-column on desktop, stacked on mobile. Left is the live
@@ -496,39 +465,6 @@ export default function HeartbeatPage() {
         </div>
       </div>
     </TabFrame>
-  );
-}
-
-function PulseIndicator({ alive }: { alive: boolean }) {
-  return (
-    <div className="relative flex size-12 shrink-0 items-center justify-center sm:size-14">
-      {alive && (
-        <>
-          <span
-            className="heartbeat-ring absolute inset-0 rounded-full bg-success/30"
-            aria-hidden
-          />
-          <span
-            className="heartbeat-ring-delay absolute inset-0 rounded-full bg-success/30"
-            aria-hidden
-          />
-        </>
-      )}
-      <span
-        className={cn(
-          "relative flex size-6 items-center justify-center rounded-full sm:size-7",
-          alive ? "bg-success" : "bg-muted-foreground/40",
-        )}
-      >
-        <Activity
-          className={cn(
-            "size-3.5 text-background sm:size-4",
-            !alive && "text-foreground/60",
-          )}
-          aria-hidden
-        />
-      </span>
-    </div>
   );
 }
 

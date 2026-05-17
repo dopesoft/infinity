@@ -21,8 +21,6 @@ import {
   PageTabs,
   PageTabsList,
   PageTabsTrigger,
-  PageSectionHeader,
-  HeaderAction,
 } from "@/components/ui/page-tabs";
 import { EmptyState } from "@/components/EmptyState";
 import { TabsContent } from "@/components/ui/tabs";
@@ -198,24 +196,24 @@ export default function LabPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b px-3 py-3 sm:px-4">
-          <PageSectionHeader title="lab">
-            <HeaderAction
-              icon={<RefreshCw className="size-4" />}
-              label="Refresh"
-              onClick={() => void load()}
-              disabled={loading}
-            />
-          </PageSectionHeader>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Things Jarvis noticed and proposes to fix, lessons learned from past
-            sessions, and skills he taught himself. Approve a fix to send the
-            full context to Live so he can apply it.
-          </p>
+        <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
+          <h1 className="text-base font-semibold tracking-tight text-foreground">
+            Lab
+          </h1>
+          <Button
+            onClick={() => void load()}
+            disabled={loading}
+            size="icon"
+            variant="ghost"
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
+          </Button>
         </div>
 
         <PageTabs value={tab} onValueChange={(v) => setTab(v as LabTab)} className="flex min-h-0 flex-1 flex-col">
-          <div className="border-b px-3 pt-2 sm:px-4">
+          <div className="px-4 pt-1 pb-2 sm:px-6 lg:px-8">
             <PageTabsList scrollable>
               <PageTabsTrigger value="open" className="gap-1.5">
                 <span>Open issues</span>
@@ -232,7 +230,7 @@ export default function LabPage() {
             </PageTabsList>
           </div>
 
-          <TabsContent value="open" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
+          <TabsContent value="open" className="mt-0 min-h-0 flex-1 overflow-y-auto px-4 py-5 scroll-touch sm:px-6 lg:px-8">
             <ProposalsPane
               loading={loading}
               proposals={data?.proposals ?? []}
@@ -241,10 +239,10 @@ export default function LabPage() {
               onDismiss={dismissProposal}
             />
           </TabsContent>
-          <TabsContent value="fixed" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
+          <TabsContent value="fixed" className="mt-0 min-h-0 flex-1 overflow-y-auto px-4 py-5 scroll-touch sm:px-6 lg:px-8">
             <ResolvedPane loading={loading} resolved={data?.resolved ?? []} />
           </TabsContent>
-          <TabsContent value="lessons" className="mt-0 min-h-0 flex-1 overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
+          <TabsContent value="lessons" className="mt-0 min-h-0 flex-1 overflow-y-auto px-4 py-5 scroll-touch sm:px-6 lg:px-8">
             <LessonsPane loading={loading} lessons={data?.lessons ?? []} />
           </TabsContent>
         </PageTabs>

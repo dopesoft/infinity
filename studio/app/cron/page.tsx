@@ -32,17 +32,22 @@ export default function CronPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
+          <h1 className="text-base font-semibold tracking-tight text-foreground">
+            Cron
+          </h1>
+        </div>
         <Tabs defaultValue="cron" className="flex min-h-0 flex-1 flex-col">
-          <div className="border-b px-3 py-3 sm:px-4">
+          <div className="px-4 pb-3 sm:px-6 lg:px-8">
             <PageTabsList columns={2}>
               <PageTabsTrigger value="cron">Cron</PageTabsTrigger>
               <PageTabsTrigger value="sentinel">Sentinels</PageTabsTrigger>
             </PageTabsList>
           </div>
-          <TabsContent value="cron" className="flex min-h-0 flex-1 flex-col px-3 py-3 sm:px-4">
+          <TabsContent value="cron" className="flex min-h-0 flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8">
             <CronSection />
           </TabsContent>
-          <TabsContent value="sentinel" className="flex min-h-0 flex-1 flex-col px-3 py-3 sm:px-4">
+          <TabsContent value="sentinel" className="flex min-h-0 flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8">
             <SentinelSection />
           </TabsContent>
         </Tabs>

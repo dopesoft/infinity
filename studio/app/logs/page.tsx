@@ -92,7 +92,7 @@ export default function LogsPage() {
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="space-y-3 border-b px-3 py-3 sm:px-4">
+        <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
           {/* No "logs (#)" header - the total moves into the tab chips below
               so each status tab carries its own filter-aware count.
               Mirrors /memory + /skills. */}
