@@ -1,20 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle,
   ArrowRight,
   BookOpen,
   Check,
-  ChevronRight,
-  Clock,
   Loader2,
   RefreshCw,
   Sparkles,
   Wrench,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
