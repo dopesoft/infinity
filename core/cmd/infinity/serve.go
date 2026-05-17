@@ -600,6 +600,15 @@ func serveCmd() *cobra.Command {
 						// → next heartbeat tick notices → skill fires → identity
 						// shows in every later turn. Zero per-toolkit Go code.
 						proactive.ConnectorIdentityChecklist(connectorsCache),
+						// Healing: scan mem_crons for error-tagged last_run_status
+						// and mem_observations for tools that have failed 3+ times
+						// in the last 24h. Each detection writes a row into
+						// mem_curiosity_questions with source_kind='cron_failure'
+						// or 'repeated_tool_error', which surfaces in /lab's
+						// Fix this tab with an Approve-and-fix path. Dedupe is
+						// the schema-level unique index on (question) WHERE
+						// status='open' so re-runs across ticks are idempotent.
+						proactive.HealingChecklist(pool),
 					))
 				heartbeat.Start(cmd.Context())
 				if a, ok := provider.(*llm.Anthropic); ok {
