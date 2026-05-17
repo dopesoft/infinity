@@ -17,6 +17,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/push"
+	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/sessions"
 	"github.com/dopesoft/infinity/core/internal/settings"
@@ -109,6 +110,11 @@ type Config struct {
 	// trace_* agent tools. Nil-safe - endpoints return empty / 503 cleanly
 	// when no DB is wired.
 	Turns *memory.TurnStore
+	// RunsAPI exposes /api/runs (read-only) so Studio's useRuns hook can
+	// backfill the snapshot of in-flight + recent runs on mount. The
+	// realtime publication on mem_runs (migration 035) handles updates;
+	// this endpoint exists for the cold-load case. Nil-safe.
+	RunsAPI *runs.API
 }
 
 type Server struct {
@@ -223,6 +229,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.DashboardAPI != nil {
 		cfg.DashboardAPI.Routes(mux)
+	}
+	if cfg.RunsAPI != nil {
+		cfg.RunsAPI.Routes(mux)
 	}
 
 	// Auth middleware. /health and /auth/* stay open so the studio can

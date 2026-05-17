@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Loader2, Play, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Clock, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ import {
   type SentinelDTO,
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { RunIndicator } from "@/lib/runs";
 
 export default function CronPage() {
   return (
@@ -54,26 +55,16 @@ function CronSection() {
   const [items, setItems] = useState<CronJobDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  // Per-row trigger state for the "Run now" button. Keyed by cron id so
-  // many buttons can be tracked independently without re-rendering
-  // siblings. Cleared automatically when the parent reloads.
-  const [runState, setRunState] = useState<
-    Record<string, { status: "running" | "ok" | "error"; error?: string }>
-  >({});
 
+  // Run state is server-tracked via mem_runs (see CLAUDE.md →
+  // "Server-tracked progress"). RunIndicator subscribes to the row's
+  // runs via useRuns, so the spinner survives navigation, refresh,
+  // focus loss, and second-device viewing. Local useState for "running"
+  // was the original bug - never reintroduce it.
   async function runNow(id: string) {
-    setRunState((s) => ({ ...s, [id]: { status: "running" } }));
-    const res = await triggerCron(id);
-    if (!res) {
-      setRunState((s) => ({ ...s, [id]: { status: "error", error: "Request failed" } }));
-      return;
-    }
-    if (!res.ok) {
-      setRunState((s) => ({ ...s, [id]: { status: "error", error: res.error ?? "Run failed" } }));
-    } else {
-      setRunState((s) => ({ ...s, [id]: { status: "ok" } }));
-    }
-    // Reload so last_run_at + last_run_status reflect the fire.
+    await triggerCron(id);
+    // The server's row write also updates last_run_at / last_run_status,
+    // which is read from mem_crons; reload to refresh those fields too.
     void load();
   }
 
@@ -120,9 +111,7 @@ function CronSection() {
             {loading ? "Loading…" : "No crons yet."}
           </p>
         ) : (
-          items.map((j) => {
-            const run = runState[j.id];
-            return (
+          items.map((j) => (
             <li key={j.id} className="rounded-xl border bg-card px-3 py-2">
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <code className="truncate font-mono text-foreground">{j.name}</code>
@@ -148,22 +137,13 @@ function CronSection() {
                   </span>
                 )}
                 <div className="ml-auto flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 gap-1 px-2 text-[11px]"
-                    onClick={() => void runNow(j.id)}
-                    disabled={run?.status === "running"}
-                    title="Fire this cron immediately, regardless of schedule. The next regular fire still happens on the cron expression's next tick."
-                    aria-label="Run now"
-                  >
-                    {run?.status === "running" ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Play className="size-3.5" />
-                    )}
-                    Run now
-                  </Button>
+                  <RunIndicator
+                    kind="cron"
+                    targetId={j.id}
+                    label="Run now"
+                    title="Fire this cron immediately, regardless of schedule. The next regular fire still happens on the cron expression's next tick. Progress survives navigation and refresh."
+                    onRun={() => runNow(j.id)}
+                  />
                   <Button
                     size="icon"
                     variant="ghost"
@@ -179,19 +159,8 @@ function CronSection() {
                   </Button>
                 </div>
               </div>
-              {run?.status === "error" && (
-                <p className="mt-1.5 break-words rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
-                  {run.error}
-                </p>
-              )}
-              {run?.status === "ok" && (
-                <p className="mt-1.5 rounded-md border border-success/40 bg-success/5 px-2 py-1 text-[11px] text-success">
-                  Fired successfully. Check the agent-work feed for the run details.
-                </p>
-              )}
             </li>
-            );
-          })
+          ))
         )}
       </ul>
     </div>

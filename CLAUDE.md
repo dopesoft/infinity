@@ -178,6 +178,23 @@ If a primitive fits, **use it as-is**. If it almost fits, **extend the primitive
 
 **Why this rule exists.** When primitives own the discipline (overflow, safe area, typography, a11y, motion), each consumer becomes trivially correct. When discipline lives in the consumer, the next consumer copies a buggy version and the bug ships. Reuse-first is how we keep mobile responsive, keep a11y intact, and keep the codebase from drifting into 30 different snowflake versions of the same surface.
 
+### Server-tracked progress — every long action persists across focus, navigation, refresh, and device
+
+**This bit us on 2026-05-16.** The boss fired a cron manually, tabbed to another page, came back, and the spinner was gone — even though the run was still in flight on the server. Root cause: a `useState<{status:"running"|"ok"|"error"}>` keyed by row id in [`studio/app/cron/page.tsx`](studio/app/cron/page.tsx). When the user navigated away, the page component unmounted, the state evaporated, and on return there was no signal that the run was still happening. The same anti-pattern was present in ~every screen that fires a long action (heartbeat run, skill invoke, voyager optimize, gym extract, etc).
+
+**The boss's words: "REALTIME + PERSISTANCE ACROSS FOCUS AND EVERYTHING ELSE."** This is a hard rule, not a preference.
+
+Non-negotiable rules:
+
+- **Any server-side action that takes longer than ~250ms — or that the user might want to watch — MUST track its state in the database.** Use the [`mem_runs`](core/db/migrations/035_mem_runs.sql) substrate: a row is inserted with `status='running'` when the action starts, updated to `'ok'` / `'error'` (and `ended_at`) when it finishes. Every long action surface gets a `mem_runs` row, no exceptions: cron run, skill invoke, heartbeat scan, voyager optimize, gym extract, GEPA run, sentinel dispatch, anything else you add.
+- **The Go side uses `runs.Track(ctx, kind, target_id, label, source, fn)`** in [`core/internal/runs`](core/internal/runs/runs.go). It books the row, runs your function, closes the row with the result. Never roll your own start/end UPDATE pair — use the helper. Adding a new kind is one new constant string; do NOT add a new column or table per kind.
+- **The Studio side uses the generic `useRuns({kind?, targetId?})` hook** from [`studio/lib/runs`](studio/lib/runs/useRuns.ts) and the `<RunIndicator>` primitive. They subscribe via the existing realtime publication (`mem_runs` is replicated) so updates push live AND survive any navigation/refresh because they read server state on mount. NEVER track "is this running?" in component-local `useState`.
+- **The spinner must work across:** route navigation, browser tab switch, browser refresh, app backgrounding, a second device opening the same screen. If your design can't do that, you've used the wrong primitive.
+- **Optimistic local state is allowed for short interactions only** (input typing, dropdown open, form draft) — anything where the server has no opinion about "in progress" and the cost of being wrong is zero. The moment a request fires that the server should track, the source of truth is the server.
+- **When you add a new long-action endpoint, wire it through `runs.Track` in the same PR.** Don't merge a `POST /api/foo/run` that doesn't book a `mem_runs` row — the next person to consume it will reintroduce the local-state anti-pattern because there's no server state to read.
+
+The pattern this replaces (the bug): UI button onClick → `setLocal({running:true})` → `await fetch(...)` → `setLocal({running:false})`. Every one of these is a regression of this rule and should be migrated to `useRuns` + `<RunIndicator>` the moment you touch the file.
+
 ### Mobile-first responsiveness — iOS Safari + Chrome are the primary targets
 
 The user lives on their phone. Every UI change must be designed for mobile first and verified at 375px. These rules are non-negotiable:

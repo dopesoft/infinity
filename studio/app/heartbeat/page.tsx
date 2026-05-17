@@ -32,6 +32,7 @@ import {
 } from "@/lib/api";
 import { seedSession } from "@/lib/dashboard/seed";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useRuns } from "@/lib/runs";
 
 /* Heartbeat - system pulse monitor.
  *
@@ -139,7 +140,13 @@ export default function HeartbeatPage() {
   const [runs, setRuns] = useState<HeartbeatRunDTO[]>([]);
   const [findings, setFindings] = useState<HeartbeatFindingDTO[]>([]);
   const [intents, setIntents] = useState<IntentRecordDTO[]>([]);
-  const [running, setRunning] = useState(false);
+  // Heartbeat run state is server-tracked via mem_runs so the spinner
+  // survives navigation, refresh, focus loss, and second-device viewing.
+  // Server-truth source: any 'heartbeat' kind run currently in 'running'
+  // status means "pulse is in flight." See CLAUDE.md → "Server-tracked
+  // progress". The empty targetId matches the single global heartbeat.
+  const { latest: heartbeatRun } = useRuns({ kind: "heartbeat", targetId: "", limit: 3 });
+  const running = heartbeatRun?.status === "running";
   const [last, setLast] = useState<HeartbeatRunSummaryDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<EventFilter>("all");
@@ -167,9 +174,7 @@ export default function HeartbeatPage() {
   useRealtime(["mem_heartbeats", "mem_heartbeat_findings", "mem_intent_decisions"], loadAll);
 
   async function fireNow() {
-    setRunning(true);
     const res = await runHeartbeatNow();
-    setRunning(false);
     if (res) setLast(res);
     await loadAll();
   }

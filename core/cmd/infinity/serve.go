@@ -29,6 +29,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/push"
+	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
 	"github.com/dopesoft/infinity/core/internal/sessions"
@@ -102,6 +103,12 @@ func serveCmd() *cobra.Command {
 					searcher = memory.NewSearcher(p, embedder)
 					procedural = memory.NewProceduralStore(p, embedder)
 					searcher.AttachProcedural(procedural)
+					// runs.SetGlobal arms the server-tracked progress
+					// substrate (mem_runs). Every long action across the
+					// codebase resolves runs.Track via this global; if
+					// the pool is missing, Track no-ops cleanly. See
+					// CLAUDE.md → "Server-tracked progress".
+					runs.SetGlobal(p)
 
 					// OAuth-backed OpenAI provider needs a pool-backed token
 					// store; FromEnv returns nil for this case so we build it
@@ -852,6 +859,7 @@ func serveCmd() *cobra.Command {
 				BridgeRouter:   activeBridgeRouter,
 				BridgePrefs:    activeBridgePrefs,
 				Turns:          turnStore,
+				RunsAPI:        runs.NewAPI(pool),
 			})
 
 			// Late-bind the Voyager auto-promote → chat-bubble notifier. The

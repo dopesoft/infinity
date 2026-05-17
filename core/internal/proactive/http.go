@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/intent"
+	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -268,7 +269,17 @@ func (a *API) handleHeartbeatRun(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
-	res, err := a.heartbeat.RunOnce(ctx)
+	// runs.Track surfaces "heartbeat is running" to every device. Single
+	// global heartbeat → target_id stays empty; consumers filter on kind
+	// alone. See CLAUDE.md → "Server-tracked progress".
+	var (
+		res any
+		err error
+	)
+	_ = runs.Track(ctx, runs.KindHeartbeat, "", "heartbeat", runs.SourceManual, func(ctx context.Context) error {
+		res, err = a.heartbeat.RunOnce(ctx)
+		return err
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error":   err.Error(),

@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/dopesoft/infinity/core/internal/plasticity"
+	"github.com/dopesoft/infinity/core/internal/runs"
 )
 
 func (s *Server) handleGym(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +51,17 @@ func (s *Server) handleGymAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown gym action"})
 		return
 	}
-	result, err := plasticity.NewStore(s.pool).ExtractExamples(r.Context(), body.Limit)
+	// runs.Track surfaces "gym extract is running" to every device,
+	// because the extract pass can chew through 50+ artifacts and is
+	// worth seeing live. See CLAUDE.md → "Server-tracked progress".
+	var (
+		result plasticity.ExtractResult
+		err    error
+	)
+	_ = runs.Track(r.Context(), runs.KindGymExtract, "", "extract examples", runs.SourceManual, func(ctx context.Context) error {
+		result, err = plasticity.NewStore(s.pool).ExtractExamples(ctx, body.Limit)
+		return err
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

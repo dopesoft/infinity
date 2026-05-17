@@ -98,6 +98,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       "mem_adapter_evals",
       "mem_policy_routes",
       "mem_turns",
+      "mem_runs",
     ] as const;
 
     let channel = supabase.channel("infinity-realtime");

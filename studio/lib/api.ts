@@ -241,6 +241,44 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null>
 
 export const fetchCoreStatus = (signal?: AbortSignal) =>
   getJSON<CoreStatus>("/api/status", signal);
+
+// Server-tracked long-action progress. Every long server action (cron,
+// skill, heartbeat, voyager.optimize, gym.extract, sentinel, …) books
+// a mem_runs row via runs.Track on the Go side and pushes updates over
+// the supabase_realtime publication. Surfaces in Studio via useRuns().
+// See CLAUDE.md → "Server-tracked progress".
+export type RunDTO = {
+  id: string;
+  kind: string;            // 'cron' | 'skill' | 'heartbeat' | 'voyager.optimize' | ...
+  target_id: string;       // row id of the thing running (cron uuid, skill name, ...)
+  label: string;
+  source: "manual" | "scheduled" | "agent" | "heartbeat" | "sentinel";
+  status: "running" | "ok" | "error";
+  progress?: number;       // 0..1 when known, omitted when indeterminate
+  progress_label?: string;
+  started_at: string;      // RFC3339
+  ended_at?: string;
+  duration_ms?: number;
+  error?: string;
+  result_summary?: string;
+};
+
+export type FetchRunsOpts = {
+  kind?: string;
+  targetId?: string;
+  status?: "running" | "ok" | "error";
+  limit?: number;
+};
+
+export async function fetchRuns(opts: FetchRunsOpts = {}, signal?: AbortSignal): Promise<RunDTO[]> {
+  const q = new URLSearchParams();
+  if (opts.kind) q.set("kind", opts.kind);
+  if (opts.targetId) q.set("target_id", opts.targetId);
+  if (opts.status) q.set("status", opts.status);
+  if (opts.limit) q.set("limit", String(opts.limit));
+  const qs = q.toString() ? `?${q.toString()}` : "";
+  return (await getJSON<RunDTO[]>(`/api/runs${qs}`, signal)) ?? [];
+}
 export const fetchTools = (signal?: AbortSignal) =>
   getJSON<ToolDescriptor[]>("/api/tools", signal);
 export const fetchMCP = (signal?: AbortSignal) => getJSON<MCPStatus[]>("/api/mcp", signal);

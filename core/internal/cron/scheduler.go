@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	robfig "github.com/robfig/cron/v3"
@@ -116,12 +117,19 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
+		// runs.Track books a mem_runs row so the Studio shows a live
+		// spinner that persists across navigation / focus / refresh.
+		// Errors from fn propagate to the post-run mem_crons UPDATE
+		// below unchanged - runs is purely observability.
 		var execErr error
-		if s.executor != nil {
-			execErr = s.executor.ExecuteJob(j)
-		} else {
-			execErr = errors.New("no executor configured")
-		}
+		_ = runs.Track(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled, func(ctx context.Context) error {
+			if s.executor != nil {
+				execErr = s.executor.ExecuteJob(j)
+			} else {
+				execErr = errors.New("no executor configured")
+			}
+			return execErr
+		})
 
 		end := time.Now().UTC()
 		status := "ok"
@@ -236,11 +244,18 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	}
 	start := time.Now().UTC()
 	var execErr error
-	if s.executor != nil {
-		execErr = s.executor.ExecuteJob(j)
-	} else {
-		execErr = errors.New("no executor configured")
-	}
+	// runs.Track exposes "this cron is running" to every device on the
+	// network via mem_runs + realtime. Survives the user navigating away
+	// from /cron or closing the tab entirely. See CLAUDE.md →
+	// "Server-tracked progress".
+	_ = runs.Track(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual, func(ctx context.Context) error {
+		if s.executor != nil {
+			execErr = s.executor.ExecuteJob(j)
+		} else {
+			execErr = errors.New("no executor configured")
+		}
+		return execErr
+	})
 	end := time.Now().UTC()
 	status := "ok (manual)"
 	if execErr != nil {

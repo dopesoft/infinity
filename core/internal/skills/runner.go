@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/runs"
 )
 
 // Runner executes skills. It dispatches by risk_level to a sandbox tier:
@@ -43,14 +45,46 @@ func (r *Runner) Invoke(ctx context.Context, sessionID, name string, args map[st
 		return Result{}, nil, err
 	}
 
-	switch skill.RiskLevel {
-	case RiskLow, RiskMedium:
-		return r.runInProcess(ctx, skill, args, sessionID, triggerSource)
-	case RiskHigh, RiskCritical:
-		return Result{Stderr: "container sandbox not yet wired"}, nil,
-			errors.New("high/critical-risk skills require the container sandbox (container sandbox)")
+	// runs.Track surfaces "this skill is invoking" to every Studio tab
+	// + device via mem_runs realtime. Wraps the dispatch below so both
+	// in-process and container tiers (when wired) get the same visible
+	// spinner. See CLAUDE.md → "Server-tracked progress".
+	source := mapTriggerSource(triggerSource)
+	var (
+		res    Result
+		runRow *Run
+		invErr error
+	)
+	_ = runs.Track(ctx, runs.KindSkill, skill.Name, skill.Name, source, func(ctx context.Context) error {
+		switch skill.RiskLevel {
+		case RiskLow, RiskMedium:
+			res, runRow, invErr = r.runInProcess(ctx, skill, args, sessionID, triggerSource)
+		case RiskHigh, RiskCritical:
+			res = Result{Stderr: "container sandbox not yet wired"}
+			invErr = errors.New("high/critical-risk skills require the container sandbox (container sandbox)")
+		default:
+			invErr = fmt.Errorf("invalid risk_level: %s", skill.RiskLevel)
+		}
+		return invErr
+	})
+	return res, runRow, invErr
+}
+
+// mapTriggerSource bridges the Skills triggerSource vocabulary to the
+// runs.Source vocabulary. They overlap but the runs side is intentionally
+// smaller (manual / agent / scheduled / heartbeat / sentinel).
+func mapTriggerSource(s string) runs.Source {
+	switch s {
+	case "conversation", "agent":
+		return runs.SourceAgent
+	case "cron", "scheduled":
+		return runs.SourceScheduled
+	case "heartbeat":
+		return runs.SourceHeartbeat
+	case "sentinel":
+		return runs.SourceSentinel
 	default:
-		return Result{}, nil, fmt.Errorf("invalid risk_level: %s", skill.RiskLevel)
+		return runs.SourceManual
 	}
 }
 

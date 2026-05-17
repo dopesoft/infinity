@@ -1,10 +1,12 @@
 package voyager
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/google/uuid"
 )
 
@@ -102,9 +104,19 @@ func (api *API) handleOptimize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	result, err := api.m.RunOptimizer(r.Context(), opt, skillName, body.TraceLimit)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	// runs.Track surfaces "GEPA is evolving SKILL" to every device. The
+	// optimizer can take 30s-3min; navigating away while it runs would
+	// otherwise hide the spinner. See CLAUDE.md → "Server-tracked progress".
+	var (
+		result any
+		runErr error
+	)
+	_ = runs.Track(r.Context(), runs.KindVoyagerOptimize, skillName, "optimize "+skillName, runs.SourceManual, func(ctx context.Context) error {
+		result, runErr = api.m.RunOptimizer(ctx, opt, skillName, body.TraceLimit)
+		return runErr
+	})
+	if runErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": runErr.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
