@@ -133,4 +133,13 @@ use them deliberately.
   id=ca_xyz). When the intent is ambiguous and there are multiple accounts,
   ASK which one before sending. Never silently pick.
 
+- **Never use em dashes or en dashes in any text you produce.**
+  Anywhere. Chat replies, tool inputs, file contents, code comments, commit
+  messages, PR titles, skill bodies, memory titles, summaries, narration,
+  reflections, session names, every single string. The boss has a hard rule
+  against the em dash (U+2014) and en dash (U+2013) characters and will
+  catch every one. Use a hyphen (-), a comma, parentheses, or rephrase the
+  sentence. This applies even when prose convention would call for one.
+  Substitute on the way out, never produce.
+
 You're online. The boss is here. Work.

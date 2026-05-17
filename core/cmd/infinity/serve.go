@@ -110,7 +110,11 @@ func serveCmd() *cobra.Command {
 					// via Studio's "Connect ChatGPT" flow.
 					if provider == nil && llm.IsOpenAIOAuth() {
 						oauthStore := llm.NewOAuthStore(p)
-						provider = llm.NewOpenAIOAuth(oauthStore, llm.ModelForVendor("openai_oauth"))
+						// WrapNoDashes mirrors the universal sanitizer
+						// applied by Registry.Register and FromEnv -
+						// this construction path bypasses both, so
+						// wrap here to keep the em-dash ban universal.
+						provider = llm.WrapNoDashes(llm.NewOpenAIOAuth(oauthStore, llm.ModelForVendor("openai_oauth")))
 						fmt.Printf("  llm: openai_oauth provider attached (paste-flow connect via Studio)\n")
 					}
 
@@ -125,7 +129,11 @@ func serveCmd() *cobra.Command {
 
 					// Compressor needs an Anthropic client; wire only if the
 					// active provider is Anthropic so we don't pin a 2nd key.
-					if a, ok := provider.(*llm.Anthropic); ok {
+					// llm.Unwrap walks through the no-dashes sanitizer
+					// wrapper so the type assertion finds the underlying
+					// *llm.Anthropic regardless of how many wrappers are in
+					// the stack.
+					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
 						summarizerModel := os.Getenv("LLM_SUMMARIZE_MODEL")
 						summarizer := llm.NewAnthropicSummarizer(a, summarizerModel)
 						compressor = memory.NewCompressor(p, embedder, memory.NewSummarizer(summarizer))

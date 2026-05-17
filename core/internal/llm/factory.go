@@ -54,6 +54,18 @@ func FromEnv() (Provider, error) {
 		provider = "anthropic"
 	}
 
+	// All return paths route through fromEnvProvider so the universal
+	// em/en-dash sanitizer is applied to the boot provider too. Any
+	// helper that fetches the bare provider via FromEnv (instead of
+	// going through Registry.Register) still gets the sanitizer.
+	p, err := fromEnvProvider(provider)
+	if p != nil {
+		p = WrapNoDashes(p)
+	}
+	return p, err
+}
+
+func fromEnvProvider(provider string) (Provider, error) {
 	switch provider {
 	case "anthropic":
 		key := os.Getenv("ANTHROPIC_API_KEY")
@@ -106,7 +118,12 @@ func (r *Registry) Register(p Provider) {
 	if p == nil {
 		return
 	}
-	r.providers[p.Name()] = p
+	// Universal em/en-dash sanitizer. Every provider gets wrapped so
+	// any helper-LLM call (summarizer, critic, namer, code-proposal
+	// generator, compaction summary, etc.) AND the main agent loop's
+	// streamed text are both scrubbed at the LLM boundary. See
+	// sanitize.go for the policy rationale.
+	r.providers[p.Name()] = WrapNoDashes(p)
 }
 
 func (r *Registry) Get(name string) (Provider, bool) {
