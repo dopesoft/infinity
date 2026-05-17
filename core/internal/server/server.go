@@ -327,6 +327,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// trailing-slash variant matches /api/traces/<turn_id> for detail.
 	mux.HandleFunc("/api/traces", s.handleTracesList)
 	mux.HandleFunc("/api/traces/", s.handleTraceDetail)
+
+	// Lab page aggregator. One endpoint, three sections (proposals,
+	// lessons, evolved skills) - mirrors the /lab tab shape.
+	mux.HandleFunc("/api/lab", s.handleLab)
 }
 
 func (s *Server) Start() error {
