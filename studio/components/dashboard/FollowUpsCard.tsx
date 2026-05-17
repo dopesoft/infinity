@@ -94,10 +94,12 @@ function metaString(m: Record<string, unknown> | undefined, ...keys: string[]): 
 function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
   const meta = metaFor(String(f.source ?? "other"));
   const account = (f.account ?? "").trim();
-  // intent: "needs reply" | "fyi" | "question" | etc. Free-form from
-  // the agent's triage; we just render whatever string it picked.
-  const intent = metaString(f.metadata, "intent", "classification");
-  // mode: "reply" | "read" | "skim" - the agent's recommended action.
+  // classification: triager output - "newsletter" | "personal" | "work" |
+  // "promotion" | "transaction" | "notification" | "automated" | "spam"
+  const classification = metaString(f.metadata, "classification", "category");
+  // intent: "needs reply" | "fyi" | "urgent" | "question" | etc.
+  const intent = metaString(f.metadata, "intent");
+  // mode: "reply" | "read" | "skim" | "ignore" - recommended action.
   const mode = metaString(f.metadata, "mode", "action");
 
   return (
@@ -125,16 +127,22 @@ function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
             {relTime(f.receivedAt)}
           </span>
         </div>
-        {account || intent || mode ? (
-          <div className="mt-1 flex flex-wrap items-center gap-1">
+        {account || classification || intent || mode ? (
+          // Account → classification → intent → mode. Rectangular
+          // rounded chips with thin borders so they read as distinct
+          // tags, not flowing prose.
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
             {account ? <Chip tone="muted">{account}</Chip> : null}
+            {classification ? (
+              <Chip tone={classificationTone(classification)}>{classification}</Chip>
+            ) : null}
             {intent ? <Chip tone={intentTone(intent)}>{intent}</Chip> : null}
             {mode ? <Chip tone={modeTone(mode)}>{mode}</Chip> : null}
           </div>
         ) : f.preview ? (
           // No chips yet - fall back to the preview so the row never
-          // collapses to just "name + time". Agent recipes that haven't
-          // started classifying still read.
+          // collapses to just "name + time". Triage hasn't run yet
+          // (cron tick incoming) or producer skipped it.
           <p className="line-clamp-1 break-words text-[12px] text-muted-foreground">
             {f.preview}
           </p>
@@ -150,26 +158,29 @@ function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
   );
 }
 
-// Chip - small caps pill. Tone tints the bg/text for known signals
-// (reply / urgent etc) and stays neutral for free-form strings.
+// Chip - rectangular tag with slightly rounded corners (rounded-md)
+// and a thin border so each chip reads as a distinct object instead of
+// flowing into the row like prose. Tone tints bg/text/border for known
+// signals; stays neutral for free-form strings.
 function Chip({
   children,
   tone = "muted",
 }: {
   children: React.ReactNode;
-  tone?: "muted" | "info" | "warn" | "success" | "danger";
+  tone?: "muted" | "info" | "warn" | "success" | "danger" | "brand";
 }) {
   const cls = {
-    muted: "bg-muted text-muted-foreground",
-    info: "bg-info/15 text-info",
-    warn: "bg-amber-500/15 text-amber-400",
-    success: "bg-success/15 text-success",
-    danger: "bg-danger/15 text-danger",
+    muted: "border-border bg-muted text-muted-foreground",
+    info: "border-info/30 bg-info/10 text-info",
+    warn: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+    success: "border-brand/30 bg-brand/10 text-brand",
+    danger: "border-danger/30 bg-danger/10 text-danger",
+    brand: "border-brand/30 bg-brand/10 text-brand",
   }[tone];
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-full px-2 font-mono text-[10px] uppercase tracking-wider",
+        "inline-flex h-5 items-center rounded-md border px-1.5 font-mono text-[10px] uppercase tracking-wider",
         cls,
       )}
     >
@@ -193,5 +204,21 @@ function modeTone(v: string): "muted" | "info" | "warn" | "success" | "danger" {
   if (k === "read" || k.includes("read")) return "info";
   if (k.includes("skim") || k.includes("scan")) return "muted";
   if (k.includes("ignore") || k.includes("dismiss")) return "muted";
+  return "muted";
+}
+
+// classification: the triager's category label. Personal / work tint
+// info-blue (matters), newsletter / promotion / automated stay muted
+// (low-priority), spam goes danger. New classes the agent might invent
+// degrade to muted so the chip still renders.
+function classificationTone(v: string): "muted" | "info" | "warn" | "success" | "danger" {
+  const k = v.toLowerCase();
+  if (k === "personal" || k === "work") return "info";
+  if (k === "transaction" || k === "scheduling") return "info";
+  if (k === "spam") return "danger";
+  if (k === "urgent") return "danger";
+  if (k === "newsletter" || k === "promotion" || k === "automated" || k === "notification") {
+    return "muted";
+  }
   return "muted";
 }
