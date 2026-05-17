@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import { fetchTraceDetail, type TraceDetailDTO, type TraceEventDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 
-/* /logs/[turnId] — full timeline + per-event detail.
+/* /logs/[turnId] - full timeline + per-event detail.
  *
  * Header convention matches /memory + /skills exactly: a `space-y-3 border-b
  * px-3 py-3 sm:px-4` strip on top of TabFrame, list area below with the
@@ -115,7 +115,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* Header strip — same px-3 py-3 sm:px-4 rhythm as every other page. */}
+        {/* Header strip - same px-3 py-3 sm:px-4 rhythm as every other page. */}
         <div className="space-y-2 border-b px-3 py-3 sm:px-4">
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -174,7 +174,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
             <div className="space-y-1">
               <h1 className="line-clamp-2 break-words text-sm font-semibold text-foreground sm:text-base">
                 {turn.user_text || (
-                  <span className="text-muted-foreground">(resumed turn — no fresh prompt)</span>
+                  <span className="text-muted-foreground">(resumed turn - no fresh prompt)</span>
                 )}
               </h1>
               <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -223,7 +223,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
           )}
         </div>
 
-        {/* Body — flex column. Headers row + body grid both share the same
+        {/* Body - flex column. Headers row + body grid both share the same
            `lg:grid-cols-[240px_minmax(0,1fr)_280px]` template so the seamless
            border-b under the header row aligns perfectly with the columns
            underneath. */}
@@ -236,7 +236,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
 
           {detail && (
             <>
-              {/* Header row — one parent, one border-b: seamless across both columns. */}
+              {/* Header row - one parent, one border-b: seamless across both columns. */}
               <div className="grid grid-cols-1 gap-x-4 border-b border-border pb-2 pt-3 lg:grid-cols-[240px_minmax(0,1fr)_280px]">
                 {/* Timeline header */}
                 <div
@@ -297,7 +297,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                 </div>
               </div>
 
-              {/* Body grid — same column template. Each panel has its own scroll. */}
+              {/* Body grid - same column template. Each panel has its own scroll. */}
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 pb-3 pt-2 lg:grid-cols-[240px_minmax(0,1fr)_280px]">
                 <aside
                   className={cn(
@@ -338,7 +338,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     </div>
                   </div>
                 </section>
-                {/* Metadata column — desktop only. */}
+                {/* Metadata column - desktop only. */}
                 <aside className="hidden min-w-0 min-h-0 lg:flex lg:flex-col">
                   <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
                     <TraceMetadata event={selected} />
@@ -354,7 +354,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
 }
 
 // serializeTurnForPaste flattens a TraceDetailDTO into a single Markdown
-// blob suitable for pasting into another LLM session — Claude, Jarvis, or
+// blob suitable for pasting into another LLM session - Claude, Jarvis, or
 // any future tooling. The shape mirrors what Jarvis itself returns from
 // `trace_inspect(turn_id)` so the boss and an outside agent see the
 // same content with the same labels.
@@ -455,14 +455,14 @@ function TurnIdChip({ turnId }: { turnId: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     } catch {
-      /* ignore — most browsers grant clipboard on user gesture */
+      /* ignore - most browsers grant clipboard on user gesture */
     }
   };
   return (
     <button
       type="button"
       onClick={() => void onClick()}
-      title={`turn ${turnId} — tap to copy`}
+      title={`turn ${turnId} - tap to copy`}
       aria-label={`Copy turn id ${turnId}`}
       className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-foreground/80 hover:bg-muted hover:text-foreground transition-colors"
     >

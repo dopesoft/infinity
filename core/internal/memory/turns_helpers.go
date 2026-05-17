@@ -41,7 +41,7 @@ func decodePayload(s string) map[string]any {
 
 // obsKind maps a hook name to the timeline "kind" the /logs UI groups
 // events by. Returns the lower-case hook name when no specific bucket
-// applies — the UI just renders it as a generic observation.
+// applies - the UI just renders it as a generic observation.
 func obsKind(hookName string) string {
 	switch hookName {
 	case "UserPromptSubmit":

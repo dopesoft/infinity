@@ -12,7 +12,7 @@ const LOCAL_FLAG = "boss_onboarded";
  * load we check two signals: the infinity_meta "boss_onboarded" flag and the
  * count of boss-profile facts. If both are absent we route the user to the
  * First Run wizard so the agent starts with identity context instead of a
- * blank slate. The gate is silent on subsequent loads — once boss_onboarded
+ * blank slate. The gate is silent on subsequent loads - once boss_onboarded
  * is set (either by completing the wizard or skipping it) we never redirect
  * again. Routes under /login or /onboarding bypass the check so the wizard
  * itself isn't trapped in a redirect loop. */

@@ -11,7 +11,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/hooks"
 )
 
-// File-fight thresholds. Tuned to bias toward false negatives — we only
+// File-fight thresholds. Tuned to bias toward false negatives - we only
 // want to propose source changes when the boss visibly struggled with the
 // same file in one session. A single clean edit is normal; three edits
 // punctuated by failures is a smell.
@@ -27,7 +27,7 @@ const (
 //	pipeline.RegisterFunc("voyager.source_extract", m.OnSessionEndSource, hooks.SessionEnd)
 //
 // Mirrors OnSessionEnd's contract: synchronous heuristic + async Haiku draft.
-// Failures log but never bubble back to the loop — capture must not block the
+// Failures log but never bubble back to the loop - capture must not block the
 // session-end path.
 func (m *Manager) OnSessionEndSource(ctx context.Context, ev hooks.Event) error {
 	if !m.Enabled() {
@@ -43,7 +43,7 @@ func (m *Manager) OnSessionEndSource(ctx context.Context, ev hooks.Event) error 
 		return nil
 	}
 
-	// Async draft. SessionEnd ought to return promptly — Haiku turns can
+	// Async draft. SessionEnd ought to return promptly - Haiku turns can
 	// run for 30+ seconds on the proposal prompt below.
 	go func(sessionID string, paths []string, st fileFightStats) {
 		bg, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -212,7 +212,7 @@ func isClaudeCodeBash(name string) bool {
 
 // extractFilePath pulls the target file out of a claude_code__edit /
 // claude_code__write tool input. Anthropic's Claude Code MCP tools use
-// `file_path` consistently, but be defensive — older variants used `path`.
+// `file_path` consistently, but be defensive - older variants used `path`.
 func extractFilePath(input map[string]any) string {
 	if input == nil {
 		return ""
@@ -245,12 +245,12 @@ You'll get:
   - Stats: number of edits, failure count, session duration, bash commands run
   - User prompts and assistant replies from the session
 
-Return ONLY a JSON object — no commentary, no code fences:
+Return ONLY a JSON object - no commentary, no code fences:
 
 {
   "title": "<=80 chars, action-oriented: 'Extract X', 'Replace Y with Z', 'Split A into B and C'",
   "rationale": "1-3 sentences: WHAT symptom the session showed, WHY it suggests this file is fragile, and WHAT the proposed change should achieve",
-  "proposed_change": "A concrete plan as a bullet list or short prose. Reference specific functions/sections by name. Keep it under 600 chars — this is a sketch the agent will expand at apply-time, not a finished diff.",
+  "proposed_change": "A concrete plan as a bullet list or short prose. Reference specific functions/sections by name. Keep it under 600 chars - this is a sketch the agent will expand at apply-time, not a finished diff.",
   "risk_level": "low|medium|high|critical"
 }
 
@@ -258,10 +258,10 @@ If the session does NOT actually indicate a refactor opportunity (e.g. the boss 
   {"title":"","rationale":"not a real refactor signal","proposed_change":"","risk_level":"low"}
 
 Risk levels:
-  low      — pure rename/extract within the file, no behavior change
-  medium   — split function, change signatures, touch callers in 1-2 files
-  high     — schema migration, breaking API change, behavior shift
-  critical — security, data loss, or wide-blast-radius change
+  low      - pure rename/extract within the file, no behavior change
+  medium   - split function, change signatures, touch callers in 1-2 files
+  high     - schema migration, breaking API change, behavior shift
+  critical - security, data loss, or wide-blast-radius change
 
 Never invent symptoms. Anchor every claim to evidence from the transcript.`
 
@@ -351,7 +351,7 @@ func (m *Manager) insertCodeProposalStub(ctx context.Context, sessionID, filePat
 	evJSON, _ := json.Marshal(evidence)
 
 	rationale := fmt.Sprintf(
-		"%d edits and %d related failures across %.0fs. LLM unavailable to draft a concrete refactor — review session and decide manually.",
+		"%d edits and %d related failures across %.0fs. LLM unavailable to draft a concrete refactor - review session and decide manually.",
 		stats.EditsByFile[filePath], stats.FailuresByFile[filePath], stats.DurationSec,
 	)
 	_, err := m.pool.Exec(ctx, `
@@ -360,7 +360,7 @@ func (m *Manager) insertCodeProposalStub(ctx context.Context, sessionID, filePat
 		VALUES ($1, $2, $3, '', $4::jsonb, 'medium', 'candidate', NULLIF($5,'')::uuid)
 	`,
 		filePath,
-		"File fought during session — needs review",
+		"File fought during session - needs review",
 		rationale,
 		string(evJSON),
 		sessionID,
@@ -478,7 +478,7 @@ func (m *Manager) ListCodeProposals(ctx context.Context, status string, limit in
 }
 
 // DecideCodeProposal updates a proposal's status. Unlike skill proposals,
-// promoting a code proposal does NOT auto-apply the change — it only marks
+// promoting a code proposal does NOT auto-apply the change - it only marks
 // the proposal as approved for the agent to attempt on its next turn. The
 // actual edit still flows through ClaudeCodeGate → Trust queue.
 //

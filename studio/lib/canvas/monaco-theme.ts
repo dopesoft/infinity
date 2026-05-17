@@ -1,10 +1,10 @@
 /**
- * Monaco themes — true-black + bone-white variants aligned with Studio's
+ * Monaco themes - true-black + bone-white variants aligned with Studio's
  * tokens in globals.css. Applied via monaco.editor.defineTheme on first
  * load of any Monaco editor instance.
  *
  * Why custom themes: Monaco's built-in vs-dark has a #1e1e1e background
- * with a faint blue cast — collides with the OLED-friendly true-black
+ * with a faint blue cast - collides with the OLED-friendly true-black
  * palette the rest of Studio uses. We mirror it as closely as possible
  * while keeping background = #000, surfaces a touch off-black, and the
  * accent colors desaturated.

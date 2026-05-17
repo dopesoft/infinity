@@ -1,4 +1,4 @@
--- 004_skills.sql — Skills system + Voyager skill state.
+-- 004_skills.sql - Skills system + Voyager skill state.
 -- Provides: registry, version history, active pointer, runs.
 -- Voyager extends mem_skill_versions with test_pass_rate / source / parent_version
 -- so the schema lands once.

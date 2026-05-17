@@ -1,10 +1,10 @@
-// Connector identity tools — the generic write-back the agent uses to
+// Connector identity tools - the generic write-back the agent uses to
 // persist what it discovered about a connected account.
 //
 // Design intent (per Rule #1 in CLAUDE.md): zero toolkit-specific code
 // in Go. The Composio listing surfaces account ids + slugs; the system
 // prompt block tells the agent that when an identity is missing it
-// should load the toolkit's identity verb (whatever it's called —
+// should load the toolkit's identity verb (whatever it's called -
 // GMAIL_GET_PROFILE, SLACK_AUTH_TEST, GITHUB_GET_AUTHENTICATED_USER),
 // call it, pull the canonical handle out of the response, and persist
 // here. The agent figures out which verb to call and how to parse it.
@@ -44,7 +44,7 @@ func (t *connectorIdentitySet) Description() string {
 		"account's identity by hitting the toolkit's profile verb " +
 		"(e.g. GMAIL_GET_PROFILE for Gmail, SLACK_AUTH_TEST for Slack). " +
 		"Future turns will see the identity in the <connected_accounts> " +
-		"block automatically — no need to re-resolve. Pass empty string to " +
+		"block automatically - no need to re-resolve. Pass empty string to " +
 		"clear a stale value (e.g. after a disconnect)."
 }
 func (t *connectorIdentitySet) Schema() map[string]any {
@@ -57,7 +57,7 @@ func (t *connectorIdentitySet) Schema() map[string]any {
 			},
 			"identity": map[string]any{
 				"type":        "string",
-				"description": "The real upstream identity — Gmail emailAddress, Slack user handle, GitHub login, etc. The shortest unambiguous string a human would use to refer to this account.",
+				"description": "The real upstream identity - Gmail emailAddress, Slack user handle, GitHub login, etc. The shortest unambiguous string a human would use to refer to this account.",
 			},
 		},
 		"required": []string{"account_id", "identity"},

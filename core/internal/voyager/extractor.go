@@ -13,7 +13,7 @@ import (
 
 // Heuristic thresholds for a session being "skill-worthy". Tuned against the
 // Hermes paper's pattern (≥3 tools, error-free, non-trivial duration). Bias
-// toward fewer false positives — every accepted candidate eats a Haiku turn.
+// toward fewer false positives - every accepted candidate eats a Haiku turn.
 const (
 	minDistinctTools = 3
 	minDurationSec   = 30
@@ -162,7 +162,7 @@ const draftSystem = `You convert a successful agent session into a reusable skil
 
 You'll get a session transcript with the user's prompts, the assistant's replies, and the tools the assistant called. Decide whether the session captured a generalizable procedure (not a one-off question), and if so produce a SKILL.md.
 
-Return ONLY a JSON object in this exact shape — no commentary, no code fences:
+Return ONLY a JSON object in this exact shape - no commentary, no code fences:
 
 {
   "name": "lowercase_underscored_name",
@@ -228,7 +228,7 @@ func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stat
 		return fmt.Errorf("insert proposal: %w", err)
 	}
 
-	// Verify in background — generates synthetic tests + auto-promote rule.
+	// Verify in background - generates synthetic tests + auto-promote rule.
 	go func(id, name string) {
 		bg, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()

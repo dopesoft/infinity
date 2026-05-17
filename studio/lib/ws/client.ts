@@ -7,7 +7,7 @@
  * We also run an application-level ping/pong heartbeat: every PING_INTERVAL_MS
  * we send `{type:"ping"}` (the core replies `{type:"pong"}`). If no message
  * arrives for STALE_TIMEOUT_MS, we treat the socket as dead and force-reconnect
- * even though `readyState` may still claim OPEN — this is the half-dead socket
+ * even though `readyState` may still claim OPEN - this is the half-dead socket
  * pattern (mobile sleep, NAT timeout, captive proxy) that silently breaks chat.
  */
 
@@ -34,16 +34,16 @@ export type WSEvent =
   // the echo via a duplicate-id check.
   | { type: "steer_received"; session_id: string; text: string }
   // intent carries the per-turn IntentFlow classification. Emitted async
-  // after the WS handler kicks off classification — arrives mid-turn or
+  // after the WS handler kicks off classification - arrives mid-turn or
   // after `complete` depending on Haiku latency. The IntentStream panel
   // consumes it; the chat transcript ignores it.
   | { type: "intent"; session_id: string; intent: WSIntent }
-  // proactive_message is an unprompted assistant turn — broadcast by the
+  // proactive_message is an unprompted assistant turn - broadcast by the
   // heartbeat when a finding crosses the surface threshold (surprise,
   // curiosity, security, or any pre-approved finding). useChat renders
   // these as regular assistant bubbles with a subtle origin badge.
   // curiosity_id is set when the finding is backed by a curiosity
-  // question — it lets the chat card offer an "Approve & fix" action.
+  // question - it lets the chat card offer an "Approve & fix" action.
   | {
       type: "proactive_message";
       session_id: string;
@@ -69,7 +69,7 @@ export type WSToolEvent = {
   ended_at?: string;
   // Set on tool_call events when the gate parked the call on a Trust
   // contract. Studio uses these to render inline Approve / Deny buttons
-  // in the tool card — no tab switch needed. The agent loop is blocked
+  // in the tool card - no tab switch needed. The agent loop is blocked
   // on the gate; the next decideTrust() call unblocks it and the real
   // tool result will arrive as a follow-up tool_result event.
   awaiting_approval?: boolean;
@@ -83,7 +83,7 @@ export type WSClientOptions = {
   url: string;
   // tokenProvider is awaited on every connect attempt so a refreshed JWT is
   // always sent to the server. Returning null aborts the connect (caller
-  // hasn't authenticated yet) — the client retries via scheduleReconnect.
+  // hasn't authenticated yet) - the client retries via scheduleReconnect.
   tokenProvider?: () => Promise<string | null>;
   onEvent: (ev: WSEvent) => void;
   onStatusChange?: (status: WSStatus) => void;
@@ -121,7 +121,7 @@ export class WSClient {
     if (this.listeners.tokenProvider) {
       const token = await this.listeners.tokenProvider();
       if (!token) {
-        // Not authenticated yet — back off and try again.
+        // Not authenticated yet - back off and try again.
         this.setStatus("disconnected");
         this.scheduleReconnect();
         return;

@@ -1,4 +1,4 @@
--- 026_dashboard_realtime.sql — add the dashboard mutation tables to the
+-- 026_dashboard_realtime.sql - add the dashboard mutation tables to the
 -- supabase_realtime publication AND set REPLICA IDENTITY FULL on each.
 --
 -- Why: Studio's DashboardClient now subscribes via useRealtime to
@@ -9,7 +9,7 @@
 --   1. The tables aren't in the publication, so the WAL stream never
 --      carries their events at all.
 --   2. Even if they were, default REPLICA IDENTITY only emits the PK on
---      UPDATE — Supabase Realtime can't evaluate RLS against a payload
+--      UPDATE - Supabase Realtime can't evaluate RLS against a payload
 --      missing user_id and drops the event silently. Same class of bug
 --      migration 025 fixed for the other tables.
 --

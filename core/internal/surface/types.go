@@ -1,15 +1,15 @@
 // Package surface implements the generic dashboard SURFACE CONTRACT.
 //
 // Rule #1 substrate. Rather than a bespoke table + bespoke Go scorer +
-// bespoke widget per source, ANY producer — a skill recipe, a connector
-// poll, a cron, the agent mid-conversation — writes ranked, structured
+// bespoke widget per source, ANY producer - a skill recipe, a connector
+// poll, a cron, the agent mid-conversation - writes ranked, structured
 // items through one contract (mem_surface_items). Studio renders them
 // generically by Surface + Kind. A new capability lands on the dashboard
 // with zero new table, zero new loader, zero new widget.
 //
 // The agent never writes this table with raw SQL. The surface_item /
 // surface_update native tools (core/internal/tools/surface_tools.go) ARE
-// the contract — the boundary the LLM assembles against.
+// the contract - the boundary the LLM assembles against.
 package surface
 
 import "time"

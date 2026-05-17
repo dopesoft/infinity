@@ -1,10 +1,10 @@
-// Curiosity tools — let the agent see and resolve the questions that
+// Curiosity tools - let the agent see and resolve the questions that
 // appear in the dashboard's "Questions" card.
 //
 // These are NOT generic surface items (mem_surface_items). They live in
 // mem_curiosity_questions and surface to Studio via the dashboard API's
 // Approval loader. Without these tools the agent would call surface_list
-// for "questions" — which it now does correctly — get 0 results, and
+// for "questions" - which it now does correctly - get 0 results, and
 // have to tell the boss "I can't find anything to dismiss" while the UI
 // is showing 5 cards. This file plugs that gap with question_list +
 // question_decide.
@@ -38,7 +38,7 @@ type questionList struct{ pool *pgxpool.Pool }
 func (t *questionList) Name() string   { return "question_list" }
 func (t *questionList) ReadOnly() bool { return true }
 func (t *questionList) Description() string {
-	return "List the curiosity questions Jarvis has raised for the boss — the " +
+	return "List the curiosity questions Jarvis has raised for the boss - the " +
 		"items that render in the dashboard's 'Questions' card. Use this BEFORE " +
 		"question_decide; ids are not shown in the UI. Filter by status " +
 		"(default 'open'). Returns id, question, rationale, importance, kind, " +
@@ -64,7 +64,7 @@ func (t *questionList) Execute(ctx context.Context, in map[string]any) (string, 
 	}
 	// NOTE: the actual column on mem_curiosity_questions is `source_kind`
 	// (gap | contradiction | low_confidence | uncovered_mention |
-	// high_surprise — see migration 011). Alias it to `kind` in the
+	// high_surprise - see migration 011). Alias it to `kind` in the
 	// result so the JSON shape the agent reads stays stable.
 	q := `SELECT id::text, question, COALESCE(rationale,''),
 	             COALESCE(importance,0)::text, COALESCE(source_kind,'') AS kind,
@@ -90,7 +90,7 @@ func (t *questionDecide) Description() string {
 		"from the dashboard (boss decided not to act). 'answered' marks it " +
 		"handled with an optional answer string. 'approved' records that the " +
 		"boss said go and the agent should act on it. Mirrors the same endpoint " +
-		"the dashboard's dismiss button hits — UI updates live."
+		"the dashboard's dismiss button hits - UI updates live."
 }
 func (t *questionDecide) Schema() map[string]any {
 	return map[string]any{
@@ -98,7 +98,7 @@ func (t *questionDecide) Schema() map[string]any {
 		"properties": map[string]any{
 			"id":       map[string]any{"type": "string"},
 			"decision": map[string]any{"type": "string", "enum": []string{"answered", "dismissed", "approved"}},
-			"answer":   map[string]any{"type": "string", "description": "Optional — only used when decision='answered'."},
+			"answer":   map[string]any{"type": "string", "description": "Optional - only used when decision='answered'."},
 		},
 		"required": []string{"id", "decision"},
 	}

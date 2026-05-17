@@ -3,13 +3,13 @@
 //
 // Two implementations today:
 //
-//   MacBridge   — talks to the home Mac over Cloudflare Tunnel. Claude
+//   MacBridge   - talks to the home Mac over Cloudflare Tunnel. Claude
 //                 Code MCP is alive there too, which means Mac-bridge
 //                 sessions get the bonus of Anthropic-Max-billed
 //                 sub-agent edits via the claude_code__* tools.
 //
-//   CloudBridge — talks to the docker/workspace service on Railway
-//                 private net. No sub-agent — Jarvis (whose cognition
+//   CloudBridge - talks to the docker/workspace service on Railway
+//                 private net. No sub-agent - Jarvis (whose cognition
 //                 is ChatGPT subscription via openai_oauth) is the
 //                 only brain. Primitives only.
 //
@@ -57,7 +57,7 @@ const (
 // Bridge is the contract Core consumes. Implementations are responsible
 // for their own auth (Cloudflare Access for Mac, bearer token for
 // Cloud). Returns (body, status, ok). ok=false means the bridge is
-// unreachable / misconfigured — the caller can decide whether to fall
+// unreachable / misconfigured - the caller can decide whether to fall
 // back to the other bridge or surface an error.
 type Bridge interface {
 	Name() Kind
@@ -161,7 +161,7 @@ func (m *MacBridge) Post(ctx context.Context, path string, body any) ([]byte, in
 
 // CloudBridge talks to the docker/workspace service over Railway's
 // private network. Bearer-token auth (WORKSPACE_BRIDGE_TOKEN). The
-// Cloud bridge has no sub-agent — primitives only. Jarvis does all
+// Cloud bridge has no sub-agent - primitives only. Jarvis does all
 // cognition via ChatGPT subscription OAuth.
 type CloudBridge struct {
 	base    string
@@ -267,10 +267,10 @@ func (r *Router) For(ctx context.Context, pref Preference) (Bridge, string, erro
 		return r.cloud, "cloud (pinned)", nil
 	default: // PrefAuto
 		if st.MacHealthy {
-			return r.mac, "mac (auto — preferred when up)", nil
+			return r.mac, "mac (auto - preferred when up)", nil
 		}
 		if st.CloudHealthy {
-			return r.cloud, "cloud (auto — mac offline, fell back)", nil
+			return r.cloud, "cloud (auto - mac offline, fell back)", nil
 		}
 		return nil, "both bridges offline", errors.New("no bridge available")
 	}

@@ -14,7 +14,7 @@ import (
 
 // OpenAI calls the OpenAI Embeddings API. We use text-embedding-3-small with
 // the `dimensions: 384` parameter so the returned vector matches Infinity's
-// hardcoded schema dim — no migrations, drop-in upgrade from the stub.
+// hardcoded schema dim - no migrations, drop-in upgrade from the stub.
 //
 // Cost (Nov 2025 pricing): ~$0.02 per 1M tokens. A typical observation is
 // 50–500 tokens, so a busy month is well under a dollar.

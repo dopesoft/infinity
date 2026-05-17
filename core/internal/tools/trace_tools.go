@@ -5,15 +5,15 @@
 // execution log from `mem_observations` + `mem_predictions` + `mem_turns`
 // instead of working from a summary. Three tools:
 //
-//   - traces_recent — list the last N turns (optionally filtered by session
+//   - traces_recent - list the last N turns (optionally filtered by session
 //     or status). Each entry is a one-line summary the agent can scan.
-//   - trace_inspect — pull one turn's full event timeline. Returns the
+//   - trace_inspect - pull one turn's full event timeline. Returns the
 //     same shape /api/traces/{id} does (turn + events array).
-//   - traces_search — fuzzy match over user_text + assistant_text + summary
+//   - traces_search - fuzzy match over user_text + assistant_text + summary
 //     + session name. Useful when the agent only remembers what the boss
 //     was talking about, not the turn id.
 //
-// None of the three is pinned or default-loaded — the agent finds them via
+// None of the three is pinned or default-loaded - the agent finds them via
 // tool_search → load_tools the same way it discovers everything else.
 package tools
 
@@ -53,8 +53,8 @@ func (t *tracesRecentTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"session_id": map[string]any{"type": "string", "description": "Optional — restrict to one session id."},
-			"status":     map[string]any{"type": "string", "enum": []string{"in_flight", "ok", "empty", "errored", "interrupted"}, "description": "Optional — filter by outcome status."},
+			"session_id": map[string]any{"type": "string", "description": "Optional - restrict to one session id."},
+			"status":     map[string]any{"type": "string", "enum": []string{"in_flight", "ok", "empty", "errored", "interrupted"}, "description": "Optional - filter by outcome status."},
 			"limit":      map[string]any{"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
 		},
 	}
@@ -88,7 +88,7 @@ type traceInspectTool struct {
 
 func (t *traceInspectTool) Name() string { return "trace_inspect" }
 func (t *traceInspectTool) Description() string {
-	return "Fetch the full per-turn timeline for one turn id: the turn row plus every observation, prediction, and trust contract tied to it. Use this BEFORE proposing a fix for a misbehaving tool or empty turn — it shows the real execution log, not your summary of it."
+	return "Fetch the full per-turn timeline for one turn id: the turn row plus every observation, prediction, and trust contract tied to it. Use this BEFORE proposing a fix for a misbehaving tool or empty turn - it shows the real execution log, not your summary of it."
 }
 func (t *traceInspectTool) Schema() map[string]any {
 	return map[string]any{
@@ -139,7 +139,7 @@ func (t *tracesSearchTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"query": map[string]any{"type": "string", "description": "Free-text query — matched ILIKE against user_text, assistant_text, summary, and session name."},
+			"query": map[string]any{"type": "string", "description": "Free-text query - matched ILIKE against user_text, assistant_text, summary, and session name."},
 			"limit": map[string]any{"type": "integer", "default": 10, "minimum": 1, "maximum": 50},
 		},
 		"required": []string{"query"},

@@ -8,11 +8,11 @@ import (
 	"github.com/dopesoft/infinity/core/internal/bridge"
 )
 
-// bridge_api.go — Studio's view into the bridge layer.
+// bridge_api.go - Studio's view into the bridge layer.
 //
 //   GET  /api/bridge/status               health of both bridges + cached snapshot
 //   GET  /api/bridge/session/{id}         this session's preference + which bridge it'd hit right now
-//   POST /api/bridge/session/{id}         { preference: "auto" | "mac" | "cloud" } — flip a session
+//   POST /api/bridge/session/{id}         { preference: "auto" | "mac" | "cloud" } - flip a session
 //   POST /api/bridge/refresh              force the router to re-probe (cache bust)
 //
 // Studio polls /status every 10s to keep the persistent pill in sync.

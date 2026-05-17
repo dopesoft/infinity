@@ -13,7 +13,7 @@ import (
 // sessionMessageDTO is the on-the-wire shape returned by
 // GET /api/sessions/{id}/messages. We reconstruct the visible conversation
 // from mem_observations (the canonical capture log) so a browser refresh
-// never loses what the user can see — even across core restarts.
+// never loses what the user can see - even across core restarts.
 type sessionMessageDTO struct {
 	Role      string `json:"role"`
 	Text      string `json:"text"`
@@ -23,7 +23,7 @@ type sessionMessageDTO struct {
 	// "dashboard_seed" for the context block injected by Discuss-with-Jarvis.
 	Kind string `json:"kind,omitempty"`
 	// SeedKind is the dashboard item kind (e.g. "activity", "memory") for
-	// a "dashboard_seed" message — used as the card's header label.
+	// a "dashboard_seed" message - used as the card's header label.
 	SeedKind string `json:"seed_kind,omitempty"`
 	// CuriosityID links a "dashboard_seed" message back to an open
 	// curiosity question (best-effort, by artifact-title match). When set,
@@ -107,7 +107,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		// DashboardSeed is the Discuss-with-Jarvis context block. It reads
 		// as a user-role turn to the model, but Studio renders it as a
-		// distinct "from dashboard" card — so it carries a Kind + the
+		// distinct "from dashboard" card - so it carries a Kind + the
 		// originating dashboard item kind parsed out of the seed payload.
 		msg := sessionMessageDTO{
 			Role:      "assistant",
@@ -177,7 +177,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 			continue
 		}
 		// DashboardSeed is injected context, but to the model it's the
-		// opening user turn — so it hydrates as a user-role message.
+		// opening user turn - so it hydrates as a user-role message.
 		role := llm.RoleAssistant
 		if hook == "UserPromptSubmit" || hook == "DashboardSeed" {
 			role = llm.RoleUser
@@ -188,7 +188,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 
 // seedKindFromPayload pulls the dashboard item kind ("activity", "memory",
 // …) out of a DashboardSeed observation's payload JSON ({kind, id, snapshot}).
-// Returns "" when the payload is missing or unparseable — the card just
+// Returns "" when the payload is missing or unparseable - the card just
 // falls back to a generic header in that case.
 func seedKindFromPayload(payload string) string {
 	if strings.TrimSpace(payload) == "" {
@@ -205,7 +205,7 @@ func seedKindFromPayload(payload string) string {
 
 // curiosityIDForSeed best-effort links a DashboardSeed observation back to
 // an open curiosity question by matching the seeded artifact's title
-// against mem_curiosity_questions.question — the same title-match the
+// against mem_curiosity_questions.question - the same title-match the
 // heartbeat-findings endpoint uses. Returns "" when there's no snapshot
 // title or no open question matches; a miss just means the chat card
 // shows no "Approve & fix" action, never an error.

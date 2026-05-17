@@ -128,7 +128,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Desktop: resizable split — sidebar list + content. */}
+        {/* Desktop: resizable split - sidebar list + content. */}
         <div className="hidden min-h-0 flex-1 lg:flex">
           <ResizablePanelGroup direction="horizontal" autoSaveId="settings:h">
             <ResizablePanel defaultSize={22} minSize={16} maxSize={36}>
@@ -273,7 +273,7 @@ function SectionHeader({ title, description }: { title: string; description: str
 
 function GeneralSection({ status }: { status: CoreStatus | null }) {
   // Vendor picker hot-swaps Core's active provider via /api/settings/provider.
-  // The change is synchronous — the next turn (and the Live composer's chip)
+  // The change is synchronous - the next turn (and the Live composer's chip)
   // sees the new vendor immediately. Stored OAuth credentials persist across
   // vendor flips, so switching back to ChatGPT later doesn't require re-auth.
   // Model edits flow through /api/settings/model as before.
@@ -283,7 +283,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   const defaultModel = setting?.defaultModel ?? "";
   const availableProviders = setting?.availableProviders ?? [];
 
-  // Vendor + model are both *drafts* until Save fires — selecting from
+  // Vendor + model are both *drafts* until Save fires - selecting from
   // either dropdown mutates local state only. Save is the deterministic
   // commit; matches the BossProfilePanel pattern in this codebase.
   const [draftVendor, setDraftVendor] = useState<string>(liveProvider || VENDORS[0].id);
@@ -293,7 +293,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
   // Sync drafts with whatever Core broadcasts (composer chip cycle,
   // first load, etc.). The model effect runs on every effectiveModel
-  // change — but only resets the draft when the user hasn't started
+  // change - but only resets the draft when the user hasn't started
   // editing locally yet (draft still equals the last broadcast).
   useEffect(() => {
     if (liveProvider) setDraftVendor(liveProvider);
@@ -308,7 +308,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   // Auto-reset the model dropdown when the current draft isn't in the
   // active vendor's catalog at all (e.g. Anthropic's claude-haiku surviving
   // a flip to openai_oauth). We check the *active vendor's catalog* rather
-  // than asking resolveModelEntry which vendor "owns" the id — that's
+  // than asking resolveModelEntry which vendor "owns" the id - that's
   // wrong when an id is shared across multiple catalogs (gpt-5.4 lives in
   // both `openai` and `openai_oauth`), because the lookup grabs the first
   // match and would snap subscription picks back to the API vendor's
@@ -429,7 +429,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 // surface their plan note instead. Anyone updating prices in
 // `models-catalog.ts` automatically updates this table.
 function PricingTable({ vendor }: { vendor: VendorEntry }) {
-  // Sortable column state. Default is catalog order — the boss has it
+  // Sortable column state. Default is catalog order - the boss has it
   // arranged with the recommended model on top, so first-render shouldn't
   // jump them around. Click a column header to toggle asc/desc.
   type SortKey = "default" | "input" | "output";
@@ -490,10 +490,10 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
                   </div>
                 </td>
                 <td className="px-2 py-2 text-right font-mono">
-                  {m.input_per_mtok != null ? `$${m.input_per_mtok.toFixed(2)}` : "—"}
+                  {m.input_per_mtok != null ? `$${m.input_per_mtok.toFixed(2)}` : "-"}
                 </td>
                 <td className="px-2 py-2 text-right font-mono">
-                  {m.output_per_mtok != null ? `$${m.output_per_mtok.toFixed(2)}` : "—"}
+                  {m.output_per_mtok != null ? `$${m.output_per_mtok.toFixed(2)}` : "-"}
                 </td>
               </tr>
             ))}
@@ -536,11 +536,11 @@ function SortHeader({
 
 // ── OAuth Connect block (openai_oauth only) ────────────────────────────────
 // Three states:
-//   • disconnected — "Connect ChatGPT" button kicks off /api/auth/openai/start,
+//   • disconnected - "Connect ChatGPT" button kicks off /api/auth/openai/start,
 //     opens the authorize URL in a new tab, reveals the paste box.
-//   • paste-pending — user has clicked through, needs to paste the callback
+//   • paste-pending - user has clicked through, needs to paste the callback
 //     URL (or code+state). Pressing "Connect" calls /exchange.
-//   • connected — shows account email, last refresh, expiry, with a
+//   • connected - shows account email, last refresh, expiry, with a
 //     Disconnect button. Reconnect is a one-click flow that re-enters the
 //     paste-pending state without dropping the existing token until success.
 function OAuthConnectBlock() {
@@ -572,7 +572,7 @@ function OAuthConnectBlock() {
     try {
       const next = await startOpenAIOAuth();
       if (!next) {
-        setError("Could not start the connect flow — check Core logs.");
+        setError("Could not start the connect flow - check Core logs.");
         return;
       }
       setPending(next);
@@ -620,7 +620,7 @@ function OAuthConnectBlock() {
         setPending(null);
         setPaste("");
       } else {
-        setError("Disconnect failed — check Core logs.");
+        setError("Disconnect failed - check Core logs.");
       }
     } finally {
       setBusy(null);
@@ -690,7 +690,7 @@ function OAuthConnectBlock() {
               <span className="font-semibold">Heads up:</span> after you log in,
               your browser will show a &quot;can&apos;t reach{" "}
               <code className="font-mono">localhost:1455</code>&quot; page.
-              That&apos;s expected — OpenAI&apos;s OAuth client only redirects
+              That&apos;s expected - OpenAI&apos;s OAuth client only redirects
               to localhost, and Studio lives in the cloud. Just copy the URL
               from the address bar back here.
             </p>
@@ -757,7 +757,7 @@ function OAuthConnectBlock() {
       )}
       {successAt && Date.now() - successAt < 4000 && !error && (
         <p className="rounded-sm bg-success/10 p-2 text-[11px] text-success">
-          Connected — Core will use this token on the next openai_oauth turn.
+          Connected - Core will use this token on the next openai_oauth turn.
         </p>
       )}
 
@@ -881,7 +881,7 @@ function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
     <div className="space-y-3">
       <SectionHeader
         title={`Tools (${tools.length})`}
-        description="Native + MCP tools available to the agent right now. Grouped by source — tap a group to expand, then tap a tool to inspect its schema."
+        description="Native + MCP tools available to the agent right now. Grouped by source - tap a group to expand, then tap a tool to inspect its schema."
       />
       <SearchBar
         value={query}

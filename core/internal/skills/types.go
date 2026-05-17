@@ -3,7 +3,7 @@
 // A "skill" is a packaged capability the agent can invoke at runtime. Skills
 // live as `<name>/SKILL.md` directories under a configurable root (default
 // `./skills`) with YAML frontmatter + Markdown body. Inspired by OpenClaw and
-// Hermes — same path convention, so OpenClaw skills can be symlinked in
+// Hermes - same path convention, so OpenClaw skills can be symlinked in
 // unmodified.
 package skills
 
@@ -39,7 +39,7 @@ const (
 	SourceAuto      Source = "auto_evolved"
 	SourceCandidate Source = "curriculum_proposed"
 	// SourceAgent marks a skill the agent authored at runtime via the
-	// skill_create tool — the closed-loop self-authoring path.
+	// skill_create tool - the closed-loop self-authoring path.
 	SourceAgent Source = "agent_authored"
 )
 
@@ -54,8 +54,8 @@ const (
 	StatusArchived  Status = "archived"
 )
 
-// IODef declares an input or output parameter on a skill. Loosely typed —
-// "string", "int", "float", "bool", "object" — with optional default.
+// IODef declares an input or output parameter on a skill. Loosely typed -
+// "string", "int", "float", "bool", "object" - with optional default.
 type IODef struct {
 	Name     string `yaml:"name" json:"name"`
 	Type     string `yaml:"type" json:"type"`
@@ -78,7 +78,7 @@ type Frontmatter struct {
 	Confidence     float64   `yaml:"confidence,omitempty"`
 }
 
-// Skill is the runtime view of a skill — frontmatter + body + provenance.
+// Skill is the runtime view of a skill - frontmatter + body + provenance.
 type Skill struct {
 	Name           string    `json:"name"`
 	Version        string    `json:"version"`

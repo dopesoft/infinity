@@ -15,12 +15,12 @@ func NewAPI(m *Manager) *API { return &API{m: m} }
 
 // Routes registers handlers. Endpoints:
 //
-//	GET  /api/voyager/status                       — manager status + counters
-//	GET  /api/voyager/proposals?status=X           — list skill proposals
-//	POST /api/voyager/proposals/{id}/decide        — { "decision": "promoted" | "rejected" }
-//	POST /api/voyager/optimize                     — { "skill": "<name>" } GEPA evolve
-//	GET  /api/voyager/code-proposals?status=X      — list code-refactor proposals
-//	POST /api/voyager/code-proposals/{id}/decide   — { "decision": "approved|rejected|applied", "note": "..." }
+//	GET  /api/voyager/status                       - manager status + counters
+//	GET  /api/voyager/proposals?status=X           - list skill proposals
+//	POST /api/voyager/proposals/{id}/decide        - { "decision": "promoted" | "rejected" }
+//	POST /api/voyager/optimize                     - { "skill": "<name>" } GEPA evolve
+//	GET  /api/voyager/code-proposals?status=X      - list code-refactor proposals
+//	POST /api/voyager/code-proposals/{id}/decide   - { "decision": "approved|rejected|applied", "note": "..." }
 func (api *API) Routes(mux *http.ServeMux) {
 	if api == nil {
 		return
@@ -36,7 +36,7 @@ func (api *API) Routes(mux *http.ServeMux) {
 
 // handleCalendarPrep triggers prep-checklist generation for one calendar
 // event. Studio's Upcoming card surfaces an "ask Jarvis to plan this"
-// affordance — or future Voyager hooks fire this automatically when a
+// affordance - or future Voyager hooks fire this automatically when a
 // new event is ingested from the calendar connector.
 //
 //	POST /api/voyager/calendar/prep

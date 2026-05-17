@@ -1,4 +1,4 @@
-// artifact_tools.go — generic CRUD over mem_artifacts.
+// artifact_tools.go - generic CRUD over mem_artifacts.
 //
 // Per Rule #1 (agents assemble, not hardwire), these are building blocks
 // the agent uses to surface "things I've made" without bespoke
@@ -13,7 +13,7 @@
 //                  github_url?, bridge?, source_tool?})
 //   artifact_list({kind?, tag?, virtual_path_prefix?, session_id?, limit?})
 //   artifact_get({id?, name?, virtual_path?})
-//   artifact_delete({id})   — soft delete (sets deleted_at)
+//   artifact_delete({id})   - soft delete (sets deleted_at)
 //
 // virtual_path is the unique boss-facing identity. The Library UI in
 // Studio renders artifacts as a tree keyed on virtual_path so the boss
@@ -51,7 +51,7 @@ func (t *artifactSave) Name() string { return "artifact_save" }
 func (t *artifactSave) Description() string {
 	return "Index a created artifact (project, image, document, audio, video, dataset). " +
 		"`virtual_path` is the boss-facing tree location (e.g. /projects/habit-tracker, " +
-		"/images/landing-page/hero-v3.png) — it powers the Library UI. `storage_path` is " +
+		"/images/landing-page/hero-v3.png) - it powers the Library UI. `storage_path` is " +
 		"where bytes actually live (real FS path OR object-store URL). Returns the new id."
 }
 func (t *artifactSave) Schema() map[string]any {
@@ -375,7 +375,7 @@ type artifactDelete struct{ pool *pgxpool.Pool }
 func (t *artifactDelete) Name() string { return "artifact_delete" }
 func (t *artifactDelete) Description() string {
 	return "Soft-delete an artifact by id. The metadata row stays for audit but no longer surfaces in lists/Library. " +
-		"For project artifacts, this does NOT delete the actual files on disk — use bash_run for that."
+		"For project artifacts, this does NOT delete the actual files on disk - use bash_run for that."
 }
 func (t *artifactDelete) Schema() map[string]any {
 	return map[string]any{

@@ -6,9 +6,9 @@
  */
 
 export function relTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "—";
+  if (Number.isNaN(t)) return "-";
   const delta = Date.now() - t;
   const future = delta < 0;
   const abs = Math.abs(delta);
@@ -22,9 +22,9 @@ export function relTime(iso: string | null | undefined): string {
 }
 
 export function clockTime(iso: string | null | undefined, opts: { seconds?: boolean } = {}): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "-";
   return d.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
@@ -61,7 +61,7 @@ export function todayHeader(): { title: string; sub: string } {
 }
 
 export function formatDuration(ms: number | undefined): string {
-  if (!ms) return "—";
+  if (!ms) return "-";
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;

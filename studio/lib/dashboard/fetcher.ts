@@ -19,7 +19,7 @@ import type {
  *
  * Wraps GET /api/dashboard. The endpoint returns sections that are
  * backed by real tables (pursuits/todos/calendar/followups/saved/memory
- * stats) — sections still wired to mock-only sources (reflection,
+ * stats) - sections still wired to mock-only sources (reflection,
  * approvals, agent work, activity) are omitted from the response and
  * the DashboardClient keeps using its local fixture for those.
  *

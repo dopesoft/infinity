@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/* Citations — pill row of URL chips rendered below an assistant reply.
+/* Citations - pill row of URL chips rendered below an assistant reply.
  *
  * Visual contract matches the suggestion-chip pill style: rounded-full,
  * thin border, subtle card background, a 16px icon on the left and the
@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  * from DuckDuckGo's privacy-friendly icon service; if it 404s we fall
  * back to a generic link glyph so the pill never collapses.
  *
- * URL extraction runs against the rendered text — every unique http(s)
+ * URL extraction runs against the rendered text - every unique http(s)
  * URL in the message body becomes one chip, deduped by host+pathname
  * so the same article cited twice doesn't repeat.
  */

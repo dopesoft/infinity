@@ -30,7 +30,7 @@ func NewUsagePersistence(pool *pgxpool.Pool) *UsagePersistence {
 }
 
 // Hydrate returns the persisted counters for the given session. A missing
-// row is not an error — it just means this session has never recorded a
+// row is not an error - it just means this session has never recorded a
 // turn yet (returns a zero snapshot + nil).
 func (u *UsagePersistence) Hydrate(ctx context.Context, sessionID string) (agent.UsageSnapshot, error) {
 	if u == nil || u.pool == nil {

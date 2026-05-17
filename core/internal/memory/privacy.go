@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Secret regex patterns. Order matters — more specific first.
+// Secret regex patterns. Order matters - more specific first.
 // Add new patterns here as new providers add new key formats.
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`sk-ant-[a-zA-Z0-9_\-]{16,}`),                                 // Anthropic

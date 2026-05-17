@@ -13,7 +13,7 @@ import (
 //
 // Thin key/value over the infinity_meta table. Studio uses it to persist
 // app-level flags like boss_onboarded so a one-time wizard doesn't replay
-// on every login. Not a substitute for typed settings — meant for booleans,
+// on every login. Not a substitute for typed settings - meant for booleans,
 // timestamps, and lightweight markers the agent loop doesn't care about.
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {

@@ -14,7 +14,7 @@ import { useCanvasStore, type DevicePreset } from "@/lib/canvas/store";
 import { cn } from "@/lib/utils";
 
 /**
- * CanvasPreviewToolbar — Lovable-style toolbar pinned above the iframe.
+ * CanvasPreviewToolbar - Lovable-style toolbar pinned above the iframe.
  *
  *   [ URL  …  pencil ] [ phone tablet desktop ] [ refresh ↻ open-in-new ↗ ]
  *
@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
  * localStorage so the override survives reloads.
  *
  * Device toggle constrains the iframe wrapper width/height (handled in
- * CanvasPreview) — mobile=390×844, tablet=820×1180, desktop=fill. Persists.
+ * CanvasPreview) - mobile=390×844, tablet=820×1180, desktop=fill. Persists.
  */
 export function CanvasPreviewToolbar({ effectiveUrl }: { effectiveUrl: string }) {
   const store = useCanvasStore();
@@ -31,7 +31,7 @@ export function CanvasPreviewToolbar({ effectiveUrl }: { effectiveUrl: string })
 
   // The URL is derived from the active session via the bridge supervisor;
   // there's no manual override anymore (it broke the session=project mental
-  // model — a stale localStorage value would point you at the wrong app for
+  // model - a stale localStorage value would point you at the wrong app for
   // a different session). Tapping the URL still copies it to clipboard for
   // sharing / opening on another device.
   async function copyUrl() {
@@ -47,7 +47,7 @@ export function CanvasPreviewToolbar({ effectiveUrl }: { effectiveUrl: string })
 
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-b bg-background px-1.5">
-      {/* URL pill — refresh lives inside the pill (browser-omnibox style);
+      {/* URL pill - refresh lives inside the pill (browser-omnibox style);
           the URL text itself is tap-to-copy. Stop-propagation on the refresh
           button so tapping refresh doesn't also fire the copy. */}
       <div className="flex h-7 min-w-0 flex-1 items-center gap-0.5 rounded-md border bg-muted/40 pl-2 pr-0.5 dark:bg-zinc-900/60">

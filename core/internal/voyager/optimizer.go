@@ -207,7 +207,7 @@ func (m *Manager) RunOptimizer(ctx context.Context, opt *Optimizer, skillName st
 }
 
 // paretoFrontier applies the hard gates Hermes uses and then ranks by score
-// descending. We keep every candidate that passes — Pareto here is uni-axis
+// descending. We keep every candidate that passes - Pareto here is uni-axis
 // (score vs. size penalty via the SizeChars filter); future enhancement is to
 // pull in latency/cost as additional axes and run a real non-dominated sort.
 func paretoFrontier(cands []candidate, original string) []candidate {
@@ -239,7 +239,7 @@ func paretoFrontier(cands []candidate, original string) []candidate {
 }
 
 // recentSkillTraces pulls recent runs for a skill out of mem_skill_runs.
-// Used as the trace input to GEPA. We grab successes too — they are the
+// Used as the trace input to GEPA. We grab successes too - they are the
 // implicit eval set ("the prompt worked here, don't break it").
 func (m *Manager) recentSkillTraces(ctx context.Context, skillName string, limit int) ([]traceItem, error) {
 	rows, err := m.pool.Query(ctx, `
@@ -315,7 +315,7 @@ func (m *Manager) insertFrontierProposal(ctx context.Context, skillName, version
 // SampleFromFrontier draws a candidate from the most recent Pareto frontier
 // for a skill, weighted by score. Returns "" when the skill has no frontier
 // (or all candidates were rejected). The agent runtime calls this when it
-// wants to A/B a non-champion variant — GEPA's empirical result is that
+// wants to A/B a non-champion variant - GEPA's empirical result is that
 // stochastic sampling beats champion-only on out-of-distribution inputs.
 func (m *Manager) SampleFromFrontier(ctx context.Context, skillName string) (string, error) {
 	if m == nil || m.pool == nil {

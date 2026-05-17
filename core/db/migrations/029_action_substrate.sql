@@ -1,4 +1,4 @@
--- 029_action_substrate.sql — the bounded-action vocabulary that lets the
+-- 029_action_substrate.sql - the bounded-action vocabulary that lets the
 -- agent mutate any mem_* table without a bespoke Go tool per domain.
 --
 -- Why this exists: even with system_map auto-discovering tables and
@@ -6,14 +6,14 @@
 -- ACTING on a new table still required shipping a new Go mutate tool.
 -- This migration ends that by providing two pieces of substrate:
 --
---   1. mem_action_schemas — a bounded vocabulary of (table, action) →
+--   1. mem_action_schemas - a bounded vocabulary of (table, action) →
 --      (op, column, value) tuples. The agent (or a seed row) declares
 --      "for mem_followups, action 'dismiss' means set status='done'".
 --      A new generic tool, mem_act, looks up the row and executes a
---      parameterised UPDATE — NO raw SQL from the agent, NO arbitrary
+--      parameterised UPDATE - NO raw SQL from the agent, NO arbitrary
 --      column writes, just the four bounded ops below.
 --
---   2. count_filter on mem_domain_hints — replaces the hardcoded
+--   2. count_filter on mem_domain_hints - replaces the hardcoded
 --      heuristic ladder in system_map. Each table can say "open rows
 --      are status='open'" and system_map uses that for live counts.
 --

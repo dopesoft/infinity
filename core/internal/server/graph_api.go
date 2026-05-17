@@ -7,16 +7,16 @@ import (
 	"strings"
 )
 
-// /api/memory/graph — returns the top N most-connected graph nodes plus
+// /api/memory/graph - returns the top N most-connected graph nodes plus
 // every edge that connects two nodes in that set. Designed for the Memory
 // tab's KnowledgeGraphPanel: the client renders a force-directed layout
 // against this snapshot.
 //
 // Query params:
 //
-//	limit         — node cap (default 80, max 500)
-//	type          — filter to nodes of this type (optional)
-//	include_stale — include stale nodes (default false)
+//	limit         - node cap (default 80, max 500)
+//	type          - filter to nodes of this type (optional)
+//	include_stale - include stale nodes (default false)
 
 type graphNodeDTO struct {
 	ID       string `json:"id"`

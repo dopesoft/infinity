@@ -5,19 +5,19 @@ import { authedFetch } from "@/lib/api";
 /* Push subscription client helpers.
  *
  * The flow:
- *   1. registerServiceWorker() — called once on app mount (PWARegister).
- *   2. requestPermission()    — user-initiated tap in Settings, prompts
+ *   1. registerServiceWorker() - called once on app mount (PWARegister).
+ *   2. requestPermission()    - user-initiated tap in Settings, prompts
  *                                the browser for notification permission.
- *   3. subscribe()             — once permission is granted, registers a
+ *   3. subscribe()             - once permission is granted, registers a
  *                                PushSubscription with the user's browser
  *                                push service (FCM / Apple) using our
  *                                VAPID public key, then POSTs the resulting
  *                                endpoint+keys to Core.
- *   4. unsubscribe()           — local + server cleanup when the boss
+ *   4. unsubscribe()           - local + server cleanup when the boss
  *                                disables push for the current device.
  *
  * VAPID public key flows from the server via /api/push/vapid (set as
- * NEXT_PUBLIC_VAPID_PUBLIC_KEY at build time OR fetched at runtime — we
+ * NEXT_PUBLIC_VAPID_PUBLIC_KEY at build time OR fetched at runtime - we
  * support both). Until the key is provisioned, the UI shows a clear
  * "not configured" state instead of attempting a doomed subscribe.
  */
@@ -29,7 +29,7 @@ export type PushStatus = {
   permission: PushPermission;
   subscribed: boolean;
   endpoint?: string;
-  // Reason a subscribe attempt would fail right now — used to render
+  // Reason a subscribe attempt would fail right now - used to render
   // a helpful empty state in Settings instead of a generic error.
   blocker?:
     | null
@@ -181,7 +181,7 @@ export async function subscribe(vapidPublicKey: string): Promise<PushSubscriptio
       }),
     });
   } catch {
-    // If the server roundtrip fails we still return the subscription —
+    // If the server roundtrip fails we still return the subscription -
     // Settings will show "subscribed locally, server sync pending" so
     // the user can retry sync without re-prompting browser permission.
   }
@@ -195,7 +195,7 @@ export async function unsubscribe(): Promise<boolean> {
   if (!sub) return false;
   // Tell the server first so it stops sending to a dead endpoint, then
   // tear down locally. If the server roundtrip fails, we still kill
-  // the local subscription — better to silence notifications than to
+  // the local subscription - better to silence notifications than to
   // half-disable.
   try {
     await authedFetch("/api/push/unsubscribe", {
@@ -204,7 +204,7 @@ export async function unsubscribe(): Promise<boolean> {
       body: JSON.stringify({ endpoint: sub.endpoint }),
     });
   } catch {
-    // ignore — local unsubscribe still proceeds
+    // ignore - local unsubscribe still proceeds
   }
   return sub.unsubscribe();
 }
@@ -219,7 +219,7 @@ function extractKeys(sub: PushSubscription): { p256dh: string; auth: string } {
 }
 
 /* Web push VAPID keys arrive as a URL-safe base64 string from Core.
- * The PushManager.subscribe contract wants a Uint8Array — convert. */
+ * The PushManager.subscribe contract wants a Uint8Array - convert. */
 function urlBase64ToUint8Array(base64: string): Uint8Array {
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);
   const padded = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");

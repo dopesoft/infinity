@@ -47,7 +47,7 @@ type Session struct {
 	Messages  []llm.Message
 	mu        sync.Mutex
 
-	// Real API-reported usage from the most recent completed turn — fed
+	// Real API-reported usage from the most recent completed turn - fed
 	// straight from the LLM provider's Response.Usage. lastInputTokens
 	// represents the current context-window fill (= what the API counted
 	// on the last call); the context meter reads this so the meter shows
@@ -67,7 +67,7 @@ type Session struct {
 
 	// SystemPromptOverride replaces the loop's base soul prompt for this
 	// session only. The memory prefix + skills prefix + tool catalog still
-	// stack above it — only the constant "you are Jarvis" portion is
+	// stack above it - only the constant "you are Jarvis" portion is
 	// swapped. Used by the delegate tool to apply a persona to a child
 	// session without forking the whole agent loop.
 	SystemPromptOverride string
@@ -103,7 +103,7 @@ func (s *Session) ReplaceMessages(next []llm.Message) {
 
 // RecordUsage updates the session's API-reported token counters after a
 // turn completes. Called by the loop with whatever the provider returned in
-// Response.Usage. Safe to call with zero values — turns that erred before
+// Response.Usage. Safe to call with zero values - turns that erred before
 // the LLM responded simply don't move the counters.
 func (s *Session) RecordUsage(u llm.TokenUsage) {
 	s.mu.Lock()
@@ -141,7 +141,7 @@ func (s *Session) UsageSnapshot() UsageSnapshot {
 // SeedUsage installs counters from persistent storage when a session is
 // faulted back into the in-memory map after a process restart. Unlike
 // RecordUsage, this overwrites unconditionally (including zero values)
-// and replaces totals rather than incrementing — the persisted row is
+// and replaces totals rather than incrementing - the persisted row is
 // already the cumulative truth.
 func (s *Session) SeedUsage(snap UsageSnapshot) {
 	s.mu.Lock()
@@ -159,14 +159,14 @@ type MemoryProvider interface {
 
 // UsageStore persists per-session API-reported token counters across
 // process restarts. The agent loop records every successful turn's
-// Usage.Input/Output onto Session.{last,total}{Input,Output}Tokens — those
+// Usage.Input/Output onto Session.{last,total}{Input,Output}Tokens - those
 // fields live in process memory, so without persistence Railway's nightly
 // container rotation wipes them and Studio's context meter shows 0% on
 // sessions that very much aren't empty.
 //
 // Implementations live in core/internal/sessions (backed by mem_sessions).
 // All methods must be safe to call concurrently. Hydrate returning a zero
-// snapshot + nil error means "no row yet" — that's the signal that this
+// snapshot + nil error means "no row yet" - that's the signal that this
 // session has never recorded usage, not an error.
 type UsageStore interface {
 	Hydrate(ctx context.Context, sessionID string) (UsageSnapshot, error)
@@ -182,7 +182,7 @@ type HookEmitter interface {
 // opens a row at turn entry, threads the returned turn_id through every
 // `fireHook` payload, increments the tool-call counter on each PreToolUse,
 // and closes the row with the final outcome on TaskCompleted. Implemented
-// by *memory.TurnStore — decoupled so the agent package doesn't pull pgx.
+// by *memory.TurnStore - decoupled so the agent package doesn't pull pgx.
 // Nil-safe: when unset, the loop simply never writes to mem_turns and the
 // /logs UI shows nothing for those sessions.
 type TurnRecorder interface {
@@ -216,7 +216,7 @@ type SessionNamer interface {
 // AccountResolver injects the "which third-party accounts are connected"
 // system-prompt block. Implementation lives in core/internal/connectors;
 // declared here to keep the agent package free of pgx/http deps for
-// that subsystem. Nil-safe — when unset the loop simply doesn't add
+// that subsystem. Nil-safe - when unset the loop simply doesn't add
 // the block and the model loses awareness of multi-account routing.
 type AccountResolver interface {
 	SystemPromptBlock() string
@@ -225,7 +225,7 @@ type AccountResolver interface {
 type Loop struct {
 	// providerMu guards llmProvider for hot-swap from Settings PUTs. We
 	// take a Read-lock on every Stream call to grab the current provider,
-	// then drop the lock before doing I/O — keeps the swap path cheap and
+	// then drop the lock before doing I/O - keeps the swap path cheap and
 	// concurrent turns safe.
 	providerMu  sync.RWMutex
 	llmProvider llm.Provider
@@ -272,7 +272,7 @@ type Loop struct {
 
 	// toolVisibility is the per-turn hook that decides which tool names
 	// to hide from the model for a given session. Guarded by providerMu
-	// (shares the same hot-swap lock as the LLM provider — both are
+	// (shares the same hot-swap lock as the LLM provider - both are
 	// per-turn snapshots read once per iteration). Nil-safe.
 	toolVisibility ToolVisibilityFunc
 
@@ -280,8 +280,8 @@ type Loop struct {
 	// Studio's Settings store. Wired once at boot via SetActiveModelFn.
 	// CENTRAL resolver: every Run() call falls back to this when the
 	// caller passes an empty model string, so cron, workflow executor,
-	// delegate, heartbeat, voice tool turns — every code path that runs
-	// the agent — automatically honors the boss's selection without
+	// delegate, heartbeat, voice tool turns - every code path that runs
+	// the agent - automatically honors the boss's selection without
 	// having to plumb settings through call by call. The provider boot
 	// default (e.g. gpt-5-codex on openai_oauth) is the LAST resort,
 	// not the silent default. Guarded by providerMu since it's read on
@@ -337,7 +337,7 @@ func (l *Loop) SetCompactor(c *memory.ConversationCompactor) {
 // SetActiveModelFn installs the resolver that returns the boss's
 // currently-selected model id (Studio Settings store). The loop calls
 // it once at the top of every Run when the caller passed an empty
-// model string. Nil resolver (or empty return) means "no override" —
+// model string. Nil resolver (or empty return) means "no override" -
 // the provider's boot default applies. Safe to call after construction.
 func (l *Loop) SetActiveModelFn(fn func(ctx context.Context) string) {
 	l.providerMu.Lock()
@@ -367,7 +367,7 @@ func (l *Loop) resolveActiveModel(ctx context.Context) string {
 //
 // Concurrency: ReplaceMessages takes the session's mutex, so a turn that
 // starts before the goroutine finishes will see either the pre- or
-// post-compaction message list — never a torn intermediate state.
+// post-compaction message list - never a torn intermediate state.
 func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 	if l.autoCompactThreshold <= 0 || lastInputTokens < l.autoCompactThreshold {
 		return
@@ -379,7 +379,7 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 		return
 	}
 	go func() {
-		// Detached context with a generous deadline — compaction is
+		// Detached context with a generous deadline - compaction is
 		// network-bound on the summariser call but should never run
 		// longer than a minute or two.
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -413,7 +413,7 @@ type Config struct {
 	MaxToolIterations int
 	// ToolVisibility, when set, decides per-turn which tool names the
 	// model is allowed to *see*. The hook returns a set of tool names to
-	// hide for the given session — those tools are dropped from both the
+	// hide for the given session - those tools are dropped from both the
 	// schema bundle sent to the LLM and the dormant catalog block in the
 	// system prompt. Used today by the bridge layer to hide
 	// `claude_code__*` (Mac-only) tools when the session is routed to the
@@ -429,13 +429,13 @@ type ToolVisibilityFunc func(ctx context.Context, sessionID string) map[string]s
 
 func New(cfg Config) *Loop {
 	if cfg.MaxToolIterations <= 0 {
-		// Default headroom. 8 was the old value and it was too tight —
+		// Default headroom. 8 was the old value and it was too tight -
 		// the agent routinely burns 3–5 iterations on tool discovery
 		// (skills_discover, tool_search, load_tools) before any real
 		// work happens, and a single multi-step task (delete, verify,
 		// confirm) eats 4–6 more. 50 lets the loop actually finish the
 		// kind of "do this until it's done" task the boss expects to
-		// just work, without becoming so loose it spins forever — token
+		// just work, without becoming so loose it spins forever - token
 		// budget + auto-compact still bound the worst case. Override
 		// with INFINITY_MAX_TOOL_ITERATIONS for tighter or looser caps.
 		cfg.MaxToolIterations = 50
@@ -585,7 +585,7 @@ func (l *Loop) Hooks() HookEmitter {
 // ToolCatalogBlock renders the dormant-tool catalog string the loop
 // prepends to the system prompt before each text turn. Exposed so the
 // voice HTTP handler can stamp the same block into a realtime session's
-// instructions — the model needs to know the long-tail tool surface
+// instructions - the model needs to know the long-tail tool surface
 // exists and can be brought online via tool_search → load_tools, exactly
 // like in text mode.
 //
@@ -618,7 +618,7 @@ func (l *Loop) GetOrCreateSession(id string) *Session {
 		created = true
 	}
 	if s.Active == nil {
-		// Defensive — older sessions reattached after a process restart
+		// Defensive - older sessions reattached after a process restart
 		// might not have an ActiveSet yet. Backfill with the default.
 		s.Active = tools.NewDefaultActiveSet()
 	}
@@ -627,8 +627,8 @@ func (l *Loop) GetOrCreateSession(id string) *Session {
 	if created {
 		// Best-effort hydrate of persisted token counters. We deliberately
 		// run this outside l.mu so a slow DB doesn't stall every other
-		// session lookup. The lookup is keyed by PK — sub-ms on a healthy
-		// pool — but the timeout caps the worst case.
+		// session lookup. The lookup is keyed by PK - sub-ms on a healthy
+		// pool - but the timeout caps the worst case.
 		if store := l.UsageStore(); store != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			snap, err := store.Hydrate(ctx, id)
@@ -686,7 +686,7 @@ type ToolEvent struct {
 	EndedAt   time.Time      `json:"ended_at,omitempty"`
 	// Set on tool_call events when the gate parked the call on a Trust
 	// contract. Studio uses these to render inline Approve/Deny buttons
-	// in the same tool card — no tab-switch required.
+	// in the same tool card - no tab-switch required.
 	AwaitingApproval bool   `json:"awaiting_approval,omitempty"`
 	ContractID       string `json:"contract_id,omitempty"`
 	Preview          string `json:"preview,omitempty"`
@@ -703,7 +703,7 @@ const (
 	EventError      EventKind = "error"
 )
 
-// Run drives one turn of the agent loop. steerCh is optional — when non-nil,
+// Run drives one turn of the agent loop. steerCh is optional - when non-nil,
 // the loop drains it at each iteration boundary (before the next LLM call)
 // and appends each drained string as a fresh user message. This is what
 // powers mid-turn steering from the Studio composer: a user can keep typing
@@ -721,14 +721,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		return errors.New("agent loop has no LLM provider configured")
 	}
 
-	// Central model resolution. An empty model means "use defaults" —
+	// Central model resolution. An empty model means "use defaults" -
 	// honor the boss's active selection from Studio first; only fall
 	// through to the provider boot default when no setting exists. This
 	// makes every code path that runs the agent (cron, workflow
 	// executor, delegate, heartbeat, voice tool turns, ws live chat,
 	// resume turns) automatically pick up the active model without
 	// having to plumb a settings store through every call site. An
-	// explicit non-empty model from the caller still wins — delegate
+	// explicit non-empty model from the caller still wins - delegate
 	// sub-agents that intentionally target a specific id are honored.
 	if strings.TrimSpace(model) == "" {
 		model = l.resolveActiveModel(ctx)
@@ -767,7 +767,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// An empty userMsg is the "resume" path: run one turn against the
 	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
 	// session whose opening turn is the DashboardSeed context block) without
-	// appending a fresh — and empty — user message or firing a bogus
+	// appending a fresh - and empty - user message or firing a bogus
 	// UserPromptSubmit hook.
 	if userMsg != "" {
 		s.Append(llm.Message{Role: llm.RoleUser, Content: userMsg})
@@ -789,7 +789,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
-	// Snapshot the per-session hidden-tools set once per turn — used to
+	// Snapshot the per-session hidden-tools set once per turn - used to
 	// drop tools the bridge layer (or any other policy) has decided the
 	// model must not see this turn. Today: hides `claude_code__*` on
 	// Cloud-routed sessions so the model can't accidentally edit the
@@ -813,7 +813,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	}
 
 	for iter := 0; iter < l.maxToolIterations; iter++ {
-		// Age out TTL'd entries before the next LLM call — keeps an
+		// Age out TTL'd entries before the next LLM call - keeps an
 		// exploratory `load_tools` from squatting once the relevant work
 		// is done.
 		s.Active.DecayTTL()
@@ -841,12 +841,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		var streamErr error
 		streamDone := make(chan struct{})
 
-		// Snapshot the provider once per iteration — a Settings PUT that
+		// Snapshot the provider once per iteration - a Settings PUT that
 		// swaps mid-turn will affect the *next* iteration, not this one,
 		// keeping the in-flight stream coherent.
 		provider := l.Provider()
 		// Only ship schemas for tools currently in the session's active
-		// set — the dormant long tail lives in the system-prompt catalog
+		// set - the dormant long tail lives in the system-prompt catalog
 		// block and surfaces via tool_search. This is the core Phase-1
 		// context-budget win.
 		//
@@ -879,7 +879,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 		// Record real API-reported usage on every successful stream. The
 		// context meter reads s.lastInputTokens to show current window
-		// fill — 0 on empty sessions, accurate after each turn.
+		// fill - 0 on empty sessions, accurate after each turn.
 		s.RecordUsage(resp.Usage)
 		// Persist counters so a process restart doesn't reset the meter
 		// to 0% on a session with real history. Best-effort + detached
@@ -1029,7 +1029,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// inline buttons in Studio POST to /api/trust-contracts
 				// to flip the row's status; WaitForDecision returns when
 				// that lands. On approve we run the same tool call we
-				// were going to run — output streams into the SAME card.
+				// were going to run - output streams into the SAME card.
 				timeout := decision.WaitTimeout
 				if timeout <= 0 {
 					timeout = 15 * time.Minute
@@ -1120,7 +1120,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 // intermediate tool results. Empty/whitespace strings are dropped.
 //
 // Steered messages do NOT get a turn_id stamped because they belong to
-// whichever turn is in flight on the receiving session — we don't track
+// whichever turn is in flight on the receiving session - we don't track
 // that here cleanly, and the missing turn_id on the resulting observation
 // only means it joins the turn via the (session_id, created_at) fallback
 // path the trace API already uses for old rows.
@@ -1178,7 +1178,7 @@ func (l *Loop) fireHookT(turnID, name, sessionID, project, text string, payload 
 // closeTurn stamps the final outcome on the mem_turns row. Safe to call with
 // empty turnID (no-op when the recorder isn't wired or the open failed).
 // Runs synchronously because the row needs to flip status before the next
-// turn might tail it — the operation is a single indexed UPDATE so it's
+// turn might tail it - the operation is a single indexed UPDATE so it's
 // sub-ms in practice.
 func (l *Loop) closeTurn(ctx context.Context, turnID string, fields TurnCloseFields) {
 	rec := l.turnRecorder()
@@ -1194,14 +1194,14 @@ func (l *Loop) closeTurn(ctx context.Context, turnID string, fields TurnCloseFie
 
 // summarizeReply builds the short summary the /logs list view renders. For
 // successful turns it's the first ~140 chars of the assistant reply; for
-// empty replies (model returned no text — usually a tool-only iteration
+// empty replies (model returned no text - usually a tool-only iteration
 // cap or a confused decode) it's a synthetic marker so the row is still
 // readable. Trims whitespace and collapses newlines.
 func summarizeReply(text string, toolCalls int) string {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		if toolCalls > 0 {
-			return fmt.Sprintf("(no reply — %d tool call%s)", toolCalls, plural(toolCalls))
+			return fmt.Sprintf("(no reply - %d tool call%s)", toolCalls, plural(toolCalls))
 		}
 		return "(no reply)"
 	}
@@ -1231,7 +1231,7 @@ func emit(ch chan<- RunEvent, ev RunEvent) {
 }
 
 // formatGatedOutput is the synthetic tool result shown to the LLM when a
-// gate blocks execution. It tells the model what actually happened —
+// gate blocks execution. It tells the model what actually happened -
 // success-or-failure honesty matters here because the model will paraphrase
 // the result to the user, and if we lie ("queued") when the row was never
 // persisted the user gets a phantom Trust contract that never appears.
@@ -1252,7 +1252,7 @@ func formatGatedOutput(toolName string, d GateDecision) string {
 		b.WriteString("This call IS queued in the Trust tab. Tell the boss to approve there. Do NOT retry without approval.")
 	} else {
 		b.WriteString("WARNING: this call was NOT persisted to the Trust queue (no contract id). ")
-		b.WriteString("DO NOT tell the boss it was queued — the gate fired but the row failed to land. ")
+		b.WriteString("DO NOT tell the boss it was queued - the gate fired but the row failed to land. ")
 		b.WriteString("Tell the boss the Trust store is misconfigured and the action was simply refused.")
 	}
 	return b.String()

@@ -11,9 +11,9 @@ var stepRefRe = regexp.MustCompile(`\{\{steps\.(\d+)\.output\}\}`)
 // ValidateSteps statically checks a workflow's step list before it runs:
 // kinds are valid, each spec carries the field its kind needs, and every
 // {{steps.N.output}} reference points at an EARLIER step. Returns a list
-// of human-readable problems — empty means the assembly is well-formed.
+// of human-readable problems - empty means the assembly is well-formed.
 //
-// This is the cheap "verify the assembly before you commit it" check —
+// This is the cheap "verify the assembly before you commit it" check -
 // it catches the structural mistakes (a typo'd kind, a forward reference)
 // without running anything. Whether a referenced tool/skill exists is
 // caught at run time by the engine's retry/fail path.
@@ -45,7 +45,7 @@ func ValidateSteps(steps []StepDef) []string {
 			n, _ := strconv.Atoi(ref)
 			if n >= i {
 				problems = append(problems, fmt.Sprintf(
-					"step %d references {{steps.%d.output}} — a step can only reference an EARLIER step's output", i, n))
+					"step %d references {{steps.%d.output}} - a step can only reference an EARLIER step's output", i, n))
 			}
 		}
 	}

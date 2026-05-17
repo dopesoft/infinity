@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 const MAX_LINES_PX = 112; // ~4 lines (text-base 16px × line-height 1.5 × 4 + py-2)
 const CODE_MODE_KEY = "infinity:composer:codeMode";
-// Single global draft slot — what the boss typed survives navigating away,
+// Single global draft slot - what the boss typed survives navigating away,
 // switching apps on iOS Safari, or any remount of the Live page. Restored
 // on mount and cleared on send. Single-user product, so one slot is right.
 const DRAFT_KEY = "infinity:composer:draft";
@@ -28,7 +28,7 @@ function writeStoredDraft(value: string) {
     if (value) window.localStorage.setItem(DRAFT_KEY, value);
     else window.localStorage.removeItem(DRAFT_KEY);
   } catch {
-    /* private mode / quota — best-effort only */
+    /* private mode / quota - best-effort only */
   }
 }
 

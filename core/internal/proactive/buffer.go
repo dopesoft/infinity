@@ -53,7 +53,7 @@ func (wb *WorkingBuffer) MaybeCapture(ctx context.Context, sessionID, userMsg, a
 
 	var entry strings.Builder
 	if !active {
-		fmt.Fprintf(&entry, "# Working Buffer — session %s\nactivated %s\n\n",
+		fmt.Fprintf(&entry, "# Working Buffer - session %s\nactivated %s\n\n",
 			sessionID, time.Now().UTC().Format(time.RFC3339))
 	}
 	entry.WriteString("## Human\n")

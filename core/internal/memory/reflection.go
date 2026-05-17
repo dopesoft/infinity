@@ -17,7 +17,7 @@ import (
 // Reflector is the metacognition layer Infinity was missing. The compressor
 // converts observations into facts; the reflector converts *sessions* into
 // critiques + lessons. Pattern: Generative Agents (Park et al., 2023) +
-// Multi-Agent Reflexion (MAR, arXiv 2512.20845) — separate "critic" persona,
+// Multi-Agent Reflexion (MAR, arXiv 2512.20845) - separate "critic" persona,
 // fresh LLM call so the actor doesn't get to grade its own homework.
 //
 // Output lands in mem_reflections. Each row carries a quality_score (the
@@ -37,7 +37,7 @@ type Critic interface {
 	CritiqueSession(ctx context.Context, transcript string) (ReflectionResult, error)
 }
 
-// ReflectionResult is what the critic returns. Strict JSON shape — the LLM
+// ReflectionResult is what the critic returns. Strict JSON shape - the LLM
 // must hit this contract or we drop the row. quality_score is 0..1; lessons
 // are short imperative sentences with self-assessed confidence.
 type ReflectionResult struct {
@@ -60,7 +60,7 @@ func NewReflector(pool *pgxpool.Pool, embedder embed.Embedder, critic Critic) *R
 }
 
 // ReflectOnSession pulls the transcript of a single session, asks the critic
-// for a structured judgment, and persists the result. Idempotent — re-running
+// for a structured judgment, and persists the result. Idempotent - re-running
 // for a session that already has a reflection is a no-op unless force=true.
 func (r *Reflector) ReflectOnSession(ctx context.Context, sessionID string, force bool) (string, error) {
 	if r == nil || r.pool == nil || r.llm == nil {
@@ -150,7 +150,7 @@ func (r *Reflector) ReflectRecent(ctx context.Context, window time.Duration, lim
 
 // buildTranscript pulls the observation stream for a session and renders a
 // compact transcript suitable for the critic. We cap at 60 obs and 12k chars
-// to keep the call cheap — the critic doesn't need every keystroke, it needs
+// to keep the call cheap - the critic doesn't need every keystroke, it needs
 // the shape of the work.
 func (r *Reflector) buildTranscript(ctx context.Context, sessionID string) (string, error) {
 	rows, err := r.pool.Query(ctx, `
@@ -244,7 +244,7 @@ func (r *Reflector) persist(ctx context.Context, sessionID string, res Reflectio
 			INSERT INTO mem_lessons (lesson_text, confidence)
 			VALUES ($1, $2)
 		`, text, l.Confidence); err != nil {
-			// Don't fail the whole reflection over a lesson — log and move on.
+			// Don't fail the whole reflection over a lesson - log and move on.
 			fmt.Printf("[reflector] persist lesson: %v\n", err)
 		}
 	}
@@ -299,7 +299,7 @@ type Reflection struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-// importanceFromQuality inverts the quality score — a *low*-quality session
+// importanceFromQuality inverts the quality score - a *low*-quality session
 // is *more* important to remember because it's the one carrying lessons. A
 // flawless session has nothing useful to learn from.
 func importanceFromQuality(q float64) int {

@@ -7,14 +7,14 @@ import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import type { DashboardItem, Saved, SavedKind } from "@/lib/dashboard/types";
 
-/* Saved — articles, links, notes, quotes worth keeping in working memory.
+/* Saved - articles, links, notes, quotes worth keeping in working memory.
  *
  * Horizontal-scroll on every breakpoint to avoid blowing up vertical
  * height. Cards are tiles with subtle hover lift; the last "tile" is
  * an add-new affordance.
  *
  * Each item taps into the ObjectViewer where the full body (or external
- * link) renders inline. Saved items are conversation seeds too — Jarvis
+ * link) renders inline. Saved items are conversation seeds too - Jarvis
  * can pick up the thread on anything you've stashed.
  */
 

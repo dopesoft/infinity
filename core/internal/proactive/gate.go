@@ -14,7 +14,7 @@ import (
 )
 
 // defaultApprovalTTL bounds how long an idle session approval lasts.
-// We use a sliding window — every gate fire renews the expiry — so as
+// We use a sliding window - every gate fire renews the expiry - so as
 // long as the boss is actively working the approval never lapses. The
 // TTL only matters when the session goes quiet (e.g. boss walks away for
 // hours). Override with INFINITY_CLAUDE_CODE_APPROVAL_TTL ("8h", "1d", etc.).
@@ -145,15 +145,15 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		return agent.GateDecision{Allow: true}
 	}
 
-	// All approval state lives in mem_trust_contracts — no in-memory cache
+	// All approval state lives in mem_trust_contracts - no in-memory cache
 	// to lose on a Railway redeploy. Two checks against the durable store:
 	//
-	//   1. HasRecentApprovalForTool — has the boss ever approved THIS
+	//   1. HasRecentApprovalForTool - has the boss ever approved THIS
 	//      (session, tool) in the last TTL window? If yes → allow. This
 	//      handles both first-call-after-approval AND every follow-up
 	//      call in the same session for the duration of the window.
 	//
-	//   2. ConsumeApprovedForTool — fold the first 'approved' row over
+	//   2. ConsumeApprovedForTool - fold the first 'approved' row over
 	//      to 'consumed' for audit clarity. Subsequent calls hit (1)
 	//      because 'consumed' is also acceptable evidence of approval.
 	//
@@ -164,7 +164,7 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		hasApproval, err := g.trust.HasRecentApprovalForTool(ctx, sessionID, toolName, g.ttl)
 		if err != nil {
 			log.Printf("ClaudeCodeGate: approval lookup error: %v", err)
-			// Fall through to queueing — fail closed.
+			// Fall through to queueing - fail closed.
 		} else if hasApproval {
 			// Best-effort fold approved→consumed so the audit view shows
 			// when the approval was first acted on. Idempotent: if the
@@ -216,12 +216,12 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 	if id == "" {
 		// Queue swallows pool=nil with a silent ("", nil). That used to leave
 		// the model telling the user "queued in the Trust tab" while nothing
-		// actually landed. Fail loud instead — the agent's tool output and
+		// actually landed. Fail loud instead - the agent's tool output and
 		// the boss's logs both surface the real story.
 		log.Printf("ClaudeCodeGate: %s queue returned empty id (pool unwired?)", toolName)
 		return agent.GateDecision{
 			Allow:  false,
-			Reason: "trust store unavailable; row was NOT persisted — do not tell the boss it was queued",
+			Reason: "trust store unavailable; row was NOT persisted - do not tell the boss it was queued",
 		}
 	}
 	log.Printf("ClaudeCodeGate: %s queued as contract=%s (loop will wait)", toolName, id)
@@ -280,10 +280,10 @@ func (g *ClaudeCodeGate) WaitForDecision(ctx context.Context, contractID string,
 			case "snoozed":
 				return false, "snoozed by the boss (treat as deny for this run)"
 			case "consumed":
-				// Already used by another flow — accept it.
+				// Already used by another flow - accept it.
 				return true, ""
 			default:
-				// "pending" — keep waiting.
+				// "pending" - keep waiting.
 				continue
 			}
 		}

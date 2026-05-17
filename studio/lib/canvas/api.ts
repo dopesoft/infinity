@@ -1,7 +1,7 @@
 import { authedFetch } from "@/lib/api";
 
 /**
- * Canvas API client — typed wrappers around /api/canvas/*. All requests run
+ * Canvas API client - typed wrappers around /api/canvas/*. All requests run
  * through authedFetch so the Supabase JWT travels with every call. Mutations
  * that touch the home Mac return a contract_id; the caller polls
  * /api/trust-contracts to know when the boss has approved.
@@ -120,7 +120,7 @@ export type DeployStatus = {
 export const fetchDeployStatus = (signal?: AbortSignal) =>
   getJSON<DeployStatus>("/api/deploy/status", signal);
 
-// Diagnostic — dumps tool registration + each LS strategy's raw output.
+// Diagnostic - dumps tool registration + each LS strategy's raw output.
 // Surfaced via a button in the Files tab's empty state so the boss can
 // trigger it without futzing with auth tokens in DevTools.
 export const fetchCanvasDebug = (path: string, signal?: AbortSignal) =>
@@ -174,7 +174,7 @@ export type GitShowResponse = {
 
 // Fetch a file's contents at a specific git ref (defaults to HEAD on the
 // server). Used as the "original" side of the diff editor when the boss
-// opens a file Jarvis edited — we need the pre-edit version to render
+// opens a file Jarvis edited - we need the pre-edit version to render
 // real hunks. found=false means the file isn't tracked at that ref
 // (new file), and the caller should treat the original side as empty.
 export const fetchCanvasGitShow = (
@@ -254,7 +254,7 @@ export const setBridgePreference = (
 export const refreshBridgeStatus = () =>
   postJSON<BridgeStatus>("/api/bridge/refresh", {});
 
-// Cloud-workspace git staleness — answers "is the Railway workspace
+// Cloud-workspace git staleness - answers "is the Railway workspace
 // volume's local checkout behind main on GitHub?" Same shape question
 // as DeployStatus but pointed at the cloud bridge's working tree, not
 // at Core's own binary.
@@ -272,7 +272,7 @@ export const fetchBridgeWorkspaceGitStatus = (signal?: AbortSignal) =>
 
 // Trigger a fast-forward `git pull` on the cloud workspace and return
 // the fresh status. Server-side runs `git pull --ff-only` via the
-// bridge's /bash endpoint — safe because it refuses any merge that
+// bridge's /bash endpoint - safe because it refuses any merge that
 // would require a non-fast-forward (no chance of clobbering local
 // edits). On a clean ephemeral workspace this is exactly what makes
 // the staleness banner disappear.
@@ -291,7 +291,7 @@ export const pullBridgeWorkspace = () =>
 
 // ---- Library (mem_artifacts grouped) -------------------------------------
 //
-// The Files tab IS the library — `<LibrarySection>` at the top renders this
+// The Files tab IS the library - `<LibrarySection>` at the top renders this
 // tree above the real filesystem view. Click a project entry → swap
 // store.root + session.project_path. Click a media entry → open via
 // storage_path (R2/Supabase URL).

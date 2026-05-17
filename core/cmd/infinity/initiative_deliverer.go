@@ -8,7 +8,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
 
-// initiativeDeliverer is the concrete initiative.Deliverer — it bridges
+// initiativeDeliverer is the concrete initiative.Deliverer - it bridges
 // the initiative package's urgency policy to the real delivery channels:
 // Web Push for urgent notifications, the Phase 1 surface contract for
 // normal ones. The initiative package stays dependency-light behind the
@@ -19,7 +19,7 @@ type initiativeDeliverer struct {
 }
 
 // Push delivers an urgent notification to the boss's phone via Web Push.
-// A nil Sender is safe — the Notifier still logs the notification.
+// A nil Sender is safe - the Notifier still logs the notification.
 func (d *initiativeDeliverer) Push(ctx context.Context, n initiative.Notification) error {
 	if d == nil || d.sender == nil {
 		return nil
@@ -35,7 +35,7 @@ func (d *initiativeDeliverer) Push(ctx context.Context, n initiative.Notificatio
 }
 
 // Surface puts a normal notification on the dashboard as a generic surface
-// item, reusing the Phase 1 surface contract — no bespoke channel.
+// item, reusing the Phase 1 surface contract - no bespoke channel.
 func (d *initiativeDeliverer) Surface(ctx context.Context, n initiative.Notification) error {
 	if d == nil || d.surface == nil {
 		return nil

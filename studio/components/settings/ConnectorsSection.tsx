@@ -40,7 +40,7 @@ import {
 //   Active  → native mcp.yaml servers (claude_code, github, composio, …)
 //             merged with Composio toolkits. Multiple connected accounts per
 //             toolkit (e.g. four Gmail mailboxes) collapse into a single
-//             toolkit group with per-account sub-rows — each row has an
+//             toolkit group with per-account sub-rows - each row has an
 //             editable alias + disconnect, plus an "Add another account"
 //             button on the group header.
 //   Browse  → searchable Composio catalog (~250 toolkits).
@@ -65,7 +65,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
 
   const [activeQuery, setActiveQuery] = useState("");
 
-  // Pre-connect alias prompt. Required field — boss can't initiate OAuth
+  // Pre-connect alias prompt. Required field - boss can't initiate OAuth
   // without naming the account. Eliminates the "four indistinguishable
   // Gmails" failure mode common to bare Composio integrations.
   const [pendingConnect, setPendingConnect] = useState<{
@@ -144,7 +144,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   // Grouped activated view. Composio toolkits collapse into one row per slug
   // with each connected_account as a sub-row. Native MCP servers from
   // mcp.yaml render as single-account groups. The composio parent MCP
-  // entry is hidden when at least one toolkit account is connected — its
+  // entry is hidden when at least one toolkit account is connected - its
   // "connection status" is implicit in the children.
   const activeGroups = useMemo<ActiveGroup[]>(() => {
     const groups: ActiveGroup[] = [];
@@ -261,7 +261,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
     const ok = await setComposioAlias(accountId, alias);
     if (!ok) {
       // eslint-disable-next-line no-alert
-      alert("Couldn't save alias — refreshing to recover canonical state.");
+      alert("Couldn't save alias - refreshing to recover canonical state.");
       await loadConnected();
     }
   }
@@ -272,7 +272,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
         <h2 className="text-base font-semibold tracking-tight">Connectors</h2>
         <p className="text-xs text-muted-foreground">
           MCP servers and Composio integrations the agent can call. Each connected toolkit
-          adds tool schemas to the system prompt — keep the activated set tight to control
+          adds tool schemas to the system prompt - keep the activated set tight to control
           context budget. Connect the same toolkit more than once for multi-account routing
           (e.g. personal + work Gmail).
         </p>
@@ -622,7 +622,7 @@ function AccountSubRow({
           </Badge>
         </div>
 
-        {/* Secondary line — identity hint (if alias is set, also surface
+        {/* Secondary line - identity hint (if alias is set, also surface
             email for disambiguation) + account id tail. */}
         {kind === "composio" && (account.identityHint || account.accountId) && (
           <p className="truncate text-[10px] text-muted-foreground">
@@ -635,7 +635,7 @@ function AccountSubRow({
           </p>
         )}
 
-        {/* Tools (native only — composio tools live under the gateway entry) */}
+        {/* Tools (native only - composio tools live under the gateway entry) */}
         {(account.tools?.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-1">
             {(account.tools ?? []).map((t) => {
@@ -713,7 +713,7 @@ function BrowseList({
       {error ? (
         <ComposioErrorBanner
           message={error}
-          hint="If the error mentions undeployed routes, push core. If it mentions 401/invalid key, set COMPOSIO_ADMIN_API_KEY (workspace admin tier — separate from the MCP consumer key)."
+          hint="If the error mentions undeployed routes, push core. If it mentions 401/invalid key, set COMPOSIO_ADMIN_API_KEY (workspace admin tier - separate from the MCP consumer key)."
         />
       ) : toolkits.length === 0 && loading ? (
         <p className="text-sm text-muted-foreground">Loading catalog…</p>
@@ -789,14 +789,14 @@ function CustomComingSoon() {
       </div>
       <p className="text-xs text-muted-foreground">
         For now, MCPs that aren&apos;t on Composio go through{" "}
-        <code className="font-mono">core/config/mcp.yaml</code> — add a server entry, set any
+        <code className="font-mono">core/config/mcp.yaml</code> - add a server entry, set any
         required env vars on Railway, redeploy. See the existing{" "}
         <code className="font-mono">claude_code</code> and <code className="font-mono">composio</code>{" "}
         entries as a reference.
       </p>
       <p className="text-xs text-muted-foreground">
         The in-app &ldquo;add custom MCP&rdquo; form will land when we add a{" "}
-        <code className="font-mono">user_mcp_servers</code> table — it needs persistence so
+        <code className="font-mono">user_mcp_servers</code> table - it needs persistence so
         servers survive deploys without a rebuild.
       </p>
     </div>
@@ -883,7 +883,7 @@ function ComposioErrorBanner({ message, hint }: { message: string; hint?: string
 // extractIdentityHint pulls a recognisable label from Composio's per-
 // account meta/data blobs. The exact field name varies per toolkit
 // (email for Gmail, login for GitHub, team_name for Slack) so we walk
-// a list of common identity keys. Best-effort — returns "" when the
+// a list of common identity keys. Best-effort - returns "" when the
 // upstream response doesn't surface anything usable.
 function extractIdentityHint(acc: ComposioConnectedAccount): string {
   const candidates = ["email", "username", "user_email", "login", "display_name", "name", "team_name", "workspace_name"];
@@ -921,7 +921,7 @@ function nativeSourceLabel(name: string): string {
 }
 
 // NameAccountPrompt is the mandatory pre-connect gate. The OAuth flow does
-// not start until the boss provides a label — this is what eliminates the
+// not start until the boss provides a label - this is what eliminates the
 // "four indistinguishable Gmails" failure mode. The same alias is sent to
 // Composio as the `user_id` (so their dashboard also shows the label) AND
 // stored locally as the human-readable alias. Two-purpose, one input.
@@ -953,7 +953,7 @@ function NameAccountPrompt({
 
   function validate(v: string): string | null {
     const trimmed = v.trim();
-    if (trimmed === "") return "Required — name this account so you can route to it later.";
+    if (trimmed === "") return "Required - name this account so you can route to it later.";
     if (trimmed.length > 32) return "Keep it short (≤ 32 chars).";
     if (!/^[a-zA-Z0-9 _-]+$/.test(trimmed)) {
       return "Use letters, numbers, spaces, hyphens, or underscores only.";
@@ -976,7 +976,7 @@ function NameAccountPrompt({
   const kind = toolkitKind(toolkit.slug);
   const instructions = toolkitInstructions(toolkit.slug, toolkit.name);
 
-  // Header — logo block + bold title + small kind subtitle. Replaces
+  // Header - logo block + bold title + small kind subtitle. Replaces
   // the previous "blah blah explanation" paragraph: the kind label
   // tells the boss what this thing IS in two words; everything else
   // collapses into the info block below.
@@ -997,7 +997,7 @@ function NameAccountPrompt({
     </div>
   );
 
-  // Body — info card with the one-sentence instruction, then the
+  // Body - info card with the one-sentence instruction, then the
   // labeled input, then validation feedback. No more paragraphs of
   // dev-console prose; the placeholder + info card carry the meaning.
   const body = (
@@ -1091,7 +1091,7 @@ function NameAccountPrompt({
 
 // toolkitKind maps a Composio toolkit slug to a two-word category
 // label rendered as the modal's subtitle ("Email service", "Note
-// application"). The boss asked for this — first read in the dialog
+// application"). The boss asked for this - first read in the dialog
 // should be "what kind of thing am I connecting," not "what's a
 // connector alias."
 function toolkitKind(slug: string): string {
@@ -1184,7 +1184,7 @@ function toolkitInstructions(slug: string, name: string): string {
       return `Use the org name so the agent picks the right ${name} repos when you ask.`;
     case "stripe":
     case "paypal":
-      return `Pick a label like "business" or "personal" — the agent uses it to pick which ${name} account to charge against.`;
+      return `Pick a label like "business" or "personal" - the agent uses it to pick which ${name} account to charge against.`;
     default:
       return `Pick a short label like "personal" or "work" so the agent knows which ${name} account to use when you have more than one.`;
   }

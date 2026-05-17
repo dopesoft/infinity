@@ -1,11 +1,11 @@
--- 006_voyager.sql — Voyager + Cron + Sentinels.
+-- 006_voyager.sql - Voyager + Cron + Sentinels.
 --
 -- Adds:
---   • mem_crons        — scheduled jobs (cron expressions)
---   • mem_sentinels    — event-driven watchers
---   • mem_skill_proposals — curriculum-generated skill candidates
---   • mem_skill_failures  — production failures fed to AutoSkill
---   • mem_skill_tests     — synthetic test cases per skill
+--   • mem_crons        - scheduled jobs (cron expressions)
+--   • mem_sentinels    - event-driven watchers
+--   • mem_skill_proposals - curriculum-generated skill candidates
+--   • mem_skill_failures  - production failures fed to AutoSkill
+--   • mem_skill_tests     - synthetic test cases per skill
 
 BEGIN;
 

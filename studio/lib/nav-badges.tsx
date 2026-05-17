@@ -18,7 +18,7 @@ import { useAuth } from "@/lib/auth/session";
  * (`TabNav`, `MobileNav`) read via `useNavBadge(href)` and render a chip
  * when the count is > 0.
  *
- * The polling cadence is intentionally slow (20s) — these are background
+ * The polling cadence is intentionally slow (20s) - these are background
  * signals, not the conversation. Studio's `<RealtimeProvider>` provides
  * the instant updates inside each tab; this hook only exists so the user
  * sees something pop up in the nav without having to open every tab.

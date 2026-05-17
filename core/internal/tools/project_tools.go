@@ -1,4 +1,4 @@
-// project_tools.go — `project_create` is the one tool the boss explicitly
+// project_tools.go - `project_create` is the one tool the boss explicitly
 // asked for. End-to-end app-creation flow:
 //
 //   1. Slugify the name, pick the projects-root on the active bridge,
@@ -14,7 +14,7 @@
 //      can find this project by name without grepping the filesystem.
 //
 // Gated through BridgeGate (added to its block-list in serve wiring) so
-// the boss approves once per project create — no separate prompts for
+// the boss approves once per project create - no separate prompts for
 // each internal bash call.
 package tools
 
@@ -74,7 +74,7 @@ func (t *projectCreate) Schema() map[string]any {
 			},
 			"description": map[string]any{
 				"type":        "string",
-				"description": "One-line description — used for the GitHub repo description and the artifact row.",
+				"description": "One-line description - used for the GitHub repo description and the artifact row.",
 			},
 			"create_github": map[string]any{
 				"type":    "boolean",
@@ -101,14 +101,14 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 	}
 	slug := slugify(rawName)
 	if slug == "" {
-		return "", errors.New("name produced an empty slug — pick something with letters/numbers")
+		return "", errors.New("name produced an empty slug - pick something with letters/numbers")
 	}
 	tmpl := strings.ToLower(strings.TrimSpace(strString(in, "template")))
 	if tmpl == "" {
 		tmpl = "empty"
 	}
 	if !isKnownTemplate(tmpl) {
-		return "", fmt.Errorf("unknown template %q — choose nextjs | vite-react | static-html | go | python | empty", tmpl)
+		return "", fmt.Errorf("unknown template %q - choose nextjs | vite-react | static-html | go | python | empty", tmpl)
 	}
 	description := strString(in, "description")
 	createGitHub := boolOrTrue(in, "create_github")
@@ -156,7 +156,7 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 		"cd %s && git init -b main >/dev/null 2>&1 && "+
 			"git add -A && git commit -m %s >/dev/null",
 		shellSingleQuote(projectPath),
-		shellSingleQuote("Initial commit — scaffold via project_create ("+tmpl+")"),
+		shellSingleQuote("Initial commit - scaffold via project_create ("+tmpl+")"),
 	)
 	gitOut, gitStatus, gitOK := b.Post(ctx, "/bash", map[string]any{
 		"cmd":         initCmd,
@@ -168,7 +168,7 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 	}
 
 	// 4. Optionally create GitHub repo + push. Errors here are
-	// non-fatal — the project still exists locally. We surface the
+	// non-fatal - the project still exists locally. We surface the
 	// error in the result so Jarvis can tell the boss what's left.
 	owner := envOrDefault("INFINITY_GITHUB_OWNER", "DopeSoft")
 	var githubURL, pushErr string
@@ -220,7 +220,7 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 		VirtualPath: virtualPath,
 	})
 	if artErr != nil {
-		// Soft failure — the project exists on disk + GitHub. The
+		// Soft failure - the project exists on disk + GitHub. The
 		// artifact row is recoverable via a follow-up artifact_save.
 		logInfo("project_create: mem_artifacts insert failed: %v", artErr)
 	}
@@ -267,8 +267,8 @@ func isKnownTemplate(t string) bool {
 }
 
 // buildScaffoldCommand returns the bash one-liner that creates the
-// directory and lays down the template. Same shape across templates —
-// `cd <root> && <create the slug>` — so the caller doesn't need to
+// directory and lays down the template. Same shape across templates -
+// `cd <root> && <create the slug>` - so the caller doesn't need to
 // special-case anything.
 func buildScaffoldCommand(template, root, slug, description, displayName string) string {
 	mkRoot := fmt.Sprintf("mkdir -p %s && cd %s", shellSingleQuote(root), shellSingleQuote(root))
@@ -302,7 +302,7 @@ func buildScaffoldCommand(template, root, slug, description, displayName string)
 		)
 	case "go":
 		modPath := "github.com/dopesoft/" + slug
-		mainGo := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"" + displayName + " — hello from Jarvis\")\n}\n"
+		mainGo := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"" + displayName + " - hello from Jarvis\")\n}\n"
 		readme := fmt.Sprintf("# %s\n\n%s\n\n## Run\n\n```\ngo run .\n```\n", displayName, description)
 		return mkRoot + " && " + fmt.Sprintf(
 			"mkdir %s && cd %s && go mod init %s && printf %s > main.go && printf %s > README.md",
@@ -312,7 +312,7 @@ func buildScaffoldCommand(template, root, slug, description, displayName string)
 			shellSingleQuote(readme),
 		)
 	case "python":
-		mainPy := "def main():\n    print(\"" + displayName + " — hello from Jarvis\")\n\nif __name__ == \"__main__\":\n    main()\n"
+		mainPy := "def main():\n    print(\"" + displayName + " - hello from Jarvis\")\n\nif __name__ == \"__main__\":\n    main()\n"
 		readme := fmt.Sprintf("# %s\n\n%s\n\n## Run\n\n```\npython -m %s\n```\n", displayName, description, slug)
 		gitignore := ".venv/\n__pycache__/\n*.pyc\n.env\n"
 		return mkRoot + " && " + fmt.Sprintf(
@@ -368,7 +368,7 @@ func envOrDefault(key, fallback string) string {
 }
 
 // logInfo is a small wrapper for soft-failure / success lines. stdout
-// intentionally — these aren't error-severity events even though they
+// intentionally - these aren't error-severity events even though they
 // surface unexpected states. Avoids the `log` package name colliding
 // with the package import elsewhere in tools/.
 func logInfo(format string, args ...any) {

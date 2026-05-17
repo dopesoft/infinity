@@ -31,7 +31,7 @@ import { useRealtime } from "@/lib/realtime/provider";
 import { useIsDesktop } from "@/lib/use-media-query";
 
 /**
- * SessionsDrawer — session switcher. Honors the global pattern:
+ * SessionsDrawer - session switcher. Honors the global pattern:
  * <Dialog> on lg+ (centered modal), <Drawer> on <lg (bottom sheet).
  *
  * Tap a row → onSelect(id). Pressing "+ New" → onNew(). Search filters by
@@ -56,7 +56,7 @@ function templateLabel(t?: string): string {
 }
 
 // formatRowDate renders "Today 2:15 PM" / "Yesterday 9:04 PM" / "Mar 7, 4:12 PM"
-// — short enough to fit on one line next to the title, scannable at a
+// - short enough to fit on one line next to the title, scannable at a
 // glance. Locale-aware: respects the boss's system clock format. SSR
 // guard: when `now` is 0 (pre-mount) we return the raw timestamp without
 // the day prefix.
@@ -100,7 +100,7 @@ export function SessionsDrawer({
   // disable + the row doesn't blink-disappear before the response.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  // Multi-select state. There's no explicit "selection mode" toggle — each
+  // Multi-select state. There's no explicit "selection mode" toggle - each
   // row carries its own subtle circle selector that's always present, so
   // ticking one is the entry into bulk delete. The header trash button
   // appears only when selectedIds is non-empty (no competing X buttons,
@@ -129,7 +129,7 @@ export function SessionsDrawer({
   // click is swallowed so the long-press doesn't also fire the row's
   // onClick → switch-session. Multi-select stays on the always-visible
   // per-row circle on mobile so a long-press is never confused with
-  // "tap to open." Movement beyond ~8px cancels — keeps a real scroll
+  // "tap to open." Movement beyond ~8px cancels - keeps a real scroll
   // from being mis-read as a press.
   function rowPressProps(id: string, onTap: () => void) {
     return {
@@ -145,7 +145,7 @@ export function SessionsDrawer({
             try {
               navigator.vibrate(10);
             } catch {
-              /* haptics unavailable — ignore */
+              /* haptics unavailable - ignore */
             }
           }
         }, 450);
@@ -196,7 +196,7 @@ export function SessionsDrawer({
 
   useRealtime("mem_sessions", refresh);
 
-  // Reset transient state when the drawer closes — otherwise reopening
+  // Reset transient state when the drawer closes - otherwise reopening
   // could land mid-confirm or with stale selections. Also clean up any
   // straggling long-press timer on unmount.
   useEffect(() => {
@@ -254,10 +254,10 @@ export function SessionsDrawer({
       setSessions((prev) => prev.filter((s) => s.id !== id));
       setConfirmingId(null);
       // Deleting the session the boss is currently in: switch to the
-      // most-recently-started remaining session — the API hands us rows
+      // most-recently-started remaining session - the API hands us rows
       // newest-first, so `sessions` minus the deleted row gives that for
       // free. If we just deleted the only one, fall back to a fresh
-      // session. We do NOT close the drawer — the boss is probably about
+      // session. We do NOT close the drawer - the boss is probably about
       // to delete more, and the modal/drawer is the workbench for that.
       if (id === currentId) {
         const remaining = sessions.filter((x) => x.id !== id);
@@ -307,7 +307,7 @@ export function SessionsDrawer({
     setOpen(false);
   }
 
-  // Header trash control. Hidden when nothing is selected — keeps the
+  // Header trash control. Hidden when nothing is selected - keeps the
   // header clean and avoids competing with the modal's own close X.
   // Shows up the moment any row is ticked, in destructive style with
   // the count, and opens the bulk-confirm strip on click.
@@ -346,7 +346,7 @@ export function SessionsDrawer({
           </Button>
         </div>
       </div>
-      {/* Bulk-delete confirm strip — sits between the search bar and the
+      {/* Bulk-delete confirm strip - sits between the search bar and the
           list so the count + actions are within thumb reach on mobile and
           can't be lost under a long list. Title-cased phrasing keeps it
           honest: this destroys N rows. */}
@@ -449,7 +449,7 @@ export function SessionsDrawer({
                       )}
                     >
                       {isConfirming ? (
-                        // Inline single-row confirm — keeps the gesture
+                        // Inline single-row confirm - keeps the gesture
                         // tight and reads the same on phone or desktop.
                         <div className="flex min-h-12 items-center gap-2 px-3 py-2">
                           <span className="min-w-0 flex-1 truncate text-sm">
@@ -480,7 +480,7 @@ export function SessionsDrawer({
                         </div>
                       ) : (
                         <div className="flex items-center gap-1 pr-1">
-                          {/* Circle selector — always rendered so its
+                          {/* Circle selector - always rendered so its
                               click target is stable, but only visually
                               present (opacity-100) once a batch is
                               forming, on hover (desktop discovery), or
@@ -529,7 +529,7 @@ export function SessionsDrawer({
                           >
                             {rowMeta}
                           </button>
-                          {/* Per-row trash — desktop quick-delete via
+                          {/* Per-row trash - desktop quick-delete via
                               hover; keyboard users see it via
                               focus-visible. On touch the path is
                               long-press → adds to selection + header

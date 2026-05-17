@@ -89,7 +89,7 @@ func IsOpenAIOAuth() bool {
 // keyed by canonical id ("anthropic" / "openai" / "openai_oauth" / "google").
 // The Settings PUT for provider looks up the requested id here and swaps
 // the agent loop's active provider via Loop.SetProvider. Providers without
-// available credentials are simply absent from the map — the UI surfaces
+// available credentials are simply absent from the map - the UI surfaces
 // "not configured" instead of letting a switch silently fail at first
 // turn.
 //

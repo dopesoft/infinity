@@ -27,7 +27,7 @@ type CompactionConfig struct {
 	// KeepLastTurns is how many of the most recent user/assistant turn
 	// pairs to preserve verbatim. Anything older is summarised. Default 5.
 	KeepLastTurns int
-	// MinTurnsToCompact is the floor below which compaction is a no-op —
+	// MinTurnsToCompact is the floor below which compaction is a no-op -
 	// summarising a 3-turn conversation costs more than it saves. Default 8.
 	MinTurnsToCompact int
 	// Model is an optional override for the summariser call. Empty =
@@ -61,7 +61,7 @@ func NewConversationCompactor(store *Store, provider llm.Provider) *Conversation
 
 // Compact runs one compaction pass. Returns the new message list to swap
 // into the session, the result metadata, and any error. The caller (the
-// agent loop) is responsible for atomically replacing Session.Messages —
+// agent loop) is responsible for atomically replacing Session.Messages -
 // we don't mutate the session here so this stays test-friendly.
 func (c *ConversationCompactor) Compact(
 	ctx context.Context,
@@ -85,7 +85,7 @@ func (c *ConversationCompactor) Compact(
 	}
 
 	// Count user+assistant pairs (one "turn" = one user + N assistant +
-	// tool messages until the next user). We don't compact mid-turn — a
+	// tool messages until the next user). We don't compact mid-turn - a
 	// turn is the atomic unit so summaries don't strand orphan tool
 	// results without their preceding call.
 	turnBoundaries := turnStartIndices(messages)
@@ -120,7 +120,7 @@ func (c *ConversationCompactor) Compact(
 	out := make(chan llm.StreamEvent, 64)
 	go func() {
 		for range out {
-			// drain — we don't care about deltas, just the final Response
+			// drain - we don't care about deltas, just the final Response
 		}
 	}()
 	resp, sumErr := c.provider.Stream(
@@ -165,7 +165,7 @@ func (c *ConversationCompactor) Compact(
 			},
 		})
 		if ierr != nil {
-			// Skip the failure but keep going — losing one row beats
+			// Skip the failure but keep going - losing one row beats
 			// losing the whole compaction pass. The summary still
 			// survives in the synthetic message below.
 			continue
@@ -204,7 +204,7 @@ Output format: markdown with these sections, omit any that have no content:
 - One bullet per decision made (what was chosen and why).
 
 ## Context
-- File paths, project names, repo names, IDs, URLs, env vars, credentials referenced (NOT the credential values themselves — just that they exist).
+- File paths, project names, repo names, IDs, URLs, env vars, credentials referenced (NOT the credential values themselves - just that they exist).
 - User preferences and constraints expressed (e.g. "prefer Tailwind over inline CSS").
 
 ## Open follow-ups
@@ -217,11 +217,11 @@ Output format: markdown with these sections, omit any that have no content:
 Be terse. No prose intro, no "to summarize" lines. Just the sections.`
 
 // buildCompactionNote wraps the LLM summary in a clear delimiter so the
-// model understands this isn't a normal turn — it's a compressed pointer
+// model understands this isn't a normal turn - it's a compressed pointer
 // to memory plus a verbatim digest of what was lost from the buffer.
 func buildCompactionNote(summary string, compactedTurns int, obsCount int) string {
 	var b strings.Builder
-	b.WriteString("[ Earlier conversation compacted to memory — ")
+	b.WriteString("[ Earlier conversation compacted to memory - ")
 	b.WriteString(itoa(compactedTurns))
 	b.WriteString(" turns folded into ")
 	b.WriteString(itoa(obsCount))
@@ -231,7 +231,7 @@ func buildCompactionNote(summary string, compactedTurns int, obsCount int) strin
 }
 
 // turnStartIndices walks the message list and returns the index of every
-// user message — those are the "turn starts." Assistant + tool messages
+// user message - those are the "turn starts." Assistant + tool messages
 // that follow belong to that turn until the next user message appears.
 func turnStartIndices(messages []llm.Message) []int {
 	out := make([]int, 0)
@@ -246,7 +246,7 @@ func turnStartIndices(messages []llm.Message) []int {
 // renderTranscript flattens messages into a plain-text transcript for the
 // summariser. Tool calls get one line per call with truncated input;
 // tool results get one line with truncated output. The goal is "the
-// summariser sees what happened" not "perfect reconstruction" — verbose
+// summariser sees what happened" not "perfect reconstruction" - verbose
 // outputs are exactly what we're trying to compress.
 func renderTranscript(messages []llm.Message) string {
 	var b strings.Builder

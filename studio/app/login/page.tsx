@@ -46,7 +46,7 @@ export default function LoginPage() {
         if (data.enabled && data.owner_set) setTab("signin");
       })
       .catch(() => {
-        // Core unreachable — let user attempt either flow; Core will reject anyway.
+        // Core unreachable - let user attempt either flow; Core will reject anyway.
       });
   }, []);
 
@@ -66,9 +66,9 @@ export default function LoginPage() {
         const { data, error: signUpErr } = await supabase.auth.signUp({ email, password });
         if (signUpErr) throw signUpErr;
         if (!data.session) {
-          // Email confirmation is enabled on the project — surface it instead
+          // Email confirmation is enabled on the project - surface it instead
           // of silently failing the redirect.
-          setInfo("Check your inbox to confirm — then come back and sign in.");
+          setInfo("Check your inbox to confirm - then come back and sign in.");
           return;
         }
         router.replace(from);

@@ -14,13 +14,13 @@ import (
 
 // defaultGitHubBlockList is the suffix block list applied when
 // INFINITY_GITHUB_BLOCK is unset. Everything here is a GitHub MCP tool
-// whose effect is visible on github.com — opening PRs, merging, pushing
+// whose effect is visible on github.com - opening PRs, merging, pushing
 // files, deleting branches, creating repos. Read-only verbs (get_*,
 // list_*, search_*, get_me, etc.) intentionally bypass the gate so the
 // bot can browse the boss's GitHub without prompting on every call.
 //
 // Source of names: github/github-mcp-server tool surface as of 2025-11.
-// New write verbs may appear over time — extend this list or override
+// New write verbs may appear over time - extend this list or override
 // via INFINITY_GITHUB_BLOCK="<csv>".
 const defaultGitHubBlockList = "create_or_update_file,delete_file,push_files," +
 	"create_branch," +
@@ -129,7 +129,7 @@ func (g *GitHubGate) Authorize(ctx context.Context, sessionID, project, toolName
 		log.Printf("GitHubGate: %s queue returned empty id (pool unwired?)", toolName)
 		return agent.GateDecision{
 			Allow:  false,
-			Reason: "trust store unavailable; row was NOT persisted — do not tell the boss it was queued",
+			Reason: "trust store unavailable; row was NOT persisted - do not tell the boss it was queued",
 		}
 	}
 	log.Printf("GitHubGate: %s queued as contract=%s (loop will wait)", toolName, id)

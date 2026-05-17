@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * CanvasStore — shared client state for the Canvas surface.
+ * CanvasStore - shared client state for the Canvas surface.
  *
  * Why a context and not URL params: the Canvas page is one app shell with
  * many internal sub-views (file tree, git, preview, editor tabs, composer).

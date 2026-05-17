@@ -9,7 +9,7 @@ import { isCodeChangeTool } from "@/lib/canvas/detection";
 import { useProjectContext } from "@/lib/canvas/useCurrentProject";
 
 /**
- * CanvasPreview — body of the Preview tab.
+ * CanvasPreview - body of the Preview tab.
  *
  *   ┌── toolbar (URL / device toggle / refresh / open-in-new) ──┐
  *   │                                                            │
@@ -19,13 +19,13 @@ import { useProjectContext } from "@/lib/canvas/useCurrentProject";
  *
  * The iframe lives inside a sandboxed container with explicit width/height
  * for mobile/tablet presets, and 100%×100% for desktop. We remount the
- * iframe via its `key` on every refresh — a key change is the only way
+ * iframe via its `key` on every refresh - a key change is the only way
  * to force a same-URL reload in iframes without messing with `src=""`
  * tricks that some browsers cache through.
  *
  * Auto-refresh on agent edits: we subscribe to tool_result events for
  * write/edit tools and bump the refresh key with a debounced timer. This
- * makes the preview feel alive — every time the agent ships a change,
+ * makes the preview feel alive - every time the agent ships a change,
  * the iframe reloads ~500ms later.
  */
 const AUTO_REFRESH_DEBOUNCE_MS = 600;
@@ -37,7 +37,7 @@ export function CanvasPreview() {
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The session decides the surface. Sessions WITHOUT a project_path are
-  // chat-only — show the "no app yet" empty state and skip the iframe.
+  // chat-only - show the "no app yet" empty state and skip the iframe.
   // Sessions WITH a project_path always point the iframe at the bridge
   // tunnel (preview.dopesoft.io); the bridge handles booting / crashed /
   // ready transitions in the response body itself.
@@ -46,7 +46,7 @@ export function CanvasPreview() {
 
   // Base URL the boss configured (toolbar URL bar / env). The iframe src
   // appends a cache-busting query param keyed to previewRefreshKey so
-  // every click of ↻ forces a true reload — without this, Next.js dev's
+  // every click of ↻ forces a true reload - without this, Next.js dev's
   // versioned chunks 404 because the cached HTML references old hashes.
   const baseUrl = useMemo(() => {
     const explicit = store.previewUrl?.trim();
@@ -55,7 +55,7 @@ export function CanvasPreview() {
     return "";
   }, [store.previewUrl, store.envPreviewUrl]);
 
-  // First-mount cache key — a single timestamp captured once per page load.
+  // First-mount cache key - a single timestamp captured once per page load.
   // Together with previewRefreshKey, this guarantees the iframe URL is
   // unique on every paint, defeating the browser's HTTP cache for
   // Next.js dev's versioned chunks (which 404 after a dev-server
@@ -161,10 +161,10 @@ export function CanvasPreview() {
   // Desktop preset = the iframe IS the preview pane, edge-to-edge, no
   // chrome. Phone / tablet presets keep the device-card styling (padding,
   // shadow, rounded corners, gradient bg) because that's the entire point
-  // of a device preset — you want to see what the app looks like at that
+  // of a device preset - you want to see what the app looks like at that
   // size, framed against neutral chrome. Desktop is the default; render
   // it like a real browser window flush against its container.
-  // No project on this session — Canvas is a passive surface. Show a
+  // No project on this session - Canvas is a passive surface. Show a
   // "tell the agent what to build" empty state instead of trying to
   // proxy through the bridge. This is the v1 path for new sessions.
   if (projectCtx && !hasProject && !projectCtx.loading) {
@@ -280,9 +280,9 @@ function ProjectStatusBanner({ status, error }: { status: string; error?: string
     status === "booting"
       ? "Warming up dev server…"
       : status === "crashed"
-        ? `Dev server crashed${error ? ` — ${error}` : ""}`
+        ? `Dev server crashed${error ? ` - ${error}` : ""}`
         : status === "idle"
-          ? "Dev server idle — switch sessions to wake it"
+          ? "Dev server idle - switch sessions to wake it"
           : status;
   return (
     <div className={"flex items-center gap-2 border-b px-3 py-1 text-[11px] " + tone}>

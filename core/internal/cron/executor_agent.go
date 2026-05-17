@@ -17,14 +17,14 @@ import (
 //                          isolated turn writes its findings to memory
 //                          without touching any live session
 //
-// Both cases drain the run-event channel and discard streaming output —
+// Both cases drain the run-event channel and discard streaming output -
 // cron jobs are background work; the agent loop's hooks pipeline still
 // captures observations into mem_observations.
 //
 // Model selection is the loop's responsibility: passing "" delegates to
 // Loop.Run's central resolver (SetActiveModelFn in serve.go), which
 // picks up the boss's Studio selection. The cron executor never speaks
-// to the settings store directly — single source of truth lives on the
+// to the settings store directly - single source of truth lives on the
 // loop so cron, workflow executor, delegate, and ws all honor the
 // active model with one wire.
 type AgentExecutor struct {

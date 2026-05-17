@@ -26,7 +26,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Tools = s.loop.Tools().Names()
 	}
-	// Effective model — settings store override beats the provider's
+	// Effective model - settings store override beats the provider's
 	// boot default so /api/status reflects what the next turn will
 	// actually run against (not the env var). Studio's status footer
 	// and the Settings page both read this.
@@ -67,7 +67,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 	}
 	// Failed-to-connect servers leave Tools nil, which marshals as JSON
 	// null. The studio crashes on `s.tools.length` if we let that
-	// through — fix the wire format here so every entry has [].
+	// through - fix the wire format here so every entry has [].
 	for i := range out {
 		if out[i].Tools == nil {
 			out[i].Tools = []string{}
@@ -109,7 +109,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 	out := []sessionDTO{}
 
-	// Postgres is the source of truth — without this the page goes empty
+	// Postgres is the source of truth - without this the page goes empty
 	// every time core restarts (Railway redeploys, OOM kills, etc.),
 	// even though mem_observations still has all the messages. Sessions
 	// recover when the user reopens them in Studio (`hydrateLoopSession`
@@ -163,7 +163,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Any session that's live in RAM but doesn't have a mem_sessions row
-	// yet (extremely early in a brand-new session, race window) — surface
+	// yet (extremely early in a brand-new session, race window) - surface
 	// it anyway so the UI never lies about what's running.
 	if s.loop != nil {
 		for _, sess := range s.loop.Sessions() {

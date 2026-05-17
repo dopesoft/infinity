@@ -49,7 +49,7 @@ type wsServerEvent struct {
 	// directly; the chat transcript ignores it.
 	Intent *wsIntent `json:"intent,omitempty"`
 	// FindingKind is set on type="proactive_message" frames so Studio can
-	// render an icon + tone consistent with the Heartbeat tab — e.g.
+	// render an icon + tone consistent with the Heartbeat tab - e.g.
 	// "surprise" gets a lightbulb, "security" gets a shield.
 	FindingKind string `json:"finding_kind,omitempty"`
 	// CuriosityID is set on type="proactive_message" frames for findings
@@ -68,7 +68,7 @@ type wsToolEvent struct {
 	EndedAt   time.Time      `json:"ended_at,omitempty"`
 	// Set on tool_call events when the gate is parking the call on a
 	// Trust contract. Studio reads these to render the inline Approve/
-	// Deny buttons inside the same tool card — without these fields
+	// Deny buttons inside the same tool card - without these fields
 	// reaching the browser the card spins forever and the agent loop
 	// silently times out on WaitForDecision.
 	AwaitingApproval bool   `json:"awaiting_approval,omitempty"`
@@ -200,7 +200,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// If no turn is in flight, fall through to start a normal
 			// turn so the client doesn't have to distinguish.
 			if s.steerTurn(msg.SessionID, msg.Content, send) {
-				/* WAL the steer too — corrections often arrive as
+				/* WAL the steer too - corrections often arrive as
 				 * mid-turn nudges and we need them on the durable
 				 * SESSION-STATE log just like a first message. */
 				s.appendWAL(connCtx, msg.SessionID, msg.Content)
@@ -229,7 +229,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			/* Register this connection under the session so the heartbeat
 			 * broadcaster can target it on a proactive surface. Safe to
-			 * call repeatedly — the latest send func wins. */
+			 * call repeatedly - the latest send func wins. */
 			if sessionID != activeSessionID {
 				if activeSessionID != "" {
 					s.unregisterSession(activeSessionID, send)
@@ -239,7 +239,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			/* WAL: extract corrections / preferences / dates / decisions
 			 * from the user message and persist to mem_session_state. Runs
-			 * synchronously — regex over the message string only, no LLM. */
+			 * synchronously - regex over the message string only, no LLM. */
 			s.appendWAL(connCtx, sessionID, msg.Content)
 			/* IntentFlow: classify this turn in the background. The agent
 			 * loop always runs regardless of the decision; the decision is
@@ -248,7 +248,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
-			// streaming without having to switch message types — the
+			// streaming without having to switch message types - the
 			// server figures it out.
 			if s.steerTurn(sessionID, msg.Content, send) {
 				continue
@@ -278,7 +278,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				activeSessionID = sessionID
 				s.registerSession(sessionID, send)
 			}
-			// A turn already running for this session — nothing to do; the
+			// A turn already running for this session - nothing to do; the
 			// in-flight turn will produce the reply. Prevents a double-fire
 			// if Studio retries the resume across a reconnect.
 			s.turnsMu.Lock()
@@ -288,12 +288,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.hydrateLoopSession(r, sessionID)
-			// Guard against resuming a session with no history at all —
+			// Guard against resuming a session with no history at all -
 			// the LLM stream would error on an empty message list. The
 			// seeded-session path always has the DashboardSeed turn, so
 			// this only trips on a misuse of the frame.
 			if sess := s.loop.GetOrCreateSession(sessionID); sess == nil || len(sess.Snapshot()) == 0 {
-				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume — session has no history"})
+				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume - session has no history"})
 				continue
 			}
 			s.startTurn(connCtx, userID, sessionID, "", send)
@@ -323,7 +323,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 //
 // startTurn spawns the agent loop for one turn. The model is resolved
 // server-side from the settings store (set by Studio's chip + Settings
-// page) rather than carried on the WS frame — that way a single source
+// page) rather than carried on the WS frame - that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
 func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, _ func(wsServerEvent)) {
@@ -351,7 +351,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	if prev, ok := s.turns[sessionID]; ok {
 		// Defensive: a prior turn should have been cleaned up. If it
 		// somehow survived (panic in the goroutine before delete),
-		// cancel it and overwrite — the new turn wins.
+		// cancel it and overwrite - the new turn wins.
 		prev.cancel()
 	}
 	s.turns[sessionID] = state
@@ -392,7 +392,7 @@ func (s *Server) interruptTurn(sessionID string) {
 // steerTurn routes a user-typed string into a running turn's steer channel.
 // Returns true when the message was consumed by a turn (either queued or
 // dropped with a soft error reported to the client). Returns false when no
-// turn is in flight — the caller should start a fresh turn instead.
+// turn is in flight - the caller should start a fresh turn instead.
 func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) bool {
 	if sessionID == "" {
 		return false
@@ -451,7 +451,7 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 
 	/* Accumulate the assistant's streamed text so on EventComplete we can
 	 * write the full user/assistant pair into the WorkingBuffer when the
-	 * context window is past threshold. We only need text deltas — tool
+	 * context window is past threshold. We only need text deltas - tool
 	 * calls aren't mirrored into the buffer (they'd churn it on every
 	 * iteration without adding recoverable content). */
 	var assistantText strings.Builder
@@ -466,7 +466,7 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 		case agent.EventToolCall:
 			if ev.ToolCall != nil {
 				// Forward the full ToolEvent including the gate's
-				// awaiting_approval signal — without these fields the
+				// awaiting_approval signal - without these fields the
 				// browser never knows to render the inline Approve /
 				// Deny buttons and the user watches the card spin
 				// while the agent loop is blocked on WaitForDecision.
@@ -513,7 +513,7 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 			})
 			/* Mirror this exchange into mem_working_buffer iff the
 			 * model's context window crossed the proactive threshold
-			 * (default 0.6 of max). Heuristic ctx_max — provider
+			 * (default 0.6 of max). Heuristic ctx_max - provider
 			 * interface doesn't expose context window, so we infer
 			 * from the model id. Fail-open: any error here is silent
 			 * because the turn already succeeded. */

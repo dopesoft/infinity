@@ -1,10 +1,10 @@
-// domain_hint_add / domain_hint_list — the agent extends its own UI/
+// domain_hint_add / domain_hint_list - the agent extends its own UI/
 // data/tool topology at runtime.
 //
 // Why this exists: system_map auto-discovers tables (information_schema)
 // and tools (registry) but pairing them by name convention only works
-// for ~80% of cases. The other 20% — multi-word tables, irregular
-// plurals, semantic mismatches (mem_curiosity_questions → question_*) —
+// for ~80% of cases. The other 20% - multi-word tables, irregular
+// plurals, semantic mismatches (mem_curiosity_questions → question_*) -
 // used to require a Go edit + rebuild. Now the agent can register the
 // mapping itself the FIRST time it learns the convention, and every
 // future system_map() reflects it without a deploy.
@@ -45,7 +45,7 @@ func (t *domainHintAdd) Description() string {
 		"acts on it. Use this the first time you discover that a table's " +
 		"agent tools live under a non-convention prefix (e.g. " +
 		"mem_curiosity_questions → question_*). The next system_map() reflects " +
-		"the hint automatically; no deploy needed. Idempotent — re-asserting " +
+		"the hint automatically; no deploy needed. Idempotent - re-asserting " +
 		"the same table updates the existing row instead of erroring."
 }
 func (t *domainHintAdd) Schema() map[string]any {

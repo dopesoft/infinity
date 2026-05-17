@@ -7,7 +7,7 @@ import { useRealtime } from "@/lib/realtime/provider";
 const SESSION_KEY = "infinity:sessionId";
 
 /**
- * useCurrentProject — Canvas's read of the active session's project.
+ * useCurrentProject - Canvas's read of the active session's project.
  *
  * The session is the project. When the boss is on the Live tab and switches
  * to a different conversation, the Canvas surface inherits the new
@@ -49,7 +49,7 @@ export function useCurrentProject(): CurrentProject {
     }
     refreshSessionId();
     // localStorage's `storage` event fires across tabs, but not in the same
-    // tab — Live mutates it via writeStoredSessionId. Re-check on focus and
+    // tab - Live mutates it via writeStoredSessionId. Re-check on focus and
     // when the sessions realtime channel fires to catch in-tab swaps.
     window.addEventListener("focus", refreshSessionId);
     window.addEventListener("pageshow", refreshSessionId);
@@ -105,7 +105,7 @@ export function useCurrentProject(): CurrentProject {
       });
       if (cancelled) return;
       if (!result) {
-        setError("bridge unreachable — the Mac supervisor isn't responding");
+        setError("bridge unreachable - the Mac supervisor isn't responding");
         return;
       }
       setError(null);
@@ -147,7 +147,7 @@ export function CurrentProjectProvider({
 }
 
 /**
- * useProjectContext — read the current-project snapshot from anywhere
+ * useProjectContext - read the current-project snapshot from anywhere
  * inside the Canvas tree. Returns null when called outside the provider
  * so consumers can degrade gracefully (treat as "no project").
  */

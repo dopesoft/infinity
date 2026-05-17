@@ -1,9 +1,9 @@
--- 025_realtime_replica_identity_full.sql — set REPLICA IDENTITY FULL on the
+-- 025_realtime_replica_identity_full.sql - set REPLICA IDENTITY FULL on the
 -- realtime-published tables that the UI subscribes to for UPDATE events.
 --
 -- Why this is load-bearing: with the default REPLICA IDENTITY, Postgres
 -- only writes the primary key to the WAL on UPDATE. Supabase Realtime
--- delivers what's in the WAL — so the user_id (and every other column)
+-- delivers what's in the WAL - so the user_id (and every other column)
 -- is missing from the UPDATE payload. Realtime evaluates row-level
 -- security against that payload, fails to find a user_id matching the
 -- subscriber, and silently drops the event.
@@ -15,7 +15,7 @@
 -- trust contracts, heartbeats, etc. Setting FULL fixes the whole class.
 --
 -- Cost: each UPDATE writes the full prior row to the WAL instead of
--- just the PK — at our write volume (single-user, mostly INSERTs) this
+-- just the PK - at our write volume (single-user, mostly INSERTs) this
 -- is well within the noise. Idempotent: ALTER TABLE ... REPLICA
 -- IDENTITY FULL is a no-op when already set.
 

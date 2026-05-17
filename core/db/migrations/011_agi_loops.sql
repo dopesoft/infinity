@@ -1,4 +1,4 @@
--- 011_agi_loops.sql — Close the AGI loops Infinity advertised but didn't have.
+-- 011_agi_loops.sql - Close the AGI loops Infinity advertised but didn't have.
 --
 -- Note: an earlier version of this file was applied as 010_agi_loops.sql before
 -- the collision with 010_code_proposals.sql was noticed. All operations are
@@ -6,12 +6,12 @@
 -- file under the new name is a safe no-op against the already-migrated DB.
 --
 -- Adds substrate for:
---   • Reflections (metacognition) — agent critiques its own sessions.
---   • Predictions (predict-then-act) — pre-tool expectation paired with reality.
---   • A-MEM associative links — relation_type='associative' on mem_relations.
---   • GEPA Pareto frontier — multiple proposals per optimization run, ranked.
---   • Procedural memory tier — index supports always-injected top-K.
---   • Curiosity questions — agent-generated probes for knowledge gaps.
+--   • Reflections (metacognition) - agent critiques its own sessions.
+--   • Predictions (predict-then-act) - pre-tool expectation paired with reality.
+--   • A-MEM associative links - relation_type='associative' on mem_relations.
+--   • GEPA Pareto frontier - multiple proposals per optimization run, ranked.
+--   • Procedural memory tier - index supports always-injected top-K.
+--   • Curiosity questions - agent-generated probes for knowledge gaps.
 
 BEGIN;
 
@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_skill_proposals_parent_status
     ON mem_skill_proposals(parent_skill, status);
 
 -- ---------------------------------------------------------------------------
--- 5. Procedural memory tier — supports the always-injected top-K used by
+-- 5. Procedural memory tier - supports the always-injected top-K used by
 --    skill-aware system-prompt construction. Promoted skills materialise as
 --    procedural memories so the agent loop can pull them via the same memory
 --    machinery (RRF / search / forget) as any other knowledge.
@@ -103,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_procedural_active
     WHERE tier = 'procedural' AND status = 'active';
 
 -- ---------------------------------------------------------------------------
--- 6. Curiosity questions — gap-driven questions surfaced by the heartbeat.
+-- 6. Curiosity questions - gap-driven questions surfaced by the heartbeat.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mem_curiosity_questions (
     id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

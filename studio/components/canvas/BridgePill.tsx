@@ -15,7 +15,7 @@ import {
 } from "@/lib/canvas/api";
 
 /**
- * BridgePill — persistent indicator + per-session control for the two-bridge
+ * BridgePill - persistent indicator + per-session control for the two-bridge
  * router. Shows which workspace (Mac vs Railway Cloud) is currently
  * fulfilling `bridge_*` tool calls for the active session, and lets the
  * boss pin a preference (auto / mac / cloud) via a Dialog (lg+) or Drawer
@@ -27,7 +27,7 @@ import {
  * we surface an in-app toast so the swap isn't silent.
  *
  * When `sessionId` is null the pill renders a muted placeholder and
- * does not poll — there's no session to scope the router decision to.
+ * does not poll - there's no session to scope the router decision to.
  */
 type Preference = "auto" | "mac" | "cloud";
 
@@ -45,7 +45,7 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
   const previousKindRef = useRef<"mac" | "cloud" | undefined>(undefined);
   const sawFirstLoadRef = useRef(false);
 
-  // Global status — fetched once on mount, refreshable.
+  // Global status - fetched once on mount, refreshable.
   useEffect(() => {
     const ac = new AbortController();
     void (async () => {
@@ -55,7 +55,7 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
     return () => ac.abort();
   }, []);
 
-  // Per-session view — polled. Resets on session swap.
+  // Per-session view - polled. Resets on session swap.
   useEffect(() => {
     previousKindRef.current = undefined;
     sawFirstLoadRef.current = false;
@@ -71,7 +71,7 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
         if (previousKindRef.current !== next.active_kind) {
           const human = next.active_kind === "mac" ? "Mac" : "Cloud";
           if (next.active_kind === "cloud" && next.why_active?.toLowerCase().includes("mac")) {
-            setToast(`Bridge switched to ${human} — Mac offline, falling back.`);
+            setToast(`Bridge switched to ${human} - Mac offline, falling back.`);
           } else {
             setToast(`Bridge switched to ${human}`);
           }
@@ -135,7 +135,7 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
       aria-label="Bridge for this session"
       title={pill.title}
       className={cn(
-        // Compact pill — sits in the top bar next to other small status
+        // Compact pill - sits in the top bar next to other small status
         // chips. Padding + gap chosen so the longest label ("Connecting…")
         // breathes away from the rounded border instead of kissing it.
         "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[10px] font-medium transition-colors",
@@ -167,7 +167,7 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
         title="No active session"
       >
         <span className="inline-block size-1.5 rounded-full bg-muted-foreground/40" aria-hidden />
-        <span className="font-mono tracking-tight">—</span>
+        <span className="font-mono tracking-tight">-</span>
       </span>
     );
   }
@@ -220,7 +220,7 @@ function renderPill({
   // No session: caller handles this and never reaches here, but be safe.
   if (!sessionId) {
     return {
-      label: "—",
+      label: "-",
       title: "No active session",
       spin: false,
       toneClasses: toneToClasses("muted"),

@@ -1,5 +1,5 @@
 // Package voice integrates OpenAI's Realtime API for low-latency, full-duplex
-// speech. Audio never touches our server — the browser does WebRTC directly
+// speech. Audio never touches our server - the browser does WebRTC directly
 // to OpenAI, authenticated by a short-lived `client_secret` that this package
 // mints from the boss's OPENAI_API_KEY. Tool calls round-trip through Core
 // over the existing WebSocket so voice has the same tool surface (and the
@@ -58,7 +58,7 @@ const (
 	// SDP offer here with the ephemeral key in Authorization; OpenAI
 	// returns the SDP answer. The model id is baked into the ephemeral
 	// at mint time, so no query params. (The beta surface used
-	// /v1/realtime?model=… — do not revive that.)
+	// /v1/realtime?model=… - do not revive that.)
 	realtimeSDPURL = "https://api.openai.com/v1/realtime/calls"
 )
 
@@ -72,7 +72,7 @@ type SessionRequest struct {
 	// instruction line so the model speaks in the accent the boss
 	// asked for.
 	SystemPrompt string
-	// Tools is the per-session active-set's schema list — same lazy-load
+	// Tools is the per-session active-set's schema list - same lazy-load
 	// discipline as text mode. The handler in voice_api.go resolves
 	// `sess.Active.Names()` and passes the matching ToolDefs here. The
 	// dormant long tail lives in the system-prompt catalog block; when
@@ -83,7 +83,7 @@ type SessionRequest struct {
 }
 
 // SessionResponse is the JSON shape the browser receives. It's
-// deliberately minimal — everything the WebRTC handshake needs, and
+// deliberately minimal - everything the WebRTC handshake needs, and
 // nothing else.
 type SessionResponse struct {
 	ClientSecret string `json:"client_secret"`
@@ -132,7 +132,7 @@ func (m *Minter) Voice() string { return m.voice }
 // Mint POSTs the session config to OpenAI and returns the ephemeral
 // client_secret. The browser uses it as the bearer for SDP exchange.
 //
-// Errors are surfaced verbatim — the calling HTTP handler logs and
+// Errors are surfaced verbatim - the calling HTTP handler logs and
 // returns 502 so the Studio UI can show a real cause instead of a
 // generic "voice failed" toast.
 func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse, error) {
@@ -154,7 +154,7 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	// Per the GA docs: `output_modalities` defaults to ["audio"] for a
 	// realtime session, but make it explicit. Some surfaces have been
 	// observed routing to text-only when this is omitted alongside a
-	// configured `audio.output.voice` — better to be explicit than to
+	// configured `audio.output.voice` - better to be explicit than to
 	// rely on a default that's been shifting between revisions.
 	session := map[string]any{
 		"type":              "realtime",
@@ -276,7 +276,7 @@ func toRealtimeTools(defs []llm.ToolDef) []map[string]any {
 	return out
 }
 
-// truncateForErr keeps error messages under control — OpenAI sometimes
+// truncateForErr keeps error messages under control - OpenAI sometimes
 // returns multi-kilobyte bodies on rate limits.
 func truncateForErr(s string) string {
 	const max = 400

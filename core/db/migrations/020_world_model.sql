@@ -1,24 +1,24 @@
--- 020_world_model.sql — the world model + agent-owned goals.
+-- 020_world_model.sql - the world model + agent-owned goals.
 --
 -- Phase 5 of the assembly substrate. Honcho models the BOSS; mem_memories
--- is episodic recall. Neither is a structured model of the boss's WORLD —
+-- is episodic recall. Neither is a structured model of the boss's WORLD -
 -- the people, projects, accounts, and threads the agent acts on, and their
 -- current state. And mem_pursuits is the boss's dashboard goals; the agent
 -- had no durable goals of its OWN.
 --
 -- Three tables:
---   mem_entities      — the nodes of the world model (person/project/…)
---   mem_entity_links  — typed edges between entities
---   mem_agent_goals   — the agent's own objectives, each with a living plan
+--   mem_entities      - the nodes of the world model (person/project/…)
+--   mem_entity_links  - typed edges between entities
+--   mem_agent_goals   - the agent's own objectives, each with a living plan
 --
--- The agent reads/writes via the entity_* and goal_* tools — never raw SQL.
+-- The agent reads/writes via the entity_* and goal_* tools - never raw SQL.
 
 BEGIN;
 
--- ── mem_entities — the nodes of the world model ───────────────────────────
+-- ── mem_entities - the nodes of the world model ───────────────────────────
 CREATE TABLE IF NOT EXISTS mem_entities (
     id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    -- person | project | account | org | thread | commitment | place | … —
+    -- person | project | account | org | thread | commitment | place | … -
     -- free-form so the agent can model a new kind of thing without a
     -- migration.
     kind         TEXT NOT NULL,
@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_mem_entities_kind_salience
 CREATE INDEX IF NOT EXISTS idx_mem_entities_name
     ON mem_entities (lower(name));
 
--- ── mem_entity_links — typed edges between entities ───────────────────────
+-- ── mem_entity_links - typed edges between entities ───────────────────────
 CREATE TABLE IF NOT EXISTS mem_entity_links (
     id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     from_id    UUID NOT NULL REFERENCES mem_entities(id) ON DELETE CASCADE,
@@ -57,17 +57,17 @@ CREATE TABLE IF NOT EXISTS mem_entity_links (
 CREATE INDEX IF NOT EXISTS idx_mem_entity_links_from ON mem_entity_links (from_id);
 CREATE INDEX IF NOT EXISTS idx_mem_entity_links_to   ON mem_entity_links (to_id);
 
--- ── mem_agent_goals — the agent's own objectives ──────────────────────────
+-- ── mem_agent_goals - the agent's own objectives ──────────────────────────
 CREATE TABLE IF NOT EXISTS mem_agent_goals (
     id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title        TEXT NOT NULL,
     description  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'active',   -- active | blocked | done | abandoned
     priority     TEXT NOT NULL DEFAULT 'med',      -- low | med | high
-    -- The agent's CURRENT plan — a JSONB array of { step, done }. Rewritten
+    -- The agent's CURRENT plan - a JSONB array of { step, done }. Rewritten
     -- as the agent re-plans; it is a living document, not an audit log.
     plan         JSONB NOT NULL DEFAULT '[]'::jsonb,
-    -- A running narrative of progress — appended to as work happens.
+    -- A running narrative of progress - appended to as work happens.
     progress     TEXT NOT NULL DEFAULT '',
     -- What's blocking it, when status = 'blocked'.
     blocker      TEXT NOT NULL DEFAULT '',

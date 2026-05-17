@@ -9,9 +9,9 @@ import { fetchHeartbeats, type HeartbeatRunDTO } from "@/lib/api";
 import { SidePanelCard } from "@/components/SidePanelCard";
 
 function relTime(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "—";
+  if (Number.isNaN(t)) return "-";
   const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);

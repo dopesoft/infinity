@@ -9,7 +9,7 @@ import {
   useDashboardPrefs,
 } from "@/lib/dashboard/preferences";
 
-/* Dashboard settings — visibility toggles per section.
+/* Dashboard settings - visibility toggles per section.
  *
  * Stored in localStorage for now (see preferences.ts for the schema).
  * Toggling here broadcasts to any open Dashboard tab in the same

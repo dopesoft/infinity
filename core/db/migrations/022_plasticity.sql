@@ -1,4 +1,4 @@
--- 022_plasticity.sql — Gym / plasticity substrate.
+-- 022_plasticity.sql - Gym / plasticity substrate.
 --
 -- Infinity already captures experience: memories, skills, trajectories,
 -- evals, reflections, predictions, and audit rows. Gym is the improvement

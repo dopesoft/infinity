@@ -1,5 +1,5 @@
 /**
- * isCodeChangeTool — single source of truth for "this tool call indicates an
+ * isCodeChangeTool - single source of truth for "this tool call indicates an
  * active coding session." Used by both Canvas (to populate the changes list,
  * to flip file tabs into diff mode) and Live (to show the "Open in Canvas"
  * banner the first time the agent reaches for an editor verb) AND the
@@ -11,13 +11,13 @@
  * the Anthropic-tools convention prefers "edit"). Both shapes show up.
  *
  * The set spans every code-write path Jarvis actually uses:
- *   • claude_code__*  — Mac local bridge (when the boss's Mac is up)
- *   • fs_*            — native fs tools used in cloud / non-Mac sessions
- *   • github__*       — GitHub MCP file ops, including direct-to-remote
+ *   • claude_code__*  - Mac local bridge (when the boss's Mac is up)
+ *   • fs_*            - native fs tools used in cloud / non-Mac sessions
+ *   • github__*       - GitHub MCP file ops, including direct-to-remote
  *                       pushes that bypass the local working tree entirely
  * Without the github__ entries, Jarvis pushing a file straight to main
  * via GitHub MCP showed up as a generic `github__push_files` row with
- * no file-path enrichment and never lit up the Changes column — which
+ * no file-path enrichment and never lit up the Changes column - which
  * is exactly the "I can't tell when it's coding" symptom.
  */
 
@@ -30,7 +30,7 @@ const CODE_CHANGE_TOOLS = new Set([
   // Cloud / native FS.
   "fs_edit",
   "fs_save",
-  // GitHub MCP — direct-to-remote writes Jarvis uses when there's no
+  // GitHub MCP - direct-to-remote writes Jarvis uses when there's no
   // local working tree (or when the boss explicitly asked for a PR).
   "github__create_or_update_file",
   "github__push_files",
@@ -88,7 +88,7 @@ export function extractToolFilePath(input: Record<string, unknown> | undefined):
 }
 
 /**
- * extractToolFilePaths — multi-file variant. Returns every path the call
+ * extractToolFilePaths - multi-file variant. Returns every path the call
  * touches: the single-file fields above plus github__push_files' `files`
  * array (each entry has a `path` and optional `content`). Used by the
  * dirty-paths bookkeeping so a single `push_files` call lights up the
@@ -114,7 +114,7 @@ export function extractToolFilePaths(input: Record<string, unknown> | undefined)
 }
 
 /**
- * extractToolPreview — short content snippet to show in the in-chat
+ * extractToolPreview - short content snippet to show in the in-chat
  * tool-call header while the call is running. Lets the boss tell
  * exactly what's being written at a glance instead of having to expand
  * every bubble.
@@ -125,7 +125,7 @@ export function extractToolFilePaths(input: Record<string, unknown> | undefined)
  * Bash  → returns the command itself.
  * Git commit → returns the commit message.
  *
- * Always trimmed and length-capped — the card renders a fixed-height
+ * Always trimmed and length-capped - the card renders a fixed-height
  * preview box, this is just the source text.
  */
 export function extractToolPreview(input: Record<string, unknown> | undefined): string {

@@ -3,16 +3,16 @@
 // A "cron" is a row in mem_crons that maps a schedule expression to one of
 // three job kinds:
 //
-//   • system_event        — sends a prompt into a live session
-//   • isolated_agent_turn — spawns a fresh sub-agent with its own context
-//   • connector_poll      — fires a deterministic Composio tools.execute
+//   • system_event        - sends a prompt into a live session
+//   • isolated_agent_turn - spawns a fresh sub-agent with its own context
+//   • connector_poll      - fires a deterministic Composio tools.execute
 //                           call (no LLM) and projects the response into
 //                           a dashboard table (mem_followups / events)
 //
 // The scheduler loads every enabled row on boot and re-loads on Reload(). It
 // degrades gracefully when no LLM provider is configured (jobs run, target
 // prompt is logged, but no completion happens). connector_poll jobs are
-// independent of the LLM — they keep running on chat-only or no-LLM builds.
+// independent of the LLM - they keep running on chat-only or no-LLM builds.
 package cron
 
 import (
@@ -62,7 +62,7 @@ type Job struct {
 }
 
 // Executor is what the scheduler hands a fired job to. The agent loop
-// implements this — for system_event we Run() against the main session, for
+// implements this - for system_event we Run() against the main session, for
 // isolated_agent_turn we Run() in a brand-new session.
 type Executor interface {
 	ExecuteJob(j Job) error

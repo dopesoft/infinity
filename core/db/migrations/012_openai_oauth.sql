@@ -1,16 +1,16 @@
--- 012_openai_oauth.sql — Persist OAuth credentials for ChatGPT-subscription
+-- 012_openai_oauth.sql - Persist OAuth credentials for ChatGPT-subscription
 -- inference (the `openai_oauth` LLM provider).
 --
 -- Two tables:
---   • mem_oauth_sessions  — short-lived PKCE verifier + state pairs created
+--   • mem_oauth_sessions  - short-lived PKCE verifier + state pairs created
 --     when the user clicks "Connect ChatGPT" in Studio. Looked up by `state`
 --     when the user pastes back the callback code. TTL-pruned (~15min).
---   • mem_provider_tokens — long-lived access/refresh token pairs keyed by
+--   • mem_provider_tokens - long-lived access/refresh token pairs keyed by
 --     (provider, account_id). Refreshed in-place by the background worker
 --     before expiry. The latest refresh_token replaces the prior one on
 --     rotation (OpenAI rotates on every refresh).
 --
--- Both tables are intentionally minimal — we don't store id_token claims
+-- Both tables are intentionally minimal - we don't store id_token claims
 -- beyond what's needed to address the account (email + sub). Anything richer
 -- (display name, avatar, etc.) we fetch on demand from the API rather than
 -- cache here, so a corrupted row never carries stale identity.

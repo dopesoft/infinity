@@ -21,7 +21,7 @@ const RISK_STYLES: Record<string, string> = {
   critical: "border-destructive/50 bg-destructive/15 text-destructive",
 };
 
-// CandidateSkillsPanel — surfaces Voyager's auto-proposed skills, lets the
+// CandidateSkillsPanel - surfaces Voyager's auto-proposed skills, lets the
 // boss promote or reject. Pure UI; Voyager generates these from SessionEnd
 // extraction + real-time discovery.
 export function CandidateSkillsPanel() {
@@ -78,7 +78,7 @@ export function CandidateSkillsPanel() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Candidate skills
           </span>
-          {/* Status dot — green if Voyager is running, yellow if enabled
+          {/* Status dot - green if Voyager is running, yellow if enabled
               but in a non-running state (starting/idle/paused), red if
               disabled entirely. Hover reveals the live status string + the
               open-sessions / tracked-triplets counters that used to live in
@@ -128,7 +128,7 @@ export function CandidateSkillsPanel() {
           )}
         </button>
 
-        {/* Chevron — rightmost. Mobile-only toggle. */}
+        {/* Chevron - rightmost. Mobile-only toggle. */}
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}

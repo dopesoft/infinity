@@ -1,4 +1,4 @@
-// Package proactive implements the proactive engine — IntentFlow + Heartbeat
+// Package proactive implements the proactive engine - IntentFlow + Heartbeat
 // + WAL + Working Buffer.
 //
 // This file holds the WAL Protocol: every user message is scanned for
@@ -19,7 +19,7 @@ import (
 )
 
 // walTriggers is the regex set lifted from Hal's Proactive Agent skill
-// (MIT-0). They are intentionally permissive — false positives are cheaper
+// (MIT-0). They are intentionally permissive - false positives are cheaper
 // than missing a correction.
 var walTriggers = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:it'?s|that'?s|actually)\s+\w+,?\s+not\s+\w+`),                                  // corrections

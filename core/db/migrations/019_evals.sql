@@ -1,13 +1,13 @@
--- 019_evals.sql — the verification substrate.
+-- 019_evals.sql - the verification substrate.
 --
--- Phase 4 of the assembly substrate. As the agent assembles more — skills,
--- workflows, runtime tools — it must be able to prove its assemblies
+-- Phase 4 of the assembly substrate. As the agent assembles more - skills,
+-- workflows, runtime tools - it must be able to prove its assemblies
 -- actually work, and notice when one regresses. mem_evals is the generic
 -- outcome ledger: every skill run, workflow run, or tool use can record an
 -- outcome here, and a scorecard rolls them up into a success rate + a
 -- recent-vs-historical trend so a degrading capability is visible.
 --
--- The agent records via eval_record / reads via eval_scorecard — never raw
+-- The agent records via eval_record / reads via eval_scorecard - never raw
 -- SQL. The workflow engine auto-records every run on completion.
 
 BEGIN;
@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS mem_evals (
 
     -- success | failure | partial.
     outcome       TEXT NOT NULL,
-    -- Optional 0-100 quality score — for outcomes that aren't binary.
+    -- Optional 0-100 quality score - for outcomes that aren't binary.
     score         SMALLINT,
-    -- What happened / why — the qualitative signal.
+    -- What happened / why - the qualitative signal.
     notes         TEXT NOT NULL DEFAULT '',
 
     -- engine = auto-recorded by the workflow engine · agent = the agent's

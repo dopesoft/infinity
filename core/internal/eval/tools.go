@@ -12,11 +12,11 @@ import (
 
 // RegisterTools wires the two agent-facing verification tools:
 //
-//	eval_record    — record the outcome of an assembled capability
-//	eval_scorecard — read a capability's success rate + regression trend
+//	eval_record    - record the outcome of an assembled capability
+//	eval_scorecard - read a capability's success rate + regression trend
 //
 // Lives in package eval (which imports tools) so the tools register
-// without a tools → eval cycle — same pattern as skills / extensions.
+// without a tools → eval cycle - same pattern as skills / extensions.
 func RegisterTools(reg *tools.Registry, store *Store) {
 	if reg == nil || store == nil {
 		return
@@ -31,12 +31,12 @@ type evalRecordTool struct{ store *Store }
 
 func (t *evalRecordTool) Name() string { return "eval_record" }
 func (t *evalRecordTool) Description() string {
-	return "Record the outcome of an assembled capability — a skill, workflow, " +
+	return "Record the outcome of an assembled capability - a skill, workflow, " +
 		"tool, or extension. This is how you (and the boss) learn whether what " +
 		"you built actually works, and catch one that's regressing. Pass an " +
 		"`outcome` (success|failure|partial), an optional 0-100 `score` for " +
 		"non-binary results, and `notes` on what happened. The workflow engine " +
-		"auto-records every workflow run — use this for skills, tools, and your " +
+		"auto-records every workflow run - use this for skills, tools, and your " +
 		"own judgment calls after you rely on something."
 }
 func (t *evalRecordTool) Schema() map[string]any {
@@ -47,7 +47,7 @@ func (t *evalRecordTool) Schema() map[string]any {
 			"subject_name": map[string]any{"type": "string", "description": "Its name (the skill name, workflow name, tool name, …)."},
 			"outcome":      map[string]any{"type": "string", "enum": []string{"success", "failure", "partial"}},
 			"score":        map[string]any{"type": "integer", "description": "Optional 0-100 quality score for non-binary outcomes."},
-			"notes":        map[string]any{"type": "string", "description": "What happened / why — the qualitative signal."},
+			"notes":        map[string]any{"type": "string", "description": "What happened / why - the qualitative signal."},
 			"run_id":       map[string]any{"type": "string", "description": "Optional pointer to the concrete run this outcome came from."},
 		},
 		"required": []string{"subject_kind", "subject_name", "outcome"},
@@ -81,7 +81,7 @@ type evalScorecardTool struct{ store *Store }
 
 func (t *evalScorecardTool) Name() string { return "eval_scorecard" }
 func (t *evalScorecardTool) Description() string {
-	return "Get the scorecard for an assembled capability — success rate, " +
+	return "Get the scorecard for an assembled capability - success rate, " +
 		"recent-vs-historical trend, average score, and whether it's regressing. " +
 		"Check this before relying on a skill or workflow, or to spot a " +
 		"capability that's degrading and needs attention."

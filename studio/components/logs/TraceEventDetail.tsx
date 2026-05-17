@@ -4,7 +4,7 @@ import { CheckCircle2, Clock, Cpu, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TraceEventDTO } from "@/lib/api";
 
-/* TraceEventDetail — body content only. Pinned header lives on the page,
+/* TraceEventDetail - body content only. Pinned header lives on the page,
  * Metadata is exported separately as <TraceMetadata> so the page can render
  * it in its own grid column (LangSmith-style right rail).
  */

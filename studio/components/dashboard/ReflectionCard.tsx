@@ -11,7 +11,7 @@ import type { DashboardItem, Reflection } from "@/lib/dashboard/types";
  * One prominent card surfacing Jarvis's latest insight. Capped at one
  * per day so it feels meaningful, not noisy. Tapping anywhere on the
  * card opens the ObjectViewer with the full reflection + source
- * observations. The "discuss" CTA also opens the viewer — same target
+ * observations. The "discuss" CTA also opens the viewer - same target
  * but visually offered as the primary action.
  */
 export function ReflectionCard({
@@ -30,7 +30,7 @@ export function ReflectionCard({
         transition={{ duration: 0.15 }}
         className="group relative w-full overflow-hidden rounded-xl border bg-card text-left transition-shadow hover:shadow-[0_4px_24px_-8px_hsl(var(--foreground)/0.18)]"
       >
-        {/* Decorative gradient sheen across top — pure visual, no semantic.
+        {/* Decorative gradient sheen across top - pure visual, no semantic.
             Tier-procedural hue (purple) makes the card feel "thinking". */}
         <span
           aria-hidden

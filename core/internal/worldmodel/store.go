@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Store is the persistence boundary for the world model — entities, the
+// Store is the persistence boundary for the world model - entities, the
 // edges between them, and the agent's own goals.
 type Store struct {
 	pool   *pgxpool.Pool
@@ -33,7 +33,7 @@ const entityCols = `id::text, kind, name, aliases, attributes, summary, status,
 	salience, last_seen_at, created_at, updated_at`
 
 // UpsertEntity creates or updates an entity by (kind, name). last_seen_at
-// is bumped on every upsert — observing an entity keeps it fresh.
+// is bumped on every upsert - observing an entity keeps it fresh.
 func (s *Store) UpsertEntity(ctx context.Context, e *Entity) (string, error) {
 	if s == nil || s.pool == nil {
 		return "", errors.New("worldmodel: no pool")
@@ -205,7 +205,7 @@ func (s *Store) entityLinks(ctx context.Context, id string) ([]LinkView, error) 
 }
 
 // resolveEntityID maps a name or id to an entity id. Returns "" when no
-// entity matches (not an error — callers decide).
+// entity matches (not an error - callers decide).
 func (s *Store) resolveEntityID(ctx context.Context, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -327,7 +327,7 @@ func (s *Store) ListGoals(ctx context.Context, status string, limit int) ([]*Goa
 }
 
 // UpdateGoal applies a partial patch. A non-nil ProgressAppend is appended
-// to the running narrative and bumps last_progress_at — that timestamp is
+// to the running narrative and bumps last_progress_at - that timestamp is
 // what the autonomous-pursuit heartbeat watches.
 func (s *Store) UpdateGoal(ctx context.Context, id string, p GoalPatch) error {
 	if s == nil || s.pool == nil {

@@ -50,7 +50,7 @@ type ObservationInput struct {
 	RawText    string
 	Embedding  []float32
 	Importance int
-	// TurnID groups the observation under a /logs trace row. Optional —
+	// TurnID groups the observation under a /logs trace row. Optional -
 	// rows that predate the mem_turns migration or come from hook paths
 	// without a turn context (steered messages, voice turns) leave it
 	// empty and join their session via the (session_id, created_at)

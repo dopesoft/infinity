@@ -8,7 +8,7 @@ import { LeftPanels, RightPanels } from "@/components/LiveSidePanels";
 import type { ChatMessage } from "@/hooks/useChat";
 
 /**
- * InfoModal — the read-only "glance" surface for the workspace.
+ * InfoModal - the read-only "glance" surface for the workspace.
  *
  *   Brain    Intent stream · Active skills · Context budget
  *   Activity Last heartbeat · Trust queue · System health

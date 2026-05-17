@@ -8,14 +8,14 @@ import (
 )
 
 // ToolGate decides whether a tool call may execute. Implementations sit
-// between the loop and the registry — high-risk calls (e.g. Claude-Code
+// between the loop and the registry - high-risk calls (e.g. Claude-Code
 // shell-outs from a phone in an Uber) divert into the Trust queue instead of
 // running blind. Returning Allow=false with WaitForApproval=true makes the
 // loop block on `WaitForDecision` so the boss can approve inline from the
 // tool card and the same tool call runs immediately on approval.
 type ToolGate interface {
 	// Authorize is called once per tool call before Execute. Returning
-	// quickly is important when WaitForApproval is false — the loop is
+	// quickly is important when WaitForApproval is false - the loop is
 	// synchronous on the WS stream. When WaitForApproval is true, the
 	// loop calls WaitForDecision next and is willing to block there.
 	Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) GateDecision
@@ -70,7 +70,7 @@ func IsClaudeCodeTool(name string) bool {
 }
 
 // IsGitHubTool reports whether the tool name belongs to the github MCP
-// namespace (i.e. github/github-mcp-server). Mirrors IsClaudeCodeTool — used
+// namespace (i.e. github/github-mcp-server). Mirrors IsClaudeCodeTool - used
 // by GitHubGate so it can no-op on every other tool call.
 func IsGitHubTool(name string) bool {
 	return strings.HasPrefix(name, "github__")
@@ -90,8 +90,8 @@ func IsComposioTool(name string) bool {
 // orchestration tool like project_create. These all route per-session
 // via the bridge.Router and operate on either the Mac filesystem (when
 // Mac is the active bridge) or the Railway workspace volume (when
-// Cloud is active). They run as Jarvis's direct file/bash/git verbs —
-// no sub-agent — so the Trust queue is the only safety layer; gate
+// Cloud is active). They run as Jarvis's direct file/bash/git verbs -
+// no sub-agent - so the Trust queue is the only safety layer; gate
 // them just like the claude_code__* mutators.
 //
 // project_create gets atomically gated at this level so the boss
@@ -118,7 +118,7 @@ func IsBridgeTool(name string) bool {
 // recorded so we can dispatch the wait back to it. We track ownership in
 // an in-memory map keyed by ContractID. The map only needs to survive
 // across one (Authorize → WaitForDecision) cycle inside the same agent
-// turn — a Railway restart kills the loop anyway, so persistence is moot.
+// turn - a Railway restart kills the loop anyway, so persistence is moot.
 //
 // This is the seam that turns Infinity from "claude_code Trust queue" into
 // a per-MCP gate system. Adding Gmail/Slack/Linear later just means adding
@@ -170,7 +170,7 @@ func (c *GateChain) WaitForDecision(ctx context.Context, contractID string, time
 	c.mu.Unlock()
 	if owner == nil {
 		// Lost ownership (process restart between Authorize and wait, or
-		// chain replaced). Fall back to the first gate — every gate shares
+		// chain replaced). Fall back to the first gate - every gate shares
 		// the same TrustStore today, so polling against any of them reads
 		// the right row.
 		if len(c.gates) == 0 {

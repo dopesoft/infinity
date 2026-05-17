@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 export type ModalSectionTone = "default" | "error" | "warning" | "success";
 
-/* Modal body content primitives — the standardized building blocks every
+/* Modal body content primitives - the standardized building blocks every
  * <ResponsiveModal> body should compose from. They exist because freehand
  * <pre>/<dl>/<a> blocks inside modal bodies kept regressing the mobile
  * overflow chain (a missing `min-w-0`, a missing `break-all`, a long URL
@@ -18,20 +18,20 @@ export type ModalSectionTone = "default" | "error" | "warning" | "success";
  * the primitive doesn't fit, extend it here so the rest of the app gets
  * the same baseline. */
 
-/** Labeled context block — the "card-within-a-modal" surface used for
+/** Labeled context block - the "card-within-a-modal" surface used for
  *  body content, JSON payloads, diffs, drafts, etc. Replaces the
  *  inlined ContextBlock that lived in ObjectViewer.
  *
  *  Props:
- *    label   — eyebrow text (default "Context"). Pass "Error" / "Schedule"
+ *    label   - eyebrow text (default "Context"). Pass "Error" / "Schedule"
  *              / "Output" / "Steps" so cards self-describe.
- *    tone    — color hint. default | error | warning | success. Tints
+ *    tone    - color hint. default | error | warning | success. Tints
  *              the border + header background so errors visually
  *              stand out without the consumer hand-rolling color
  *              classes. Pairs with a matching icon swap (alert icon
  *              for error/warning, eye for everything else).
- *    icon    — override the leading icon (rare). Defaults follow tone.
- *    meta    — right-aligned eyebrow (timestamp, count, etc.).
+ *    icon    - override the leading icon (rare). Defaults follow tone.
+ *    meta    - right-aligned eyebrow (timestamp, count, etc.).
  */
 export function ModalSection({
   label = "Context",
@@ -139,7 +139,7 @@ export function ModalPre({
   );
 }
 
-/** Code / diff block — preserves whitespace and line integrity; scrolls
+/** Code / diff block - preserves whitespace and line integrity; scrolls
  *  internally instead of escaping the modal. Use ModalPre for prose. */
 export function ModalCode({
   children,
@@ -160,7 +160,7 @@ export function ModalCode({
   );
 }
 
-/** Bare URL link — always wraps unbroken strings and pins the icon so the
+/** Bare URL link - always wraps unbroken strings and pins the icon so the
  *  link never escapes the modal frame on mobile. */
 export function ModalUrl({
   href,
@@ -192,7 +192,7 @@ export function ModalUrl({
   );
 }
 
-/** Key/value metadata grid — replaces hand-rolled `<dl class="grid">`
+/** Key/value metadata grid - replaces hand-rolled `<dl class="grid">`
  *  blocks. Each row is `key (mono, truncates) · value (breaks)`. */
 export function ModalDl({
   entries,
@@ -219,7 +219,7 @@ export function ModalDl({
   );
 }
 
-/** Horizontal chip row — the standardized "eyebrow with badges" line that
+/** Horizontal chip row - the standardized "eyebrow with badges" line that
  *  sits above the body content (kind, time, risk, etc.). Wraps on mobile. */
 export function ModalChips({
   children,

@@ -56,7 +56,7 @@ func toRowDTO(r memory.TurnRow) turnRowDTO {
 	}
 }
 
-// handleTracesList serves GET /api/traces — list of recent turns, filtered
+// handleTracesList serves GET /api/traces - list of recent turns, filtered
 // optionally by session and/or status. Newest first.
 func (s *Server) handleTracesList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -87,7 +87,7 @@ func (s *Server) handleTracesList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleTraceDetail serves GET /api/traces/{turn_id} — one turn plus its
+// handleTraceDetail serves GET /api/traces/{turn_id} - one turn plus its
 // merged event timeline (observations + predictions + trust contracts).
 func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

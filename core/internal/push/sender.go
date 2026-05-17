@@ -44,7 +44,7 @@ type Notification struct {
 // origin of the push.
 //
 // Construct via NewSenderFromEnv (production path) or NewSender (tests).
-// A nil Sender is safe — Notify becomes a no-op, which is how Core
+// A nil Sender is safe - Notify becomes a no-op, which is how Core
 // behaves when VAPID is unconfigured.
 type Sender struct {
 	store       *Store
@@ -56,7 +56,7 @@ type Sender struct {
 	logger      *slog.Logger
 }
 
-// SenderConfig captures every knob — most users want NewSenderFromEnv.
+// SenderConfig captures every knob - most users want NewSenderFromEnv.
 type SenderConfig struct {
 	Store      *Store
 	PublicKey  string
@@ -127,7 +127,7 @@ func (s *Sender) PublicKey() string {
 // DeliveryResult records the outcome of one fan-out attempt. Returned
 // from Notify so callers (e.g. the test endpoint) can show a per-device
 // summary. Errors don't propagate up because one dead device shouldn't
-// fail the rest — instead the caller can surface the list.
+// fail the rest - instead the caller can surface the list.
 type DeliveryResult struct {
 	Endpoint   string `json:"endpoint"`
 	Label      string `json:"label,omitempty"`
@@ -227,12 +227,12 @@ func (s *Sender) deliverOne(ctx context.Context, sub Subscription, payload []byt
 	res.StatusCode = resp.StatusCode
 	switch {
 	case resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusNotFound:
-		// 410/404 — subscription is dead. Delete the row so we stop
+		// 410/404 - subscription is dead. Delete the row so we stop
 		// trying. Boss can re-subscribe from the device.
 		_ = s.store.Delete(ctx, sub.Endpoint)
-		res.Err = "subscription gone — removed"
+		res.Err = "subscription gone - removed"
 	case resp.StatusCode >= 400:
-		// Other errors — mark revoked so Settings can show the failure
+		// Other errors - mark revoked so Settings can show the failure
 		// without us aggressively re-trying every event.
 		_ = s.store.MarkRevoked(ctx, sub.Endpoint)
 		res.Err = fmt.Sprintf("push service returned %d", resp.StatusCode)

@@ -1,4 +1,4 @@
--- 027_curiosity_realtime.sql — add mem_curiosity_questions to the
+-- 027_curiosity_realtime.sql - add mem_curiosity_questions to the
 -- supabase_realtime publication so the dashboard's "Questions" card
 -- updates the instant the agent dismisses (via question_decide) or a
 -- new question lands. Without this the card was a snapshot from initial

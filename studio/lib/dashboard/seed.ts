@@ -9,7 +9,7 @@ import { authedFetch } from "@/lib/api";
  * turn 1 and hydrates the artifact as a sticky Context block at the
  * top of the conversation.
  *
- * Returns null on any failure — caller should fall back to navigating
+ * Returns null on any failure - caller should fall back to navigating
  * to /live (unseeded) so the boss can still start typing.
  */
 export async function seedSession(

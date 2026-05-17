@@ -74,7 +74,7 @@ type Config struct {
 	Heartbeat      *proactive.Heartbeat
 	// LLMRegistry is the map of constructable providers used by the
 	// Settings PUT to hot-swap the agent loop's active provider without
-	// a restart. Nil-safe — when absent, /api/settings/provider returns
+	// a restart. Nil-safe - when absent, /api/settings/provider returns
 	// 503 and the loop sticks with its boot provider.
 	LLMRegistry *llm.Registry
 	// Connectors caches the live picture of Composio connected accounts
@@ -87,7 +87,7 @@ type Config struct {
 	// /api/voice/* endpoints all return 503 and Studio's mic button
 	// surfaces "voice not configured".
 	Voice *voice.Minter
-	// PushAPI registers /api/push/* — VAPID key, subscribe/unsubscribe,
+	// PushAPI registers /api/push/* - VAPID key, subscribe/unsubscribe,
 	// device list, test send. Nil-safe: missing VAPID env disables push
 	// and the handlers return empty / 503 cleanly.
 	PushAPI *push.API
@@ -97,7 +97,7 @@ type Config struct {
 	DashboardAPI *dashboard.API
 	// BridgeRouter decides per session whether fs/bash/git ops land on
 	// the Mac bridge (Cloudflare tunnel to home Mac) or the Cloud bridge
-	// (docker/workspace on Railway private net). Nil-safe — when unset
+	// (docker/workspace on Railway private net). Nil-safe - when unset
 	// the bridge_* tools error cleanly and the /api/bridge endpoints
 	// return offline status.
 	BridgeRouter *bridge.Router
@@ -106,7 +106,7 @@ type Config struct {
 	// endpoints that surface "what would this session use right now."
 	BridgePrefs tools.PreferenceFetcher
 	// Turns is the LangSmith-style trace store backing /api/traces and the
-	// trace_* agent tools. Nil-safe — endpoints return empty / 503 cleanly
+	// trace_* agent tools. Nil-safe - endpoints return empty / 503 cleanly
 	// when no DB is wired.
 	Turns *memory.TurnStore
 }
@@ -146,7 +146,7 @@ type Server struct {
 	turns   map[string]*turnState
 
 	// activeMu guards activeSessions. Distinct from turnsMu because a
-	// session can be "active" (WS connected) without a turn in flight —
+	// session can be "active" (WS connected) without a turn in flight -
 	// that's exactly when we want to push unprompted assistant messages
 	// from the heartbeat. Map value is the send func bound to the WS
 	// writer goroutine; calling it pushes a frame to that browser tab.
@@ -191,7 +191,7 @@ func New(cfg Config) *Server {
 
 	// Apply the persisted provider override at boot. The agent loop was
 	// constructed with the LLM_PROVIDER env value; if Studio's last save
-	// flipped it elsewhere, honor that — Settings is the source of truth
+	// flipped it elsewhere, honor that - Settings is the source of truth
 	// once the user has touched the picker.
 	if s.loop != nil && s.llmReg != nil && s.settings != nil {
 		if persisted := s.settings.GetProvider(context.Background()); persisted != "" {
@@ -290,7 +290,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/openai/status", s.handleOpenAIOAuthStatus)
 	mux.HandleFunc("/api/auth/openai/disconnect", s.handleOpenAIOAuthDisconnect)
 
-	// Composio Connectors — proxy endpoints for the Studio /connectors page.
+	// Composio Connectors - proxy endpoints for the Studio /connectors page.
 	// Key never leaves core; browser sees Composio JSON shape directly.
 	mux.HandleFunc("/api/connectors/composio/toolkits", s.handleComposioToolkits)
 	mux.HandleFunc("/api/connectors/composio/connected", s.handleComposioConnected)
@@ -299,7 +299,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/connectors/composio/aliases", s.handleComposioAliases)
 	mux.HandleFunc("/api/connectors/composio/cache", s.handleComposioCacheStatus)
 
-	// Voice — OpenAI Realtime over WebRTC. Browser holds the audio
+	// Voice - OpenAI Realtime over WebRTC. Browser holds the audio
 	// pipes, Core mints the key, runs tools, and persists turns.
 	mux.HandleFunc("/api/voice/session", s.handleVoiceSession)
 	mux.HandleFunc("/api/voice/tool", s.handleVoiceTool)
@@ -319,7 +319,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// resolves with one tap from Studio.
 	mux.HandleFunc("/api/bridge/workspace/git-pull", s.handleBridgeWorkspaceGitPull)
 
-	// Library — mem_artifacts grouped by kind. The Files tab IS the library;
+	// Library - mem_artifacts grouped by kind. The Files tab IS the library;
 	// this powers the collapsible section at the top.
 	mux.HandleFunc("/api/library/tree", s.handleLibraryTree)
 
@@ -347,7 +347,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // withCORS handles cross-origin requests from Studio.
 //
 // Production reality: Studio runs at infinity.dopesoft.io while Core runs at
-// core-production-*.up.railway.app — two different origins. Every authed
+// core-production-*.up.railway.app - two different origins. Every authed
 // fetch from Studio sends `Authorization: Bearer …` which is a non-simple
 // header, so the browser preflights with OPTIONS before the real request.
 // Any miss on the preflight → the actual call never goes out.
@@ -362,7 +362,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 //     header Studio decides to send in the future (x-request-id, etc.)
 //     is preflight-approved automatically.
 //  3. **`Access-Control-Max-Age`** so the browser caches the preflight
-//     for an hour — fewer round-trips, less surface area for transient
+//     for an hour - fewer round-trips, less surface area for transient
 //     preflight failures.
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

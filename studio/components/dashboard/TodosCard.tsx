@@ -7,10 +7,10 @@ import { cn } from "@/lib/utils";
 import { dayLabel } from "@/lib/dashboard/format";
 import type { DashboardItem, Todo } from "@/lib/dashboard/types";
 
-/* Todos — your tasks, not the agent's work board.
+/* Todos - your tasks, not the agent's work board.
  *
  * Each row is tappable to open the ObjectViewer. The check button toggles
- * inline (optimistic). Source badge on rows the agent created — visible
+ * inline (optimistic). Source badge on rows the agent created - visible
  * proof Jarvis is filling these in for you.
  */
 export function TodosCard({

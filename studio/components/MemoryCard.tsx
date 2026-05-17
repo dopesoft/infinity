@@ -87,7 +87,7 @@ export function MemoryCard({
         </div>
       </div>
       {item.title && <p className="mt-1 line-clamp-1 font-semibold">{item.title}</p>}
-      <p className="mt-1 line-clamp-2 break-words text-sm">{item.text || "—"}</p>
+      <p className="mt-1 line-clamp-2 break-words text-sm">{item.text || "-"}</p>
       <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
         {item.streams?.map((s) => (
           <span

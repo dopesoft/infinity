@@ -24,7 +24,7 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * Workspace — the unified /live surface that merges the old Live + Canvas
+ * Workspace - the unified /live surface that merges the old Live + Canvas
  * tabs into one work environment.
  *
  *   Desktop (lg+)   three horizontally-resizable columns:
@@ -47,8 +47,8 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   const { mode, setMode } = useWorkspaceMode("chat");
 
   // Server-configured fallback path (INFINITY_DEFAULT_PROJECT_PATH on
-  // core). Sessions without their own project_path land here — typically
-  // the Jarvis repo — so chat-only sessions don't sit in an empty "set
+  // core). Sessions without their own project_path land here - typically
+  // the Jarvis repo - so chat-only sessions don't sit in an empty "set
   // workspace root first" state. Also pre-warms the cloud bridge from
   // Railway App Sleeping (fire-and-forget).
   const [defaultProjectPath, setDefaultProjectPath] = useState<string>("");
@@ -78,7 +78,7 @@ export function Workspace({ chat }: { chat: ChatHook }) {
         store.clearDirty();
       }
     } else if (store.root) {
-      // No session project AND no configured default — wipe.
+      // No session project AND no configured default - wipe.
       store.setRoot("");
       store.closeAllFiles();
       store.clearDirty();
@@ -100,7 +100,7 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       if (ev.type !== "tool_call") return;
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
-      // github__push_files carries multiple paths in one call — mark
+      // github__push_files carries multiple paths in one call - mark
       // every one so the Changes badge reflects the real fan-out.
       for (const path of extractToolFilePaths(ev.tool_call.input)) {
         store.markDirty(path);
@@ -108,7 +108,7 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     });
   }, [ws, chat.sessionId, store]);
 
-  // Mount gate — react-resizable-panels reads localStorage on first paint
+  // Mount gate - react-resizable-panels reads localStorage on first paint
   // so SSR vs CSR diverge; render a stable skeleton until the client takes
   // over.
   const [mounted, setMounted] = useState(false);
@@ -123,9 +123,9 @@ export function Workspace({ chat }: { chat: ChatHook }) {
 
   return (
     <CurrentProjectProvider value={current}>
-      {/* Desktop — three horizontally-resizable columns */}
+      {/* Desktop - three horizontally-resizable columns */}
       <div className="hidden min-h-0 flex-1 lg:flex">
-        {/* No autoSaveId — column widths reset to defaults on every refresh.
+        {/* No autoSaveId - column widths reset to defaults on every refresh.
             Dragging the dividers still works in-session, but a reload always
             returns to the 25 / 18 / 57 layout. The boss explicitly wants the
             workspace to feel "fresh" on each visit instead of accumulating
@@ -151,7 +151,7 @@ export function Workspace({ chat }: { chat: ChatHook }) {
         </ResizablePanelGroup>
       </div>
 
-      {/* Mobile — single-column with mode pills */}
+      {/* Mobile - single-column with mode pills */}
       <div className="flex min-h-0 flex-1 flex-col lg:hidden">
         <WorkspaceMobile chat={chat} mode={mode} onModeChange={setMode} />
       </div>

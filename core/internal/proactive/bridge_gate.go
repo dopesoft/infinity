@@ -59,7 +59,7 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 		return agent.GateDecision{Allow: true} // read-only / unknown verb
 	}
 
-	// Standing per-session approval shortcut — same pattern as
+	// Standing per-session approval shortcut - same pattern as
 	// ClaudeCodeGate. If the boss already approved this exact tool for
 	// this session within the TTL window, allow without re-prompting.
 	if g.trust != nil {
@@ -122,7 +122,7 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 }
 
 // WaitForDecision polls the durable trust contract for resolution.
-// Same pattern as ClaudeCodeGate / GitHubGate — single TrustStore is
+// Same pattern as ClaudeCodeGate / GitHubGate - single TrustStore is
 // the source of truth across all gates.
 func (g *BridgeGate) WaitForDecision(ctx context.Context, contractID string, timeout time.Duration) (bool, string) {
 	if g == nil || g.trust == nil || contractID == "" {

@@ -1,4 +1,4 @@
-// Package sentinel implements event-driven watchers — webhooks,
+// Package sentinel implements event-driven watchers - webhooks,
 // file-change watchers, memory-event triggers, external HTTP polls, and
 // metric thresholds.
 package sentinel

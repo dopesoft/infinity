@@ -124,7 +124,7 @@ export function MemoryDetail({
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-3 scroll-touch">
         <Section title={item.kind === "memory" ? "Memory" : "Observation"}>
           <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/60 p-3 font-mono text-xs leading-relaxed scroll-touch">
-            {item.text || "—"}
+            {item.text || "-"}
           </pre>
         </Section>
 

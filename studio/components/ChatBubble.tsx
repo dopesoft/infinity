@@ -53,7 +53,7 @@ function writeFeedback(map: FeedbackMap) {
 
 export function ChatBubble({
   message,
-  // onQuickReply sends a canned message into the current session — wired
+  // onQuickReply sends a canned message into the current session - wired
   // to the "Approve & fix" action on proactive heartbeat findings.
   onQuickReply,
 }: {
@@ -62,7 +62,7 @@ export function ChatBubble({
 }) {
   // All hooks must run on every render, so early returns live below them.
   // The "tool"/"thinking" branch renders nothing but still pays for hook
-  // setup — that's the cost of holding the rules-of-hooks invariant.
+  // setup - that's the cost of holding the rules-of-hooks invariant.
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | undefined>(undefined);
   const [now, setNow] = useState(0);
@@ -163,7 +163,7 @@ export function ChatBubble({
           </div>
         </div>
       ) : (
-        // Agent row — pulsing dot OUTSIDE the bubble (left edge), bubble
+        // Agent row - pulsing dot OUTSIDE the bubble (left edge), bubble
         // on the right. The dot signals "Jarvis is still working on this
         // reply" even after the ThinkingBlock has collapsed, without
         // crowding the bubble's text content. items-start so the dot
@@ -179,7 +179,7 @@ export function ChatBubble({
               <span className="relative inline-flex size-2.5 rounded-full bg-info" />
             </span>
           )}
-          {/* Agent bubble — a touch darker than the surrounding muted
+          {/* Agent bubble - a touch darker than the surrounding muted
               column bg so it reads as a distinct surface in both modes.
               Proactive bubbles (heartbeat-initiated) get a subtle accent
               border + origin badge so the boss can tell the agent spoke
@@ -218,7 +218,7 @@ export function ChatBubble({
               </div>
             )}
             {/* Proactive curiosity findings get the one-tap "Approve & fix"
-                row — it tells the agent to act on the finding right here in
+                row - it tells the agent to act on the finding right here in
                 this conversation and confirm what it changed. */}
             {message.proactive && message.curiosityId && (
               <FindingActions
@@ -230,7 +230,7 @@ export function ChatBubble({
         </div>
       )}
 
-      {/* Sources strip — extracted URLs as favicon pills. Lives outside
+      {/* Sources strip - extracted URLs as favicon pills. Lives outside
           the bubble so it visually attributes to the assistant message
           but doesn't crowd the message body. Hidden while pending so it
           doesn't flicker as the agent streams. */}
@@ -238,7 +238,7 @@ export function ChatBubble({
         <Citations text={message.text} />
       )}
 
-      {/* Metadata row — timestamp stays visible all the time. Action icons
+      {/* Metadata row - timestamp stays visible all the time. Action icons
           (thumbs, copy) live in a child container that fades in on hover
           (and is always visible on touch devices via hover:none media). */}
       {!message.pending && (

@@ -1,5 +1,5 @@
 // Package hooks implements the 12-event observation pipeline. Hooks are
-// registered against event names and fired async — they never block the agent
+// registered against event names and fired async - they never block the agent
 // loop. Memory capture (PostToolUse and family) lives in capture.go.
 package hooks
 

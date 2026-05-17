@@ -9,7 +9,7 @@ import (
 )
 
 // AgentGoalChecklist returns a Checklist that scans the agent's own goals
-// (mem_agent_goals, Phase 5) and resurfaces the ones that need attention —
+// (mem_agent_goals, Phase 5) and resurfaces the ones that need attention -
 // goals that are blocked, due soon, or stalled (no progress recorded in a
 // while). This is the autonomous-pursuit loop: a goal the agent set and
 // then forgot about gets pulled back into view on every heartbeat tick, so
@@ -37,7 +37,7 @@ func AgentGoalChecklist(pool *pgxpool.Pool) Checklist {
 			 LIMIT 5
 		`)
 		if err != nil {
-			// Degrade quietly — migration 020 may not be applied yet.
+			// Degrade quietly - migration 020 may not be applied yet.
 			return nil, nil
 		}
 		defer rows.Close()
@@ -51,12 +51,12 @@ func AgentGoalChecklist(pool *pgxpool.Pool) Checklist {
 			if err := rows.Scan(&title, &status, &blocker, &dueAt); err != nil {
 				continue
 			}
-			detail := "No progress recorded in a while — revisit or close it."
+			detail := "No progress recorded in a while - revisit or close it."
 			switch {
 			case status == "blocked":
 				detail = "Blocked: " + blocker
 			case dueAt != nil && dueAt.Before(time.Now().Add(48*time.Hour)):
-				detail = fmt.Sprintf("Due %s — pick this back up.", dueAt.Format("Mon Jan 2"))
+				detail = fmt.Sprintf("Due %s - pick this back up.", dueAt.Format("Mon Jan 2"))
 			}
 			out = append(out, Finding{
 				Kind:   "pattern",

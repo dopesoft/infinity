@@ -20,12 +20,12 @@ import (
 //
 // The seeded_from JSONB column carries {kind, id}. The agent loop reads
 // it when building the system prompt for turn 1 and emits a "Context"
-// block with the artifact's native form — the same shape Studio's
+// block with the artifact's native form - the same shape Studio's
 // ObjectViewer renders.
 //
 // The Discuss-with-Jarvis CTA in ObjectViewer hits this endpoint and
 // navigates the user to /live?session=<id>. From there everything is
-// normal session behavior — replies stream over the WS, future turns
+// normal session behavior - replies stream over the WS, future turns
 // can call task_done / followup_dismiss / etc. to mutate the source
 // artifact back from chat.
 func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 
 // isSeedKindWithoutID lists discriminated-union kinds that can spawn a
 // seeded session without a concrete artifact id (e.g. "scratch" notes).
-// Most dashboard items DO require an id — keep this list short and
+// Most dashboard items DO require an id - keep this list short and
 // explicit.
 func isSeedKindWithoutID(kind string) bool {
 	switch kind {
@@ -135,7 +135,7 @@ func formatSeedContext(kind, artifactID string, snapshot json.RawMessage) string
 	return b.String()
 }
 
-// Local helpers — server.go has its own writeJSON/writeErr but they're
+// Local helpers - server.go has its own writeJSON/writeErr but they're
 // package-internal and named differently. Mirror them here so this file
 // stays self-contained without cross-file knowledge.
 

@@ -1,11 +1,11 @@
-// bridge_tools.go — generic filesystem / bash / git primitives that
+// bridge_tools.go - generic filesystem / bash / git primitives that
 // route through the Bridge Router to whichever bridge (Mac or Cloud)
 // is active for the current session.
 //
 // These coexist with the existing claude_code__* tools registered via
 // MCP. The claude_code__* tools only work when the Mac bridge is up
 // (they hit Claude Code's MCP server). The bridge_* tools work for
-// EITHER bridge — Mac or Cloud — so Jarvis can keep working when the
+// EITHER bridge - Mac or Cloud - so Jarvis can keep working when the
 // Mac is offline without dropping into a "set workspace root first"
 // state.
 //
@@ -91,7 +91,7 @@ func pickBridge(ctx context.Context, router *bridge.Router, prefs PreferenceFetc
 }
 
 // formatBridgeResult attaches a short prefix telling Jarvis which
-// bridge served the call. Helps when a session-pinned call fails —
+// bridge served the call. Helps when a session-pinned call fails -
 // the prefix makes the source obvious.
 func formatBridgeResult(b bridge.Bridge, body []byte) string {
 	if b == nil {
@@ -111,7 +111,7 @@ func (t *bridgeFSRead) Name() string     { return "fs_read" }
 func (t *bridgeFSRead) ReadOnly() bool   { return true }
 func (t *bridgeFSRead) Description() string {
 	return "Read a file from the active bridge's filesystem (Mac or Cloud). " +
-		"Optionally pass start/end (1-indexed line range) to read only a window — preferred for large files to keep context tight."
+		"Optionally pass start/end (1-indexed line range) to read only a window - preferred for large files to keep context tight."
 }
 func (t *bridgeFSRead) Schema() map[string]any {
 	return map[string]any{
@@ -187,7 +187,7 @@ type bridgeFSSave struct {
 func (t *bridgeFSSave) Name() string { return "fs_save" }
 func (t *bridgeFSSave) Description() string {
 	return "Overwrite a file at the given path with `content` on the active bridge's filesystem. " +
-		"Use fs_edit for surgical changes — this clobbers the whole file."
+		"Use fs_edit for surgical changes - this clobbers the whole file."
 }
 func (t *bridgeFSSave) Schema() map[string]any {
 	return map[string]any{
@@ -224,7 +224,7 @@ type bridgeFSEdit struct {
 func (t *bridgeFSEdit) Name() string { return "fs_edit" }
 func (t *bridgeFSEdit) Description() string {
 	return "Replace `old_string` with `new_string` in a file. Strict: old_string must " +
-		"appear exactly once unless replace_all=true. Use this for precise edits — it " +
+		"appear exactly once unless replace_all=true. Use this for precise edits - it " +
 		"avoids resending the whole file and surfaces the exact replacement count."
 }
 func (t *bridgeFSEdit) Schema() map[string]any {
@@ -254,7 +254,7 @@ func (t *bridgeFSEdit) Execute(ctx context.Context, in map[string]any) (string, 
 		return "", fmt.Errorf("fs_edit via %s unreachable", b.Name())
 	}
 	if status >= 300 {
-		// Surface the bridge's exact error message — Jarvis reads it.
+		// Surface the bridge's exact error message - Jarvis reads it.
 		var msg struct{ Error string `json:"error"` }
 		_ = json.Unmarshal(body, &msg)
 		if msg.Error != "" {
@@ -382,7 +382,7 @@ type bridgeGitStage struct {
 
 func (t *bridgeGitStage) Name() string { return "git_stage" }
 func (t *bridgeGitStage) Description() string {
-	return "git add — stages files for commit. Pass `files: []` (empty) to stage all (-A) or a list of paths."
+	return "git add - stages files for commit. Pass `files: []` (empty) to stage all (-A) or a list of paths."
 }
 func (t *bridgeGitStage) Schema() map[string]any {
 	return map[string]any{
@@ -444,7 +444,7 @@ func (t *bridgeGitCommit) Execute(ctx context.Context, in map[string]any) (strin
 	// Per-session branching: when commits land on the Cloud bridge,
 	// auto-route them onto a session-named branch so Jarvis's work
 	// is attributable + revertable without polluting main. Mac
-	// commits use whatever branch the boss has checked out — he's
+	// commits use whatever branch the boss has checked out - he's
 	// the human in that loop.
 	if b.Name() == bridge.KindCloud {
 		ensureSessionBranch(ctx, b, strString(in, "repo"), SessionIDFromContext(ctx))
@@ -500,7 +500,7 @@ func ensureSessionBranch(ctx context.Context, b bridge.Bridge, repo, sessionID s
 		}
 	}
 	// Create or switch. `git switch -c <branch> 2>/dev/null || git switch <branch>`
-	// — first form succeeds on first call, second on subsequent calls.
+	// - first form succeeds on first call, second on subsequent calls.
 	switchCmd := fmt.Sprintf(
 		"git switch -c %s 2>/dev/null || git switch %s",
 		shellQuote(branch), shellQuote(branch),
@@ -518,7 +518,7 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
-// extractJSONFieldFast is a single-key string extractor — duplicated
+// extractJSONFieldFast is a single-key string extractor - duplicated
 // from the server package's helper because importing it would create
 // a cycle (server imports tools). Tiny enough that copy is fine.
 func extractJSONFieldFast(raw, key string) string {
@@ -586,7 +586,7 @@ type bridgeGitPull struct {
 
 func (t *bridgeGitPull) Name() string { return "git_pull" }
 func (t *bridgeGitPull) Description() string {
-	return "git pull --ff-only on the active bridge. Refuses to merge — if there's drift, " +
+	return "git pull --ff-only on the active bridge. Refuses to merge - if there's drift, " +
 		"the boss resolves manually. This is the canonical 'pull deploy changes' tool."
 }
 func (t *bridgeGitPull) Schema() map[string]any {

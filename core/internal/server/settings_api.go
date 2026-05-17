@@ -9,11 +9,11 @@ import (
 // settingsModelResponse is the on-the-wire shape for GET/PUT
 // /api/settings/model. `model` is the effective id (override if set,
 // boot default otherwise). `provider` is the loop's current provider
-// name — useful so the UI can filter the model picker to options that
+// name - useful so the UI can filter the model picker to options that
 // belong to the wired provider. `default_model` is the boot default,
 // surfaced so the UI can show "(default)" next to the right entry. The
 // `source` field tells Studio whether the user has explicitly chosen
-// ("user") or is riding the boot default ("default") — drives chip UX.
+// ("user") or is riding the boot default ("default") - drives chip UX.
 type settingsModelResponse struct {
 	Model        string   `json:"model"`
 	DefaultModel string   `json:"default_model"`
@@ -34,7 +34,7 @@ type settingsModelResponse struct {
 // GET → returns the effective model id + provider + source.
 // PUT body: {"model": "claude-opus-4-7"}. Empty model clears the override
 // so the loop falls back to the boot default. We don't allowlist values
-// server-side beyond a trim — the Anthropic / OpenAI / Google APIs are
+// server-side beyond a trim - the Anthropic / OpenAI / Google APIs are
 // the source of truth for what's valid, and they return clean errors
 // that the WS error channel already plumbs back to Studio. A typo here
 // produces a visible "invalid model id" on the next turn rather than a
@@ -99,11 +99,11 @@ func (s *Server) buildSettingsModelResponse(ctx context.Context) settingsModelRe
 // handleSettingsProvider serves GET + PUT /api/settings/provider. The PUT
 // hot-swaps the agent loop's provider via Loop.SetProvider and persists
 // the choice in the settings store. Switching providers does NOT touch
-// mem_provider_tokens — flipping anthropic → openai_oauth → anthropic
+// mem_provider_tokens - flipping anthropic → openai_oauth → anthropic
 // never requires re-authentication.
 //
 // PUT body: {"provider": "openai_oauth"}. Empty value clears the override
-// and reverts to the LLM_PROVIDER env (next restart only — runtime stays
+// and reverts to the LLM_PROVIDER env (next restart only - runtime stays
 // on whatever's active until then).
 func (s *Server) handleSettingsProvider(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -132,7 +132,7 @@ func (s *Server) handleSettingsProvider(w http.ResponseWriter, r *http.Request) 
 			p, ok := s.llmReg.Get(target)
 			if !ok {
 				writeJSON(w, http.StatusBadRequest, map[string]string{
-					"error": "provider not available — check credentials are wired and try again",
+					"error": "provider not available - check credentials are wired and try again",
 				})
 				return
 			}
@@ -160,7 +160,7 @@ func (s *Server) handleSettingsProvider(w http.ResponseWriter, r *http.Request) 
 
 // resolveModel returns the model id the next turn should run against.
 // Empty string means "let the agent loop fall back to the provider's
-// boot default" — the loop's Stream signature treats "" identically to
+// boot default" - the loop's Stream signature treats "" identically to
 // no override. We don't surface DB errors here; a transient settings
 // read failure shouldn't stall a turn when "use the default" is a
 // perfectly safe answer.

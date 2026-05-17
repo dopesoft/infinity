@@ -23,7 +23,7 @@ import (
 // The observation's session_id is derived from the request body if provided,
 // or left empty (which causes InsertObservation to reject). For now we don't
 // look the session up by message_id because messages aren't first-class
-// rows — they live as observations themselves, so id correlation would be
+// rows - they live as observations themselves, so id correlation would be
 // brittle. Frontend is updated to send the active session id.
 func (s *Server) handleMessageFeedback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

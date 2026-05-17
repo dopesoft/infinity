@@ -22,7 +22,7 @@ type profileFactDTO struct {
 //	DELETE?id=<uuid> → remove one fact
 //
 // Surfaced in the Studio Memory tab as the "Boss profile" panel. Every fact
-// here is prepended to every system prompt — keep entries short and dense.
+// here is prepended to every system prompt - keep entries short and dense.
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no database pool"})

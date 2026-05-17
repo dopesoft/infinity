@@ -1,10 +1,10 @@
-// Package worldmodel implements the world model + agent-owned goals —
+// Package worldmodel implements the world model + agent-owned goals -
 // Phase 5 of the assembly substrate.
 //
 // Honcho models the boss; mem_memories is episodic recall. The world model
-// is the third thing: a structured, queryable model of the boss's WORLD —
+// is the third thing: a structured, queryable model of the boss's WORLD -
 // the people, projects, accounts, and threads the agent acts on, and their
-// current state — plus the agent's OWN durable goals, each carrying a
+// current state - plus the agent's OWN durable goals, each carrying a
 // living plan the agent re-writes as it makes (or fails to make) progress.
 //
 // The agent reads/writes via the entity_* and goal_* tools, never raw SQL.
@@ -28,7 +28,7 @@ type Entity struct {
 	Links      []LinkView     `json:"links,omitempty"`
 }
 
-// LinkView is a resolved edge — the relation plus the entity on the other
+// LinkView is a resolved edge - the relation plus the entity on the other
 // end, with the direction relative to the entity being viewed.
 type LinkView struct {
 	Direction  string `json:"direction"` // "out" (this → other) | "in" (other → this)

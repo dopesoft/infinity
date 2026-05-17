@@ -16,7 +16,7 @@ import (
 //
 // Two paths:
 //
-//  1. Generate synthetic test cases via Haiku — concrete inputs the skill
+//  1. Generate synthetic test cases via Haiku - concrete inputs the skill
 //     should handle. These get persisted to mem_skill_tests for later run.
 //
 //  2. Auto-promote rule. Risk=low + body has no impl_path/scripts/network

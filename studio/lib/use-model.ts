@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { authedFetch } from "@/lib/api";
 
 /**
- * Global model selection — single source of truth in Core's settings
+ * Global model selection - single source of truth in Core's settings
  * store (infinity_meta row at key `setting.model`). Persists across
  * sessions, devices, and Core restarts.
  *
@@ -27,7 +27,7 @@ import { authedFetch } from "@/lib/api";
 export type ModelSetting = {
   /** Effective model id Core is using (override if set, default otherwise). */
   model: string;
-  /** Provider's boot-default model id — what kicks in when the override is cleared. */
+  /** Provider's boot-default model id - what kicks in when the override is cleared. */
   defaultModel: string;
   /** Active provider id (anthropic / openai / openai_oauth / google). */
   provider: string;
@@ -44,7 +44,7 @@ const PROVIDER_ENDPOINT = "/api/settings/provider";
 
 // Module-scoped cache + subscribers. The cache lets a freshly mounted
 // hook render with the last known value instead of a placeholder. The
-// subscriber list pushes updates when any caller writes — so the chip
+// subscriber list pushes updates when any caller writes - so the chip
 // updates when Settings saves and vice versa.
 let cache: ModelSetting | null = null;
 const subscribers = new Set<(s: ModelSetting) => void>();

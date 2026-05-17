@@ -25,7 +25,7 @@ import { LibrarySection } from "@/components/canvas/LibrarySection";
 import { cn } from "@/lib/utils";
 
 /**
- * CanvasFileTree — lazy directory browser scoped to INFINITY_CANVAS_ROOT.
+ * CanvasFileTree - lazy directory browser scoped to INFINITY_CANVAS_ROOT.
  *
  * Internally each directory caches its children once loaded. Expanding a
  * collapsed folder kicks a fetch; collapsing does NOT discard children
@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
  * re-fetch.
  *
  * Selecting a file opens it in the right pane (canvas store handles tab
- * lifecycle). Files modified in this session show a yellow dot — that
+ * lifecycle). Files modified in this session show a yellow dot - that
  * signal comes from the WS hook in CanvasFrame.
  */
 type Node = {
@@ -154,7 +154,7 @@ export function CanvasFileTree({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Filter row — height + visual mass-matched to the Canvas preview
+      {/* Filter row - height + visual mass-matched to the Canvas preview
           URL bar. The outer row is h-11, the input itself slims to h-7 inside
           a rounded muted wrapper, so the two columns line up across the
           screen and feel like one continuous toolbar. */}
@@ -221,7 +221,7 @@ export function CanvasFileTree({
           Renders only when Jarvis's running binary is behind main, or for
           a brief beat after catching up so the boss sees the green tick. */}
       <DeployStatusRow />
-      {/* Source label — declares which bridge owns the filesystem currently
+      {/* Source label - declares which bridge owns the filesystem currently
           rendered (Mac vs Cloud). Same visual mass as DeployStatusRow.
           Hidden when the bridge is unconfigured or no active kind yet. */}
       <BridgeSourceRow sessionId={projectCtx?.sessionId || null} />
@@ -230,12 +230,12 @@ export function CanvasFileTree({
           behind origin/<branch>. Renders only when the active bridge
           for this session is Cloud AND the workspace is behind. */}
       <CloudWorkspaceStalenessRow sessionId={projectCtx?.sessionId || null} />
-      {/* Library — mem_artifacts grouped by kind. Lives INSIDE the
+      {/* Library - mem_artifacts grouped by kind. Lives INSIDE the
           Files tab (not a separate /library route) so the boss has one
           place to browse everything Jarvis has made. Click a project →
           tree below auto-scopes. Click an image → opens viewer. */}
       <LibrarySection sessionId={projectCtx?.sessionId || null} />
-      {/* py-0 here — the 4px of vertical padding used to push the empty
+      {/* py-0 here - the 4px of vertical padding used to push the empty
           state ~4px lower than the chat / canvas equivalents. When files
           ARE populated, the rows have their own row-padding so this top
           gap isn't load-bearing. */}

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * CanvasSettings — workspace root, preview URL override, auto-open toggle.
+ * CanvasSettings - workspace root, preview URL override, auto-open toggle.
  *
  * Note: this is a Settings-page card, not part of the Canvas surface itself.
  * Everything edits localStorage keys the CanvasStoreProvider reads on mount,

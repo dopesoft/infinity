@@ -16,7 +16,7 @@ var (
 func main() {
 	root := &cobra.Command{
 		Use:           "infinity",
-		Short:         "Infinity — single-user AI agent with persistent memory",
+		Short:         "Infinity - single-user AI agent with persistent memory",
 		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceUsage:  true,
 		SilenceErrors: true,

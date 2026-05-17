@@ -5,7 +5,7 @@ import { Sparkles, ExternalLink } from "lucide-react";
 import type { ChatMessage } from "@/hooks/useChat";
 
 /**
- * SkillProposalCard — specialized tool-call surface for skill_propose and
+ * SkillProposalCard - specialized tool-call surface for skill_propose and
  * skill_optimize results. Renders inline in the conversation stream so the
  * boss immediately sees "oh shit, new skill" without having to scan the
  * generic tool-call card or check the Skills tab manually.
@@ -26,7 +26,7 @@ export function SkillProposalCard({ message }: { message: ChatMessage }) {
   const parsed = safeParse(typeof result?.output === "string" ? result.output : "");
   const isUpdate = call.name === "skill_optimize";
 
-  // Status / wording —
+  // Status / wording -
   //   running  : agent invoked but hasn't returned yet
   //   error    : non-zero exit / parse failure
   //   proposed : success path; show name + review link

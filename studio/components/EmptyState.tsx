@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 type IconProps = SVGProps<SVGSVGElement>;
 
 /**
- * EmptyState — shared placeholder shape used across the workspace columns
+ * EmptyState - shared placeholder shape used across the workspace columns
  * and detail panels. Mirrors the Live-tab "fresh session" treatment:
  * lucide icon inside a muted circle, semibold title, soft sub-copy.
  *

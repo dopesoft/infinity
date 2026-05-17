@@ -1,30 +1,30 @@
--- 017_workflows.sql — durable workflows + the job queue.
+-- 017_workflows.sql - durable workflows + the job queue.
 --
 -- Phase 2 of the assembly substrate. A workflow is a first-class, durable,
 -- multi-step, RESUMABLE object. The agent assembles one from natural
 -- language (a step list); the Go engine runs it as a state machine that
 -- persists after every step, so a process restart resumes mid-workflow.
 --
--- Skills are single recipes. Workflows chain them — plus tools, sub-agent
--- turns, and human checkpoints — into processes that run over hours or
+-- Skills are single recipes. Workflows chain them - plus tools, sub-agent
+-- turns, and human checkpoints - into processes that run over hours or
 -- days. This is the spine everything downstream hangs off.
 --
 -- Three tables:
---   mem_workflows       — the definition (a named, reusable step list)
---   mem_workflow_runs   — one execution instance, with durable state
---   mem_workflow_steps  — per-run step state (status, output, retries)
+--   mem_workflows       - the definition (a named, reusable step list)
+--   mem_workflow_runs   - one execution instance, with durable state
+--   mem_workflow_steps  - per-run step state (status, output, retries)
 --
 -- The agent NEVER writes these with raw SQL. The workflow_* native tools
 -- ARE the contract.
 
 BEGIN;
 
--- ── mem_workflows — the reusable definition ───────────────────────────────
+-- ── mem_workflows - the reusable definition ───────────────────────────────
 CREATE TABLE IF NOT EXISTS mem_workflows (
     id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name         TEXT NOT NULL UNIQUE,            -- kebab-case
     description  TEXT NOT NULL DEFAULT '',
-    -- The ordered step list — the definition. JSONB array of:
+    -- The ordered step list - the definition. JSONB array of:
     --   { "name": "…", "kind": "tool|skill|agent|checkpoint",
     --     "spec": { … }, "max_attempts": 3 }
     -- The judgment of WHAT the steps are is the agent's; the engine only
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS mem_workflows (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ── mem_workflow_runs — one execution instance ────────────────────────────
+-- ── mem_workflow_runs - one execution instance ────────────────────────────
 CREATE TABLE IF NOT EXISTS mem_workflow_runs (
     id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     -- Nullable: ad-hoc runs (inline step list, no saved definition) carry
@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_mem_workflow_runs_runnable
 CREATE INDEX IF NOT EXISTS idx_mem_workflow_runs_recent
     ON mem_workflow_runs (created_at DESC);
 
--- ── mem_workflow_steps — per-run step state ───────────────────────────────
+-- ── mem_workflow_steps - per-run step state ───────────────────────────────
 CREATE TABLE IF NOT EXISTS mem_workflow_steps (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     run_id        UUID NOT NULL REFERENCES mem_workflow_runs(id) ON DELETE CASCADE,

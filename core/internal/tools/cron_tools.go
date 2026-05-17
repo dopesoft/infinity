@@ -1,13 +1,13 @@
-// Cron tools — let Jarvis schedule recurring work from chat.
+// Cron tools - let Jarvis schedule recurring work from chat.
 //
 // Six tools land here:
 //
-//   cron_create_agent    — schedule an isolated_agent_turn job (prompt cron)
-//   cron_create_poll     — schedule a connector_poll job (Composio action cron)
-//   cron_list            — list every cron row
-//   cron_delete          — remove a cron row by id or name
-//   cron_pause           — toggle enabled flag without deleting
-//   cron_run_now         — fire a job immediately (debug + on-demand)
+//   cron_create_agent    - schedule an isolated_agent_turn job (prompt cron)
+//   cron_create_poll     - schedule a connector_poll job (Composio action cron)
+//   cron_list            - list every cron row
+//   cron_delete          - remove a cron row by id or name
+//   cron_pause           - toggle enabled flag without deleting
+//   cron_run_now         - fire a job immediately (debug + on-demand)
 //
 // These wrap the existing cron.Scheduler (same package the HTTP API uses).
 // Designed to be the "Hey Jarvis, check my email every 15 minutes" path:
@@ -48,7 +48,7 @@ type CronJob struct {
 
 // CronScheduler is the contract the tools rely on. The concrete type
 // (cron.Scheduler) satisfies it through a thin adapter constructed in
-// serve.go — see cronSchedulerAdapter there. Keeping the interface
+// serve.go - see cronSchedulerAdapter there. Keeping the interface
 // here breaks the import cycle.
 type CronScheduler interface {
 	Upsert(ctx context.Context, j CronJob) (string, error)
@@ -58,7 +58,7 @@ type CronScheduler interface {
 	Reload(ctx context.Context) error
 }
 
-// Cron kind constants — local mirror so tools don't import cron.
+// Cron kind constants - local mirror so tools don't import cron.
 const (
 	cronKindAgent = "isolated_agent_turn"
 	cronKindPoll  = "connector_poll"

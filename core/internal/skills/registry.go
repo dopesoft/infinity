@@ -19,7 +19,7 @@ type Registry struct {
 	skills map[string]*Skill
 	errs   []LoadError
 	loaded time.Time
-	store  *Store // optional — used to record runs / sync versions
+	store  *Store // optional - used to record runs / sync versions
 }
 
 // NewRegistry creates a Registry rooted at `root` (e.g. "./skills"). Callers
@@ -75,7 +75,7 @@ func (r *Registry) Reload(ctx context.Context) ([]LoadError, error) {
 // Put adds (or replaces) a skill in the in-memory index and, when a Store
 // is attached, persists it to Postgres. This is the runtime self-authoring
 // path: a skill the agent creates via skill_create is invocable THIS
-// session — no redeploy, no boot reload. The boot-time
+// session - no redeploy, no boot reload. The boot-time
 // MaterializeActiveSkills + Reload chain re-hydrates it from the DB on the
 // next restart, so it is durable.
 func (r *Registry) Put(ctx context.Context, s *Skill) error {
@@ -95,7 +95,7 @@ func (r *Registry) Put(ctx context.Context, s *Skill) error {
 	return nil
 }
 
-// Get returns a skill by name. Lookup is case-sensitive — names are kebab-case
+// Get returns a skill by name. Lookup is case-sensitive - names are kebab-case
 // by convention.
 func (r *Registry) Get(name string) (*Skill, bool) {
 	r.mu.RLock()

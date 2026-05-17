@@ -15,7 +15,7 @@ import (
 //
 // Calendar events ingested from a connector (Google Cal, iCloud, …)
 // arrive with title + location + time but no preparation context. The
-// boss wants the agent to *anticipate* what needs doing — tickets for
+// boss wants the agent to *anticipate* what needs doing - tickets for
 // a concert, parking, dinner reservation, packing for a flight, etc.
 //
 // Per the design conversation: the prep schema is intentionally
@@ -23,11 +23,11 @@ import (
 // == concert, ask about parking"). Haiku is given the event details
 // and asked to invent the right prep checklist for *this* event,
 // drawing on whatever world knowledge fits. The structure we hand back
-// to Studio is always the same shape — { label, rationale, done } —
+// to Studio is always the same shape - { label, rationale, done } -
 // but the *content* is open-ended.
 //
 // Classification still happens because Studio's icon row uses it for
-// glanceable scanning, but it's only a hint — out-of-vocabulary
+// glanceable scanning, but it's only a hint - out-of-vocabulary
 // classifications are allowed.
 
 // CalendarEvent is the local DTO. We don't import the dashboard package
@@ -52,10 +52,10 @@ type PrepItem struct {
 
 // GeneratePrepForEvent reads the event row, asks Haiku to classify it
 // and draft a prep checklist, then writes the result back. Idempotent
-// — running twice replaces the prep with the newer draft.
+// - running twice replaces the prep with the newer draft.
 //
 // When `m.llm == nil` (no LLM provider configured) the function inserts
-// a single stub prep item flagging the gap rather than failing — keeps
+// a single stub prep item flagging the gap rather than failing - keeps
 // the calendar surface useful even on a low-config deploy.
 func (m *Manager) GeneratePrepForEvent(ctx context.Context, eventID uuid.UUID) error {
 	if m == nil || m.pool == nil {
@@ -131,14 +131,14 @@ You're looking at an upcoming calendar event and your job is two things:
    from common types if applicable: meeting, concert, flight, dinner,
    appointment, travel, social, personal, workout, doctor, dentist, call,
    demo, interview, wedding, funeral, conference, talk, recording, …
-   You may invent a new classification if none fit — keep it short and
+   You may invent a new classification if none fit - keep it short and
    lowercase. The boss explicitly asked that this NOT be schema-locked.
 
-2. **Draft a prep checklist** — a short list of concrete things the boss
+2. **Draft a prep checklist** - a short list of concrete things the boss
    should think about, do, or confirm before the event happens. Drawing
    on world knowledge specific to this event type and details.
 
-   Examples by type (NOT a fixed schema — invent appropriate items):
+   Examples by type (NOT a fixed schema - invent appropriate items):
    - concert → tickets bought · parking near venue · pre-show food · transit timing
    - flight → check-in opened · packed · ride to airport · OOO email · ID/passport
    - restaurant dinner → reservation made · dietary mentioned · address shared
@@ -149,11 +149,11 @@ You're looking at an upcoming calendar event and your job is two things:
 
 Each prep item gets:
    - "label": imperative phrase, ≤80 chars ("Book parking near MSG")
-   - "rationale": one sentence (≤140 chars) explaining WHY this item — what
+   - "rationale": one sentence (≤140 chars) explaining WHY this item - what
      the boss should think about. Reference specifics from the event when
      useful ("MSG-area lots fill by 6pm on event nights").
 
-Return STRICT JSON exactly in this shape — no commentary, no markdown:
+Return STRICT JSON exactly in this shape - no commentary, no markdown:
 
 {
   "classification": "concert",
@@ -164,11 +164,11 @@ Return STRICT JSON exactly in this shape — no commentary, no markdown:
 }
 
 Rules:
-- 2 to 8 prep items. Avoid pointless ones — every item should be something
+- 2 to 8 prep items. Avoid pointless ones - every item should be something
   the boss would forget if they didn't see it on the dashboard.
 - Skip items only the agent can't help with (e.g. "have fun"). Focus on
   concrete actions or confirmations.
-- "done" is omitted in your output — the system fills it in as false.
+- "done" is omitted in your output - the system fills it in as false.
 - No prep at all is okay for routine events (a recurring stand-up). Return
   { "classification": "...", "prep": [] }.`
 
@@ -195,7 +195,7 @@ func (m *Manager) draftPrep(ctx context.Context, req prepDraftRequest) (prepDraf
 	if err != nil {
 		return prepDraftResult{}, fmt.Errorf("haiku prep draft: %w", err)
 	}
-	// Haiku occasionally wraps JSON in ```json fences — strip them.
+	// Haiku occasionally wraps JSON in ```json fences - strip them.
 	raw = stripJSONFence(raw)
 
 	var parsed prepDraftResult

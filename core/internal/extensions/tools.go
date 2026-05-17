@@ -12,12 +12,12 @@ import (
 
 // RegisterTools wires the three agent-facing self-extension tools:
 //
-//	extension_register — wire a new MCP server or REST-API tool, live
-//	extension_list     — see what's registered
-//	extension_remove   — disable an extension
+//	extension_register - wire a new MCP server or REST-API tool, live
+//	extension_list     - see what's registered
+//	extension_remove   - disable an extension
 //
 // This file lives in package extensions (which imports tools), so the
-// tools register themselves without a tools → extensions import cycle —
+// tools register themselves without a tools → extensions import cycle -
 // the same pattern skills/registry_tools.go uses.
 func RegisterTools(reg *tools.Registry, mgr *Manager) {
 	if reg == nil || mgr == nil {
@@ -35,7 +35,7 @@ type extensionRegisterTool struct{ mgr *Manager }
 func (t *extensionRegisterTool) Name() string { return "extension_register" }
 func (t *extensionRegisterTool) Description() string {
 	return "Extend your own toolset at runtime. Wire a new capability and it's " +
-		"live this session AND durable across restarts — no redeploy.\n\n" +
+		"live this session AND durable across restarts - no redeploy.\n\n" +
 		"kind='http_tool': turn any REST endpoint into a named tool. config = " +
 		"{method, url, headers?, body_template?, params?}. {{param}} placeholders " +
 		"in url/headers/body_template are filled from the generated tool's call " +
@@ -43,7 +43,7 @@ func (t *extensionRegisterTool) Description() string {
 		"generated tool is named ext_<name>.\n\n" +
 		"kind='mcp': connect a remote MCP server. config = {url, transport " +
 		"(sse|http), auth? (bearer|header|cloudflare_access), auth_token_env?, " +
-		"auth_header_name?}. Auth references an env var NAME — never paste a " +
+		"auth_header_name?}. Auth references an env var NAME - never paste a " +
 		"secret. Its tools register under <name>__<tool>.\n\n" +
 		"Use this when a task needs a capability you don't have. Returns the " +
 		"registration result."
@@ -55,7 +55,7 @@ func (t *extensionRegisterTool) Schema() map[string]any {
 			"name":        map[string]any{"type": "string", "description": "kebab-case identifier for the extension (e.g. 'openweather', 'linear-mcp')."},
 			"kind":        map[string]any{"type": "string", "enum": []string{"http_tool", "mcp"}, "description": "http_tool = a REST endpoint as a tool · mcp = a remote MCP server."},
 			"description": map[string]any{"type": "string", "description": "What the capability does + when to use it (becomes the tool description)."},
-			"config":      map[string]any{"type": "object", "description": "Kind-specific config — see the tool description for the shape of each kind."},
+			"config":      map[string]any{"type": "object", "description": "Kind-specific config - see the tool description for the shape of each kind."},
 		},
 		"required": []string{"name", "kind", "config"},
 	}
@@ -91,9 +91,9 @@ func (t *extensionRegisterTool) Execute(ctx context.Context, in map[string]any) 
 	}
 	if kind == KindHTTPTool {
 		result["tool_name"] = extToolName(name)
-		result["message"] = fmt.Sprintf("Registered — the tool %q is live now.", extToolName(name))
+		result["message"] = fmt.Sprintf("Registered - the tool %q is live now.", extToolName(name))
 	} else {
-		result["message"] = fmt.Sprintf("MCP server %q connected — its tools are live now.", name)
+		result["message"] = fmt.Sprintf("MCP server %q connected - its tools are live now.", name)
 	}
 	out, _ := json.Marshal(result)
 	return string(out), nil
@@ -105,7 +105,7 @@ type extensionListTool struct{ mgr *Manager }
 
 func (t *extensionListTool) Name() string { return "extension_list" }
 func (t *extensionListTool) Description() string {
-	return "List every runtime-registered extension — MCP servers and HTTP tools — " +
+	return "List every runtime-registered extension - MCP servers and HTTP tools - " +
 		"with their kind, status, and any activation error. Check this before " +
 		"registering a duplicate."
 }

@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { clockTime, relTime } from "@/lib/dashboard/format";
 import type { ActivityEvent, ActivityKind, DashboardItem } from "@/lib/dashboard/types";
 
-/* Activity feed — rolling stream of agent events.
+/* Activity feed - rolling stream of agent events.
  *
  * Time-ordered, with a "now" divider separating future (scheduled) from
  * past (completed). Each row taps into the ObjectViewer for the source

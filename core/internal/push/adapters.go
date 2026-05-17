@@ -7,7 +7,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/proactive"
 )
 
-// TrustAdapter implements proactive.TrustNotifier — wire it into the
+// TrustAdapter implements proactive.TrustNotifier - wire it into the
 // TrustStore at boot so every queued contract turns into a banner on
 // the boss's iPhone + Mac.
 //

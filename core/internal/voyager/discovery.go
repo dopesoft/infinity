@@ -15,16 +15,16 @@ import (
 // every PostToolUse: per-session sliding window of recent tool names, then a
 // global counter of consecutive triplets. When the same triplet shows up
 // across enough sessions in a sliding window, that's a procedure crystallizing
-// in front of us — we propose it as a candidate immediately, before the
+// in front of us - we propose it as a candidate immediately, before the
 // session even ends.
 //
 // Tunables:
 //
-//	windowSize       — how many recent tools per session we remember (default 8)
-//	tripletMinHits   — how many session-distinct firings before we propose (default 3)
-//	tripletWindowMin — how long a triplet's hit count is valid (default 60min)
+//	windowSize       - how many recent tools per session we remember (default 8)
+//	tripletMinHits   - how many session-distinct firings before we propose (default 3)
+//	tripletWindowMin - how long a triplet's hit count is valid (default 60min)
 //
-// The proposal it writes is light — just a hint with the triplet and counts.
+// The proposal it writes is light - just a hint with the triplet and counts.
 // SessionEnd extraction is still the place that produces a real SKILL.md.
 
 const (

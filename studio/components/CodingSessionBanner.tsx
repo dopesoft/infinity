@@ -10,7 +10,7 @@ import { isCodeChangeTool } from "@/lib/canvas/detection";
 import { cn } from "@/lib/utils";
 
 /**
- * CodingSessionBanner — first claude_code__edit/write/multiedit in a Live
+ * CodingSessionBanner - first claude_code__edit/write/multiedit in a Live
  * session triggers this banner. It surfaces a one-tap link to Canvas where
  * the boss can review the diff and watch the preview update.
  *

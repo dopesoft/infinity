@@ -17,7 +17,7 @@ import (
 // <TOOLKIT>_<VERB>_<OBJECT>; we look for verbs that historically rewrite,
 // send, post, delete, or otherwise change someone else's system of record.
 //
-// This is intentionally conservative — false positives (gating a read that
+// This is intentionally conservative - false positives (gating a read that
 // happens to contain "send" in its name) are recoverable via a single
 // boss tap; false negatives (NOT gating a real destructive write) are not.
 // Override with $INFINITY_COMPOSIO_BLOCK_VERBS / $INFINITY_COMPOSIO_AUTOAPPROVE_VERBS.
@@ -37,7 +37,7 @@ const defaultComposioBlockVerbs = "CREATE,UPDATE,DELETE,PATCH,PUT,POST," +
 
 // ComposioGate is the agent.ToolGate that intercepts composio__* tool calls.
 // Composio fronts ~250 SaaS APIs through a single MCP, so per-vendor gating
-// (a la ClaudeCodeGate / GitHubGate) doesn't scale — we'd need a new gate
+// (a la ClaudeCodeGate / GitHubGate) doesn't scale - we'd need a new gate
 // per toolkit. Instead this gate uses a verb-pattern allowlist that applies
 // uniformly: any token in the verb part that matches the block set queues
 // the call for boss approval; everything else (GET, LIST, SEARCH, FETCH,
@@ -171,7 +171,7 @@ func (g *ComposioGate) Authorize(ctx context.Context, sessionID, project, toolNa
 		log.Printf("ComposioGate: %s queue returned empty id (pool unwired?)", toolName)
 		return agent.GateDecision{
 			Allow:  false,
-			Reason: "trust store unavailable; row was NOT persisted — do not tell the boss it was queued",
+			Reason: "trust store unavailable; row was NOT persisted - do not tell the boss it was queued",
 		}
 	}
 	log.Printf("ComposioGate: %s queued as contract=%s (loop will wait)", toolName, id)

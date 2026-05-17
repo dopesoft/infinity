@@ -75,7 +75,7 @@ export function Section({
   );
 }
 
-/* TileCard — the standard tappable card body used across sections.
+/* TileCard - the standard tappable card body used across sections.
  *
  * Wraps content in a button-like surface with a subtle hover-lift and
  * focus ring. Sections compose these for their list rows so every item

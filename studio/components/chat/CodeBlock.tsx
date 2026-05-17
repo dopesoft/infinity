@@ -4,11 +4,11 @@ import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/* CodeBlock — fenced-code renderer for chat markdown.
+/* CodeBlock - fenced-code renderer for chat markdown.
  *
  * Renders a header strip (language tag + copy button) above a horizontally
  * scrollable monospace pane. Long lines scroll inside the block instead
- * of forcing the parent bubble to grow — important for mobile, where the
+ * of forcing the parent bubble to grow - important for mobile, where the
  * conversation column is narrow.
  */
 export function CodeBlock({

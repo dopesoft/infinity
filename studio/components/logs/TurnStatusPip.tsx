@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import type { TraceStatus } from "@/lib/api";
 
-/* TurnStatusPip — small reusable status indicator for a /logs row.
+/* TurnStatusPip - small reusable status indicator for a /logs row.
  *
  * Colors are deliberately desaturated so a list of 50+ rows doesn't read as
  * Christmas lights. Green = ok, amber = empty (boss-visible class of bug),

@@ -8,7 +8,7 @@ import (
 
 // ActiveSet is the per-session whitelist of tools whose full JSON-Schema
 // definitions are shipped to the LLM each turn. Tools outside the active
-// set still exist in the registry — they can be invoked if the model
+// set still exist in the registry - they can be invoked if the model
 // happens to know their exact name (e.g. tool_search returned it), and
 // they show up as one-line catalog entries in the system prompt so the
 // model knows they exist. The active set is what keeps 250+ Composio
@@ -20,7 +20,7 @@ import (
 //
 // TTL semantics: each load can opt-in to a turns-until-expiry counter.
 // The loop calls DecayTTL() at the start of each turn to age entries
-// out automatically — keeps an exploratory `load_tools` from staying
+// out automatically - keeps an exploratory `load_tools` from staying
 // resident forever after the relevant work is done.
 type ActiveSet struct {
 	mu      sync.RWMutex
@@ -29,7 +29,7 @@ type ActiveSet struct {
 }
 
 // NewActiveSet returns a set seeded with the given names as permanent
-// entries. Pinned names cannot be unloaded — used for the core curated
+// entries. Pinned names cannot be unloaded - used for the core curated
 // tools (delegate, tool_search, load_tools, compact, memory ops) that
 // must always be reachable for the discipline pattern to function.
 func NewActiveSet(pinned []string) *ActiveSet {
@@ -79,7 +79,7 @@ func (s *ActiveSet) Load(names []string, ttl int) {
 		if n == "" {
 			continue
 		}
-		// Preserve a permanent (ttl=0) entry — never demote to a TTL.
+		// Preserve a permanent (ttl=0) entry - never demote to a TTL.
 		if existing, ok := s.names[n]; ok && existing == 0 {
 			continue
 		}
@@ -87,7 +87,7 @@ func (s *ActiveSet) Load(names []string, ttl int) {
 	}
 }
 
-// Unload removes names. Pinned names are silently ignored — the model
+// Unload removes names. Pinned names are silently ignored - the model
 // can't accidentally lose access to the core discipline tools.
 func (s *ActiveSet) Unload(names []string) {
 	s.mu.Lock()

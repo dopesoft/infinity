@@ -36,7 +36,7 @@ export type VendorEntry = {
   label: string;
   /** Env var the provider reads for credentials (informational). */
   keyEnv?: string;
-  /** Auth flow shape — drives Settings UI. */
+  /** Auth flow shape - drives Settings UI. */
   auth: "api_key" | "oauth";
   models: ModelEntry[];
 };
@@ -545,7 +545,7 @@ export function resolveModelEntry(
   return null;
 }
 
-/** Default model id for a vendor — the first entry tagged `recommended`. */
+/** Default model id for a vendor - the first entry tagged `recommended`. */
 export function defaultModelFor(vendor: VendorEntry): string {
   return (vendor.models.find((m) => m.recommended) ?? vendor.models[0]).id;
 }

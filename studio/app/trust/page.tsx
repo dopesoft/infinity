@@ -188,7 +188,7 @@ export default function TrustPage() {
                   </h3>
                 </header>
                 <Section title="Reasoning">
-                  <p className="whitespace-pre-wrap break-words text-sm">{selected.reasoning || "—"}</p>
+                  <p className="whitespace-pre-wrap break-words text-sm">{selected.reasoning || "-"}</p>
                 </Section>
                 <Section title="Action spec">
                   <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/60 p-3 font-mono text-xs scroll-touch">

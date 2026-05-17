@@ -1,8 +1,8 @@
-// Workflow tools — durable, multi-step workflows, agent-facing.
+// Workflow tools - durable, multi-step workflows, agent-facing.
 //
 // Phase 2 of the assembly substrate. A workflow is how the agent turns a
-// complex natural-language request — "every morning pull my calendar,
-// draft prep for each meeting, surface them" — into a durable process that
+// complex natural-language request - "every morning pull my calendar,
+// draft prep for each meeting, surface them" - into a durable process that
 // survives restarts. workflow_create saves a reusable definition;
 // workflow_run starts an execution; the engine advances it step by step.
 //
@@ -39,13 +39,13 @@ func RegisterWorkflowTools(r *Registry, pool *pgxpool.Pool) {
 	r.Register(&workflowValidateTool{store: store})
 }
 
-// stepsParamSchema is the shared JSON schema for the step list — the heart
+// stepsParamSchema is the shared JSON schema for the step list - the heart
 // of the workflow contract.
 func stepsParamSchema() map[string]any {
 	return map[string]any{
 		"type": "array",
 		"description": "Ordered steps the engine runs as a state machine. Each step's `spec` " +
-			"depends on `kind` — tool: {\"tool\":\"<name>\",\"args\":{…}}; skill: " +
+			"depends on `kind` - tool: {\"tool\":\"<name>\",\"args\":{…}}; skill: " +
 			"{\"skill\":\"<name>\",\"args\":{…}}; agent: {\"prompt\":\"…\"}; checkpoint: " +
 			"{\"message\":\"…\"}. String values in a spec may reference earlier results with " +
 			"{{steps.N.output}} or run inputs with {{input.KEY}}.",
@@ -59,7 +59,7 @@ func stepsParamSchema() map[string]any {
 					"description": "tool = call a native/MCP tool · skill = invoke a skill · " +
 						"agent = run a sub-agent turn · checkpoint = pause for boss approval.",
 				},
-				"spec":         map[string]any{"type": "object", "description": "Step parameters — shape depends on kind (see parent description)."},
+				"spec":         map[string]any{"type": "object", "description": "Step parameters - shape depends on kind (see parent description)."},
 				"max_attempts": map[string]any{"type": "integer", "description": "Retries before the step (and run) fails. Default 3."},
 			},
 			"required": []string{"kind", "spec"},
@@ -105,12 +105,12 @@ type workflowCreateTool struct{ store *workflow.Store }
 
 func (t *workflowCreateTool) Name() string { return "workflow_create" }
 func (t *workflowCreateTool) Description() string {
-	return "Save a reusable workflow — a named, ordered list of steps the engine " +
+	return "Save a reusable workflow - a named, ordered list of steps the engine " +
 		"runs as a durable state machine. Use this when the boss describes a " +
 		"multi-step process worth keeping. Each step is one of: tool (call a " +
 		"native/MCP tool), skill (invoke a skill), agent (run a sub-agent turn " +
 		"with a prompt), or checkpoint (pause for the boss to approve before " +
-		"continuing). Steps chain — a later step's spec can reference " +
+		"continuing). Steps chain - a later step's spec can reference " +
 		"{{steps.N.output}}. Returns the workflow id; run it with workflow_run."
 }
 func (t *workflowCreateTool) Schema() map[string]any {
@@ -160,7 +160,7 @@ func (t *workflowRunTool) Description() string {
 		"OR an inline `steps` list for a one-off. The run starts immediately and " +
 		"the engine advances it step by step, surviving restarts. Pass `input` " +
 		"for run-level values steps can reference with {{input.KEY}}. Returns the " +
-		"run id — poll it with workflow_status."
+		"run id - poll it with workflow_status."
 }
 func (t *workflowRunTool) Schema() map[string]any {
 	return map[string]any{
@@ -170,7 +170,7 @@ func (t *workflowRunTool) Schema() map[string]any {
 			"name":       map[string]any{"type": "string", "description": "Label for an ad-hoc run (used when passing inline steps)."},
 			"steps":      stepsParamSchema(),
 			"input":      map[string]any{"type": "object", "description": "Run-level inputs, referenceable in step specs as {{input.KEY}}."},
-			"depends_on": map[string]any{"type": "string", "description": "Optional run id — hold this run until that run is done (dependency-aware scheduling)."},
+			"depends_on": map[string]any{"type": "string", "description": "Optional run id - hold this run until that run is done (dependency-aware scheduling)."},
 		},
 	}
 }
@@ -211,7 +211,7 @@ func (t *workflowRunTool) Execute(ctx context.Context, in map[string]any) (strin
 	out, _ := json.Marshal(map[string]any{
 		"ok": true, "run_id": run.ID, "workflow": runName, "steps": len(steps),
 		"status":  string(run.Status),
-		"message": fmt.Sprintf("Run %s started (%d steps). The engine advances it automatically — poll workflow_status.", run.ID, len(steps)),
+		"message": fmt.Sprintf("Run %s started (%d steps). The engine advances it automatically - poll workflow_status.", run.ID, len(steps)),
 	})
 	return string(out), nil
 }
@@ -222,7 +222,7 @@ type workflowStatusTool struct{ store *workflow.Store }
 
 func (t *workflowStatusTool) Name() string { return "workflow_status" }
 func (t *workflowStatusTool) Description() string {
-	return "Get the current state of a workflow run — overall status plus every " +
+	return "Get the current state of a workflow run - overall status plus every " +
 		"step's status, output, and error. Use the run id returned by workflow_run."
 }
 func (t *workflowStatusTool) Schema() map[string]any {
@@ -302,7 +302,7 @@ func (t *workflowResumeTool) Execute(ctx context.Context, in map[string]any) (st
 	}
 	out, _ := json.Marshal(map[string]any{
 		"ok": true, "run_id": runID, "approved": approve,
-		"message": "Checkpoint resolved — the run is back to running.",
+		"message": "Checkpoint resolved - the run is back to running.",
 	})
 	return string(out), nil
 }
@@ -341,11 +341,11 @@ type workflowValidateTool struct{ store *workflow.Store }
 
 func (t *workflowValidateTool) Name() string { return "workflow_validate" }
 func (t *workflowValidateTool) Description() string {
-	return "Statically check a workflow's step list before you run it — kinds are " +
+	return "Statically check a workflow's step list before you run it - kinds are " +
 		"valid, each step's spec carries what its kind needs, and every " +
 		"{{steps.N.output}} reference points at an earlier step. Pass `workflow` " +
 		"(a saved name) or inline `steps`. Returns the problems found, or confirms " +
-		"the assembly is well-formed. Cheap insurance — run it before workflow_run."
+		"the assembly is well-formed. Cheap insurance - run it before workflow_run."
 }
 func (t *workflowValidateTool) Schema() map[string]any {
 	return map[string]any{
@@ -380,8 +380,8 @@ func (t *workflowValidateTool) Execute(ctx context.Context, in map[string]any) (
 		"steps":    len(steps),
 		"problems": problems,
 		"message": map[bool]string{
-			true:  "Well-formed — safe to run.",
-			false: fmt.Sprintf("%d problem(s) found — fix before running.", len(problems)),
+			true:  "Well-formed - safe to run.",
+			false: fmt.Sprintf("%d problem(s) found - fix before running.", len(problems)),
 		}[len(problems) == 0],
 	})
 	return string(out), nil
@@ -393,7 +393,7 @@ type workflowListTool struct{ store *workflow.Store }
 
 func (t *workflowListTool) Name() string { return "workflow_list" }
 func (t *workflowListTool) Description() string {
-	return "List saved workflows and recent runs — names, step counts, and run " +
+	return "List saved workflows and recent runs - names, step counts, and run " +
 		"statuses. Use to see what workflows exist before creating a duplicate."
 }
 func (t *workflowListTool) Schema() map[string]any {

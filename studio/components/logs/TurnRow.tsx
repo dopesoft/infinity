@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { TurnStatusPip } from "./TurnStatusPip";
 import type { TurnRowDTO } from "@/lib/api";
 
-/* TurnRow — one row in the /logs list.
+/* TurnRow - one row in the /logs list.
  *
  * Card shape matches the rest of the app (rounded-xl border bg-card,
  * hover:bg-accent). Top line is meta (timestamp · session · model · pip)
@@ -58,7 +58,7 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
         "hover:bg-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-info",
       )}
     >
-      {/* meta row — same shape as /trust card top line */}
+      {/* meta row - same shape as /trust card top line */}
       <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground">
         <span className="flex min-w-0 items-center gap-1.5">
           <Clock className="size-3 shrink-0" aria-hidden />

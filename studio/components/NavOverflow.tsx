@@ -13,7 +13,7 @@ import { NAV_OVERFLOW } from "@/lib/nav-tabs";
 import { useNavBadge } from "@/lib/nav-badges";
 import { cn } from "@/lib/utils";
 
-/* NavOverflow — desktop header kebab that exposes the demoted routes
+/* NavOverflow - desktop header kebab that exposes the demoted routes
  * (Skills / Heartbeat / Trust / Cron / Audit). Primary tabs (Live, Memory)
  * stay in <TabNav>. Settings keeps its own header button. */
 

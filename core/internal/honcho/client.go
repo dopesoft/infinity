@@ -1,4 +1,4 @@
-// Package honcho is a thin client for plastic-labs/honcho — an open-source
+// Package honcho is a thin client for plastic-labs/honcho - an open-source
 // dialectic peer-modelling system Infinity treats as a complement to its own
 // memory store. Honcho derives "who the boss is" from interaction traces.
 // Infinity's mem_* tables remain the source of truth for facts, provenance
@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	// HTTP client timeout — outer ceiling for any single request. The
+	// HTTP client timeout - outer ceiling for any single request. The
 	// per-call deadlines below are tighter; this just prevents a stuck
 	// socket from leaking a goroutine for minutes if Honcho hangs.
 	defaultTimeout = 30 * time.Second
@@ -61,7 +61,7 @@ type Client struct {
 	repAt    time.Time
 
 	// Simple in-process circuit breaker. Honcho on Railway's free tier
-	// can wedge for minutes at a time — when it does, every turn we'd
+	// can wedge for minutes at a time - when it does, every turn we'd
 	// otherwise pay the 2-second read deadline AND log a 4-second hook
 	// timeout on every user/assistant message. The breaker tracks
 	// consecutive failures; once it trips, all calls short-circuit
@@ -81,7 +81,7 @@ const (
 
 // FromEnv returns a Client when HONCHO_BASE_URL is set, otherwise nil. Callers
 // should treat a nil return as "Honcho disabled" and not call any methods on
-// it — every method already nil-guards but skipping the call avoids the
+// it - every method already nil-guards but skipping the call avoids the
 // allocations.
 func FromEnv() *Client {
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("HONCHO_BASE_URL")), "/")
@@ -124,7 +124,7 @@ type Message struct {
 	Role      string `json:"role,omitempty"` // "user" | "assistant"
 }
 
-// honchoMessageBatch matches Honcho v3's POST messages body shape — an
+// honchoMessageBatch matches Honcho v3's POST messages body shape - an
 // envelope wrapping a list of {peer_id, content, ...}.
 type honchoMessageBatch struct {
 	Messages []honchoMessage `json:"messages"`
@@ -146,7 +146,7 @@ func (c *Client) breakerTripped() bool {
 	if time.Now().Before(c.openUntil) {
 		return true
 	}
-	// Cooldown elapsed — half-open: let the next request try, reset the
+	// Cooldown elapsed - half-open: let the next request try, reset the
 	// timestamps. If it fails we trip again immediately.
 	c.openUntil = time.Time{}
 	c.consecutiveErrors = 0
@@ -170,14 +170,14 @@ func (c *Client) markResult(err error) {
 }
 
 // PostMessage writes a single observation to Honcho. v3 batches messages
-// under sessions, so a session_id is required — when none is supplied we
+// under sessions, so a session_id is required - when none is supplied we
 // fall back to a default per-peer bucket so messages still land somewhere
 // indexed for the deriver to pick up.
 func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	if !c.Enabled() {
 		return nil
 	}
-	// Breaker open — silently drop. The hook pipeline will see no error;
+	// Breaker open - silently drop. The hook pipeline will see no error;
 	// Honcho's deriver lags one turn (or many), Studio chat unaffected.
 	if c.breakerTripped() {
 		return nil
@@ -201,7 +201,7 @@ func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	}
 	// Tight per-call deadline so a slow/dead Honcho can't park hook
 	// goroutines for the full http.Client timeout. The hook pipeline
-	// fires this on every turn — dropping a mirror is preferable to
+	// fires this on every turn - dropping a mirror is preferable to
 	// 30s of log spam and goroutine pileup.
 	postCtx, cancel := context.WithTimeout(ctx, postTimeout)
 	defer cancel()
@@ -244,7 +244,7 @@ func (c *Client) Ask(ctx context.Context, q string) (string, error) {
 
 // Representation returns the cached peer context, refreshing it from
 // Honcho if older than ttl. Used by the memory provider on every system
-// prefix build — keeps the representation hot while bounding traffic.
+// prefix build - keeps the representation hot while bounding traffic.
 //
 // Honcho v3 splits this across /representation (POST, curated subset) and
 // /context (GET, peer-card + representation rolled into one). We use
@@ -263,7 +263,7 @@ func (c *Client) Representation(ctx context.Context, ttl time.Duration) (string,
 	if cached != "" && time.Since(at) < ttl {
 		return cached, nil
 	}
-	// Breaker open — return whatever's cached (possibly empty) without
+	// Breaker open - return whatever's cached (possibly empty) without
 	// hitting the wire. The on-turn read path treats "" as "no peer
 	// representation this turn" and continues with Infinity's own RRF.
 	if c.breakerTripped() {

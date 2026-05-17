@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
  *
  * The wizard is mobile-first: one question per screen, big touch targets,
  * a single primary action. Desktop gets the same layout centered in a
- * narrow column — no fancy multi-column form because identity questions
+ * narrow column - no fancy multi-column form because identity questions
  * deserve focused attention, not data-entry density. */
 
 type Step = {
@@ -37,7 +37,7 @@ const STEPS: Step[] = [
   {
     key: "Name",
     title: "What should I call you?",
-    subtitle: "Your name, a nickname, or just 'boss' — whatever lands right.",
+    subtitle: "Your name, a nickname, or just 'boss' - whatever lands right.",
     placeholder: "e.g. Khaya, or boss",
     importance: 10,
   },
@@ -46,7 +46,7 @@ const STEPS: Step[] = [
     title: "What do you do?",
     subtitle:
       "One line about your work or role. This grounds the agent so it stops asking what you do every week.",
-    placeholder: "e.g. Founder of Malabie Industries — I build AI products.",
+    placeholder: "e.g. Founder of Malabie Industries - I build AI products.",
     long: true,
     importance: 10,
   },
@@ -55,7 +55,7 @@ const STEPS: Step[] = [
     title: "What are you actively working on?",
     subtitle:
       "Projects in flight. One per line. The agent uses these to disambiguate when you say 'the deploy' or 'that bug'.",
-    placeholder: "Infinity — the AGI companion\nMalabie — paint marketplace\nDirector — video tooling",
+    placeholder: "Infinity - the AGI companion\nMalabie - paint marketplace\nDirector - video tooling",
     long: true,
     importance: 9,
   },
@@ -63,7 +63,7 @@ const STEPS: Step[] = [
     key: "Communication style",
     title: "How do you want me to talk to you?",
     subtitle:
-      "Terse? Verbose? Profane? Formal? Emojis welcome or not? Pick the texture — be specific.",
+      "Terse? Verbose? Profane? Formal? Emojis welcome or not? Pick the texture - be specific.",
     placeholder: "Terse, profanity-friendly, zero emojis. Cite memory when relevant.",
     long: true,
     importance: 9,
@@ -81,8 +81,8 @@ const STEPS: Step[] = [
     key: "Key relationships",
     title: "Who should I know about?",
     subtitle:
-      "People who matter — co-founders, family, customers, key contacts. One per line with a short note.",
-    placeholder: "Mom — call every Sunday\nBob — landlord, lease comes up in March\nMike — CTO at Stripe partner",
+      "People who matter - co-founders, family, customers, key contacts. One per line with a short note.",
+    placeholder: "Mom - call every Sunday\nBob - landlord, lease comes up in March\nMike - CTO at Stripe partner",
     long: true,
     optional: true,
     importance: 7,
@@ -91,7 +91,7 @@ const STEPS: Step[] = [
     key: "Anything else",
     title: "Anything else I should know?",
     subtitle:
-      "Health constraints, preferences, hard rules, recurring goals — whatever you want me to remember on day one.",
+      "Health constraints, preferences, hard rules, recurring goals - whatever you want me to remember on day one.",
     placeholder: "I'm in a sober streak (no drinks, no nicotine). I read in the morning before screens.",
     long: true,
     optional: true,
@@ -124,7 +124,7 @@ export default function OnboardingPage() {
     setSubmitting(true);
     /* Write every non-empty answer in parallel. Each becomes a row in
      * mem_memories under project='_self' tier='semantic' so they survive
-     * compaction, pruning, and consolidation — they are the agent's
+     * compaction, pruning, and consolidation - they are the agent's
      * always-on primer. Importance differs per fact so the system prompt
      * ranks identity > projects > preferences > optional context. */
     const writes = STEPS.map(async (s) => {
@@ -155,7 +155,7 @@ export default function OnboardingPage() {
   async function skipAll() {
     setSkipping(true);
     /* Set the flag without writing any facts. Agent boots blank but the
-     * wizard never reappears — the user can seed their profile later from
+     * wizard never reappears - the user can seed their profile later from
      * the Boss Profile panel in Memory. The localStorage write is the
      * escape hatch when Core is unreachable (local dev with no backend),
      * so Skip always works even if the API call silently fails. */

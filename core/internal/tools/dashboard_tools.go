@@ -1,4 +1,4 @@
-// Dashboard tools — let Jarvis write to the dashboard surfaces from chat.
+// Dashboard tools - let Jarvis write to the dashboard surfaces from chat.
 //
 // Eight tools land here, organized by surface:
 //
@@ -7,7 +7,7 @@
 //	followup_snooze / followup_dismiss                → mem_followups
 //	saved_add                                         → mem_saved
 //
-// Each tool is intentionally narrow — one mutation per name — so the
+// Each tool is intentionally narrow - one mutation per name - so the
 // model has clear targets and we can grant/revoke per-tool risk later
 // (none of these route through ClaudeCodeGate; they're internal data
 // edits, not shell commands).
@@ -31,7 +31,7 @@ import (
 
 // RegisterDashboardTools wires every dashboard mutation as a native tool
 // AND its matching list tool. Every table the agent can write to needs a
-// read counterpart — without one, "dismiss the X" requests force the
+// read counterpart - without one, "dismiss the X" requests force the
 // agent to ask the boss for ids it has no way to see.
 func RegisterDashboardTools(r *Registry, pool *pgxpool.Pool) {
 	if r == nil || pool == nil {
@@ -117,7 +117,7 @@ func (t *taskUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 	if id == "" {
 		return "", errors.New("id required")
 	}
-	// Build a dynamic UPDATE via COALESCE — keeps the SQL simple while
+	// Build a dynamic UPDATE via COALESCE - keeps the SQL simple while
 	// supporting partial updates without writing a builder.
 	var (
 		title, body, priority, status *string
@@ -453,7 +453,7 @@ func (t *taskList) Name() string   { return "task_list" }
 func (t *taskList) ReadOnly() bool { return true }
 func (t *taskList) Description() string {
 	return "List todos on the dashboard with their ids. Use this BEFORE task_update / " +
-		"task_done — ids are not shown in the UI. Filter by status (default 'open') " +
+		"task_done - ids are not shown in the UI. Filter by status (default 'open') " +
 		"and limit (default 100). Returns id, title, status, priority, due_at, created_at."
 }
 func (t *taskList) Schema() map[string]any {
@@ -496,7 +496,7 @@ func (t *pursuitList) Name() string   { return "pursuit_list" }
 func (t *pursuitList) ReadOnly() bool { return true }
 func (t *pursuitList) Description() string {
 	return "List Pursuits (habits + goals) on the dashboard with their ids. Use " +
-		"this BEFORE pursuit_checkin — ids are not shown in the UI. Returns id, " +
+		"this BEFORE pursuit_checkin - ids are not shown in the UI. Returns id, " +
 		"title, cadence, current_value, target_value, unit, streak_days, done_today."
 }
 func (t *pursuitList) Schema() map[string]any {
@@ -540,7 +540,7 @@ func (t *followupList) Name() string   { return "followup_list" }
 func (t *followupList) ReadOnly() bool { return true }
 func (t *followupList) Description() string {
 	return "List follow-ups on the dashboard with their ids. Use this BEFORE " +
-		"followup_snooze / followup_dismiss — ids are not shown in the UI. " +
+		"followup_snooze / followup_dismiss - ids are not shown in the UI. " +
 		"Filter by status (default 'open'). Returns id, source, account, " +
 		"from_name, subject, preview, status, unread, received_at."
 }
@@ -622,7 +622,7 @@ func (t *savedList) Execute(ctx context.Context, in map[string]any) (string, err
 // queryRowsAsJSON runs a SELECT of TEXT-castable columns and emits one
 // JSON object per row, keyed by the supplied column names. Kept small
 // and column-list-driven so adding a new list tool stays a 20-line
-// affair — the recurring "agent needs to see what it can write to"
+// affair - the recurring "agent needs to see what it can write to"
 // pattern doesn't deserve a bespoke struct each time.
 func queryRowsAsJSON(ctx context.Context, pool *pgxpool.Pool, q string, args []any, cols []string) (string, error) {
 	rows, err := pool.Query(ctx, q, args...)

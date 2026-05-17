@@ -33,13 +33,13 @@ import {
 import { seedSession } from "@/lib/dashboard/seed";
 import { useRealtime } from "@/lib/realtime/provider";
 
-/* Heartbeat — system pulse monitor.
+/* Heartbeat - system pulse monitor.
  *
  * This page is the diagnostic command center for the proactive engine: a live
  * status hero at the top with the actions baked in (not floating beneath as
  * orphans), an interleaved pulse stream of every event the heartbeat has
  * emitted on the left, and a compact run + kind sidebar on the right. The
- * mental model is "watch the agent's pulse" — every tick, every finding,
+ * mental model is "watch the agent's pulse" - every tick, every finding,
  * every classified turn lands here, time-ordered.
  *
  * Distinct from /memory by intent: memory is a library of facts, heartbeat is
@@ -101,9 +101,9 @@ const INTENT_TONE: Record<IntentRecordDTO["token"], { label: string; cls: string
 };
 
 function relTime(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "—";
+  if (Number.isNaN(t)) return "-";
   const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -114,14 +114,14 @@ function relTime(iso?: string | null): string {
 }
 
 function clockTime(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "-";
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function formatInterval(seconds: number) {
-  if (seconds <= 0) return "—";
+  if (seconds <= 0) return "-";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   return `${(seconds / 3600).toFixed(1)}h`;
@@ -258,7 +258,7 @@ export default function HeartbeatPage() {
         {/* Hero status card. Mobile-first: pulse + title/stats on top, action
             row spans full width below for 44px-min tap targets. sm+: actions
             float to the right of the header inline (same row). Never orphans
-            the buttons — they're always anchored to a parent surface. */}
+            the buttons - they're always anchored to a parent surface. */}
         <div className="border-b bg-gradient-to-b from-background to-background/40 px-3 py-4 sm:px-4 sm:py-6">
           <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
@@ -687,12 +687,12 @@ function EmptyPulse({ loading, filter }: { loading: boolean; filter: EventFilter
   }
   const msg =
     filter === "findings"
-      ? "No findings yet. Hit Pulse now or wait for the next tick — when the heartbeat notices something worth saying, it shows up here."
+      ? "No findings yet. Hit Pulse now or wait for the next tick - when the heartbeat notices something worth saying, it shows up here."
       : filter === "intent"
-        ? "No classified turns yet. Every message you send through Live gets classified — they'll start landing here as you chat."
+        ? "No classified turns yet. Every message you send through Live gets classified - they'll start landing here as you chat."
         : filter === "runs"
           ? "No heartbeat ticks recorded. Hit Pulse now to fire one manually."
-          : "Quiet — no pulses yet. Send a message in Live or hit Pulse now to seed the stream.";
+          : "Quiet - no pulses yet. Send a message in Live or hit Pulse now to seed the stream.";
   return (
     <div className="rounded-xl border border-dashed bg-card/40 p-8 text-center">
       <Activity className="mx-auto mb-2 size-5 text-muted-foreground" aria-hidden />

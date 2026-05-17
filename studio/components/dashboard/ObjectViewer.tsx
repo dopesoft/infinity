@@ -61,12 +61,12 @@ import type {
   WorkItem,
 } from "@/lib/dashboard/types";
 
-/* ObjectViewer — the responsive preview surface for every dashboard item.
+/* ObjectViewer - the responsive preview surface for every dashboard item.
  *
  * Per the ObjectViewer pattern:
  *  - Dialog on lg+, Drawer on <lg.
  *  - Renders the artifact in its native form (full email body, full diff,
- *    full event card, etc.) — *not* a summary.
+ *    full event card, etc.) - *not* a summary.
  *  - "Discuss with Jarvis" is the only path to a seeded /live session.
  *  - Many items also surface kind-specific quick actions (approve, snooze,
  *    mark done, dismiss) so the user can act without ever opening a chat.
@@ -83,7 +83,7 @@ export function ObjectViewer({
   const open = item !== null;
   // All overflow / Dialog-vs-Drawer / a11y handling is owned by
   // ResponsiveModal. ObjectViewer just composes the header, body, and
-  // footer slots — same shape it would have in either form.
+  // footer slots - same shape it would have in either form.
   return (
     <ResponsiveModal
       open={open}
@@ -192,7 +192,7 @@ function ViewerActions({
       if (sessionId) {
         router.push(`/live?session=${encodeURIComponent(sessionId)}`);
       } else {
-        // Seed failed — degrade to unseeded /live so the boss can still
+        // Seed failed - degrade to unseeded /live so the boss can still
         // start a chat. ObjectViewer will close as the route changes.
         router.push("/live");
       }
@@ -510,7 +510,7 @@ function EventBody({ e }: { e: CalendarEvent }) {
         </ModalSection>
       ) : (
         <p className="text-[12px] text-muted-foreground">
-          No prep items for this event — Jarvis didn&apos;t flag anything you need to do beforehand.
+          No prep items for this event - Jarvis didn&apos;t flag anything you need to do beforehand.
         </p>
       )}
     </div>
@@ -750,7 +750,7 @@ function SavedBody({ s }: { s: Saved }) {
 
 // ── Work ──────────────────────────────────────────────────────────────────
 function WorkBody({ w }: { w: WorkItem }) {
-  // The subtitle is "agent-narrated outcome" — when it leads with
+  // The subtitle is "agent-narrated outcome" - when it leads with
   // "error" it's the failure message and deserves the danger-toned
   // section. Otherwise it's neutral context above the metadata grid.
   const isError = (w.subtitle ?? "").toLowerCase().startsWith("error");
@@ -790,7 +790,7 @@ function WorkBody({ w }: { w: WorkItem }) {
         </ModalSection>
       ) : null}
 
-      {/* Workflow runs carry their step state-machine inline — the Kanban
+      {/* Workflow runs carry their step state-machine inline - the Kanban
           card IS the workflow view. Tap any column, see the steps. */}
       {w.kind === "workflow" && w.workflowSteps && w.workflowSteps.length > 0 ? (
         <ModalSection

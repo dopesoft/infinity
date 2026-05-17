@@ -1,4 +1,4 @@
--- 032_turn_traces.sql — LangSmith-style turn-by-turn traces.
+-- 032_turn_traces.sql - LangSmith-style turn-by-turn traces.
 --
 -- One row per agent turn lands in mem_turns. Every per-event row
 -- (mem_observations, mem_skill_runs, mem_intent_decisions, mem_predictions,
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS mem_turns (
     error           TEXT,
     -- summary is the short one-liner the /logs list view renders. Computed
     -- at close time (first ~140 chars of assistant_text or a synthetic
-    -- "(no reply — N tool calls)" when empty).
+    -- "(no reply - N tool calls)" when empty).
     summary         TEXT NOT NULL DEFAULT ''
 );
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-/* Dashboard preferences — local-first.
+/* Dashboard preferences - local-first.
  *
  * Until we have a `mem_meta` row keyed on `dashboard.preferences`, these
  * toggles persist to localStorage. The shape mirrors what we'll eventually
@@ -29,7 +29,7 @@ export type DashboardPreferences = {
 export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; description: string }> = {
   pursuits: {
     title: "Pursuits",
-    description: "Daily habits, weekly cadences, and long-term goals — merged with cadence tags.",
+    description: "Daily habits, weekly cadences, and long-term goals - merged with cadence tags.",
   },
   todos: {
     title: "Todos",
@@ -49,11 +49,11 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
   },
   followups: {
     title: "Follow-ups",
-    description: "Emails, Slack mentions, iMessage threads — people waiting on you.",
+    description: "Emails, Slack mentions, iMessage threads - people waiting on you.",
   },
   work: {
     title: "Agent Work board",
-    description: "Kanban of agent activity — what's queued, running, awaiting, and done today.",
+    description: "Kanban of agent activity - what's queued, running, awaiting, and done today.",
   },
   saved: {
     title: "Saved",
@@ -61,11 +61,11 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
   },
   activity: {
     title: "Activity",
-    description: "Rolling event stream — agent runs, memory ops, sentinel fires, reflections.",
+    description: "Rolling event stream - agent runs, memory ops, sentinel fires, reflections.",
   },
   memoryFooter: {
     title: "Memory telemetry footer",
-    description: "Quiet status strip at the bottom — daily memory growth + streak count.",
+    description: "Quiet status strip at the bottom - daily memory growth + streak count.",
   },
 };
 
@@ -121,11 +121,11 @@ export function savePrefs(prefs: DashboardPreferences): void {
     // immediately when the Settings tab is open beside it.
     window.dispatchEvent(new CustomEvent("infinity:dashboard-prefs", { detail: prefs }));
   } catch {
-    // localStorage is a best-effort surface — ignore quota / private-mode errors.
+    // localStorage is a best-effort surface - ignore quota / private-mode errors.
   }
 }
 
-/* useDashboardPrefs — subscribes to localStorage changes + same-tab
+/* useDashboardPrefs - subscribes to localStorage changes + same-tab
  * broadcasts. Renders the SSR-safe default until mount; after mount
  * always returns the persisted value. */
 export function useDashboardPrefs(): {

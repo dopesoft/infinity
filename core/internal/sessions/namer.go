@@ -1,5 +1,5 @@
 // Package sessions owns session-level metadata that lives outside the agent
-// loop's in-memory map. Right now that's auto-naming via Haiku — turning a
+// loop's in-memory map. Right now that's auto-naming via Haiku - turning a
 // freshly-minted session's first exchange into a 3-5 word title so the
 // Live header drawer doesn't show "chs3-djnc" garbage.
 package sessions
@@ -27,7 +27,7 @@ type Drafter interface {
 
 // Namer renames sessions whose `name` column is NULL by asking a small model
 // to summarize the first user→assistant exchange in 3-5 words. Best-effort,
-// asynchronous, and idempotent — losing a name race never blocks the agent.
+// asynchronous, and idempotent - losing a name race never blocks the agent.
 type Namer struct {
 	pool    *pgxpool.Pool
 	drafter Drafter
@@ -87,7 +87,7 @@ func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
 		var existing *string
 		if err := n.pool.QueryRow(ctx,
 			`SELECT name FROM mem_sessions WHERE id = $1::uuid`, sessionID).Scan(&existing); err != nil {
-			// Row missing is fine — the loop creates the row on first
+			// Row missing is fine - the loop creates the row on first
 			// observation insert; we'll try again next turn.
 			return
 		}
@@ -144,7 +144,7 @@ Rules:
   - If the exchange is a casual greeting or a tiny clarification, return:
       "Quick chat"
 
-Return ONLY the title — nothing else.`
+Return ONLY the title - nothing else.`
 
 func (n *Namer) draftName(ctx context.Context, userMsg, assistantMsg string) (string, error) {
 	if assistantMsg == "" {

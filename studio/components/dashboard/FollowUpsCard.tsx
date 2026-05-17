@@ -6,13 +6,13 @@ import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import type { DashboardItem, FollowUp, FollowUpSource } from "@/lib/dashboard/types";
 
-/* Follow-ups — humans (or connector-surfaced systems) waiting on you.
+/* Follow-ups - humans (or connector-surfaced systems) waiting on you.
  *
  * Different from Approvals (which are agent-waiting-on-you). These rows
  * are emails, Slack mentions, iMessage threads, Linear pings that the
  * agent has flagged as needing a response. Tapping opens the ObjectViewer
  * with the full content so you can decide if it's worth a conversation
- * — that's the design rule: preview first, then "Discuss with Jarvis".
+ * - that's the design rule: preview first, then "Discuss with Jarvis".
  */
 
 const SOURCE_META: Record<
@@ -44,7 +44,7 @@ export function FollowUpsCard({
       <div className="space-y-2">
         {followUps.length === 0 ? (
           <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-            Inbox zero — no one is waiting on you.
+            Inbox zero - no one is waiting on you.
           </div>
         ) : (
           <ul className="space-y-1.5">

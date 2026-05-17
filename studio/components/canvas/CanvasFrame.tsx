@@ -21,7 +21,7 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * CanvasFrame — the responsive shell that hosts the IDE layout.
+ * CanvasFrame - the responsive shell that hosts the IDE layout.
  *
  *   Desktop (lg+):   [ left pane (resizable) | divider | right pane ]
  *                    Left pane is itself vertically split:
@@ -32,8 +32,8 @@ type ChatHook = ReturnType<typeof useChat>;
  *                    Composer is sticky-bottom regardless of which tab.
  *
  * The WS subscription here is one of two consumers of tool_call events:
- *   1. useChat (in the composer) — to display messages in conversation form.
- *   2. CanvasFrame — to update the dirty-file set so the file tree and
+ *   1. useChat (in the composer) - to display messages in conversation form.
+ *   2. CanvasFrame - to update the dirty-file set so the file tree and
  *      Monaco tabs reflect agent activity in real time.
  *
  * Both consumers ride the same multi-subscriber WebSocketProvider, so no
@@ -57,7 +57,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
       if (cfg?.default_project_path) setDefaultProjectPath(cfg.default_project_path);
     })();
     // Pre-warm the cloud workspace from Railway App Sleeping. Fire-and-forget;
-    // we don't care about the result here — the BridgePill / BridgeSourceRow
+    // we don't care about the result here - the BridgePill / BridgeSourceRow
     // do their own status fetches. The goal is just to wake the container
     // so the first user-driven `bridge_*` call doesn't pay the cold-start.
     void fetchBridgeStatus(ac.signal).catch(() => {});
@@ -68,7 +68,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   // to whatever project_path the current session points at. When the
   // session has no project_path, fall back to `defaultProjectPath`
   // (typically the Jarvis repo) so the panels never sit in an empty
-  // "set workspace root first" state — that's not how an automated
+  // "set workspace root first" state - that's not how an automated
   // system should work. Per-session paths still win for actual app
   // projects.
   //
@@ -86,13 +86,13 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
         store.clearDirty();
       }
     } else if (store.root) {
-      // No session project AND no configured default — wipe.
+      // No session project AND no configured default - wipe.
       store.setRoot("");
       store.closeAllFiles();
       store.clearDirty();
     }
   }, [projectPath, defaultProjectPath, current.loading, store]);
-  // Mount gate — react-resizable-panels reads layout from localStorage on
+  // Mount gate - react-resizable-panels reads layout from localStorage on
   // first paint (via autoSaveId). The server has no localStorage and
   // renders defaultSize, while the client renders the saved size → React
   // logs hydration error #418/#423/#425 every visit. Deferring the entire
@@ -141,7 +141,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
         </ResizablePanelGroup>
       </div>
 
-      {/* Mobile layout — vertical 50/50 split. Top half hosts a sub-tab
+      {/* Mobile layout - vertical 50/50 split. Top half hosts a sub-tab
           switcher (Files / Git / Editor), each scrollable inside. Bottom
           half is always the chat (ConversationStream + Composer) so the
           boss can keep prompting without losing context. The divider is

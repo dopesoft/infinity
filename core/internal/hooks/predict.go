@@ -11,7 +11,7 @@ import (
 
 // PredictionRecorder is a hook-side helper that binds the prediction store
 // to the agent's PreToolUse / PostToolUse events. Pattern: JEPA-style
-// predict-then-act, without a generative world model — we capture a
+// predict-then-act, without a generative world model - we capture a
 // heuristic prediction at PreToolUse and resolve it on PostToolUse so the
 // delta becomes a curriculum signal (high surprise → Voyager curriculum).
 //
@@ -37,7 +37,7 @@ func (p *PredictionRecorder) Register(pipe *Pipeline) {
 
 // handlePre extracts the tool call id + name from the PreToolUse payload,
 // builds a heuristic prediction sentence, and records it. The prediction is
-// intentionally generic — the value here is the post-hoc surprise score, not
+// intentionally generic - the value here is the post-hoc surprise score, not
 // the prediction text itself. (When a model wants more fidelity, the agent
 // loop can override Predict with a real Haiku call.)
 func (p *PredictionRecorder) handlePre(ctx context.Context, ev Event) error {
@@ -60,7 +60,7 @@ func (p *PredictionRecorder) handlePre(ctx context.Context, ev Event) error {
 }
 
 // handlePost resolves the prediction with the actual output, computes surprise
-// via memory.SurpriseFor, and persists. Failure hooks also land here — when
+// via memory.SurpriseFor, and persists. Failure hooks also land here - when
 // PostToolUseFailure fires, the actual is treated as an error string.
 func (p *PredictionRecorder) handlePost(ctx context.Context, ev Event) error {
 	if p.store == nil {
@@ -68,7 +68,7 @@ func (p *PredictionRecorder) handlePost(ctx context.Context, ev Event) error {
 	}
 	toolName, callID, _ := extractToolMeta(ev.Payload)
 	if callID == "" {
-		// Try to recover the call id from event text — when the loop emits
+		// Try to recover the call id from event text - when the loop emits
 		// the post hook with just the tool name + result, fall back to a
 		// composite key. This is a best-effort path.
 		return nil
@@ -79,7 +79,7 @@ func (p *PredictionRecorder) handlePost(ctx context.Context, ev Event) error {
 	}
 	// Pull the expected prediction we wrote at PreToolUse so we can score
 	// surprise without making a second LLM call. We don't strictly need the
-	// expected text — Resolve only needs surprise + matched — but doing the
+	// expected text - Resolve only needs surprise + matched - but doing the
 	// pull lets us tune the heuristic. The current implementation scores
 	// surprise inline using the actual+name+input we have.
 	matched, surprise := memory.SurpriseFor(toolName+" "+jsonShort(ev.Payload["input"]), actual)
@@ -113,7 +113,7 @@ func extractToolMeta(payload map[string]any) (string, string, map[string]any) {
 
 // heuristicPrediction returns a one-sentence expectation for a tool call.
 // Kept deliberately small and rule-based so it costs zero LLM tokens. The
-// score is what matters — even a generic "expect success" prediction will
+// score is what matters - even a generic "expect success" prediction will
 // score low surprise on success and high on failure, which is the signal
 // the curriculum cares about.
 func heuristicPrediction(toolName string, input map[string]any) string {

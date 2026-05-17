@@ -63,7 +63,7 @@ export default function SkillsPage() {
   }, [skills, query, statusFilter, riskFilter]);
 
   // Per-status counts respect the active search + risk filter but ignore
-  // the status filter itself — that way each tab chip previews how many
+  // the status filter itself - that way each tab chip previews how many
   // skills will appear if you switch to it under the current narrowing.
   const statusCounts = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -91,10 +91,10 @@ export default function SkillsPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          {/* No "skills (#)" header — the total moves into the tab chips
+          {/* No "skills (#)" header - the total moves into the tab chips
               below so each status tab carries its own filter-aware count. */}
 
-          {/* Search row centered on desktop with a sane max width — mirrors
+          {/* Search row centered on desktop with a sane max width - mirrors
               the Memory tab so the two read as the same family. Mobile stays
               full-width because there's no space to spare. Reload sits to the
               right as an icon-only ghost button, matching Memory's refresh. */}
@@ -161,9 +161,9 @@ export default function SkillsPage() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-          {/* Candidate rail — Voyager-proposed skills awaiting a decision.
+          {/* Candidate rail - Voyager-proposed skills awaiting a decision.
               Lives here (not in /memory) because the mental model is "the
-              skill library and its pipeline" — candidates are upstream
+              skill library and its pipeline" - candidates are upstream
               registry entries. Hidden on mobile while a skill detail is
               open so the list/detail switcheroo isn't crowded. */}
           <aside
@@ -207,7 +207,7 @@ export default function SkillsPage() {
                       <>
                         Drop a skill folder into{" "}
                         <code className="rounded bg-muted px-1 font-mono text-[10px]">./skills/</code>{" "}
-                        on Core and reload, or wait for Voyager to propose one from your sessions —
+                        on Core and reload, or wait for Voyager to propose one from your sessions -
                         candidates appear in the rail to the left.
                       </>
                     }

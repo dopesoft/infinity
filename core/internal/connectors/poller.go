@@ -1,4 +1,4 @@
-// Package connectors — deterministic dashboard pollers.
+// Package connectors - deterministic dashboard pollers.
 //
 // The Poller is the bridge between Composio's tools.execute REST surface
 // and the dashboard substrate (mem_followups / mem_calendar_events from
@@ -17,8 +17,8 @@
 //
 // We deliberately keep transformation logic per-toolkit small. Gmail and
 // Google Calendar are the two sinks shipped here; new toolkits add a
-// `case` branch + a small projector. The alternative — a generic JSON
-// path mapper — adds config-file weight for no real win when there are
+// `case` branch + a small projector. The alternative - a generic JSON
+// path mapper - adds config-file weight for no real win when there are
 // <10 toolkits in active rotation.
 
 package connectors
@@ -38,12 +38,12 @@ import (
 )
 
 // infoLog routes connector poller success lines to stdout so Railway tags
-// them as info, not error. See CLAUDE.md "Logging — severity must match
-// reality" — `log.Printf` defaults to stderr.
+// them as info, not error. See CLAUDE.md "Logging - severity must match
+// reality" - `log.Printf` defaults to stderr.
 var infoLog = log.New(os.Stdout, "", log.LstdFlags)
 
 // PollConfig is the JSONB shape stored in mem_crons.target_config for a
-// connector_poll job. It's deliberately narrow — toolkit + action + the
+// connector_poll job. It's deliberately narrow - toolkit + action + the
 // connected_account_id + freeform arguments + sink.
 type PollConfig struct {
 	Toolkit            string         `json:"toolkit"`              // "gmail", "googlecalendar", ...
@@ -139,7 +139,7 @@ func (p *Poller) Poll(ctx context.Context, jobName string, cfg PollConfig) (*Pol
 	}
 
 	// Emit a hook so the capture pipeline records what happened. Even
-	// when zero new items land, the run itself is observation-worthy —
+	// when zero new items land, the run itself is observation-worthy -
 	// "poll happened, nothing new" is signal for curiosity / reflection.
 	if p.pipeline != nil {
 		p.pipeline.Emit(hooks.Event{
@@ -209,7 +209,7 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 		preview := firstString(m, "preview", "snippet")
 		body := firstString(m, "messageText", "body", "text")
 		threadURL := firstString(m, "threadUrl", "permalink", "url")
-		// Best-effort received_at parse — falls back to NOW() on the
+		// Best-effort received_at parse - falls back to NOW() on the
 		// INSERT clause when nil.
 		receivedAt := parseTimeAny(m, "messageTimestamp", "internalDate", "received_at", "timestamp")
 
@@ -295,7 +295,7 @@ func (p *Poller) writeCalendar(ctx context.Context, cfg PollConfig, raw json.Raw
 			"html_link": firstString(ev, "htmlLink", "url"),
 		})
 
-		// Skip events with no start time — calendar table requires NOT NULL.
+		// Skip events with no start time - calendar table requires NOT NULL.
 		if startsAt == nil {
 			continue
 		}

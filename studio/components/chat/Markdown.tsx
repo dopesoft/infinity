@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./CodeBlock";
 import { cn } from "@/lib/utils";
 
-/* Markdown — chat-tuned markdown renderer for assistant messages.
+/* Markdown - chat-tuned markdown renderer for assistant messages.
  *
  * Uses react-markdown + remark-gfm so GitHub-Flavored markdown lands
  * with tables, task lists, strikethrough, and autolinks. Element
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  * giant H1s) and themed via Tailwind utilities so the renderer stays
  * consistent with the rest of Studio. No inline styles, no @apply.
  *
- * Streaming is fine — react-markdown reparses the input on each chunk
+ * Streaming is fine - react-markdown reparses the input on each chunk
  * and renders whatever's there. Partial fences stay visually inert
  * until the closer arrives.
  *
@@ -46,7 +46,7 @@ export const Markdown = memo(function Markdown({
             </p>
           ),
 
-          // Headings — sized down. A chat bubble shouldn't host display
+          // Headings - sized down. A chat bubble shouldn't host display
           // typography; these are content dividers, not section titles
           // on a marketing page.
           h1: ({ children }) => (
@@ -104,7 +104,7 @@ export const Markdown = memo(function Markdown({
             <del className="text-muted-foreground line-through">{children}</del>
           ),
 
-          // Block quote — left rule + muted text. Inherits inner spacing
+          // Block quote - left rule + muted text. Inherits inner spacing
           // from the elements it contains.
           blockquote: ({ children }) => (
             <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">
@@ -115,7 +115,7 @@ export const Markdown = memo(function Markdown({
           // Horizontal rule.
           hr: () => <hr className="my-3 border-border" />,
 
-          // Links — always external in chat. Underline-on-hover keeps
+          // Links - always external in chat. Underline-on-hover keeps
           // the body legible while still signaling interactivity.
           a: ({ href, children }) => (
             <a

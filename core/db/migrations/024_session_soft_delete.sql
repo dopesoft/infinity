@@ -1,9 +1,9 @@
--- 024_session_soft_delete.sql — soft delete for sessions.
+-- 024_session_soft_delete.sql - soft delete for sessions.
 --
 -- Adds `deleted_at` to mem_sessions so the boss can remove conversations
 -- from the Sessions drawer without losing the underlying memories: the
 -- observations stay (mem_observations.session_id has ON DELETE CASCADE,
--- but we intentionally don't cascade — soft delete preserves the trail
+-- but we intentionally don't cascade - soft delete preserves the trail
 -- for cross-session memory + reflections + audit).
 --
 -- The partial index on (started_at DESC) WHERE deleted_at IS NULL keeps

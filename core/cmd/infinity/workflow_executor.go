@@ -17,7 +17,7 @@ import (
 )
 
 // workflowExecutor is the concrete workflow.Executor. It dispatches a
-// workflow step to the right subsystem — a native/MCP tool, a skill, or a
+// workflow step to the right subsystem - a native/MCP tool, a skill, or a
 // sub-agent turn. It lives in package main so it can depend on every
 // subsystem; the workflow package itself stays dependency-light behind the
 // workflow.Executor interface (same pattern as cron's executors).
@@ -116,7 +116,7 @@ func (e *workflowExecutor) runAgent(ctx context.Context, step workflow.Step) (st
 		case ev := <-out:
 			collect(ev)
 		case err := <-errCh:
-			// Run returned — drain whatever is still buffered, non-blocking.
+			// Run returned - drain whatever is still buffered, non-blocking.
 			for drained := false; !drained; {
 				select {
 				case ev := <-out:
@@ -137,7 +137,7 @@ func (e *workflowExecutor) runAgent(ctx context.Context, step workflow.Step) (st
 }
 
 // checkpointSurfacer puts a paused-workflow checkpoint in front of the boss
-// as a generic surface item — a workflow waiting on approval shows up on
+// as a generic surface item - a workflow waiting on approval shows up on
 // the dashboard without the boss digging into the workflow tab.
 type checkpointSurfacer struct {
 	store *surface.Store
@@ -167,7 +167,7 @@ func (c *checkpointSurfacer) SurfaceCheckpoint(ctx context.Context, run *workflo
 			"resume_with": "workflow_resume",
 		},
 		Importance:       &importance,
-		ImportanceReason: "Workflow paused — needs your approval to continue",
+		ImportanceReason: "Workflow paused - needs your approval to continue",
 	})
 	return err
 }

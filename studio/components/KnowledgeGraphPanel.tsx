@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { fetchGraph, type GraphEdgeDTO, type GraphNodeDTO, type GraphResponse } from "@/lib/api";
 
-// Knowledge graph viewer — force-directed SVG with no external dep. The
+// Knowledge graph viewer - force-directed SVG with no external dep. The
 // dataset is small by design (capped server-side); a custom Verlet-style sim
 // is plenty here and keeps the studio bundle lean.
 //
@@ -99,7 +99,7 @@ export function KnowledgeGraphPanel() {
     const nodesById = new Map<string, SimNode>();
     const nodes: SimNode[] = data.nodes.map((n, i) => {
       // Spread initial positions on a circle so the sim doesn't start with
-      // every node stacked at center — that produces stable, consistent layout.
+      // every node stacked at center - that produces stable, consistent layout.
       const angle = (i / Math.max(data.nodes.length, 1)) * Math.PI * 2;
       const radius = 6 + Math.min(14, n.degree * 1.2);
       const sn: SimNode = {
@@ -141,7 +141,7 @@ export function KnowledgeGraphPanel() {
       const cx = size.w / 2;
       const cy = size.h / 2;
 
-      // Repulsion (Coulomb-ish) — every pair pushes apart.
+      // Repulsion (Coulomb-ish) - every pair pushes apart.
       const k = 4500 * alpha;
       for (let i = 0; i < sim.nodes.length; i++) {
         const a = sim.nodes[i];
@@ -190,7 +190,7 @@ export function KnowledgeGraphPanel() {
         }
       }
 
-      alpha = Math.max(0.05, alpha * 0.992); // never freeze fully — keeps it lively under interaction
+      alpha = Math.max(0.05, alpha * 0.992); // never freeze fully - keeps it lively under interaction
       setTick((t) => (t + 1) % 1_000_000);
       rafRef.current = requestAnimationFrame(step);
     };
@@ -389,7 +389,7 @@ export function KnowledgeGraphPanel() {
         </div>
       )}
 
-      {/* Canvas — explicit min-height keeps the SVG visible even when the
+      {/* Canvas - explicit min-height keeps the SVG visible even when the
           parent flex container is short on mobile. */}
       <div
         ref={containerRef}
@@ -445,7 +445,7 @@ export function KnowledgeGraphPanel() {
                   />
                 </g>
               ))}
-              {/* Nodes — visible circle + invisible larger hit-target so
+              {/* Nodes - visible circle + invisible larger hit-target so
                   small nodes are still tappable on a phone (44px guideline). */}
               {visibleNodes.map((n) => {
                 const isSelected = selected?.id === n.id;
@@ -487,7 +487,7 @@ export function KnowledgeGraphPanel() {
           </svg>
         )}
 
-        {/* Inspector overlay — pinned bottom on mobile (above safe-area),
+        {/* Inspector overlay - pinned bottom on mobile (above safe-area),
             top-right on desktop. */}
         {selected && (
           <div

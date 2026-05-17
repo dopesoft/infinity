@@ -22,7 +22,7 @@ export type ChatMessage = {
   createdAt: number;
   // Only set on `thinking` messages once the agent moves on to text/tool/complete.
   endedAt?: number;
-  // steered=true on a user message means it was typed and sent mid-turn —
+  // steered=true on a user message means it was typed and sent mid-turn -
   // it routes through the WS `steer` channel and gets drained into the
   // running agent loop on the next iteration boundary. ChatBubble surfaces
   // a small "↳ steered" affordance so the transcript reads correctly.
@@ -54,7 +54,7 @@ type Usage = { input: number; output: number };
 
 const SESSION_KEY = "infinity:sessionId";
 // Optimistic per-session message cache. Core (Postgres-backed) remains the
-// source of truth — this cache only exists so a refresh while Core is
+// source of truth - this cache only exists so a refresh while Core is
 // offline doesn't blank out the visible conversation. Whenever Core
 // returns rows for the session, those overwrite the cache entirely.
 const MESSAGES_KEY_PREFIX = "infinity:messages:";
@@ -84,7 +84,7 @@ type ServerRow = {
 
 // rowToMessage converts a canonical server transcript row into the local
 // ChatMessage shape. Single source of truth for the mapping so the
-// session-load, switch-session, and reconnect-merge paths stay in sync —
+// session-load, switch-session, and reconnect-merge paths stay in sync -
 // notably the `seeded` flag that routes the Discuss-with-Jarvis context
 // block to DashboardContextCard instead of a plain user bubble.
 function rowToMessage(r: ServerRow): ChatMessage {
@@ -118,7 +118,7 @@ function writeStoredSessionId(id: string) {
   }
 }
 
-// Pending / in-flight messages aren't worth caching — they'd hydrate as
+// Pending / in-flight messages aren't worth caching - they'd hydrate as
 // orphaned spinners. The "thinking" placeholder is always dropped (it's
 // purely an in-flight affordance). Error messages, however, ARE cached:
 // if the boss gets an error and navigates away to fix it, the error
@@ -155,14 +155,14 @@ function writeCachedMessages(sessionId: string, messages: ChatMessage[]) {
       JSON.stringify(trimmed),
     );
   } catch {
-    /* private mode / quota — caller can ignore */
+    /* private mode / quota - caller can ignore */
   }
 }
 
 // mergeServerRows reconciles the canonical transcript from Core with the
 // optimistic local state. We keep any *pending* local messages (thinking
 // indicators, drafts in flight) and replace finalized turns with whatever
-// Core reports — Core is the source of truth for completed turns.
+// Core reports - Core is the source of truth for completed turns.
 //
 // This is the rehydration path used on WS reconnect: a turn the agent
 // completed while we were disconnected is in `rows` but missing locally,
@@ -192,7 +192,7 @@ function mergeServerRows(
   // may sit at a partial transcript ("Good afternoon, boss. What's on
   // your") while the server has already persisted the completed text
   // ("…What's on your mind today?"). Without the prefix-dedupe we'd
-  // render BOTH — the orphaned streaming partial AND the canonical
+  // render BOTH - the orphaned streaming partial AND the canonical
   // completed turn. The bug looked like the agent "duplicating" itself.
   const sameRoleServer: Map<ChatRole, string[]> = new Map();
   for (const m of fromServer) {
@@ -215,7 +215,7 @@ function mergeServerRows(
 }
 
 // Mark the most recent pending `thinking` message as complete. Called whenever
-// the agent transitions out of "thinking" — first text delta, first tool call,
+// the agent transitions out of "thinking" - first text delta, first tool call,
 // or stream complete. Returns a new array (never mutates).
 function closePendingThinking(messages: ChatMessage[]): ChatMessage[] {
   const next = [...messages];
@@ -259,7 +259,7 @@ export function useChat() {
   const turnStartRef = useRef<number | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Discuss-with-Jarvis opens a session whose only row is a DashboardSeed
-  // context block — no agent reply yet. seededKickRef parks such a session
+  // context block - no agent reply yet. seededKickRef parks such a session
   // id until the socket is connected enough to fire one `resume` turn so
   // the agent actually responds. kickedSessionsRef dedupes so a remount or
   // reconnect never re-fires the opening turn.
@@ -322,7 +322,7 @@ export function useChat() {
       setIsStreaming(true);
       armWatchdog();
       // Show the "Jarvis is thinking" indicator while the resume turn
-      // spins up — same optimistic affordance a normal send() gives.
+      // spins up - same optimistic affordance a normal send() gives.
       setMessages((prev) =>
         prev.some((m) => m.role === "thinking" && m.pending)
           ? prev
@@ -350,8 +350,8 @@ export function useChat() {
   }, [ws.status, kickSeeded]);
 
   // Restore session id from localStorage on mount; mint a fresh one if none.
-  // Hydrate from the optimistic local cache *immediately* so a refresh —
-  // even one while Core is offline — keeps the visible conversation. Then
+  // Hydrate from the optimistic local cache *immediately* so a refresh -
+  // even one while Core is offline - keeps the visible conversation. Then
   // ask Core for the canonical transcript and overwrite the local cache
   // with whatever Core returns. Core wins; local cache only fills the
   // gap when Core is unreachable. Will be replaced by Supabase Realtime
@@ -373,12 +373,12 @@ export function useChat() {
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows) return;
       const restored: ChatMessage[] = rows.map(rowToMessage);
-      // Core is authoritative — overwrite both state and cache.
+      // Core is authoritative - overwrite both state and cache.
       setMessages(restored);
       writeCachedMessages(id, restored);
       // A session whose entire transcript is a single seeded context
       // block was just opened from Discuss-with-Jarvis and has no reply
-      // yet — fire the opening turn so the agent actually responds.
+      // yet - fire the opening turn so the agent actually responds.
       if (restored.length === 1 && restored[0].seeded) {
         kickSeededRef.current(id);
       }
@@ -398,12 +398,12 @@ export function useChat() {
 
   // WS-reconnect rehydration. iOS Safari (and any flaky network) can kill
   // the WebSocket mid-turn. The agent finishes the turn and writes to
-  // mem_messages, but the `complete` frame never reaches us — the UI ends
+  // mem_messages, but the `complete` frame never reaches us - the UI ends
   // up stuck on "thinking forever" until the user nudges the agent.
   //
   // On every connect transition we re-fetch the session's messages from
   // Core and merge in any assistant turns that landed while we were
-  // disconnected. Streaming-in-progress is left alone — we only patch
+  // disconnected. Streaming-in-progress is left alone - we only patch
   // when the local state has gaps Core knows about.
   const lastStatusRef = useRef<typeof ws.status>(ws.status);
   useEffect(() => {
@@ -413,7 +413,7 @@ export function useChat() {
     if (prevStatus === "connected") return; // ignore initial mount; covered by the session-load effect
     if (!sessionId) return;
 
-    // ALWAYS refetch on reconnect — even mid-stream. Turns now run
+    // ALWAYS refetch on reconnect - even mid-stream. Turns now run
     // server-side independent of the WS lifecycle (see ws.go startTurn),
     // so a turn the boss kicked off before backgrounding the app on iOS
     // Safari may have completed while disconnected. The server's
@@ -427,7 +427,7 @@ export function useChat() {
         const next = mergeServerRows(prev, rows);
         if (!serverFinishedTurn) return next;
         // Server already has a completed assistant turn at the tail.
-        // Drop trailing pending bubbles mergeServerRows preserved —
+        // Drop trailing pending bubbles mergeServerRows preserved -
         // the canonical reply replaced them and the `complete` frame
         // landed on a now-dead WS.
         while (next.length > 0) {
@@ -502,7 +502,7 @@ export function useChat() {
           // When the gate parks a call on a Trust contract, the agent
           // loop blocks inside WaitForDecision for up to 15 min. The
           // 90s "agent went silent" watchdog would fire long before
-          // the boss could tap Approve — disarm it here so the card
+          // the boss could tap Approve - disarm it here so the card
           // can sit waiting indefinitely. tool_result re-arms it.
           if (ev.tool_call.awaiting_approval) {
             clearWatchdog();
@@ -613,7 +613,7 @@ export function useChat() {
                     "Tools ran above but Jarvis didn't follow up with a reply. Ask \"what did you find?\" to continue.";
                 } else if (outputT === 0) {
                   errorText =
-                    "Jarvis didn't emit anything this turn (0 output tokens) — likely a transient API hiccup or a soft refusal. Try rephrasing.";
+                    "Jarvis didn't emit anything this turn (0 output tokens) - likely a transient API hiccup or a soft refusal. Try rephrasing.";
                 } else {
                   errorText = `Turn ended without a visible reply (${outputT} output tokens). Ask a follow-up to continue.`;
                 }
@@ -693,7 +693,7 @@ export function useChat() {
         case "pong":
           break;
         case "intent": {
-          /* IntentFlow classification — consumed by the IntentStream panel
+          /* IntentFlow classification - consumed by the IntentStream panel
            * via its own /api/intent fetch path, not the chat transcript.
            * Acknowledged here so the WSEvent switch is exhaustive and
            * future TS strictness doesn't blow up. */
@@ -702,7 +702,7 @@ export function useChat() {
         case "proactive_message": {
           /* Unprompted assistant turn pushed by the heartbeat. Render it
            * as a regular assistant bubble so the transcript reads
-           * naturally — the `proactive` flag lets the bubble surface a
+           * naturally - the `proactive` flag lets the bubble surface a
            * subtle origin badge ("heartbeat: surprise", etc.) without
            * altering the conversation flow.
            *
@@ -737,7 +737,7 @@ export function useChat() {
       if (!trimmed || !sessionId) return false;
 
       // Mid-turn steering. When a turn is already in flight, send the
-      // input as `steer` instead of `message` — the server drops it into
+      // input as `steer` instead of `message` - the server drops it into
       // the running agent loop's steer channel and the loop drains it
       // between iterations. We render the user bubble optimistically
       // with `steered: true` so the transcript distinguishes it. The
@@ -762,7 +762,7 @@ export function useChat() {
               id: makeId(),
               role: "assistant",
               text: "",
-              error: "Steer dropped — connection is reconnecting. Try again.",
+              error: "Steer dropped - connection is reconnecting. Try again.",
               createdAt: Date.now(),
             },
           ]);
@@ -812,7 +812,7 @@ export function useChat() {
 
   const newSession = useCallback(() => {
     clearWatchdog();
-    // Drop the previous session's cache too — `/new` is a deliberate
+    // Drop the previous session's cache too - `/new` is a deliberate
     // reset, the user doesn't want it lingering in storage.
     setSessionId((prev) => {
       if (prev) writeCachedMessages(prev, []);
@@ -826,7 +826,7 @@ export function useChat() {
     setIsStreaming(false);
   }, [clearWatchdog]);
 
-  // switchSession loads an existing session in place — same view, different
+  // switchSession loads an existing session in place - same view, different
   // conversation. Used by the Sessions drawer in the Live header. We hydrate
   // from Core's authoritative transcript and fall back to localStorage only
   // when Core is unreachable.
@@ -869,7 +869,7 @@ export function useChat() {
   // browser side instead of going through the WS turn pipeline. These
   // hooks let the voice client push final user utterances and live
   // assistant deltas straight into the same `messages` array text mode
-  // populates — so the conversation reads as one continuous thread,
+  // populates - so the conversation reads as one continuous thread,
   // regardless of which modality each turn arrived through.
   //
   // The /api/voice/turn POST still fires on the Core side for memory
@@ -905,7 +905,7 @@ export function useChat() {
    *
    *  Important: when `isFinal` is true, `delta` is the COMPLETE final
    *  transcript (not an incremental chunk). We replace the bubble's
-   *  text wholesale instead of concatenating — otherwise the final
+   *  text wholesale instead of concatenating - otherwise the final
    *  transcript gets appended to the already-accumulated streamed
    *  text, producing duplicated "X X" bubbles. */
   const streamVoiceAssistantDelta = useCallback((delta: string, isFinal: boolean) => {
@@ -937,7 +937,7 @@ export function useChat() {
           if (isDuplicateVoiceAssistantText(next[i].text, delta)) return next;
         }
       }
-      // No in-flight assistant bubble — start one. For the final-only
+      // No in-flight assistant bubble - start one. For the final-only
       // case (no preceding deltas) this captures the full transcript
       // in a single, immediately-committed message.
       next.push({

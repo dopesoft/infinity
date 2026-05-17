@@ -53,7 +53,7 @@ func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Get returns the raw string value for the given key (no prefix —
+// Get returns the raw string value for the given key (no prefix -
 // caller passes the full key constant). Returns ("", false, nil) when
 // no row exists for the key. Errors are propagated so the caller can
 // distinguish "unset" from "DB unavailable".
@@ -75,7 +75,7 @@ func (s *Store) Get(ctx context.Context, key string) (string, bool, error) {
 }
 
 // Set upserts the row for `key`. Empty values are allowed and represent
-// "explicitly cleared by the user" — distinct from "never set". Callers
+// "explicitly cleared by the user" - distinct from "never set". Callers
 // that want fallback-on-empty behavior should branch in their own code.
 func (s *Store) Set(ctx context.Context, key, value string) error {
 	if s == nil || s.pool == nil {
@@ -99,12 +99,12 @@ func (s *Store) Set(ctx context.Context, key, value string) error {
 
 // GetModel is a typed convenience that returns the current model id
 // for the agent loop. Empty string means "no override; fall back to the
-// provider's boot default" — callers should pass it straight through to
+// provider's boot default" - callers should pass it straight through to
 // the LLM provider's Stream call which knows what to do.
 func (s *Store) GetModel(ctx context.Context) string {
 	v, _, err := s.Get(ctx, KeyModel)
 	if err != nil {
-		// Treat DB errors as "unset" — the agent loop's default model
+		// Treat DB errors as "unset" - the agent loop's default model
 		// is a perfectly safe fallback and we'd rather degrade than
 		// stall a turn over a transient settings read.
 		return ""
@@ -114,7 +114,7 @@ func (s *Store) GetModel(ctx context.Context) string {
 
 // SetModel updates the active model id. Empty value clears the override
 // (next turn uses the provider's boot default). No validation beyond
-// trim — the agent loop already surfaces a clean error when the LLM
+// trim - the agent loop already surfaces a clean error when the LLM
 // provider rejects an unknown id, so the UI gets feedback either way.
 func (s *Store) SetModel(ctx context.Context, model string) error {
 	return s.Set(ctx, KeyModel, strings.TrimSpace(model))
@@ -132,7 +132,7 @@ func (s *Store) GetProvider(ctx context.Context) string {
 
 // SetProvider updates the active provider override. Pass "" to clear it
 // and revert to the boot default. NOTE: this only flips the provider the
-// agent loop uses — stored OAuth credentials in mem_provider_tokens are
+// agent loop uses - stored OAuth credentials in mem_provider_tokens are
 // untouched, so the user can switch back later without re-authenticating.
 func (s *Store) SetProvider(ctx context.Context, provider string) error {
 	return s.Set(ctx, KeyProvider, strings.ToLower(strings.TrimSpace(provider)))

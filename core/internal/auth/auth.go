@@ -6,7 +6,7 @@
 // must present a JWT whose subject equals that owner UUID. Going multi-tenant
 // later is a single boolean flip in Verifier.checkOwner.
 //
-// Asymmetric verification only — Supabase moved to ES256/RS256 JWKS in 2025.
+// Asymmetric verification only - Supabase moved to ES256/RS256 JWKS in 2025.
 // We do NOT support legacy HS256 shared-secret verification.
 package auth
 
@@ -79,7 +79,7 @@ func New(ctx context.Context, cfg Config) (*Verifier, error) {
 }
 
 // FromEnv constructs a Verifier from SUPABASE_JWKS_URL + SUPABASE_ISSUER.
-// SUPABASE_URL alone is enough — issuer + JWKS URL are derivable.
+// SUPABASE_URL alone is enough - issuer + JWKS URL are derivable.
 func FromEnv(ctx context.Context, pool *pgxpool.Pool) (*Verifier, error) {
 	jwksURL := os.Getenv("SUPABASE_JWKS_URL")
 	issuer := os.Getenv("SUPABASE_ISSUER")
@@ -98,7 +98,7 @@ func FromEnv(ctx context.Context, pool *pgxpool.Pool) (*Verifier, error) {
 }
 
 // Enabled reports whether JWT verification is active. When false, the gate
-// is wide open — useful for local dev only.
+// is wide open - useful for local dev only.
 func (v *Verifier) Enabled() bool { return v != nil && v.enabled }
 
 // Owner returns the cached owner UUID; empty if no one has claimed yet.
@@ -119,7 +119,7 @@ func (v *Verifier) refreshOwner(ctx context.Context) {
 		`SELECT value FROM infinity_meta WHERE key = 'owner_user_id'`,
 	).Scan(&owner)
 	if err != nil {
-		return // no owner yet — first signup will claim
+		return // no owner yet - first signup will claim
 	}
 	v.ownerMu.Lock()
 	v.owner = owner
@@ -129,7 +129,7 @@ func (v *Verifier) refreshOwner(ctx context.Context) {
 // claimOwnerIfUnclaimed atomically inserts the candidate as the owner if no
 // owner exists. Returns the canonical owner UUID after the call (either the
 // candidate just claimed, or the pre-existing owner). The DB INSERT ON
-// CONFLICT DO NOTHING is the actual concurrency primitive — sub-millisecond,
+// CONFLICT DO NOTHING is the actual concurrency primitive - sub-millisecond,
 // race-free across processes.
 func (v *Verifier) claimOwnerIfUnclaimed(ctx context.Context, candidate string) (string, error) {
 	if v.pool == nil {
@@ -157,7 +157,7 @@ func (v *Verifier) claimOwnerIfUnclaimed(ctx context.Context, candidate string) 
 }
 
 // VerifyToken parses + validates a Supabase JWT and returns the claims.
-// It does NOT enforce the owner check — that's the caller's job (two
+// It does NOT enforce the owner check - that's the caller's job (two
 // reasons: (a) WS upgrade and HTTP take different code paths into the same
 // authz logic, (b) a future debug route may want a verified-but-non-owner
 // inspection mode).
@@ -188,7 +188,7 @@ func (v *Verifier) VerifyToken(tokenStr string) (*Claims, error) {
 
 // Authorize verifies the token AND enforces the single-user gate. Returns
 // the owner UUID on success. First call ever (no owner stored) claims the
-// caller as owner — this is the "settings carry-over" point: all existing
+// caller as owner - this is the "settings carry-over" point: all existing
 // rows with NULL user_id become this user's by convention.
 func (v *Verifier) Authorize(ctx context.Context, tokenStr string) (string, error) {
 	claims, err := v.VerifyToken(tokenStr)
@@ -196,7 +196,7 @@ func (v *Verifier) Authorize(ctx context.Context, tokenStr string) (string, erro
 		return "", err
 	}
 	if !v.Enabled() {
-		// Disabled verifier — no gate. Use a static dev UUID so memory writes
+		// Disabled verifier - no gate. Use a static dev UUID so memory writes
 		// still get a consistent user_id during local-only runs.
 		return "00000000-0000-0000-0000-000000000000", nil
 	}
@@ -285,7 +285,7 @@ func (v *Verifier) HTTPMiddleware(skipPrefixes []string) func(http.Handler) http
 }
 
 // AuthorizeRequest is the WS upgrade entry point. Returns the user UUID on
-// success — caller is responsible for closing the connection on error.
+// success - caller is responsible for closing the connection on error.
 func (v *Verifier) AuthorizeRequest(r *http.Request) (string, error) {
 	if !v.Enabled() {
 		return "00000000-0000-0000-0000-000000000000", nil

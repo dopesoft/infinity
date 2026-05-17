@@ -47,7 +47,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 }
 
 // Response is the single payload returned to Studio. Each section is a
-// (possibly nil) array — nil means "backend doesn't serve this yet, use
+// (possibly nil) array - nil means "backend doesn't serve this yet, use
 // your local mock," empty array means "backend has nothing to surface."
 type Response struct {
 	Pursuits       []Pursuit       `json:"pursuits"`
@@ -125,7 +125,7 @@ type FollowUp struct {
 	ReceivedAt time.Time `json:"receivedAt"`
 }
 
-// SurfaceItem mirrors core/internal/surface.Item — one row of the generic
+// SurfaceItem mirrors core/internal/surface.Item - one row of the generic
 // dashboard surface contract (mem_surface_items). The dashboard groups
 // these by Surface and renders each group with the same generic card.
 type SurfaceItem struct {
@@ -219,7 +219,7 @@ type WorkItem struct {
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
 	DurationMs   *int       `json:"durationMs,omitempty"`
 	DetailHref   string     `json:"detailHref,omitempty"`
-	// WorkflowSteps is populated only for Kind == "workflow" — the run's
+	// WorkflowSteps is populated only for Kind == "workflow" - the run's
 	// step state-machine, carried inline so tapping the Kanban card opens
 	// the drawer with the full workflow without a second fetch.
 	WorkflowSteps []WorkflowStep `json:"workflowSteps,omitempty"`
@@ -250,7 +250,7 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	resp := Response{}
 
-	// Each section is independent — if one query fails we log and
+	// Each section is independent - if one query fails we log and
 	// return the rest. Studio falls back to mock for missing pieces.
 	if p, err := a.loadPursuits(ctx); err != nil {
 		a.Logger.Warn("dashboard: pursuits", "err", err)
@@ -376,7 +376,7 @@ func (a *API) loadTodos(ctx context.Context) ([]Todo, error) {
 
 func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
 	// Forward-looking window: 6 months from today, plus events still
-	// active right now (ends_at >= now). Past events are excluded —
+	// active right now (ends_at >= now). Past events are excluded -
 	// the dashboard surface is "what's coming," not history.
 	rows, err := a.Pool.Query(ctx, `
 		SELECT id, title, starts_at, ends_at, location,
@@ -442,7 +442,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 
 // loadSurface reads the generic surface contract (mem_surface_items) and
 // groups visible items by their `surface` key. Studio renders each group
-// with one generic SurfaceCard — a new surface the agent invents appears
+// with one generic SurfaceCard - a new surface the agent invents appears
 // on the dashboard with zero backend changes.
 func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error) {
 	rows, err := a.Pool.Query(ctx, `
@@ -519,7 +519,7 @@ func (a *API) loadSaved(ctx context.Context) ([]Saved, error) {
 }
 
 // loadMemoryStats reads the same numbers shown in the dashboard's
-// footer strip — daily memory growth + procedural count + a streak
+// footer strip - daily memory growth + procedural count + a streak
 // approximation (consecutive days with at least one new memory).
 func (a *API) loadMemoryStats(ctx context.Context) (*MemoryStats, error) {
 	stats := &MemoryStats{}
@@ -577,7 +577,7 @@ func (a *API) loadReflection(ctx context.Context) (*Reflection, error) {
 		createdAt    time.Time
 	)
 	if err := row.Scan(&id, &critique, &lessonsRaw, &createdAt); err != nil {
-		// "no rows" is the normal empty-DB case — not an error.
+		// "no rows" is the normal empty-DB case - not an error.
 		return nil, nil //nolint:nilerr
 	}
 	title, body := splitTitleBody(critique)
@@ -595,8 +595,8 @@ func (a *API) loadReflection(ctx context.Context) (*Reflection, error) {
 	}, nil
 }
 
-// loadApprovals unions three "needs you" surfaces — trust contracts,
-// code proposals, curiosity questions — into the same Approval shape
+// loadApprovals unions three "needs you" surfaces - trust contracts,
+// code proposals, curiosity questions - into the same Approval shape
 // the dashboard's Approvals card already consumes.
 func (a *API) loadApprovals(ctx context.Context) ([]Approval, error) {
 	out := make([]Approval, 0, 16)
@@ -653,7 +653,7 @@ func (a *API) loadApprovals(ctx context.Context) ([]Approval, error) {
 		if toolName != "" {
 			args, _ := action["args"].(map[string]any)
 			if args == nil {
-				// Some callers store the full action minus the routing tag —
+				// Some callers store the full action minus the routing tag -
 				// fall back to the whole map sans `tool` so the boss still
 				// sees the args in the viewer.
 				args = map[string]any{}
@@ -832,7 +832,7 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 }
 
 // loadWork unions live cron/sentinel/skill-run/trust/code-proposal rows
-// into the Kanban shape. One small query per source — no joins — keeps
+// into the Kanban shape. One small query per source - no joins - keeps
 // the payload predictable and each column independently fail-safe.
 //
 // Column policy:
@@ -841,7 +841,7 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 //   - running   → enabled sentinels (always watching), plus skill runs
 //                 in-flight (started but not ended).
 //   - awaiting  → pending trust contracts + candidate code proposals.
-//                 These also appear in Approvals — that's intentional;
+//                 These also appear in Approvals - that's intentional;
 //                 the Kanban is a *status board*, the Approvals card is
 //                 the decision surface.
 //   - done      → today's completed cron runs + completed skill runs.
@@ -1152,10 +1152,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		skillDoneRows.Close()
 	}
 
-	// ── workflow runs — span columns by run status ────────────────────
+	// ── workflow runs - span columns by run status ────────────────────
 	// pending→queued, running→running, paused→awaiting, terminal→done.
 	// Each run carries its step list inline so tapping a Kanban card opens
-	// the ObjectViewer drawer with the full step state-machine — the
+	// the ObjectViewer drawer with the full step state-machine - the
 	// Kanban IS the workflow view, no separate page.
 	wfRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, workflow_name, status, current_step,
@@ -1216,7 +1216,7 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		wfRows.Close()
 
 		// Batch-load every step for the surfaced runs in one query, then
-		// attach to its run — no N+1, no separate endpoint.
+		// attach to its run - no N+1, no separate endpoint.
 		if len(runIndex) > 0 {
 			runIDs := make([]string, 0, len(runIndex))
 			for id := range runIndex {
@@ -1239,7 +1239,7 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 						return nil, err
 					}
 					if item, ok := runIndex[runID]; ok {
-						// Trim long outputs — the drawer shows a preview.
+						// Trim long outputs - the drawer shows a preview.
 						if len(sOutput) > 600 {
 							sOutput = sOutput[:600] + "…"
 						}
@@ -1297,7 +1297,7 @@ func activityKindFromFinding(k string) string {
 	}
 }
 
-// splitTitleBody extracts a short title from a longer critique string —
+// splitTitleBody extracts a short title from a longer critique string -
 // first sentence or first 80 chars, whichever's shorter.
 func splitTitleBody(text string) (title, body string) {
 	t := strings.TrimSpace(text)

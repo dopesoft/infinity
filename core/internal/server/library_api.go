@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// library_api.go — the Files tab IS the library.
+// library_api.go - the Files tab IS the library.
 //
 //   GET /api/library/tree
 //
@@ -60,7 +60,7 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 	}
 	// Per-kind cap so a runaway image-generation session doesn't ship
 	// 10k rows to the browser. Library is for navigation, not bulk
-	// listing — Studio's existing artifact_list tool handles filtered
+	// listing - Studio's existing artifact_list tool handles filtered
 	// queries for the agent.
 	const perKindCap = 200
 

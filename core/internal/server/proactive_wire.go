@@ -15,7 +15,7 @@ import (
 // broadcastFindings tracks fingerprints of findings we've already pushed
 // to chat this process. The heartbeat re-evaluates its checklist every
 // tick (default every 2 minutes) and re-emits identical findings for any
-// condition that hasn't been resolved yet — open curiosity questions,
+// condition that hasn't been resolved yet - open curiosity questions,
 // active connected_accounts still missing identity, an open pattern, an
 // overdue outcome. Without dedup the boss gets the same chat bubble every
 // two minutes until the underlying state changes.
@@ -52,7 +52,7 @@ func findingFingerprint(f proactive.Finding) string {
 // registerSession marks a WS connection as active under sessionID and binds
 // it to a send function. The heartbeat broadcaster calls send when a finding
 // crosses the proactive threshold so the browser tab gets an unprompted
-// assistant turn — that's the wire that turns "responds when asked" into
+// assistant turn - that's the wire that turns "responds when asked" into
 // "speaks first."
 //
 // Multiple tabs sharing one sessionID is legal; the last registration wins.
@@ -90,14 +90,14 @@ func (s *Server) unregisterSession(sessionID string, send func(wsServerEvent)) {
 // up the *current* WS binding for sessionID and dispatches there. If the
 // session has no active WS (browser navigated away, network flap, tab
 // backgrounded on iOS Safari and the socket died), the frame is dropped
-// silently — the turn keeps running, persists its output to mem_turns /
+// silently - the turn keeps running, persists its output to mem_turns /
 // mem_messages on completion, and the client's reconnect path
 // (mergeServerRows in useChat.ts) picks the completed turn up.
 //
 // The key property: the returned closure does NOT capture the send fn
 // from the WS handler. A turn launched from a WS that subsequently dies
 // will route its remaining frames to whichever WS happens to be bound to
-// this session at the moment the frame is emitted — including no WS at
+// this session at the moment the frame is emitted - including no WS at
 // all, in which case the frame is dropped without stalling the agent.
 func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
 	return func(ev wsServerEvent) {
@@ -115,7 +115,7 @@ func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
 }
 
 // broadcastProactive pushes the same event to every active WS session.
-// Heartbeat findings broadcast to all open sessions — there's only one
+// Heartbeat findings broadcast to all open sessions - there's only one
 // boss, so multi-tab fanout is the desired behaviour (whichever tab is
 // foregrounded reads it first).
 func (s *Server) broadcastProactive(ev wsServerEvent) {
@@ -141,7 +141,7 @@ func (s *Server) broadcastProactive(ev wsServerEvent) {
 // the procedural-memory write-through so the boss sees:
 //
 //   🤖 skill learned
-//   I just created a skill called "create_habit_pursuit" — when you
+//   I just created a skill called "create_habit_pursuit" - when you
 //   ask me to set up another habit like this, I'll know exactly what
 //   to do.
 //
@@ -161,7 +161,7 @@ func (s *Server) BroadcastSkillPromoted(name, description string) {
 	if description != "" {
 		// Trim trailing punctuation so we can chain cleanly into "when…".
 		desc := strings.TrimRight(description, " .!?")
-		tail = desc + " — next time it comes up, I'll know what to do."
+		tail = desc + " - next time it comes up, I'll know what to do."
 	}
 	text := "**Skill learned: `" + name + "`**\n\n" +
 		"I just taught myself a new skill from how this work went. " + tail
@@ -213,7 +213,7 @@ func (s *Server) onHeartbeatFinding(ctx context.Context, f proactive.Finding) {
 // not live chat interruption. kind=surprise / curiosity are the designed
 // delight surfaces; kind=security is a safety surface. Other kinds
 // (outcome, pattern, self_heal) stay quiet by default to avoid nag
-// fatigue — the boss can still see them in the Heartbeat tab.
+// fatigue - the boss can still see them in the Heartbeat tab.
 func shouldSurfaceFinding(f proactive.Finding) bool {
 	switch f.Kind {
 	case "surprise", "curiosity", "security":
@@ -224,7 +224,7 @@ func shouldSurfaceFinding(f proactive.Finding) bool {
 
 // formatFindingForChat composes the Markdown the boss sees when the
 // heartbeat decides to speak. The chat surface renders Markdown, so this
-// uses real structure — a header, a one-line "why this surfaced" framing,
+// uses real structure - a header, a one-line "why this surfaced" framing,
 // the actual ask set off as a quote, and supporting detail with any
 // code/JSON pushed into fenced blocks. The old single-run-on-paragraph
 // form was unreadable the moment a finding carried a JSON payload.
@@ -247,7 +247,7 @@ func formatFindingForChat(f proactive.Finding) string {
 		b.WriteString("\n\n")
 	}
 
-	// The ask itself — set off as a blockquote so it's visually distinct
+	// The ask itself - set off as a blockquote so it's visually distinct
 	// from the framing above and the supporting data below.
 	if title != "" {
 		switch f.Kind {
@@ -263,7 +263,7 @@ func formatFindingForChat(f proactive.Finding) string {
 		b.WriteString("\n")
 	}
 
-	// Supporting detail — labelled sections, with code/JSON fenced so it
+	// Supporting detail - labelled sections, with code/JSON fenced so it
 	// never bleeds into the prose as an unreadable run-on.
 	if detail != "" {
 		b.WriteString("\n")
@@ -280,28 +280,28 @@ func formatFindingForChat(f proactive.Finding) string {
 func findingFraming(f proactive.Finding) (header, why string) {
 	switch f.Kind {
 	case "surprise":
-		return "💡 **Heartbeat — an idea for you**",
+		return "💡 **Heartbeat - an idea for you**",
 			"Something I noticed while reviewing recent activity that might be worth acting on."
 	case "security":
-		return "⚠️ **Heartbeat — security heads-up**",
+		return "⚠️ **Heartbeat - security heads-up**",
 			"This looked security-relevant, so I'm surfacing it now rather than waiting for you to ask."
 	case "curiosity":
 		switch f.Source {
 		case "high_surprise":
-			return "🔭 **Heartbeat — a prediction of mine missed**",
+			return "🔭 **Heartbeat - a prediction of mine missed**",
 				"I predicted how a tool would behave and the result came back noticeably different. I'd like your read before I change how I use it."
 		case "contradiction":
-			return "🔭 **Heartbeat — two memories disagree**",
+			return "🔭 **Heartbeat - two memories disagree**",
 				"I'm holding two memories that contradict each other and can't tell which is right on my own."
 		case "uncovered_mention":
-			return "🔭 **Heartbeat — a gap I noticed**",
+			return "🔭 **Heartbeat - a gap I noticed**",
 				"You've referenced this several times but I haven't captured anything durable about it yet."
 		default:
-			return "🔭 **Heartbeat — a question for you**",
+			return "🔭 **Heartbeat - a question for you**",
 				"Something didn't line up while I was reviewing recent activity and I'd like your call on it."
 		}
 	default:
-		return "**Heartbeat — heads-up**", ""
+		return "**Heartbeat - heads-up**", ""
 	}
 }
 
@@ -381,7 +381,7 @@ func prettyLabel(label string) string {
 	}
 }
 
-// looksLikeJSON is a cheap structural sniff — enough to pick a fence
+// looksLikeJSON is a cheap structural sniff - enough to pick a fence
 // language, not a validator.
 func looksLikeJSON(value string) bool {
 	v := strings.TrimSpace(value)
@@ -410,7 +410,7 @@ func looksLikeCode(value string) bool {
 // turn. The decision is recorded for analytics and emitted as a wsServerEvent
 // so the Studio Live tab's IntentStream panel can render the per-turn
 // classification stream in real time. Fail-closed: any error degrades to a
-// silent decision and a warning event — chat itself never stalls on
+// silent decision and a warning event - chat itself never stalls on
 // classification.
 func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent)) {
 	if s == nil || s.intentDet == nil || strings.TrimSpace(userMsg) == "" {
@@ -419,7 +419,7 @@ func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg str
 	go func() {
 		/* Classify uses an internal Haiku call and parses strict JSON. The
 		 * package returns silent on any failure so a classifier outage
-		 * never gates the agent loop — chat continues, the IntentStream
+		 * never gates the agent loop - chat continues, the IntentStream
 		 * panel just shows "silent · classifier unavailable". */
 		dec := s.intentDet.Classify(ctx, userMsg, "")
 		if s.intentDB != nil {
@@ -442,7 +442,7 @@ func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg str
 
 // appendWAL extracts load-bearing fragments from a user message and writes
 // them to mem_session_state. Synchronous and fast (regex over the message
-// string only — no LLM). Runs before the turn so a corrective phrase
+// string only - no LLM). Runs before the turn so a corrective phrase
 // ("actually, it's Bob not Bill") survives the same turn's compaction.
 func (s *Server) appendWAL(ctx context.Context, sessionID, userMsg string) {
 	if s == nil || s.wal == nil {
@@ -494,7 +494,7 @@ func (s *Server) modelForCapture(ctx context.Context) string {
 }
 
 // estimateContextMax maps a model id to its context-window token count.
-// Imperfect by design — the working-buffer threshold is a ratio, so a
+// Imperfect by design - the working-buffer threshold is a ratio, so a
 // missed 1M-context model just means the buffer triggers later than
 // ideal. Never under-estimates (would cause spurious captures); always
 // returns at least 200k.
@@ -514,7 +514,7 @@ func estimateContextMax(model string) int {
 
 // formatRecentContext is a thin helper kept for potential future use:
 // IntentFlow's Classify accepts a recentContext string that disambiguates
-// short messages. For now the WS handler passes "" — the substrate is
+// short messages. For now the WS handler passes "" - the substrate is
 // here so a follow-up can wire the last 2-3 turns without churning every
 // call site. Kept deliberately small and import-stable so tests pin it.
 func formatRecentContext(_ []intent.Record) string { return "" }

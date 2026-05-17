@@ -84,7 +84,7 @@ export function IntentStream() {
                   </span>
                 </div>
                 <p className="line-clamp-2 text-[13px] text-foreground/90">
-                  {r.reason || r.user_msg || "—"}
+                  {r.reason || r.user_msg || "-"}
                 </p>
               </li>
             );

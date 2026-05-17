@@ -15,7 +15,7 @@ import { fetchTraces, type TurnRowDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 import { TurnRow } from "@/components/logs/TurnRow";
 
-/* /logs — LangSmith-style turn-by-turn list.
+/* /logs - LangSmith-style turn-by-turn list.
  *
  * Layout mirrors /memory and /skills exactly so the three pages read as the
  * same family: centered search form with reload sitting to the right as
@@ -93,11 +93,11 @@ export default function LogsPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 border-b px-3 py-3 sm:px-4">
-          {/* No "logs (#)" header — the total moves into the tab chips below
+          {/* No "logs (#)" header - the total moves into the tab chips below
               so each status tab carries its own filter-aware count.
               Mirrors /memory + /skills. */}
 
-          {/* Search row centered on desktop with a sane max width — mirrors
+          {/* Search row centered on desktop with a sane max width - mirrors
               Memory + Skills so the three tabs read as the same family.
               Mobile stays full-width. Reload sits to the right as an
               icon-only ghost button on mobile and a labeled primary
@@ -158,7 +158,7 @@ export default function LogsPage() {
           </div>
         </div>
 
-        {/* List area — matches /code-proposals padding rhythm exactly:
+        {/* List area - matches /code-proposals padding rhythm exactly:
             px-3 py-3 sm:px-4, with the list inside on space-y-3.
             overflow-x-hidden as a mobile guardrail so a runaway token
             string in user_text can't push the column wider than 375px. */}

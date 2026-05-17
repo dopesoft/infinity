@@ -41,7 +41,7 @@ func DefaultChecklist(pool *pgxpool.Pool) Checklist {
 					findings = append(findings, Finding{
 						Kind:   "outcome",
 						Title:  "Decision follow-up overdue",
-						Detail: fmt.Sprintf("%s — %s", txt, due.Format(time.RFC3339)),
+						Detail: fmt.Sprintf("%s - %s", txt, due.Format(time.RFC3339)),
 					})
 				}
 			}

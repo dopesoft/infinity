@@ -17,20 +17,20 @@ import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import type { DashboardItem, SurfaceItem } from "@/lib/dashboard/types";
 
-/* SurfaceCard — the ONE generic renderer for the dashboard surface
+/* SurfaceCard - the ONE generic renderer for the dashboard surface
  * contract (mem_surface_items). Every item the agent surfaces via the
  * `surface_item` tool lands here, grouped by `surface` key. There is no
  * per-source widget: a triage skill, a connector poll, a cron, or the
  * agent itself can invent a new `surface` and it renders with zero new
  * frontend code. Tap a row → ObjectViewer with the full item.
  *
- * This is the Rule #1 payoff on the Studio side — the app adapts to
+ * This is the Rule #1 payoff on the Studio side - the app adapts to
  * whatever the agent assembles.
  */
 
 // kind → icon. `kind` is free-form on the backend; anything unmapped
 // falls back to a neutral dot. Add a mapping here only when a kind earns
-// a clearer glyph — never block rendering on it.
+// a clearer glyph - never block rendering on it.
 const KIND_ICON: Record<string, LucideIcon> = {
   email: AtSign,
   message: MessageCircle,
@@ -43,14 +43,14 @@ const KIND_ICON: Record<string, LucideIcon> = {
 };
 
 // A few well-known surfaces get a friendlier title + action link. The map
-// is a nicety, not a gate — an unknown surface still renders, with a
+// is a nicety, not a gate - an unknown surface still renders, with a
 // titleized key and no action.
 const SURFACE_META: Record<
   string,
   { title: string; action?: { label: string; href: string } }
 > = {
   followups: { title: "Follow-ups", action: { label: "see inbox", href: "/memory" } },
-  // Jarvis's OWN goals (mem_agent_goals) — what the agent is working toward
+  // Jarvis's OWN goals (mem_agent_goals) - what the agent is working toward
   // for the boss. Distinct from the boss's Pursuits card (mem_pursuits).
   agenda: { title: "Jarvis's agenda" },
   health: { title: "Needs attention" },
@@ -110,7 +110,7 @@ export function SurfaceCard({
 function SurfaceRow({ item, onClick }: { item: SurfaceItem; onClick: () => void }) {
   const Icon = KIND_ICON[item.kind] ?? CircleDot;
   // 80+ → "Important" chip. 50-79 → "Notable" chip. Below that, or
-  // unranked → no chip. Importance is optional — an unranked item just
+  // unranked → no chip. Importance is optional - an unranked item just
   // renders without one.
   const imp = typeof item.importance === "number" ? item.importance : null;
   const chip =

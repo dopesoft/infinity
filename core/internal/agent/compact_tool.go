@@ -31,7 +31,7 @@ func (c *CompactContext) Description() string {
 	return "Compact older conversation turns into long-term memory. Keeps the most recent turns verbatim; " +
 		"everything older becomes memory observations (promoted via the existing compress pipeline) and is " +
 		"replaced by a single summary message. Use when the conversation has grown long and earlier turns " +
-		"are no longer load-bearing. Safe to call mid-task — the recent context survives untouched."
+		"are no longer load-bearing. Safe to call mid-task - the recent context survives untouched."
 }
 func (c *CompactContext) Schema() map[string]any {
 	return map[string]any{
@@ -55,7 +55,7 @@ func (c *CompactContext) Execute(ctx context.Context, input map[string]any) (str
 	if c.Loop == nil || c.Compactor == nil {
 		return "", errors.New("compact_context not fully wired (Loop or Compactor nil)")
 	}
-	// Walk every active session — in practice the model is calling this
+	// Walk every active session - in practice the model is calling this
 	// from inside one session and we use the loop's session registry to
 	// find it via the ActiveSet pointer we stashed in the context.
 	active := tools.ActiveSetFromContext(ctx)
@@ -65,7 +65,7 @@ func (c *CompactContext) Execute(ctx context.Context, input map[string]any) (str
 
 	// Find the session whose Active pointer matches the one in our ctx.
 	// This is the cheapest way to attribute the call to a session without
-	// plumbing session-id into every tool — we already do this for
+	// plumbing session-id into every tool - we already do this for
 	// load_tools/unload_tools.
 	var session *Session
 	for _, s := range c.Loop.Sessions() {

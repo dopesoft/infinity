@@ -10,7 +10,7 @@ import (
 
 // GET /api/bridge/workspace/git-status
 //
-// "Is the cloud workspace's checkout behind main on GitHub?" — same
+// "Is the cloud workspace's checkout behind main on GitHub?" - same
 // shape question the deploy-status endpoint answers for Core's binary,
 // but pointed at the cloud workspace's working tree. Studio uses this
 // to render a staleness banner on the Files column when the Cloud
@@ -20,7 +20,7 @@ import (
 //
 //  1. Ask the Cloud bridge for the working tree's HEAD SHA + current
 //     branch via /bash (cheap; one-shot `git rev-parse HEAD`).
-//  2. Ask GitHub's REST API for the remote branch's HEAD SHA — reuses
+//  2. Ask GitHub's REST API for the remote branch's HEAD SHA - reuses
 //     the same /commits/<branch> call the deploy tracker uses.
 //  3. Diff the two; if they don't match, ask /compare for the count.
 //
@@ -68,7 +68,7 @@ func (s *Server) handleBridgeWorkspaceGitStatus(w http.ResponseWriter, r *http.R
 
 	// 2. Remote: reuse the deploy tracker's GitHub API client by
 	// borrowing its compare endpoint logic. The branch from rev-parse
-	// is authoritative — we ask GitHub about THAT branch, not 'main',
+	// is authoritative - we ask GitHub about THAT branch, not 'main',
 	// so a session checkout of a feature branch reports against its
 	// own upstream.
 	remote := fetchRemoteHead(r.Context(), branch)
@@ -90,7 +90,7 @@ func (s *Server) handleBridgeWorkspaceGitStatus(w http.ResponseWriter, r *http.R
 // One-shot fast-forward pull on the cloud workspace, called when the
 // boss taps the refresh icon on the staleness banner. We use
 // `git pull --ff-only` so a workspace that has drifted (rebase in
-// progress, local commits) refuses rather than silently merging — the
+// progress, local commits) refuses rather than silently merging - the
 // banner then continues to surface staleness and the agent can be
 // asked to reconcile. On a clean ephemeral checkout (the steady
 // state) it just advances HEAD and the banner disappears on the

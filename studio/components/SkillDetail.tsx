@@ -240,7 +240,7 @@ export function SkillDetail({
               <>
                 <Section title="SKILL.md body">
                   <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/60 p-3 font-mono text-xs leading-relaxed scroll-touch">
-                    {skill.body || "—"}
+                    {skill.body || "-"}
                   </pre>
                 </Section>
                 {skill.impl_path && (

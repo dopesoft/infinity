@@ -106,7 +106,7 @@ func (s *Store) ListWorkflows(ctx context.Context) ([]*Workflow, error) {
 // ── runs ──────────────────────────────────────────────────────────────────
 
 // StartRun creates a run plus its materialized step rows in one transaction.
-// The run starts `pending` — the engine claims it on the next tick. A run
+// The run starts `pending` - the engine claims it on the next tick. A run
 // is self-contained: it copies the step list at start, so editing the
 // definition later never disturbs an in-flight run. dependsOn, when set to
 // another run's id, holds this run back until that run is `done`.
@@ -235,7 +235,7 @@ func (s *Store) ClaimRunnable(ctx context.Context) (*Run, error) {
 	}
 	defer tx.Rollback(ctx)
 
-	// A run is claimable only when its dependency (if any) has finished —
+	// A run is claimable only when its dependency (if any) has finished -
 	// dependency-aware scheduling: "run B after run A is done."
 	var id string
 	err = tx.QueryRow(ctx, `
@@ -300,7 +300,7 @@ func (s *Store) CompleteStep(ctx context.Context, stepID, output string) error {
 
 // FailStep handles a failed step. If the step has retries left it goes back
 // to 'pending' (the engine re-runs it next tick) and retried=true. Once
-// retries are exhausted it is marked 'failed' and retried=false — the
+// retries are exhausted it is marked 'failed' and retried=false - the
 // caller then fails the run.
 func (s *Store) FailStep(ctx context.Context, st *Step, errMsg string) (retried bool, err error) {
 	if st.Attempt < st.MaxAttempts {
@@ -399,7 +399,7 @@ func (s *Store) ReclaimOrphans(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Any run that was 'running' stays runnable; nothing else to do —
+	// Any run that was 'running' stays runnable; nothing else to do -
 	// the engine re-claims it and re-runs the reclaimed step.
 	return int(ct.RowsAffected()), nil
 }

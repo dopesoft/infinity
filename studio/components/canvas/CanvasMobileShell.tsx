@@ -8,12 +8,12 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * CanvasMobileShell — the *top half* of the mobile Canvas layout.
+ * CanvasMobileShell - the *top half* of the mobile Canvas layout.
  *
  * Renders the active mobile tab (Files / Git / Editor). The tab strip
  * itself lives in CanvasFrame; this component just swaps content. Chat
  * (ConversationStream + Composer) is the bottom half of CanvasFrame's
- * vertical split — it's not rendered here so a deep scroll in the tree
+ * vertical split - it's not rendered here so a deep scroll in the tree
  * doesn't push the input below the keyboard.
  *
  * Every pane is mounted-but-hidden so switching tabs is instant: Monaco

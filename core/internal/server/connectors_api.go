@@ -14,7 +14,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/connectors"
 )
 
-// /api/connectors/composio — thin proxy over Composio's REST API for the
+// /api/connectors/composio - thin proxy over Composio's REST API for the
 // Studio /connectors page. Keeps the COMPOSIO_API_KEY server-side (never
 // shipped to the browser) and gives us a single chokepoint to add caching,
 // rate-limiting, or per-user scoping later when Infinity goes multi-tenant.
@@ -38,7 +38,7 @@ var composioHTTP = &http.Client{Timeout: 20 * time.Second}
 // composioRESTKey prefers the workspace admin API key over the consumer
 // key for REST calls. Composio's /api/v3/* endpoints (toolkit catalog,
 // workspace-level connected_accounts) reject `x-consumer-api-key`
-// outright — the consumer key is for the MCP gateway and per-user calls
+// outright - the consumer key is for the MCP gateway and per-user calls
 // only. Both are read fresh each call so a Railway env swap takes effect
 // without a restart.
 //
@@ -135,7 +135,7 @@ func (s *Server) handleComposioConnected(w http.ResponseWriter, r *http.Request)
 //
 //	{ "toolkit_slug": "github", "user_id": "personal", "auth_config_id": "<optional>" }
 //
-// `user_id` is the Composio entity identifier — pass distinct values to
+// `user_id` is the Composio entity identifier - pass distinct values to
 // authorise the *same* toolkit under multiple identities (e.g.
 // "personal" + "work" Gmail mailboxes). Each Connect creates a fresh
 // connected_account row that surfaces in the activated list as its own
@@ -248,7 +248,7 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Error path — pass through Composio's body so the FE can surface
+	// Error path - pass through Composio's body so the FE can surface
 	// the vendor's actual message.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
@@ -271,7 +271,7 @@ func applyComposioAuth(req *http.Request, key string, isAdmin bool) {
 // toolkit slug. Prefers an existing config in the workspace; falls
 // back to creating a Composio-managed OAuth config if none exists.
 //
-// Caching is not worth the lock contention here — Composio's list
+// Caching is not worth the lock contention here - Composio's list
 // endpoint replies in well under a second and connect is a manual
 // user action, not a hot path. If two concurrent connects race on
 // the create step we end up with two equivalent configs, and the
@@ -279,7 +279,7 @@ func applyComposioAuth(req *http.Request, key string, isAdmin bool) {
 func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug string) (string, error) {
 	// 1) List existing configs filtered by toolkit slug. Composio's
 	//    response wraps each row in `{ "auth_config": {...} }` or
-	//    flat depending on the endpoint — handle both.
+	//    flat depending on the endpoint - handle both.
 	listURL := composioAPIBase + "/auth_configs?toolkit_slug=" + url.QueryEscape(slug) + "&limit=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
 	if err != nil {
@@ -312,7 +312,7 @@ func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug 
 		}
 	}
 
-	// 2) None exist — create one using Composio-managed auth so the boss
+	// 2) None exist - create one using Composio-managed auth so the boss
 	//    doesn't have to register an OAuth app per toolkit. For toolkits
 	//    that don't support Composio-managed auth (rare), this will fail
 	//    and the error message tells the boss to wire a custom config in
@@ -401,7 +401,7 @@ func (s *Server) handleComposioAccount(w http.ResponseWriter, r *http.Request) {
 // handleComposioAliases is the alias CRUD surface. Used by Studio's
 // inline editor on each connected-account row. The alias map persists
 // in infinity_meta as a single JSON blob keyed by Composio
-// connected_account id — see connectors.MetaKey for the layout.
+// connected_account id - see connectors.MetaKey for the layout.
 //
 //	GET    /api/connectors/composio/aliases
 //	  → { "aliases": { "ca_abc": "personal", "ca_def": "work" } }

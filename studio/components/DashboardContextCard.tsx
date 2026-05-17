@@ -5,8 +5,8 @@ import { LayoutDashboard } from "lucide-react";
 import type { ChatMessage } from "@/hooks/useChat";
 import { FindingActions } from "@/components/FindingActions";
 
-// The context block Discuss-with-Jarvis injects renders as this card —
-// NOT a plain user bubble — so the transcript makes clear it's something
+// The context block Discuss-with-Jarvis injects renders as this card -
+// NOT a plain user bubble - so the transcript makes clear it's something
 // the boss brought in from the dashboard to deliberate on, not something
 // they typed. Mirrors the heartbeat bubble's info-accent treatment.
 
@@ -79,7 +79,7 @@ export function DashboardContextCard({
       </div>
 
       {/* When the seeded item is an open curiosity finding, offer the
-          one-tap "Approve & fix" — it tells the agent to act on the
+          one-tap "Approve & fix" - it tells the agent to act on the
           finding in this same conversation and confirm what it changed. */}
       {message.curiosityId && (
         <FindingActions

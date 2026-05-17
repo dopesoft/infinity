@@ -16,35 +16,35 @@ The following tools exist but their JSON schemas are NOT in your current
 toolset to save context. They are real and callable.
 
 Primitives (pinned, always available):
-  - system_map() — runtime topology. Lists every backing table, its
+  - system_map() - runtime topology. Lists every backing table, its
     list_tools, mutate_tools, registered actions, live open_count, AND
     the gaps where a tool is missing. Use this FIRST for any task about
     user-facing data ("dismiss my X", "what's on my dashboard", "act on
     the queue"). No prompt-level memorisation.
-  - mem_list({table}) / mem_act({table, action, ids}) — GENERIC reader
+  - mem_list({table}) / mem_act({table, action, ids}) - GENERIC reader
     and bounded-action mutator over ANY mem_* table. Pair these with
     system_map for one-shot dismissals on any surface, even ones that
     have no bespoke list/mutate tool yet. The action vocabulary is
     bounded by mem_action_schemas (set_status / set_timestamp /
-    set_null / set_bool) — no raw SQL.
-  - action_register({table, action, op, column, value?}) — extend
+    set_null / set_bool) - no raw SQL.
+  - action_register({table, action, op, column, value?}) - extend
     mem_act's vocabulary at runtime. New table, new action → one
     register call, no deploy.
-  - domain_hint_add({table, tool_prefix}) — extend system_map's
+  - domain_hint_add({table, tool_prefix}) - extend system_map's
     topology when a new mem_X has irregular tool naming.
-  - tool_search("query") — search the dormant catalog for non-surface
+  - tool_search("query") - search the dormant catalog for non-surface
     capabilities (web_search, delegate, claude_code__*). NOT
-    claude_code__ToolSearch — that indexes a different registry.
+    claude_code__ToolSearch - that indexes a different registry.
 
 Bring dormant tools online with load_tools(["name1","name2"]).
-NEVER ask the boss for record ids; ids aren't shown in the UI —
+NEVER ask the boss for record ids; ids aren't shown in the UI -
 system_map + mem_list give you everything you need.
 
 Self-extension flow when you hit a gap:
-  1. system_map() — see the missing list_tool or mutate_tool.
-  2. mem_list({table}) — read works on ANY mem_* table out of the box.
-  3. If you need a new action verb, action_register(...) — persisted.
-  4. mem_act({table, action, ids}) — apply.
+  1. system_map() - see the missing list_tool or mutate_tool.
+  2. mem_list({table}) - read works on ANY mem_* table out of the box.
+  3. If you need a new action verb, action_register(...) - persisted.
+  4. mem_act({table, action, ids}) - apply.
 
 Format: name - short description.
 `
@@ -75,7 +75,7 @@ func buildToolCatalogBlock(reg *tools.Registry, active *tools.ActiveSet, hidden 
 	for _, d := range dormant {
 		// Honor the per-session hidden set so tools we're filtering out
 		// of schemas (e.g. claude_code__* on Cloud) also disappear from
-		// the catalog — otherwise the model wastes turns on
+		// the catalog - otherwise the model wastes turns on
 		// tool_search/load_tools for things it can't use.
 		if _, drop := hidden[d.Name]; drop {
 			continue
@@ -136,7 +136,7 @@ func buildToolCatalogBlock(reg *tools.Registry, active *tools.ActiveSet, hidden 
 	return b.String()
 }
 
-// itoa is a tiny stdlib-free int-to-string for the catalog count — keeps
+// itoa is a tiny stdlib-free int-to-string for the catalog count - keeps
 // this file dependency-light.
 func itoa(n int) string {
 	if n == 0 {

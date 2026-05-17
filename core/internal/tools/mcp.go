@@ -1,4 +1,4 @@
-// Package tools — MCP client wraps modelcontextprotocol/go-sdk and exposes
+// Package tools - MCP client wraps modelcontextprotocol/go-sdk and exposes
 // each remote tool as a Tool in the central registry under the namespace
 // "<server>.<tool>".
 package tools
@@ -178,7 +178,7 @@ func LoadMCPConfig(path string) (*MCPConfig, error) {
 
 // MCPManager owns the MCP client sessions and registers their tools.
 //
-// Sessions can die silently — Cloudflare Tunnel idle-timeouts, mac-bridge
+// Sessions can die silently - Cloudflare Tunnel idle-timeouts, mac-bridge
 // restarts, or transient network blips drop the long-lived SSE stream and
 // the underlying transport surfaces EOF only on the next call. We keep the
 // original server config around so `Reconnect` can re-dial the same server
@@ -192,12 +192,12 @@ type MCPManager struct {
 	statuses   map[string]MCPStatus
 	reconnects map[string]*sync.Mutex
 	// lastReconnect tracks the last time each server was successfully
-	// re-dialled. Used to coalesce concurrent Reconnect calls — if N
+	// re-dialled. Used to coalesce concurrent Reconnect calls - if N
 	// goroutines all see EOF on the same dead session, only the first
 	// re-dials; the others see a fresh `lastReconnect` and reuse the
 	// just-created session instead of closing it and re-dialling again
 	// (which is what was happening on canvas's parallel polls and the
-	// agent loop — each was stomping the others' fresh session).
+	// agent loop - each was stomping the others' fresh session).
 	lastReconnect map[string]time.Time
 }
 
@@ -249,7 +249,7 @@ func (m *MCPManager) Connect(ctx context.Context, cfg *MCPConfig, registry *Regi
 }
 
 // ConnectServer connects a single MCP server at runtime and registers its
-// tools into the registry — the runtime self-extension path. Unlike
+// tools into the registry - the runtime self-extension path. Unlike
 // Connect (which takes the whole embedded mcp.yaml at boot), this adds one
 // server to a live process. The extensions Manager calls it when the agent
 // registers an MCP extension.
@@ -258,7 +258,7 @@ func (m *MCPManager) ConnectServer(ctx context.Context, s MCPServerConfig, regis
 }
 
 // dialSession opens a fresh MCP session for the given server. It performs
-// the connect handshake only — listing tools and registering them is left
+// the connect handshake only - listing tools and registering them is left
 // to the caller so this can be reused by Reconnect.
 //
 // CRITICAL DETAIL: SSE sessions use the connect-time context for the
@@ -294,7 +294,7 @@ func (m *MCPManager) dialSession(_ context.Context, s MCPServerConfig) (*mcp.Cli
 		if len(headers) > 0 {
 			// CRITICAL: do NOT set http.Client.Timeout for SSE. That
 			// timeout covers the *entire* request including reading the
-			// response body — for SSE the body is a long-lived stream,
+			// response body - for SSE the body is a long-lived stream,
 			// so any Timeout > 0 will kill the connection after N seconds
 			// and surface as "client is closing: EOF" on the next call.
 			// Connection establishment is bounded by the underlying
@@ -312,7 +312,7 @@ func (m *MCPManager) dialSession(_ context.Context, s MCPServerConfig) (*mcp.Cli
 		}
 		transport = sse
 	case "http", "streamable_http":
-		// Streamable HTTP transport — the 2025-03-26 spec replacement
+		// Streamable HTTP transport - the 2025-03-26 spec replacement
 		// for the two-URL SSE handshake. Single endpoint that handles
 		// both POST request/response and an optional GET-based SSE
 		// side-channel. Required by GitHub's remote MCP and Composio's
@@ -377,7 +377,7 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 
 	toolNames := make([]string, 0, len(listed.Tools))
 	for _, t := range listed.Tools {
-		// Anthropic's tool name regex is ^[a-zA-Z0-9_-]{1,128}$ — no dots.
+		// Anthropic's tool name regex is ^[a-zA-Z0-9_-]{1,128}$ - no dots.
 		// Use a double underscore as the namespace separator and sanitise
 		// each side so MCP servers with hyphenated/dotted names still work.
 		name := sanitiseToolName(s.Name) + "__" + sanitiseToolName(t.Name)
@@ -419,7 +419,7 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 
 // keepAlive pings the named MCP session every 45s with a lightweight
 // ListTools call. On error we trigger a Reconnect and keep going so the
-// loop is self-healing — without this the first real tool call after an
+// loop is self-healing - without this the first real tool call after an
 // idle stretch always fails with "client is closing: EOF".
 func (m *MCPManager) keepAlive(server string) {
 	ticker := time.NewTicker(45 * time.Second)
@@ -433,7 +433,7 @@ func (m *MCPManager) keepAlive(server string) {
 		_, err := sess.ListTools(ctx, nil)
 		cancel()
 		if err != nil && isTransportDeadErr(err) {
-			log.Printf("mcp: %s keepalive failed (%v) — reconnecting", server, err)
+			log.Printf("mcp: %s keepalive failed (%v) - reconnecting", server, err)
 			rctx, rcancel := context.WithTimeout(context.Background(), 20*time.Second)
 			if rerr := m.Reconnect(rctx, server); rerr != nil {
 				log.Printf("mcp: %s keepalive reconnect failed: %v", server, rerr)
@@ -567,7 +567,7 @@ func (t *mcpTool) Execute(ctx context.Context, input map[string]any) (string, er
 	// Up to maxAttempts total. The Cloudflare Tunnel → mcp-proxy → claude
 	// mcp serve stack is chatty: SSE sessions die silently and `tools/call`
 	// hands back "EOF" before the keepalive has finished reconnecting.
-	// One retry isn't enough — sometimes the reconnect itself races and
+	// One retry isn't enough - sometimes the reconnect itself races and
 	// the second call also EOFs while the new session is still spinning
 	// up. Three attempts with brief backoff catches the vast majority of
 	// these without the boss seeing anything.
@@ -584,7 +584,7 @@ func (t *mcpTool) Execute(ctx context.Context, input map[string]any) (string, er
 		if !isTransportDeadErr(err) {
 			return "", err
 		}
-		log.Printf("mcp: %s.%s transport dead attempt %d/%d (%v) — reconnecting",
+		log.Printf("mcp: %s.%s transport dead attempt %d/%d (%v) - reconnecting",
 			t.server, t.remote, attempt, maxAttempts, err)
 		if rerr := t.mgr.Reconnect(ctx, t.server); rerr != nil {
 			// Reconnect itself failed. Bubble up only on the last

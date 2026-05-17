@@ -10,7 +10,7 @@ import {
 } from "@/lib/canvas/api";
 
 /**
- * BridgeSourceRow — tiny single-line label under the Files filter row
+ * BridgeSourceRow - tiny single-line label under the Files filter row
  * declaring which bridge owns the filesystem currently rendered. Matches
  * the visual mass of DeployStatusRow (border-b, font-mono 11px, colored
  * dot) so the two stack cleanly when both render.

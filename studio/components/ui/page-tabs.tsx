@@ -32,7 +32,7 @@
  *   • `scrollable` for ANY of: 4+ tabs, labels with count badges, labels with
  *     variable-length text. Horizontal-scroll on mobile (no squishing, no
  *     clipping); inline-flex on sm+. THIS IS THE DEFAULT FOR ANYTHING WITH
- *     COUNTS — `columns={N}` + count badges crushes the labels on a 375px
+ *     COUNTS - `columns={N}` + count badges crushes the labels on a 375px
  *     viewport. If you're unsure, use `scrollable`.
  *   • Neither prop → inline-flex everywhere (caller controls width).
  *
@@ -49,7 +49,7 @@ import { cn } from "@/lib/utils";
 export const PageTabs = Tabs;
 
 // Static lookup so Tailwind's JIT keeps these classes in the bundle.
-// Don't switch to template-literal interpolation — JIT can't resolve those.
+// Don't switch to template-literal interpolation - JIT can't resolve those.
 const COLUMN_LAYOUTS: Record<number, string> = {
   2: "grid w-full grid-cols-2 sm:inline-flex sm:w-auto",
   3: "grid w-full grid-cols-3 sm:inline-flex sm:w-auto",
@@ -62,7 +62,7 @@ const COLUMN_LAYOUTS: Record<number, string> = {
 // trigger pinned `shrink-0` so labels (incl. count badges) never get crushed.
 // Snap proximity is gentle enough to glance but still helps land on a tab.
 // no-scrollbar + scroll-touch keep it native-feeling on iOS. On sm+ we go
-// back to inline-flex with overflow visible — desktop has room.
+// back to inline-flex with overflow visible - desktop has room.
 const SCROLLABLE_LAYOUT =
   "inline-flex w-full max-w-full justify-start overflow-x-auto scroll-touch snap-x snap-proximity no-scrollbar [&>*]:shrink-0 [&>*]:snap-start sm:w-auto sm:max-w-none sm:overflow-visible";
 
@@ -75,7 +75,7 @@ export const PageTabsList = React.forwardRef<
 >(({ className, columns, scrollable, children, ...props }, ref) => {
   // Precedence: `scrollable` wins over `columns`. If neither is set we default
   // to inline-flex everywhere (caller can still pass classes via className).
-  // `columns` is only safe for 2–3 short text-only labels — anything with a
+  // `columns` is only safe for 2–3 short text-only labels - anything with a
   // count badge or 4+ tabs squishes on mobile (375px / 6 ≈ 62px per cell).
   let layout: string;
   if (scrollable) {
@@ -161,7 +161,7 @@ export function PageSectionHeader({
   /**
    * Optional inline content rendered immediately after the title (and the
    * count chip, if any). Use this for a single status tag like
-   * `every 30m` or `paused` — keep it short, it sits on the same row as
+   * `every 30m` or `paused` - keep it short, it sits on the same row as
    * the action buttons on desktop.
    */
   meta?: React.ReactNode;
@@ -188,7 +188,7 @@ export function PageSectionHeader({
 }
 
 /**
- * Header action button. Always ghost — no filled backgrounds anywhere.
+ * Header action button. Always ghost - no filled backgrounds anywhere.
  *   • mobile (<sm)  → square 36×36 icon button (no label, no bg)
  *   • sm+           → icon + label, still ghost (text only, no bg)
  *
@@ -216,7 +216,7 @@ export const HeaderAction = React.forwardRef<
       title={label}
       className={cn(
         // Tight ghost icon: square on mobile, expands on sm+. No filled
-        // background — so we drop to h-7 (28px) on mobile to match the
+        // background - so we drop to h-7 (28px) on mobile to match the
         // 11px section title's visual weight. Without that, the row
         // expands to the button's chrome and the title appears to "float"
         // away from the card's top edge. On sm+ we keep h-8 since the
@@ -238,7 +238,7 @@ HeaderAction.displayName = "HeaderAction";
 
 /**
  * Sub-filter pill. Same look as the memory-page tier chips. Always paired
- * with `<HScrollRow>` (or any other flex container) — never used standalone.
+ * with `<HScrollRow>` (or any other flex container) - never used standalone.
  */
 export const FilterPill = React.forwardRef<
   HTMLButtonElement,

@@ -41,7 +41,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!userId) {
-      // Not signed in yet — tear down any prior client (e.g. after sign-out)
+      // Not signed in yet - tear down any prior client (e.g. after sign-out)
       // and skip connect. The next auth state change re-runs this effect.
       clientRef.current?.close();
       clientRef.current = null;

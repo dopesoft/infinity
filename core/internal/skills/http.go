@@ -21,7 +21,7 @@ func NewAPI(reg *Registry, runner *Runner, store *Store) *API {
 }
 
 // Routes registers skill endpoints on the provided mux. Path prefix is
-// `/api/skills` — matches the Studio client.
+// `/api/skills` - matches the Studio client.
 //
 //   GET    /api/skills              → list summaries
 //   GET    /api/skills/:name        → detail

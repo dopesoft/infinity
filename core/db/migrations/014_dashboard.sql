@@ -1,21 +1,21 @@
--- 014_dashboard.sql — Dashboard substrate + PWA push subscriptions.
+-- 014_dashboard.sql - Dashboard substrate + PWA push subscriptions.
 --
 -- Lands the storage for the new root surface (Dashboard) and the iOS/macOS
 -- notification pipeline that surfaces actionable items on the boss's phone
 -- and dock.
 --
 -- Surfaces introduced:
---   mem_tasks              — todos (manual / agent-created / email-derived /
+--   mem_tasks              - todos (manual / agent-created / email-derived /
 --                            cron-output)
---   mem_pursuits           — habits, weekly cadences, and long-term goals
+--   mem_pursuits           - habits, weekly cadences, and long-term goals
 --                            merged into one entity with a cadence tag
---   mem_pursuit_checkins   — habit-history rows; one per check-in event
---   mem_followups          — connector-surfaced messages awaiting reply
+--   mem_pursuit_checkins   - habit-history rows; one per check-in event
+--   mem_followups          - connector-surfaced messages awaiting reply
 --                            (Gmail, Slack, iMessage, Linear, …)
---   mem_saved              — articles, links, notes, quotes the boss stashed
---   mem_calendar_events    — events ingested from a calendar connector with
+--   mem_saved              - articles, links, notes, quotes the boss stashed
+--   mem_calendar_events    - events ingested from a calendar connector with
 --                            agent-classified type + agent-flagged prep
---   mem_push_subscriptions — Web Push endpoints per installed device
+--   mem_push_subscriptions - Web Push endpoints per installed device
 --
 -- And the seeded-session column that lets a dashboard tap open `/live` with
 -- the source artifact pre-hydrated into the system prompt:
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS mem_tasks (
     title        TEXT NOT NULL,
 
     -- Optional longer body / notes. Used when the boss expands the
-    -- ObjectViewer for the task — most rows leave it empty.
+    -- ObjectViewer for the task - most rows leave it empty.
     body         TEXT NOT NULL DEFAULT '',
 
     -- Where this task came from. agent → Jarvis decided to file it;
@@ -101,7 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_mem_pursuits_cadence
 
 -- ── mem_pursuit_checkins ───────────────────────────────────────────────────
 -- One row per "today I did this." Daily habit toggles, weekly cadence
--- ticks, goal progress increments — all land here. Sorted by checked_at
+-- ticks, goal progress increments - all land here. Sorted by checked_at
 -- to compute streaks deterministically. Idempotent on (pursuit_id, day)
 -- so re-toggles don't duplicate.
 CREATE TABLE IF NOT EXISTS mem_pursuit_checkins (
@@ -127,11 +127,11 @@ CREATE INDEX IF NOT EXISTS idx_mem_pursuit_checkins_pursuit_checked
 -- ── mem_followups ──────────────────────────────────────────────────────────
 -- Connector-surfaced items where a human (or Linear/etc) is waiting on
 -- the boss. The agent decides which inbound messages get promoted into
--- this table — it's the actionable subset, not a mirror of every email.
+-- this table - it's the actionable subset, not a mirror of every email.
 CREATE TABLE IF NOT EXISTS mem_followups (
     id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 
-    -- gmail|slack|imessage|linear|other — drives the icon + display
+    -- gmail|slack|imessage|linear|other - drives the icon + display
     -- conventions in Studio.
     source       TEXT NOT NULL DEFAULT 'gmail',
 
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS mem_followups (
     subject      TEXT NOT NULL DEFAULT '',
     preview      TEXT NOT NULL DEFAULT '',
 
-    -- Full content surfaced in the ObjectViewer — the "preview before
+    -- Full content surfaced in the ObjectViewer - the "preview before
     -- discuss" surface relies on this being the actual artifact, not
     -- a summary.
     body         TEXT NOT NULL DEFAULT '',
@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS mem_calendar_events (
     ends_at         TIMESTAMPTZ,
     all_day         BOOLEAN NOT NULL DEFAULT FALSE,
 
-    -- Agent classification — drives the icon + the prep template choice.
+    -- Agent classification - drives the icon + the prep template choice.
     -- Free-text so the agent can invent new categories (per the boss's
     -- "schema should grow dynamically" direction in the design thread).
     classification  TEXT NOT NULL DEFAULT 'other',
@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS mem_push_subscriptions (
     user_agent   TEXT NOT NULL DEFAULT '',
 
     -- Set true after the first 410 Gone from the push service so we
-    -- stop trying — the boss can clean up via Settings.
+    -- stop trying - the boss can clean up via Settings.
     revoked      BOOLEAN NOT NULL DEFAULT FALSE,
 
     last_seen_at TIMESTAMPTZ,

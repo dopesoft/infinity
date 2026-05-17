@@ -15,7 +15,7 @@ const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
 export function ConversationStream({
   messages,
   // onQuickReply sends a canned message into the current session. Used by
-  // the "Approve & fix" action on heartbeat finding cards — it routes
+  // the "Approve & fix" action on heartbeat finding cards - it routes
   // through chat.send so the agent acts in this same conversation.
   onQuickReply,
 }: {
@@ -91,7 +91,7 @@ export function ConversationStream({
         ref={scrollRef}
         onScroll={onScroll}
         // pb-8 gives the last message (often an error or thinking bubble) clear
-        // breathing room before the composer — otherwise auto-scroll
+        // breathing room before the composer - otherwise auto-scroll
         // pins it flush against the prompt input with zero padding.
         className="flex-1 min-w-0 space-y-3 overflow-y-auto px-3 pt-3 pb-8 scroll-touch sm:px-4"
       >
@@ -111,7 +111,7 @@ export function ConversationStream({
               ) : (
                 // Tool/Thinking/Context cards all share the same left-
                 // anchored max-w-[80%] as the assistant ChatBubble so the
-                // "agent voice" column reads as one consistent rail —
+                // "agent voice" column reads as one consistent rail -
                 // earlier slim widths (1/2 / 3/4) made long INPUT/OUTPUT
                 // payloads unreadable, especially the indented JSON.
                 <div className="flex justify-start">
@@ -127,7 +127,7 @@ export function ConversationStream({
                 </div>
               </div>
             ) : m.seeded ? (
-              // Discuss-with-Jarvis context block — a left-anchored card
+              // Discuss-with-Jarvis context block - a left-anchored card
               // (same rhythm as the thinking / skill cards) so it reads as
               // "something the boss brought in", not a typed user message.
               <div className="flex justify-start">

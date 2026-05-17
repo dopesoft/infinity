@@ -14,11 +14,11 @@ import (
 // Runner. The agent can always reach for these regardless of which skills
 // happen to be installed.
 //
-//   skills_list      — enumerate installed skills
-//   skills_invoke    — execute a skill by name
-//   skills_discover  — fuzzy search over trigger phrases / descriptions
-//   skills_history   — recent runs of a single skill
-//   skill_create     — author a NEW skill and make it live (self-authoring)
+//   skills_list      - enumerate installed skills
+//   skills_invoke    - execute a skill by name
+//   skills_discover  - fuzzy search over trigger phrases / descriptions
+//   skills_history   - recent runs of a single skill
+//   skill_create     - author a NEW skill and make it live (self-authoring)
 func RegisterTools(reg *tools.Registry, registry *Registry, runner *Runner) {
 	reg.Register(&listTool{r: registry})
 	reg.Register(&invokeTool{r: registry, runner: runner})
@@ -89,7 +89,7 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 		return "", fmt.Errorf("unknown skill: %s", name)
 	}
 	if skill.ImplPath == "" {
-		// Skill is LLM-only — return its formatted prompt for the parent
+		// Skill is LLM-only - return its formatted prompt for the parent
 		// agent to fold into its own context. The LLM caller is in charge
 		// of executing the instruction. This is the pattern used by the
 		// majority of OpenClaw and Hermes skills.
@@ -189,8 +189,8 @@ func (t *historyTool) Execute(ctx context.Context, in map[string]any) (string, e
 //
 // The closed-loop self-authoring path. Rule #1 substrate: the agent
 // assembles a workflow described in natural language into a durable,
-// reusable recipe. The judgment — the rubric, the steps, the "hard rules"
-// — lives in the SKILL.md body the agent writes, never in Go. A low-risk
+// reusable recipe. The judgment - the rubric, the steps, the "hard rules"
+// - lives in the SKILL.md body the agent writes, never in Go. A low-risk
 // recipe goes live immediately (invocable this session, durable across
 // restarts via the boot-time materialize + reload chain). Anything riskier
 // is filed as a candidate for the boss to approve.
@@ -199,15 +199,15 @@ type skillCreateTool struct{ r *Registry }
 
 func (t *skillCreateTool) Name() string { return "skill_create" }
 func (t *skillCreateTool) Description() string {
-	return "Author a NEW skill and make it live. A skill is a reusable recipe — " +
+	return "Author a NEW skill and make it live. A skill is a reusable recipe - " +
 		"its body is the instruction set you (or a future session) follow: \"hit " +
 		"this API, pull the data, analyze it, surface the result.\" Create one " +
 		"when the boss describes a workflow worth keeping, or when you notice a " +
 		"repeatable multi-step pattern. Low-risk recipe skills (risk_level=low, no " +
-		"executable file) go LIVE IMMEDIATELY — invocable this session via " +
+		"executable file) go LIVE IMMEDIATELY - invocable this session via " +
 		"skills_invoke and durable across restarts. Anything riskier is filed as a " +
 		"candidate for the boss to approve in the Skills tab. The judgment lives " +
-		"in the `body` (the rubric, the steps, the hard rules) — that IS the " +
+		"in the `body` (the rubric, the steps, the hard rules) - that IS the " +
 		"skill. Returns the skill name and whether it went live or pending."
 }
 func (t *skillCreateTool) Schema() map[string]any {
@@ -224,7 +224,7 @@ func (t *skillCreateTool) Schema() map[string]any {
 			},
 			"body": map[string]any{
 				"type":        "string",
-				"description": "The SKILL.md body in Markdown — the actual recipe. Steps, the rubric, the judgment ('hard rules'). This IS the skill; write it like instructions to yourself.",
+				"description": "The SKILL.md body in Markdown - the actual recipe. Steps, the rubric, the judgment ('hard rules'). This IS the skill; write it like instructions to yourself.",
 			},
 			"trigger_phrases": map[string]any{
 				"type":        "array",
@@ -297,12 +297,12 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 			"status":  "live",
 			"name":    name,
 			"version": sk.Version,
-			"message": fmt.Sprintf("Skill %q is live now — invoke it with skills_invoke. It persists across restarts.", name),
+			"message": fmt.Sprintf("Skill %q is live now - invoke it with skills_invoke. It persists across restarts.", name),
 		})
 		return string(out), nil
 	}
 
-	// Candidate path — needs the Store.
+	// Candidate path - needs the Store.
 	if t.r.store == nil {
 		return "", errors.New("skill_create: medium+ risk skills need a database (no Store configured)")
 	}

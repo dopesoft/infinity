@@ -26,7 +26,7 @@ import {
  * day-to-day duty (heartbeat, trust history, skill registry, audit) is read
  * mostly through the workspace's Info modal.
  *
- * Settings stays out of NAV_TABS — it's an app-level action surfaced as its
+ * Settings stays out of NAV_TABS - it's an app-level action surfaced as its
  * own header button + mobile-drawer footer link.
  */
 export type NavTab = {

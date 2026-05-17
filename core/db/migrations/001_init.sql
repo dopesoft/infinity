@@ -1,11 +1,11 @@
--- 001_init.sql — base extensions and connection sanity for Infinity Phase 0.
+-- 001_init.sql - base extensions and connection sanity for Infinity Phase 0.
 -- Memory schema (mem_*) lands in 002_memory.sql.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Sanity ping — every Infinity build records its first migration here.
+-- Sanity ping - every Infinity build records its first migration here.
 CREATE TABLE IF NOT EXISTS infinity_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

@@ -16,7 +16,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/voice"
 )
 
-// Voice HTTP surface — three endpoints, all under /api/voice/*:
+// Voice HTTP surface - three endpoints, all under /api/voice/*:
 //
 //   POST /session   → mint an ephemeral OpenAI client_secret for the browser.
 //                     Builds the session config from the same memory + skills
@@ -81,7 +81,7 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 	// realtime session with session.update.
 	sess := s.loop.GetOrCreateSession(sessionID)
 
-	// Build instructions the same way the agent loop would for a turn —
+	// Build instructions the same way the agent loop would for a turn -
 	// soul prompt + memory prefix + skills + tool catalog block.
 	systemPrompt := s.loop.SystemPrompt()
 	// Memory retrieval needs a non-empty query to embed against. When
@@ -91,7 +91,7 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 	// better to have context loaded than none.
 	memQuery := strings.TrimSpace(body.Query)
 	if memQuery == "" {
-		memQuery = "voice session opening — surface recent context, active projects, and any in-flight commitments"
+		memQuery = "voice session opening - surface recent context, active projects, and any in-flight commitments"
 	}
 	if mem := buildMemoryPrefix(r.Context(), s.loop, sessionID, memQuery); mem != "" {
 		systemPrompt = mem + "\n\n" + systemPrompt
@@ -101,7 +101,7 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
 		}
 	}
-	// Dormant tool catalog — same block text-mode prepends so the model
+	// Dormant tool catalog - same block text-mode prepends so the model
 	// knows the long tail exists and can pull it in on demand. Without
 	// this, the model wouldn't know to call tool_search at all in voice.
 	if catalog := s.loop.ToolCatalogBlock(sess.Active); catalog != "" {
@@ -130,7 +130,7 @@ func (s *Server) handleVoiceSession(w http.ResponseWriter, r *http.Request) {
 
 // buildMemoryPrefix calls the agent loop's MemoryProvider if one is wired.
 // We can't access the field directly from outside the package, so we drive
-// it via a dedicated method added in this PR. Returns "" on any failure —
+// it via a dedicated method added in this PR. Returns "" on any failure -
 // memory is best-effort context.
 func buildMemoryPrefix(ctx context.Context, loop *agent.Loop, sessionID, query string) string {
 	if loop == nil {
@@ -229,7 +229,7 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Hard deny — synthesize reason as the model-visible output.
+		// Hard deny - synthesize reason as the model-visible output.
 		writeJSON(w, http.StatusOK, voiceToolResp{
 			CallID:  callID,
 			Output:  fmt.Sprintf("Tool %s was denied: %s", name, decision.Reason),
@@ -279,7 +279,7 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 	// at each iteration boundary, then diff. If the active set changed
 	// (load_tools / unload_tools / tool_search materialised something
 	// or aged it out), ship the new tool list back so the client can
-	// session.update — otherwise the realtime session stays stuck on
+	// session.update - otherwise the realtime session stays stuck on
 	// the schemas it had at mint time.
 	sess.Active.DecayTTL()
 	afterActive := stringSet(sess.Active.Names())

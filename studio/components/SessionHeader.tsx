@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { SessionsDrawer } from "@/components/SessionsDrawer";
 
 function shortId(id: string): string {
-  if (!id) return "—";
+  if (!id) return "-";
   const tail = id.replace(/-/g, "").slice(-8);
   if (tail.length < 8) return tail;
   return `${tail.slice(0, 4)}-${tail.slice(4)}`;
@@ -24,11 +24,11 @@ function formatStarted(ms: number): string {
 }
 
 /**
- * SessionHeader — the bar across the top of the Live chat surface.
+ * SessionHeader - the bar across the top of the Live chat surface.
  *
  * The session name is the primary affordance: tap it (or the chevron) to
  * open a bottom-sheet drawer listing every other session with search.
- * Picking a session swaps the conversation in place — no /sessions route
+ * Picking a session swaps the conversation in place - no /sessions route
  * to navigate to anymore (we collapsed that surface into this drawer).
  *
  * Falls back to a short hex ID when the session hasn't been auto-named
@@ -112,7 +112,7 @@ export function SessionHeader({
           variant="ghost"
           size="sm"
           onClick={onClear}
-          aria-label="Compact session — fold into memory and clear visible context"
+          aria-label="Compact session - fold into memory and clear visible context"
           title="Compact session"
           className="h-7 gap-1 px-2 text-xs"
         >

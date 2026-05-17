@@ -12,34 +12,34 @@ import (
 	"github.com/google/uuid"
 )
 
-// Delegate is the model-callable sub-agent spawner — Infinity's answer to
+// Delegate is the model-callable sub-agent spawner - Infinity's answer to
 // Claude Code's Task tool. The parent agent invokes delegate with a tight
 // task description and a tool subset; we spin a fresh session, run an
 // independent loop to completion, and hand back a single summary. The
-// parent's context only ever sees the request and the summary — the
+// parent's context only ever sees the request and the summary - the
 // 30-100 intermediate tool calls and reasoning steps stay in the child's
 // ephemeral context and evaporate when the session is cleared.
 //
 // Five refinements over the vanilla Task pattern:
 //
-//  1. Shared memory substrate — the child reads/writes the same `mem_*`
+//  1. Shared memory substrate - the child reads/writes the same `mem_*`
 //     tables via the parent's MemoryProvider and Hooks, so learnings
 //     promote to long-term memory automatically. Claude Code can't do
 //     this; their delegated work evaporates.
 //
-//  2. Persona library — `persona_id` looks up a procedural memory
+//  2. Persona library - `persona_id` looks up a procedural memory
 //     (CoALA tier) and applies it as the child's base prompt. New
 //     personas = new memory rows, zero code.
 //
-//  3. Structured output — `output_schema` (JSON Schema) makes the child
+//  3. Structured output - `output_schema` (JSON Schema) makes the child
 //     return a parseable JSON blob the parent can act on without
 //     re-parsing prose. Failed schema validation surfaces as a tool error.
 //
-//  4. Hard caps — every delegate has explicit ceilings on iterations,
+//  4. Hard caps - every delegate has explicit ceilings on iterations,
 //     wall-clock time, and (soon) token budget. A runaway sub-agent
 //     can't blow up the parent's bill.
 //
-//  5. Parallel variant — delegate_parallel runs N independent tasks
+//  5. Parallel variant - delegate_parallel runs N independent tasks
 //     concurrently and merges their summaries.
 //
 // Allowed-tools defaults: if the caller leaves `allowed_tools` empty, the
@@ -62,7 +62,7 @@ func (d *Delegate) Schema() map[string]any {
 		"properties": map[string]any{
 			"task": map[string]any{
 				"type":        "string",
-				"description": "Tight, self-contained task description. The sub-agent has no access to this conversation — give it every detail it needs to act.",
+				"description": "Tight, self-contained task description. The sub-agent has no access to this conversation - give it every detail it needs to act.",
 			},
 			"context_brief": map[string]any{
 				"type":        "string",
@@ -75,7 +75,7 @@ func (d *Delegate) Schema() map[string]any {
 			},
 			"persona": map[string]any{
 				"type":        "string",
-				"description": "Optional persona prompt — a focused role for the sub-agent (e.g. 'code-reviewer', 'researcher'). Overrides the default sub-agent base prompt.",
+				"description": "Optional persona prompt - a focused role for the sub-agent (e.g. 'code-reviewer', 'researcher'). Overrides the default sub-agent base prompt.",
 			},
 			"output_schema": map[string]any{
 				"type":        "object",
@@ -101,7 +101,7 @@ func (d *Delegate) Schema() map[string]any {
 }
 
 const (
-	// Sub-agent iteration budget. Was 20/40 — too tight once you account
+	// Sub-agent iteration budget. Was 20/40 - too tight once you account
 	// for tool discovery overhead inside the child loop. Bumped so a
 	// delegated multi-step task (find → act → verify) doesn't hit the
 	// wall before reporting back.
@@ -137,7 +137,7 @@ const delegateBasePrompt = `You are a focused sub-agent spawned to complete one 
 You do not have visibility into the parent conversation. You have access to a tool subset chosen for this task plus the shared memory substrate (memory_search, memory_recall).
 
 Discipline:
-- Do the work, then summarize. Don't ask the parent for clarification — make the best call with what you have.
+- Do the work, then summarize. Don't ask the parent for clarification - make the best call with what you have.
 - When you've answered the task, stop calling tools and write the final summary in plain text (or JSON if an output_schema was given).
 - Be concise. Your summary is what the parent sees; intermediate reasoning is invisible to them.
 - If you genuinely cannot make progress (truly blocked, not just hard), state what's missing in your final summary and stop.`
@@ -156,7 +156,7 @@ func (d *Delegate) Execute(ctx context.Context, input map[string]any) (string, e
 	persona, _ := input["persona"].(string)
 	// Any model string (full id, tier nickname like "haiku"/"sonnet", or
 	// the wrong provider's name) is normalized inside the LLM provider's
-	// Stream() — see normalize{Anthropic,OpenAI}Model and the OAuth
+	// Stream() - see normalize{Anthropic,OpenAI}Model and the OAuth
 	// retry-on-400 path. Pass through unchanged.
 	model, _ := input["model"].(string)
 
@@ -222,7 +222,7 @@ type runArgs struct {
 func (d *Delegate) run(ctx context.Context, args runArgs) (string, error) {
 	childID := delegateSessionIDPrefix + uuid.NewString()
 	child := d.Loop.GetOrCreateSession(childID)
-	defer d.Loop.ClearSession(childID) // ephemeral — tear down on return
+	defer d.Loop.ClearSession(childID) // ephemeral - tear down on return
 
 	// Scope the child's tool surface to the requested subset (pinned
 	// discipline tools always stay).
@@ -271,7 +271,7 @@ func (d *Delegate) run(ctx context.Context, args runArgs) (string, error) {
 			case EventError:
 				runErr = errors.New(ev.Error)
 			case EventComplete:
-				// Loop terminates after Complete — we'll exit when the
+				// Loop terminates after Complete - we'll exit when the
 				// channel closes.
 			}
 		}

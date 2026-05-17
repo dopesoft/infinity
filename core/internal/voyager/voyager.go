@@ -2,18 +2,18 @@
 //
 // Three coordinated subsystems:
 //
-//  1. SessionEnd extractor — when a session ends, score recent observations
+//  1. SessionEnd extractor - when a session ends, score recent observations
 //     against a heuristic (≥3 distinct tools, no fatal errors, ≥30s elapsed).
 //     If it passes, Haiku drafts a SKILL.md candidate from the transcript and
 //     a row lands in mem_skill_proposals.
 //
-//  2. Real-time discovery — every PostToolUse, the manager appends the tool
+//  2. Real-time discovery - every PostToolUse, the manager appends the tool
 //     to a per-session window. When the same N-tuple of consecutive tools
 //     appears across multiple sessions within a sliding window, that's a
-//     pattern worth crystallizing — the agent is doing the same dance often
+//     pattern worth crystallizing - the agent is doing the same dance often
 //     enough that a one-shot skill would be cheaper.
 //
-//  3. Verifier — for each candidate, Haiku generates synthetic test cases.
+//  3. Verifier - for each candidate, Haiku generates synthetic test cases.
 //     Instruction-only skills (no impl) auto-promote because there's nothing
 //     executable to verify. Implementation-bearing skills sit as candidates
 //     until a human (or future automated runner) confirms.
@@ -51,7 +51,7 @@ type Manager struct {
 	// retrieve via the same RRF/search machinery as semantic facts.
 	onPromoted func(ctx context.Context, name, description, skillMD string)
 
-	// Discovery state — per-session sliding windows of recent tool names plus
+	// Discovery state - per-session sliding windows of recent tool names plus
 	// a global counter of repeated triplets across sessions.
 	mu              sync.Mutex
 	sessionWindows  map[string][]toolEvent
@@ -92,7 +92,7 @@ type Config struct {
 }
 
 func New(cfg Config) *Manager {
-	/* Voyager is on by default — the substrate is mature enough that an
+	/* Voyager is on by default - the substrate is mature enough that an
 	 * always-running discovery + extraction loop pays for itself in skill
 	 * candidates. Set INFINITY_VOYAGER=false (or 0/off/no) to disable
 	 * explicitly; everything else (unset, empty, anything truthy) treats
@@ -217,7 +217,7 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 		}
 		// Persist to Postgres FIRST so the skill survives any container
 		// restart (Railway redeploys wipe the ephemeral filesystem).
-		// Disk write is then a derivative — used by the loader to
+		// Disk write is then a derivative - used by the loader to
 		// populate the in-memory registry. On every boot the
 		// MaterializeFromDB hook (see skills.MaterializeActiveSkills)
 		// re-syncs disk to match active rows in Postgres, so even if
@@ -233,7 +233,7 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 			_, _ = m.skillsReg.Reload(ctx)
 		}
 		if m.onPromoted != nil {
-			// Fire async — procedural-memory writes embed text via Haiku
+			// Fire async - procedural-memory writes embed text via Haiku
 			// and shouldn't block the Trust-queue response.
 			go func(n, d, md string) {
 				bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -266,7 +266,7 @@ func (m *Manager) writeSkillToDisk(name, skillMD string) error {
 // persistSkillToDB upserts the auto-evolved skill into the three durable
 // tables (mem_skills + mem_skill_versions + mem_skill_active) inside a
 // single transaction. This is the deploy-survival guarantee for skills
-// generated at runtime — Railway's ephemeral container filesystem can
+// generated at runtime - Railway's ephemeral container filesystem can
 // disappear on every push, but these Postgres rows persist forever and
 // are re-materialized to disk on the next boot.
 func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, description, riskLevel string) error {
@@ -301,7 +301,7 @@ func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, 
 		return fmt.Errorf("upsert mem_skills: %w", err)
 	}
 
-	// 2. Insert the new version row (immutable history — every evolution
+	// 2. Insert the new version row (immutable history - every evolution
 	//    leaves a trail).
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO mem_skill_versions (skill_name, version, skill_md, source, promoted_at)

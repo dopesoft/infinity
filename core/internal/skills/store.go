@@ -12,7 +12,7 @@ import (
 )
 
 // Store persists skill metadata, version history, and run logs. The Registry
-// can run without a Store — Store is optional and used only when DATABASE_URL
+// can run without a Store - Store is optional and used only when DATABASE_URL
 // is configured.
 type Store struct {
 	pool *pgxpool.Pool

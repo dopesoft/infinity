@@ -7,7 +7,7 @@
  *
  * Light: clean neutral white-on-near-black surfaces, no blue tint.
  * Dark:  TRUE black backgrounds (#000) with neutral gray surfaces; no
- *        blue/slate undertone — "OLED-friendly" look.
+ *        blue/slate undertone - "OLED-friendly" look.
  *
  * NOTE: Dark mode foreground deliberately keeps a touch of warmth via
  * higher lightness; pure white on pure black is harsh, so we use 0 0% 96%.
@@ -152,7 +152,7 @@
   /* ≥16px on text-entry fields keeps iOS Safari from auto-zooming on
    * focus, which blocks the URL-bar collapse and breaks dvh layout math.
    * Scoped to touch devices via @media (pointer: coarse) so desktop UIs
-   * are free to use text-sm / text-xs on inputs without overriding —
+   * are free to use text-sm / text-xs on inputs without overriding -
    * iPhones, iPads, and Android stay locked at 16px+, mice/trackpads
    * (laptops, desktops) honor whatever Tailwind class wins.
    *
@@ -178,7 +178,7 @@
 
 @layer utilities {
   /* Use --app-height (100dvh) so the viewport math is correct as iOS
-   * Safari's URL bar collapses/expands. Avoid 100vh — it locks to the
+   * Safari's URL bar collapses/expands. Avoid 100vh - it locks to the
    * "expanded" height and produces overflow under the home indicator. */
   .h-app {
     height: var(--app-height);
@@ -191,7 +191,7 @@
    *
    * Each utility takes the LARGER of (a) the OS safe-area inset and
    * (b) a sane base padding. The base matters because env(safe-area-*)
-   * resolves to 0px on desktop and on phones in landscape — so the
+   * resolves to 0px on desktop and on phones in landscape - so the
    * naive `padding: env(safe-area-inset-bottom)` form collapses to 0
    * and a footer action bar ends up flush against the modal border.
    *
@@ -219,7 +219,7 @@
 
   /* Hide scrollbar chrome on horizontally-scrolling rails (snap rows of
    * cards, chip ribbons). Pointers still scroll on desktop, fingers still
-   * scroll on touch — we just don't render the bar. */
+   * scroll on touch - we just don't render the bar. */
   .no-scrollbar {
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -268,7 +268,7 @@
     }
   }
 
-  /* Heartbeat pulse — radial ring that fades outward on a 2s cycle. Used
+  /* Heartbeat pulse - radial ring that fades outward on a 2s cycle. Used
    * as the hero status indicator on /heartbeat so the page reads as a
    * live system monitor, not a static dashboard. Two staggered rings
    * give the impression of a continuous pulse without burning frames. */
@@ -316,7 +316,7 @@
 }
 
 /* -----------------------------------------------------------------------
- * vaul (Drawer) tokens — overrides so the bottom-drawer surface uses our
+ * vaul (Drawer) tokens - overrides so the bottom-drawer surface uses our
  * popover token instead of the library's default theme.
  * --------------------------------------------------------------------- */
 @layer components {

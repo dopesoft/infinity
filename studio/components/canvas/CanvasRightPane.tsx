@@ -11,7 +11,7 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * CanvasRightPane — VS Code-style tabbed editor group.
+ * CanvasRightPane - VS Code-style tabbed editor group.
  *
  * Tab 1 is always Preview (pinned, non-closable). Subsequent tabs are open
  * files, ordered by open time. Active-tab content renders below the tab
@@ -23,7 +23,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const stripRef = useRef<HTMLDivElement>(null);
 
-  // When the active tab changes, scroll it into view in the strip — mobile
+  // When the active tab changes, scroll it into view in the strip - mobile
   // and small desktop widths can clip the strip horizontally.
   useEffect(() => {
     const strip = stripRef.current;
@@ -114,7 +114,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
         })}
       </div>
 
-      {/* Content area — every tab is kept mounted to avoid Monaco re-init. */}
+      {/* Content area - every tab is kept mounted to avoid Monaco re-init. */}
       <div className="relative min-h-0 flex-1">
         <div
           className={cn(
@@ -152,6 +152,6 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
 
 function cssAttr(s: string) {
   // CSS attribute selectors don't tolerate ":" without escaping. file tab
-  // IDs are "file:/abs/path" — escape the colon so querySelector finds them.
+  // IDs are "file:/abs/path" - escape the colon so querySelector finds them.
   return s.replace(/:/g, "\\:");
 }

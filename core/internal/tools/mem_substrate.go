@@ -1,4 +1,4 @@
-// mem_substrate — the generic read/write substrate over mem_* tables.
+// mem_substrate - the generic read/write substrate over mem_* tables.
 //
 // Before this, every new mem_* table required a bespoke Go list tool +
 // bespoke Go mutate tool. Now the agent uses:
@@ -76,7 +76,7 @@ func validateIdent(name string) error {
 	return nil
 }
 
-// confirmTableExists protects against typo'd table names from the LLM —
+// confirmTableExists protects against typo'd table names from the LLM -
 // information_schema is the authoritative existence check.
 func confirmTableExists(ctx context.Context, pool *pgxpool.Pool, name string) error {
 	var n int
@@ -148,7 +148,7 @@ func (t *memList) Execute(ctx context.Context, in map[string]any) (string, error
 	statusFilter := strString(in, "status")
 	unreadOnly, _ := in["unread_only"].(bool)
 
-	// Discover columns for this table — text-castable subset.
+	// Discover columns for this table - text-castable subset.
 	cols, hasStatus, hasUnread, err := t.readColumns(ctx, table)
 	if err != nil {
 		return "", err
@@ -157,7 +157,7 @@ func (t *memList) Execute(ctx context.Context, in map[string]any) (string, error
 		return "", fmt.Errorf("table %q has no readable columns", table)
 	}
 
-	// Build SELECT col1::text, col2::text, ... — uniform string output so
+	// Build SELECT col1::text, col2::text, ... - uniform string output so
 	// the agent gets stable JSON regardless of underlying types.
 	selects := make([]string, 0, len(cols))
 	for _, c := range cols {
@@ -181,7 +181,7 @@ func (t *memList) Execute(ctx context.Context, in map[string]any) (string, error
 }
 
 // readColumns pulls a short, predictable column list from information_schema
-// for a given mem_* table. Caps at 12 to keep payloads bounded — if the
+// for a given mem_* table. Caps at 12 to keep payloads bounded - if the
 // agent needs more it can name them explicitly via a future tool. Returns
 // the chosen columns, whether 'status' and 'unread' are among them.
 func (t *memList) readColumns(ctx context.Context, table string) ([]string, bool, bool, error) {
@@ -243,7 +243,7 @@ func (t *memAct) Name() string { return "mem_act" }
 func (t *memAct) Description() string {
 	return "Apply a REGISTERED action (mem_action_schemas) to one or more rows " +
 		"in a mem_* table by id. The action vocabulary is bounded: set_status, " +
-		"set_timestamp, set_null, set_bool — no arbitrary SQL. Use action_list " +
+		"set_timestamp, set_null, set_bool - no arbitrary SQL. Use action_list " +
 		"or system_map to see which (table, action) pairs are registered. To " +
 		"register a new action, use action_register."
 }
@@ -420,7 +420,7 @@ func (t *actionRegister) Execute(ctx context.Context, in map[string]any) (string
 	if err := validateIdent(column); err != nil {
 		return "", err
 	}
-	// Confirm the column exists on the table — defence against typos.
+	// Confirm the column exists on the table - defence against typos.
 	var n int
 	if err := t.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM information_schema.columns
@@ -467,7 +467,7 @@ func (t *actionList) Name() string        { return "action_list" }
 func (t *actionList) ReadOnly() bool      { return true }
 func (t *actionList) Description() string {
 	return "List registered action schemas. Optionally filter by table. Returns " +
-		"every (table, action, op, column, value, source) tuple — the agent's " +
+		"every (table, action, op, column, value, source) tuple - the agent's " +
 		"complete mutation vocabulary."
 }
 func (t *actionList) Schema() map[string]any {

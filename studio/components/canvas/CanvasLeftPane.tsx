@@ -17,13 +17,13 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * CanvasLeftPane — vertical split: tabbed Files/Git on top, composer on
+ * CanvasLeftPane - vertical split: tabbed Files/Git on top, composer on
  * bottom. The composer's panel sets a minimum so the chat input never
  * collapses below a usable height; the tabs panel takes the rest.
  *
  * The Files vs Git split is intentional: file tree gives you anywhere-in-repo
  * read access (open any file in a Monaco tab), while Git shows the *changes*
- * — the ones the agent or the boss is about to ship. They mirror VS Code's
+ * - the ones the agent or the boss is about to ship. They mirror VS Code's
  * Explorer + Source Control split.
  */
 export function CanvasLeftPane({ chat }: { chat: ChatHook }) {

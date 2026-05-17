@@ -9,7 +9,7 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * WorkspaceChatColumn — the chat surface in the unified /live workspace.
+ * WorkspaceChatColumn - the chat surface in the unified /live workspace.
  *
  * Layout: coding-session banner (one-shot dismissable) at the top, conversation
  * stream filling the middle, AI prompt box pinned to the bottom inside a

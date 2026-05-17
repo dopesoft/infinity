@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// deploy_api.go — "is the running binary behind main?" detection.
+// deploy_api.go - "is the running binary behind main?" detection.
 //
-// Railway injects RAILWAY_GIT_COMMIT_SHA at deploy time — that's the SHA the
+// Railway injects RAILWAY_GIT_COMMIT_SHA at deploy time - that's the SHA the
 // running binary was built from. We poll GitHub's main HEAD periodically
 // and compare. The Studio Files panel surfaces the gap so Jarvis (and the
 // boss) know when a fresher build is on its way.
@@ -71,7 +71,7 @@ func (t *deployTracker) snapshot() deployStatus {
 }
 
 // refresh hits GitHub's REST API once and updates the cached status.
-// No auth needed for public repos at 60 req/hr per IP — we poll every
+// No auth needed for public repos at 60 req/hr per IP - we poll every
 // 5 min so we use 12/hr.
 func (t *deployTracker) refresh(ctx context.Context) error {
 	url := "https://api.github.com/repos/" + t.owner + "/" + t.repo + "/commits/" + t.branch
@@ -129,7 +129,7 @@ func (t *deployTracker) refresh(ctx context.Context) error {
 }
 
 // fetchCompareAheadBy returns how many commits `head` is ahead of `base`.
-// Returns 0 on any error or rate-limit — the "behind" boolean is still
+// Returns 0 on any error or rate-limit - the "behind" boolean is still
 // authoritative; this is just for the count.
 func (t *deployTracker) fetchCompareAheadBy(ctx context.Context, base, head string) int {
 	url := "https://api.github.com/repos/" + t.owner + "/" + t.repo + "/compare/" + base + "..." + head

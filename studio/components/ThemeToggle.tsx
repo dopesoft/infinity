@@ -86,7 +86,7 @@ export function ThemeToggle({
     );
   }
 
-  // Desktop variant: same cycle behaviour as the mobile drawer row — one
+  // Desktop variant: same cycle behaviour as the mobile drawer row - one
   // tap advances Light → Dark → Auto → Light. No dropdown, no menu state
   // to hydrate. The aria-label always reflects the *current* theme so
   // screen readers + tooltips read the active state, not the action.

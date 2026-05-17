@@ -56,7 +56,7 @@ export function SystemPanel({ wsConnected }: { wsConnected: boolean }) {
   }, []);
 
   const activeSkills = skills?.filter((s) => s.status === "active").length ?? 0;
-  const provider = status?.provider ?? "—";
+  const provider = status?.provider ?? "-";
   const memoryStoreLabel = counts ? "healthy" : wsConnected ? "warming" : "offline";
   const memoryStoreClass = counts
     ? "text-success"
@@ -75,12 +75,12 @@ export function SystemPanel({ wsConnected }: { wsConnected: boolean }) {
 
         <dt className="text-muted-foreground">Observations</dt>
         <dd className="font-mono tabular-nums">
-          {counts ? compactNum(counts.observations) : "—"}
+          {counts ? compactNum(counts.observations) : "-"}
         </dd>
 
         <dt className="text-muted-foreground">Memories</dt>
         <dd className="font-mono tabular-nums">
-          {counts ? compactNum(counts.memories) : "—"}
+          {counts ? compactNum(counts.memories) : "-"}
         </dd>
 
         <dt className="text-muted-foreground">Skills active</dt>
@@ -88,7 +88,7 @@ export function SystemPanel({ wsConnected }: { wsConnected: boolean }) {
 
         <dt className="text-muted-foreground">Uptime</dt>
         <dd className="font-mono tabular-nums" suppressHydrationWarning>
-          {bootedAt && now ? formatUptime(now - bootedAt) : "—"}
+          {bootedAt && now ? formatUptime(now - bootedAt) : "-"}
         </dd>
       </dl>
     </SidePanelCard>

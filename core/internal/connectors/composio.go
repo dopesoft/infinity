@@ -1,4 +1,4 @@
-// Package connectors — Composio REST execute client.
+// Package connectors - Composio REST execute client.
 //
 // Counterpart to cache.go (which lists connected accounts). This file
 // exposes the *action* surface: pick an action slug, point it at a
@@ -14,7 +14,7 @@
 //              "arguments": {...} }
 //
 // The full SDK supports custom_auth_params, modifiers, file handling,
-// and tracing — none of which a cron poll needs. We keep this thin on
+// and tracing - none of which a cron poll needs. We keep this thin on
 // purpose; expand it when a concrete caller actually needs the extra
 // surface area.
 
@@ -35,7 +35,7 @@ const composioExecuteBase = "https://backend.composio.dev/api/v3"
 
 // ExecuteRequest is what callers hand to Client.Execute. ConnectedAccountID
 // is required for any action that hits an authenticated upstream (every
-// Gmail/Calendar action does). UserID may be left empty — Composio defaults
+// Gmail/Calendar action does). UserID may be left empty - Composio defaults
 // to the user the connected_account belongs to.
 type ExecuteRequest struct {
 	Slug               string         `json:"-"` // path param, not body
@@ -82,7 +82,7 @@ func NewExecuteClient(keyFn func() string) *ExecuteClient {
 
 // Execute fires one POST /api/v3/tools/execute/{slug} call. Returns the
 // parsed envelope OR a transport/decoding error. A successful response
-// from Composio with Successful=false is NOT treated as a Go error — the
+// from Composio with Successful=false is NOT treated as a Go error - the
 // caller inspects `resp.Successful` + `resp.Error` and decides whether
 // to retry, surface, or capture.
 func (c *ExecuteClient) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {

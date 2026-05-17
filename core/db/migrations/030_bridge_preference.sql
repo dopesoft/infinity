@@ -13,9 +13,9 @@
 -- on the other when the boss switches devices.
 --
 -- bridge_preference values:
---   'auto'  — prefer Mac when its /health is up; fall back to cloud.
---   'mac'   — Mac only; surface an error if it's offline (no silent fall).
---   'cloud' — Cloud only; pin the session to the Railway workspace.
+--   'auto'  - prefer Mac when its /health is up; fall back to cloud.
+--   'mac'   - Mac only; surface an error if it's offline (no silent fall).
+--   'cloud' - Cloud only; pin the session to the Railway workspace.
 
 ALTER TABLE mem_sessions
     ADD COLUMN IF NOT EXISTS bridge_preference TEXT

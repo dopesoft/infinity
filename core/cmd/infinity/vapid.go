@@ -18,7 +18,7 @@ import (
 //
 // VAPID keys identify Core as the legitimate origin of push messages to
 // Apple/Google push services. They're a one-time generation per
-// production environment — don't rotate them lightly because every
+// production environment - don't rotate them lightly because every
 // subscribed device is tied to the public key on file when it
 // subscribed. Rotation invalidates all existing subscriptions.
 func vapidCmd() *cobra.Command {

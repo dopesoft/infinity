@@ -21,7 +21,7 @@ import (
 //  1. SHA-256 dedup with 5-minute window
 //  2. privacy.StripSecrets (regex + <private> tags)
 //  3. Insert raw observation
-//  4. (Optional) compress to mem_memories via Claude Haiku — gated by
+//  4. (Optional) compress to mem_memories via Claude Haiku - gated by
 //     INFINITY_AUTO_COMPRESS=true. Async; never blocks the agent loop.
 //  5. Generate vector embedding (best-effort)
 //  6. Audit

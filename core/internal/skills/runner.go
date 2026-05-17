@@ -111,7 +111,7 @@ func validateInputs(skill *Skill, args map[string]any) error {
 
 // buildCommand resolves how to execute the skill: implementation file if
 // present, otherwise the body Markdown is treated as a prompt for an LLM
-// sub-call (handled by registry_tools.go via the parent agent — when there is
+// sub-call (handled by registry_tools.go via the parent agent - when there is
 // no implementation file, runInProcess will return an error and registry_tools
 // surfaces the body to the model).
 func buildCommand(skill *Skill, args map[string]any) ([]string, error) {
@@ -153,7 +153,7 @@ func timeoutFor(skill *Skill) time.Duration {
 }
 
 // defaultAllowedEnv returns the env-var names a skill is permitted to inherit.
-// Skills declare extras via documentation; the v1 default exposes nothing —
+// Skills declare extras via documentation; the v1 default exposes nothing -
 // skills are expected to take inputs via argv or stdin.
 func defaultAllowedEnv(skill *Skill) []string {
 	out := []string{"PATH", "HOME", "TMPDIR"}

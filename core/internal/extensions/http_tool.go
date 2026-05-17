@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// HTTPTool is a generic native tool built from an HTTPToolConfig — the
+// HTTPTool is a generic native tool built from an HTTPToolConfig - the
 // payoff of runtime self-extension. The agent registers any REST endpoint
 // via extension_register (kind=http_tool) and it becomes a first-class
 // tool: {{param}} placeholders in the URL / headers / body are filled from
@@ -76,7 +76,7 @@ func (t *HTTPTool) Schema() map[string]any {
 
 // Execute fills {{param}} placeholders from the call args, sends the
 // request, and returns {status, body} as JSON. Non-2xx responses are NOT
-// Go errors — the agent gets the status + body and decides. Only a
+// Go errors - the agent gets the status + body and decides. Only a
 // transport failure returns an error.
 func (t *HTTPTool) Execute(ctx context.Context, in map[string]any) (string, error) {
 	subst := func(s string) string {

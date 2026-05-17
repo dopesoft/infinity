@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Compact circular context meter — modeled on Claude Code / Codex CLI's
+ * Compact circular context meter - modeled on Claude Code / Codex CLI's
  * context indicator. Renders a tiny SVG ring that fills as the active
  * session's context window approaches capacity. Clicking opens a modal
  * (desktop) or bottom drawer (mobile) with the per-category breakdown.
@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 export function ContextMeter({ sessionId }: { sessionId?: string }) {
   const [data, setData] = useState<ContextUsageDTO | null>(null);
   const [open, setOpen] = useState(false);
-  // Subscribe to the same model broadcast Settings + the chip use — when
+  // Subscribe to the same model broadcast Settings + the chip use - when
   // the active model or provider changes, we re-fetch immediately so the
   // meter never lags the actual runtime.
   const { setting } = useGlobalModel();
@@ -80,7 +80,7 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
 
 // ── Ring ──────────────────────────────────────────────────────────────────
 // 18px SVG ring sitting inside the 32px button. Stroke colors shift with
-// fill — info under 70%, warning above 70%, danger above 90% — same
+// fill - info under 70%, warning above 70%, danger above 90% - same
 // semantics Claude Code uses.
 function Ring({ pct }: { pct: number }) {
   const r = 7;
@@ -222,8 +222,8 @@ function SegmentedBar({
 }
 
 // Color palette mirrors Claude Code's: each category gets a distinct hue,
-// "free space" stays muted. Tokens come from globals.css — info/warning/
-// danger/success + the tier palette — so they swap with the theme.
+// "free space" stays muted. Tokens come from globals.css - info/warning/
+// danger/success + the tier palette - so they swap with the theme.
 function colorForCategory(id: string): string {
   switch (id) {
     case "system_prompt":

@@ -85,7 +85,7 @@ func (a *Anthropic) Stream(
 	out chan<- StreamEvent,
 ) (Response, error) {
 	// Per-call model override (studio model chip). Falls back to the
-	// boot-time default when unset. We don't validate the string here —
+	// boot-time default when unset. We don't validate the string here -
 	// the Anthropic API surfaces a 404 / invalid-model error if the
 	// client requests something unrecognized, which the WS error path
 	// already plumbs back to the user.

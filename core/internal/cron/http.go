@@ -109,7 +109,7 @@ func (a *API) handleScoped(w http.ResponseWriter, r *http.Request) {
 		}
 		runErr := a.scheduler.RunOnce(r.Context(), *found)
 		if runErr != nil {
-			// Report the failure but still 200 — the run completed
+			// Report the failure but still 200 - the run completed
 			// with an error, the client wants to render it. Same
 			// semantics as a scheduled fire that errored.
 			writeJSON(w, http.StatusOK, map[string]any{

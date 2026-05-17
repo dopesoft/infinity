@@ -27,13 +27,13 @@ func NewAPI(p *pgxpool.Pool, hb *Heartbeat, ts *TrustStore, is *intent.Store) *A
 
 // Routes registers under:
 //
-//	GET  /api/heartbeat           — recent runs + last summary
-//	POST /api/heartbeat/run       — run-now button
-//	GET  /api/heartbeat/findings  — recent findings
+//	GET  /api/heartbeat           - recent runs + last summary
+//	POST /api/heartbeat/run       - run-now button
+//	GET  /api/heartbeat/findings  - recent findings
 //	POST /api/curiosity/questions/:id/decide
-//	GET  /api/trust-contracts     — pending queue
+//	GET  /api/trust-contracts     - pending queue
 //	POST /api/trust-contracts/:id/decide
-//	GET  /api/intent/recent       — last 50 IntentFlow decisions
+//	GET  /api/intent/recent       - last 50 IntentFlow decisions
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/heartbeat", a.handleHeartbeats)
 	mux.HandleFunc("/api/heartbeat/run", a.handleHeartbeatRun)
@@ -177,7 +177,7 @@ func (a *API) handleCuriosityScoped(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 	switch body.Decision {
-	// "approved" means the boss told the agent to act on the question —
+	// "approved" means the boss told the agent to act on the question -
 	// the chat surface fires this alongside a follow-up turn that hands
 	// the agent the finding to fix. It resolves the question like
 	// answered/dismissed do (it's no longer open), just with a status

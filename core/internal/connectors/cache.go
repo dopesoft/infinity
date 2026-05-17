@@ -5,7 +5,7 @@
 // the agent loop can render account-aware catalog hints without a network
 // hop on every turn.
 //
-// Aliases (human-readable labels — "personal", "work", "support inbox")
+// Aliases (human-readable labels - "personal", "work", "support inbox")
 // live in `infinity_meta` under a single JSON blob keyed by Composio's
 // connected_account id. Editing happens via REST from Studio; reads are
 // folded into the cache snapshot.
@@ -28,7 +28,7 @@ import (
 
 // Account is the cached projection of one Composio connected_account
 // row plus the boss's alias overlay. Field set is intentionally narrow
-// — only what the agent loop needs to render its system-prompt block.
+// - only what the agent loop needs to render its system-prompt block.
 type Account struct {
 	ID           string    `json:"id"`
 	ToolkitSlug  string    `json:"toolkit_slug"`
@@ -48,8 +48,8 @@ const MetaKey = "connectors_aliases"
 
 // IdentityMetaKey is the infinity_meta row that caches the real OAuth
 // identity per connected_account (e.g. Gmail's emailAddress). Composio's
-// /connected_accounts list response often omits the upstream identity —
-// for Gmail you have to call GMAIL_GET_PROFILE to learn the email — so
+// /connected_accounts list response often omits the upstream identity -
+// for Gmail you have to call GMAIL_GET_PROFILE to learn the email - so
 // we fetch lazily on the first Refresh after a new account appears,
 // cache forever, and overlay onto every system-prompt render.
 //
@@ -75,7 +75,7 @@ type Cache struct {
 	aliases     map[string]string
 	// identities is the agent-discovered overlay: account_id → real
 	// upstream identity (email / handle / username). Written by the
-	// generic `connector_identity_set` tool — Composio's list response
+	// generic `connector_identity_set` tool - Composio's list response
 	// doesn't reliably include OAuth identity, but the agent has every
 	// toolkit's verbs and can call e.g. GMAIL_GET_PROFILE / slack auth.test
 	// / github__get_me itself, then persist the result here. Generic
@@ -88,7 +88,7 @@ type Cache struct {
 	// (toolkit_slug → connected account count) changed since the last
 	// snapshot. The toolkit-verb registrar subscribes to this so a new
 	// Composio connection lights up the agent's tool catalog without
-	// waiting for a redeploy — runtime adaptation is the point.
+	// waiting for a redeploy - runtime adaptation is the point.
 	onChangeMu sync.Mutex
 	onChange   func()
 	lastShape  map[string]int
@@ -112,7 +112,7 @@ func New(pool *pgxpool.Pool, adminKey func() string) *Cache {
 	}
 }
 
-// Start kicks the background refresh loop. Idempotent — calling twice
+// Start kicks the background refresh loop. Idempotent - calling twice
 // is harmless. Stop with cancel from the parent context.
 func (c *Cache) Start(ctx context.Context) {
 	if c.cancel != nil {
@@ -151,12 +151,12 @@ func (c *Cache) Refresh(ctx context.Context) error {
 	aliases, err := c.loadAliases(ctx)
 	if err != nil {
 		c.recordErr("alias load: " + err.Error())
-		// Continue — we can still refresh the account list, just without alias overlay.
+		// Continue - we can still refresh the account list, just without alias overlay.
 	}
 	identities, err := c.loadIdentities(ctx)
 	if err != nil {
 		c.recordErr("identity load: " + err.Error())
-		// Continue — identity overlay is optional.
+		// Continue - identity overlay is optional.
 	}
 	accounts, err := c.loadAccounts(ctx)
 	if err != nil {
@@ -291,7 +291,7 @@ func (c *Cache) Status() Status {
 // SetAlias upserts the alias for a single connected_account id and
 // invalidates the cache so the next read sees the new label. Persists
 // to infinity_meta atomically by re-marshalling the full map (we have
-// O(dozens) of entries — JSON in a single row is fine).
+// O(dozens) of entries - JSON in a single row is fine).
 func (c *Cache) SetAlias(ctx context.Context, accountID, alias string) error {
 	if strings.TrimSpace(accountID) == "" {
 		return fmt.Errorf("account id required")
@@ -337,7 +337,7 @@ func (c *Cache) Aliases() map[string]string {
 // SetIdentity upserts the agent-discovered upstream identity for a
 // connected_account (e.g. Gmail's emailAddress, Slack's user handle,
 // GitHub's login). Called by the generic `connector_identity_set` tool.
-// Generic — no toolkit-specific code lives here; the agent decides what
+// Generic - no toolkit-specific code lives here; the agent decides what
 // verb to call to learn the identity and writes the result back here.
 func (c *Cache) SetIdentity(ctx context.Context, accountID, identity string) error {
 	if strings.TrimSpace(accountID) == "" {
@@ -382,7 +382,7 @@ func (c *Cache) Identities() map[string]string {
 }
 
 // loadIdentities reads the persisted identity blob. Same pattern as
-// loadAliases — JSON in a single infinity_meta row.
+// loadAliases - JSON in a single infinity_meta row.
 func (c *Cache) loadIdentities(ctx context.Context) (map[string]string, error) {
 	out := make(map[string]string)
 	if c.pool == nil {
@@ -419,7 +419,7 @@ func (c *Cache) saveIdentities(ctx context.Context, m map[string]string) error {
 }
 
 // loadAliases reads the alias JSON blob from infinity_meta. Missing
-// row = empty map, not an error — first-time boot has no aliases.
+// row = empty map, not an error - first-time boot has no aliases.
 func (c *Cache) loadAliases(ctx context.Context) (map[string]string, error) {
 	out := make(map[string]string)
 	if c.pool == nil {
@@ -428,7 +428,7 @@ func (c *Cache) loadAliases(ctx context.Context) (map[string]string, error) {
 	var raw string
 	err := c.pool.QueryRow(ctx, `SELECT value FROM infinity_meta WHERE key = $1`, MetaKey).Scan(&raw)
 	if err != nil {
-		// pgx returns ErrNoRows for missing — treat as empty map.
+		// pgx returns ErrNoRows for missing - treat as empty map.
 		return out, nil
 	}
 	if strings.TrimSpace(raw) == "" {
@@ -458,7 +458,7 @@ func (c *Cache) saveAliases(ctx context.Context, m map[string]string) error {
 
 // loadAccounts hits Composio's /connected_accounts and projects each
 // row into our narrow Account shape. We deliberately keep the projection
-// minimal — extra fields can be re-fetched on demand.
+// minimal - extra fields can be re-fetched on demand.
 func (c *Cache) loadAccounts(ctx context.Context) ([]*Account, error) {
 	key := c.adminKey()
 	if key == "" {
@@ -519,7 +519,7 @@ func (c *Cache) loadAccounts(ctx context.Context) ([]*Account, error) {
 
 // extractIdentityHint walks Composio's meta/data blobs looking for the
 // OAuth-side identity the user would recognise (email > username >
-// display_name > generic name). Best-effort — when nothing surfaces we
+// display_name > generic name). Best-effort - when nothing surfaces we
 // return "" and the UI falls back to the account id tail.
 func extractIdentityHint(parts ...map[string]any) string {
 	keys := []string{"email", "username", "user_email", "display_name", "name", "login"}
@@ -534,7 +534,7 @@ func extractIdentityHint(parts ...map[string]any) string {
 				}
 			}
 		}
-		// Dig one level deeper — Composio nests OAuth identity under
+		// Dig one level deeper - Composio nests OAuth identity under
 		// "user", "profile", or "account" depending on the toolkit.
 		for _, k := range []string{"user", "profile", "account", "authed_user"} {
 			if nested, ok := m[k].(map[string]any); ok {
@@ -588,10 +588,10 @@ func (c *Cache) SystemPromptBlock() string {
 
 	var b strings.Builder
 	b.WriteString("<connected_accounts>\n")
-	b.WriteString("The boss has authenticated the following SaaS accounts via Composio. Every verb of each connected toolkit is already in your <tool_catalog> as `composio__TOOLKIT_VERB` — discover with `tool_search(\"send gmail\")`, bring online with `load_tools([\"composio__GMAIL_SEND_EMAIL\"])`, then call it directly. The gateway tools (`composio__COMPOSIO_SEARCH_TOOLS`, `composio__COMPOSIO_MULTI_EXECUTE_TOOL`) are a fallback for toolkits whose verbs failed to pre-register; do not reach for `composio__COMPOSIO_REMOTE_WORKBENCH` / `_BASH_TOOL` for anything a real toolkit verb covers.\n\n")
-	b.WriteString("Pass `connected_account_id` to every Composio verb that hits an authenticated upstream. When there's exactly one account for a toolkit it's auto-resolved; with multiple accounts (e.g. personal + work Gmail) you must pick — match the boss's intent against the alias (\"send from work\" → alias=work → that id) AND the `identity` (the real email/handle) so you can answer questions like \"which email did I connect for work?\" without guessing. If the intent is ambiguous, ask before sending.\n\n")
+	b.WriteString("The boss has authenticated the following SaaS accounts via Composio. Every verb of each connected toolkit is already in your <tool_catalog> as `composio__TOOLKIT_VERB` - discover with `tool_search(\"send gmail\")`, bring online with `load_tools([\"composio__GMAIL_SEND_EMAIL\"])`, then call it directly. The gateway tools (`composio__COMPOSIO_SEARCH_TOOLS`, `composio__COMPOSIO_MULTI_EXECUTE_TOOL`) are a fallback for toolkits whose verbs failed to pre-register; do not reach for `composio__COMPOSIO_REMOTE_WORKBENCH` / `_BASH_TOOL` for anything a real toolkit verb covers.\n\n")
+	b.WriteString("Pass `connected_account_id` to every Composio verb that hits an authenticated upstream. When there's exactly one account for a toolkit it's auto-resolved; with multiple accounts (e.g. personal + work Gmail) you must pick - match the boss's intent against the alias (\"send from work\" → alias=work → that id) AND the `identity` (the real email/handle) so you can answer questions like \"which email did I connect for work?\" without guessing. If the intent is ambiguous, ask before sending.\n\n")
 	if missingIdentity {
-		b.WriteString("Some accounts below have no `identity` yet — meaning you don't yet know the real email/handle/login behind each `ca_*` id. Run the `resolve-connector-identities` skill now (via `skills_invoke({name:\"resolve-connector-identities\"})`) — it carries the generic, toolkit-agnostic recipe (find the toolkit's profile verb, call it with the connected_account_id, extract the canonical handle, persist via `connector_identity_set`). One run resolves every account; results persist to `infinity_meta` so future turns render `identity=\"...\"` automatically and no further calls are needed. Do this proactively the first time you see a missing identity.\n\n")
+		b.WriteString("Some accounts below have no `identity` yet - meaning you don't yet know the real email/handle/login behind each `ca_*` id. Run the `resolve-connector-identities` skill now (via `skills_invoke({name:\"resolve-connector-identities\"})`) - it carries the generic, toolkit-agnostic recipe (find the toolkit's profile verb, call it with the connected_account_id, extract the canonical handle, persist via `connector_identity_set`). One run resolves every account; results persist to `infinity_meta` so future turns render `identity=\"...\"` automatically and no further calls are needed. Do this proactively the first time you see a missing identity.\n\n")
 	}
 	for _, slug := range slugs {
 		accs := c.byToolkit[slug]

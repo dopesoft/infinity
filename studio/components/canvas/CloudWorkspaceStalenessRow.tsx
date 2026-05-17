@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * CloudWorkspaceStalenessRow — surfaces "the cloud workspace volume's
+ * CloudWorkspaceStalenessRow - surfaces "the cloud workspace volume's
  * local checkout is behind main on GitHub" the same way the deploy
  * banner surfaces "Core's binary is behind main."
  *
@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
  *   2. The active bridge for that session is the cloud workspace
  *   3. The cloud workspace's local HEAD differs from origin/main
  *
- * Silent otherwise. Polls every 60s — the cloud workspace pulls slowly
+ * Silent otherwise. Polls every 60s - the cloud workspace pulls slowly
  * compared to Core's deploy, so we don't need 30s granularity.
  */
 export function CloudWorkspaceStalenessRow({
@@ -65,7 +65,7 @@ export function CloudWorkspaceStalenessRow({
   }, [sessionId]);
 
   // Gate render on all the prerequisites. The deploy banner has its
-  // own row right above this — these two never both shout at once
+  // own row right above this - these two never both shout at once
   // unless both the binary AND the workspace are stale, which is
   // legitimate and worth seeing.
   if (!sessionId) return null;
@@ -104,10 +104,10 @@ export function CloudWorkspaceStalenessRow({
           {status.commits_behind === 1 ? "" : "s"}
         </span>{" "}
         {pullError ? (
-          <span className="text-danger">— {pullError}</span>
+          <span className="text-danger">- {pullError}</span>
         ) : (
           <>
-            — tap{" "}
+            - tap{" "}
             <RefreshCw className="inline size-3 align-[-1px]" aria-hidden /> to{" "}
             <span className="font-mono">git pull --ff-only</span>{" "}
           </>
@@ -134,5 +134,5 @@ export function CloudWorkspaceStalenessRow({
 }
 
 function shortSHA(sha: string): string {
-  return sha ? sha.slice(0, 7) : "—";
+  return sha ? sha.slice(0, 7) : "-";
 }

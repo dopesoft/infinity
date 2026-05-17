@@ -1,12 +1,12 @@
-// Package workflow implements durable, resumable multi-step workflows —
+// Package workflow implements durable, resumable multi-step workflows -
 // Phase 2 of the assembly substrate.
 //
 // A workflow is a first-class object. The agent assembles one from natural
 // language (a step list); the Engine runs it as a state machine that
 // persists after every step, so a process restart resumes mid-workflow.
 //
-// Skills are single recipes. Workflows chain them — plus tools, sub-agent
-// turns, and human checkpoints — into processes that run over hours or
+// Skills are single recipes. Workflows chain them - plus tools, sub-agent
+// turns, and human checkpoints - into processes that run over hours or
 // days. The agent never writes the tables with raw SQL; the workflow_*
 // native tools are the contract.
 package workflow
@@ -37,7 +37,7 @@ const (
 	StepDone     StepStatus = "done"
 	StepFailed   StepStatus = "failed"
 	StepSkipped  StepStatus = "skipped"
-	StepAwaiting StepStatus = "awaiting" // checkpoint — blocked on the boss
+	StepAwaiting StepStatus = "awaiting" // checkpoint - blocked on the boss
 )
 
 // StepKind is how a step executes.
@@ -66,7 +66,7 @@ func (k StepKind) Valid() bool {
 //	checkpoint: { "message": "Review before I proceed" }
 //
 // String values in Spec may reference prior state with {{input.KEY}} or
-// {{steps.N.output}} — the engine resolves these before execution.
+// {{steps.N.output}} - the engine resolves these before execution.
 type StepDef struct {
 	Name        string         `json:"name"`
 	Kind        StepKind       `json:"kind"`
@@ -86,7 +86,7 @@ type Workflow struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-// Run is one execution instance — the durable thing.
+// Run is one execution instance - the durable thing.
 type Run struct {
 	ID            string         `json:"id"`
 	WorkflowID    string         `json:"workflowId,omitempty"`
@@ -122,7 +122,7 @@ type Step struct {
 
 // Executor runs one non-checkpoint step. serve.go provides the concrete
 // implementation that dispatches to the tools.Registry / skill Runner /
-// agent loop — the workflow package stays dependency-light behind this
+// agent loop - the workflow package stays dependency-light behind this
 // interface (same pattern as cron's CronScheduler).
 type Executor interface {
 	Execute(ctx context.Context, step Step, runInput map[string]any) (output string, err error)

@@ -12,7 +12,7 @@ import (
 // OAuthToken is the persisted credential row used by OAuth-backed providers.
 // AccessToken is the bearer used on inference calls; RefreshToken rotates on
 // every refresh and replaces this row in place. ExpiresAt is the access_token
-// expiry — refresh ~2 minutes before to absorb clock skew.
+// expiry - refresh ~2 minutes before to absorb clock skew.
 type OAuthToken struct {
 	ID            string
 	Provider      string

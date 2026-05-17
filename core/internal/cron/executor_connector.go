@@ -14,7 +14,7 @@ import (
 // target_config into a connectors.PollConfig and handing it to the
 // shared Poller. No LLM. No tokens. Pure plumbing.
 //
-// The split mirrors the original AgentExecutor — one struct per JobKind.
+// The split mirrors the original AgentExecutor - one struct per JobKind.
 // The composite executor (composite.go) chooses which one to invoke
 // based on j.JobKind.
 type ConnectorExecutor struct {

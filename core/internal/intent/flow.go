@@ -1,11 +1,11 @@
-// Package intent implements IntentFlow — streaming demand detection.
+// Package intent implements IntentFlow - streaming demand detection.
 //
 // Every user observation runs through Classify which returns one of three
 // control tokens:
 //
-//   • silent             — wait, the user is mid-thought
-//   • fast_intervention  — low-latency understanding help (<1s response)
-//   • full_assistance    — invoke memory + skills + take action
+//   • silent             - wait, the user is mid-thought
+//   • fast_intervention  - low-latency understanding help (<1s response)
+//   • full_assistance    - invoke memory + skills + take action
 //
 // The classifier is a prompt-engineered Claude Haiku call. It can be migrated
 // to a fine-tuned model later once labelled data exists; the Provider/Decision
@@ -73,7 +73,7 @@ func DepthFor(t Token) Depth {
 }
 
 // Detector classifies user input. It uses an LLM provider configured for a
-// fast model — typically claude-haiku — and a strict JSON output prompt.
+// fast model - typically claude-haiku - and a strict JSON output prompt.
 type Detector struct {
 	provider llm.Provider
 	model    string
@@ -136,7 +136,7 @@ func New(cfg Config) *Detector {
 }
 
 // Classify runs the LLM call. It returns a Decision and never an error from
-// the LLM — we degrade to <silent> on any failure (fail-closed for proactive
+// the LLM - we degrade to <silent> on any failure (fail-closed for proactive
 // behaviour).
 //
 // recentContext should be the last few user/assistant turns concatenated; it
@@ -156,7 +156,7 @@ func (d *Detector) Classify(ctx context.Context, observation, recentContext stri
 	respCh := make(chan llm.Response, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		// IntentFlow uses the provider's default model — the boss's per-turn
+		// IntentFlow uses the provider's default model - the boss's per-turn
 		// override only applies to the main agent loop, not internal Haiku-style
 		// classifiers.
 		resp, err := d.provider.Stream(ctx, "", systemPrompt,
@@ -170,7 +170,7 @@ func (d *Detector) Classify(ctx context.Context, observation, recentContext stri
 	}()
 
 	for range out {
-		// drain stream — we only care about the final response
+		// drain stream - we only care about the final response
 	}
 
 	var resp llm.Response

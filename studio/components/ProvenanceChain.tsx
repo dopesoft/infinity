@@ -64,7 +64,7 @@ export function ProvenanceChain({ memoryId }: { memoryId: string }) {
                   <code className="font-mono">{src.observation_id.slice(0, 8)}</code>
                 </span>
               </div>
-              <p className="mt-1 break-words">{src.excerpt || "—"}</p>
+              <p className="mt-1 break-words">{src.excerpt || "-"}</p>
               {src.session_id && (
                 <p className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
                   <LinkIcon className="size-2.5" aria-hidden />

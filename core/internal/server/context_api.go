@@ -8,7 +8,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 )
 
-// Context usage endpoint — backs the circular meter in Studio's composer.
+// Context usage endpoint - backs the circular meter in Studio's composer.
 // Returns a per-category breakdown so the modal/drawer can render the same
 // shape Claude Code / Codex CLI ship (system prompt, tools, messages, free
 // space). Memory + skills prefixes are dynamic per-turn (they depend on
@@ -28,7 +28,7 @@ type contextUsageResp struct {
 	Categories    []contextCategory `json:"categories"`
 }
 
-// estimateTokens uses the chars-divided-by-4 heuristic — accurate enough for
+// estimateTokens uses the chars-divided-by-4 heuristic - accurate enough for
 // a "how full is the context" meter without pulling a real tokenizer per
 // model. Underestimates code/JSON slightly and overestimates non-English;
 // good enough for the UI.
@@ -39,11 +39,11 @@ func estimateTokens(s string) int {
 // contextWindowFor returns the model's input context window in tokens.
 // Order matters: more specific patterns first (e.g. "1m" suffix overrides
 // the family default; gpt-4o-mini before gpt-4o). Mirrors the catalog in
-// studio/lib/models-catalog.ts — keep in sync when adding entries there.
+// studio/lib/models-catalog.ts - keep in sync when adding entries there.
 func contextWindowFor(model string) int {
 	m := strings.ToLower(strings.TrimSpace(model))
 
-	// Anthropic — opus/sonnet/haiku 200K standard, opt-in 1M variants
+	// Anthropic - opus/sonnet/haiku 200K standard, opt-in 1M variants
 	// carry a "1m" suffix or bracket. Match the suffix first.
 	if strings.HasPrefix(m, "claude-") {
 		if strings.Contains(m, "1m") {
@@ -52,7 +52,7 @@ func contextWindowFor(model string) int {
 		return 200_000
 	}
 
-	// OpenAI — every gpt-5.x flagship variant ships with a 400K input
+	// OpenAI - every gpt-5.x flagship variant ships with a 400K input
 	// window. o4 family stays at 200K. gpt-4.1 is the long-context one
 	// at 1M; gpt-4o sits at 128K.
 	if strings.HasPrefix(m, "gpt-5") {
@@ -68,7 +68,7 @@ func contextWindowFor(model string) int {
 		return 128_000
 	}
 
-	// Google — Gemini 3 + 2.5 Pro at 2M; 2.5 Flash + 2.0 Flash at 1M.
+	// Google - Gemini 3 + 2.5 Pro at 2M; 2.5 Flash + 2.0 Flash at 1M.
 	if strings.HasPrefix(m, "gemini-3") {
 		return 2_000_000
 	}
@@ -87,7 +87,7 @@ func contextWindowFor(model string) int {
 
 // handleContextUsage serves GET /api/context/usage?session_id=…
 //
-// Returns real API-reported token usage for the session — NOT a preview of
+// Returns real API-reported token usage for the session - NOT a preview of
 // what would be sent next. Before any turn fires the session has zero
 // reported usage, so the meter sits at 0%. After each turn the loop records
 // resp.Usage.Input/Output via Session.RecordUsage; this endpoint reads
@@ -120,7 +120,7 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 
 	// Pull the real API-reported usage for this session. If no session id
 	// was supplied or the session has never sent a turn, snapshot.LastInputTokens
-	// is 0 and every category reports 0 — exactly what we want for an
+	// is 0 and every category reports 0 - exactly what we want for an
 	// empty conversation.
 	var snapshot agent.UsageSnapshot
 	if sid := strings.TrimSpace(r.URL.Query().Get("session_id")); sid != "" {

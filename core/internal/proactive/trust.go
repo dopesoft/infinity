@@ -41,13 +41,13 @@ func NewTrustStore(p *pgxpool.Pool) *TrustStore { return &TrustStore{pool: p} }
 // pluggable surfaces (Web Push, email, Slack DMs) can poke the boss
 // when something needs approval. Keeping the interface here means the
 // proactive package doesn't take a build-time dependency on the push
-// package — serve.go wires the adapter at boot.
+// package - serve.go wires the adapter at boot.
 type TrustNotifier interface {
 	NotifyTrustQueued(ctx context.Context, c *TrustContract)
 }
 
 // SetNotifier registers the trust notifier. Safe to call before or
-// after Queue is exercised — nil-safe at the call site.
+// after Queue is exercised - nil-safe at the call site.
 func (s *TrustStore) SetNotifier(n TrustNotifier) {
 	if s == nil {
 		return
@@ -74,7 +74,7 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 
 	// Pull the authenticated user from ctx so the row is owned by them.
 	// auth.UserID returns "" when the request didn't pass through the auth
-	// middleware (e.g. heartbeat/cron) — we set NULL in that case so the
+	// middleware (e.g. heartbeat/cron) - we set NULL in that case so the
 	// existing single-user fallback (rows with NULL get claimed by the
 	// owner at first login) keeps working.
 	userID := auth.UserID(ctx)
@@ -98,7 +98,7 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 	} else {
 		log.Printf("trust.queue: INSERT ok id=%s source=%s status=%s user_id=%v rows=%d",
 			c.ID, c.Source, c.Status, userIDArg, tag.RowsAffected())
-		// Async notifier — runs in a goroutine with a detached context so
+		// Async notifier - runs in a goroutine with a detached context so
 		// it never blocks the gate's wait loop. We deliberately drop the
 		// request context's deadline because push delivery (FCM/APNs over
 		// HTTPS) can outlive a typical 5s API timeout.
@@ -124,7 +124,7 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 	args := []any{limit}
 	// decision_note is TEXT nullable in the schema; coalesce to '' so the
 	// Go scan into `c.DecisionNote string` doesn't fail with "Scan error:
-	// converting NULL to string is unsupported" — which silently 500'd the
+	// converting NULL to string is unsupported" - which silently 500'd the
 	// whole list endpoint and showed Studio an empty Trust tab for every
 	// pending row ever inserted. (Found by tracing a confirmed insert that
 	// never surfaced in the panel.)
@@ -165,7 +165,7 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 // HasRecentApprovalForTool returns true when an approval (or already-
 // consumed approval) exists for the (session, tool) pair within `window`.
 // This is the deploy-resilient replacement for the gate's old in-memory
-// session-approval map — every check hits Postgres, so a core restart
+// session-approval map - every check hits Postgres, so a core restart
 // never loses approvals the boss already granted.
 //
 // Window mirrors the gate's TTL; the gate passes its configured TTL in.
@@ -247,7 +247,7 @@ func (s *TrustStore) ConsumeApprovedForTool(ctx context.Context, sessionID, tool
 		 RETURNING id::text
 	`, toolName, sessionID).Scan(&id)
 	if err != nil {
-		// pgx.ErrNoRows means no approved contract — that's "not approved",
+		// pgx.ErrNoRows means no approved contract - that's "not approved",
 		// not a failure. Caller treats it as false / no consumption.
 		if err.Error() == "no rows in result set" {
 			return false, nil

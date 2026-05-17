@@ -16,7 +16,7 @@ import type { VoiceStatus } from "@/lib/voice/client";
  *   error              → danger (red)
  *
  * The element sits inline at the start of the composer textarea row, so
- * the conversation stream above remains fully visible — voice mode just
+ * the conversation stream above remains fully visible - voice mode just
  * swaps what's inside the input bar, never overlays it.
  */
 export function VoiceOrb({
@@ -43,7 +43,7 @@ export function VoiceOrb({
       )}
       aria-hidden
     >
-      {/* Halo — softer, larger, follows the level peak. */}
+      {/* Halo - softer, larger, follows the level peak. */}
       <span
         className={cn(
           "absolute inset-0 rounded-full transition-opacity duration-150",
@@ -51,7 +51,7 @@ export function VoiceOrb({
         )}
         style={{ transform: `scale(${1.1 * scale})`, opacity: opacity * 0.55 }}
       />
-      {/* Core dot — solid color, scales tighter. */}
+      {/* Core dot - solid color, scales tighter. */}
       <span
         className={cn(
           "h-3 w-3 rounded-full transition-transform duration-150",

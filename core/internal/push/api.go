@@ -24,11 +24,11 @@ func NewAPI(store *Store, sender *Sender, logger *slog.Logger) *API {
 
 // Routes registers /api/push/* on the provided mux.
 //
-//	GET  /api/push/vapid       — public key for the browser to subscribe
-//	POST /api/push/subscribe   — register a new endpoint
-//	POST /api/push/unsubscribe — remove an endpoint
-//	GET  /api/push/devices     — list active devices for the Settings UI
-//	POST /api/push/test        — send a synthetic notification
+//	GET  /api/push/vapid       - public key for the browser to subscribe
+//	POST /api/push/subscribe   - register a new endpoint
+//	POST /api/push/unsubscribe - remove an endpoint
+//	GET  /api/push/devices     - list active devices for the Settings UI
+//	POST /api/push/test        - send a synthetic notification
 func (a *API) Routes(mux *http.ServeMux) {
 	if a == nil {
 		return
@@ -51,7 +51,7 @@ func (a *API) handleVAPID(w http.ResponseWriter, r *http.Request) {
 		key = a.Sender.PublicKey()
 	}
 	if key == "" {
-		// 200 with empty body, not 503 — Studio uses absence to render
+		// 200 with empty body, not 503 - Studio uses absence to render
 		// "push not configured" instead of throwing on a load error.
 		writeJSON(w, http.StatusOK, map[string]any{"publicKey": ""})
 		return
@@ -228,7 +228,7 @@ func (a *API) handleTest(w http.ResponseWriter, r *http.Request) {
 // ── helpers ───────────────────────────────────────────────────────────────
 
 // labelFromUA derives a friendly device label from the user-agent
-// string. Doesn't try to be perfect — just enough that the Notifications
+// string. Doesn't try to be perfect - just enough that the Notifications
 // settings page can show "Safari on iPhone" vs "Chrome on macOS" without
 // the boss having to set it manually.
 func labelFromUA(ua string) string {

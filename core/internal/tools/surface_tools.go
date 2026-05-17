@@ -1,9 +1,9 @@
-// Surface tools — the generic dashboard SURFACE CONTRACT, agent-facing.
+// Surface tools - the generic dashboard SURFACE CONTRACT, agent-facing.
 //
 // Rule #1 substrate. These two tools ARE the boundary the LLM assembles
 // against when it wants to put something in front of the boss. A triage
 // skill that pulls email, ranks it, and "drops the important ones on the
-// dashboard" does that last step through surface_item — not through a
+// dashboard" does that last step through surface_item - not through a
 // bespoke table, not through Go. Anything the agent surfaces this way
 // renders generically in Studio with zero new widget code.
 
@@ -41,12 +41,12 @@ type surfaceItemTool struct{ store *surface.Store }
 func (t *surfaceItemTool) Name() string { return "surface_item" }
 func (t *surfaceItemTool) Description() string {
 	return "Put a ranked, structured item on the boss's dashboard. This is the " +
-		"standard contract for surfacing ANYTHING — an important email a triage " +
+		"standard contract for surfacing ANYTHING - an important email a triage " +
 		"recipe found, an alert, a digest entry, an insight. Pick a `surface` (the " +
 		"dashboard region: 'followups', 'alerts', 'digest', 'insights', or invent " +
 		"one) and a `kind` (semantic type for the icon: 'email', 'message', " +
 		"'alert', 'article', 'metric', 'event', 'finding'). Set `importance` 0-100 " +
-		"when you've judged it — the dashboard floats high-importance items to the " +
+		"when you've judged it - the dashboard floats high-importance items to the " +
 		"top. Pass `external_id` (e.g. a Gmail message id) so re-running the same " +
 		"recipe refreshes the row instead of duplicating it. Put any extra " +
 		"structured payload in `metadata`. Returns the item id."
@@ -58,7 +58,7 @@ func (t *surfaceItemTool) Schema() map[string]any {
 			"surface":           map[string]any{"type": "string", "description": "Dashboard region: 'followups', 'alerts', 'digest', 'insights', … (free-form)."},
 			"title":             map[string]any{"type": "string", "description": "Headline shown on the card. Required."},
 			"kind":              map[string]any{"type": "string", "description": "Semantic type for the icon: 'email','message','alert','article','metric','event','finding'. Default 'item'."},
-			"source":            map[string]any{"type": "string", "description": "Who produced this — your skill name, a connector slug, a cron name. Default 'agent'."},
+			"source":            map[string]any{"type": "string", "description": "Who produced this - your skill name, a connector slug, a cron name. Default 'agent'."},
 			"external_id":       map[string]any{"type": "string", "description": "Stable id from the source system (Gmail message id, Slack ts, …). Enables upsert-on-rerun."},
 			"subtitle":          map[string]any{"type": "string", "description": "Secondary line under the title."},
 			"body":              map[string]any{"type": "string", "description": "Full content shown when the boss expands the item."},
@@ -66,7 +66,7 @@ func (t *surfaceItemTool) Schema() map[string]any {
 			"importance":        map[string]any{"type": "integer", "description": "0-100 ranking. Omit if you haven't judged it. 80+ = urgent, 50-79 = notable, <50 = routine."},
 			"importance_reason": map[string]any{"type": "string", "description": "One line explaining the importance score."},
 			"metadata":          map[string]any{"type": "object", "description": "Arbitrary structured payload (from, attachments, draft, …). Rendered in the ObjectViewer and readable by downstream skills."},
-			"expires_in_hours":  map[string]any{"type": "number", "description": "Optional TTL — the item auto-dismisses after this many hours. Use for ephemera like a daily digest entry."},
+			"expires_in_hours":  map[string]any{"type": "number", "description": "Optional TTL - the item auto-dismisses after this many hours. Use for ephemera like a daily digest entry."},
 		},
 		"required": []string{"surface", "title"},
 	}
@@ -177,7 +177,7 @@ func (t *surfaceListTool) ReadOnly() bool { return true }
 func (t *surfaceListTool) Description() string {
 	return "List items currently on the boss's dashboard with their ids. Use " +
 		"this BEFORE surface_update when the boss asks to dismiss, snooze, or " +
-		"re-rank items — you need the actual item ids and they are not shown " +
+		"re-rank items - you need the actual item ids and they are not shown " +
 		"in the UI. Optional `surface` filter (e.g. 'questions', 'followups', " +
 		"'alerts', 'digest', 'insights') narrows to one dashboard region; " +
 		"omit it to see everything open across surfaces. Returns id, surface, " +

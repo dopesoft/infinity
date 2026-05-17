@@ -24,7 +24,7 @@ export function getSupabaseServerClient() {
             cookieStore.set(name, value, options);
           }
         } catch {
-          // Called from a server component (read-only cookie store) — safe
+          // Called from a server component (read-only cookie store) - safe
           // to ignore; the middleware will refresh on the next request.
         }
       },

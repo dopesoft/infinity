@@ -14,7 +14,7 @@ import (
 )
 
 // CodeExec posts code to a sandboxed Python sidecar. Core never executes user
-// code itself — see docker/codeexec.Dockerfile for the sidecar image.
+// code itself - see docker/codeexec.Dockerfile for the sidecar image.
 type CodeExec struct {
 	sidecarURL string
 	client     *http.Client

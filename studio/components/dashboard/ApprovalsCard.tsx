@@ -6,14 +6,14 @@ import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import type { Approval, ApprovalKind, DashboardItem } from "@/lib/dashboard/types";
 
-/* Approvals — items where the agent is waiting on the boss.
+/* Approvals - items where the agent is waiting on the boss.
  *
  * Three flavors land here:
- *  - trust_* — high-risk tool calls gated by ClaudeCodeGate
- *  - code_proposal — Voyager source extractor drafts
- *  - curiosity — questions Jarvis has for you
+ *  - trust_* - high-risk tool calls gated by ClaudeCodeGate
+ *  - code_proposal - Voyager source extractor drafts
+ *  - curiosity - questions Jarvis has for you
  *
- * Tapping a row opens the ObjectViewer with the full payload — bash args
+ * Tapping a row opens the ObjectViewer with the full payload - bash args
  * for trust, diff for code, question + context for curiosity.
  */
 export function ApprovalsCard({

@@ -10,7 +10,7 @@ import (
 
 // Manager activates runtime-registered extensions into the live tool
 // registry. It is the bridge between the mem_extensions store and the
-// running process — on boot it re-activates everything enabled; at runtime
+// running process - on boot it re-activates everything enabled; at runtime
 // it activates whatever the agent registers via the extension_* tools.
 type Manager struct {
 	store    *Store
@@ -27,7 +27,7 @@ func NewManager(store *Store, registry *tools.Registry, mcpManager *tools.MCPMan
 }
 
 // LoadAll activates every enabled extension from the DB. Called once on
-// boot, AFTER the embedded mcp.yaml is connected — so a runtime-registered
+// boot, AFTER the embedded mcp.yaml is connected - so a runtime-registered
 // extension survives restarts. Returns the count successfully activated.
 func (m *Manager) LoadAll(ctx context.Context) (int, error) {
 	if m == nil || m.store == nil {
@@ -50,7 +50,7 @@ func (m *Manager) LoadAll(ctx context.Context) (int, error) {
 	return loaded, nil
 }
 
-// Register persists a new extension and activates it live — the runtime
+// Register persists a new extension and activates it live - the runtime
 // self-extension path. The capability is usable this session and reloads
 // on the next boot. A failed activation is still persisted (status=error)
 // so the boss can see and fix it.

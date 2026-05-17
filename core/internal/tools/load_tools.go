@@ -8,11 +8,11 @@ import (
 )
 
 // LoadTools is the model-callable tool that mutates the current session's
-// ActiveSet — moves dormant catalog entries into the live tool surface so
+// ActiveSet - moves dormant catalog entries into the live tool surface so
 // their schemas reach the next LLM call. Pair with tool_search (find) +
 // load_tools (commit) so the model takes a deliberate two-step.
 //
-// Optional ttl_turns auto-unloads after N turns — keeps an exploratory
+// Optional ttl_turns auto-unloads after N turns - keeps an exploratory
 // load from squatting forever once the relevant work is done.
 type LoadTools struct {
 	Registry *Registry
@@ -68,7 +68,7 @@ func (l *LoadTools) Execute(ctx context.Context, input map[string]any) (string, 
 		ttl = int(v)
 	}
 
-	// Filter to names that actually exist — silently dropping ghosts so
+	// Filter to names that actually exist - silently dropping ghosts so
 	// the model gets a clean error report instead of a poisoned set.
 	valid := make([]string, 0, len(names))
 	missing := make([]string, 0)
@@ -88,7 +88,7 @@ func (l *LoadTools) Execute(ctx context.Context, input map[string]any) (string, 
 	}
 	if len(missing) > 0 {
 		body["missing"] = missing
-		body["hint"] = "Unknown tool names — check Connectors page or tool_search again."
+		body["hint"] = "Unknown tool names - check Connectors page or tool_search again."
 	}
 	b, _ := json.Marshal(body)
 	return string(b), nil
@@ -96,7 +96,7 @@ func (l *LoadTools) Execute(ctx context.Context, input map[string]any) (string, 
 
 // UnloadTools removes named tools from the active set. Pinned tools
 // (the discipline core: delegate, tool_search, load_tools, compact, …)
-// are silently ignored — the model can't accidentally lose its
+// are silently ignored - the model can't accidentally lose its
 // foundation.
 type UnloadTools struct{}
 

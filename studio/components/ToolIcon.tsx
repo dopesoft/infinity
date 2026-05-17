@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 // Adding a new brand:
 //   1. Define a small inline SVG below (24×24 viewBox, no fill="white").
 //   2. Add a case in the switch.
-//   3. Done — every existing tool-card / status pill picks it up.
+//   3. Done - every existing tool-card / status pill picks it up.
 
 type ToolIconProps = {
   /** Full MCP tool name, e.g. `claude_code__edit` or `github__create_pull_request`. */
@@ -25,7 +25,7 @@ export function ToolIcon({ name, className }: ToolIconProps) {
   const [prefix, rest] = raw.split("__", 2);
   const p = (prefix ?? "").toLowerCase();
 
-  // Composio is a gateway — the interesting brand is the underlying toolkit
+  // Composio is a gateway - the interesting brand is the underlying toolkit
   // (the part before the first underscore in `rest`). composio__GITHUB_CREATE_ISSUE
   // → GitHub mark. Falls back to Composio's own glyph when toolkit is unknown.
   if (p === "composio") {
@@ -76,7 +76,7 @@ function composioToolkitIcon(toolkit: string, className?: string) {
   }
 }
 
-// GitHubMark — Octocat mark from github/octicons (MIT-licensed). Single
+// GitHubMark - Octocat mark from github/octicons (MIT-licensed). Single
 // path, mono fill via currentColor so it inherits the foreground colour.
 // Lucide-react dropped `Github` as of v0.46 (trademark concerns); inlining
 // the open-sourced octicon keeps the brand recognisable without a dep.
@@ -97,7 +97,7 @@ function GitHubMark({
   );
 }
 
-// ComposioMark — three interlinked chain nodes evoking Composio's role as
+// ComposioMark - three interlinked chain nodes evoking Composio's role as
 // a connector/gateway between many SaaS surfaces. Mono fill, brand-tinted
 // via `text-[#6b5cff]` (Composio's signature indigo) at the call site.
 function ComposioMark({
@@ -125,7 +125,7 @@ function ComposioMark({
   );
 }
 
-// AnthropicMark — a 4-point spark glyph (four elongated diamond petals
+// AnthropicMark - a 4-point spark glyph (four elongated diamond petals
 // arranged at 0/90/180/270°). Evokes Anthropic's signature spark without
 // reproducing the registered mark literally. Mono fill via currentColor
 // so a className like `text-[#cc785c]` (Anthropic's signature kraft tone)

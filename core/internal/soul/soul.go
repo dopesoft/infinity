@@ -1,4 +1,4 @@
-// Package soul carries Jarvis's identity — the system prompt that defines
+// Package soul carries Jarvis's identity - the system prompt that defines
 // who the agent is, how he speaks, and how he operates. The default soul is
 // embedded at build time so the distroless container always has it; setting
 // INFINITY_SOUL_PATH at runtime swaps in a file from disk for live iteration.

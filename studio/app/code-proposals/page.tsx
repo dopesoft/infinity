@@ -38,7 +38,7 @@ const RISK_STYLES: Record<string, string> = {
 // Code proposals are Voyager's source-refactor counterpart to skill proposals.
 // SessionEnd's source extractor watches for "boss fought the same file" and
 // drafts a refactor sketch via Haiku. Approval here marks the proposal for
-// the agent to attempt — the actual edit still goes through ClaudeCodeGate.
+// the agent to attempt - the actual edit still goes through ClaudeCodeGate.
 export default function CodeProposalsPage() {
   const [proposals, setProposals] = useState<CodeProposalDTO[]>([]);
   const [status, setStatus] = useState<CodeProposalStatus>("candidate");
@@ -93,7 +93,7 @@ export default function CodeProposalsPage() {
 
           <p className="text-xs leading-relaxed text-muted-foreground">
             Voyager drafts these when a session shows the same file fought multiple times.
-            Approve to flag it for the agent — actual edits still route through Trust.
+            Approve to flag it for the agent - actual edits still route through Trust.
           </p>
 
           <div className="relative flex-1">
@@ -270,7 +270,7 @@ function Stat({ label, value }: { label: string; value: number | string | null }
   return (
     <div className="flex items-baseline gap-1.5">
       <span className="font-mono tabular-nums text-foreground">
-        {value == null ? "—" : value}
+        {value == null ? "-" : value}
       </span>
       <span className="text-muted-foreground">{label}</span>
     </div>

@@ -15,7 +15,7 @@ function formatElapsed(ms: number) {
 }
 
 /**
- * ThinkingBlock — shown above an assistant turn while Jarvis is preparing a
+ * ThinkingBlock - shown above an assistant turn while Jarvis is preparing a
  * response. Renders the live "extended thinking" stream (when available) with
  * an auto-scroll preview, a shimmering "Jarvis is thinking" header, and an
  * elapsed timer. After the agent moves on it stays as a collapsed "Thought

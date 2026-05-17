@@ -1,15 +1,15 @@
--- 016_surface_items.sql — the generic dashboard SURFACE CONTRACT.
+-- 016_surface_items.sql - the generic dashboard SURFACE CONTRACT.
 --
 -- Rule #1 substrate. Instead of a bespoke table + bespoke Go scorer +
 -- bespoke widget per source (the followup_scoring.go anti-pattern this
--- migration replaces), ANY producer — a skill recipe, a connector poll,
--- a cron, the agent mid-conversation — writes ranked, structured items
+-- migration replaces), ANY producer - a skill recipe, a connector poll,
+-- a cron, the agent mid-conversation - writes ranked, structured items
 -- through ONE contract. Studio renders them generically by `surface`
 -- and `kind`; a new capability lands on the dashboard with zero new
 -- table, zero new loader, zero new widget.
 --
 -- The agent NEVER writes this table with raw SQL. The `surface_item`
--- native tool IS the contract — that is the boundary the LLM assembles
+-- native tool IS the contract - that is the boundary the LLM assembles
 -- against.
 
 BEGIN;
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS mem_surface_items (
     -- bespoke header for.
     surface           TEXT NOT NULL,
 
-    -- SEMANTIC type — drives the icon + render hint in the generic card
+    -- SEMANTIC type - drives the icon + render hint in the generic card
     -- ('email', 'message', 'alert', 'article', 'metric', 'event',
     -- 'task', 'finding', …). Also free-form.
     kind              TEXT NOT NULL DEFAULT 'item',
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS mem_surface_items (
 );
 
 -- Dedup: a producer re-running its recipe upserts by (source, external_id)
--- instead of piling up duplicates. Partial — only constrains rows that
+-- instead of piling up duplicates. Partial - only constrains rows that
 -- actually carry an external_id, so agent-surfaced one-offs (no external
 -- id) are never blocked.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mem_surface_items_source_external
@@ -82,7 +82,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mem_surface_items_source_external
 CREATE INDEX IF NOT EXISTS idx_mem_surface_items_surface_status_rank
     ON mem_surface_items (surface, status, importance DESC NULLS LAST, created_at DESC);
 
--- "Everything open across all surfaces" — the dashboard aggregate read.
+-- "Everything open across all surfaces" - the dashboard aggregate read.
 CREATE INDEX IF NOT EXISTS idx_mem_surface_items_open
     ON mem_surface_items (created_at DESC)
     WHERE status = 'open';

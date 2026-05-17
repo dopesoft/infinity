@@ -10,7 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// ReflectionResult mirrors memory.ReflectionResult — kept in the llm package
+// ReflectionResult mirrors memory.ReflectionResult - kept in the llm package
 // so the memory package doesn't import this one (matches the
 // CompressedFacts/Summarizer pattern).
 type ReflectionResult struct {
@@ -27,7 +27,7 @@ type CriticLesson struct {
 
 // AnthropicCritic implements the metacognition step: it reads a session
 // transcript and emits a structured critique + lessons. Pattern: Multi-Agent
-// Reflexion (MAR, arXiv 2512.20845) — separate persona, fresh model call so
+// Reflexion (MAR, arXiv 2512.20845) - separate persona, fresh model call so
 // the actor doesn't get to grade its own homework. We use Haiku to keep this
 // cheap; quality is high enough for the extraction shape.
 type AnthropicCritic struct {
@@ -44,11 +44,11 @@ func NewAnthropicCritic(a *Anthropic, model string) *AnthropicCritic {
 
 const critiqueSystem = `You are an honest, terse critic reviewing one of your own past agent sessions.
 
-You will receive a transcript of a session — user prompts, your replies, the tools you called, errors, etc. Your job: judge how well the session went and extract durable lessons.
+You will receive a transcript of a session - user prompts, your replies, the tools you called, errors, etc. Your job: judge how well the session went and extract durable lessons.
 
 Be strict. If the session was sloppy, say so. If it was excellent, say so. Don't pad.
 
-Return ONLY a JSON object in this exact shape — no commentary, no code fences:
+Return ONLY a JSON object in this exact shape - no commentary, no code fences:
 
 {
   "kind": "session_critique" | "error_postmortem" | "self_consistency",

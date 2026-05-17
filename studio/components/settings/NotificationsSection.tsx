@@ -32,10 +32,10 @@ import {
 /* Notifications settings.
  *
  * Renders three blocks:
- *   1. Capability — what the current device can do (browser support,
+ *   1. Capability - what the current device can do (browser support,
  *      permission state, PWA install state on iOS).
- *   2. Subscribe / unsubscribe — primary action for this device.
- *   3. Why bother — small explainer of what Jarvis pushes for, so the
+ *   2. Subscribe / unsubscribe - primary action for this device.
+ *   3. Why bother - small explainer of what Jarvis pushes for, so the
  *      boss can decide whether to grant permission.
  *
  * VAPID public key flows in via NEXT_PUBLIC_VAPID_PUBLIC_KEY at build
@@ -89,7 +89,7 @@ export function NotificationsSection() {
         }
       }
       if (!vapid) {
-        setErr("Push isn't configured on Core yet — VAPID public key is missing.");
+        setErr("Push isn't configured on Core yet - VAPID public key is missing.");
         return;
       }
       const sub = await subscribe(vapid);
@@ -113,7 +113,7 @@ export function NotificationsSection() {
         url: "/",
       });
       if (!res) {
-        setErr("Test push failed — Core may be unreachable or not configured.");
+        setErr("Test push failed - Core may be unreachable or not configured.");
       } else if (res.sent === 0) {
         setTestResult("No devices to deliver to. Subscribe at least one device first.");
       } else {
@@ -121,7 +121,7 @@ export function NotificationsSection() {
         const failed = res.results.length - ok;
         setTestResult(
           failed === 0
-            ? `Sent to ${ok} device${ok === 1 ? "" : "s"} — check your banners.`
+            ? `Sent to ${ok} device${ok === 1 ? "" : "s"} - check your banners.`
             : `Sent to ${ok}, failed on ${failed}.`,
         );
       }
@@ -136,7 +136,7 @@ export function NotificationsSection() {
     setErr(null);
     try {
       const ok = await unsubscribe();
-      if (!ok) setErr("Couldn't unsubscribe — try again, or reset permissions in browser.");
+      if (!ok) setErr("Couldn't unsubscribe - try again, or reset permissions in browser.");
       await refresh();
     } finally {
       setBusy(null);
@@ -152,7 +152,7 @@ export function NotificationsSection() {
         </div>
         <p className="text-xs text-muted-foreground">
           Receive iOS-style banners on your iPhone and Mac when Jarvis needs
-          you. Each device is subscribed independently — enable on every
+          you. Each device is subscribed independently - enable on every
           device you want pushes on.
         </p>
       </div>
@@ -222,7 +222,7 @@ function DeviceList({ devices, onRemove }: { devices: Device[]; onRemove: () => 
                 // For revoked rows the endpoint is truncated; we can still
                 // unsubscribe-by-endpoint locally if this is the current
                 // device. For other devices, surfacing a remote remove
-                // would need an admin endpoint — for now, just hide the
+                // would need an admin endpoint - for now, just hide the
                 // local row + re-fetch.
                 onRemove();
               }}
@@ -261,7 +261,7 @@ function CapabilityBlock({ status }: { status: PushStatus | null }) {
           ok={isIosStandalone()}
           detail={
             isIosStandalone()
-              ? "Running standalone — iOS Web Push works on this device."
+              ? "Running standalone - iOS Web Push works on this device."
               : "On iPhone you must add Studio to the Home Screen (Share → Add to Home Screen), then open it from the icon. Web Push only works inside that installed mode."
           }
         />
@@ -272,7 +272,7 @@ function CapabilityBlock({ status }: { status: PushStatus | null }) {
         warn={status.permission === "default"}
         detail={
           status.permission === "granted"
-            ? "Granted — banners will appear."
+            ? "Granted - banners will appear."
             : status.permission === "denied"
               ? "Denied. Reset in browser settings."
               : "Not asked yet. Tap Enable below."
@@ -363,7 +363,7 @@ function ActionBlock({
   if (!vapidConfigured) {
     return (
       <div className="rounded-md border border-dashed bg-muted/20 p-3 text-[12px] text-muted-foreground">
-        Push delivery isn&apos;t configured on Core yet — the VAPID public
+        Push delivery isn&apos;t configured on Core yet - the VAPID public
         key is missing. Once it&apos;s set (
         <code className="font-mono">NEXT_PUBLIC_VAPID_PUBLIC_KEY</code>),
         this button activates.
@@ -418,23 +418,23 @@ function WhyBlock() {
       </summary>
       <ul className="mt-2 space-y-1.5 text-foreground/80">
         <Bullet>
-          <span className="font-semibold">Trust requests</span> — Jarvis wants
+          <span className="font-semibold">Trust requests</span> - Jarvis wants
           to run a bash command, edit, or write that needs your approval.
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Curiosity questions</span> — Jarvis
+          <span className="font-semibold">Curiosity questions</span> - Jarvis
           can&apos;t make a call without clarification.
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Code proposals</span> — Voyager
+          <span className="font-semibold">Code proposals</span> - Voyager
           drafted a refactor based on file-fight detection.
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Sentinel fires</span> — a watcher
+          <span className="font-semibold">Sentinel fires</span> - a watcher
           tripped (GitHub Actions red, log error spike, etc).
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Cron output worth seeing</span> —
+          <span className="font-semibold">Cron output worth seeing</span> -
           morning brief delivered, GH digest ready.
         </Bullet>
       </ul>

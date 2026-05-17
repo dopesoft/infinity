@@ -1,8 +1,8 @@
--- 013_session_usage.sql — Persist API-reported token usage on the session.
+-- 013_session_usage.sql - Persist API-reported token usage on the session.
 --
 -- The agent loop records every successful turn's Usage.Input / Usage.Output
 -- onto Session.{last,total}{Input,Output}Tokens. Those fields lived only in
--- process memory, so a Railway restart wiped them — the context meter in
+-- process memory, so a Railway restart wiped them - the context meter in
 -- Studio would then show 0% on a session that very much was not empty.
 --
 -- Adding the counters to mem_sessions lets the agent hydrate them when a

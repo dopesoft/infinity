@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 /**
- * SearchInput — Input wrapped with a left-side magnifier and a right-side
+ * SearchInput - Input wrapped with a left-side magnifier and a right-side
  * clear (X) button that appears when there's text. One-tap clear without
  * having to drag-select and delete. Use this everywhere we have a
  * search/filter field instead of hand-rolling the wrapper each time.

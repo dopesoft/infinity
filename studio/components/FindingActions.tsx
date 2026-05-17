@@ -48,15 +48,15 @@ function approveInstruction(curiosityId: string): string {
     : "";
   return (
     idLine +
-    "Approved — fix this specific finding now. Steps you MUST execute, in order:\n" +
+    "Approved - fix this specific finding now. Steps you MUST execute, in order:\n" +
     "1. Call `question_list` (filter to this id if helpful) so you have the exact " +
     "expectation, the actual result, and which tool surprised you. Operate on THIS " +
-    "finding only — if multiple Approve & fix prompts come in, treat each as its " +
+    "finding only - if multiple Approve & fix prompts come in, treat each as its " +
     "own task and don't conflate them.\n" +
     "2. Call `skills_invoke` with `name: \"self-improve-from-finding\"` to load the recipe.\n" +
     "3. Follow it: diagnose the root cause for this specific finding, then make a " +
     "real artifact change with `skill_create` (rework the relevant skill, same name + " +
-    "bumped version) or `memory_write` (procedural-tier rule) — don't just describe " +
+    "bumped version) or `memory_write` (procedural-tier rule) - don't just describe " +
     "what you'd do.\n" +
     "4. Verify the change against the original evidence for THIS finding (re-read the " +
     "new skill body / `memory_recall` the rule).\n" +
@@ -72,7 +72,7 @@ function approveInstruction(curiosityId: string): string {
 // bubble). Approving marks the curiosity question approved AND fires the
 // canned reply so the agent acts in this same conversation; dismissing
 // just resolves the question. Both collapse to a status line once acted
-// on — and after a refresh the question is no longer "open", so the row
+// on - and after a refresh the question is no longer "open", so the row
 // stops rendering entirely.
 export function FindingActions({
   curiosityId,
@@ -85,7 +85,7 @@ export function FindingActions({
     "idle" | "working" | "approved" | "dismissed"
   >("idle");
   // If a sibling card with the same curiosity_id was already acted on,
-  // adopt its outcome — we don't want a second click to re-fire the
+  // adopt its outcome - we don't want a second click to re-fire the
   // agent for a finding the boss already handled. effectiveState is
   // what we render against.
   const handledOutcome = useHandledOutcome(curiosityId);
@@ -94,7 +94,7 @@ export function FindingActions({
   async function approve() {
     if (effectiveState !== "idle") return;
     setState("working");
-    // Fire the turn first — the visible "Jarvis is fixing it" feedback
+    // Fire the turn first - the visible "Jarvis is fixing it" feedback
     // matters more than the bookkeeping write, which is best-effort.
     onSend?.(approveInstruction(curiosityId));
     if (curiosityId) {
@@ -118,7 +118,7 @@ export function FindingActions({
     return (
       <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-success">
         <Check className="size-3.5" />
-        <span>Approved — Jarvis is applying the fix.</span>
+        <span>Approved - Jarvis is applying the fix.</span>
       </div>
     );
   }

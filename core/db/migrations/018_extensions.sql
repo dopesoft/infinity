@@ -1,17 +1,17 @@
--- 018_extensions.sql — runtime self-extension.
+-- 018_extensions.sql - runtime self-extension.
 --
 -- Phase 3 of the assembly substrate. The agent extends its OWN toolset at
 -- runtime: it wires a new MCP server or registers a REST API as a tool,
--- and that capability is live this session AND durable across restarts —
+-- and that capability is live this session AND durable across restarts -
 -- no rebuild of the embedded mcp.yaml, no redeploy.
 --
 -- mem_extensions stores runtime-registered capability providers. Two
 -- kinds today:
---   mcp        — a remote MCP server (url + transport + auth-by-env-var)
---   http_tool  — a single REST endpoint exposed as a named native tool
+--   mcp        - a remote MCP server (url + transport + auth-by-env-var)
+--   http_tool  - a single REST endpoint exposed as a named native tool
 --
 -- Secrets never land here. MCP auth references env var NAMES, never
--- values — the same rule the embedded mcp.yaml follows. The agent
+-- values - the same rule the embedded mcp.yaml follows. The agent
 -- registers through the extension_* tools, never raw SQL.
 
 BEGIN;

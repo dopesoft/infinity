@@ -16,7 +16,7 @@ import {
 import { useIsDesktop } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
-/* ResponsiveModal — THE canonical modal primitive for Studio.
+/* ResponsiveModal - THE canonical modal primitive for Studio.
  *
  * Every preview / info / action surface in the app uses THIS component,
  * not raw <Dialog> or <Drawer>. The component:
@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
  *   • supports three width sizes (sm / md / lg). Drawer ignores width.
  *
  * IMPORTANT: New modal-style surfaces MUST use this component. Reaching
- * for `<Dialog>` or `<Drawer>` directly is a smell — it means each modal
+ * for `<Dialog>` or `<Drawer>` directly is a smell - it means each modal
  * is its own world, which is exactly the bug that kept reappearing on
  * mobile. The Dialog/Drawer primitives in `dialog.tsx` / `drawer.tsx`
  * are still exported (the global nav drawer, sessions drawer, etc. use
@@ -52,11 +52,11 @@ const SIZE_CLS: Record<Size, string> = {
 export interface ResponsiveModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** a11y title — REQUIRED. Becomes the visible header unless `header` overrides. */
+  /** a11y title - REQUIRED. Becomes the visible header unless `header` overrides. */
   title: string;
   /** Optional a11y description / sub-line under the title. */
   description?: string;
-  /** Custom header node — when set, replaces the default title row. The visible header
+  /** Custom header node - when set, replaces the default title row. The visible header
    *  must still convey what `title` says (we keep the visually hidden Title for a11y). */
   header?: React.ReactNode;
   /** Pinned footer (action bar). Sits below the scrollable body. */
@@ -85,7 +85,7 @@ export function ResponsiveModal({
   const isDesktop = useIsDesktop();
 
   // Shared inner shell. Same JSX tree for Dialog and Drawer so the body /
-  // header / footer behave identically across breakpoints — the ONLY
+  // header / footer behave identically across breakpoints - the ONLY
   // delta is which primitive wraps the shell.
   const shell = (
     <div className="flex h-full min-h-0 min-w-0 max-h-full max-w-full flex-col">
@@ -106,7 +106,7 @@ export function ResponsiveModal({
         // Pinned action bar. `pt-3` is the always-on top breathing
         // room above the buttons; `pb-safe` is now sane (max(safe,
         // 0.75rem)) so the buttons get matching bottom space on every
-        // viewport — no more buttons glued to the modal's bottom
+        // viewport - no more buttons glued to the modal's bottom
         // border on desktop. `gap-2` separates stacked actions when
         // they wrap on a narrow viewport.
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 pt-3 sm:px-5 pb-safe">
@@ -126,7 +126,7 @@ export function ResponsiveModal({
             contentClassName,
           )}
         >
-          {/* a11y — always render a Title + Description (sr-only when a
+          {/* a11y - always render a Title + Description (sr-only when a
               custom header is provided) so Radix doesn't warn and screen
               readers always have an announcement. */}
           {header ? (
@@ -160,7 +160,7 @@ export function ResponsiveModal({
   );
 }
 
-/* DefaultHeader — the standard title row used when callers don't supply a
+/* DefaultHeader - the standard title row used when callers don't supply a
  * custom `header`. Renders the visible <DialogTitle>/<DrawerTitle> directly
  * so a11y and visuals agree. */
 function DefaultHeader({
@@ -173,7 +173,7 @@ function DefaultHeader({
   // The ResponsiveModal wrapper renders either Dialog or Drawer. The
   // <DialogTitle>/<DrawerTitle> primitives are themed identically, and
   // Radix/vaul both accept being mounted inside any descendant of their
-  // Root — so it's safe to render both flavors here unconditionally and
+  // Root - so it's safe to render both flavors here unconditionally and
   // let the inactive one no-op. In practice only one ancestor exists at a
   // time, so only one of these mounts. Keeps the header isomorphic.
   return (
@@ -187,7 +187,7 @@ function DefaultHeader({
 }
 
 function ModalTitleSlot({ children }: { children: React.ReactNode }) {
-  // Render the same text once — Radix Title or vaul Title — by trying
+  // Render the same text once - Radix Title or vaul Title - by trying
   // both. Each is a no-op if its Root isn't mounted as an ancestor. We
   // use the Dialog primitive here because it's mounted on lg+; mobile
   // uses Drawer and we render the Drawer title at the same level. The
@@ -207,7 +207,7 @@ function ModalDescriptionSlot({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* CustomHeader — opt-in helper for richer headers (icon + eyebrow + title +
+/* CustomHeader - opt-in helper for richer headers (icon + eyebrow + title +
  * trailing slot). Pass into ResponsiveModal via the `header` prop. Carries
  * the same overflow discipline as the default header so callers can't
  * regress it. Pair with `title` on ResponsiveModal for the a11y label. */

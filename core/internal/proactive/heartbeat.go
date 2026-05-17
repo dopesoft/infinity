@@ -19,7 +19,7 @@ import (
 //   • Outcome check: decisions older than 7 days needing follow-up?
 //   • Security: any error / injection signal in recent logs?
 //   • Self-healing: errors in the run log → diagnose
-//   • Memory: context %% — trigger danger zone if >60%
+//   • Memory: context %% - trigger danger zone if >60%
 //   • Surprise: what could I build right now that would delight my human?
 //
 // Initial cut ships a *substrate*: the ticker, the persistence, and a hookable
@@ -37,7 +37,7 @@ type Heartbeat struct {
 
 	// onFinding fires for every finding emitted by a tick, after it's been
 	// persisted. The server wires this to broadcast notable findings to any
-	// active WS session as an unprompted assistant turn — the wire that
+	// active WS session as an unprompted assistant turn - the wire that
 	// turns the heartbeat from a silent background job into proactive
 	// behaviour. Nil-safe.
 	onFinding func(context.Context, Finding)
@@ -55,7 +55,7 @@ type Finding struct {
 	Title       string `json:"title"`
 	Detail      string `json:"detail,omitempty"`
 	PreApproved bool   `json:"pre_approved"`
-	// Source is the finer-grained origin within a Kind — e.g. a curiosity
+	// Source is the finer-grained origin within a Kind - e.g. a curiosity
 	// finding's Source is "high_surprise" | "contradiction" |
 	// "uncovered_mention". Used by the chat formatter to explain *why* the
 	// finding surfaced; not persisted (mem_heartbeat_findings has no column

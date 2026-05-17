@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Resizable — thin wrapper around react-resizable-panels matching the shadcn
+ * Resizable - thin wrapper around react-resizable-panels matching the shadcn
  * primitive shape (PanelGroup / Panel / Handle). We render the handle as a
  * 6px hit target with a 1px visible line, so it's easy to grab on touch
  * without taking up real estate. Keyboard-accessible via Radix focus styles.
@@ -38,7 +38,7 @@ function ResizableHandle({
       className={cn(
         "relative flex w-px items-center justify-center bg-border transition-colors hover:bg-accent-foreground/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         "data-[panel-group-direction=vertical]:h-px data-[panel-group-direction=vertical]:w-full",
-        // Wider hit target on touch — visible line stays 1px but the
+        // Wider hit target on touch - visible line stays 1px but the
         // grab area is 12px wide via the absolute overlay below.
         "after:absolute after:inset-y-0 after:left-1/2 after:w-3 after:-translate-x-1/2",
         "data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:h-3 data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:translate-x-0 data-[panel-group-direction=vertical]:after:-translate-y-1/2 data-[panel-group-direction=vertical]:after:top-1/2",

@@ -1,4 +1,4 @@
--- 028_domain_hints.sql — persistent table↔tool-prefix mappings used by
+-- 028_domain_hints.sql - persistent table↔tool-prefix mappings used by
 -- system_map. Storing these in the DB (instead of a Go slice) lets the
 -- agent extend its own topology via the domain_hint_add tool: the next
 -- system_map() call reflects the new hint without a deploy.

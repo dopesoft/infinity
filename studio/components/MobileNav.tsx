@@ -79,7 +79,7 @@ export function MobileNav() {
   );
 }
 
-// MobileNavBadgeChip — slightly bigger than the desktop chip because the
+// MobileNavBadgeChip - slightly bigger than the desktop chip because the
 // mobile drawer rows are wider and thumbs need a meatier target.
 function MobileNavBadgeChip({ href }: { href: string }) {
   const count = useNavBadge(href);

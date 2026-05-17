@@ -256,10 +256,10 @@ export type SessionMessageDTO = {
   // Discuss-with-Jarvis (rendered as a distinct card, not a user bubble).
   kind?: string;
   // seed_kind is the originating dashboard item kind (e.g. "activity")
-  // for a "dashboard_seed" row — used as the card's header label.
+  // for a "dashboard_seed" row - used as the card's header label.
   seed_kind?: string;
   // curiosity_id links a "dashboard_seed" row to an open curiosity
-  // question (best-effort title match) — when present the card renders
+  // question (best-effort title match) - when present the card renders
   // an "Approve & fix" action.
   curiosity_id?: string;
 };
@@ -268,7 +268,7 @@ export type SessionMessageDTO = {
 // The row is tombstoned (deleted_at = NOW()), its observations stay so
 // memories built from them remain grounded, and the list / messages /
 // hydrate endpoints all filter it out. Returns true on success, false on
-// any failure — callers can still optimistically remove the row.
+// any failure - callers can still optimistically remove the row.
 export async function deleteSession(id: string): Promise<boolean> {
   try {
     const res = await authedFetch(`/api/sessions/${encodeURIComponent(id)}/delete`, {
@@ -472,7 +472,7 @@ export async function decideSkillProposal(id: string, decision: "promoted" | "re
 // When a session has the boss fighting the same file (multiple edits +
 // failures), the source_extract hook drafts a refactor sketch via Haiku and
 // lands a row in mem_code_proposals. The boss reviews here and decides whether
-// the agent should attempt the change — actual edits still flow through
+// the agent should attempt the change - actual edits still flow through
 // ClaudeCodeGate → Trust queue.
 
 export type CodeProposalStatus = "candidate" | "approved" | "rejected" | "applied";
@@ -936,7 +936,7 @@ export async function deleteCron(id: string): Promise<boolean> {
 // triggerCron fires a cron job immediately, regardless of its schedule.
 // The next regular fire still happens at the cron-expression's next
 // tick. Use this to test a freshly-edited job before its schedule rolls
-// around — the run goes through the full agent loop, writes to mem_turns,
+// around - the run goes through the full agent loop, writes to mem_turns,
 // surfaces in the agent-work feed exactly like a scheduled fire, and
 // updates last_run_status so failures are visible. Returns { ok, error? }
 // when reachable, null when the request itself failed.
@@ -1097,7 +1097,7 @@ export async function disconnectOpenAIOAuth(): Promise<boolean> {
 
 /**
  * Submit a thumbs-up / thumbs-down on an assistant message. Pass null to
- * clear the existing rating. Fire-and-forget — UI optimistically updates,
+ * clear the existing rating. Fire-and-forget - UI optimistically updates,
  * server captures into mem_observations so the memory layer can surface
  * "the boss tends to like this kind of response" on future turns.
  */
@@ -1130,7 +1130,7 @@ export async function submitMessageFeedback(
 //
 // All four calls hit core's /api/connectors/composio/* proxy so the API
 // key never leaves the server. Types are loose because Composio's response
-// shape evolves — the /connectors page reads fields defensively rather
+// shape evolves - the /connectors page reads fields defensively rather
 // than locking us to a specific schema version.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1174,7 +1174,7 @@ export type ComposioPage<T> = {
 // our proxy mirrors them). The unhappy path is when core itself
 // hasn't deployed the route yet (Go's default mux returns
 // "404 page not found\n" as text/plain) or when Cloudflare is in
-// front and returns an HTML error page — JSON.parse on either of
+// front and returns an HTML error page - JSON.parse on either of
 // those is what produces the cryptic "Unexpected character at
 // position 4" message. Distinguish so the user gets a useful hint.
 async function parseComposioResponse(
@@ -1189,7 +1189,7 @@ async function parseComposioResponse(
   try {
     body = JSON.parse(text) as Record<string, unknown>;
   } catch {
-    // Non-JSON body — almost always means the route doesn't exist on
+    // Non-JSON body - almost always means the route doesn't exist on
     // core yet (deploy pending) or a proxy/CDN error page intercepted.
     const sample = text.slice(0, 80).replace(/\s+/g, " ");
     if (text.startsWith("404")) {

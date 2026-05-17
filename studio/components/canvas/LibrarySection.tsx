@@ -24,7 +24,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { cn } from "@/lib/utils";
 
 /**
- * LibrarySection — collapsible block at the top of the Files tab that
+ * LibrarySection - collapsible block at the top of the Files tab that
  * surfaces mem_artifacts grouped by kind. The Files tab is the unified
  * file browser; Library lives inside it, not as its own tab.
  *
@@ -49,7 +49,7 @@ export function LibrarySection({
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [openKinds, setOpenKinds] = useState<Record<string, boolean>>({
-    project: true, // projects expanded by default — most-used
+    project: true, // projects expanded by default - most-used
   });
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -97,7 +97,7 @@ export function LibrarySection({
 
   return (
     <div className="shrink-0 border-b bg-muted/20 dark:bg-zinc-900/30">
-      {/* Header row — toggles the whole Library block. Matches the
+      {/* Header row - toggles the whole Library block. Matches the
           visual mass of the deploy/source banners above it (font-mono,
           11px, muted tone) so the Files panel reads as one continuous
           stack rather than competing surfaces. */}
@@ -133,7 +133,7 @@ export function LibrarySection({
         <div className="pb-1">
           {groups.length === 0 && !loading && (
             <p className="px-3 pb-2 text-[11px] text-muted-foreground">
-              Empty — projects, images, and other artifacts Jarvis makes will appear here.
+              Empty - projects, images, and other artifacts Jarvis makes will appear here.
             </p>
           )}
           {groups.map((group) => (

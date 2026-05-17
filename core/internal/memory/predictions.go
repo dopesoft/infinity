@@ -19,7 +19,7 @@ import (
 // become curriculum signals for Voyager.
 //
 // The store is best-effort: prediction writes happen async and never block
-// the agent loop. A missing prediction row on PostToolUse is fine — the
+// the agent loop. A missing prediction row on PostToolUse is fine - the
 // resolver no-ops and moves on.
 type PredictionStore struct {
 	pool *pgxpool.Pool
@@ -38,7 +38,7 @@ func (p *PredictionStore) Record(ctx context.Context, sessionID, toolCallID, too
 
 // RecordWithTurn is Record but with an explicit turn_id so the /logs trace
 // view can show predictions as paired pre/post events alongside their
-// triggering tool call. turnID may be empty — that path matches the old
+// triggering tool call. turnID may be empty - that path matches the old
 // Record behavior exactly.
 func (p *PredictionStore) RecordWithTurn(ctx context.Context, sessionID, turnID, toolCallID, toolName, expected string, input map[string]any) (string, error) {
 	if p == nil || p.pool == nil {
@@ -48,7 +48,7 @@ func (p *PredictionStore) RecordWithTurn(ctx context.Context, sessionID, turnID,
 		return "", errors.New("tool_call_id and tool_name required")
 	}
 	if strings.TrimSpace(expected) == "" {
-		return "", nil // skip — no prediction worth recording
+		return "", nil // skip - no prediction worth recording
 	}
 	inputJSON, _ := json.Marshal(input)
 	id := uuid.NewString()
@@ -155,7 +155,7 @@ type PredictionRow struct {
 
 // SurpriseFor compares an expectation to an actual result and returns a
 // 0..1 surprise score. Cheap heuristic: tokenize, compute jaccard on lowered
-// words. This is intentionally not LLM-driven — we want post-hoc scoring
+// words. This is intentionally not LLM-driven - we want post-hoc scoring
 // to be free. The score is rough but consistent, and high values correctly
 // flag "the tool returned something nothing like what we predicted."
 func SurpriseFor(expected, actual string) (matched bool, surprise float64) {

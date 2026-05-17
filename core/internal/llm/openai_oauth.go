@@ -31,7 +31,7 @@ var (
 
 // logUnknownOAIEvent prints the SSE event type the first time we
 // encounter it. Useful when OpenAI ships a new reasoning-event variant
-// and the ThinkingBlock goes silent — the next deploy's logs show
+// and the ThinkingBlock goes silent - the next deploy's logs show
 // exactly which event name we missed so the handler can be extended.
 func logUnknownOAIEvent(t string) {
 	if t == "" {
@@ -48,8 +48,8 @@ func logUnknownOAIEvent(t string) {
 	}
 }
 
-// debugLogSeenEvent logs EVERY distinct event type once per process —
-// handled and unhandled alike — so we can verify the reasoning stream
+// debugLogSeenEvent logs EVERY distinct event type once per process -
+// handled and unhandled alike - so we can verify the reasoning stream
 // shape from the prod logs without instrumenting the call site every
 // time. Gated on INFINITY_OAI_DEBUG_EVENTS=true so the steady state
 // stays quiet.
@@ -86,7 +86,7 @@ func debugLogSeenEvent(t string) {
 // Wire protocol notes
 //   - Endpoint and auth headers follow the same shape Codex CLI uses. OpenAI
 //     does not publish these as a stable public contract, so the chatgpt.com
-//     backend may change — when it does, update the request shape here and
+//     backend may change - when it does, update the request shape here and
 //     bump the user-agent so we can correlate failures in the audit log.
 //   - The body uses OpenAI's Responses API JSON. Streamed events arrive as
 //     SSE with `event: <name>` + `data: <json>` pairs; we parse the small
@@ -114,7 +114,7 @@ const (
 	defaultOpenAIClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
 	defaultOpenAIAuthBase    = "https://auth.openai.com"
 	defaultOpenAIAPIBase     = "https://chatgpt.com/backend-api/codex"
-	// Scopes must include the connectors scopes Codex CLI requests —
+	// Scopes must include the connectors scopes Codex CLI requests -
 	// without them the issuer routes you to the platform project picker
 	// instead of the subscription-org consent screen.
 	defaultOpenAIScopes = "openid profile email offline_access api.connectors.read api.connectors.invoke"
@@ -124,7 +124,7 @@ const (
 
 func NewOpenAIOAuth(store *OAuthStore, model string) *OpenAIOAuth {
 	if model == "" {
-		// Default to the Codex roster — ChatGPT-account OAuth (the
+		// Default to the Codex roster - ChatGPT-account OAuth (the
 		// subscription path) rejects plain "gpt-5" with
 		//   The 'gpt-5' model is not supported when using Codex with
 		//   a ChatGPT account.
@@ -136,7 +136,7 @@ func NewOpenAIOAuth(store *OAuthStore, model string) *OpenAIOAuth {
 	return &OpenAIOAuth{
 		store:       store,
 		model:       model,
-		httpClient:  &http.Client{Timeout: 0}, // streaming — no overall timeout
+		httpClient:  &http.Client{Timeout: 0}, // streaming - no overall timeout
 		apiBase:     envOr("OPENAI_OAUTH_API_BASE", defaultOpenAIAPIBase),
 		authBase:    envOr("OPENAI_OAUTH_AUTH_BASE", defaultOpenAIAuthBase),
 		clientID:    envOr("OPENAI_OAUTH_CLIENT_ID", defaultOpenAIClientID),
@@ -162,7 +162,7 @@ func (o *OpenAIOAuth) Store() *OAuthStore { return o.store }
 
 // ClientID / AuthBase / RedirectURI / Scopes / APIBase let the HTTP layer
 // build the authorize URL with the same constants the provider uses for
-// refresh — keeps the OAuth contract in one place.
+// refresh - keeps the OAuth contract in one place.
 func (o *OpenAIOAuth) ClientID() string    { return o.clientID }
 func (o *OpenAIOAuth) AuthBase() string    { return o.authBase }
 func (o *OpenAIOAuth) APIBase() string     { return o.apiBase }
@@ -172,7 +172,7 @@ func (o *OpenAIOAuth) Scopes() string      { return o.scopes }
 // --- PKCE helpers (shared with the HTTP start handler) ----------------------
 
 // GeneratePKCE returns a (verifier, challenge) pair where the challenge is
-// the URL-safe base64-encoded SHA256 of the verifier — the S256 method.
+// the URL-safe base64-encoded SHA256 of the verifier - the S256 method.
 func GeneratePKCE() (verifier, challenge string, err error) {
 	buf := make([]byte, 64)
 	if _, err = rand.Read(buf); err != nil {
@@ -197,7 +197,7 @@ func RandomState() (string, error) {
 //
 // The `codex_cli_simplified_flow` + `id_token_add_organizations` flags are
 // the bits that make OpenAI skip its platform project-picker step and
-// instead bind the resulting token to the user's ChatGPT subscription org —
+// instead bind the resulting token to the user's ChatGPT subscription org -
 // so the issued access token routes to chatgpt.com/backend-api/codex
 // (subscription quota) rather than api.openai.com (pay-per-token). Codex
 // CLI sends both unconditionally; omitting them is what triggers the
@@ -251,13 +251,13 @@ func (o *OpenAIOAuth) refreshIfNeeded(ctx context.Context) (OAuthToken, error) {
 		return tok, nil
 	}
 	if tok.RefreshToken == "" {
-		return tok, errors.New("openai_oauth: token expired and no refresh_token stored — reconnect ChatGPT")
+		return tok, errors.New("openai_oauth: token expired and no refresh_token stored - reconnect ChatGPT")
 	}
 
 	o.refreshMu.Lock()
 	defer o.refreshMu.Unlock()
 
-	// Re-check under lock — another goroutine may have refreshed while we
+	// Re-check under lock - another goroutine may have refreshed while we
 	// were waiting for the mutex.
 	tok, err = o.store.GetToken(ctx, o.Name())
 	if err != nil {
@@ -346,7 +346,7 @@ func (o *OpenAIOAuth) tokenRequest(ctx context.Context, form url.Values) (OAuthT
 }
 
 // decodeIDTokenClaims pulls the `sub` and `email` claims out of a JWT id_token
-// without verifying signatures — we only use these for identity display in
+// without verifying signatures - we only use these for identity display in
 // Studio and as the chatgpt-account-id header. The token comes straight from
 // the OAuth response over TLS, so signature verification adds no security
 // here beyond what TLS already gave us.
@@ -360,7 +360,7 @@ func decodeIDTokenClaims(idToken string) (sub, email string) {
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		// Some providers pad the segment — retry tolerant.
+		// Some providers pad the segment - retry tolerant.
 		if p, perr := base64.URLEncoding.DecodeString(parts[1] + strings.Repeat("=", (4-len(parts[1])%4)%4)); perr == nil {
 			payload = p
 		} else {
@@ -402,7 +402,7 @@ func (o *OpenAIOAuth) Stream(
 	// Respect the configured model. The boss's Settings choice (or
 	// the per-call override from a sub-agent) is the truth. We only
 	// translate tier *nicknames* like "haiku" / "sonnet" that come
-	// from cross-provider routing — real model ids pass through to
+	// from cross-provider routing - real model ids pass through to
 	// OpenAI untouched, even if the OAuth path doesn't serve them.
 	// The retry-on-400 below catches genuine "model not supported"
 	// errors and falls back to o.model; we do not second-guess.
@@ -488,8 +488,8 @@ func (o *OpenAIOAuth) attemptStream(
 
 // looksLikeModelRejection identifies a 400 body whose root cause is the
 // model name (rather than e.g. malformed payload). Codex returns a few
-// distinct phrasings — "is not supported when using Codex with a ChatGPT
-// account", "model_not_found", "does not exist", "invalid model" — so we
+// distinct phrasings - "is not supported when using Codex with a ChatGPT
+// account", "model_not_found", "does not exist", "invalid model" - so we
 // match on the common substrings. Conservative on purpose: a false
 // positive just means we retry with the default once.
 func looksLikeModelRejection(body string) bool {
@@ -564,10 +564,10 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 		// IMPORTANT: must be "web_search", NOT "web_search_preview".
 		// The Codex backend (chatgpt.com/backend-api/codex/responses)
 		// rejects "web_search_preview" with 400 "Unsupported tool type"
-		// — that string is the public api.openai.com/v1/responses name.
+		// - that string is the public api.openai.com/v1/responses name.
 		// Verified against openai/codex tool_spec.rs:
 		//   #[serde(rename = "web_search")] WebSearch { ... }
-		// DO NOT REVERT TO `web_search_preview` — it will 400 every
+		// DO NOT REVERT TO `web_search_preview` - it will 400 every
 		// request because this `tools` array is sent on every turn,
 		// not just web-search turns.
 		body["tools"] = []map[string]any{{"type": "web_search"}}
@@ -614,7 +614,7 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 // the ChatGPT-account OAuth path (chatgpt.com/backend-api/codex/responses)
 // accepts OpenAI's built-in web search tool. The Codex backend expects the
 // bare name `"web_search"` (NOT `"web_search_preview"`, which is the public
-// api.openai.com Responses API spelling — Codex 400s with "Unsupported tool
+// api.openai.com Responses API spelling - Codex 400s with "Unsupported tool
 // type" on that). Verified against openai/codex tool_spec.rs (#[serde(rename
 // = "web_search")]). The codex roster (gpt-5*, codex-mini-latest, chatgpt-*
 // aliases) all support built-in web search; older API-only families do not
@@ -691,7 +691,7 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			// Current Responses API reasoning event names (gpt-5 reasoning
 			// variants, o3, o4 family). Names have shifted across model
 			// generations so we handle the family of variants the upstream
-			// has shipped — extra unknown ones get ignored silently below.
+			// has shipped - extra unknown ones get ignored silently below.
 			"response.reasoning.delta",
 			"response.reasoning_summary.delta",
 			"response.reasoning_summary_text.delta",
@@ -709,7 +709,7 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			// streams under load) finalize an output item without first
 			// emitting per-token deltas. The final `output_item.done` event
 			// carries the complete item, so we mine it for any text or
-			// function call we haven't already surfaced — without this the
+			// function call we haven't already surfaced - without this the
 			// turn appears empty in the UI even though the model replied.
 			if text := decodeMessageText(evt.Item); text != "" {
 				if !strings.HasSuffix(resp.Text, text) {
@@ -780,7 +780,7 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			// (gpt-5-* families especially), and OpenAI keeps shipping new
 			// event names that carry the summary text. Anything ending in
 			// `.delta` whose path contains "reasoning" is a reasoning chunk
-			// — surface it so the ThinkingBlock fills in even on new
+			// - surface it so the ThinkingBlock fills in even on new
 			// variants we haven't explicitly listed above. The narrow
 			// substring guard avoids surfacing unrelated `.delta` events
 			// (function_call_arguments etc. are handled in their own
@@ -789,7 +789,7 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			t := evt.Type
 			// Widen the net for reasoning-shaped events. OpenAI has
 			// shipped reasoning content under "reasoning", "thinking",
-			// "summary" — any *.delta with a Delta payload AND one of
+			// "summary" - any *.delta with a Delta payload AND one of
 			// those keywords is treated as thinking content. Better to
 			// over-surface (you see the model's chain-of-thought
 			// summary) than under-surface (empty bubble).
@@ -863,7 +863,7 @@ func finalizeToolCall(pc *pendingToolCall) ToolCall {
 // `{"type":"message","content":[{"type":"output_text","text":"…"}, …]}`,
 // so we walk the content array and join every output_text segment. Any
 // non-message item type (function_call, reasoning) returns the empty
-// string — those are handled by their own decoders.
+// string - those are handled by their own decoders.
 func decodeMessageText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -933,7 +933,7 @@ func truncateOAuth(s string, n int) string {
 
 // tierNicknameToCodex maps cross-provider tier nicknames ONLY.
 //
-// "haiku" / "small" / "cheap" / "mini" — keywords sub-agents pass for
+// "haiku" / "small" / "cheap" / "mini" - keywords sub-agents pass for
 // cheap reasoning when they don't know which provider is wired. On the
 // OpenAI OAuth path those translate to codex-mini-latest. "sonnet" /
 // "opus" / "default" map to gpt-5-codex. Real model ids (anything with

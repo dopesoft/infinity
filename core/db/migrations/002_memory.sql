@@ -1,4 +1,4 @@
--- 002_memory.sql — Memory subsystem schema.
+-- 002_memory.sql - Memory subsystem schema.
 -- Ports rohitg00/agentmemory's TypeScript schema (Apache-2.0) to Postgres+pgvector.
 -- Embedding dimension: 384 (Xenova all-MiniLM-L6-v2).
 

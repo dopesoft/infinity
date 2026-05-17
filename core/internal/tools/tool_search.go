@@ -9,7 +9,7 @@ import (
 
 // ToolSearch surfaces the dormant registry to the LLM. The model can call
 // it with a natural-language query and receive (name, description) pairs
-// for the top N matches. It does NOT load the tool — that's a separate
+// for the top N matches. It does NOT load the tool - that's a separate
 // step via load_tools so the model commits intentionally rather than
 // vacuuming every search result into context.
 //
@@ -78,7 +78,7 @@ func (t *ToolSearch) Execute(ctx context.Context, input map[string]any) (string,
 	t.Registry.mu.RLock()
 	for name, tool := range t.Registry.tools {
 		if _, on := activeNames[name]; on {
-			continue // already loaded — no point surfacing
+			continue // already loaded - no point surfacing
 		}
 		desc := tool.Description()
 		score := scoreToolMatch(name, desc, q, tokens)
@@ -99,7 +99,7 @@ func (t *ToolSearch) Execute(ctx context.Context, input map[string]any) (string,
 		"matches": hits,
 	}
 	if len(hits) == 0 {
-		body["hint"] = "No matches in the dormant catalog. The tool may not be connected yet — check Settings → Connectors."
+		body["hint"] = "No matches in the dormant catalog. The tool may not be connected yet - check Settings → Connectors."
 	} else {
 		body["next_step"] = "Call load_tools with the names you want; their schemas will be available on the next turn."
 	}

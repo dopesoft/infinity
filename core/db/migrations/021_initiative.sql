@@ -1,22 +1,22 @@
--- 021_initiative.sql — initiative + economics.
+-- 021_initiative.sql - initiative + economics.
 --
 -- Phase 6 (final) of the assembly substrate. An always-on agent needs two
 -- things a reactive chatbot doesn't:
---   1. INITIATIVE — a policy for WHEN and HOW to reach the boss (push to
+--   1. INITIATIVE - a policy for WHEN and HOW to reach the boss (push to
 --      the phone now? surface a dashboard card? batch into a digest?), and
 --      a ledger of what it sent.
---   2. ECONOMICS — awareness of what it costs to run, so it can make
+--   2. ECONOMICS - awareness of what it costs to run, so it can make
 --      value/cost tradeoffs instead of burning the budget blind.
 --
 -- Plus dependency-aware scheduling: a workflow run can wait on another run
 -- finishing before the engine claims it.
 --
---   mem_notifications            — the outbound ledger
---   mem_cost_events              — the cost ledger
---   mem_workflow_runs.depends_on — run-after-run ordering
+--   mem_notifications            - the outbound ledger
+--   mem_cost_events              - the cost ledger
+--   mem_workflow_runs.depends_on - run-after-run ordering
 --
 -- The agent reaches out via the notify tool / records spend via cost_record
--- / reads the budget via budget_status — never raw SQL.
+-- / reads the budget via budget_status - never raw SQL.
 
 BEGIN;
 

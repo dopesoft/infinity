@@ -11,20 +11,20 @@ import (
 )
 
 // SubstrateSurfaceChecklist mirrors the noteworthy state of the assembly
-// substrate onto the generic dashboard surface — so the agent's goals, its
+// substrate onto the generic dashboard surface - so the agent's goals, its
 // broken extensions, and its failing capabilities show up on the dashboard
 // with ZERO bespoke Studio code.
 //
 // This is Rule #1 applied to the substrate itself: the dashboard's generic
 // SurfaceCard already renders whatever `surface` key gets written, so a
-// substrate phase doesn't need its own page — it just writes through the
+// substrate phase doesn't need its own page - it just writes through the
 // surface contract. Each heartbeat tick this reconciles two surfaces:
 //
-//	surface='agenda' — Jarvis's OWN active / blocked goals (mem_agent_goals).
-//	                   Distinct from the boss's Pursuits card (mem_pursuits) —
+//	surface='agenda' - Jarvis's OWN active / blocked goals (mem_agent_goals).
+//	                   Distinct from the boss's Pursuits card (mem_pursuits) -
 //	                   this is what the agent is working toward, not the
 //	                   boss's habits.
-//	surface='health' — extensions that failed to activate, plus any
+//	surface='health' - extensions that failed to activate, plus any
 //	                   skill/workflow/tool whose last 3 runs all failed
 //
 // Reconcile = items for state that's no longer noteworthy (a goal finished,
@@ -37,14 +37,14 @@ func SubstrateSurfaceChecklist(pool *pgxpool.Pool) Checklist {
 		store := surface.NewStore(pool, nil)
 		surfaceAgentGoals(ctx, pool, store)
 		surfaceSubstrateHealth(ctx, pool, store)
-		// The surface items ARE the output — no heartbeat Findings needed
+		// The surface items ARE the output - no heartbeat Findings needed
 		// (AgentGoalChecklist already emits the needs-attention nudges).
 		return nil, nil
 	}
 }
 
 // surfaceAgentGoals upserts one card per active/blocked goal onto the
-// 'agenda' surface (Jarvis's agenda — not the boss's Pursuits), then
+// 'agenda' surface (Jarvis's agenda - not the boss's Pursuits), then
 // dismisses cards for goals that are no longer active.
 func surfaceAgentGoals(ctx context.Context, pool *pgxpool.Pool, store *surface.Store) {
 	rows, err := pool.Query(ctx, `
@@ -55,7 +55,7 @@ func surfaceAgentGoals(ctx context.Context, pool *pgxpool.Pool, store *surface.S
 		 LIMIT 30
 	`)
 	if err != nil {
-		return // migration 020 may not be applied — degrade quietly
+		return // migration 020 may not be applied - degrade quietly
 	}
 	defer rows.Close()
 
@@ -97,8 +97,8 @@ func surfaceAgentGoals(ctx context.Context, pool *pgxpool.Pool, store *surface.S
 }
 
 // surfaceSubstrateHealth upserts a card for anything in the substrate that
-// is broken — an extension that failed to activate, or a capability whose
-// last three runs all failed — onto the 'health' surface.
+// is broken - an extension that failed to activate, or a capability whose
+// last three runs all failed - onto the 'health' surface.
 func surfaceSubstrateHealth(ctx context.Context, pool *pgxpool.Pool, store *surface.Store) {
 	desired := map[string]bool{}
 
@@ -165,7 +165,7 @@ func surfaceSubstrateHealth(ctx context.Context, pool *pgxpool.Pool, store *surf
 				Title:            fmt.Sprintf("%s %q is failing", kind, name),
 				Subtitle:         "last 3 runs failed",
 				Importance:       &imp,
-				ImportanceReason: "Regressed — the last 3 recorded outcomes were all failures",
+				ImportanceReason: "Regressed - the last 3 recorded outcomes were all failures",
 			})
 		}
 		rows.Close()
@@ -174,8 +174,8 @@ func surfaceSubstrateHealth(ctx context.Context, pool *pgxpool.Pool, store *surf
 	reconcileSurface(ctx, store, "health", "substrate-health", desired)
 }
 
-// reconcileSurface dismisses open items on a surface — written by `source`
-// — whose external_id is no longer in the desired set. This is what keeps
+// reconcileSurface dismisses open items on a surface - written by `source`
+// - whose external_id is no longer in the desired set. This is what keeps
 // the cards current: state that resolved drops off the dashboard.
 func reconcileSurface(ctx context.Context, store *surface.Store, surfaceKey, source string, desired map[string]bool) {
 	items, err := store.ListBySurface(ctx, surfaceKey, 200)

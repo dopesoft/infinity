@@ -23,7 +23,7 @@ const labelClass = {
 export function FooterStatus() {
   const ws = useWebSocket();
   const [status, setStatus] = useState<CoreStatus | null>(null);
-  // Subscribe to the shared model/provider setting — both the composer's
+  // Subscribe to the shared model/provider setting - both the composer's
   // ModelChip and the Settings page write through this same hook, so any
   // change there reaches the footer on the same tick (no 30s polling lag).
   const { setting } = useGlobalModel();
@@ -69,11 +69,11 @@ export function FooterStatus() {
   // catalog (Settings + ModelChip use the same source of truth).
   //
   // Prefer the live `useGlobalModel` setting over the polled /api/status
-  // snapshot — when the chip cycles or Settings saves, the hook broadcasts
+  // snapshot - when the chip cycles or Settings saves, the hook broadcasts
   // synchronously and the footer re-renders the same tick. /api/status is
   // still the fallback so first paint isn't blank.
   //
-  // CRITICAL: provider id (not model id) is the source of truth — `openai`
+  // CRITICAL: provider id (not model id) is the source of truth - `openai`
   // and `openai_oauth` share most model ids (gpt-5.4-mini etc.), so a naive
   // resolveModelEntry() walk picks `openai` (API key) first and would
   // mislabel a real ChatGPT-Plan turn. Look up the vendor by provider id
@@ -95,12 +95,12 @@ export function FooterStatus() {
     ?? fallbackEntry?.vendor.label
     ?? (liveProvider ? findVendor(liveProvider).label : null)
     ?? liveProvider
-    ?? "—";
+    ?? "-";
   const modelLabel =
     modelFromVendor?.label
     ?? fallbackEntry?.model.label
     ?? liveModel
-    ?? "—";
+    ?? "-";
 
   const toolCount = status?.tools?.length ?? 0;
   const sep = <span aria-hidden className="text-border">|</span>;

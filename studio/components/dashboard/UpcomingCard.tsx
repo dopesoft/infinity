@@ -23,10 +23,10 @@ import type {
   DashboardItem,
 } from "@/lib/dashboard/types";
 
-/* Upcoming — calendar feed, 6 months out, no empty weeks.
+/* Upcoming - calendar feed, 6 months out, no empty weeks.
  *
  * Events are grouped by day, and any day without events is omitted
- * entirely (per the boss's request — "no empty weeks"). Long stretches
+ * entirely (per the boss's request - "no empty weeks"). Long stretches
  * with no events get a single thin "nothing scheduled · 12 days" row
  * inside the scroll so the temporal gap is still legible without
  * burning vertical space.

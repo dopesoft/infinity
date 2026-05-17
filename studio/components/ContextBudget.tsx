@@ -69,9 +69,9 @@ export function ContextBudget({ usedTokens }: { usedTokens: number }) {
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
         {critical
-          ? "Critical — compact recommended"
+          ? "Critical - compact recommended"
           : danger
-            ? "Danger zone — compact soon"
+            ? "Danger zone - compact soon"
             : "Danger zone at 60%"}
       </p>
     </SidePanelCard>

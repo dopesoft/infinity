@@ -18,7 +18,7 @@ import (
 //     candidate; the user reviews + promotes/rejects in the Skills tab.
 //   - skill_optimize: the agent calls this to suggest an update to an
 //     existing skill. Drops a proposal with parent_skill set so the diff is
-//     visible. (Distinct from the GEPA optimizer — this is the agent's own
+//     visible. (Distinct from the GEPA optimizer - this is the agent's own
 //     edit suggestion, not a Pareto search result.)
 //
 // No-op when pool is nil. Skills don't need an embedder.

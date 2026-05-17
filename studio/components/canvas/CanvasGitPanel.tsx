@@ -43,12 +43,12 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * CanvasGitPanel — VS Code Source Control parity, minus the heavy stuff.
+ * CanvasGitPanel - VS Code Source Control parity, minus the heavy stuff.
  *
  * What it does:
  *   - Polls git status (read-only, no Trust prompt) every 4s while focused.
  *   - Click a changed file → opens Monaco in diff mode in the right pane.
- *   - Stage all / Commit / Push / Pull — each composes a single bash command
+ *   - Stage all / Commit / Push / Pull - each composes a single bash command
  *     and queues a Trust contract. The boss approves in Trust tab (or inline
  *     from the contract toast). After approval, the API endpoint runs the
  *     command and echoes output back here as a toast/banner.
@@ -84,7 +84,7 @@ export function CanvasGitPanel({
   }, [store.root]);
 
   useEffect(() => {
-    // When the workspace root clears (session has no project_path —
+    // When the workspace root clears (session has no project_path -
     // see CanvasFrame), drop any stale status so the panel can't
     // show ghost entries / counts alongside the "Set a workspace
     // root first" banner. Also stop the poll until root returns.
@@ -189,7 +189,7 @@ export function CanvasGitPanel({
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
           <GitBranch className="size-3.5 shrink-0" />
           <span className="truncate font-mono" title={status?.branch}>
-            {status?.branch ?? "—"}
+            {status?.branch ?? "-"}
           </span>
           {status && (status.ahead > 0 || status.behind > 0) && (
             <span className="ml-1 font-mono text-[10px]">
@@ -293,7 +293,7 @@ export function CanvasGitPanel({
         {store.root && untracked.length > 0 && <GitGroup title="Untracked" entries={untracked} repo={store.root} onOpen={openFile} />}
       </div>
 
-      {/* Commit modal — Dialog on desktop, Drawer on mobile per project convention. */}
+      {/* Commit modal - Dialog on desktop, Drawer on mobile per project convention. */}
       {isDesktop ? (
         <Dialog open={commitOpen} onOpenChange={setCommitOpen}>
           <DialogContent className="max-w-lg gap-0 p-0">

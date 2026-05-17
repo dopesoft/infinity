@@ -11,7 +11,7 @@ import (
 // import cycle when agent.CompositeMemory wires it in).
 type PrefFetcher func(ctx context.Context, sessionID string) Preference
 
-// MemoryProvider satisfies the agent.MemoryProvider interface — emits
+// MemoryProvider satisfies the agent.MemoryProvider interface - emits
 // a system-prompt prefix every turn. Used to keep Jarvis honest about
 // which bridge he's actually working through right now.
 //
@@ -51,17 +51,17 @@ func (m *MemoryProvider) BuildSystemPrefix(ctx context.Context, sessionID, query
 
 	switch {
 	case err != nil:
-		b.WriteString(fmt.Sprintf("Active: NONE — %s. Any fs/bash/git tool call will fail. Ask the boss to bring a bridge online or flip the session preference (POST /api/bridge/session/<id>).\n", err.Error()))
+		b.WriteString(fmt.Sprintf("Active: NONE - %s. Any fs/bash/git tool call will fail. Ask the boss to bring a bridge online or flip the session preference (POST /api/bridge/session/<id>).\n", err.Error()))
 	case active == nil:
 		b.WriteString("Active: unknown\n")
 	case active.Name() == KindMac:
 		b.WriteString(fmt.Sprintf("Active: Mac (%s)\n", why))
-		b.WriteString("Coding muscle: prefer `claude_code__Edit`, `claude_code__Bash`, `claude_code__Write` etc. for heavy edits — those bill against the boss's Anthropic Max subscription via Claude Code on his Mac. Use `fs_edit`, `fs_save`, `bash_run`, `git_*` when a sub-agent loop would be wasted (deterministic / single-shot).\n")
+		b.WriteString("Coding muscle: prefer `claude_code__Edit`, `claude_code__Bash`, `claude_code__Write` etc. for heavy edits - those bill against the boss's Anthropic Max subscription via Claude Code on his Mac. Use `fs_edit`, `fs_save`, `bash_run`, `git_*` when a sub-agent loop would be wasted (deterministic / single-shot).\n")
 		b.WriteString("Filesystem: the boss's local Mac checkout. Commits authored as the boss's git identity.\n")
 	case active.Name() == KindCloud:
 		b.WriteString(fmt.Sprintf("Active: Cloud (%s)\n", why))
-		b.WriteString("Tools: use the generic bridge primitives — `fs_read`, `fs_ls`, `fs_save`, `fs_edit`, `bash_run`, `git_status`, `git_diff`, `git_stage`, `git_commit`, `git_push`, `git_pull`. The `claude_code__*` schemas are intentionally not present this turn: those tools edit the boss's Mac filesystem, not this Cloud workspace volume, and calling them here would silently change the wrong tree. YOU are the only brain here — your own cognition (ChatGPT subscription via openai_oauth) covers all the decisions; no metered API spend.\n")
-		b.WriteString("Filesystem: the Railway workspace volume. Commits authored as 'Jarvis Cloud <jarvis@dopesoft.io>' — diff-able from the boss's Mac commits.\n")
+		b.WriteString("Tools: use the generic bridge primitives - `fs_read`, `fs_ls`, `fs_save`, `fs_edit`, `bash_run`, `git_status`, `git_diff`, `git_stage`, `git_commit`, `git_push`, `git_pull`. The `claude_code__*` schemas are intentionally not present this turn: those tools edit the boss's Mac filesystem, not this Cloud workspace volume, and calling them here would silently change the wrong tree. YOU are the only brain here - your own cognition (ChatGPT subscription via openai_oauth) covers all the decisions; no metered API spend.\n")
+		b.WriteString("Filesystem: the Railway workspace volume. Commits authored as 'Jarvis Cloud <jarvis@dopesoft.io>' - diff-able from the boss's Mac commits.\n")
 		b.WriteString("Sync: when the boss wants to continue on his Mac, push to GitHub and have him `git pull` there. Same in reverse.\n")
 	}
 

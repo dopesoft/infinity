@@ -6,7 +6,7 @@ import { Section, TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import type { DashboardItem, Pursuit } from "@/lib/dashboard/types";
 
-/* Pursuits — habits + goals + objectives merged.
+/* Pursuits - habits + goals + objectives merged.
  *
  * Each row carries a cadence tag (daily / weekly / goal / quarterly).
  * Habits show a check button + streak; goals show a progress bar. Tap

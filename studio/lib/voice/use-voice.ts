@@ -38,7 +38,7 @@ const INITIAL: UseVoiceState = {
 
 /** Hooks the chat conversation stream into voice's transcript events so
  *  user utterances and live assistant deltas appear as proper chat
- *  messages in the conversation area — never as ephemeral captions in
+ *  messages in the conversation area - never as ephemeral captions in
  *  the composer. The composer only ever renders the orb + status + Mute
  *  + End controls. */
 export type UseVoiceCallbacks = {
@@ -63,7 +63,7 @@ function normalizeVoiceTranscript(text: string): string {
 // for the first time, so the boss has an audible confirmation that
 // audio output is working AND the agent is ready to listen. Doubles as
 // a sanity check: if you don't hear the chime, you won't hear the
-// agent either — fix your output device before recording bug reports.
+// agent either - fix your output device before recording bug reports.
 function playConnectChime(): void {
   try {
     const Ctx =
@@ -103,7 +103,7 @@ function playConnectChime(): void {
     }, 700);
   } catch {
     // Audio context construction can fail in private modes or on
-    // some embedded webviews — silent failure is fine, the chime is
+    // some embedded webviews - silent failure is fine, the chime is
     // a convenience.
   }
 }
@@ -168,7 +168,7 @@ export function useVoice(
     }
   }, []);
 
-  // Smooth-peak ticker — runs as long as a session exists.
+  // Smooth-peak ticker - runs as long as a session exists.
   useEffect(() => {
     let raf = 0;
     let last = 0;
@@ -273,7 +273,7 @@ export function useVoice(
             assistantTextRef.current += cleanDelta;
             // Stream the delta into the assistant message bubble.
             // useChat creates / extends a pending bubble exactly like
-            // text-mode deltas do — the conversation stream is the
+            // text-mode deltas do - the conversation stream is the
             // single source of truth for "what did the agent say".
             if (cleanDelta) emitAssistantUi(cleanDelta, false);
             return;
@@ -297,7 +297,7 @@ export function useVoice(
           try {
             input = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
           } catch (err) {
-            // Don't silently run with empty input — the boss should see
+            // Don't silently run with empty input - the boss should see
             // this in the console + the model gets a real signal back.
             console.warn("voice: failed to parse tool arguments", {
               tool: call.name,
@@ -319,7 +319,7 @@ export function useVoice(
             input,
           });
           // Guard against the user ending voice while the tool was
-          // running — submitting on a closed data channel is a no-op
+          // running - submitting on a closed data channel is a no-op
           // inside the client, but bailing early saves a render.
           if (!clientRef.current) return;
           // If load_tools / unload_tools / tool_search mutated the

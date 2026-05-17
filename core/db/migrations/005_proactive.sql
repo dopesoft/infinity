@@ -1,14 +1,14 @@
--- 005_proactive.sql — Proactive engine.
+-- 005_proactive.sql - Proactive engine.
 --
 -- Adds tables for:
---   • mem_session_state    — durable WAL output (SESSION-STATE.md replacement)
---   • mem_working_buffer   — danger-zone exchange log (60%-of-context capture)
---   • mem_intent_decisions — IntentFlow control-token history per turn
---   • mem_heartbeats       — record of every heartbeat run + findings count
---   • mem_heartbeat_findings — individual findings produced by a heartbeat
---   • mem_outcomes         — non-trivial decisions awaiting follow-up
---   • mem_trust_contracts  — Trust-Contract approval queue
---   • mem_patterns         — detected repeated request patterns (skill candidates)
+--   • mem_session_state    - durable WAL output (SESSION-STATE.md replacement)
+--   • mem_working_buffer   - danger-zone exchange log (60%-of-context capture)
+--   • mem_intent_decisions - IntentFlow control-token history per turn
+--   • mem_heartbeats       - record of every heartbeat run + findings count
+--   • mem_heartbeat_findings - individual findings produced by a heartbeat
+--   • mem_outcomes         - non-trivial decisions awaiting follow-up
+--   • mem_trust_contracts  - Trust-Contract approval queue
+--   • mem_patterns         - detected repeated request patterns (skill candidates)
 
 BEGIN;
 

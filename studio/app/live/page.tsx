@@ -14,7 +14,7 @@ import type { AgentState } from "@/components/StatusPill";
 import { useRealtime } from "@/lib/realtime/provider";
 
 /**
- * /live — the unified workspace.
+ * /live - the unified workspace.
  *
  *   <TabFrame>
  *     <SessionHeader>    chat-app name + chevron switcher + new + info

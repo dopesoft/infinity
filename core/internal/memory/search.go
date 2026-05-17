@@ -35,7 +35,7 @@ func NewSearcher(pool *pgxpool.Pool, embedder embed.Embedder) *Searcher {
 
 // AttachProcedural plugs the procedural-tier store into the searcher so
 // BuildSystemPrefix can include the top-K procedural skills relevant to the
-// current query. Optional — when nil, the system prefix simply omits the
+// current query. Optional - when nil, the system prefix simply omits the
 // procedural block.
 func (s *Searcher) AttachProcedural(p *ProceduralStore) {
 	if s == nil {
@@ -87,7 +87,7 @@ func (s *Searcher) Search(ctx context.Context, query string, opts SearchOpts) ([
 	streams := make(map[string][]ScoredItem, 3)
 	for r := range results {
 		if r.err != nil {
-			// Don't fail the whole search on one stream's error — just log via context.
+			// Don't fail the whole search on one stream's error - just log via context.
 			continue
 		}
 		streams[r.name] = r.items
@@ -278,11 +278,11 @@ func intervalArg(d time.Duration) any {
 // agent loop without coupling.
 //
 // Composes two layers:
-//  1. The boss-profile primer — semantic-tier memories under project='_self'.
+//  1. The boss-profile primer - semantic-tier memories under project='_self'.
 //     Always prepended so generic queries (where retrieval finds nothing) still
 //     have identity context: who the user is, persistent preferences, projects
 //     in flight.
-//  2. Query-relevant retrieval — the standard triple-stream RRF search.
+//  2. Query-relevant retrieval - the standard triple-stream RRF search.
 func (s *Searcher) BuildSystemPrefix(ctx context.Context, sessionID, query string) (string, error) {
 	var b stringBuilder
 
@@ -292,7 +292,7 @@ func (s *Searcher) BuildSystemPrefix(ctx context.Context, sessionID, query strin
 		b.WriteString("\n")
 	}
 
-	// Procedural skills — top-K relevant to this query, retrieved via the
+	// Procedural skills - top-K relevant to this query, retrieved via the
 	// same vector machinery as semantic memories. CoALA's "procedural" tier
 	// applied: skills the agent already knows, surfaced *before* the agent
 	// scans tools, so it reaches for habit over improvisation.
@@ -325,7 +325,7 @@ func (s *Searcher) BuildSystemPrefix(ctx context.Context, sessionID, query strin
 
 // fetchBossProfile pulls the always-on identity primer. Lives in mem_memories
 // at tier='semantic' AND project='_self'. Cap at 8 rows / ~1.5k chars so we
-// don't balloon the system prompt — if you need more, write fewer/denser facts.
+// don't balloon the system prompt - if you need more, write fewer/denser facts.
 func (s *Searcher) fetchBossProfile(ctx context.Context) (string, error) {
 	if s.pool == nil {
 		return "", nil

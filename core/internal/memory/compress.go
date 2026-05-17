@@ -21,7 +21,7 @@ import (
 // nodes/edges. This is the bridge between raw capture and semantic memory.
 //
 // Disabled by default. Enable with INFINITY_AUTO_COMPRESS=true. Each call
-// costs one Claude Haiku turn — keep this off during high-volume capture
+// costs one Claude Haiku turn - keep this off during high-volume capture
 // (filesystem ops, big tool outputs) unless you've budgeted for it.
 type Compressor struct {
 	pool     *pgxpool.Pool
@@ -119,7 +119,7 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 		return fmt.Errorf("summarize: %w", err)
 	}
 	if strings.TrimSpace(facts.Summary) == "" {
-		return nil // model declined to summarize — likely empty / boilerplate input
+		return nil // model declined to summarize - likely empty / boilerplate input
 	}
 
 	memEmb, err := c.embedder.Embed(ctx, facts.Title+"\n"+facts.Summary)
@@ -219,7 +219,7 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 	}
 	_ = c.auditor.Log(ctx, "create", "mem_memories", memID, "compressor", diff)
 
-	// A-MEM auto-linking. arXiv 2502.12110 — at write time, link this new
+	// A-MEM auto-linking. arXiv 2502.12110 - at write time, link this new
 	// memory to its top-K neighbours so retrieval can traverse the graph,
 	// not just rank by score. Async via goroutine: never blocks the
 	// compression path; failures log and continue.
@@ -237,7 +237,7 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 
 // autoLinkNeighbours writes mem_relations rows of type 'associative' from
 // the freshly-written memory to its k nearest neighbours in embedding space.
-// We bound k at 4 — A-MEM's paper used k=5 but our schema doesn't dedupe so
+// We bound k at 4 - A-MEM's paper used k=5 but our schema doesn't dedupe so
 // fewer edges are better. Threshold of 0.65 cosine similarity prevents
 // linking to "everything is loosely related" noise.
 func (c *Compressor) autoLinkNeighbours(ctx context.Context, memID string, emb []float32) error {

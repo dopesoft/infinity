@@ -41,7 +41,7 @@ export function SkillCard({
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={cn("inline-block size-1.5 rounded-full", statusDot[skill.status])} />
           <code className="truncate font-mono text-foreground">{skill.name}</code>
-          <span className="font-mono">v{skill.version || "—"}</span>
+          <span className="font-mono">v{skill.version || "-"}</span>
         </div>
         {skill.source === "auto_evolved" && (
           <Sparkles className="size-3 text-info" aria-hidden />

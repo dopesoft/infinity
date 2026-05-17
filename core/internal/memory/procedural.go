@@ -43,7 +43,7 @@ type ProceduralEntry struct {
 }
 
 // UpsertFromSkill records a promoted skill as a procedural memory. Idempotent
-// on the skill name — re-promoting the same skill updates the existing row
+// on the skill name - re-promoting the same skill updates the existing row
 // rather than appending. The content is the skill's "When to use" + first
 // few lines of "Steps" so retrieval at injection time gets a usable summary
 // without exploding the system-prompt budget.
@@ -122,7 +122,7 @@ func (p *ProceduralStore) MarkSkillArchived(ctx context.Context, skillName strin
 
 // TopK returns the K most relevant procedural memories. With query="" it
 // returns the top-K by strength × importance (used as the always-injected
-// slice at agent boot). With a query it embeds and ranks by cosine — used
+// slice at agent boot). With a query it embeds and ranks by cosine - used
 // by the system-prompt builder when a user message arrives.
 func (p *ProceduralStore) TopK(ctx context.Context, query string, k int) ([]ProceduralEntry, error) {
 	if p == nil || p.pool == nil {
@@ -247,7 +247,7 @@ func extractSection(body, heading string, maxLines int) string {
 }
 
 // FormatForPrompt renders a TopK slice as a short system-prompt block. The
-// agent loop calls this when building the context — keeps the formatting
+// agent loop calls this when building the context - keeps the formatting
 // contract in one place.
 func FormatForPrompt(entries []ProceduralEntry) string {
 	if len(entries) == 0 {
@@ -256,7 +256,7 @@ func FormatForPrompt(entries []ProceduralEntry) string {
 	var b strings.Builder
 	b.WriteString("## Your procedural skills (top matches)\n")
 	for _, e := range entries {
-		fmt.Fprintf(&b, "- **%s** — %s\n", e.SkillName, firstLine(e.Content))
+		fmt.Fprintf(&b, "- **%s** - %s\n", e.SkillName, firstLine(e.Content))
 	}
 	return b.String()
 }

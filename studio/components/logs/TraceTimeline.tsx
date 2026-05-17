@@ -15,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { TraceEventDTO } from "@/lib/api";
 
-/* TraceTimeline — slim left sidebar listing every event in a turn.
+/* TraceTimeline - slim left sidebar listing every event in a turn.
  *
  * Events group into parent + annotations: any `prediction` / `gate` event
  * that follows a parent (tool_call, user, assistant, …) is treated as a

@@ -1,11 +1,11 @@
 /* Dashboard domain types.
  *
- * These types describe the artifacts surfaced on the Dashboard tab — they
+ * These types describe the artifacts surfaced on the Dashboard tab - they
  * deliberately mirror the shapes that will exist in Postgres (mem_tasks,
  * mem_pursuits, mem_followups, mem_saved, etc.) so that switching from the
  * mock layer to live data is a near-mechanical swap of the loader.
  *
- * The ObjectViewer uses `DashboardItem` as a discriminated union — every
+ * The ObjectViewer uses `DashboardItem` as a discriminated union - every
  * kind that can be opened from a dashboard card lands here.
  */
 
@@ -127,8 +127,8 @@ export type FollowUp = {
 };
 
 // ── Surface items (the generic dashboard surface contract) ───────────────────
-// Mirror of core/internal/surface.Item. ANY producer — a skill recipe, a
-// connector poll, a cron, the agent mid-conversation — writes items through
+// Mirror of core/internal/surface.Item. ANY producer - a skill recipe, a
+// connector poll, a cron, the agent mid-conversation - writes items through
 // the `surface_item` tool; the dashboard groups them by `surface` and renders
 // each group with one generic SurfaceCard. A new surface the agent invents
 // appears with zero new frontend code.
@@ -164,7 +164,7 @@ export type WorkItemKind =
   | "memory_op"
   | "reflection";
 
-// One step of a workflow run's state-machine — carried inline on a
+// One step of a workflow run's state-machine - carried inline on a
 // workflow WorkItem so tapping the Kanban card opens the drawer with the
 // full workflow, no second fetch.
 export type WorkflowStep = {
@@ -188,7 +188,7 @@ export type WorkItem = {
   durationMs?: number;
   // links to existing routes for "see in /trust" / "see in /cron" etc.
   detailHref?: string;
-  // populated only for kind === "workflow" — the run's step state-machine.
+  // populated only for kind === "workflow" - the run's step state-machine.
   workflowSteps?: WorkflowStep[];
 };
 

@@ -1,4 +1,4 @@
--- 008_realtime.sql — Add user-rooted tables to the supabase_realtime
+-- 008_realtime.sql - Add user-rooted tables to the supabase_realtime
 -- publication so Studio can subscribe to INSERT/UPDATE/DELETE events.
 --
 -- The publication is created by Supabase out of the box; this migration

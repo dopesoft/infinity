@@ -33,7 +33,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const listenersRef = useRef<Set<Listener>>(new Set());
   const channelRef = useRef<RealtimeChannel | null>(null);
 
-  // Stable register function — listeners de-register via the returned
+  // Stable register function - listeners de-register via the returned
   // teardown. The handler is dispatched inside the channel subscription.
   const register = useMemo<RealtimeContextValue["register"]>(
     () => (l: Listener) => {

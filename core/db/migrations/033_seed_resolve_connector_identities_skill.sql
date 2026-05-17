@@ -10,8 +10,8 @@
 -- with no user handle). Hardcoding "for gmail call GMAIL_GET_PROFILE,
 -- for slack call SLACK_AUTH_TEST, ..." in Go would force a code change
 -- every time Composio onboards a new toolkit. Putting the heuristic in
--- a SKILL.md keeps the cognition where it belongs — in versioned text
--- the agent reads, follows, and Voyager can evolve — while the durable
+-- a SKILL.md keeps the cognition where it belongs - in versioned text
+-- the agent reads, follows, and Voyager can evolve - while the durable
 -- infrastructure (the `connector_identity_set` tool + the identity
 -- overlay in <connected_accounts>) stays generic in Go.
 --
@@ -21,7 +21,7 @@
 --      identity. So the very next turn after deploy / after a new
 --      account is connected, the agent self-resolves.
 --   2. Boss can fire manually with one of the trigger phrases.
---   3. Composes naturally with the heartbeat tick — when the cache
+--   3. Composes naturally with the heartbeat tick - when the cache
 --      reports missing identities, a heartbeat checklist (future) can
 --      surface a finding that points at this skill.
 --
@@ -35,12 +35,12 @@ INSERT INTO mem_skills
    confidence, status, source)
 VALUES (
   'resolve-connector-identities',
-  'Discover and persist the real upstream identity (email / handle / username / login) for every connected_account that has no identity in the <connected_accounts> overlay. Generic across toolkits — finds the toolkit''s identity verb on its own, calls it once per account, and writes the result back via connector_identity_set so future turns see the identity automatically.',
+  'Discover and persist the real upstream identity (email / handle / username / login) for every connected_account that has no identity in the <connected_accounts> overlay. Generic across toolkits - finds the toolkit''s identity verb on its own, calls it once per account, and writes the result back via connector_identity_set so future turns see the identity automatically.',
   'low',
   '[]'::jsonb,
   '["resolve my connector identities","learn my connected account identities","what email is connected","figure out which email/account is connected","which gmail is which","identify my connected accounts","fix unknown account identities"]'::jsonb,
   '[]'::jsonb,
-  '[{"name":"resolved","type":"array","doc":"list of {account_id, toolkit_slug, identity, source_verb} entries that were resolved this run; empty when nothing was unresolved"},{"name":"unresolved","type":"array","doc":"list of {account_id, toolkit_slug, reason} entries that could NOT be resolved (no profile verb, verb errored, response had no identifiable field) — surface these so the boss can investigate or alias them manually"}]'::jsonb,
+  '[{"name":"resolved","type":"array","doc":"list of {account_id, toolkit_slug, identity, source_verb} entries that were resolved this run; empty when nothing was unresolved"},{"name":"unresolved","type":"array","doc":"list of {account_id, toolkit_slug, reason} entries that could NOT be resolved (no profile verb, verb errored, response had no identifiable field) - surface these so the boss can investigate or alias them manually"}]'::jsonb,
   0.95,
   'active',
   'manual'
@@ -55,7 +55,7 @@ VALUES (
   $skill$---
 name: resolve-connector-identities
 version: "1.0.0"
-description: Discover and persist the real upstream identity (email / handle / username / login) for every connected_account that has no identity in the <connected_accounts> overlay. Generic across toolkits — finds the toolkit's identity verb on its own, calls it once per account, and writes the result back via connector_identity_set so future turns see the identity automatically.
+description: Discover and persist the real upstream identity (email / handle / username / login) for every connected_account that has no identity in the <connected_accounts> overlay. Generic across toolkits - finds the toolkit's identity verb on its own, calls it once per account, and writes the result back via connector_identity_set so future turns see the identity automatically.
 trigger_phrases:
   - resolve my connector identities
   - learn my connected account identities
@@ -71,7 +71,7 @@ outputs:
     doc: list of {account_id, toolkit_slug, identity, source_verb} entries that were resolved this run; empty when nothing was unresolved
   - name: unresolved
     type: array
-    doc: list of {account_id, toolkit_slug, reason} entries that could NOT be resolved (no profile verb, verb errored, response had no identifiable field) — surface these so the boss can investigate or alias them manually
+    doc: list of {account_id, toolkit_slug, reason} entries that could NOT be resolved (no profile verb, verb errored, response had no identifiable field) - surface these so the boss can investigate or alias them manually
 risk_level: low
 network_egress: none
 confidence: 0.95
@@ -81,7 +81,7 @@ confidence: 0.95
 
 Your <connected_accounts> overlay shows every Composio account the boss has
 connected, with `id`, `alias` (the boss-chosen short label), and sometimes
-`identity` (the real upstream handle — Gmail's emailAddress, Slack's user, etc.).
+`identity` (the real upstream handle - Gmail's emailAddress, Slack's user, etc.).
 Composio's listing API doesn't reliably populate `identity`, so when an account
 has no `identity` the boss's next turn lands without knowing *which* email or
 workspace each account refers to.
@@ -89,7 +89,7 @@ workspace each account refers to.
 Your job: for every account missing its identity, find the right "profile" verb
 in that toolkit's catalog, call it once, pull the canonical handle from the
 response, and persist via `connector_identity_set`. After this runs once per
-account the identity sticks forever (it's stored in `infinity_meta`) — boot,
+account the identity sticks forever (it's stored in `infinity_meta`) - boot,
 restart, and future turns all see it.
 
 This recipe is **generic**. Do not assume any specific toolkit. Apply the same
@@ -100,7 +100,7 @@ algorithm to Gmail today, Notion tomorrow, and whatever Composio adds next year.
 Read the `<connected_accounts>` overlay in your system prompt. Build a list of
 `{account_id, toolkit_slug}` for every account whose `identity` field is empty
 or missing. If the list is empty, finish immediately and report
-`resolved: [], unresolved: []` — you have nothing to do.
+`resolved: [], unresolved: []` - you have nothing to do.
 
 ## 2. For each unresolved account, find the toolkit's identity verb
 
@@ -121,21 +121,21 @@ Use `tool_search` with a query like `"<toolkit_slug> profile"` or
 so it's available. If `tool_search` returns multiple matches, prefer the one
 whose verb name contains PROFILE → AUTH_TEST → AUTHENTICATED → ME → CURRENT →
 WHOAMI → USERINFO → USER, in that order. If nothing in the catalog matches
-any of these patterns, the toolkit doesn't expose a profile verb — record
+any of these patterns, the toolkit doesn't expose a profile verb - record
 the account in `unresolved` with `reason: "no profile verb in toolkit catalog"`
 and move on.
 
 ## 3. Call the verb with the connected_account_id
 
 Invoke the verb you found, passing `connected_account_id: "<the ca_xxx>"` from
-the unresolved account. Use the toolkit's verb directly — do not reach for
+the unresolved account. Use the toolkit's verb directly - do not reach for
 `composio__COMPOSIO_REMOTE_BASH_TOOL` or `_REMOTE_WORKBENCH`. Those are
 fallbacks for toolkits whose verbs failed to pre-register; profile verbs do
 not need them.
 
 If the verb call errors (connection inactive, rate-limited, permission denied),
 record the account in `unresolved` with `reason: "<the error message, trimmed>"`
-and move on. Do not retry — one shot per account per run.
+and move on. Do not retry - one shot per account per run.
 
 ## 4. Extract the canonical handle from the response
 
@@ -151,7 +151,7 @@ Pull the first non-empty value from these candidate fields, in this order:
 8. `display_name`, `name`, `user.name`
 
 The first field that holds a non-empty string is the identity. Trim it. Skip
-generic placeholders like "me", "user", "anonymous" — if the only candidate
+generic placeholders like "me", "user", "anonymous" - if the only candidate
 is one of those, record the account in `unresolved` with
 `reason: "response had no usable identity field"`.
 
@@ -165,7 +165,7 @@ connector_identity_set({account_id: "<ca_xxx>", identity: "<the handle>"})
 
 This writes to the `connectors_identities` blob in `infinity_meta` and the
 cache picks it up on its next refresh tick (≤60s). Future turns render
-`identity="<the handle>"` in `<connected_accounts>` automatically — you will
+`identity="<the handle>"` in `<connected_accounts>` automatically - you will
 never have to re-resolve unless the boss disconnects and reconnects.
 
 ## 6. Report
@@ -178,10 +178,10 @@ Reply with two lists:
   resolve, with the specific reason (no profile verb, error message, missing
   field). The boss may want to set the alias manually or investigate.
 
-Be concise — one line per account. The boss does not need explanation; the
+Be concise - one line per account. The boss does not need explanation; the
 data is the answer.
 
-## Hard rules — read before acting
+## Hard rules - read before acting
 
 - **Idempotent.** Skip any account whose `identity` is already set. Never
   overwrite a non-empty identity unless the boss explicitly asks you to
@@ -190,7 +190,7 @@ data is the answer.
 - **One call per unresolved account.** Do not retry on error in this run.
   Surface the failure and let a future invocation (or the boss) decide.
 - **Toolkit-agnostic.** Never hardcode a toolkit slug in your prompt
-  reasoning — the same code path applies to Gmail, Notion, Stripe, anything.
+  reasoning - the same code path applies to Gmail, Notion, Stripe, anything.
   If you find yourself thinking "for Gmail I'll do X but for Slack I'll do Y,"
   back up: the algorithm is the same; only the verb name differs, and you
   found that with `tool_search`.

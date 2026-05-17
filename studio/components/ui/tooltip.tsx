@@ -5,7 +5,7 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { cn } from "@/lib/utils";
 
 /* Shadcn-style Radix Tooltip primitive. Plain opacity fade per the
- * project's modal-motion rule — no slide-from-anywhere, no zoom-in. */
+ * project's modal-motion rule - no slide-from-anywhere, no zoom-in. */
 
 const TooltipProvider = TooltipPrimitive.Provider;
 const Tooltip = TooltipPrimitive.Root;

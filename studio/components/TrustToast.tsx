@@ -8,7 +8,7 @@ import { useRealtime } from "@/lib/realtime/provider";
 import { cn } from "@/lib/utils";
 
 /**
- * TrustToast — iOS-style sticky banner that appears at the top of the app
+ * TrustToast - iOS-style sticky banner that appears at the top of the app
  * whenever there's at least one pending trust contract AND the boss isn't
  * currently looking at Live (where the inline approval card on the tool
  * call is already visible).
@@ -37,7 +37,7 @@ function writeDismissedUntil(ts: number) {
   try {
     window.localStorage.setItem(DISMISS_KEY, String(ts));
   } catch {
-    /* private mode — banner just reappears next mount */
+    /* private mode - banner just reappears next mount */
   }
 }
 
@@ -64,7 +64,7 @@ export function TrustToast() {
 
   useRealtime("mem_trust_contracts", refresh);
 
-  // Hide on /live — the tool card has inline Approve/Deny, no banner needed.
+  // Hide on /live - the tool card has inline Approve/Deny, no banner needed.
   // Also hide if currently dismissed.
   const hide =
     pending.length === 0 ||
@@ -110,7 +110,7 @@ export function TrustToast() {
               : "Approval needed"}
           </span>
           <span className="block truncate text-[11px] text-muted-foreground">
-            {summary} — tap to review
+            {summary} - tap to review
           </span>
         </span>
         <span

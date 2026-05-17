@@ -7,7 +7,7 @@ import { todayHeader } from "@/lib/dashboard/format";
 
 /* Dashboard page header.
  *
- * Lives *inside* the TabFrame's main area — the global TopBar (logo, tabs,
+ * Lives *inside* the TabFrame's main area - the global TopBar (logo, tabs,
  * theme toggle, mobile hamburger) is rendered by <TabFrame>. This is the
  * page-scoped header below it: the agent's name ("Jarvis") + today's date,
  * then a page-scoped search bar.
@@ -15,7 +15,7 @@ import { todayHeader } from "@/lib/dashboard/format";
  * Search filters everything visible on the dashboard (todos, follow-ups,
  * calendar events, kanban items, saved items, activity rows). Different
  * from the eventual global cmd-K command palette which spans the whole
- * product — this is just for the current page.
+ * product - this is just for the current page.
  */
 export function DashboardHeader({
   badgeCount,

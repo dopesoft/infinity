@@ -1,4 +1,4 @@
-// Package eval implements the verification substrate — Phase 4 of the
+// Package eval implements the verification substrate - Phase 4 of the
 // assembly substrate.
 //
 // As the agent assembles more (skills, workflows, runtime tools), it must

@@ -8,7 +8,7 @@ import (
 )
 
 // ConsolidateReport summarizes what a sleep-time pass did. Each field is a
-// count of rows touched by that operation — handy for observability + the
+// count of rows touched by that operation - handy for observability + the
 // Studio Memory tab's "last consolidation" line.
 type ConsolidateReport struct {
 	Decayed             int          `json:"decayed"`
@@ -33,10 +33,10 @@ type ConsolidateReport struct {
 // The order matters:
 //   1. Decay every active memory's strength by 0.95 (default forgetting).
 //   2. Reset hot memories (recently accessed) to strength 1.0.
-//   3. Identify episodic clusters (cosine >0.85, size ≥3) — flag for merge.
-//   4. Find contradicting active memories — when two semantic memories with
+//   3. Identify episodic clusters (cosine >0.85, size ≥3) - flag for merge.
+//   4. Find contradicting active memories - when two semantic memories with
 //      a 'contradicts' edge are both active, mark the older one stale.
-//   5. Prune redundant associative edges (>10 outgoing from any node — keep
+//   5. Prune redundant associative edges (>10 outgoing from any node - keep
 //      top-10 by confidence).
 //   6. Drop weak associative edges (confidence < 0.40 after recompute).
 //   7. Re-weight procedural skills by recent success rate.
@@ -128,7 +128,7 @@ func ConsolidateNightly(ctx context.Context, pool *pgxpool.Pool) (ConsolidateRep
 		contradictRows.Close()
 	}
 
-	// 5. Prune redundant associative edges — keep at most 10 outgoing per
+	// 5. Prune redundant associative edges - keep at most 10 outgoing per
 	// source node, drop the rest by lowest confidence.
 	pruned, err := pool.Exec(ctx, `
 		DELETE FROM mem_relations

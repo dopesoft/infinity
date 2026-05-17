@@ -21,7 +21,7 @@ type Tool interface {
 // ReadOnlyTool is an OPTIONAL extension interface. Tools that implement
 // it declare themselves explicitly as reads (true) or mutations (false),
 // killing the system_map heuristic that classified by name suffix. The
-// default — when a tool does NOT implement it — is still the suffix
+// default - when a tool does NOT implement it - is still the suffix
 // heuristic, so existing tools continue to work without changes.
 //
 // Implement on any new tool whose name doesn't match the `_list /
@@ -109,7 +109,7 @@ func (r *Registry) Names() []string {
 // map. Snapshot semantics: the returned map is a copy, so callers can
 // iterate without holding the registry lock. Used by system_map and
 // any other introspection path that needs both names and types in one
-// pass — avoids the Names() + Get(name) round-trip that the v1 impl
+// pass - avoids the Names() + Get(name) round-trip that the v1 impl
 // used.
 func (r *Registry) All() map[string]Tool {
 	r.mu.RLock()
@@ -145,7 +145,7 @@ func (r *Registry) Execute(ctx context.Context, call llm.ToolCall) (string, erro
 }
 
 // DefinitionsFor returns the JSON-schema tool defs for the named subset
-// only. Tools whose names aren't in `active` are silently skipped — they
+// only. Tools whose names aren't in `active` are silently skipped - they
 // remain executable (Get/Execute still work) but their schemas don't go
 // to the LLM. This is the hot path of Phase 1 lazy loading: instead of
 // every connected MCP dumping ~60 tools into the system prompt, only the
@@ -183,7 +183,7 @@ type CatalogEntry struct {
 
 // DormantCatalog returns the (name, description) for every registered
 // tool whose name is NOT in `active`. Sorted, deterministic. The loop
-// renders this into the system prompt — ~30 tokens per entry is the
+// renders this into the system prompt - ~30 tokens per entry is the
 // price of "the model knows the long tail exists" without paying the
 // full schema cost.
 func (r *Registry) DormantCatalog(active []string) []CatalogEntry {

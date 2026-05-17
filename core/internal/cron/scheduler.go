@@ -224,7 +224,7 @@ func (s *Scheduler) List(ctx context.Context) ([]Job, error) {
 }
 
 // RunOnce fires a single job immediately, regardless of schedule. It does
-// not mutate the schedule entry — the next regular firing still happens at
+// not mutate the schedule entry - the next regular firing still happens at
 // the cron-expression's next tick. Used by the cron_run_now agent tool and
 // by Studio's "Run now" button.
 //

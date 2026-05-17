@@ -55,7 +55,7 @@ export function StatusPill({
   // Thinking gets a louder pulse: a real ping-ring around a solid dot,
   // not just an animate-pulse opacity tick. Stays visible for the ENTIRE
   // turn (thinking → tool calls → streaming) because chat.isStreaming
-  // drives the state, not just the local ThinkingBlock — so the boss can
+  // drives the state, not just the local ThinkingBlock - so the boss can
   // glance at the header and know Jarvis is still working.
   const isThinking = state === "thinking";
   return (

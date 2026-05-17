@@ -11,15 +11,15 @@ import (
 // AutoTrigger watches mem_skill_runs for skills whose recent failure rate
 // crosses a threshold, then auto-fires the GEPA optimizer for that skill.
 // This is what closes the failure → curriculum → skill → optimization cycle
-// Voyager originally promised but never had — RunOptimizer used to be HTTP
+// Voyager originally promised but never had - RunOptimizer used to be HTTP
 // only.
 //
 // Tunables (env):
-//   • INFINITY_VOYAGER_AUTOTRIGGER       — off | on (default on when GEPA_URL set)
-//   • INFINITY_VOYAGER_AUTOTRIGGER_EVERY — Go duration, default 30m
-//   • INFINITY_VOYAGER_FAILURE_RATE      — float 0..1, default 0.3 (30%)
-//   • INFINITY_VOYAGER_MIN_RUNS          — int, default 5 (window size)
-//   • INFINITY_VOYAGER_COOLDOWN          — Go duration, default 6h per skill
+//   • INFINITY_VOYAGER_AUTOTRIGGER       - off | on (default on when GEPA_URL set)
+//   • INFINITY_VOYAGER_AUTOTRIGGER_EVERY - Go duration, default 30m
+//   • INFINITY_VOYAGER_FAILURE_RATE      - float 0..1, default 0.3 (30%)
+//   • INFINITY_VOYAGER_MIN_RUNS          - int, default 5 (window size)
+//   • INFINITY_VOYAGER_COOLDOWN          - Go duration, default 6h per skill
 //
 // The ticker runs in a goroutine. Stop() cleans up. Concurrent fires for the
 // same skill are guarded by the per-skill cooldown map.
@@ -185,6 +185,6 @@ func (a *AutoTrigger) fire(ctx context.Context, skillName string) {
 		fmt.Printf("[voyager.autotrigger] optimize %s: %v\n", skillName, err)
 		return
 	}
-	fmt.Printf("[voyager.autotrigger] fired %s — frontier_run=%s candidates=%d calls=%d\n",
+	fmt.Printf("[voyager.autotrigger] fired %s - frontier_run=%s candidates=%d calls=%d\n",
 		skillName, result.FrontierRunID, len(result.Candidates), result.Calls)
 }

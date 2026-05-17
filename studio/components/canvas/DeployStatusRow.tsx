@@ -6,12 +6,12 @@ import { fetchDeployStatus, type DeployStatus } from "@/lib/canvas/api";
 import { cn } from "@/lib/utils";
 
 /**
- * DeployStatusRow — slim banner inside the Canvas Files column that
+ * DeployStatusRow - slim banner inside the Canvas Files column that
  * surfaces "Jarvis is behind a deploy."
  *
  * Compares Railway's deployed commit (RAILWAY_GIT_COMMIT_SHA, baked at
  * deploy time) to GitHub main HEAD via Core's /api/deploy/status. Polls
- * every 30s — fast enough that you watch the "behind by N → caught up"
+ * every 30s - fast enough that you watch the "behind by N → caught up"
  * transition happen after `git push`, slow enough not to burn GitHub
  * rate limit. Hides when up-to-date so the column stays clean.
  */
@@ -35,7 +35,7 @@ export function DeployStatusRow() {
   }, []);
 
   // Don't render anything until we know. The banner is only useful when
-  // there's a real signal — silence is fine otherwise.
+  // there's a real signal - silence is fine otherwise.
   if (!status) return null;
   if (!status.running_sha) return null; // not running on Railway / SHA unset
 
@@ -50,9 +50,9 @@ export function DeployStatusRow() {
   };
 
   if (!status.behind) {
-    // Subtle up-to-date row — confirms Railway is running the latest main.
+    // Subtle up-to-date row - confirms Railway is running the latest main.
     // We used to show the running commit SHA here, but a 7-char hash is
-    // meaningless without context — say "Railway" so the boss knows what
+    // meaningless without context - say "Railway" so the boss knows what
     // the green check is confirming.
     return (
       <div className="flex shrink-0 items-center gap-2 border-b bg-success/5 px-3 py-1.5 text-[11px] text-success">
@@ -71,7 +71,7 @@ export function DeployStatusRow() {
           {status.commits_behind || "≥1"} commit
           {status.commits_behind === 1 ? "" : "s"}
         </span>{" "}
-        — waiting for redeploy
+        - waiting for redeploy
       </span>
       <button
         type="button"

@@ -14,13 +14,13 @@ import (
 // questions, it FINDS gaps and surfaces them.
 //
 // Four signal types:
-//   1. low_confidence  — semantic memories whose strength has decayed under
+//   1. low_confidence  - semantic memories whose strength has decayed under
 //                        0.35 but haven't been forgotten yet.
-//   2. contradiction   — unresolved 'contradicts' edges where both memories
+//   2. contradiction   - unresolved 'contradicts' edges where both memories
 //                        are still active.
-//   3. uncovered_mention — graph nodes referenced repeatedly with no memory
+//   3. uncovered_mention - graph nodes referenced repeatedly with no memory
 //                          providing context.
-//   4. high_surprise   — predictions where surprise_score >= 0.8.
+//   4. high_surprise   - predictions where surprise_score >= 0.8.
 //
 // Each gap writes a row to mem_curiosity_questions (unique on the open
 // question text). The heartbeat surfaces them as findings, and Studio can
@@ -90,7 +90,7 @@ func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 			continue
 		}
 		question := fmt.Sprintf("Is this still true: %s?", shortQuestion(title, content))
-		rationale := "Semantic memory has decayed below confidence threshold — ask the boss to confirm or retire it."
+		rationale := "Semantic memory has decayed below confidence threshold - ask the boss to confirm or retire it."
 		if c.insertQuestion(ctx, question, rationale, "low_confidence", []string{id}, 6) {
 			n++
 		}
@@ -120,9 +120,9 @@ func (c *CuriosityScan) scanContradictions(ctx context.Context) (int, error) {
 		if err := rows.Scan(&srcID, &tgtID, &srcTitle, &tgtTitle); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Two memories disagree — which is right: %q or %q?",
+		question := fmt.Sprintf("Two memories disagree - which is right: %q or %q?",
 			clipShort(srcTitle, 80), clipShort(tgtTitle, 80))
-		rationale := "Both memories are active but a 'contradicts' edge links them — need the boss to resolve."
+		rationale := "Both memories are active but a 'contradicts' edge links them - need the boss to resolve."
 		if c.insertQuestion(ctx, question, rationale, "contradiction", []string{srcID, tgtID}, 8) {
 			n++
 		}
@@ -156,8 +156,8 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 		if err := rows.Scan(&id, &kind, &name); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("The boss has mentioned %s %q multiple times — what's important about it?", kind, name)
-		rationale := "Repeated graph mentions with no derived memory — gap worth filling."
+		question := fmt.Sprintf("The boss has mentioned %s %q multiple times - what's important about it?", kind, name)
+		rationale := "Repeated graph mentions with no derived memory - gap worth filling."
 		if c.insertQuestion(ctx, question, rationale, "uncovered_mention", []string{id}, 5) {
 			n++
 		}
@@ -207,7 +207,7 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 //
 //   1. Empty-collection returns. `{"count":0,"items":[]}` /
 //      `[]` / `{}` mean "the tool worked fine, there was just nothing
-//      to return." Not a prompt-rework signal — the boss doesn't need
+//      to return." Not a prompt-rework signal - the boss doesn't need
 //      a heartbeat card for an empty list.
 //
 //   2. Expected == actual after normalisation. The prediction matched
@@ -253,7 +253,7 @@ func shouldSuppressHighSurpriseQuestion(tool, expected, actual string) bool {
 }
 
 // insertQuestion tries to write a row to mem_curiosity_questions. The unique
-// index on (question) WHERE status='open' makes this idempotent — duplicate
+// index on (question) WHERE status='open' makes this idempotent - duplicate
 // inserts no-op. Returns true when a new row was written.
 func (c *CuriosityScan) insertQuestion(ctx context.Context, question, rationale, kind string, sourceIDs []string, importance int) bool {
 	if strings.TrimSpace(question) == "" {
@@ -338,7 +338,7 @@ func CuriosityChecklist(pool *pgxpool.Pool) Checklist {
 				// precisely why this question surfaced.
 				Source: q.SourceKind,
 				// CuriosityID lets the chat surface offer "Approve & fix"
-				// — it round-trips to /api/curiosity/questions/:id/decide.
+				// - it round-trips to /api/curiosity/questions/:id/decide.
 				CuriosityID: q.ID,
 			})
 		}
@@ -384,7 +384,7 @@ func clipShort(s string, n int) string {
 
 // oneLine collapses every run of whitespace (including newlines) into a
 // single space. Used on prediction expected/actual values so a rationale
-// stays one-concept-per-line — the chat formatter splits the rationale on
+// stays one-concept-per-line - the chat formatter splits the rationale on
 // "\n" to label its parts, so embedded newlines would corrupt that.
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")

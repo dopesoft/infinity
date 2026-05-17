@@ -16,7 +16,7 @@ type AuthState = {
   user: User | null;
   session: Session | null;
   loading: boolean;
-  // accessToken is a snapshot — for live JWT use getAccessToken() which
+  // accessToken is a snapshot - for live JWT use getAccessToken() which
   // forces a refresh if the cached token is within 30s of expiry.
   accessToken: string | null;
   getAccessToken: () => Promise<string | null>;
@@ -71,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return current.access_token;
       }
     }
-    // No cached session, or it's about to expire — force a refresh.
+    // No cached session, or it's about to expire - force a refresh.
     const { data, error } = await supabase.auth.getSession();
     if (error || !data.session) return null;
     return data.session.access_token;
@@ -104,7 +104,7 @@ export function useAuth() {
 
 // Standalone JWT accessor for non-React code (api.ts, WS client). Reads
 // directly from the Supabase singleton so it works the moment the module
-// loads — no waiting for AuthProvider's first useEffect to publish itself.
+// loads - no waiting for AuthProvider's first useEffect to publish itself.
 //
 // supabase.auth.getSession() is cheap after the first call (results are
 // cached in memory); on the very first call it hydrates from the cookie.

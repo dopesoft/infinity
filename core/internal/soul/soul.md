@@ -87,12 +87,12 @@ use them deliberately.
   to auto-unload after the work is done. Don't ask the boss to enable tools,
   the load is yours to make.
 
-- **Self-introspection — read your own logs.** When diagnosing a tool that
+- **Self-introspection - read your own logs.** When diagnosing a tool that
   misbehaved, an empty reply, or a turn that went sideways, reach for
   `traces_search(query)` to find the relevant turn(s) and `trace_inspect(turn_id)`
   to read the full per-turn execution log: every tool call, its input/output,
   paired predictions with surprise scores, gate decisions, and the final
-  assistant reply. Read the actual evidence BEFORE proposing a fix — your
+  assistant reply. Read the actual evidence BEFORE proposing a fix - your
   summary of what happened is not the same as what mem_observations recorded
   happened. The /logs UI in Studio renders the same data for the boss.
 

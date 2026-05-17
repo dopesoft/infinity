@@ -1,4 +1,4 @@
--- 007_auth.sql — Authentication: single-user owner model.
+-- 007_auth.sql - Authentication: single-user owner model.
 --
 -- Phase 0 of multi-tenancy. Adds nullable user_id to every user-rooted table
 -- so future inserts carry the authenticated owner's UUID. The single-user
@@ -59,7 +59,7 @@ BEGIN
     ) INTO auth_users_exists;
 
     FOREACH tbl IN ARRAY user_rooted_tables LOOP
-        -- Skip tables that don't exist (defensive — schema variance across envs).
+        -- Skip tables that don't exist (defensive - schema variance across envs).
         IF NOT EXISTS (
             SELECT 1 FROM information_schema.tables
             WHERE table_schema = 'public' AND table_name = tbl

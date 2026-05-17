@@ -73,7 +73,7 @@ func (s *Server) handleMemoryCite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, chain)
 }
 
-// /api/memory/memories — list memories (filtered by tier/project/q)
+// /api/memory/memories - list memories (filtered by tier/project/q)
 func (s *Server) handleMemoryList(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusOK, []memory.Memory{})
@@ -91,7 +91,7 @@ func (s *Server) handleMemoryList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mems)
 }
 
-// /api/memory/reflections — recent metacognitive session critiques.
+// /api/memory/reflections - recent metacognitive session critiques.
 func (s *Server) handleMemoryReflections(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusOK, []memory.Reflection{})
@@ -107,7 +107,7 @@ func (s *Server) handleMemoryReflections(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, rows)
 }
 
-// /api/memory/predictions — high-surprise predict-then-act rows.
+// /api/memory/predictions - high-surprise predict-then-act rows.
 func (s *Server) handleMemoryPredictions(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusOK, []memory.PredictionRow{})

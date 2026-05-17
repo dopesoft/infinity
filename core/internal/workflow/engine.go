@@ -10,7 +10,7 @@ import (
 
 // Engine is the durable workflow runner. A single background worker polls
 // for runnable runs, advances each one exactly one step per tick via the
-// injected Executor, and persists state after every step — so a process
+// injected Executor, and persists state after every step - so a process
 // restart resumes mid-workflow exactly where it left off.
 type Engine struct {
 	store        *Store
@@ -53,7 +53,7 @@ func (e *Engine) WithCheckpointSurfacer(s CheckpointSurfacer) *Engine {
 	return e
 }
 
-// WithEvalRecorder wires the optional eval recorder — every run that
+// WithEvalRecorder wires the optional eval recorder - every run that
 // reaches a terminal state then records a success/failure outcome to the
 // verification substrate.
 func (e *Engine) WithEvalRecorder(r EvalRecorder) *Engine {
@@ -119,7 +119,7 @@ func (e *Engine) tick(ctx context.Context) {
 func (e *Engine) advance(ctx context.Context, run *Run) {
 	step := nextActionable(run)
 	if step == nil {
-		// Every step is terminal — the run is finished.
+		// Every step is terminal - the run is finished.
 		if anyFailed(run) {
 			e.finishRun(ctx, run, RunFailed, "a step failed")
 		} else {
@@ -195,7 +195,7 @@ func (e *Engine) advance(ctx context.Context, run *Run) {
 	}
 }
 
-// nextActionable returns the first non-terminal step — pending, awaiting,
+// nextActionable returns the first non-terminal step - pending, awaiting,
 // or (after a crash) running. Returns nil when every step is terminal.
 func nextActionable(run *Run) *Step {
 	for i := range run.Steps {
@@ -218,8 +218,8 @@ func anyFailed(run *Run) bool {
 
 // resolveSpec walks a step spec and substitutes {{input.KEY}} and
 // {{steps.N.output}} references in string values with prior run state.
-// This is what lets the agent chain steps — "feed step 0's output into
-// step 1" — without the engine knowing anything domain-specific.
+// This is what lets the agent chain steps - "feed step 0's output into
+// step 1" - without the engine knowing anything domain-specific.
 func resolveSpec(spec map[string]any, run *Run) map[string]any {
 	if len(spec) == 0 {
 		return map[string]any{}

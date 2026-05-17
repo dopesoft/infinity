@@ -225,8 +225,8 @@ function Overview({ gym, loading }: { gym: GymSnapshotDTO | null; loading: boole
           <>
             <TimelineRow label="status" value={latest.status} />
             <TimelineRow label="trigger" value={latest.trigger} />
-            <TimelineRow label="model" value={latest.base_model || "—"} />
-            <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{latest.reason || latest.error || "—"}</p>
+            <TimelineRow label="model" value={latest.base_model || "-"} />
+            <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{latest.reason || latest.error || "-"}</p>
           </>
         ) : (
           <EmptyLine loading={loading} text="No distillation runs yet." />
@@ -446,7 +446,7 @@ function tabLabel(tab: Tab): string {
 }
 
 function shortDate(value?: string) {
-  if (!value) return "—";
+  if (!value) return "-";
   return new Date(value).toLocaleDateString();
 }
 

@@ -14,7 +14,7 @@ import (
 )
 
 // Store is the persistence boundary for the generic surface contract. It
-// is the ONLY thing that touches mem_surface_items — the surface_item /
+// is the ONLY thing that touches mem_surface_items - the surface_item /
 // surface_update tools call through here, never raw SQL.
 type Store struct {
 	pool   *pgxpool.Pool

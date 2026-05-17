@@ -11,17 +11,17 @@ import { VoiceOrb } from "@/components/VoiceOrb";
 import { useVoice } from "@/lib/voice/use-voice";
 
 /**
- * AI prompt box — adapted from 21st.dev/r/easemize/ai-prompt-box.
+ * AI prompt box - adapted from 21st.dev/r/easemize/ai-prompt-box.
  *
  * Diverges from the source in three ways:
  *   1. Themed against Infinity tokens (--popover / --border / --foreground /
  *      --muted-foreground / --primary). Works in both light and dark, no
  *      hardcoded #1F2023.
- *   2. SSR-safe — removed the module-scope `document.createElement('style')`
+ *   2. SSR-safe - removed the module-scope `document.createElement('style')`
  *      that broke Next.js hydration. Scrollbar styling lives in the className
  *      block instead.
  *   3. Replaced the Search / Think / Canvas toggles with a single
- *      <ModelChip> — click cycles through Sonnet 4.5 → Opus 4.7 → Haiku 4.5.
+ *      <ModelChip> - click cycles through Sonnet 4.5 → Opus 4.7 → Haiku 4.5.
  *      Voice + image-paste UX stays (the agent loop accepts text only today;
  *      attachments are visual-only until we wire multimodal).
  */
@@ -237,7 +237,7 @@ export interface PromptInputBoxProps {
   vendorId?: string;
   /** Called with the next full model id when the user cycles the chip. */
   onModelChange?: (modelId: string) => void;
-  /** Active session id — drives the context meter's per-session query. */
+  /** Active session id - drives the context meter's per-session query. */
   sessionId?: string;
   /** Hide the attachment + voice affordances. Defaults to false. */
   minimal?: boolean;
@@ -247,7 +247,7 @@ export interface PromptInputBoxProps {
    * Cancel an in-flight agent turn. When provided AND `isLoading` is true,
    * the action button morphs into a stop button (red border, Square icon)
    * so the user can interrupt without waiting for the turn to finish.
-   * Mid-turn typing is still allowed — pressing send while there's text
+   * Mid-turn typing is still allowed - pressing send while there's text
    * sends a steer instead of stopping.
    */
   onStop?: () => void;
@@ -303,7 +303,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
     // Voice mode (OpenAI Realtime over WebRTC). Owns its own state
     // machine; we just read .active to swap the composer body and
     // hand .start / .stop to the mic / end buttons. Transcripts flow
-    // into the conversation stream via the host's callbacks — the
+    // into the conversation stream via the host's callbacks - the
     // composer never renders caption text itself.
     const voice = useVoice(sessionId, {
       onUserMessage: onVoiceUserMessage,
@@ -401,7 +401,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           className={cn(
             // `min-w-0 max-w-full` makes the composer respect its parent's
             // width even when descendants (textarea, action chips) have an
-            // intrinsic content width larger than the viewport — without
+            // intrinsic content width larger than the viewport - without
             // these, iOS Safari leaks the overflow up to the page.
             "min-w-0 max-w-full rounded-3xl border bg-popover p-2 transition-colors duration-200",
             "shadow-[0_8px_30px_rgba(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.32)]",
@@ -449,7 +449,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
 
           {/* Textarea (hidden while voice is active or while the legacy
            * fake recorder runs). Voice replaces the textarea inline so the
-           * conversation stream above stays fully visible — tool cards
+           * conversation stream above stays fully visible - tool cards
            * and any agent work keeps streaming as the boss talks. */}
           <div
             className={cn(
@@ -477,7 +477,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           {voiceActive && (
             // Composer slot in voice mode: orb + one-line status only.
             // The actual transcript (what you said, what the agent
-            // says back) streams into the conversation thread above —
+            // says back) streams into the conversation thread above -
             // see useChat.addVoiceUserMessage / streamVoiceAssistantDelta.
             // That keeps long, multi-sentence replies readable instead
             // of getting chopped off in a one-line caption.
@@ -574,7 +574,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
             </div>
 
             {(() => {
-              // Mode selection — single source of truth for icon, color,
+              // Mode selection - single source of truth for icon, color,
               // aria, click behavior, and tooltip. Keeping the matrix in
               // one place makes the stop-vs-steer-vs-send transitions
               // easy to reason about.
@@ -614,7 +614,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                   handleSubmit();
                   return;
                 }
-                // mode === "voice" — kick off the realtime session.
+                // mode === "voice" - kick off the realtime session.
                 if (!minimal) void voice.start();
               };
 

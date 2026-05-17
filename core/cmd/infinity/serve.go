@@ -117,7 +117,7 @@ func serveCmd() *cobra.Command {
 					// Build the multi-provider registry so the Settings PUT
 					// can hot-swap between any vendor whose creds are wired.
 					// The OAuthStore is shared so flipping anthropic ↔
-					// openai_oauth never wipes mem_provider_tokens — re-auth
+					// openai_oauth never wipes mem_provider_tokens - re-auth
 					// is not required to switch back.
 					oauthStoreShared := llm.NewOAuthStore(p)
 					llmRegistry = llm.BuildRegistry(oauthStoreShared)
@@ -138,12 +138,12 @@ func serveCmd() *cobra.Command {
 					// outcome; PostToolUse resolves with a surprise score.
 					// High-surprise rows feed the curiosity scanner + Voyager
 					// curriculum. JEPA discipline without a generative world
-					// model — see core/internal/memory/predictions.go.
+					// model - see core/internal/memory/predictions.go.
 					predictions := memory.NewPredictionStore(p)
 					hooks.NewPredictionRecorder(predictions).Register(pipeline)
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
-					// LangSmith-style trace tools — read mem_turns +
+					// LangSmith-style trace tools - read mem_turns +
 					// mem_observations + mem_predictions per turn so the
 					// self-improve-from-finding skill can diagnose from
 					// real evidence, not summaries.
@@ -152,14 +152,14 @@ func serveCmd() *cobra.Command {
 					tools.RegisterDashboardTools(registry, p)
 					// Curiosity questions tools (question_list / question_decide).
 					// The "Questions" card on the dashboard is backed by
-					// mem_curiosity_questions, NOT mem_surface_items — without
+					// mem_curiosity_questions, NOT mem_surface_items - without
 					// these the agent can't dismiss the items rendered there.
 					tools.RegisterCuriosityTools(registry, p)
-					// system_map — runtime introspection. Pinned + always-
+					// system_map - runtime introspection. Pinned + always-
 					// available so the agent never guesses which list/
 					// mutate tool maps to which surface.
 					tools.RegisterSystemMap(registry, p)
-					// domain_hint_add / _list — the agent extends the
+					// domain_hint_add / _list - the agent extends the
 					// system_map topology itself, persisted to
 					// mem_domain_hints. Closes the autonomy loop on
 					// introspection: a new irregular table needs no Go
@@ -170,7 +170,7 @@ func serveCmd() *cobra.Command {
 					// bridge (Cloudflare tunnel to home Mac, also home of
 					// the Anthropic-Max-billed Claude Code sub-agent) or
 					// the Cloud bridge (docker/workspace on Railway private
-					// net, no sub-agent — Jarvis's own cognition via
+					// net, no sub-agent - Jarvis's own cognition via
 					// ChatGPT subscription handles everything). Auto-route
 					// prefers Mac when its /health responds. The fs_/bash_/
 					// git_ tool names work uniformly across both bridges.
@@ -209,7 +209,7 @@ func serveCmd() *cobra.Command {
 						cloudStatusStr = "configured"
 					}
 					fmt.Printf("  bridges: mac=%s cloud=%s\n", macStatusStr, cloudStatusStr)
-					// mem_substrate — mem_list / mem_act / action_register
+					// mem_substrate - mem_list / mem_act / action_register
 					// / action_list. The generic, bounded read/write
 					// surface over every mem_* table. Combined with
 					// system_map this is the AGI substrate: any new
@@ -256,7 +256,7 @@ func serveCmd() *cobra.Command {
 			//
 			// Skills that aren't project scaffolds (e.g.
 			// self-improve-from-finding) are seeded directly into the
-			// Postgres store via a migration instead — the store is the
+			// Postgres store via a migration instead - the store is the
 			// durable home, and MaterializeActiveSkills derives them to
 			// disk at boot. No rebuild needed to ship or evolve those.
 			if planted, err := config.MaterializeScaffoldSkills(skillsRoot); err != nil {
@@ -326,7 +326,7 @@ func serveCmd() *cobra.Command {
 				earlyTrust = proactive.NewTrustStore(pool)
 			}
 
-			// Honcho — optional dialectic peer-modelling sidecar. When
+			// Honcho - optional dialectic peer-modelling sidecar. When
 			// HONCHO_BASE_URL is set we register a memory provider that folds
 			// the boss's peer representation into the system prefix, plus a
 			// hook that mirrors user/assistant turns into Honcho so its
@@ -390,7 +390,7 @@ func serveCmd() *cobra.Command {
 			if pool != nil {
 				connectorsCache = connectors.New(pool, composioKeyFn)
 				composioExec = connectors.NewExecuteClient(composioKeyFn)
-				// connector_identity_set — generic write-back the agent
+				// connector_identity_set - generic write-back the agent
 				// uses after it has resolved an account's real upstream
 				// identity (Gmail's emailAddress, Slack's handle, etc.).
 				// Zero toolkit knowledge in Go; the system prompt nudges
@@ -418,7 +418,7 @@ func serveCmd() *cobra.Command {
 				}
 				// Compose memory providers: Infinity's RRF searcher always
 				// runs first, Honcho's peer representation folds in second
-				// when configured. Order matters — searcher emits the boss
+				// when configured. Order matters - searcher emits the boss
 				// profile primer + relevant memory; Honcho's reasoning sits
 				// below it in the system prompt for clear separation.
 				memProviders := []agent.MemoryProvider{}
@@ -431,7 +431,7 @@ func serveCmd() *cobra.Command {
 				if honchoClient.Enabled() {
 					memProviders = append(memProviders, honcho.NewMemoryProvider(honchoClient))
 				}
-				// Bridge overlay — emits "Active bridge: Mac/Cloud, here's
+				// Bridge overlay - emits "Active bridge: Mac/Cloud, here's
 				// what tools work right now" every turn so Jarvis answers
 				// device questions truthfully and picks the right tool the
 				// first time.
@@ -451,13 +451,13 @@ func serveCmd() *cobra.Command {
 					// Gate chain: per-MCP authorization policies, all sharing
 					// the same TrustStore so the boss sees a single approval
 					// queue in Studio. Order matters only for tools that match
-					// multiple gates (none today) — first non-allow decision
+					// multiple gates (none today) - first non-allow decision
 					// wins.
 					//
 					//   ClaudeCodeGate → claude_code__*  (home Mac shell/edit/write)
 					//   GitHubGate     → github__*       (direct github-mcp-server)
 					//   ComposioGate   → composio__*     (Composio gateway, all SaaS
-					//                                     toolkits — pattern-based
+					//                                     toolkits - pattern-based
 					//                                     write-verb detection)
 					cfg.Gate = agent.NewGateChain(
 						proactive.NewClaudeCodeGate(earlyTrust),
@@ -484,13 +484,13 @@ func serveCmd() *cobra.Command {
 					registry.Register(&agent.CompactContext{Loop: loop, Compactor: convCompactor})
 					loop.SetCompactor(convCompactor)
 				}
-				// LangSmith-style turn tracing — opens a mem_turns row at
+				// LangSmith-style turn tracing - opens a mem_turns row at
 				// turn entry, threads turn_id into every fireHook payload,
 				// closes the row on TaskCompleted / interrupt / error.
 				if pool != nil {
 					loop.SetTurnRecorder(turnRecorderAdapter{store: memory.NewTurnStore(pool)})
 				}
-				// Tool visibility — hide claude_code__* on Cloud-routed
+				// Tool visibility - hide claude_code__* on Cloud-routed
 				// sessions so the model can't accidentally edit the Mac
 				// filesystem when working in the Cloud workspace. The
 				// nudges in the bridge system-prompt overlay were not
@@ -502,21 +502,21 @@ func serveCmd() *cobra.Command {
 				}
 				// Central active-model resolver. Every Loop.Run that
 				// passes an empty model string now picks up the boss's
-				// Studio selection here — cron, workflow executor,
+				// Studio selection here - cron, workflow executor,
 				// delegate sub-agents that don't override, heartbeat
 				// turns, voice tool turns, ws resume. Without this
 				// resolver an openai_oauth deploy falls into the
 				// provider's boot default (gpt-5-codex) and breaks any
 				// recipe that needs standard GPT chat. This makes the
 				// boss's selection authoritative across EVERY execution
-				// path with one wire — no per-call-site plumbing.
+				// path with one wire - no per-call-site plumbing.
 				if pool != nil {
 					modelSettings := settings.New(pool)
 					loop.SetActiveModelFn(modelSettings.GetModel)
 				}
 			}
 
-			// Durable workflow engine — Phase 2 substrate. The agent
+			// Durable workflow engine - Phase 2 substrate. The agent
 			// assembles multi-step processes via the workflow_* tools; this
 			// background worker advances each run one step per tick,
 			// persisting after every step so a restart resumes mid-flow.
@@ -574,7 +574,7 @@ func serveCmd() *cobra.Command {
 						// learning loop, populated.
 						proactive.CuriosityChecklist(pool),
 						// Autonomous pursuit (Phase 5): resurface the agent's
-						// own goals that are blocked, due soon, or stalled —
+						// own goals that are blocked, due soon, or stalled -
 						// so a goal it set and forgot gets revisited.
 						proactive.AgentGoalChecklist(pool),
 						// Substrate → dashboard: mirror the agent's goals and
@@ -602,7 +602,7 @@ func serveCmd() *cobra.Command {
 				}
 				/* WAL + WorkingBuffer are the durable substrates for
 				 * compaction-recovery and load-bearing-fragment capture.
-				 * Both are stateless pool wrappers — safe to share
+				 * Both are stateless pool wrappers - safe to share
 				 * across the WS handler and Studio API readers. */
 				walStore = proactive.NewWAL(pool)
 				workingBuf = proactive.NewWorkingBuffer(pool, 0)
@@ -610,13 +610,13 @@ func serveCmd() *cobra.Command {
 				fmt.Printf("  proactive: heartbeat every %s, intent=%v, trust=ready, wal=on, buffer=on\n",
 					heartbeat.Interval(), intentDetector != nil)
 			}
-			/* IntentFlow is now wired into the WS turn handler — every
+			/* IntentFlow is now wired into the WS turn handler - every
 			 * user message is classified async (Haiku JSON call),
 			 * persisted to mem_intent_decisions, and emitted as an
 			 * `intent` WS frame for Studio's IntentStream panel. The
 			 * detector is passed into server.Config below. */
 
-			// Connector poller — deterministic Composio tools.execute path
+			// Connector poller - deterministic Composio tools.execute path
 			// (no LLM) that connector_poll cron jobs ride on. Reads the
 			// same admin/consumer key resolution the connectors cache uses
 			// so a Railway env swap propagates without restart.
@@ -628,7 +628,7 @@ func serveCmd() *cobra.Command {
 
 			// Cron scheduler + Sentinel manager. Both degrade gracefully when
 			// no DB pool is configured. The scheduler now runs a composite
-			// executor — agent jobs (system_event / isolated_agent_turn) go
+			// executor - agent jobs (system_event / isolated_agent_turn) go
 			// to the agent loop, connector_poll jobs to the poller. Either
 			// half is optional; missing handlers surface as last_run_status.
 			var (
@@ -641,7 +641,7 @@ func serveCmd() *cobra.Command {
 				var agentExec cron.Executor
 				if loop != nil {
 					// Active-model selection is the loop's job (see
-					// SetActiveModelFn above) — cron just hands the
+					// SetActiveModelFn above) - cron just hands the
 					// loop a session and prompt, no settings plumbing.
 					agentExec = cron.NewAgentExecutor(loop)
 				}
@@ -682,7 +682,7 @@ func serveCmd() *cobra.Command {
 				if pipeline != nil {
 					pipeline.RegisterFunc("voyager.extract", voyagerMgr.OnSessionEnd, hooks.SessionEnd)
 					pipeline.RegisterFunc("voyager.discover", voyagerMgr.OnPostToolUse, hooks.PostToolUse)
-					// source_extract is the third Voyager hook — drafts a
+					// source_extract is the third Voyager hook - drafts a
 					// code-refactor proposal when the boss visibly fought
 					// the same file during a session. Lands rows in
 					// mem_code_proposals for review in Studio.
@@ -694,7 +694,7 @@ func serveCmd() *cobra.Command {
 				//   2. notifySkillPromoted, late-bound to the server's
 				//      BroadcastSkillPromoted so the chat surface gets a
 				//      "🤖 skill learned" bubble in real time. The server
-				//      doesn't exist yet at this point — we bind the var
+				//      doesn't exist yet at this point - we bind the var
 				//      below right after server.New().
 				voyagerMgr.OnSkillPromoted(func(ctx context.Context, name, description, skillMD string) {
 					if procedural != nil {
@@ -713,7 +713,7 @@ func serveCmd() *cobra.Command {
 				// ticker that watches mem_skill_runs and fires the optimizer
 				// for any skill whose recent failure rate crosses the
 				// threshold. This is the close-the-loop step Voyager was
-				// missing — without it, GEPA only fires when someone POSTs
+				// missing - without it, GEPA only fires when someone POSTs
 				// /api/voyager/optimize by hand.
 				autoTrigger := voyager.NewAutoTrigger(voyagerMgr, voyager.NewOptimizer())
 				if autoTrigger.Enabled() {
@@ -732,16 +732,16 @@ func serveCmd() *cobra.Command {
 				if authVerifier.Enabled() {
 					owner := authVerifier.Owner()
 					if owner == "" {
-						fmt.Printf("  auth: enabled (JWKS) — no owner claimed yet, first signup wins\n")
+						fmt.Printf("  auth: enabled (JWKS) - no owner claimed yet, first signup wins\n")
 					} else {
-						fmt.Printf("  auth: enabled (JWKS) — owner=%s\n", owner)
+						fmt.Printf("  auth: enabled (JWKS) - owner=%s\n", owner)
 					}
 				} else {
 					fmt.Printf("  auth: DISABLED (set SUPABASE_URL to enable)\n")
 				}
 			}
 
-			// Voice (OpenAI Realtime over WebRTC). nil-safe — when
+			// Voice (OpenAI Realtime over WebRTC). nil-safe - when
 			// OPENAI_API_KEY isn't set, voice.New() returns nil and
 			// the /api/voice/* endpoints simply 503.
 			voiceMinter := voice.New()
@@ -752,7 +752,7 @@ func serveCmd() *cobra.Command {
 			// Push notifications. Sender requires VAPID env vars; when
 			// they're missing we still expose the API so Studio can show
 			// "not configured" instead of 404'ing. Store works whenever
-			// the pool is up — subscriptions can land in advance of the
+			// the pool is up - subscriptions can land in advance of the
 			// VAPID key being provisioned.
 			var pushAPI *push.API
 			var pushSender *push.Sender
@@ -855,7 +855,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// Pre-register every Composio toolkit verb the boss has
-			// CONNECTED as a dormant tool in the registry — so the agent
+			// CONNECTED as a dormant tool in the registry - so the agent
 			// finds `composio__GMAIL_SEND_EMAIL` etc. via the normal
 			// `tool_search` + `load_tools` path instead of being forced
 			// into the MCP gateway's SEARCH_TOOLS + MULTI_EXECUTE dance
@@ -870,7 +870,7 @@ func serveCmd() *cobra.Command {
 			// cache's onChange callback keeps it live thereafter,
 			// so when the boss connects a new toolkit via Settings
 			// → Connectors its verbs appear in the agent's catalog
-			// within one cache refresh (~60s) — no redeploy, no
+			// within one cache refresh (~60s) - no redeploy, no
 			// restart. Disconnecting an account removes its verbs
 			// the same way. Runtime adaptation, per Rule #1.
 			if connectorsCache != nil && composioExec != nil {
@@ -891,7 +891,7 @@ func serveCmd() *cobra.Command {
 				}
 				// Subscribe to cache changes so future toolkit
 				// connect/disconnect events trigger a re-sync.
-				// Each onChange runs in its own goroutine — the
+				// Each onChange runs in its own goroutine - the
 				// sync's mutex serializes overlapping fires.
 				connectorsCache.SetOnChange(func() {
 					reCtx, reCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -949,7 +949,7 @@ func serveCmd() *cobra.Command {
 //
 // Mac sessions, or sessions where the bridge selection is indeterminate
 // (no router state, no preference, errored router), see the full
-// toolset unchanged — the filter only ACTS when we're confident Cloud
+// toolset unchanged - the filter only ACTS when we're confident Cloud
 // is in charge.
 func makeBridgeToolVisibility(router *bridge.Router, prefs tools.PreferenceFetcher) agent.ToolVisibilityFunc {
 	if router == nil {
@@ -971,7 +971,7 @@ func makeBridgeToolVisibility(router *bridge.Router, prefs tools.PreferenceFetch
 		// MCP-registered tool ids in tools/defaults.go DefaultLoadedTools
 		// plus the dormant catalog (Agent/Grep/Glob/LS/NotebookEdit/etc).
 		// We use a name-prefix match via the registry's catalog rather
-		// than a hardcoded list — that way any new claude_code__X tool
+		// than a hardcoded list - that way any new claude_code__X tool
 		// added later inherits the filter automatically.
 		hidden := map[string]struct{}{}
 		for _, n := range allClaudeCodeToolNames {
@@ -1045,7 +1045,7 @@ func (a turnRecorderAdapter) IncrementToolCalls(ctx context.Context, turnID stri
 // cronSchedulerAdapter bridges *cron.Scheduler → tools.CronScheduler.
 // The tools package can't import cron directly (would cycle through
 // agent), so we translate between cron.Job and tools.CronJob here. The
-// adapter is stateless — every call passes through to the wrapped
+// adapter is stateless - every call passes through to the wrapped
 // scheduler with minimal copy overhead.
 type cronSchedulerAdapter struct{ s *cron.Scheduler }
 

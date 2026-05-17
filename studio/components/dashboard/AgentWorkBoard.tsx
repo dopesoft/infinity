@@ -30,10 +30,10 @@ import type {
   WorkItemKind,
 } from "@/lib/dashboard/types";
 
-/* Agent Work Board — Kanban of agent activity.
+/* Agent Work Board - Kanban of agent activity.
  *
  * Four columns: queued / running / awaiting you / done (today). Visible
- * proof that Jarvis is *doing things* — cron runs, sentinel watchers,
+ * proof that Jarvis is *doing things* - cron runs, sentinel watchers,
  * Voyager optimizations, skill verifications, memory ops.
  *
  * Desktop: 4 columns side-by-side, each scrolls internally.
@@ -118,7 +118,7 @@ export function AgentWorkBoard({
        * the rail inherits that padding, the first card lands at the
        * same inset as the SAVED / ACTIVITY cards above it.
        *
-       * `snap-x snap-proximity` is gentler than mandatory — desktop
+       * `snap-x snap-proximity` is gentler than mandatory - desktop
        * trackpads and resized viewports between sm and lg often fight
        * snap-mandatory because the user wants to scroll partway to
        * peek the next column, and mandatory yanks it back. Proximity

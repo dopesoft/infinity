@@ -27,7 +27,7 @@ func NewTurnStore(pool *pgxpool.Pool) *TurnStore {
 
 // Open inserts a new mem_turns row and returns its id. sessionID must be a
 // real UUID (the caller is expected to have already EnsureSession'd it).
-// userText may be empty on the resume path — the row is still created so
+// userText may be empty on the resume path - the row is still created so
 // every turn has a trace, even ones that didn't start with a fresh prompt.
 func (s *TurnStore) Open(ctx context.Context, sessionID, userText, model string) (string, error) {
 	if s == nil || s.pool == nil {

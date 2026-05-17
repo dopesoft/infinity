@@ -86,7 +86,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
   const filePaths = call ? extractToolFilePaths(call.input) : [];
   const preview = call ? extractToolPreview(call.input) : "";
 
-  // Default-open rules — collapsed by default so the transcript stays
+  // Default-open rules - collapsed by default so the transcript stays
   // skimmable on mobile; expanded only when the boss genuinely needs to
   // see something:
   //   • awaiting approval     → must see the Approve/Deny buttons
@@ -125,7 +125,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
     }
   }
 
-  // Header label — for code/repo writes, lead with what actually matters
+  // Header label - for code/repo writes, lead with what actually matters
   // (the file path, or the count when multiple). The tool name moves
   // into a small subscript so the boss can scan a transcript and pick
   // out file edits without parsing tool ids.
@@ -137,7 +137,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
       if (filePath) return basename(filePath);
     }
     if (isRepoWrite && preview) {
-      // Commit message / PR title — first line, trimmed.
+      // Commit message / PR title - first line, trimmed.
       const first = preview.split("\n")[0].trim();
       if (first) return first.length > 80 ? first.slice(0, 80) + "…" : first;
     }
@@ -190,7 +190,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
               dumping the raw JSON. For Edit this is new_string; for Write
               it's the full content; for GitHub push it's the first file.
               Capped height so a huge content blob doesn't blow the
-              transcript out — scroll inside the box. */}
+              transcript out - scroll inside the box. */}
           {isWriteCall && preview && (
             <Section title={previewTitle(call.name)}>
               <pre className="min-w-0 max-w-full max-h-64 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs">
@@ -215,7 +215,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
                 <p className="text-xs leading-relaxed text-foreground">
                   This call is paused waiting for your approval. Tap{" "}
                   <span className="font-semibold">Approve</span> and the same
-                  command runs immediately — the output shows up right here.
+                  command runs immediately - the output shows up right here.
                 </p>
                 {call.preview ? (
                   <pre className="mt-2 min-w-0 max-w-full max-h-32 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted/70 p-2 font-mono text-[11px] text-muted-foreground scroll-touch sm:text-xs">
@@ -226,7 +226,7 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
               {decisionMade ? (
                 <p className="mt-2 text-xs text-muted-foreground">
                   {decisionMade === "approved"
-                    ? "Approved — running now…"
+                    ? "Approved - running now…"
                     : "Denied. Tell the agent if you want it to try something else."}
                 </p>
               ) : (
@@ -321,7 +321,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-// basename / dirname — tiny path helpers (no `path` polyfill needed for the
+// basename / dirname - tiny path helpers (no `path` polyfill needed for the
 // browser). Works for both posix paths the agent uses (Mac bridge,
 // GitHub) and Windows-style ones in case a Cloud session ever yields
 // them.
@@ -336,7 +336,7 @@ function dirname(p: string): string {
   return idx >= 0 ? trimmed.slice(0, idx) : "";
 }
 
-// shortToolKind — the verb the boss reads as a subscript under a file
+// shortToolKind - the verb the boss reads as a subscript under a file
 // path. "claude_code__Edit" → "edit", "github__push_files" → "push",
 // etc. Falls back to the raw tool name so unknown tools still show
 // something legible.
@@ -358,7 +358,7 @@ function shortToolKind(name: string): string {
   return name;
 }
 
-// previewTitle — labels the preview block based on the tool kind so the
+// previewTitle - labels the preview block based on the tool kind so the
 // boss knows what they're looking at (the replacement text vs the full
 // new file vs the commit message etc).
 function previewTitle(name: string): string {
@@ -376,7 +376,7 @@ function previewTitle(name: string): string {
   return "Preview";
 }
 
-// DiffPre renders unified-diff text with per-line color hints. Pure presentation —
+// DiffPre renders unified-diff text with per-line color hints. Pure presentation -
 // no parsing of multi-file structure (Claude Code returns single-file diffs in
 // most edits, and large multi-file ones get the same treatment line by line).
 function DiffPre({ text }: { text: string }) {

@@ -129,22 +129,22 @@ export default function MemoryPage() {
             <div className="no-scrollbar flex snap-x snap-mandatory gap-2 overflow-x-auto scroll-touch px-3 pb-1 sm:grid sm:grid-cols-3 sm:gap-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-5">
               <MetricCard
                 label="observations"
-                value={counts?.observations ?? "—"}
+                value={counts?.observations ?? "-"}
                 className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
               />
               <MetricCard
                 label="memories"
-                value={counts?.memories ?? "—"}
+                value={counts?.memories ?? "-"}
                 className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
               />
               <MetricCard
                 label="graph nodes"
-                value={counts?.graph_nodes ?? "—"}
+                value={counts?.graph_nodes ?? "-"}
                 className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
               />
               <MetricCard
                 label="graph edges"
-                value={counts?.graph_edges ?? "—"}
+                value={counts?.graph_edges ?? "-"}
                 className="min-w-[10.5rem] shrink-0 snap-start sm:min-w-0"
               />
               <MetricCard
@@ -156,7 +156,7 @@ export default function MemoryPage() {
             </div>
           </div>
 
-          {/* Search row centered on desktop with a sane max width — full
+          {/* Search row centered on desktop with a sane max width - full
               page-width search input reads as wasted real estate on a
               25"+ monitor and pushes the result list way down. Mobile
               stays full-width since there's no space to spare. */}
@@ -405,7 +405,7 @@ function ReflectionRow({ item }: { item: ReflectionDTO }) {
           {new Date(item.created_at).toLocaleString()}
         </time>
       </div>
-      <p className="mt-2 line-clamp-4 break-words text-sm">{item.critique || "—"}</p>
+      <p className="mt-2 line-clamp-4 break-words text-sm">{item.critique || "-"}</p>
       <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
         <span className="rounded-full bg-tier-procedural/10 px-2 py-0.5 font-mono text-tier-procedural">
           quality {(item.quality_score * 100).toFixed(0)}%
@@ -440,7 +440,7 @@ function PredictionRow({ item }: { item: PredictionDTO }) {
         </span>
       </div>
       <p className="mt-2 line-clamp-2 break-words text-xs text-muted-foreground">
-        Expected: <span className="text-foreground">{item.expected || "—"}</span>
+        Expected: <span className="text-foreground">{item.expected || "-"}</span>
       </p>
       <p className="mt-1 line-clamp-3 break-words text-xs text-muted-foreground">
         Actual: <span className="text-foreground">{item.actual || "unresolved"}</span>

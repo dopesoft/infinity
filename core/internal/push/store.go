@@ -1,20 +1,20 @@
 // Package push wires Web Push delivery from Core to the boss's iPhone
 // and macOS PWAs.
 //
-// The store layer wraps mem_push_subscriptions — one row per installed
+// The store layer wraps mem_push_subscriptions - one row per installed
 // browser/device that has opted in. The sender layer encrypts and
 // delivers payloads via the boss's push services (FCM for Chrome/Edge,
 // APNs for Safari/iOS) using VAPID-signed JWTs.
 //
 // The HTTP layer (api.go) exposes:
-//   - GET  /api/push/vapid       — public key for the client to subscribe
-//   - POST /api/push/subscribe   — register a new device
-//   - POST /api/push/unsubscribe — remove a device
-//   - GET  /api/push/devices     — list registered devices
-//   - POST /api/push/test        — send a test notification to all devices
+//   - GET  /api/push/vapid       - public key for the client to subscribe
+//   - POST /api/push/subscribe   - register a new device
+//   - POST /api/push/unsubscribe - remove a device
+//   - GET  /api/push/devices     - list registered devices
+//   - POST /api/push/test        - send a test notification to all devices
 //
 // Other packages (proactive, voyager, sentinel, …) inject the *Sender
-// and call Notify(ctx, payload) on the events they care about — trust
+// and call Notify(ctx, payload) on the events they care about - trust
 // inserts, curiosity questions, sentinel fires, etc.
 package push
 
@@ -53,7 +53,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // Upsert inserts or refreshes a subscription. Endpoint is the unique
-// key — Web Push spec guarantees a single endpoint per (device, app).
+// key - Web Push spec guarantees a single endpoint per (device, app).
 // If the endpoint already exists we update the crypto keys (they can
 // rotate when a browser refreshes subscriptions) and clear `revoked`.
 func (s *Store) Upsert(ctx context.Context, sub Subscription) (Subscription, error) {

@@ -5,7 +5,7 @@ import { ArrowRight, Brain, Flame } from "lucide-react";
 import Link from "next/link";
 import type { MemoryStats } from "@/lib/dashboard/types";
 
-/* Memory footer — quiet telemetry showing the brain is alive.
+/* Memory footer - quiet telemetry showing the brain is alive.
  *
  * Subtle stat strip pinned at the bottom of the dashboard with day-level
  * memory growth numbers. Tap to jump into /memory. Visual goal: "calm

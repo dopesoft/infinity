@@ -1,4 +1,4 @@
--- 003_search.sql — Full-text search configuration with project synonym dictionary.
+-- 003_search.sql - Full-text search configuration with project synonym dictionary.
 -- The synonym source file lives at db/synonyms.syn and must be deployed to
 -- $PGDATA/tsearch_data/infinity_synonyms.syn for the dictionary to load.
 --
@@ -17,7 +17,7 @@ BEGIN
             );
         $sql$;
     EXCEPTION WHEN others THEN
-        RAISE NOTICE 'infinity_synonyms dictionary not created (% — falling back to plain english config)', SQLERRM;
+        RAISE NOTICE 'infinity_synonyms dictionary not created (% - falling back to plain english config)', SQLERRM;
     END;
 END$$;
 

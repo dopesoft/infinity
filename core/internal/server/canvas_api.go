@@ -19,7 +19,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/proactive"
 )
 
-// canvas_api.go — HTTP surface for the Studio Canvas tab.
+// canvas_api.go - HTTP surface for the Studio Canvas tab.
 //
 // All filesystem reads and git mutations on the user's home Mac route through
 // this file. The contract:
@@ -32,7 +32,7 @@ import (
 //     bash command and queue it as a Trust contract via proactive.TrustStore.
 //     The HTTP handler then blocks on the contract's status (up to 15 min)
 //     so the request lifecycle mirrors the agent loop's gating semantics.
-//     The boss approves in the Trust tab — or inline in Canvas, since the
+//     The boss approves in the Trust tab - or inline in Canvas, since the
 //     same contract IDs are visible everywhere.
 //
 //   - Path inputs are sanitised against INFINITY_CANVAS_ROOT before they
@@ -91,7 +91,7 @@ func resolveCanvasPath(raw string) (string, bool) {
 		candidate = filepath.Join(root, candidate)
 	}
 	clean := filepath.Clean(candidate)
-	// rel must not start with ".." or be ".." — both indicate escape.
+	// rel must not start with ".." or be ".." - both indicate escape.
 	rel, err := filepath.Rel(root, clean)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
@@ -103,7 +103,7 @@ func resolveCanvasPath(raw string) (string, bool) {
 // https://coder.dopesoft.io) for hitting the bridge's direct
 // filesystem + git endpoints. Strips the trailing /sse since those
 // endpoints live at /fs/ls, /fs/read, /git/status, /git/diff. Returns
-// "" if not configured — callers should fall through to MCP.
+// "" if not configured - callers should fall through to MCP.
 func bridgeBaseURL() string {
 	raw := strings.TrimSpace(os.Getenv("CLAUDE_CODE_TUNNEL_URL"))
 	if raw == "" {
@@ -115,7 +115,7 @@ func bridgeBaseURL() string {
 // directBridgeHeaders returns the Cloudflare Access service-token headers
 // configured for the claude_code MCP server. Reuses the same env vars
 // (CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET) so we don't need a
-// separate token for the direct endpoints — they live on the same host.
+// separate token for the direct endpoints - they live on the same host.
 func directBridgeHeaders() http.Header {
 	h := http.Header{}
 	if id := strings.TrimSpace(os.Getenv("CF_ACCESS_CLIENT_ID")); id != "" {
@@ -227,14 +227,14 @@ func (s *Server) macBridgeAvailable() bool {
 // listViaMCP tries to list directory entries via the Mac bridge.
 // Strategies in order:
 //
-//  1. Direct bridge GET /fs/ls — plain Go filesystem read on the Mac.
+//  1. Direct bridge GET /fs/ls - plain Go filesystem read on the Mac.
 //     NO MCP. NO Claude Code session spawn. NO per-call subprocess.
 //     The bridge is already running on the Mac with full FS access;
 //     this is the obvious right answer for browsing files.
-//  2. claude_code__LS — older fallback path if the bridge somehow
+//  2. claude_code__LS - older fallback path if the bridge somehow
 //     doesn't expose /fs/ls (older bridge build).
-//  3. claude_code__Bash with `ls -1Fp` — last-ditch fallback.
-//  4. claude_code__Glob — absolute last-ditch.
+//  3. claude_code__Bash with `ls -1Fp` - last-ditch fallback.
+//  4. claude_code__Glob - absolute last-ditch.
 func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
 	// Strategy 1: direct bridge.
 	if body, ok := directBridgeGet(ctx, "/fs/ls?path="+url.QueryEscape(dir)); ok {
@@ -263,7 +263,7 @@ func (s *Server) listViaMCP(ctx context.Context, dir string) ([]fsEntry, bool) {
 		return entries, true
 	}
 
-	// Strategy 2: Bash `ls -1Fp`. This is the workhorse — works on every
+	// Strategy 2: Bash `ls -1Fp`. This is the workhorse - works on every
 	// Mac and Linux, output is one name per line with clear type markers.
 	if t, err := s.canvasMCP("claude_code__Bash"); err == nil {
 		cmd := "ls -1Fp " + shellQuote(dir)
@@ -329,7 +329,7 @@ func unwrapBashStdout(raw string) string {
 //	{"type":"text","file":{"filePath":"...","content":"..."}}
 //
 // Returns ("", false) when the response is `{"type":"file_unchanged",...}`
-// — Claude Code's per-session read cache returns this when the file was
+// - Claude Code's per-session read cache returns this when the file was
 // already read in the same MCP session, with NO content body. Callers
 // should fall back to a fresh read (e.g. `cat` via Bash) in that case.
 //
@@ -417,7 +417,7 @@ func parseGlobOutput(raw, dir string) []fsEntry {
 			// Path didn't start with our prefix → not a child of dir.
 			continue
 		}
-		// Only direct children — no '/' inside.
+		// Only direct children - no '/' inside.
 		if idx := strings.Index(rel, "/"); idx >= 0 {
 			rel = rel[:idx]
 		}
@@ -442,7 +442,7 @@ func parseGlobOutput(raw, dir string) []fsEntry {
 // Returns (content, true) on a non-empty read.
 func (s *Server) readViaMCP(ctx context.Context, path string) (string, bool) {
 	// Strategy 1: direct bridge /fs/read. Reads the file off the Mac
-	// filesystem via Go's os.ReadFile — no MCP, no Claude Code, no
+	// filesystem via Go's os.ReadFile - no MCP, no Claude Code, no
 	// per-session read cache shenanigans.
 	if body, ok := directBridgeGet(ctx, "/fs/read?path="+url.QueryEscape(path)); ok {
 		var resp struct {
@@ -466,7 +466,7 @@ func (s *Server) readViaMCP(ctx context.Context, path string) (string, bool) {
 		if ok {
 			return content, true
 		}
-		// Read returned `file_unchanged` with no body — Claude Code's
+		// Read returned `file_unchanged` with no body - Claude Code's
 		// per-session cache. Fall through to the Bash cat path below.
 	}
 	// Last-ditch: cat the file via Bash. Always returns fresh bytes,
@@ -529,7 +529,7 @@ func (s *Server) handleCanvasFSList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Local FS — used when Core runs on the same machine as the boss
+	// Local FS - used when Core runs on the same machine as the boss
 	// (local dev on the Mac) or as a fallback when the bridge is connected
 	// but didn't return useful output for this path.
 	if entries, lerr := localListDir(resolved); lerr == nil {
@@ -575,7 +575,7 @@ func localListDir(dir string) ([]fsEntry, error) {
 	out := make([]fsEntry, 0, len(names))
 	for _, n := range names {
 		if strings.HasPrefix(n, ".") && n != ".gitignore" && n != ".env.example" {
-			// Hide dotfiles by default — Canvas is for project work,
+			// Hide dotfiles by default - Canvas is for project work,
 			// not OS plumbing. The boss can still type the full path
 			// into the URL to descend into them if needed.
 			continue
@@ -609,7 +609,7 @@ func localListDir(dir string) ([]fsEntry, error) {
 //	  - other-project/
 //	  - notes.md
 //
-// We extract only the direct children of `dir` (depth-1 entries — bullets
+// We extract only the direct children of `dir` (depth-1 entries - bullets
 // indented 2 spaces past the root line). Trailing "/" marks a directory.
 //
 // Also tolerates the older tab-separated `name<TAB>size<TAB>type` shape and
@@ -629,12 +629,12 @@ func parseLsOutput(raw, dir string) []fsEntry {
 			continue
 		}
 
-		// Bullet form: "  - name/" — count leading spaces, strip "- ".
+		// Bullet form: "  - name/" - count leading spaces, strip "- ".
 		if strings.HasPrefix(trimmed, "- ") {
 			indent := len(rstripped) - len(strings.TrimLeft(rstripped, " "))
 			content := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
 			if rootIndent < 0 {
-				// First bullet is the root being listed — store its
+				// First bullet is the root being listed - store its
 				// indent so we can pick direct children one level
 				// deeper.
 				rootIndent = indent
@@ -642,7 +642,7 @@ func parseLsOutput(raw, dir string) []fsEntry {
 			}
 			// Direct children are exactly 2 spaces deeper than the
 			// root bullet. Anything deeper is a grandchild Claude
-			// Code surfaced — skip it; the studio lazy-loads
+			// Code surfaced - skip it; the studio lazy-loads
 			// subdirectories on expand.
 			if indent != rootIndent+2 {
 				continue
@@ -749,7 +749,7 @@ func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Local read — used when Core runs on the same box as the files, or as
+	// Local read - used when Core runs on the same box as the files, or as
 	// a fallback when the bridge is connected but the read came back empty.
 	if data, lerr := os.ReadFile(resolved); lerr == nil {
 		writeJSON(w, http.StatusOK, fsReadResponse{
@@ -785,7 +785,7 @@ func stripReadHeader(raw string) string {
 	lines := strings.Split(raw, "\n")
 	out := make([]string, 0, len(lines))
 	for _, ln := range lines {
-		// First tab character — anything before is the line number prefix.
+		// First tab character - anything before is the line number prefix.
 		if idx := strings.Index(ln, "\t"); idx > 0 {
 			// Only strip if the prefix is purely numeric whitespace, e.g. "  42".
 			prefix := strings.TrimSpace(ln[:idx])
@@ -965,7 +965,7 @@ func (s *Server) handleCanvasFSSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Don't block — the editor's status bar polls /api/trust-contracts and
+	// Don't block - the editor's status bar polls /api/trust-contracts and
 	// will refresh when the boss approves. Saves often need a moment of
 	// thought ("did I just delete the auth layer?") and a 15-min hang is
 	// the wrong UX. The status bar shows a single "Approve in Trust" link
@@ -1010,7 +1010,7 @@ func (s *Server) handleCanvasGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo escapes INFINITY_CANVAS_ROOT"})
 		return
 	}
-	// Try the direct bridge first — runs `git status` natively on the
+	// Try the direct bridge first - runs `git status` natively on the
 	// Mac, no MCP detour.
 	if body, dok := directBridgeGet(r.Context(), "/git/status?repo="+url.QueryEscape(repo)); dok {
 		writeJSON(w, http.StatusOK, parseGitStatusV2(string(body), repo))
@@ -1120,13 +1120,13 @@ type gitShowResponse struct {
 	// Found = false when the path exists on disk but isn't tracked at the
 	// requested ref (e.g. a brand-new file Jarvis just added that hasn't
 	// been committed yet). The client treats this as "original side of
-	// the diff is empty" — the whole file shows as additions.
+	// the diff is empty" - the whole file shows as additions.
 	Found bool `json:"found"`
 }
 
 // handleCanvasGitShow returns the contents of a file at a specific git ref
 // (defaults to HEAD). Powers the diff view's "original" side when the boss
-// opens a file Jarvis edited — Monaco's DiffEditor needs the pre-edit
+// opens a file Jarvis edited - Monaco's DiffEditor needs the pre-edit
 // version to render real diff hunks, but the on-disk content already has
 // Jarvis's changes applied so the FS read alone produces an empty diff.
 //
@@ -1165,7 +1165,7 @@ func (s *Server) handleCanvasGitShow(w http.ResponseWriter, r *http.Request) {
 	out, err := s.runReadOnlyBash(r.Context(), cmd)
 	if err != nil {
 		// File isn't tracked at this ref (new file Jarvis just added,
-		// rename, etc.) — return empty content so the diff shows the
+		// rename, etc.) - return empty content so the diff shows the
 		// whole file as additions rather than failing the request.
 		writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: "", Found: false})
 		return
@@ -1174,7 +1174,7 @@ func (s *Server) handleCanvasGitShow(w http.ResponseWriter, r *http.Request) {
 }
 
 // findRepoRoot walks up from absPath until it finds a directory containing
-// .git (file or directory — submodules use a .git file pointing elsewhere).
+// .git (file or directory - submodules use a .git file pointing elsewhere).
 // Returns the repo root, the path relative to that root, and ok=true when
 // found. Stops at filesystem root or the canvas-root boundary.
 func findRepoRoot(absPath string) (root string, relPath string, ok bool) {
@@ -1200,7 +1200,7 @@ func findRepoRoot(absPath string) (root string, relPath string, ok bool) {
 
 // runReadOnlyBash invokes claude_code__Bash for a vetted read-only command.
 // The gate's isReadOnlyGit allow-list lets these pass without Trust queueing.
-// Returns the raw stdout — unwraps Claude Code's {"stdout":...} JSON envelope.
+// Returns the raw stdout - unwraps Claude Code's {"stdout":...} JSON envelope.
 func (s *Server) runReadOnlyBash(ctx context.Context, cmd string) (string, error) {
 	t, err := s.canvasMCP("claude_code__Bash")
 	if err != nil {
@@ -1365,7 +1365,7 @@ func (s *Server) handleCanvasGitMutation(
 		return
 	}
 
-	// Block until the boss decides — same model the agent loop's gate
+	// Block until the boss decides - same model the agent loop's gate
 	// uses. We give 15 min. Once approved, run the bash command and
 	// echo the output back to the studio.
 	decision, reason := s.waitForTrustDecision(r.Context(), id, canvasGitWaitTimeout)
@@ -1408,7 +1408,7 @@ func (s *Server) handleCanvasGitMutation(
 }
 
 // waitForTrustDecision polls the trust store. Mirrors proactive.ClaudeCodeGate's
-// loop without coupling to it — the Canvas HTTP layer doesn't have a
+// loop without coupling to it - the Canvas HTTP layer doesn't have a
 // gate.ToolGate interface available, so we read the store directly.
 func (s *Server) waitForTrustDecision(ctx context.Context, id string, timeout time.Duration) (bool, string) {
 	if s.trust == nil || id == "" {
@@ -1473,7 +1473,7 @@ func (s *Server) handleCanvasConfig(w http.ResponseWriter, r *http.Request) {
 //
 //	fetch('/api/canvas/debug?path=/Users/you/Dev').then(r=>r.json()).then(console.log)
 //
-// Cheap to call, no Trust queue side effects, no secrets — just the
+// Cheap to call, no Trust queue side effects, no secrets - just the
 // names and a small slice of raw output so we can see what Claude Code
 // is actually returning.
 func (s *Server) handleCanvasDebug(w http.ResponseWriter, r *http.Request) {
@@ -1535,7 +1535,7 @@ func (s *Server) handleCanvasDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	strategies["bash_ls_1Fp"] = bashEntry
 
-	// 3b. Probe — bash with the smallest possible command. If THIS fails
+	// 3b. Probe - bash with the smallest possible command. If THIS fails
 	//     too, the bridge is broken for all bash calls, not just ls
 	//     (i.e. the issue is on the Mac, not in our command).
 	probeEntry := map[string]any{"tool": "claude_code__Bash", "registered": false}
@@ -1550,7 +1550,7 @@ func (s *Server) handleCanvasDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	strategies["bash_echo_probe"] = probeEntry
 
-	// 3c. Read probe — try claude_code__Read on a known file. If Read
+	// 3c. Read probe - try claude_code__Read on a known file. If Read
 	//     works while Bash doesn't, the bridge has a specific Bash
 	//     issue (probably a tool-handler crash on the Mac).
 	readEntry := map[string]any{"tool": "claude_code__Read", "registered": false}
@@ -1609,7 +1609,7 @@ func shellQuote(s string) string {
 }
 
 // sanitizeRef strips anything from a git ref that isn't alnum, dot, slash,
-// dash, underscore, or plus. Git ref names are restrictive — this is loose
+// dash, underscore, or plus. Git ref names are restrictive - this is loose
 // enough to allow any legal ref but tight enough to make injection
 // uninteresting.
 func sanitizeRef(s string) string {
@@ -1637,7 +1637,7 @@ func truncate(s string, n int) string {
 //
 // These thin handlers proxy to the bridge's /supervisor/* endpoints so
 // Studio only ever talks to Core. Core attaches Cloudflare Access headers
-// the same way it does for /fs/ls and /git/status — service tokens never
+// the same way it does for /fs/ls and /git/status - service tokens never
 // touch the browser.
 
 // handleCanvasProjectStart POSTs to the bridge supervisor to bring a

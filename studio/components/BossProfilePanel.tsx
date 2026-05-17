@@ -14,7 +14,7 @@ import {
   type ProfileFactDTO,
 } from "@/lib/api";
 
-// BossProfilePanel — surfaces and edits the always-on identity primer.
+// BossProfilePanel - surfaces and edits the always-on identity primer.
 // Every fact here is prepended to every system prompt the agent sees.
 //
 // Mobile: collapsed by default to avoid eating screen above the memory list.
@@ -26,7 +26,7 @@ export function BossProfilePanel() {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState({ title: "", content: "", importance: 8 });
   const [collapsed, setCollapsed] = useState<boolean | null>(null);
-  // Per-row expand state — tap the body to flip line-clamp off and read
+  // Per-row expand state - tap the body to flip line-clamp off and read
   // the full fact without yanking the user into a separate detail view.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -77,7 +77,7 @@ export function BossProfilePanel() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Boss profile
           </span>
-          {/* Status dot — green if facts exist (primer is active for every
+          {/* Status dot - green if facts exist (primer is active for every
               turn), gray if empty. Hover for the live primer count + what
               the primer is for. Wrapped in a span because TooltipTrigger
               propagates the click; the outer header button still toggles
@@ -137,7 +137,7 @@ export function BossProfilePanel() {
           <span className="hidden lg:inline">{adding ? "Cancel" : "Add"}</span>
         </Button>
 
-        {/* Chevron — rightmost. Mobile-only; doubles as the toggle button. */}
+        {/* Chevron - rightmost. Mobile-only; doubles as the toggle button. */}
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
@@ -196,7 +196,7 @@ export function BossProfilePanel() {
           <p className="text-xs text-muted-foreground">Loading…</p>
         ) : facts.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            No profile facts yet. Add one — Jarvis sees these on every turn.
+            No profile facts yet. Add one - Jarvis sees these on every turn.
           </p>
         ) : (
           <ul className="space-y-1.5">

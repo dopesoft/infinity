@@ -1,27 +1,27 @@
-// system_map — runtime introspection of the agent's own UI/data/tool
+// system_map - runtime introspection of the agent's own UI/data/tool
 // topology. Called by the agent to answer "for any user-facing surface,
-// which table backs it and which tool acts on it?" — with zero
+// which table backs it and which tool acts on it?" - with zero
 // prompt-level memorisation.
 //
 // Hardened version. What's runtime-derived:
 //
-//   1. Tables — queried from information_schema at every call.
-//   2. Tools — walked from the live Registry at every call.
-//   3. Domain hints — read from mem_domain_hints (persistent DB table,
+//   1. Tables - queried from information_schema at every call.
+//   2. Tools - walked from the live Registry at every call.
+//   3. Domain hints - read from mem_domain_hints (persistent DB table,
 //      seeded by migration 028, extendable by the agent via
 //      domain_hint_add). No Go slice, no rebuild required.
-//   4. Read/mutate classification — uses the optional ReadOnlyTool
+//   4. Read/mutate classification - uses the optional ReadOnlyTool
 //      interface (registry.go) when implemented, falls back to suffix
 //      heuristic otherwise.
-//   5. Open counts — heuristic ladder over common status columns,
+//   5. Open counts - heuristic ladder over common status columns,
 //      degrades to total row count.
-//   6. Gaps — first-class output: tables without tools, missing list/
+//   6. Gaps - first-class output: tables without tools, missing list/
 //      mutate halves. The agent sees what's broken and can propose
 //      tools (skill_propose) to fill them.
 //
 // The ONLY remaining hardcoding is the heuristic ladder for counts (six
 // status column patterns) and the singular-strip convention (trailing
-// `s` for plural→singular). Both apply uniformly across all tables —
+// `s` for plural→singular). Both apply uniformly across all tables -
 // no per-domain branching.
 
 package tools
@@ -36,7 +36,7 @@ import (
 )
 
 // RegisterSystemMap wires system_map. Needs both the live registry and
-// the DB pool — without both, introspection degrades to whichever half
+// the DB pool - without both, introspection degrades to whichever half
 // is available.
 func RegisterSystemMap(r *Registry, pool *pgxpool.Pool) {
 	if r == nil {
@@ -52,13 +52,13 @@ type systemMap struct {
 
 func (t *systemMap) Name() string { return "system_map" }
 func (t *systemMap) Description() string {
-	return "Introspect the agent's own UI/data/tool topology — runtime, from " +
+	return "Introspect the agent's own UI/data/tool topology - runtime, from " +
 		"the live DB schema, tool registry, and persistent domain hints. " +
 		"Returns: per-domain surfaces (table + list_tools + mutate_tools + " +
 		"live open_count + recipe), GAPS where a table has no tool or only " +
 		"half the verb pair, and CAPABILITIES (non-domain tools). Call FIRST " +
 		"for any 'do X on my dashboard / list / queue' task. To extend the " +
-		"map for a new irregular table, call domain_hint_add — the next " +
+		"map for a new irregular table, call domain_hint_add - the next " +
 		"system_map() reflects it without a deploy."
 }
 func (t *systemMap) ReadOnly() bool { return true }
@@ -198,7 +198,7 @@ func (t *systemMap) Execute(ctx context.Context, in map[string]any) (string, err
 
 	resp := map[string]any{
 		"version":   3,
-		"principle": "Pair list_tools → mutate_tools to act. Never ask the boss for ids. To map a new irregular table, call domain_hint_add — no deploy needed.",
+		"principle": "Pair list_tools → mutate_tools to act. Never ask the boss for ids. To map a new irregular table, call domain_hint_add - no deploy needed.",
 		"surfaces":  surfaces,
 		"gap_count": len(gaps),
 	}
@@ -219,7 +219,7 @@ func (t *systemMap) Execute(ctx context.Context, in map[string]any) (string, err
 }
 
 // loadHints reads mem_domain_hints from the live DB. Returns a
-// map[table]→hint. Failure is non-fatal — system_map falls back to the
+// map[table]→hint. Failure is non-fatal - system_map falls back to the
 // pure-convention path (which still handles ~80% of tables correctly).
 type loadedHint struct {
 	Prefix      string
@@ -233,7 +233,7 @@ func (t *systemMap) loadHints(ctx context.Context) (map[string]loadedHint, error
 		return map[string]loadedHint{}, nil
 	}
 	// Try with count_filter first (post-migration 029). Fall back to the
-	// older schema if the column doesn't exist yet — keeps the tool
+	// older schema if the column doesn't exist yet - keeps the tool
 	// resilient against partial-migrate states.
 	rows, err := t.pool.Query(ctx, `
 		SELECT table_name, tool_prefix, COALESCE(display_as,''),

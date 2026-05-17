@@ -31,14 +31,14 @@ import (
 //   4. From this point on the openai_oauth provider reads the token row on
 //      every inference call and refreshes in place before expiry.
 //
-// We don't need to know the redirect_uri on the wire — it's tied to the
+// We don't need to know the redirect_uri on the wire - it's tied to the
 // public Codex CLI client_id and constant across sessions.
 
 // oauthProvider returns the live OAuth-backed provider when LLM_PROVIDER
 // is openai_oauth and the loop has it wired. When the env points at a
 // different provider but the boss wants to pre-connect ChatGPT (so they
 // can flip LLM_PROVIDER later without re-logging in), we still need a
-// provider instance for the PKCE constants — we build a transient one
+// provider instance for the PKCE constants - we build a transient one
 // against the same pool/store. The transient never streams.
 func (s *Server) oauthProvider() (*llm.OpenAIOAuth, error) {
 	if s == nil {
@@ -144,7 +144,7 @@ func (s *Server) handleOpenAIOAuthExchange(w http.ResponseWriter, r *http.Reques
 	}
 	code, state := body.Code, body.State
 
-	// Accept a pasted-URL form too — common when the user just copies the
+	// Accept a pasted-URL form too - common when the user just copies the
 	// "this site can't be reached" address bar wholesale instead of fishing
 	// out the query params.
 	if (code == "" || state == "") && body.CallbackURL != "" {
@@ -182,7 +182,7 @@ func (s *Server) handleOpenAIOAuthExchange(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, oauthStatusBody(tok, true))
 }
 
-// GET /api/auth/openai/status — connected? when does it expire? when was it
+// GET /api/auth/openai/status - connected? when does it expire? when was it
 // last refreshed? Studio polls this to render the Connect / Reconnect badge.
 func (s *Server) handleOpenAIOAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -206,7 +206,7 @@ func (s *Server) handleOpenAIOAuthStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, oauthStatusBody(tok, true))
 }
 
-// POST /api/auth/openai/disconnect — drops the stored credential row. The
+// POST /api/auth/openai/disconnect - drops the stored credential row. The
 // next inference call will fail with "no oauth token stored" until the
 // user reconnects.
 func (s *Server) handleOpenAIOAuthDisconnect(w http.ResponseWriter, r *http.Request) {

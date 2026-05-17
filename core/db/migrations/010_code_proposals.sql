@@ -1,4 +1,4 @@
--- 010_code_proposals.sql — Voyager source-extraction substrate.
+-- 010_code_proposals.sql - Voyager source-extraction substrate.
 --
 -- Skill proposals (mem_skill_proposals) crystallize *behavior* into SKILL.md.
 -- Code proposals crystallize *struggle* into a suggested source change. When
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS mem_code_proposals (
     rationale      TEXT NOT NULL DEFAULT '',
 
     -- Free-form summary of the change. Could be prose, a pseudo-diff,
-    -- or a bullet list of steps. We do NOT store an applied diff —
+    -- or a bullet list of steps. We do NOT store an applied diff -
     -- the agent generates the real edit at promote-time so the diff
     -- always reflects current HEAD.
     proposed_change TEXT NOT NULL DEFAULT '',

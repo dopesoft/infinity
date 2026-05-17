@@ -1,10 +1,10 @@
-// Package initiative implements the initiative + economics substrate —
+// Package initiative implements the initiative + economics substrate -
 // Phase 6 (final) of the assembly substrate.
 //
 // An always-on agent needs two things a reactive chatbot doesn't:
 //
 //   - INITIATIVE: a policy for when and how to reach the boss. The agent
-//     decides an urgency; the Notifier routes it — urgent → push to the
+//     decides an urgency; the Notifier routes it - urgent → push to the
 //     phone now, normal → a dashboard card, low → batched into the next
 //     digest. Everything is logged to mem_notifications.
 //   - ECONOMICS: awareness of what it costs to run. Every cost-incurring
@@ -12,7 +12,7 @@
 //     value/cost tradeoffs instead of burning the budget blind.
 //
 // The agent reaches out via the notify tool, records spend via cost_record,
-// and reads the budget via budget_status — never raw SQL.
+// and reads the budget via budget_status - never raw SQL.
 package initiative
 
 import (
@@ -236,7 +236,7 @@ func (s *Store) BudgetRollup(ctx context.Context, windowDays int) (*Budget, erro
 	case b.LimitUSD == 0:
 		b.Note = "No budget limit set (INFINITY_BUDGET_USD)."
 	case !b.WithinBudget:
-		b.Note = fmt.Sprintf("OVER BUDGET — $%.2f of $%.2f over the last %d days. Throttle expensive work.", b.TotalUSD, b.LimitUSD, windowDays)
+		b.Note = fmt.Sprintf("OVER BUDGET - $%.2f of $%.2f over the last %d days. Throttle expensive work.", b.TotalUSD, b.LimitUSD, windowDays)
 	default:
 		b.Note = fmt.Sprintf("$%.2f of $%.2f used over the last %d days.", b.TotalUSD, b.LimitUSD, windowDays)
 	}
@@ -284,7 +284,7 @@ func (n *Notifier) Send(ctx context.Context, notif *Notification) error {
 		notif.Channel, notif.Status = "push", "sent"
 		if n.deliverer != nil {
 			if err := n.deliverer.Push(ctx, *notif); err != nil {
-				// Delivery failed — still log it, but as surface so it's
+				// Delivery failed - still log it, but as surface so it's
 				// not lost.
 				n.logger.Error("initiative: push failed, falling back to surface", "err", err)
 				notif.Channel = "surface"
@@ -324,14 +324,14 @@ func (n *Notifier) Digest(ctx context.Context) (int, error) {
 	for i, item := range batched {
 		fmt.Fprintf(&b, "%d. %s", i+1, item.Title)
 		if item.Body != "" {
-			fmt.Fprintf(&b, " — %s", item.Body)
+			fmt.Fprintf(&b, " - %s", item.Body)
 		}
 		b.WriteByte('\n')
 		ids = append(ids, item.ID)
 	}
 	digest := Notification{
 		Urgency: UrgencyNormal,
-		Title:   fmt.Sprintf("Digest — %d update(s)", len(batched)),
+		Title:   fmt.Sprintf("Digest - %d update(s)", len(batched)),
 		Body:    strings.TrimSpace(b.String()),
 		Source:  "digest",
 		Channel: "push",

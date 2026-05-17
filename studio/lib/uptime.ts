@@ -4,7 +4,7 @@
  * Persisted to sessionStorage so it survives client-side navigation
  * (TabFrame remounts on every Next.js route change, which would otherwise
  * reset any in-component `Date.now()` counter). The value clears when the
- * tab is closed — that's the right semantic for "time since you opened
+ * tab is closed - that's the right semantic for "time since you opened
  * Infinity in this tab".
  */
 const KEY = "infinity:studio:bootedAt";
@@ -21,7 +21,7 @@ export function getBootedAt(): number {
     window.sessionStorage.setItem(KEY, String(now));
   } catch {
     // sessionStorage can throw in private mode / disabled storage;
-    // fall back to in-memory now() — the counter still ticks, it just
+    // fall back to in-memory now() - the counter still ticks, it just
     // resets on navigation in that environment. Not worth a runtime error.
   }
   return now;

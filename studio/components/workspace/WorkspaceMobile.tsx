@@ -15,12 +15,12 @@ type ChatHook = ReturnType<typeof useChat>;
 export type WorkspaceMode = "chat" | "files" | "canvas";
 
 /**
- * WorkspaceMobile — the phone-first manifestation of the unified workspace.
+ * WorkspaceMobile - the phone-first manifestation of the unified workspace.
  *
  * Three full-bleed modes (Chat / Files / Canvas) selected via sticky-top
  * pills below the header. Horizontal swipe gestures (framer-motion drag)
  * cycle between adjacent modes for one-handed thumb operation. Tapping a
- * file in the Files mode auto-jumps to Canvas — that's the rule the boss
+ * file in the Files mode auto-jumps to Canvas - that's the rule the boss
  * locked in: "I expect when I click a file then we automatically go into
  * canvas to view it."
  *
@@ -71,7 +71,7 @@ export function WorkspaceMobile({
       </div>
 
       {/* Content area. One mode at a time with an opacity-only cross-fade.
-          The swipe-to-switch gesture was REMOVED — framer-motion's drag
+          The swipe-to-switch gesture was REMOVED - framer-motion's drag
           consumed pointer events that should have been scrolls (the
           conversation wouldn't scroll under it) AND its dragElastic
           translated the panel horizontally on incidental movement,

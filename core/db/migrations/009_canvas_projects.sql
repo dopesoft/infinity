@@ -1,14 +1,14 @@
--- 009_canvas_projects.sql — Sessions become first-class projects.
+-- 009_canvas_projects.sql - Sessions become first-class projects.
 --
 -- Adds five columns to mem_sessions:
---   name             — short LLM-generated label ("Building chat app with vite").
---   project_path     — absolute path on the Mac where the app lives.
---   project_template — slug of the scaffold skill that created it (nextjs, vite,
+--   name             - short LLM-generated label ("Building chat app with vite").
+--   project_path     - absolute path on the Mac where the app lives.
+--   project_template - slug of the scaffold skill that created it (nextjs, vite,
 --                      static, ios-swift, capacitor) or NULL for non-coding chats.
---   dev_port         — last-known dev server port for the supervisor to bind to.
---   last_run_at      — most recent time the supervisor reported the project running.
+--   dev_port         - last-known dev server port for the supervisor to bind to.
+--   last_run_at      - most recent time the supervisor reported the project running.
 --
--- Empty strings / NULLs are valid — the session may exist long before any
+-- Empty strings / NULLs are valid - the session may exist long before any
 -- scaffold call attaches a project. The Studio Canvas tab branches on
 -- project_path: present → file tree + preview, absent → "no app yet" state.
 

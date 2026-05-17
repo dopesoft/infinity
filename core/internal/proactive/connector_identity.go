@@ -11,7 +11,7 @@ import (
 // ConnectorIdentityChecklist is the heartbeat hook that surfaces a
 // finding whenever any active connected_account is missing its real
 // upstream identity. The finding tells the agent to run the
-// `resolve-connector-identities` skill — the generic, toolkit-agnostic
+// `resolve-connector-identities` skill - the generic, toolkit-agnostic
 // recipe that calls each toolkit's profile verb (e.g. GMAIL_GET_PROFILE)
 // once per account and persists the result via `connector_identity_set`.
 //
@@ -30,7 +30,7 @@ func ConnectorIdentityChecklist(cache *connectors.Cache) Checklist {
 		}
 		byToolkit := cache.AccountsByToolkit()
 		missing := 0
-		// Count missing across only ACTIVE accounts — dormant /
+		// Count missing across only ACTIVE accounts - dormant /
 		// INITIATED / FAILED accounts can't be resolved anyway (their
 		// profile verb would 401), so flagging them creates noise.
 		for _, accs := range byToolkit {

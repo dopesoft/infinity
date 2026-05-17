@@ -1,4 +1,4 @@
--- 015_connector_polls.sql — enable Jarvis to schedule deterministic
+-- 015_connector_polls.sql - enable Jarvis to schedule deterministic
 -- connector polling (Gmail inbox, Google Calendar, etc.) via cron WITHOUT
 -- spinning up the LLM. Phase 6 cron only supported agent-driven jobs
 -- (system_event / isolated_agent_turn). This migration lets Jarvis say
@@ -11,7 +11,7 @@
 --   1. mem_crons.job_kind grows a new value: 'connector_poll'.
 --   2. mem_crons gets a target_config JSONB column for structured polling
 --      parameters (toolkit, action slug, connected_account_id, max items,
---      destination table). target stays for backward-compat — agent jobs
+--      destination table). target stays for backward-compat - agent jobs
 --      keep using it as the literal prompt.
 --
 -- Idempotency for the actual poll output is enforced at write-time by the
@@ -44,7 +44,7 @@ ALTER TABLE mem_crons
 -- ── dedup indexes for the sink tables ─────────────────────────────────────
 -- mem_followups stores its remote pointer in source_ref. We dedupe by the
 -- (source, remote_id) tuple so a re-poll of the same message thread doesn't
--- duplicate. Partial unique index — only constrains rows that actually
+-- duplicate. Partial unique index - only constrains rows that actually
 -- carry a remote_id, so manual followups (source='other', no remote_id)
 -- stay unaffected.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mem_followups_source_remote

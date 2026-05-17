@@ -30,7 +30,7 @@ type FactEntity struct {
 
 // FactRelation is a directed, typed edge between two extracted entities.
 // Both endpoints must reference an entity present in the same Entities slice
-// (matched by name+type) — the compressor ignores dangling references.
+// (matched by name+type) - the compressor ignores dangling references.
 type FactRelation struct {
 	FromType string `json:"from_type"`
 	FromName string `json:"from_name"`

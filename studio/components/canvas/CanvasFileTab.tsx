@@ -20,7 +20,7 @@ import { INFINITY_DARK, INFINITY_LIGHT, registerInfinityThemes } from "@/lib/can
 import { cn } from "@/lib/utils";
 
 /**
- * CanvasFileTab — Monaco-backed view of a single file.
+ * CanvasFileTab - Monaco-backed view of a single file.
  *
  * Mode switch (top-right of the body):
  *   ┌─────────────────────┐
@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils";
 
 const SAVE_POLL_INTERVAL_MS = 2_000;
 
-// Dynamic imports keep Monaco out of the initial chunk — it's ~600KB and
+// Dynamic imports keep Monaco out of the initial chunk - it's ~600KB and
 // only loads when a file tab is actually opened. ssr:false because Monaco
 // can't render on the server.
 const MonacoEditor = dynamic(
@@ -74,7 +74,7 @@ export function CanvasFileTab({
   // originalContent is the LEFT side of the diff editor. For a clean
   // file it equals on-disk (so diff vs your unsaved edits makes sense).
   // For a file Jarvis touched (dirty), it must instead be the version
-  // at git HEAD — otherwise both sides are identical (Jarvis already
+  // at git HEAD - otherwise both sides are identical (Jarvis already
   // wrote to disk) and the diff renders empty.
   const [originalContent, setOriginalContent] = useState<string | null>(null);
   const [currentContent, setCurrentContent] = useState<string | null>(null);
@@ -99,7 +99,7 @@ export function CanvasFileTab({
   // Load (or reload) the file. Bumping reloadKey forces a fresh fetch.
   // When the file is dirty (Jarvis touched it this session) we ALSO
   // fetch the HEAD version in parallel so the diff editor can show
-  // git HEAD vs working tree — the real "what did Jarvis change"
+  // git HEAD vs working tree - the real "what did Jarvis change"
   // comparison. The two fetches race but settle independently so the
   // editor can render the disk version immediately and swap in the
   // HEAD baseline as soon as it arrives.
@@ -131,7 +131,7 @@ export function CanvasFileTab({
       fetchCanvasGitShow(path).then((r) => {
         if (cancelled) return;
         if (!r) return;
-        // Use HEAD as the diff baseline regardless of `found` — when
+        // Use HEAD as the diff baseline regardless of `found` - when
         // not found (untracked / brand-new file Jarvis just added),
         // r.content is "" and the diff renders the whole file as
         // additions, which is exactly correct.
@@ -168,7 +168,7 @@ export function CanvasFileTab({
       return;
     }
     if (res.status === "conflict") {
-      setSaveState({ status: "error", error: res.reason ?? "File changed on disk — reload to see it." });
+      setSaveState({ status: "error", error: res.reason ?? "File changed on disk - reload to see it." });
       return;
     }
     if (res.contract_id) {
@@ -357,7 +357,7 @@ export function CanvasFileTab({
               className="font-mono"
               title={
                 diffSource === "head"
-                  ? "Diff is HEAD (left) → working tree (right) — Jarvis's uncommitted edits"
+                  ? "Diff is HEAD (left) → working tree (right) - Jarvis's uncommitted edits"
                   : "Diff is on-disk (left) → your unsaved edits (right)"
               }
             >
@@ -368,7 +368,7 @@ export function CanvasFileTab({
         )}
         {saveState.status === "idle" && isModified && <span className="text-warning">Modified</span>}
         {saveState.status === "idle" && !isModified && isDirty && diffSource === "head" && (
-          <span className="text-warning" title="Jarvis edited this file this session — not yet committed">
+          <span className="text-warning" title="Jarvis edited this file this session - not yet committed">
             Jarvis-edited
           </span>
         )}

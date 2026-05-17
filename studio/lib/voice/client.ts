@@ -101,7 +101,7 @@ export class VoiceClient {
     //   - `playsInline` is required to keep audio in-page on iPhone
     //     instead of opening a fullscreen player.
     // An <audio> element without the `controls` attribute renders no
-    // UI at all — no need to clip, opacity-zero, or absolutely position
+    // UI at all - no need to clip, opacity-zero, or absolutely position
     // it. Those tricks tend to be the thing that breaks autoplay (some
     // engines treat heavily-styled-away media elements as "invisible"
     // and silently refuse to play). Just append it bare to the body
@@ -119,7 +119,7 @@ export class VoiceClient {
       this.ensureAudioPlayback();
       // Intentionally do NOT route this stream through createMediaStreamSource
       // for an analyser. Several browsers (notably Chrome in some configs)
-      // treat a MediaStream as exclusive — once an AudioContext consumes it,
+      // treat a MediaStream as exclusive - once an AudioContext consumes it,
       // the <audio> element it's also attached to stops producing sound.
       // That cost us the entire "I can't hear the agent" symptom. If we ever
       // want an output-side level meter, do it off `audioEl.captureStream()`
@@ -132,7 +132,7 @@ export class VoiceClient {
     pc.oniceconnectionstatechange = () => {
       const st = pc.iceConnectionState;
       if (st === "failed" || st === "disconnected") {
-        this.args.callbacks?.onError?.(`ICE ${st} — network blocked WebRTC`);
+        this.args.callbacks?.onError?.(`ICE ${st} - network blocked WebRTC`);
         this.args.callbacks?.onStatus?.("error", `ice-${st}`);
       }
     };
@@ -145,7 +145,7 @@ export class VoiceClient {
 
     // Send local mic. addTrack creates a sendrecv transceiver by
     // default, which is exactly what OpenAI's canonical browser sample
-    // does — DO NOT also call addTransceiver("audio", …); that creates
+    // does - DO NOT also call addTransceiver("audio", …); that creates
     // a second m-line OpenAI doesn't bind in the answer, and inbound
     // audio dies on the floor. (Lesson learned the slow way.)
     for (const track of this.localStream.getAudioTracks()) {
@@ -179,7 +179,7 @@ export class VoiceClient {
       }
       // GA Realtime `/v1/realtime/calls` returns the answer SDP as
       // plain text per OpenAI's official browser sample. No JSON
-      // wrapper, no FormData on the request side — that's a different
+      // wrapper, no FormData on the request side - that's a different
       // path used when you authenticate with the master API key
       // directly. Ephemeral flow stays text-in / text-out.
       answerSDP = await resp.text();
@@ -221,7 +221,7 @@ export class VoiceClient {
 
   /** Replace the realtime session's tools list. Used after a tool call
    * (load_tools / unload_tools / tool_search) mutates Core's per-session
-   * ActiveSet — the diffed tool defs come back on the /api/voice/tool
+   * ActiveSet - the diffed tool defs come back on the /api/voice/tool
    * response and we push them here so the next turn sees the new
    * schemas. No-op when the data channel isn't open. */
   updateTools(tools: Array<Record<string, unknown>>): void {
@@ -240,7 +240,7 @@ export class VoiceClient {
     try {
       this.dc?.close();
     } catch {
-      // intentionally swallow — close races are routine
+      // intentionally swallow - close races are routine
     }
     try {
       this.pc?.close();
@@ -256,7 +256,7 @@ export class VoiceClient {
         this.audioEl.srcObject = null;
         if (this.audioEl.parentNode) this.audioEl.parentNode.removeChild(this.audioEl);
       } catch {
-        // intentionally swallow — DOM detach races on close are routine
+        // intentionally swallow - DOM detach races on close are routine
       }
     }
     if (this.micLevelTimer) {
@@ -334,7 +334,7 @@ export class VoiceClient {
 
       // Assistant audio transcript. GA event names are
       // response.output_audio_transcript.{delta,done}. The beta
-      // surface used response.audio_transcript.* — do NOT revive that.
+      // surface used response.audio_transcript.* - do NOT revive that.
       case "response.output_audio_transcript.delta": {
         const delta = String((evt as { delta?: string }).delta ?? "");
         if (!delta) break;
@@ -387,7 +387,7 @@ export class VoiceClient {
       }
 
       // response.done is the canonical "response is fully assembled"
-      // signal in GA. Its `response.output` array contains items —
+      // signal in GA. Its `response.output` array contains items -
       // any with type === "function_call" carry { call_id, name,
       // arguments } as a complete payload. Dispatch here.
       case "response.done": {
@@ -443,7 +443,7 @@ export class VoiceClient {
       }
 
       default:
-        // Quiet — there are dozens of event types and we only care
+        // Quiet - there are dozens of event types and we only care
         // about the ones that drive UI.
         break;
     }
@@ -468,7 +468,7 @@ export class VoiceClient {
         cb.onLevel?.("mic", level);
       }, 90);
     } catch {
-      // Audio context creation can fail on some browsers — surface as
+      // Audio context creation can fail on some browsers - surface as
       // missing level meter, not as a session-killing error.
     }
   }
@@ -484,6 +484,6 @@ export class VoiceClient {
     audioEl.play().catch(() => undefined);
   }
 
-  // (Output level meter removed — see ontrack comment for the reason. The
+  // (Output level meter removed - see ontrack comment for the reason. The
   // orb pulses on mic level + status transitions, which is enough signal.)
 }

@@ -8,7 +8,7 @@ import "embed"
 var Migrations embed.FS
 
 // SynonymsFile contains the FTS synonym dictionary text. Managed Postgres
-// (Supabase, Neon) typically can't load synonym files from disk — see
+// (Supabase, Neon) typically can't load synonym files from disk - see
 // 003_search.sql for the graceful fallback that activates in that case.
 //
 //go:embed synonyms.syn

@@ -1,4 +1,4 @@
-// Package extensions implements runtime self-extension — Phase 3 of the
+// Package extensions implements runtime self-extension - Phase 3 of the
 // assembly substrate.
 //
 // The agent extends its own toolset at runtime: it wires a new MCP server
@@ -7,7 +7,7 @@
 // mem_extensions on the next boot). No rebuild of the embedded mcp.yaml,
 // no redeploy.
 //
-// Secrets never land in the DB — MCP auth references env var NAMES, never
+// Secrets never land in the DB - MCP auth references env var NAMES, never
 // values. The agent registers through the extension_* tools, never raw SQL.
 package extensions
 
@@ -53,7 +53,7 @@ type Extension struct {
 }
 
 // MCPConfig is the `config` shape for kind=mcp. Auth fields reference env
-// var NAMES — the actual token stays in the environment, never the DB.
+// var NAMES - the actual token stays in the environment, never the DB.
 type MCPConfig struct {
 	URL            string `json:"url"`
 	Transport      string `json:"transport"` // sse | http | streamable_http

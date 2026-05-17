@@ -33,7 +33,7 @@ import type {
   WorkItem,
 } from "@/lib/dashboard/types";
 
-/* DashboardClient — the orchestrating client component for the Dashboard
+/* DashboardClient - the orchestrating client component for the Dashboard
  * tab. Holds local mock state (toggle habits/todos optimistically),
  * routes taps into the ObjectViewer, and lays out every section.
  *
@@ -45,7 +45,7 @@ import type {
  *
  * Search filters across every section's content. When active, sections
  * with zero matches are still rendered so the page structure stays
- * stable — they just say "no matches" inline.
+ * stable - they just say "no matches" inline.
  */
 
 const ZERO_MEMORY_STATS: MemoryStats = {
@@ -57,7 +57,7 @@ const ZERO_MEMORY_STATS: MemoryStats = {
 
 export function DashboardClient() {
   // Every section starts empty and is filled only by /api/dashboard.
-  // No mock fixtures, no fallback fixtures — if the fetch fails the
+  // No mock fixtures, no fallback fixtures - if the fetch fails the
   // dashboard shows empty state, not a lie.
   const [pursuits, setPursuits] = useState<Pursuit[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -71,7 +71,7 @@ export function DashboardClient() {
   const [memoryStats, setMemoryStats] = useState<MemoryStats>(ZERO_MEMORY_STATS);
   // Generic surface contract: items the agent surfaced via `surface_item`,
   // grouped by `surface` key. A new surface the agent invents renders here
-  // automatically — no new state field, no new card component.
+  // automatically - no new state field, no new card component.
   const [surfaceItems, setSurfaceItems] = useState<Record<string, SurfaceItem[]>>({});
   // `loading` covers both the first paint and every realtime-driven
   // refetch. The header spinner reads from this so the boss can see the
@@ -107,11 +107,11 @@ export function DashboardClient() {
     return () => ctl.abort();
   }, [load]);
 
-  // Realtime subscriptions — when the agent dismisses a follow-up,
+  // Realtime subscriptions - when the agent dismisses a follow-up,
   // checks in on a pursuit, completes a task, or surfaces a new item,
   // the dashboard re-fetches in the background. Without this the page
   // was a snapshot from page load that only updated on hard refresh,
-  // which is why dismissals felt like they "didn't take" — the row was
+  // which is why dismissals felt like they "didn't take" - the row was
   // already flipped in Postgres, the UI just never heard about it.
   useRealtime(
     [
@@ -214,7 +214,7 @@ export function DashboardClient() {
     };
   }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
 
-  // Counter for the "need you" badge in the header — anything actionable.
+  // Counter for the "need you" badge in the header - anything actionable.
   // High-importance surfaced items (80+) count too.
   const needYouCount =
     approvals.length +
@@ -240,8 +240,8 @@ export function DashboardClient() {
         />
 
         <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
-          {/* TODAY row — collapses to fewer columns if any sub-section is off.
-              `grid-cols-1` is REQUIRED as the default — without it, the
+          {/* TODAY row - collapses to fewer columns if any sub-section is off.
+              `grid-cols-1` is REQUIRED as the default - without it, the
               implicit grid column sizes to `max-content`, letting any
               long unbroken text (question title, email subject) blow the
               column past the viewport on mobile. With `minmax(0, 1fr)`
@@ -262,7 +262,7 @@ export function DashboardClient() {
             </div>
           )}
 
-          {/* Generic surface contract — every group the agent surfaced via
+          {/* Generic surface contract - every group the agent surfaced via
               `surface_item`, each rendered by one generic SurfaceCard. A new
               surface the agent invents appears here with zero new code. */}
           {Object.keys(filtered.surfaceItems).length > 0 && (

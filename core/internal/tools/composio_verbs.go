@@ -1,10 +1,10 @@
-// Package tools — Composio toolkit verb registration.
+// Package tools - Composio toolkit verb registration.
 //
 // Composio's MCP gateway only exposes 7 control tools to the agent
 // (COMPOSIO_SEARCH_TOOLS, COMPOSIO_MULTI_EXECUTE_TOOL, etc.). That
 // forces the agent into a multi-step "discover then execute" dance
 // any time it wants to use a real toolkit verb like
-// GMAIL_FETCH_EMAILS — and the dance is the failure mode that
+// GMAIL_FETCH_EMAILS - and the dance is the failure mode that
 // produced agent replies of "(input_tokens=…)" when the model gave
 // up and ran arbitrary Python via REMOTE_WORKBENCH.
 //
@@ -13,7 +13,7 @@
 // block in the agent's system prompt collapses each toolkit to one
 // line (`composio__GMAIL_* (23 verbs)`); the agent uses the same
 // `tool_search` + `load_tools` pattern it already uses for every
-// other dormant tool. Active-set schemas stay tight by design —
+// other dormant tool. Active-set schemas stay tight by design -
 // only the verbs the model actually pulls in pay per-turn schema
 // cost, never the whole 50+ catalog.
 //
@@ -64,7 +64,7 @@ type composioVerbTK struct {
 }
 
 // fetchComposioVerbs paginates GET /api/v3/tools?toolkit_slug=X and
-// returns every verb in the toolkit. Caller supplies the API key — we
+// returns every verb in the toolkit. Caller supplies the API key - we
 // don't read env here so a key rotation is one explicit pass-through
 // away.
 func fetchComposioVerbs(ctx context.Context, hc *http.Client, key, toolkitSlug string) ([]composioVerbDef, error) {
@@ -117,7 +117,7 @@ func fetchComposioVerbs(ctx context.Context, hc *http.Client, key, toolkitSlug s
 }
 
 // composioVerb is the Tool implementation for one Composio verb.
-// Execution routes through ExecuteClient (REST), not the MCP gateway —
+// Execution routes through ExecuteClient (REST), not the MCP gateway -
 // the agent calls this exactly the way it calls any other native tool.
 type composioVerb struct {
 	slug        string
@@ -149,13 +149,13 @@ func (v *composioVerb) Execute(ctx context.Context, input map[string]any) (strin
 	}
 	if accountID == "" {
 		// Auto-route when there's exactly one connected account for
-		// this toolkit. With multiple, the model has to choose — the
+		// this toolkit. With multiple, the model has to choose - the
 		// <connected_accounts> overlay enumerates the IDs and aliases
 		// so the error message points back at that list.
 		accs := v.cache.AccountsByToolkit()[v.toolkitSlug]
 		switch len(accs) {
 		case 0:
-			return "", fmt.Errorf("no connected %s account — connect one in Settings → Connectors", v.toolkitSlug)
+			return "", fmt.Errorf("no connected %s account - connect one in Settings → Connectors", v.toolkitSlug)
 		case 1:
 			accountID = accs[0].ID
 		default:
@@ -171,7 +171,7 @@ func (v *composioVerb) Execute(ctx context.Context, input map[string]any) (strin
 					hints = append(hints, a.ID)
 				}
 			}
-			return "", fmt.Errorf("connected_account_id required: %d %s accounts connected — pass one of %v (see <connected_accounts>)", len(accs), v.toolkitSlug, hints)
+			return "", fmt.Errorf("connected_account_id required: %d %s accounts connected - pass one of %v (see <connected_accounts>)", len(accs), v.toolkitSlug, hints)
 		}
 	}
 
@@ -223,7 +223,7 @@ func (v *composioVerb) accountByID(accountID string) (*connectors.Account, error
 // input_parameters with a top-level `connected_account_id` field so the
 // agent can route across multiple accounts of the same toolkit. We do
 // NOT add it to required[] because the Execute path resolves a
-// single-account toolkit's id automatically — only multi-account
+// single-account toolkit's id automatically - only multi-account
 // toolkits force the model to pick.
 func buildComposioVerbSchema(toolkitSlug string, params map[string]any) map[string]any {
 	out := map[string]any{
@@ -244,7 +244,7 @@ func buildComposioVerbSchema(toolkitSlug string, params map[string]any) map[stri
 		"type": "string",
 		"description": "Composio connected_account_id (e.g. ca_…). " +
 			"Required when the boss has multiple " + toolkitSlug +
-			" accounts connected — match the alias against the boss's intent. " +
+			" accounts connected - match the alias against the boss's intent. " +
 			"Optional when there's only one (auto-resolved). " +
 			"See the <connected_accounts> block for valid IDs + aliases.",
 	}
@@ -253,7 +253,7 @@ func buildComposioVerbSchema(toolkitSlug string, params map[string]any) map[stri
 
 // ComposioVerbSync owns the runtime adaptation loop for Composio toolkit
 // verbs: a stateful diff between what's connected (cache snapshot) and
-// what's registered (its own tracked set). Hot-reloading is the point —
+// what's registered (its own tracked set). Hot-reloading is the point -
 // when the boss connects a new toolkit, its verbs light up in the agent's
 // catalog within one cache refresh tick (default 60s) with no redeploy,
 // and verbs disappear from the catalog when an account is disconnected.

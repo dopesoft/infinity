@@ -13,7 +13,7 @@ import (
 // for CPU time, memory, and file descriptors via sandbox_process_unix.go.
 //
 // This is the sandbox tier for risk_level=low and risk_level=medium. The
-// medium-risk network egress allowlist is enforced by the *caller* — the
+// medium-risk network egress allowlist is enforced by the *caller* - the
 // runner wraps any net/http transport with a domain check before invoking
 // the skill.
 func RunInProcessJail(ctx context.Context, cmd []string, opts SandboxOpts) (Result, error) {
@@ -63,7 +63,7 @@ func RunInProcessJail(ctx context.Context, cmd []string, opts SandboxOpts) (Resu
 }
 
 // filterEnv returns the subset of os.Environ() whose KEY appears in the allow
-// list. Skills get a clean environment by default — they explicitly declare
+// list. Skills get a clean environment by default - they explicitly declare
 // which env vars they need.
 func filterEnv(allowed []string) []string {
 	if len(allowed) == 0 {

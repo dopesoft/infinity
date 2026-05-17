@@ -10,16 +10,16 @@ import type { useChat } from "@/hooks/useChat";
 type ChatHook = ReturnType<typeof useChat>;
 
 /**
- * CanvasComposer — the bottom panel in the Canvas left column.
+ * CanvasComposer - the bottom panel in the Canvas left column.
  *
  * Layout: tiny session-info bar at the top, ConversationStream (scrolling)
  * in the middle, Composer pinned at the bottom. Same flex pattern Live uses
- * — header / stream (flex-1, scrollable) / sticky composer — so the input
+ * - header / stream (flex-1, scrollable) / sticky composer - so the input
  * never floats and there's no whitespace below it.
  */
 export function CanvasComposer({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
-  const shortId = chat.sessionId ? chat.sessionId.slice(0, 8) : "—";
+  const shortId = chat.sessionId ? chat.sessionId.slice(0, 8) : "-";
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">

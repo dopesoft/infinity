@@ -13,15 +13,15 @@ import (
 
 // RegisterTools wires the seven agent-facing world-model tools:
 //
-//	entity_upsert  — add/update a person/project/account/… in the world model
-//	entity_link    — connect two entities with a typed relation
-//	entity_get     — read one entity + its links
-//	entity_search  — find entities by kind / text
-//	goal_set       — create or replace one of the agent's own goals
-//	goal_update    — record progress / re-plan / mark blocked
-//	goal_list      — list the agent's goals
+//	entity_upsert  - add/update a person/project/account/… in the world model
+//	entity_link    - connect two entities with a typed relation
+//	entity_get     - read one entity + its links
+//	entity_search  - find entities by kind / text
+//	goal_set       - create or replace one of the agent's own goals
+//	goal_update    - record progress / re-plan / mark blocked
+//	goal_list      - list the agent's goals
 //
-// Lives in package worldmodel (which imports tools) — no import cycle.
+// Lives in package worldmodel (which imports tools) - no import cycle.
 func RegisterTools(reg *tools.Registry, store *Store) {
 	if reg == nil || store == nil {
 		return
@@ -41,7 +41,7 @@ type entityUpsertTool struct{ store *Store }
 
 func (t *entityUpsertTool) Name() string { return "entity_upsert" }
 func (t *entityUpsertTool) Description() string {
-	return "Add or update an entity in the world model — a person, project, " +
+	return "Add or update an entity in the world model - a person, project, " +
 		"account, org, thread, commitment, or any other thing in the boss's " +
 		"world. Use this whenever you learn a durable fact about who/what the " +
 		"boss works with. `attributes` is free-form structured facts (role, " +
@@ -55,7 +55,7 @@ func (t *entityUpsertTool) Schema() map[string]any {
 			"kind":       map[string]any{"type": "string", "description": "person | project | account | org | thread | commitment | place | … (free-form)."},
 			"name":       map[string]any{"type": "string", "description": "Canonical name."},
 			"aliases":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Other names this entity goes by, for resolution."},
-			"attributes": map[string]any{"type": "object", "description": "Structured facts — merged into existing attributes on update."},
+			"attributes": map[string]any{"type": "object", "description": "Structured facts - merged into existing attributes on update."},
 			"summary":    map[string]any{"type": "string", "description": "One-paragraph current-state summary."},
 			"salience":   map[string]any{"type": "integer", "description": "0-100: how central to the boss's world right now. Default 50."},
 			"status":     map[string]any{"type": "string", "enum": []string{"active", "dormant", "archived"}},
@@ -97,7 +97,7 @@ type entityLinkTool struct{ store *Store }
 
 func (t *entityLinkTool) Name() string { return "entity_link" }
 func (t *entityLinkTool) Description() string {
-	return "Connect two entities with a typed relation — 'works_on', " +
+	return "Connect two entities with a typed relation - 'works_on', " +
 		"'reports_to', 'belongs_to', 'blocked_by', 'collaborates_with', etc. " +
 		"Both entities must already exist (create them with entity_upsert first). " +
 		"Reference each by name or id."
@@ -106,8 +106,8 @@ func (t *entityLinkTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"from":     map[string]any{"type": "string", "description": "Source entity — name or id."},
-			"to":       map[string]any{"type": "string", "description": "Target entity — name or id."},
+			"from":     map[string]any{"type": "string", "description": "Source entity - name or id."},
+			"to":       map[string]any{"type": "string", "description": "Target entity - name or id."},
 			"relation": map[string]any{"type": "string", "description": "The relation type, e.g. 'works_on'."},
 			"note":     map[string]any{"type": "string", "description": "Optional context on the relationship."},
 		},
@@ -130,7 +130,7 @@ type entityGetTool struct{ store *Store }
 
 func (t *entityGetTool) Name() string { return "entity_get" }
 func (t *entityGetTool) Description() string {
-	return "Read one entity from the world model — its attributes, summary, and " +
+	return "Read one entity from the world model - its attributes, summary, and " +
 		"every relation it has to other entities. Reference by name or id."
 }
 func (t *entityGetTool) Schema() map[string]any {
@@ -162,7 +162,7 @@ type entitySearchTool struct{ store *Store }
 
 func (t *entitySearchTool) Name() string { return "entity_search" }
 func (t *entitySearchTool) Description() string {
-	return "Search the world model — find entities by free text over name/summary, " +
+	return "Search the world model - find entities by free text over name/summary, " +
 		"optionally filtered by kind. Ranked by salience. Use this to ground a " +
 		"task in what you already know about the boss's world."
 }
@@ -170,7 +170,7 @@ func (t *entitySearchTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"query": map[string]any{"type": "string", "description": "Free-text query (optional — omit to list by kind)."},
+			"query": map[string]any{"type": "string", "description": "Free-text query (optional - omit to list by kind)."},
 			"kind":  map[string]any{"type": "string", "description": "Filter to one entity kind (optional)."},
 			"limit": map[string]any{"type": "integer", "description": "Max results. Default 25."},
 		},
@@ -201,7 +201,7 @@ type goalSetTool struct{ store *Store }
 
 func (t *goalSetTool) Name() string { return "goal_set" }
 func (t *goalSetTool) Description() string {
-	return "Create one of your OWN durable goals — an objective you'll pursue " +
+	return "Create one of your OWN durable goals - an objective you'll pursue " +
 		"across sessions, with a living plan. Distinct from the boss's dashboard " +
 		"pursuits: these are what YOU are working toward on the boss's behalf " +
 		"(\"get the migration shipped\", \"keep the inbox triaged daily\"). Pass " +
@@ -267,11 +267,11 @@ func (t *goalUpdateTool) Schema() map[string]any {
 			"id":       map[string]any{"type": "string"},
 			"status":   map[string]any{"type": "string", "enum": []string{"active", "blocked", "done", "abandoned"}},
 			"priority": map[string]any{"type": "string", "enum": []string{"low", "med", "high"}},
-			"progress": map[string]any{"type": "string", "description": "A progress note — appended to the running narrative."},
+			"progress": map[string]any{"type": "string", "description": "A progress note - appended to the running narrative."},
 			"blocker":  map[string]any{"type": "string", "description": "What's blocking the goal (set with status=blocked)."},
 			"plan": map[string]any{
 				"type":        "array",
-				"description": "Updated plan — list of {step, done} objects.",
+				"description": "Updated plan - list of {step, done} objects.",
 				"items":       map[string]any{"type": "object"},
 			},
 			"due_at": map[string]any{"type": "string", "description": "Optional ISO-8601 deadline."},
@@ -320,7 +320,7 @@ type goalListTool struct{ store *Store }
 
 func (t *goalListTool) Name() string { return "goal_list" }
 func (t *goalListTool) Description() string {
-	return "List your own goals — what you're working toward on the boss's " +
+	return "List your own goals - what you're working toward on the boss's " +
 		"behalf, with each goal's status, priority, plan, and progress. Filter " +
 		"by status to see just active / blocked / done."
 }
