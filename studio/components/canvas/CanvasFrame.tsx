@@ -13,7 +13,7 @@ import { CanvasMobileShell } from "@/components/canvas/CanvasMobileShell";
 import { CanvasComposer } from "@/components/canvas/CanvasComposer";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useCurrentProject, CurrentProjectProvider } from "@/lib/canvas/useCurrentProject";
-import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
+import { isCodeChangeTool, extractToolFilePaths } from "@/lib/canvas/detection";
 import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
 import { useWebSocket } from "@/lib/ws/provider";
 import type { useChat } from "@/hooks/useChat";
@@ -112,8 +112,9 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
       if (ev.type !== "tool_call") return;
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
-      const path = extractToolFilePath(ev.tool_call.input);
-      if (path) store.markDirty(path);
+      for (const path of extractToolFilePaths(ev.tool_call.input)) {
+        store.markDirty(path);
+      }
     });
   }, [ws, chat.sessionId, store]);
 

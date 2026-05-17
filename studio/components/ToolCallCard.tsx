@@ -15,6 +15,13 @@ import { Button } from "@/components/ui/button";
 import { ToolIcon } from "@/components/ToolIcon";
 import { cn } from "@/lib/utils";
 import { decideTrust } from "@/lib/api";
+import {
+  extractToolFilePath,
+  extractToolFilePaths,
+  extractToolPreview,
+  isCodeChangeTool,
+  isRepoWriteTool,
+} from "@/lib/canvas/detection";
 import type { ChatMessage } from "@/hooks/useChat";
 
 function formatMs(start?: string, end?: string) {
@@ -68,9 +75,32 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
     return "success";
   }, [result, awaiting]);
 
-  // Default collapsed on completion (matches PDF spec). Open while running
-  // or while awaiting approval so the boss sees the buttons immediately.
-  const [open, setOpen] = useState<boolean>(status === "running" || status === "awaiting");
+  // Classify the tool so the card can choose: high-signal at-a-glance
+  // display for code/repo writes (boss wants to SEE Jarvis coding),
+  // generic collapsed-tool-row for everything else (chat was getting
+  // overrun by giant tool dumps that don't matter once they succeed).
+  const isCodeWrite = isCodeChangeTool(call?.name);
+  const isRepoWrite = isRepoWriteTool(call?.name);
+  const isWriteCall = isCodeWrite || isRepoWrite;
+  const filePath = call ? extractToolFilePath(call.input) : null;
+  const filePaths = call ? extractToolFilePaths(call.input) : [];
+  const preview = call ? extractToolPreview(call.input) : "";
+
+  // Default-open rules — collapsed by default so the transcript stays
+  // skimmable on mobile; expanded only when the boss genuinely needs to
+  // see something:
+  //   • awaiting approval     → must see the Approve/Deny buttons
+  //   • error                 → must see what failed
+  //   • running + code/repo   → preview of what's being written or
+  //                             committed, so "I can tell when Jarvis
+  //                             is coding" doesn't require a tap
+  // Everything else lands collapsed; the header carries enough signal
+  // (tool name, file path, status icon, latency) to skim past.
+  const defaultOpen =
+    status === "awaiting" ||
+    status === "error" ||
+    (status === "running" && isWriteCall);
+  const [open, setOpen] = useState<boolean>(defaultOpen);
   const [deciding, setDeciding] = useState<"approve" | "deny" | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [decisionMade, setDecisionMade] = useState<"approved" | "denied" | null>(null);
@@ -95,18 +125,56 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
     }
   }
 
+  // Header label — for code/repo writes, lead with what actually matters
+  // (the file path, or the count when multiple). The tool name moves
+  // into a small subscript so the boss can scan a transcript and pick
+  // out file edits without parsing tool ids.
+  const headerLabel = (() => {
+    if (isCodeWrite) {
+      if (filePaths.length > 1) {
+        return `${filePaths.length} files`;
+      }
+      if (filePath) return basename(filePath);
+    }
+    if (isRepoWrite && preview) {
+      // Commit message / PR title — first line, trimmed.
+      const first = preview.split("\n")[0].trim();
+      if (first) return first.length > 80 ? first.slice(0, 80) + "…" : first;
+    }
+    return call.name;
+  })();
+  const headerSubtitle = (() => {
+    if (isCodeWrite && filePath && filePaths.length <= 1) {
+      // Show directory part as subscript so the basename above reads cleanly.
+      const dir = dirname(filePath);
+      return dir ? `${shortToolKind(call.name)} · ${dir}` : shortToolKind(call.name);
+    }
+    if (isCodeWrite && filePaths.length > 1) {
+      return shortToolKind(call.name);
+    }
+    if (isRepoWrite) return shortToolKind(call.name);
+    return "";
+  })();
+
   return (
     <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card text-card-foreground">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="flex w-full items-start gap-2 px-3 py-2 text-left"
         aria-expanded={open}
       >
-        <ToolIcon name={call.name} className="size-4 shrink-0" />
-        <span className="truncate font-mono text-xs sm:text-sm">{call.name}</span>
+        <ToolIcon name={call.name} className="mt-0.5 size-4 shrink-0" />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate font-mono text-xs sm:text-sm">{headerLabel}</span>
+          {headerSubtitle ? (
+            <span className="truncate font-mono text-[10px] text-muted-foreground">
+              {headerSubtitle}
+            </span>
+          ) : null}
+        </div>
         <StatusIcon status={status} />
-        <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="ml-1 flex items-center gap-2 self-center text-[11px] text-muted-foreground">
           <span>{formatMs(call.started_at, result?.ended_at)}</span>
           {open ? (
             <ChevronDown className="size-4" aria-hidden />
@@ -118,6 +186,24 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
 
       {open && (
         <div className="space-y-2 border-t px-3 py-2">
+          {/* Code-write preview: show what's actually being written before
+              dumping the raw JSON. For Edit this is new_string; for Write
+              it's the full content; for GitHub push it's the first file.
+              Capped height so a huge content blob doesn't blow the
+              transcript out — scroll inside the box. */}
+          {isWriteCall && preview && (
+            <Section title={previewTitle(call.name)}>
+              <pre className="min-w-0 max-w-full max-h-64 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs">
+                {preview}
+              </pre>
+              {filePaths.length > 1 && (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  + {filePaths.length - 1} more file
+                  {filePaths.length - 1 === 1 ? "" : "s"} in this call
+                </p>
+              )}
+            </Section>
+          )}
           <Section title="Input">
             <pre className="min-w-0 max-w-full overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-[11px] leading-snug sm:text-xs">
               {JSON.stringify(call.input ?? {}, null, 2)}
@@ -233,6 +319,61 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       {children}
     </div>
   );
+}
+
+// basename / dirname — tiny path helpers (no `path` polyfill needed for the
+// browser). Works for both posix paths the agent uses (Mac bridge,
+// GitHub) and Windows-style ones in case a Cloud session ever yields
+// them.
+function basename(p: string): string {
+  const trimmed = p.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+function dirname(p: string): string {
+  const trimmed = p.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return idx >= 0 ? trimmed.slice(0, idx) : "";
+}
+
+// shortToolKind — the verb the boss reads as a subscript under a file
+// path. "claude_code__Edit" → "edit", "github__push_files" → "push",
+// etc. Falls back to the raw tool name so unknown tools still show
+// something legible.
+function shortToolKind(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.endsWith("__edit") || lower.endsWith("__multiedit")) return "edit";
+  if (lower.endsWith("__write") || lower.endsWith("__notebookedit")) return "write";
+  if (lower === "fs_edit") return "edit";
+  if (lower === "fs_save") return "save";
+  if (lower === "github__create_or_update_file") return "github · upsert";
+  if (lower === "github__push_files") return "github · push";
+  if (lower === "github__delete_file") return "github · delete";
+  if (lower === "git_commit") return "git commit";
+  if (lower === "git_push") return "git push";
+  if (lower === "git_stage") return "git stage";
+  if (lower === "github__create_pull_request") return "github · open PR";
+  if (lower === "github__merge_pull_request") return "github · merge PR";
+  if (lower === "github__create_branch") return "github · branch";
+  return name;
+}
+
+// previewTitle — labels the preview block based on the tool kind so the
+// boss knows what they're looking at (the replacement text vs the full
+// new file vs the commit message etc).
+function previewTitle(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.endsWith("__edit") || lower === "fs_edit" || lower.endsWith("__multiedit")) {
+    return "Replacement text";
+  }
+  if (lower.endsWith("__write") || lower === "fs_save") return "New file contents";
+  if (lower === "github__create_or_update_file") return "New file contents";
+  if (lower === "github__push_files") return "First file contents";
+  if (lower === "git_commit") return "Commit message";
+  if (lower === "github__create_pull_request" || lower === "github__update_pull_request") {
+    return "PR description";
+  }
+  return "Preview";
 }
 
 // DiffPre renders unified-diff text with per-line color hints. Pure presentation —

@@ -17,7 +17,7 @@ import {
   CurrentProjectProvider,
 } from "@/lib/canvas/useCurrentProject";
 import { useWebSocket } from "@/lib/ws/provider";
-import { isCodeChangeTool, extractToolFilePath } from "@/lib/canvas/detection";
+import { isCodeChangeTool, extractToolFilePaths } from "@/lib/canvas/detection";
 import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
 import type { useChat } from "@/hooks/useChat";
 
@@ -100,8 +100,11 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       if (ev.type !== "tool_call") return;
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
-      const path = extractToolFilePath(ev.tool_call.input);
-      if (path) store.markDirty(path);
+      // github__push_files carries multiple paths in one call — mark
+      // every one so the Changes badge reflects the real fan-out.
+      for (const path of extractToolFilePaths(ev.tool_call.input)) {
+        store.markDirty(path);
+      }
     });
   }, [ws, chat.sessionId, store]);
 
