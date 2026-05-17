@@ -763,12 +763,20 @@ func (a *API) loadApprovals(ctx context.Context) ([]Approval, error) {
 func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 	out := make([]ActivityEvent, 0, 40)
 
+	// status='open' filter: post-migration 034 the heartbeat marks
+	// findings 'resolved' when their underlying condition clears or
+	// when a fresh finding under the same source_tag supersedes them,
+	// and 'dismissed' when the boss explicitly closes them via the
+	// heartbeat-findings dismiss endpoint. The dashboard activity feed
+	// only ever wants the live ones; full history still lives at
+	// /heartbeat for archaeology.
 	hbRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, kind, title, detail, created_at
 		FROM (
 			SELECT DISTINCT ON (kind, title)
 			       id::text, kind, title, detail, created_at
 			  FROM mem_heartbeat_findings
+			 WHERE status = 'open'
 			 ORDER BY kind, title, created_at DESC
 		) recent_unique
 		ORDER BY created_at DESC

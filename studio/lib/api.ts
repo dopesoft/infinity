@@ -818,6 +818,21 @@ export async function decideCuriosityQuestion(
   }
 }
 
+// dismissHeartbeatFinding marks a heartbeat finding (and every open
+// duplicate sharing the same kind+title) as status='dismissed' so the
+// dashboard activity feed stops surfacing it. Used by the ObjectViewer
+// dismiss action on activity rows whose id starts with "hb-".
+export async function dismissHeartbeatFinding(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/heartbeat/findings/${id}/dismiss`, {
+      method: "POST",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function runHeartbeatNow(): Promise<HeartbeatRunSummaryDTO | null> {
   try {
     const res = await authedFetch(`/api/heartbeat/run`, { method: "POST" });

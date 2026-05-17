@@ -46,7 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
-import { decideCodeProposal, decideTrust } from "@/lib/api";
+import { decideCodeProposal, decideTrust, dismissHeartbeatFinding } from "@/lib/api";
 import type {
   Approval,
   CalendarEvent,
@@ -286,8 +286,38 @@ function ViewerActions({
         );
       case "saved":
         return <SecondaryButton tone="muted" Icon={Trash2}>Remove</SecondaryButton>;
+      case "activity": {
+        // Heartbeat findings carry an id prefixed with "hb-". Other
+        // activity rows (reflections, sentinel fires) don't have a
+        // dismiss path yet, so the button only renders when we know
+        // we can act on it. Dismissing closes EVERY open finding with
+        // the same (kind, title) on the server, so count-varying
+        // duplicates ("2 accounts" / "4 accounts") clear in one shot.
+        const id = item.data.id;
+        if (!id.startsWith("hb-")) return null;
+        return (
+          <SecondaryButton
+            tone="muted"
+            Icon={Trash2}
+            disabled={deciding !== null}
+            onClick={() => void dismissActivity(id.slice(3))}
+          >
+            Dismiss
+          </SecondaryButton>
+        );
+      }
       default:
         return null;
+    }
+  }
+
+  async function dismissActivity(rawId: string) {
+    setDeciding("rejected");
+    try {
+      const ok = await dismissHeartbeatFinding(rawId);
+      if (ok) onResolved?.(item);
+    } finally {
+      setDeciding(null);
     }
   }
 

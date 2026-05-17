@@ -100,6 +100,11 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			Source: "cron_failure",
 			Title:  question,
 			Detail: rationale,
+			// Per-cron source_tag so the next tick's finding for the
+			// same cron supersedes this one even if the error message
+			// changes (e.g. routing fix lands and the same cron fails
+			// for a different reason).
+			SourceTag: "cron_failure:" + id,
 		})
 	}
 	return out
@@ -163,6 +168,9 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			Source: "repeated_tool_error",
 			Title:  question,
 			Detail: rationale,
+			// Per-tool source_tag so the count-varying title
+			// ("3 times" -> "6 times") doesn't stack rows.
+			SourceTag: "repeated_tool_error:" + tool,
 		})
 	}
 	return out

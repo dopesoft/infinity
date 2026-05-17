@@ -38,6 +38,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/heartbeat", a.handleHeartbeats)
 	mux.HandleFunc("/api/heartbeat/run", a.handleHeartbeatRun)
 	mux.HandleFunc("/api/heartbeat/findings", a.handleHeartbeatFindings)
+	mux.HandleFunc("/api/heartbeat/findings/", a.handleHeartbeatFindingScoped)
 	mux.HandleFunc("/api/curiosity/questions/", a.handleCuriosityScoped)
 	mux.HandleFunc("/api/trust-contracts", a.handleTrustList)
 	mux.HandleFunc("/api/trust-contracts/", a.handleTrustScoped)
@@ -158,6 +159,56 @@ func (a *API) handleHeartbeatFindings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleHeartbeatFindingScoped owns the per-finding mutation routes,
+// for now only /api/heartbeat/findings/:id/dismiss. Marks the finding
+// status='dismissed' so the dashboard activity feed stops surfacing it
+// AND every duplicate row with the same (kind, title) tuple, since the
+// feed's DISTINCT ON picks the newest row per (kind, title) and that
+// row also needs to be 'open' to render. Tag-driven supersession is
+// handled in heartbeat.RunOnce; this endpoint is the manual escape
+// hatch for findings the boss decides aren't worth acting on.
+func (a *API) handleHeartbeatFindingScoped(w http.ResponseWriter, r *http.Request) {
+	tail := strings.TrimPrefix(r.URL.Path, "/api/heartbeat/findings/")
+	if tail == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !strings.HasSuffix(tail, "/dismiss") {
+		http.NotFound(w, r)
+		return
+	}
+	id := strings.TrimSuffix(tail, "/dismiss")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.pool == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	// Pull the (kind, title) for this id so we can dismiss every
+	// duplicate that the feed's DISTINCT ON might otherwise keep
+	// rendering. Without this, dismissing one row of a count-varying
+	// finding stream still leaves the older copies visible.
+	var kind, title string
+	if err := a.pool.QueryRow(r.Context(), `
+		SELECT kind, title FROM mem_heartbeat_findings WHERE id = $1::uuid
+	`, id).Scan(&kind, &title); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	_, _ = a.pool.Exec(r.Context(), `
+		UPDATE mem_heartbeat_findings
+		   SET status = 'dismissed', resolved_at = NOW()
+		 WHERE kind = $1 AND title = $2 AND status = 'open'
+	`, kind, title)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 type curiosityDecisionReq struct {

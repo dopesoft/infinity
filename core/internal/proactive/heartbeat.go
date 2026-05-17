@@ -66,6 +66,14 @@ type Finding struct {
 	// "Approve & fix" action that marks the question and lets the agent
 	// act on it. Empty for findings with no curiosity-question backing.
 	CuriosityID string `json:"curiosity_id,omitempty"`
+	// SourceTag is the stable identifier for "what condition this is
+	// about" - e.g. 'connector_identity_resolution',
+	// 'cron_failure:<id>', 'repeated_tool_error:<tool>'. Persisting
+	// the tag lets the heartbeat auto-resolve previous findings when
+	// a fresh one for the same condition lands (titles can vary -
+	// "4 accounts" -> "2 accounts" should NOT pile up - but the tag
+	// is stable). Optional; when empty, no auto-supersede happens.
+	SourceTag string `json:"source_tag,omitempty"`
 }
 
 func NewHeartbeat(p *pgxpool.Pool, interval time.Duration, checklist Checklist) *Heartbeat {
@@ -174,11 +182,23 @@ func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
 			 WHERE id = $1::uuid
 		`, hbID, end, dur.Milliseconds(), len(findings), summary, status)
 		for _, f := range findings {
+			// Auto-supersede any earlier open finding with the same
+			// source_tag - that's the count-varying case
+			// ("4 accounts" -> "2 accounts" finding pair). Schema's
+			// migration 034 added the status column; older rows that
+			// were backfilled to 'resolved' aren't touched.
+			if f.SourceTag != "" {
+				_, _ = h.pool.Exec(ctx, `
+					UPDATE mem_heartbeat_findings
+					   SET status = 'resolved', resolved_at = NOW()
+					 WHERE source_tag = $1 AND status = 'open'
+				`, f.SourceTag)
+			}
 			_, _ = h.pool.Exec(ctx, `
 				INSERT INTO mem_heartbeat_findings
-				  (heartbeat_id, kind, title, detail, pre_approved)
-				VALUES ($1::uuid, $2, $3, $4, $5)
-			`, hbID, f.Kind, f.Title, f.Detail, f.PreApproved)
+				  (heartbeat_id, kind, title, detail, pre_approved, source_tag)
+				VALUES ($1::uuid, $2, $3, $4, $5, $6)
+			`, hbID, f.Kind, f.Title, f.Detail, f.PreApproved, f.SourceTag)
 			if cb := h.callback(); cb != nil {
 				cb(ctx, f)
 			}
@@ -194,6 +214,23 @@ func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
 		Status:     status,
 		Error:      stringErr(err),
 	}, err
+}
+
+// ResolveSourceTag marks every open finding with the given source_tag
+// as resolved. Checklists call this when their condition has cleared
+// but they have NO new finding to emit - e.g. ConnectorIdentityChecklist
+// sees missing=0, so any earlier "N accounts need identity" finding
+// should be closed even though no new row is being written this tick.
+// No-op for empty tag, nil pool, or no matching open rows.
+func ResolveSourceTag(ctx context.Context, pool *pgxpool.Pool, tag string) {
+	if pool == nil || tag == "" {
+		return
+	}
+	_, _ = pool.Exec(ctx, `
+		UPDATE mem_heartbeat_findings
+		   SET status = 'resolved', resolved_at = NOW()
+		 WHERE source_tag = $1 AND status = 'open'
+	`, tag)
 }
 
 // RunSummary is the result returned from RunOnce. Suitable for a JSON payload

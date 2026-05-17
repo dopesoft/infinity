@@ -24,7 +24,7 @@ import (
 // CuriosityChecklist; no-ops when the cache is nil so chat-only
 // deployments don't break.
 func ConnectorIdentityChecklist(cache *connectors.Cache) Checklist {
-	return func(ctx context.Context, _ *Heartbeat) ([]Finding, error) {
+	return func(ctx context.Context, h *Heartbeat) ([]Finding, error) {
 		if cache == nil {
 			return nil, nil
 		}
@@ -43,7 +43,16 @@ func ConnectorIdentityChecklist(cache *connectors.Cache) Checklist {
 				}
 			}
 		}
+		// Condition resolved (every active account has its identity).
+		// Close any earlier open findings under this tag so the
+		// dashboard activity feed stops surfacing stale
+		// "N accounts need identity" copies. Without this, the rows
+		// kept piling up as the count drifted ("4 accounts" then
+		// "3 accounts" then "2 accounts", each a different title).
 		if missing == 0 {
+			if h != nil {
+				ResolveSourceTag(ctx, h.pool, "connector_identity_resolution")
+			}
 			return nil, nil
 		}
 		title := fmt.Sprintf("%d connected account(s) need identity resolution", missing)
@@ -59,6 +68,10 @@ func ConnectorIdentityChecklist(cache *connectors.Cache) Checklist {
 			Detail:      detail,
 			PreApproved: true,
 			Source:      "connector_identity_resolution",
+			// SourceTag stable across count changes so the heartbeat
+			// auto-resolves the previous "4 accounts" finding when
+			// "2 accounts" lands.
+			SourceTag: "connector_identity_resolution",
 		}}, nil
 	}
 }
