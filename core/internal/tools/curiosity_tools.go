@@ -62,8 +62,12 @@ func (t *questionList) Execute(ctx context.Context, in map[string]any) (string, 
 	if limit > 500 {
 		limit = 500
 	}
+	// NOTE: the actual column on mem_curiosity_questions is `source_kind`
+	// (gap | contradiction | low_confidence | uncovered_mention |
+	// high_surprise — see migration 011). Alias it to `kind` in the
+	// result so the JSON shape the agent reads stays stable.
 	q := `SELECT id::text, question, COALESCE(rationale,''),
-	             COALESCE(importance,0)::text, COALESCE(kind,''),
+	             COALESCE(importance,0)::text, COALESCE(source_kind,'') AS kind,
 	             to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF')
 	        FROM mem_curiosity_questions`
 	args := []any{}

@@ -275,6 +275,18 @@ type Loop struct {
 	// (shares the same hot-swap lock as the LLM provider — both are
 	// per-turn snapshots read once per iteration). Nil-safe.
 	toolVisibility ToolVisibilityFunc
+
+	// activeModelFn returns the boss's currently-selected model id from
+	// Studio's Settings store. Wired once at boot via SetActiveModelFn.
+	// CENTRAL resolver: every Run() call falls back to this when the
+	// caller passes an empty model string, so cron, workflow executor,
+	// delegate, heartbeat, voice tool turns — every code path that runs
+	// the agent — automatically honors the boss's selection without
+	// having to plumb settings through call by call. The provider boot
+	// default (e.g. gpt-5-codex on openai_oauth) is the LAST resort,
+	// not the silent default. Guarded by providerMu since it's read on
+	// every turn alongside the live provider.
+	activeModelFn func(ctx context.Context) string
 }
 
 // hiddenForSession reads the visibility hook under providerMu and
@@ -320,6 +332,32 @@ func (l *Loop) SetCompactor(c *memory.ConversationCompactor) {
 	l.compactorMu.Lock()
 	defer l.compactorMu.Unlock()
 	l.compactor = c
+}
+
+// SetActiveModelFn installs the resolver that returns the boss's
+// currently-selected model id (Studio Settings store). The loop calls
+// it once at the top of every Run when the caller passed an empty
+// model string. Nil resolver (or empty return) means "no override" —
+// the provider's boot default applies. Safe to call after construction.
+func (l *Loop) SetActiveModelFn(fn func(ctx context.Context) string) {
+	l.providerMu.Lock()
+	defer l.providerMu.Unlock()
+	l.activeModelFn = fn
+}
+
+// resolveActiveModel reads the active-model setting under providerMu and
+// returns the trimmed id (or empty string if unset / no resolver wired).
+func (l *Loop) resolveActiveModel(ctx context.Context) string {
+	if l == nil {
+		return ""
+	}
+	l.providerMu.RLock()
+	fn := l.activeModelFn
+	l.providerMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return strings.TrimSpace(fn(ctx))
 }
 
 // maybeAutoCompact fires a background compaction pass when the most
@@ -681,6 +719,19 @@ const (
 func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerCh <-chan string, out chan<- RunEvent) error {
 	if l.Provider() == nil {
 		return errors.New("agent loop has no LLM provider configured")
+	}
+
+	// Central model resolution. An empty model means "use defaults" —
+	// honor the boss's active selection from Studio first; only fall
+	// through to the provider boot default when no setting exists. This
+	// makes every code path that runs the agent (cron, workflow
+	// executor, delegate, heartbeat, voice tool turns, ws live chat,
+	// resume turns) automatically pick up the active model without
+	// having to plumb a settings store through every call site. An
+	// explicit non-empty model from the caller still wins — delegate
+	// sub-agents that intentionally target a specific id are honored.
+	if strings.TrimSpace(model) == "" {
+		model = l.resolveActiveModel(ctx)
 	}
 
 	s := l.GetOrCreateSession(sessionID)

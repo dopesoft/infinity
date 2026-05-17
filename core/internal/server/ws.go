@@ -309,20 +309,39 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // reader. The goroutine's cleanup deregisters itself only if it's still
 // the active state, preserving correctness across a cancel-then-new-turn
 // sequence.
+//
+// Turn lifecycle is deliberately DECOUPLED from the WS connection: we
+// use context.Background() as the parent instead of the connection's
+// ctx, and route frames through s.sessionSender(sessionID) which looks
+// up the live WS binding each emit. Result: if the boss switches apps
+// on iOS Safari, navigates away in the browser, or the network flaps,
+// the turn keeps running. Its assistant_text persists to mem_turns and
+// becomes visible on reconnect via useChat's mergeServerRows refetch.
+// The only thing that cancels a turn now is an explicit `interrupt`
+// frame, the per-turn 5-minute timeout, or a new turn for the same
+// session evicting it.
+//
 // startTurn spawns the agent loop for one turn. The model is resolved
 // server-side from the settings store (set by Studio's chip + Settings
 // page) rather than carried on the WS frame — that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
-func (s *Server) startTurn(parent context.Context, userID, sessionID, content string, send func(wsServerEvent)) {
+func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, _ func(wsServerEvent)) {
+	// Use a fresh background context so the WS dying doesn't cancel this
+	// turn. The 5-minute timeout below is the only deadline that applies.
+	base := context.Background()
 	// Resolve effective model from the persisted setting; empty string
 	// means the agent loop falls back to the provider's boot default.
-	model := s.resolveModel(parent)
+	model := s.resolveModel(base)
 	// Attach the auth identity so any tool calls / hook fires that key
 	// off the request user have it available. Then wrap in a per-turn
 	// timeout so a wedged provider doesn't pin a goroutine forever.
-	ctxWithUser := context.WithValue(parent, auth.ContextKey{}, userID)
+	ctxWithUser := context.WithValue(base, auth.ContextKey{}, userID)
 	turnCtx, cancel := context.WithTimeout(ctxWithUser, 5*time.Minute)
+	// Route every WS frame through the live session binding rather than
+	// the connection-bound closure the handler captured. See
+	// sessionSender for the no-op-on-disconnect contract.
+	send := s.sessionSender(sessionID)
 	state := &turnState{
 		cancel: cancel,
 		steer:  make(chan string, 8),

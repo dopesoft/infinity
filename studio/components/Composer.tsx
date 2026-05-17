@@ -8,6 +8,29 @@ import { cn } from "@/lib/utils";
 
 const MAX_LINES_PX = 112; // ~4 lines (text-base 16px × line-height 1.5 × 4 + py-2)
 const CODE_MODE_KEY = "infinity:composer:codeMode";
+// Single global draft slot — what the boss typed survives navigating away,
+// switching apps on iOS Safari, or any remount of the Live page. Restored
+// on mount and cleared on send. Single-user product, so one slot is right.
+const DRAFT_KEY = "infinity:composer:draft";
+
+function readStoredDraft(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredDraft(value: string) {
+  if (typeof window === "undefined") return;
+  try {
+    if (value) window.localStorage.setItem(DRAFT_KEY, value);
+    else window.localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* private mode / quota — best-effort only */
+  }
+}
 
 export function Composer({
   onSend,
@@ -18,11 +41,16 @@ export function Composer({
   onSlash?: (cmd: "new" | "clear") => void;
   disabled?: boolean;
 }) {
+  // Empty on first server render; hydrated from localStorage in the
+  // mount effect below so SSR markup stays deterministic.
   const [value, setValue] = useState("");
   const [codeMode, setCodeMode] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
-  // Hydrate the code-mode toggle from localStorage after mount so SSR matches.
+  // Hydrate the code-mode toggle AND the in-progress draft from
+  // localStorage after mount so SSR matches and a remount (navigation,
+  // tab switch, iOS Safari backgrounding+restore) restores what the
+  // boss was typing.
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -30,7 +58,17 @@ export function Composer({
     } catch {
       /* ignore */
     }
+    const stored = readStoredDraft();
+    if (stored) setValue(stored);
   }, []);
+
+  // Mirror every keystroke into localStorage. Cheap (single key, small
+  // string) and the iOS Safari kill-tab path doesn't fire beforeunload
+  // reliably, so we can't batch on unload. Best to keep storage in sync
+  // with every change.
+  useEffect(() => {
+    writeStoredDraft(value);
+  }, [value]);
 
   function persistCodeMode(next: boolean) {
     setCodeMode(next);

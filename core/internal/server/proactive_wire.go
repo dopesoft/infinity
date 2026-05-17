@@ -86,6 +86,34 @@ func (s *Server) unregisterSession(sessionID string, send func(wsServerEvent)) {
 	s.activeMu.Unlock()
 }
 
+// sessionSender returns a send function that, every time it's called, looks
+// up the *current* WS binding for sessionID and dispatches there. If the
+// session has no active WS (browser navigated away, network flap, tab
+// backgrounded on iOS Safari and the socket died), the frame is dropped
+// silently — the turn keeps running, persists its output to mem_turns /
+// mem_messages on completion, and the client's reconnect path
+// (mergeServerRows in useChat.ts) picks the completed turn up.
+//
+// The key property: the returned closure does NOT capture the send fn
+// from the WS handler. A turn launched from a WS that subsequently dies
+// will route its remaining frames to whichever WS happens to be bound to
+// this session at the moment the frame is emitted — including no WS at
+// all, in which case the frame is dropped without stalling the agent.
+func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
+	return func(ev wsServerEvent) {
+		if s == nil || sessionID == "" {
+			return
+		}
+		s.activeMu.Lock()
+		send := s.activeSessions[sessionID]
+		s.activeMu.Unlock()
+		if send == nil {
+			return
+		}
+		send(ev)
+	}
+}
+
 // broadcastProactive pushes the same event to every active WS session.
 // Heartbeat findings broadcast to all open sessions — there's only one
 // boss, so multi-tab fanout is the desired behaviour (whichever tab is

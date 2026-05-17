@@ -72,10 +72,13 @@ type SessionRequest struct {
 	// instruction line so the model speaks in the accent the boss
 	// asked for.
 	SystemPrompt string
-	// Tools is the registry's full schema list. Voice mode runs without
-	// the lazy active-set machinery — at realtime cadence the model
-	// would never have time to load-tools and re-call. Ship everything;
-	// the schema cost is paid once at session start, not per turn.
+	// Tools is the per-session active-set's schema list — same lazy-load
+	// discipline as text mode. The handler in voice_api.go resolves
+	// `sess.Active.Names()` and passes the matching ToolDefs here. The
+	// dormant long tail lives in the system-prompt catalog block; when
+	// the model calls tool_search → load_tools mid-conversation, the
+	// browser mirrors the updated active set into the live realtime
+	// session via session.update (no re-mint required).
 	Tools []llm.ToolDef
 }
 

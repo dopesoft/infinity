@@ -32,6 +32,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
 	"github.com/dopesoft/infinity/core/internal/sessions"
+	"github.com/dopesoft/infinity/core/internal/settings"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/surface"
@@ -499,6 +500,20 @@ func serveCmd() *cobra.Command {
 				if activeBridgeRouter != nil {
 					loop.SetToolVisibility(makeBridgeToolVisibility(activeBridgeRouter, activeBridgePrefs))
 				}
+				// Central active-model resolver. Every Loop.Run that
+				// passes an empty model string now picks up the boss's
+				// Studio selection here — cron, workflow executor,
+				// delegate sub-agents that don't override, heartbeat
+				// turns, voice tool turns, ws resume. Without this
+				// resolver an openai_oauth deploy falls into the
+				// provider's boot default (gpt-5-codex) and breaks any
+				// recipe that needs standard GPT chat. This makes the
+				// boss's selection authoritative across EVERY execution
+				// path with one wire — no per-call-site plumbing.
+				if pool != nil {
+					modelSettings := settings.New(pool)
+					loop.SetActiveModelFn(modelSettings.GetModel)
+				}
 			}
 
 			// Durable workflow engine — Phase 2 substrate. The agent
@@ -625,6 +640,9 @@ func serveCmd() *cobra.Command {
 			if pool != nil {
 				var agentExec cron.Executor
 				if loop != nil {
+					// Active-model selection is the loop's job (see
+					// SetActiveModelFn above) — cron just hands the
+					// loop a session and prompt, no settings plumbing.
 					agentExec = cron.NewAgentExecutor(loop)
 				}
 				var connectorExec cron.Executor

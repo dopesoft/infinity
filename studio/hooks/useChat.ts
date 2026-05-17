@@ -119,11 +119,14 @@ function writeStoredSessionId(id: string) {
 }
 
 // Pending / in-flight messages aren't worth caching — they'd hydrate as
-// orphaned spinners. We also drop the optimistic "thinking" placeholder.
+// orphaned spinners. The "thinking" placeholder is always dropped (it's
+// purely an in-flight affordance). Error messages, however, ARE cached:
+// if the boss gets an error and navigates away to fix it, the error
+// MUST still be visible when they come back. Errors are durable client
+// state; the server never persisted them.
 function isCacheable(m: ChatMessage): boolean {
   if (m.role === "thinking") return false;
-  if (m.pending) return false;
-  if (m.error) return false;
+  if (m.pending && !m.error) return false;
   return true;
 }
 
@@ -409,19 +412,46 @@ export function useChat() {
     if (ws.status !== "connected") return;
     if (prevStatus === "connected") return; // ignore initial mount; covered by the session-load effect
     if (!sessionId) return;
-    if (isStreaming) return; // don't clobber an in-flight turn
 
+    // ALWAYS refetch on reconnect — even mid-stream. Turns now run
+    // server-side independent of the WS lifecycle (see ws.go startTurn),
+    // so a turn the boss kicked off before backgrounding the app on iOS
+    // Safari may have completed while disconnected. The server's
+    // mem_messages row is the source of truth; reconcile against it.
     const ac = new AbortController();
     void fetchSessionMessages(sessionId, ac.signal).then((rows) => {
       if (!rows || rows.length === 0) return;
-      setMessages((prev) => mergeServerRows(prev, rows));
+      const serverFinishedTurn =
+        rows[rows.length - 1]?.role === "assistant";
+      setMessages((prev) => {
+        const next = mergeServerRows(prev, rows);
+        if (!serverFinishedTurn) return next;
+        // Server already has a completed assistant turn at the tail.
+        // Drop trailing pending bubbles mergeServerRows preserved —
+        // the canonical reply replaced them and the `complete` frame
+        // landed on a now-dead WS.
+        while (next.length > 0) {
+          const last = next[next.length - 1];
+          if (last.role === "thinking" && last.pending) {
+            next.pop();
+            continue;
+          }
+          if (last.role === "assistant" && last.pending && !last.error) {
+            next.pop();
+            continue;
+          }
+          break;
+        }
+        return next;
+      });
+      if (serverFinishedTurn) {
+        turnStartRef.current = null;
+        setIsStreaming(false);
+        clearWatchdog();
+      }
     });
     return () => ac.abort();
-    // We deliberately depend on ws.status + sessionId. isStreaming is a
-    // guard at the top of the effect; we don't want a refetch on every
-    // streaming flip.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.status, sessionId]);
+  }, [ws.status, sessionId, clearWatchdog]);
 
   useEffect(() => {
     return ws.subscribe((ev: WSEvent) => {
