@@ -149,17 +149,37 @@ func (s *TurnStore) RecoverStranded(ctx context.Context) (int, error) {
 	// status flip; observation inserts go in a follow-up loop because
 	// mem_observations has FTS / embedding columns that don't compose
 	// well into a single INSERT … SELECT.
+	//
+	// ended_at = the timestamp of the LAST observation we recorded for the
+	// turn — that's the last moment we know the agent was alive. Falling
+	// back to NOW() (the obvious choice) lies: a turn started at 20:01,
+	// crashed at 20:05, and recovered at 22:30 would report a 149-minute
+	// "latency" when the agent was actually only working for 4 minutes
+	// before it died. The boss's complaint about "103 minutes" was
+	// exactly this lie. If a turn has no observations at all (extremely
+	// rare — even the UserPromptSubmit fires before the loop starts),
+	// fall back to started_at + 1s so the row still gets a finite latency.
 	rows, err := s.pool.Query(ctx, `
 		WITH stranded AS (
-		    SELECT id, session_id, user_id
+		    SELECT id, session_id, user_id, started_at
 		      FROM mem_turns
 		     WHERE status = 'in_flight'
 		     FOR UPDATE SKIP LOCKED
 		),
+		last_obs AS (
+		    SELECT turn_id, MAX(created_at) AS ts
+		      FROM mem_observations
+		     WHERE turn_id IN (SELECT id FROM stranded)
+		     GROUP BY turn_id
+		),
 		closed AS (
 		    UPDATE mem_turns t
 		       SET status   = 'errored',
-		           ended_at = COALESCE(t.ended_at, NOW()),
+		           ended_at = COALESCE(
+		                          t.ended_at,
+		                          (SELECT ts FROM last_obs WHERE turn_id = t.id),
+		                          t.started_at + INTERVAL '1 second'
+		                      ),
 		           error    = COALESCE(NULLIF(t.error, ''), $1),
 		           summary  = COALESCE(NULLIF(t.summary, ''), $2),
 		           stop_reason = COALESCE(NULLIF(t.stop_reason, ''), 'recovered')

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   ArrowDownToLine,
   ArrowLeft,
   ArrowUpFromLine,
@@ -104,12 +105,44 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
     }
   }, [detail]);
 
-  const latencyLabel = useMemo(() => {
-    if (!turn?.latency_ms) return "";
+  // Latency chip — three states, each with honest framing:
+  //   • finished turn → "1m 30s" labelled "Latency"
+  //   • in_flight ≤ 5min → "running 2m 15s" (the agent might actually be
+  //     mid-turn; the server's hard per-turn timeout is 5 minutes)
+  //   • in_flight > 5min → "stalled (5m+)" with warning treatment. Past
+  //     the server timeout, an in_flight row is by definition stranded
+  //     (boot recovery will close it on next core restart). Showing
+  //     "103 minutes" would be a lie of the UI — the agent isn't doing
+  //     anything, the row just never got its ended_at written.
+  const STALL_SECONDS = 5 * 60;
+  const latencyState = useMemo<{
+    label: string;
+    title: string;
+    tone: "default" | "stalled";
+  } | null>(() => {
+    if (!turn?.latency_ms) return null;
     const s = turn.latency_ms / 1000;
-    if (s < 1) return `${Math.round(turn.latency_ms)}ms`;
-    if (s < 60) return `${s.toFixed(1)}s`;
-    return `${Math.round(s / 60)}m ${Math.round(s % 60)}s`;
+    const formatElapsed = (sec: number) => {
+      if (sec < 1) return `${Math.round(sec * 1000)}ms`;
+      if (sec < 60) return `${sec.toFixed(1)}s`;
+      return `${Math.round(sec / 60)}m ${Math.round(sec % 60)}s`;
+    };
+    if (turn.status === "in_flight") {
+      if (s > STALL_SECONDS) {
+        return {
+          label: `stalled (${Math.round(STALL_SECONDS / 60)}m+)`,
+          title:
+            "Turn has been in_flight longer than the 5-minute server timeout — the agent loop almost certainly died and the row never got closed. Boot recovery will finalize it on the next core restart.",
+          tone: "stalled",
+        };
+      }
+      return {
+        label: `running ${formatElapsed(s)}`,
+        title: "Time elapsed since the turn started — still in flight",
+        tone: "default",
+      };
+    }
+    return { label: formatElapsed(s), title: "Latency", tone: "default" };
   }, [turn]);
 
   return (
@@ -207,9 +240,13 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     {turn.output_tokens.toLocaleString()}
                   </MetricChip>
                 )}
-                {latencyLabel && (
-                  <MetricChip icon={Clock} title="Latency">
-                    {latencyLabel}
+                {latencyState && (
+                  <MetricChip
+                    icon={latencyState.tone === "stalled" ? AlertTriangle : Clock}
+                    title={latencyState.title}
+                    tone={latencyState.tone}
+                  >
+                    {latencyState.label}
                   </MetricChip>
                 )}
                 {turn.stop_reason && (
@@ -434,18 +471,34 @@ function serializeTurnForPaste(detail: TraceDetailDTO): string {
 function MetricChip({
   icon: Icon,
   title,
+  tone = "default",
   children,
 }: {
   icon?: LucideIcon;
   title?: string;
+  tone?: "default" | "stalled";
   children: ReactNode;
 }) {
+  const stalled = tone === "stalled";
   return (
     <span
       title={title}
-      className="inline-flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-foreground/80"
+      className={cn(
+        "inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono",
+        stalled
+          ? "border-warning/40 bg-warning/10 text-warning"
+          : "border-border/60 bg-muted/40 text-foreground/80",
+      )}
     >
-      {Icon && <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+      {Icon && (
+        <Icon
+          className={cn(
+            "size-3 shrink-0",
+            stalled ? "text-warning" : "text-muted-foreground",
+          )}
+          aria-hidden
+        />
+      )}
       <span className="truncate">{children}</span>
     </span>
   );
