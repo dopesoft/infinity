@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { ShieldCheck, X } from "lucide-react";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
@@ -19,8 +19,16 @@ import { cn } from "@/lib/utils";
  * if more contracts land in that window, the count updates but the
  * banner stays hidden.
  *
- * Single source of truth: /api/trust-contracts?status=pending. We hit it
- * on mount and whenever the mem_trust_contracts realtime channel fires.
+ * Single source of truth: /api/trust-contracts?status=pending. We refresh:
+ *   • on mount
+ *   • whenever the mem_trust_contracts realtime channel fires
+ *   • on every pathname change (covers the case where the boss approves
+ *     on /settings/trust and then navigates away — realtime should have
+ *     fired but iOS Safari kills WebSockets on backgrounding and UPDATE
+ *     events delivered during the dead-time are lost, so navigation acts
+ *     as a deterministic "refresh from server" trigger)
+ *   • on tab visibilitychange + window focus + pageshow (same backgrounding
+ *     defense; mirrors the WebSocket reconnect listeners elsewhere in the app)
  */
 const DISMISS_KEY = "infinity:trust-toast:dismissed_until";
 
@@ -50,20 +58,52 @@ export function TrustToast() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
     setNow(Date.now());
     setDismissedUntil(readDismissedUntil());
   }, []);
 
-  async function refresh() {
-    const rows = await fetchTrustContracts("pending");
-    setPending(rows ?? []);
-  }
-
-  useEffect(() => {
-    refresh();
+  // Single de-duped refresh — pathname change + visibility return + focus
+  // all race to call this; we collapse overlapping calls to one HTTP hit.
+  const refresh = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const rows = await fetchTrustContracts("pending");
+      setPending(rows ?? []);
+    } finally {
+      inFlightRef.current = false;
+    }
   }, []);
+
+  // Mount + every pathname change. Navigating to a new page is the
+  // deterministic signal that we should re-sync (covers iOS Safari
+  // WebSocket-killed-while-backgrounded case where realtime UPDATE
+  // events were lost during the dead-time).
+  useEffect(() => {
+    void refresh();
+  }, [pathname, refresh]);
+
+  // Tab visibility / window focus / pageshow — same backgrounding defense.
+  // Mirrors the WebSocket reconnect listeners in studio/lib/ws/provider.tsx.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    function onWake() {
+      if (typeof document === "undefined" || document.visibilityState === "visible") {
+        void refresh();
+      }
+    }
+    window.addEventListener("focus", onWake);
+    window.addEventListener("pageshow", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => {
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("pageshow", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+    };
+  }, [refresh]);
 
   useRealtime("mem_trust_contracts", refresh);
 
