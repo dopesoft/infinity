@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  PageTabs,
+  PageTabsList,
+  PageTabsTrigger,
+} from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 import {
   decideTrust,
@@ -234,65 +239,32 @@ function TabBar({
   decidedCount: number;
 }) {
   return (
-    <div role="tablist" className="inline-flex rounded-md border border-border bg-muted/40 p-0.5 text-[12px]">
-      <TabButton
-        active={tab === "pending"}
-        onClick={() => onChange("pending")}
-        label="Pending"
-        count={pendingCount}
-        tone="warning"
-      />
-      <TabButton
-        active={tab === "decided"}
-        onClick={() => onChange("decided")}
-        label="Decided"
-        count={decidedCount}
-        tone="muted"
-      />
-    </div>
+    <PageTabs value={tab} onValueChange={(v) => onChange(v as Tab)}>
+      <PageTabsList scrollable>
+        <PageTabsTrigger value="pending">
+          <span>Pending</span>
+          {pendingCount > 0 ? <CountBadge active={tab === "pending"} count={pendingCount} /> : null}
+        </PageTabsTrigger>
+        <PageTabsTrigger value="decided">
+          <span>Decided</span>
+          {decidedCount > 0 ? <CountBadge active={tab === "decided"} count={decidedCount} /> : null}
+        </PageTabsTrigger>
+      </PageTabsList>
+    </PageTabs>
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  label,
-  count,
-  tone,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  count: number;
-  tone: "warning" | "muted";
-}) {
+function CountBadge({ active, count }: { active: boolean; count: number }) {
   return (
-    <button
-      role="tab"
-      aria-selected={active}
-      type="button"
-      onClick={onClick}
+    <span
       className={cn(
-        "inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 font-medium transition-colors",
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
+        "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+        active ? "bg-background text-foreground" : "bg-muted-foreground/15 text-muted-foreground",
       )}
+      aria-label={`${count} ${count === 1 ? "item" : "items"}`}
     >
-      <span>{label}</span>
-      {count > 0 ? (
-        <span
-          className={cn(
-            "inline-flex h-4 min-w-[1.1rem] items-center justify-center rounded-full px-1 font-mono text-[10px]",
-            tone === "warning"
-              ? "bg-warning/15 text-warning"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {count}
-        </span>
-      ) : null}
-    </button>
+      {count}
+    </span>
   );
 }
 

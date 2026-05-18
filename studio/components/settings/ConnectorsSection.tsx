@@ -279,9 +279,22 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
       </div>
 
       <PageTabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <PageTabsList columns={3}>
-          <PageTabsTrigger value="active">
-            Active{totalActiveCount ? ` (${totalActiveCount})` : ""}
+        <PageTabsList scrollable>
+          <PageTabsTrigger value="active" className="gap-1.5">
+            <span>Active</span>
+            {totalActiveCount ? (
+              <span
+                className={cn(
+                  "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+                  tab === "active"
+                    ? "bg-background text-foreground"
+                    : "bg-muted-foreground/15 text-muted-foreground",
+                )}
+                aria-label={`${totalActiveCount} active`}
+              >
+                {totalActiveCount}
+              </span>
+            ) : null}
           </PageTabsTrigger>
           <PageTabsTrigger value="browse">Browse</PageTabsTrigger>
           <PageTabsTrigger value="custom">Custom</PageTabsTrigger>

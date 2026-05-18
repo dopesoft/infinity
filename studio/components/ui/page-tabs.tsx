@@ -27,13 +27,16 @@
  *   FilterPillRow   gap-2 py-1, horizontal-scroll on mobile, flex-wrap on sm+
  *
  * Layout decision tree (pick exactly one):
- *   • `columns={2|3}` with short text-only labels (e.g. "Cron" / "Sentinels")
- *     → full-width equal-cell grid on mobile, inline on sm+. Looks crisp.
- *   • `scrollable` for ANY of: 4+ tabs, labels with count badges, labels with
- *     variable-length text. Horizontal-scroll on mobile (no squishing, no
- *     clipping); inline-flex on sm+. THIS IS THE DEFAULT FOR ANYTHING WITH
- *     COUNTS - `columns={N}` + count badges crushes the labels on a 375px
- *     viewport. If you're unsure, use `scrollable`.
+ *   • `scrollable` is the default for page-level tabs. Renders as airy
+ *     chips (same look as /settings's mobile SectionPill rail) inside a
+ *     horizontal-scroll row: each trigger is a self-contained pill so
+ *     labels + count badges never get crushed and the swipe is native.
+ *     Use this for 2+ tabs, anything with counts, anything with variable
+ *     label widths. If you're unsure, use `scrollable`.
+ *   • `columns={2|3}` is a niche fallback for short text-only labels that
+ *     must visually fill the row (e.g. a single-purpose modal split).
+ *     Prefer `scrollable` for page-level navigation — it matches the rest
+ *     of the app.
  *   • Neither prop → inline-flex everywhere (caller controls width).
  *
  * Don't deviate from these; if a page needs a different look, change them
@@ -58,13 +61,30 @@ const COLUMN_LAYOUTS: Record<number, string> = {
   6: "grid w-full grid-cols-6 sm:inline-flex sm:w-auto",
 };
 
-// Horizontal-scroll mode for mobile: inline-flex with overflow-x-auto, every
-// trigger pinned `shrink-0` so labels (incl. count badges) never get crushed.
-// Snap proximity is gentle enough to glance but still helps land on a tab.
-// no-scrollbar + scroll-touch keep it native-feeling on iOS. On sm+ we go
-// back to inline-flex with overflow visible - desktop has room.
-const SCROLLABLE_LAYOUT =
-  "inline-flex w-full max-w-full justify-start overflow-x-auto scroll-touch snap-x snap-proximity no-scrollbar [&>*]:shrink-0 [&>*]:snap-start sm:w-auto sm:max-w-none sm:overflow-visible";
+// Horizontal-scroll mode for mobile: rendered as a row of airy chips (same
+// visual as the /settings mobile SectionPill rail) instead of a packed
+// muted strip. Each trigger is shrink-0 so labels + count badges never
+// get crushed; snap-proximity helps the swipe land cleanly. On sm+ we
+// drop overflow handling and let it sit inline.
+//
+// Chip styling is applied via `[&>button]:` descendant utilities so the
+// underlying shadcn TabsTrigger doesn't need to know about it — every
+// existing scrollable consumer inherits the airy look automatically.
+// Selectors win over TabsTrigger's own `rounded-md` / `data-[state]:bg`
+// classes via higher specificity (descendant selector vs single class).
+const SCROLLABLE_LAYOUT = [
+  // Row container - drop the default muted background / padding so chips
+  // float on the page background like /settings does on mobile.
+  "no-scrollbar flex w-full max-w-full justify-start gap-1.5 overflow-x-auto scroll-touch snap-x snap-proximity bg-transparent p-0",
+  "sm:w-auto sm:max-w-none sm:overflow-visible",
+  // Chip shape + tap target on every trigger.
+  "[&>button]:shrink-0 [&>button]:snap-start [&>button]:h-9 [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:border [&>button]:px-3.5",
+  // Inactive chip: bordered muted pill that hugs the text.
+  "[&>button]:border-border [&>button]:bg-muted [&>button]:text-muted-foreground [&>button]:shadow-none",
+  // Active chip: inverted (foreground fill + background text), matches
+  // the settings SectionPill active state exactly.
+  "[&>button[data-state=active]]:border-foreground [&>button[data-state=active]]:bg-foreground [&>button[data-state=active]]:text-background [&>button[data-state=active]]:shadow-none",
+].join(" ");
 
 export const PageTabsList = React.forwardRef<
   React.ElementRef<typeof TabsList>,

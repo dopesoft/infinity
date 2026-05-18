@@ -39,7 +39,7 @@ export default function CronPage() {
         </div>
         <Tabs defaultValue="cron" className="flex flex-col">
           <div className="px-4 pb-3 sm:px-6 lg:px-8">
-            <PageTabsList columns={2}>
+            <PageTabsList scrollable>
               <PageTabsTrigger value="cron">Cron</PageTabsTrigger>
               <PageTabsTrigger value="sentinel">Sentinels</PageTabsTrigger>
             </PageTabsList>
