@@ -34,7 +34,7 @@ import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { DashboardSettings } from "@/components/settings/DashboardSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
-import { TrustQueuePanel } from "@/components/TrustQueuePanel";
+import { TrustReviewPanel } from "@/components/TrustReviewPanel";
 import { cn } from "@/lib/utils";
 import {
   disconnectOpenAIOAuth,
@@ -301,9 +301,9 @@ function TrustSection() {
     <div className="space-y-3">
       <SectionHeader
         title="Trust"
-        description="Real-time requests still pop up inline in Chat. This page is the audit / bulk-management surface."
+        description="Real-time requests still pop up inline in Chat. This page groups batched approvals (inbox triage, calendar prep, etc.) so you can clear them in one tap."
       />
-      <TrustQueuePanel />
+      <TrustReviewPanel />
     </div>
   );
 }

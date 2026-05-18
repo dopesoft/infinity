@@ -29,6 +29,11 @@ type TrustContract struct {
 	DecidedAt      *time.Time     `json:"decided_at,omitempty"`
 	DecisionNote   string         `json:"decision_note,omitempty"`
 	CreatedAt      time.Time      `json:"created_at"`
+	// BatchID groups contracts that were queued together (inbox triage
+	// drafts, calendar prep replies, etc.). Studio renders these as a
+	// single "Approve all N" group. NULL/empty rows keep the original
+	// single-item UX.
+	BatchID        string         `json:"batch_id,omitempty"`
 }
 
 type TrustStore struct {
@@ -87,12 +92,19 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 		userIDArg = userID
 	}
 
+	var batchArg any
+	if strings.TrimSpace(c.BatchID) == "" {
+		batchArg = nil
+	} else {
+		batchArg = c.BatchID
+	}
+
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_trust_contracts
 		  (id, title, risk_level, source, action_spec, reasoning, cited_memory_ids,
-		   risk_assessment, preview, status, user_id)
-		VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::uuid[], $8::jsonb, $9, $10, $11::uuid)
-	`, c.ID, c.Title, c.RiskLevel, c.Source, action, c.Reasoning, cited, risk, c.Preview, c.Status, userIDArg)
+		   risk_assessment, preview, status, user_id, batch_id)
+		VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::uuid[], $8::jsonb, $9, $10, $11::uuid, $12::uuid)
+	`, c.ID, c.Title, c.RiskLevel, c.Source, action, c.Reasoning, cited, risk, c.Preview, c.Status, userIDArg, batchArg)
 	// Loud logging because this row appearing (or not) is the entire UX:
 	// the Studio Trust queue and the gated tool card both depend on it.
 	if err != nil {
@@ -198,7 +210,8 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 		       action_spec, reasoning,
 		       COALESCE(array_to_json(cited_memory_ids)::text, '[]'),
 		       risk_assessment, preview, status, decided_at,
-		       COALESCE(decision_note, ''), created_at
+		       COALESCE(decision_note, ''), created_at,
+		       COALESCE(batch_id::text, '')
 		  FROM mem_trust_contracts`
 	if status != "" && status != "all" {
 		q += ` WHERE status = $2`
@@ -216,7 +229,7 @@ func (s *TrustStore) List(ctx context.Context, status string, limit int) ([]Trus
 		var actionRaw, riskRaw, citedRaw []byte
 		if err := rows.Scan(&c.ID, &c.Title, &c.RiskLevel, &c.Source,
 			&actionRaw, &c.Reasoning, &citedRaw, &riskRaw, &c.Preview, &c.Status,
-			&c.DecidedAt, &c.DecisionNote, &c.CreatedAt); err != nil {
+			&c.DecidedAt, &c.DecisionNote, &c.CreatedAt, &c.BatchID); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(actionRaw, &c.ActionSpec)
@@ -333,4 +346,25 @@ func (s *TrustStore) Decide(ctx context.Context, id, decision, note string) erro
 		 WHERE id = $1::uuid
 	`, id, decision, note)
 	return err
+}
+
+// DecideBatch applies the same decision to every pending contract sharing
+// batch_id. Returns the count of rows actually updated so the API can
+// report "approved N of M" back to the UI when some rows were already
+// decided. Only pending rows are touched - already approved/denied/
+// snoozed contracts in the batch are left alone.
+func (s *TrustStore) DecideBatch(ctx context.Context, batchID, decision, note string) (int64, error) {
+	if s == nil || s.pool == nil || strings.TrimSpace(batchID) == "" {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE mem_trust_contracts
+		   SET status = $2, decided_at = NOW(), decision_note = $3
+		 WHERE batch_id = $1::uuid
+		   AND status = 'pending'
+	`, batchID, decision, note)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

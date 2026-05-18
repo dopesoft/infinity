@@ -433,7 +433,9 @@ type decideReq struct {
 func (a *API) handleTrustScoped(w http.ResponseWriter, r *http.Request) {
 	tail := strings.TrimPrefix(r.URL.Path, "/api/trust-contracts/")
 	parts := strings.Split(tail, "/")
-	if len(parts) != 2 || parts[1] != "decide" || r.Method != http.MethodPost {
+	// Per-contract: /api/trust-contracts/:id/decide
+	// Batch: /api/trust-contracts/batch/:batch_id/decide
+	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
 	}
@@ -447,11 +449,26 @@ func (a *API) handleTrustScoped(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "decision must be approved | denied | snoozed", http.StatusBadRequest)
 		return
 	}
-	if err := a.trust.Decide(r.Context(), parts[0], body.Decision, body.Note); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	switch {
+	case len(parts) == 2 && parts[1] == "decide":
+		if err := a.trust.Decide(r.Context(), parts[0], body.Decision, body.Note); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": body.Decision})
+	case len(parts) == 3 && parts[0] == "batch" && parts[2] == "decide":
+		n, err := a.trust.DecideBatch(r.Context(), parts[1], body.Decision, body.Note)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  body.Decision,
+			"updated": n,
+		})
+	default:
+		http.NotFound(w, r)
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": body.Decision})
 }
 
 func (a *API) handleIntentRecent(w http.ResponseWriter, r *http.Request) {

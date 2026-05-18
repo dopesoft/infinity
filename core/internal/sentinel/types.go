@@ -16,11 +16,17 @@ const (
 	WatchMemoryEvent   WatchType = "memory_event"
 	WatchExternalPoll  WatchType = "external_api_poll"
 	WatchThreshold     WatchType = "threshold"
+	// WatchGoalEvent fires when a row in mem_agent_goals transitions to a
+	// configured status, or any update lands and no status filter is set.
+	// Lets the agent watch its own goals - "ping me when this becomes
+	// blocked" or "fire the skill when due_at passes" - without per-goal
+	// cron entries.
+	WatchGoalEvent     WatchType = "goal_event"
 )
 
 func (w WatchType) Valid() bool {
 	switch w {
-	case WatchWebhook, WatchFileChange, WatchMemoryEvent, WatchExternalPoll, WatchThreshold:
+	case WatchWebhook, WatchFileChange, WatchMemoryEvent, WatchExternalPoll, WatchThreshold, WatchGoalEvent:
 		return true
 	}
 	return false

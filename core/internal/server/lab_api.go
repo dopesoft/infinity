@@ -79,11 +79,12 @@ type labResolved struct {
 }
 
 type labResponse struct {
-	Proposals []labProposal `json:"proposals"`
-	Resolved  []labResolved `json:"resolved"`
-	Lessons   []labLesson   `json:"lessons"`
-	Skills    []labSkill    `json:"skills"`
-	Counts    labCounts     `json:"counts"`
+	Proposals []labProposal      `json:"proposals"`
+	Resolved  []labResolved      `json:"resolved"`
+	Lessons   []labLesson        `json:"lessons"`
+	Skills    []labSkill         `json:"skills"`
+	Counts    labCounts          `json:"counts"`
+	Gym       labGymSnapshot     `json:"gym"`
 }
 
 type labCounts struct {
@@ -91,6 +92,43 @@ type labCounts struct {
 	RecentlyResolved int `json:"recently_resolved"`
 	Lessons          int `json:"lessons"`
 	EvolvedSkills    int `json:"evolved_skills"`
+	GymCandidates    int `json:"gym_candidates"`
+}
+
+// labGymSnapshot exposes the plasticity tables (mem_training_examples,
+// mem_adapter_evals, mem_policy_routes) so the Lab page can show what
+// would graduate to a training run when Phase 9 ships GPU infra.
+//
+// Today only Candidates carries data - the rest render as empty-state
+// scaffolding pointing the boss at PHASE_9_GYM_TRAINING.md.
+type labGymSnapshot struct {
+	Candidates   []labGymCandidate   `json:"candidates"`
+	AdapterEvals []labAdapterEval    `json:"adapter_evals"`
+	Routes       []labPolicyRoute    `json:"routes"`
+}
+
+type labGymCandidate struct {
+	SourceKind string `json:"source_kind"`
+	TaskKind   string `json:"task_kind"`
+	Count      int    `json:"count"`
+	AvgScore   float64 `json:"avg_score"`
+	LatestAt   time.Time `json:"latest_at"`
+}
+
+type labAdapterEval struct {
+	ID             string    `json:"id"`
+	AdapterID      string    `json:"adapter_id"`
+	BaselineScore  float64   `json:"baseline_score"`
+	CandidateScore float64   `json:"candidate_score"`
+	Passed         bool      `json:"passed"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type labPolicyRoute struct {
+	ID              string `json:"id"`
+	TaskKind        string `json:"task_kind"`
+	ActiveAdapterID string `json:"active_adapter_id"`
+	Status          string `json:"status"`
 }
 
 func (s *Server) handleLab(w http.ResponseWriter, r *http.Request) {
@@ -113,12 +151,81 @@ func (s *Server) handleLab(w http.ResponseWriter, r *http.Request) {
 		Resolved:  loadLabResolved(ctx, s.pool),
 		Lessons:   loadLabLessons(ctx, s.pool),
 		Skills:    loadLabSkills(ctx, s.pool),
+		Gym:       loadLabGym(ctx, s.pool),
 	}
 	resp.Counts.OpenProposals = len(resp.Proposals)
 	resp.Counts.RecentlyResolved = len(resp.Resolved)
 	resp.Counts.Lessons = len(resp.Lessons)
 	resp.Counts.EvolvedSkills = len(resp.Skills)
+	for _, c := range resp.Gym.Candidates {
+		resp.Counts.GymCandidates += c.Count
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// loadLabGym reads the plasticity substrate (migration 022) and returns
+// today's training-example buckets plus the still-empty adapter eval and
+// policy route tables. The Lab "Gym" tab renders all three as empty-state
+// scaffolding until Phase 9 wires GPU training.
+func loadLabGym(ctx context.Context, pool *pgxpool.Pool) labGymSnapshot {
+	out := labGymSnapshot{
+		Candidates:   []labGymCandidate{},
+		AdapterEvals: []labAdapterEval{},
+		Routes:       []labPolicyRoute{},
+	}
+	// Candidates: group by (source_kind, task_kind) - what would train if
+	// you ran a dataset build today. Best-effort; degrade quietly.
+	rows, err := pool.Query(ctx, `
+		SELECT COALESCE(source_kind, ''),
+		       COALESCE(task_kind,   ''),
+		       COUNT(*),
+		       COALESCE(AVG(score)::float8, 0),
+		       MAX(created_at)
+		  FROM mem_training_examples
+		 GROUP BY source_kind, task_kind
+		 ORDER BY COUNT(*) DESC
+		 LIMIT 50
+	`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var c labGymCandidate
+			if err := rows.Scan(&c.SourceKind, &c.TaskKind, &c.Count, &c.AvgScore, &c.LatestAt); err == nil {
+				out.Candidates = append(out.Candidates, c)
+			}
+		}
+	}
+	// Adapter evals (still empty until Phase 9 - keep the query so it
+	// quietly lights up when the sidecar ships).
+	if rs, err := pool.Query(ctx, `
+		SELECT id::text, adapter_id::text, baseline_score, candidate_score, passed, created_at
+		  FROM mem_adapter_evals
+		 ORDER BY created_at DESC
+		 LIMIT 20
+	`); err == nil {
+		defer rs.Close()
+		for rs.Next() {
+			var e labAdapterEval
+			if err := rs.Scan(&e.ID, &e.AdapterID, &e.BaselineScore, &e.CandidateScore, &e.Passed, &e.CreatedAt); err == nil {
+				out.AdapterEvals = append(out.AdapterEvals, e)
+			}
+		}
+	}
+	if rs, err := pool.Query(ctx, `
+		SELECT id::text, task_kind, COALESCE(active_adapter_id::text, ''), status
+		  FROM mem_policy_routes
+		 ORDER BY task_kind ASC
+		 LIMIT 50
+	`); err == nil {
+		defer rs.Close()
+		for rs.Next() {
+			var p labPolicyRoute
+			if err := rs.Scan(&p.ID, &p.TaskKind, &p.ActiveAdapterID, &p.Status); err == nil {
+				out.Routes = append(out.Routes, p)
+			}
+		}
+	}
+	return out
 }
 
 // loadLabResolved fetches the recently-closed curiosity questions,

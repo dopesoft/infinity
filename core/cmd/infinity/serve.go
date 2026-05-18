@@ -129,6 +129,15 @@ func serveCmd() *cobra.Command {
 					// reason. Single source of cleanup truth.
 					proactive.RegisterAsConsolidateHook(memory.RegisterConsolidateHook, slog.Default())
 
+					// Self-model rollup: every nightly pass aggregates
+					// today's quality / cost / surprise / per-skill /
+					// per-tool numbers into mem_agent_metrics, then
+					// recomputes the 14-day baseline. The
+					// SelfModelProvider reads this at turn time and only
+					// surfaces a block when drift > 2σ - the agent
+					// notices itself, but only when it should.
+					memory.RegisterConsolidateHook(memory.RollupAgentMetrics)
+
 					// Opt 7: every UpsertCandidate writes a mem_memories
 					// twin (tier='working') for the draft body. Embedded,
 					// auto-linked via A-MEM associative edges. Agent
@@ -397,7 +406,20 @@ func serveCmd() *cobra.Command {
 			var earlyTrust *proactive.TrustStore
 			if pool != nil {
 				earlyTrust = proactive.NewTrustStore(pool)
+				// trust_batch_assign: lets skills group recent pending
+				// contracts under a fresh batch_id so the boss can
+				// bulk-approve from Studio's Trust panel. Inbox triage
+				// is the first consumer; works for any skill that
+				// queues multiple contracts in one run.
+				proactive.RegisterTrustTools(registry, earlyTrust)
 			}
+
+			// LoopGate + awareness: catch retry loops and runaway sessions
+			// without depending on USD spend. The same gate instance feeds
+			// both the gate chain (safety net - blocks at the threshold)
+			// and the LoopAwarenessProvider (primary defense - surfaces the
+			// rate so the agent self-throttles BEFORE the gate fires).
+			loopGate := initiative.NewLoopGate(earlyTrust)
 
 			// Honcho - optional dialectic peer-modelling sidecar. When
 			// HONCHO_BASE_URL is set we register a memory provider that folds
@@ -504,7 +526,37 @@ func serveCmd() *cobra.Command {
 					memProviders = append(memProviders, searcher)
 				}
 				if pool != nil {
-					memProviders = append(memProviders, plasticity.NewProvider(pool))
+					memProviders = append(memProviders, plasticity.NewProvider(pool, embedder))
+				}
+				// Agent goals: the model's own durable objectives (mem_agent_goals)
+				// folded into every turn so the agent reasons knowing what it's
+				// supposed to be doing across sessions, not just the current
+				// message.
+				if pool != nil {
+					memProviders = append(memProviders, worldmodel.NewGoalsProvider(pool))
+				}
+				// Cross-session lessons: mem_reflection_chains clusters repeated
+				// reflection lessons across sessions. This provider round-robins
+				// among the top-confidence chains so the agent picks up patterns
+				// it has noticed before without seeing the same lesson on every
+				// turn.
+				if pool != nil {
+					memProviders = append(memProviders, memory.NewReflectionChainsProvider(pool))
+				}
+				// Self-model: mem_agent_metrics is rolled up nightly with
+				// today's behaviour vs. the 14-day baseline. The provider
+				// emits a block only when something has drifted >2σ - the
+				// agent notices itself when it should, stays silent
+				// otherwise.
+				if pool != nil {
+					memProviders = append(memProviders, memory.NewSelfModelProvider(pool))
+				}
+				// Loop awareness: surface the session's own tool-call rate
+				// every turn once it crosses 50% of the ceiling, so the
+				// agent self-throttles BEFORE the LoopGate trips. Quiet
+				// during healthy sessions.
+				if awareness := initiative.NewLoopAwarenessProvider(loopGate); awareness != nil {
+					memProviders = append(memProviders, awareness)
 				}
 				if honchoClient.Enabled() {
 					memProviders = append(memProviders, honcho.NewMemoryProvider(honchoClient))
@@ -542,6 +594,13 @@ func serveCmd() *cobra.Command {
 						proactive.NewGitHubGate(earlyTrust),
 						proactive.NewComposioGate(earlyTrust),
 						proactive.NewBridgeGate(earlyTrust),
+						// LoopGate is the safety net: hard-blocks the same
+						// exact tool+input repeating ≥3 times in 60s, and
+						// routes through Trust when a session blows past
+						// 50 tool calls in 5 min. The agent sees its own
+						// rate every turn via LoopAwarenessProvider and is
+						// expected to self-throttle before this trips.
+						loopGate,
 					)
 				}
 				loop = agent.New(cfg)
@@ -661,6 +720,18 @@ func serveCmd() *cobra.Command {
 						// own goals that are blocked, due soon, or stalled -
 						// so a goal it set and forgot gets revisited.
 						proactive.AgentGoalChecklist(pool),
+						// Goal × entity urgency: when an active goal references
+						// a world-model entity and that entity shows up in a
+						// recent observation, the agent learns about it. This
+						// is what makes goal pursuit feel responsive to the
+						// world instead of polling on a timer.
+						proactive.GoalEntityUrgencyChecklist(pool),
+						// Calendar prep: read mem_calendar_events (Composio
+						// poller keeps it fresh) for anything in the next 60
+						// min and surface a Finding with attendee context +
+						// recent memory. Turns "you have a meeting in 30
+						// min" from manual mental work into a heartbeat hit.
+						proactive.CalendarPrepChecklist(pool),
 						// Substrate → dashboard: mirror the agent's goals and
 						// anything broken (failed extensions, regressed
 						// capabilities) onto the generic surface contract, so
@@ -784,6 +855,7 @@ func serveCmd() *cobra.Command {
 					Reflector:  reflector,
 					Compressor: compressor,
 					Surface:    surface.NewStore(pool, slog.Default()),
+					Embedder:   embedder,
 					Logger:     slog.Default(),
 				})
 				cronScheduler = cron.New(pool, cron.NewCompositeExecutor(agentExec, connectorExec, systemExec))

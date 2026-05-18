@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 )
 
 // Snapshot is the Gym overview: examples become datasets, datasets become
@@ -277,6 +280,71 @@ func (s *Store) ExtractExamples(ctx context.Context, limit int) (ExtractResult, 
 
 	out.Inserted = out.Evals + out.Lessons + out.Surprise
 	return out, tx.Commit(ctx)
+}
+
+// EmbedPending walks up to `limit` mem_training_examples rows that have no
+// embedding yet and writes one. Used by the nightly cron to keep the
+// vector index warm after extraction, AND to backfill rows inserted
+// before migration 057 added the column.
+//
+// Errors per row are logged and swallowed - one bad embedder call should
+// not stall the whole batch.
+func (s *Store) EmbedPending(ctx context.Context, embedder embed.Embedder, limit int) (int, error) {
+	if s == nil || s.pool == nil || embedder == nil {
+		return 0, nil
+	}
+	if ok, err := s.tableExists(ctx, "mem_training_examples"); err != nil || !ok {
+		return 0, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, COALESCE(task_kind,''), COALESCE(input_text,''), COALESCE(output_text,'')
+		  FROM mem_training_examples
+		 WHERE embedding IS NULL
+		 ORDER BY created_at DESC
+		 LIMIT $1
+	`, limit)
+	if err != nil {
+		return 0, err
+	}
+	type pending struct {
+		id   string
+		text string
+	}
+	var batch []pending
+	for rows.Next() {
+		var id, taskKind, input, output string
+		if err := rows.Scan(&id, &taskKind, &input, &output); err != nil {
+			continue
+		}
+		text := taskKind + "\n" + input + "\n" + output
+		batch = append(batch, pending{id: id, text: text})
+	}
+	rows.Close()
+	log := slog.Default()
+	n := 0
+	for _, p := range batch {
+		vec, err := embedder.Embed(ctx, p.text)
+		if err != nil {
+			log.Warn("plasticity: embed failed", "id", p.id, "err", err)
+			continue
+		}
+		if len(vec) == 0 {
+			continue
+		}
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE mem_training_examples
+			   SET embedding = $1
+			 WHERE id = $2::uuid
+		`, pgvector.NewVector(vec), p.id); err != nil {
+			log.Warn("plasticity: embedding write failed", "id", p.id, "err", err)
+			continue
+		}
+		n++
+	}
+	return n, nil
 }
 
 func (s *Store) Snapshot(ctx context.Context, limit int) (Snapshot, error) {

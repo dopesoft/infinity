@@ -43,7 +43,37 @@ import { cn } from "@/lib/utils";
  *                    empty; populates as the auto-promotion fires).
  */
 
-type LabTab = "open" | "fixed" | "lessons";
+type LabTab = "open" | "fixed" | "lessons" | "gym";
+
+type GymCandidate = {
+  source_kind: string;
+  task_kind: string;
+  count: number;
+  avg_score: number;
+  latest_at: string;
+};
+
+type GymAdapterEval = {
+  id: string;
+  adapter_id: string;
+  baseline_score: number;
+  candidate_score: number;
+  passed: boolean;
+  created_at: string;
+};
+
+type GymRoute = {
+  id: string;
+  task_kind: string;
+  active_adapter_id: string;
+  status: string;
+};
+
+type GymSnapshot = {
+  candidates: GymCandidate[];
+  adapter_evals: GymAdapterEval[];
+  routes: GymRoute[];
+};
 
 type LabProposal = {
   id: string;
@@ -92,11 +122,13 @@ type LabSnapshot = {
   resolved: LabResolved[];
   lessons: LabLesson[];
   skills: LabSkill[];
+  gym: GymSnapshot;
   counts: {
     open_proposals: number;
     recently_resolved: number;
     lessons: number;
     evolved_skills: number;
+    gym_candidates: number;
   };
 };
 
@@ -126,7 +158,7 @@ export default function LabPage() {
         : requested === "skills"
           ? null
           : requested;
-    if (aliased && ["open", "fixed", "lessons"].includes(aliased)) {
+    if (aliased && ["open", "fixed", "lessons", "gym"].includes(aliased)) {
       setTab(aliased as LabTab);
     }
   }, []);
@@ -190,8 +222,13 @@ export default function LabPage() {
     }
   }
 
-  const counts =
-    data?.counts ?? { open_proposals: 0, recently_resolved: 0, lessons: 0, evolved_skills: 0 };
+  const counts = data?.counts ?? {
+    open_proposals: 0,
+    recently_resolved: 0,
+    lessons: 0,
+    evolved_skills: 0,
+    gym_candidates: 0,
+  };
 
   return (
     <TabFrame>
@@ -227,6 +264,10 @@ export default function LabPage() {
                 <span>Lessons learned</span>
                 <CountChip n={counts.lessons} />
               </PageTabsTrigger>
+              <PageTabsTrigger value="gym" className="gap-1.5">
+                <span>Gym</span>
+                <CountChip n={counts.gym_candidates} />
+              </PageTabsTrigger>
             </PageTabsList>
           </div>
 
@@ -244,6 +285,17 @@ export default function LabPage() {
           </TabsContent>
           <TabsContent value="lessons" className="mt-0 min-h-0 flex-1 overflow-y-auto px-4 py-5 scroll-touch sm:px-6 lg:px-8">
             <LessonsPane loading={loading} lessons={data?.lessons ?? []} />
+          </TabsContent>
+          <TabsContent
+            value="gym"
+            className="mt-0 min-h-0 flex-1 overflow-y-auto px-4 py-5 scroll-touch sm:px-6 lg:px-8"
+          >
+            <GymPane
+              loading={loading}
+              snapshot={
+                data?.gym ?? { candidates: [], adapter_evals: [], routes: [] }
+              }
+            />
           </TabsContent>
         </PageTabs>
       </div>
@@ -627,4 +679,72 @@ function prettyReason(s: string): string {
     default:
       return s.replace(/_/g, " ");
   }
+}
+
+function GymPane({
+  loading,
+  snapshot,
+}: {
+  loading: boolean;
+  snapshot: GymSnapshot;
+}) {
+  if (loading && snapshot.candidates.length === 0) {
+    return (
+      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 size-4 animate-spin" /> Loading
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold tracking-tight">Candidates</h2>
+          <p className="text-xs text-muted-foreground">
+            Lessons mined from your past sessions. Jarvis injects the top
+            matches into every turn (split into AVOID / APPLY) so behavior
+            changes immediately — no model training needed. See{" "}
+            <span className="font-mono">
+              docs/agi-loops/WHY_NOT_FINE_TUNE.md
+            </span>{" "}
+            for the rationale.
+          </p>
+        </div>
+        {snapshot.candidates.length === 0 ? (
+          <EmptyState
+            icon={Sparkles}
+            title="No training examples yet"
+            description="Run the nightly cognition cron once or fire `infinity gym extract` to pull lessons out of reflections, evals, and high-surprise predictions."
+          />
+        ) : (
+          <ul className="space-y-2">
+            {snapshot.candidates.map((c, i) => (
+              <li
+                key={`${c.source_kind}:${c.task_kind}:${i}`}
+                className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">
+                    {(c.task_kind || "unspecified").replace(/_/g, " ")}{" "}
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      from {c.source_kind || "unknown"}
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    latest {relTime(c.latest_at)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  <Badge variant="outline">{c.count} ex</Badge>
+                  <span className="font-mono text-muted-foreground">
+                    avg score {c.avg_score.toFixed(2)}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
 }

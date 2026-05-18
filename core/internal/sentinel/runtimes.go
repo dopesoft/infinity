@@ -51,6 +51,18 @@ type thresholdConfig struct {
 	IntervalSeconds int     `json:"interval_seconds"`
 }
 
+type goalEventConfig struct {
+	// Optional - empty = watch every goal.
+	GoalID string `json:"goal_id"`
+	// Optional - empty = watch every entity. When set, narrows to goals
+	// that point at this world-model entity.
+	EntityID string `json:"entity_id"`
+	// Optional - fire only when the goal's current status is in this list.
+	// Empty = fire on any change.
+	OnStatusIn      []string `json:"on_status_in"`
+	IntervalSeconds int      `json:"interval_seconds"`
+}
+
 // Start launches the non-webhook watcher runtimes. Webhooks still enter via
 // Trigger directly; every other watch type polls cheaply and reuses Trigger so
 // cooldowns, action chains, and fire_count stay in one place.
@@ -106,6 +118,8 @@ func (m *Manager) checkRuntime(ctx context.Context, s Sentinel, st runtimeState)
 		return m.checkExternalPoll(ctx, s, st)
 	case WatchThreshold:
 		return m.checkThreshold(ctx, s, st)
+	case WatchGoalEvent:
+		return m.checkGoalEvent(ctx, s, st)
 	default:
 		return st, nil, nil
 	}
@@ -297,4 +311,63 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func (m *Manager) checkGoalEvent(ctx context.Context, s Sentinel, st runtimeState) (runtimeState, map[string]any, error) {
+	var cfg goalEventConfig
+	if err := json.Unmarshal(s.WatchConfig, &cfg); err != nil {
+		return st, nil, err
+	}
+	// LastKey holds the most recent updated_at we've seen for this sentinel
+	// in RFC3339Nano form. First tick stamps the cursor without firing.
+	cursor := time.Time{}
+	if st.LastKey != "" {
+		if t, err := time.Parse(time.RFC3339Nano, st.LastKey); err == nil {
+			cursor = t
+		}
+	}
+	// Pull the latest row matching the filter that has been updated AFTER
+	// the cursor. One row is enough - the next tick will catch the next one.
+	var (
+		id, title, status, blocker string
+		updatedAt                  time.Time
+	)
+	err := m.pool.QueryRow(ctx, `
+		SELECT id::text, title, status, blocker, updated_at
+		  FROM mem_agent_goals
+		 WHERE updated_at > $1
+		   AND ($2 = '' OR id::text = $2)
+		   AND ($3 = '' OR entity_id::text = $3)
+		 ORDER BY updated_at ASC
+		 LIMIT 1
+	`, cursor, strings.TrimSpace(cfg.GoalID), strings.TrimSpace(cfg.EntityID)).Scan(&id, &title, &status, &blocker, &updatedAt)
+	if err != nil {
+		// pgx.ErrNoRows or schema not applied. First tick still needs to
+		// stamp the cursor so we don't refire on history.
+		if cursor.IsZero() {
+			st.LastKey = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		return st, nil, nil
+	}
+	st.LastKey = updatedAt.Format(time.RFC3339Nano)
+	if len(cfg.OnStatusIn) > 0 && !containsStr(cfg.OnStatusIn, status) {
+		return st, nil, nil
+	}
+	return st, map[string]any{
+		"watch_type": "goal_event",
+		"goal_id":    id,
+		"title":      title,
+		"status":     status,
+		"blocker":    blocker,
+		"updated_at": updatedAt.UTC(),
+	}, nil
+}
+
+func containsStr(set []string, want string) bool {
+	for _, s := range set {
+		if strings.EqualFold(strings.TrimSpace(s), want) {
+			return true
+		}
+	}
+	return false
 }

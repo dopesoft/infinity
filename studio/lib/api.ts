@@ -975,6 +975,11 @@ export type TrustContractDTO = {
   decided_at?: string | null;
   decision_note?: string;
   created_at: string;
+  // batch_id groups contracts that came from the same skill run
+  // (inbox triage, calendar prep, etc.). NULL/empty rows render
+  // ungrouped with the single-row UX; non-empty rows fold into a
+  // batch group that supports "Approve all N".
+  batch_id?: string;
 };
 
 export const fetchTrustContracts = (status = "pending", signal?: AbortSignal) =>
@@ -990,6 +995,32 @@ export async function decideTrust(id: string, decision: string, note = ""): Prom
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+// decideTrustBatch flips every pending contract sharing a batch_id to the
+// same decision in one round trip. Returns the count of contracts updated
+// (zero on error) so the UI can render "Approved N of M" feedback. Pair
+// with /api/trust-contracts?status=pending to refresh after.
+export async function decideTrustBatch(
+  batchId: string,
+  decision: string,
+  note = "",
+): Promise<number> {
+  try {
+    const res = await authedFetch(
+      `/api/trust-contracts/batch/${encodeURIComponent(batchId)}/decide`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, note }),
+      },
+    );
+    if (!res.ok) return 0;
+    const json = (await res.json()) as { updated?: number };
+    return json.updated ?? 0;
+  } catch {
+    return 0;
   }
 }
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/surface"
@@ -26,6 +27,7 @@ type Deps struct {
 	Reflector  *memory.Reflector
 	Compressor *memory.Compressor
 	Surface    *surface.Store
+	Embedder   embed.Embedder
 	Logger     *slog.Logger
 }
 
@@ -45,6 +47,7 @@ type Report struct {
 	CompressedObservations int                      `json:"compressed_observations"`
 	Consolidate            memory.ConsolidateReport `json:"consolidate"`
 	TrainingExamples       plasticity.ExtractResult `json:"training_examples"`
+	TrainingEmbedded       int                      `json:"training_embedded"`
 	WorldModel             worldmodel.ExtractReport `json:"world_model"`
 	Errors                 []string                 `json:"errors,omitempty"`
 	Options                Options                  `json:"options"`
@@ -144,11 +147,22 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 		} else {
 			report.Consolidate = rep
 		}
-		extract, err := plasticity.NewStore(deps.Pool).ExtractExamples(ctx, opts.GymLimit)
+		gymStore := plasticity.NewStore(deps.Pool)
+		extract, err := gymStore.ExtractExamples(ctx, opts.GymLimit)
 		if err != nil {
 			addErr("gym_extract", err)
 		} else {
 			report.TrainingExamples = extract
+		}
+		// Embed any rows still missing a vector. Newly inserted rows above
+		// land here, plus any backfill from before migration 057. Bounded
+		// at 200 per pass to keep embedder load predictable.
+		if deps.Embedder != nil {
+			n, err := gymStore.EmbedPending(ctx, deps.Embedder, 200)
+			if err != nil {
+				addErr("gym_embed", err)
+			}
+			report.TrainingEmbedded = n
 		}
 		world, err := worldmodel.NewStore(deps.Pool, deps.Logger).ExtractFromRecentObservations(ctx, 100)
 		if err != nil {
