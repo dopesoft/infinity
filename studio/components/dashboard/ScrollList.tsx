@@ -71,7 +71,14 @@ export function ScrollList({
       ref={ref}
       className={cn(
         "relative min-w-0 max-w-full",
-        clipped ? "overflow-y-auto scroll-touch overscroll-contain" : "",
+        // pt-px keeps the first row's top border + focus ring + hover
+        // -1px translate visible. Without it, overflow-y-auto clips the
+        // first item flush at y=0 and the user sees three sides of the
+        // border but not the top. px-px gives focus-ring breathing room
+        // on the sides too.
+        clipped
+          ? "overflow-y-auto scroll-touch overscroll-contain px-px pt-px"
+          : "",
         // Subtle fade mask at the bottom when clipped, hinting "more below".
         clipped
           ? "[mask-image:linear-gradient(to_bottom,black_calc(100%-24px),transparent)]"
