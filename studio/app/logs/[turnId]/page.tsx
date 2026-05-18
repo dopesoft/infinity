@@ -115,69 +115,73 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* Header strip - same px-3 py-3 sm:px-4 rhythm as every other page. */}
-        <div className="space-y-2 border-b px-3 py-3 sm:px-4">
+        {/* Header strip — three rows of decreasing visual weight:
+              1. Toolbar (back + status pill + actions) — single-row chrome
+              2. Title (the user's prompt, full prominence)
+              3. Metadata chips (id, model, session, tools, tokens, latency)
+            The old layout crowded id + status pip + uppercase status badge
+            into the toolbar alongside the back button, which buried the
+            actual prompt below a cluttered row. Now status lives as ONE
+            tasteful pill on the right of the toolbar; the id moves to an
+            eyebrow under the title; redundant "TURN" label is dropped. */}
+        <div className="space-y-2.5 border-b px-3 py-3 sm:px-4">
+          {/* Row 1 — toolbar. Back on left, status + actions on right. */}
           <div className="flex min-w-0 items-center gap-2">
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={() => router.push("/logs")}
-              className="h-8 shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+              className="-ml-2 h-8 shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="size-4" />
               <span className="hidden sm:inline">Logs</span>
             </Button>
-            <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              turn
-            </span>
-            <TurnIdChip turnId={turnId} />
-            {turn && (
-              <>
-                <TurnStatusPip status={turn.status} />
-                <Badge variant="secondary" className="font-mono text-[10px] uppercase">
-                  {turn.status}
-                </Badge>
-              </>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void onCopyRun()}
-              disabled={!detail}
-              aria-label="Copy full run as markdown"
-              title="Copy full run (paste to Jarvis or Claude)"
-              className="ml-auto h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
-            >
-              {copied ? (
-                <Check className="size-4 text-success" aria-hidden />
-              ) : (
-                <Copy className="size-4" aria-hidden />
-              )}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void load()}
-              disabled={loading}
-              aria-label="Refresh"
-              title="Refresh"
-              className="h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
-            >
-              <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
-            </Button>
+            <div className="ml-auto flex items-center gap-1">
+              {turn && <TurnStatusPip status={turn.status} showLabel />}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void onCopyRun()}
+                disabled={!detail}
+                aria-label="Copy full run as markdown"
+                title="Copy full run (paste to Jarvis or Claude)"
+                className="h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
+              >
+                {copied ? (
+                  <Check className="size-4 text-success" aria-hidden />
+                ) : (
+                  <Copy className="size-4" aria-hidden />
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void load()}
+                disabled={loading}
+                aria-label="Refresh"
+                title="Refresh"
+                className="h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
+              >
+                <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
+              </Button>
+            </div>
           </div>
 
           {turn && (
-            <div className="space-y-1">
-              <h1 className="line-clamp-2 break-words text-sm font-semibold text-foreground sm:text-base">
+            <div className="space-y-1.5">
+              {/* Row 2 — the prompt itself, the most important text on the page. */}
+              <h1 className="line-clamp-2 break-words text-base font-semibold leading-snug text-foreground sm:text-lg">
                 {turn.user_text || (
-                  <span className="text-muted-foreground">(resumed turn - no fresh prompt)</span>
+                  <span className="text-muted-foreground">(resumed turn — no fresh prompt)</span>
                 )}
               </h1>
+              {/* Row 3 — metadata chips. Turn-id chip leads so the boss
+                  can copy it without scanning past the prompt. */}
               <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                <TurnIdChip turnId={turnId} />
                 {turn.model && (
                   <MetricChip icon={Cpu} title="Model">
                     <span className="break-all">{turn.model}</span>
@@ -305,7 +309,11 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     mobileShowDetail ? "hidden lg:flex" : "flex",
                   )}
                 >
-                  <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
+                  {/* pt-1 gives the first row's `ring-1` selection ring room to
+                     render its top edge without being clipped by the
+                     overflow-y-auto viewport at scrollTop=0. Without it the
+                     top border of the selected user-prompt card disappears. */}
+                  <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 pt-1 [scrollbar-gutter:stable] scroll-touch [overscroll-behavior:contain]">
                     <TraceTimeline
                       events={events}
                       selectedId={selected?.id ?? null}
