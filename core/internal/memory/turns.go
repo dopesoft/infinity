@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -105,6 +106,119 @@ func (s *TurnStore) IncrementToolCalls(ctx context.Context, turnID string) error
 		UPDATE mem_turns SET tool_call_count = tool_call_count + 1 WHERE id = $1::uuid
 	`, turnID)
 	return err
+}
+
+// RecoverStranded marks every turn still flagged in_flight as errored AND
+// inserts a synthetic TaskCompleted observation so the chat reload at
+// /api/sessions/:id/messages renders an "(interrupted)" assistant turn
+// where the silent gap used to be.
+//
+// Why this is load-bearing:
+//   • The agent loop's `closeTurn` runs in a deferred goroutine. If the
+//     core process dies mid-turn (deploy, OOM, panic that escapes the
+//     recover, host kill), the row is stranded at status='in_flight'
+//     forever and the user is stuck staring at their own prompt with no
+//     reply, no error, no way to know the agent isn't still thinking.
+//   • Studio's chat reload (sessions_messages_api.go) reconstructs the
+//     transcript from `UserPromptSubmit + TaskCompleted` observations.
+//     Without a TaskCompleted, the transcript ends on the user's prompt
+//     and the boss can't tell that anything went wrong — they just see
+//     "in flight" forever on the logs page and silence in the chat.
+//
+// Call this at startup, RIGHT AFTER the migrator and BEFORE the WS
+// handlers come online. Infinity is single-process / single-instance —
+// any in_flight row visible at boot is definitively stranded; there is
+// no concurrent core that might still be working on it.
+//
+// Returns the number of turns recovered (for the boot log line) and the
+// first error encountered (best-effort: a failure on one row doesn't
+// abort the sweep).
+func (s *TurnStore) RecoverStranded(ctx context.Context) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, nil
+	}
+	// Synthetic text the chat reload renders as an assistant turn. The
+	// text is intentionally short + actionable: the boss should be able
+	// to read it once and know to retry the prompt.
+	const recoveryText = "(Jarvis was interrupted mid-turn — the core restarted. Your prompt was received but the reply never completed. Please try again.)"
+	const recoveryError = "core restarted while turn was in flight"
+
+	// CTE pattern: close every in_flight row in one statement, returning
+	// the (session_id, user_id, turn_id) tuples we then fan back out as
+	// synthetic observation inserts. Atomic + single round trip for the
+	// status flip; observation inserts go in a follow-up loop because
+	// mem_observations has FTS / embedding columns that don't compose
+	// well into a single INSERT … SELECT.
+	rows, err := s.pool.Query(ctx, `
+		WITH stranded AS (
+		    SELECT id, session_id, user_id
+		      FROM mem_turns
+		     WHERE status = 'in_flight'
+		     FOR UPDATE SKIP LOCKED
+		),
+		closed AS (
+		    UPDATE mem_turns t
+		       SET status   = 'errored',
+		           ended_at = COALESCE(t.ended_at, NOW()),
+		           error    = COALESCE(NULLIF(t.error, ''), $1),
+		           summary  = COALESCE(NULLIF(t.summary, ''), $2),
+		           stop_reason = COALESCE(NULLIF(t.stop_reason, ''), 'recovered')
+		      FROM stranded
+		     WHERE t.id = stranded.id
+		 RETURNING t.id::text, t.session_id::text, COALESCE(t.user_id::text, '')
+		)
+		SELECT id, session_id, user_id FROM closed
+	`, recoveryError, "(interrupted)")
+	if err != nil {
+		return 0, fmt.Errorf("recover stranded turns: %w", err)
+	}
+	defer rows.Close()
+
+	type stranded struct{ id, sessionID, userID string }
+	var batch []stranded
+	for rows.Next() {
+		var s stranded
+		if err := rows.Scan(&s.id, &s.sessionID, &s.userID); err != nil {
+			return 0, fmt.Errorf("scan stranded: %w", err)
+		}
+		batch = append(batch, s)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(batch) == 0 {
+		return 0, nil
+	}
+
+	// Emit the synthetic TaskCompleted observation per row. user_id is
+	// nullable on mem_observations so the empty-string → NULL coercion
+	// is safe; setting it when known keeps RLS-scoped reads correct.
+	var firstErr error
+	for _, st := range batch {
+		obsID := uuid.NewString()
+		var userArg any
+		if st.userID != "" {
+			userArg = st.userID
+		}
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO mem_observations
+			    (id, session_id, hook_name, payload, raw_text, fts_doc, importance, turn_id, user_id)
+			VALUES (
+			    $1::uuid, $2::uuid, 'TaskCompleted',
+			    jsonb_build_object('recovered', true, 'reason', $3::text),
+			    $4::text,
+			    to_tsvector(COALESCE(current_setting('infinity.search_config', true), 'english')::regconfig, $4::text),
+			    1, $5::uuid, NULLIF($6::text, '')::uuid
+			)
+		`, obsID, st.sessionID, recoveryError, recoveryText, st.id, st.userID); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("insert recovery observation for turn %s: %w", st.id, err)
+			}
+			continue
+		}
+		_ = userArg
+	}
+	return len(batch), firstErr
 }
 
 // TurnRow is one mem_turns row plus the session display name. Used by the

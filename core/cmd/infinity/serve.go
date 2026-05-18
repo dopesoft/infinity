@@ -109,6 +109,26 @@ func serveCmd() *cobra.Command {
 					procedural = memory.NewProceduralStore(p, embedder)
 					searcher.AttachProcedural(procedural)
 
+					// Stranded-turn recovery: every `mem_turns` row still flagged
+					// in_flight at boot is by definition orphaned (single-process
+					// core — there is no concurrent instance still running it).
+					// Mark each errored AND insert a synthetic TaskCompleted
+					// observation so the chat reload at /api/sessions/:id/messages
+					// renders a clear "(interrupted)" assistant turn where the
+					// silent gap used to be. Without this, the boss reloads after
+					// a deploy / crash and sees only their own prompt — no reply,
+					// no error, no signal that the agent isn't still thinking. Run
+					// it before the WS handlers come online so the very first
+					// reconnect already sees the recovered state.
+					rctx, rcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+					if n, err := memory.NewTurnStore(p).RecoverStranded(rctx); err != nil {
+						log.Printf("turn recovery: %v", err)
+					} else if n > 0 {
+						infoLog := log.New(os.Stdout, "", log.LstdFlags)
+						infoLog.Printf("turn recovery: closed %d stranded in_flight turn(s) from prior boot", n)
+					}
+					rcancel()
+
 					// Learning hub - turns dashboard interactions into
 					// procedural memories. When the boss bulk-dismisses
 					// N+ questions in the same pattern_key, a row in
