@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { ShieldCheck, X } from "lucide-react";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
@@ -10,12 +10,14 @@ import { cn } from "@/lib/utils";
 /**
  * TrustToast - iOS-style sticky banner that appears at the top of the app
  * whenever there's at least one pending trust contract AND the boss isn't
- * currently looking at Live (where the inline approval card on the tool
- * call is already visible).
+ * already on the Trust review surface (/settings?section=trust) or on
+ * /live where the inline approval card on the tool call is also visible.
  *
- * Tap → routes to /live so the boss can approve right inside the chat.
- * The "x" dismisses for this device for 5 minutes; if more contracts
- * land in that window, the count updates but the banner stays hidden.
+ * Tap → routes to /settings?section=trust (the dedicated review panel)
+ * so the boss never gets accidentally dropped into a chat when they
+ * meant to approve. The "x" dismisses for this device for 5 minutes;
+ * if more contracts land in that window, the count updates but the
+ * banner stays hidden.
  *
  * Single source of truth: /api/trust-contracts?status=pending. We hit it
  * on mount and whenever the mem_trust_contracts realtime channel fires.
@@ -47,6 +49,7 @@ export function TrustToast() {
   const [now, setNow] = useState<number>(0);
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     setNow(Date.now());
@@ -65,10 +68,15 @@ export function TrustToast() {
   useRealtime("mem_trust_contracts", refresh);
 
   // Hide on /live - the tool card has inline Approve/Deny, no banner needed.
-  // Also hide if currently dismissed.
+  // Hide on the Trust review surface itself (/settings?section=trust) since
+  // the boss is already looking at the full queue. Also hide if dismissed.
+  const onTrustSection =
+    pathname === "/settings" && searchParams?.get("section") === "trust";
   const hide =
     pending.length === 0 ||
     pathname === "/live" ||
+    pathname === "/trust" ||
+    onTrustSection ||
     pathname?.startsWith("/login") ||
     (dismissedUntil > 0 && now < dismissedUntil);
 
@@ -85,7 +93,7 @@ export function TrustToast() {
   }
 
   function onTap() {
-    router.push("/live");
+    router.push("/settings?section=trust");
   }
 
   return (

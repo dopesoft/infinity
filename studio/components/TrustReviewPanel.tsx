@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, X } from "lucide-react";
+import { Check, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -10,6 +10,7 @@ import {
   fetchTrustContracts,
   type TrustContractDTO,
 } from "@/lib/api";
+import { useRealtime } from "@/lib/realtime/provider";
 
 const RISK_DOT: Record<TrustContractDTO["risk_level"], string> = {
   low: "bg-success",
@@ -23,6 +24,14 @@ type Group = {
   items: TrustContractDTO[];
 };
 
+type Tab = "pending" | "decided";
+
+// "Decided" rolls up everything the boss has already actioned: approvals
+// (still actionable / consumed by Core) and denials. Snoozed is omitted
+// because those rows are time-bombs that bounce back to pending and would
+// otherwise double-count.
+const DECIDED_STATUSES = ["approved", "consumed", "denied"] as const;
+
 /**
  * TrustReviewPanel is the full Trust queue UI for /settings?section=trust.
  * It groups pending contracts by batch_id so a skill that queued multiple
@@ -30,33 +39,75 @@ type Group = {
  * surfaces as a single "Approve all N" block. Contracts without a
  * batch_id keep the original per-row flow.
  *
+ * The Decided tab is a read-only audit log of recent approvals/denials,
+ * sorted newest-first by decided_at — same source endpoint, just a
+ * different status filter. This is what fulfills the "audit what you've
+ * already trusted" half of the section description.
+ *
  * The lightweight TrustQueuePanel is unchanged - it stays the
  * dashboard side-card; this is the surface the boss bulk-clears from.
  */
 export function TrustReviewPanel() {
-  const [items, setItems] = useState<TrustContractDTO[] | null>(null);
+  const [tab, setTab] = useState<Tab>("pending");
+  const [pending, setPending] = useState<TrustContractDTO[] | null>(null);
+  const [decided, setDecided] = useState<TrustContractDTO[] | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const loadPending = useCallback(async (signal?: AbortSignal) => {
     const rows = await fetchTrustContracts("pending", signal);
-    setItems(rows ?? []);
+    setPending(rows ?? []);
+  }, []);
+
+  const loadDecided = useCallback(async (signal?: AbortSignal) => {
+    // Fan out one fetch per status, merge, sort by decided_at desc.
+    // Server caps each status at 50 rows; we cap the merged view at 100
+    // so the page doesn't grow unbounded as the audit log fills up.
+    const results = await Promise.all(
+      DECIDED_STATUSES.map((s) => fetchTrustContracts(s, signal)),
+    );
+    const merged = results.flatMap((r) => r ?? []);
+    merged.sort((a, b) => {
+      const at = a.decided_at ?? a.created_at;
+      const bt = b.decided_at ?? b.created_at;
+      return (bt ?? "").localeCompare(at ?? "");
+    });
+    setDecided(merged.slice(0, 100));
   }, []);
 
   useEffect(() => {
     const ctl = new AbortController();
-    load(ctl.signal);
-    const id = setInterval(() => load(), 15_000);
+    loadPending(ctl.signal);
+    const id = setInterval(() => loadPending(), 15_000);
     return () => {
       ctl.abort();
       clearInterval(id);
     };
-  }, [load]);
+  }, [loadPending]);
 
-  const groups = useMemo<Group[]>(() => {
-    if (!items) return [];
+  // Decided list loads lazily on first tab switch, then refreshes when the
+  // boss returns to the tab. Polling isn't needed - it changes only when
+  // the boss themselves clicks Approve/Deny.
+  useEffect(() => {
+    if (tab !== "decided") return;
+    const ctl = new AbortController();
+    loadDecided(ctl.signal);
+    return () => ctl.abort();
+  }, [tab, loadDecided]);
+
+  // Push updates the moment a new contract lands so the boss never sees
+  // "No pending approvals" during the 15s polling gap after landing here
+  // from the TrustToast. Same channel the toast subscribes to. Decided
+  // list also refreshes since approvals flip status on the same table.
+  useRealtime("mem_trust_contracts", () => {
+    void loadPending();
+    if (tab === "decided") void loadDecided();
+  });
+
+  const pendingGroups = useMemo<Group[]>(() => {
+    if (!pending) return [];
     const map = new Map<string, TrustContractDTO[]>();
     const ungrouped: TrustContractDTO[] = [];
-    for (const c of items) {
+    for (const c of pending) {
       if (c.batch_id) {
         const list = map.get(c.batch_id) ?? [];
         list.push(c);
@@ -74,7 +125,7 @@ export function TrustReviewPanel() {
       (b.items[0]?.created_at ?? "").localeCompare(a.items[0]?.created_at ?? ""),
     );
     return [...batched, { batchId: null, items: ungrouped }];
-  }, [items]);
+  }, [pending]);
 
   const decideOne = useCallback(
     async (id: string, decision: "approved" | "denied") => {
@@ -85,9 +136,12 @@ export function TrustReviewPanel() {
         delete next[id];
         return next;
       });
-      if (ok) await load();
+      if (ok) {
+        await loadPending();
+        if (tab === "decided") await loadDecided();
+      }
     },
-    [load],
+    [loadPending, loadDecided, tab],
   );
 
   const decideBatchAction = useCallback(
@@ -100,47 +154,213 @@ export function TrustReviewPanel() {
         delete next[key];
         return next;
       });
-      await load();
+      await loadPending();
+      if (tab === "decided") await loadDecided();
     },
-    [load],
+    [loadPending, loadDecided, tab],
   );
 
-  if (items === null) {
-    return <p className="text-xs text-muted-foreground">Loading…</p>;
-  }
-  if (items.length === 0) {
-    return (
-      <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-        No pending approvals. New requests will appear here.
-      </p>
-    );
-  }
+  const pendingCount = pending?.length ?? 0;
+  const decidedCount = decided?.length ?? 0;
 
   return (
     <div className="space-y-3">
-      {groups.map((g) =>
-        g.items.length === 0 ? null : g.batchId ? (
-          <BatchCard
-            key={g.batchId}
-            batchId={g.batchId}
-            items={g.items}
-            busy={!!busy[`batch:${g.batchId}`]}
-            onDecide={decideBatchAction}
-          />
+      <TabBar
+        tab={tab}
+        onChange={setTab}
+        pendingCount={pendingCount}
+        decidedCount={decidedCount}
+      />
+
+      {tab === "pending" ? (
+        pending === null ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : pending.length === 0 ? (
+          <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+            No pending approvals. New requests will appear here.
+          </p>
         ) : (
-          <ul key="ungrouped" className="space-y-2">
-            {g.items.map((c) => (
-              <SingleRow
-                key={c.id}
-                contract={c}
-                busy={!!busy[c.id]}
-                onDecide={decideOne}
-              />
-            ))}
-          </ul>
-        ),
+          <div className="space-y-3">
+            {pendingGroups.map((g) =>
+              g.items.length === 0 ? null : g.batchId ? (
+                <BatchCard
+                  key={g.batchId}
+                  batchId={g.batchId}
+                  items={g.items}
+                  busy={!!busy[`batch:${g.batchId}`]}
+                  onDecide={decideBatchAction}
+                />
+              ) : (
+                <ul key="ungrouped" className="space-y-2">
+                  {g.items.map((c) => (
+                    <SingleRow
+                      key={c.id}
+                      contract={c}
+                      busy={!!busy[c.id]}
+                      onDecide={decideOne}
+                    />
+                  ))}
+                </ul>
+              ),
+            )}
+          </div>
+        )
+      ) : decided === null ? (
+        <p className="text-xs text-muted-foreground">Loading…</p>
+      ) : decided.length === 0 ? (
+        <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+          No decisions yet. Approvals and denials show up here.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {decided.map((c) => (
+            <DecidedRow key={c.id} contract={c} />
+          ))}
+        </ul>
       )}
     </div>
+  );
+}
+
+function TabBar({
+  tab,
+  onChange,
+  pendingCount,
+  decidedCount,
+}: {
+  tab: Tab;
+  onChange: (next: Tab) => void;
+  pendingCount: number;
+  decidedCount: number;
+}) {
+  return (
+    <div role="tablist" className="inline-flex rounded-md border border-border bg-muted/40 p-0.5 text-[12px]">
+      <TabButton
+        active={tab === "pending"}
+        onClick={() => onChange("pending")}
+        label="Pending"
+        count={pendingCount}
+        tone="warning"
+      />
+      <TabButton
+        active={tab === "decided"}
+        onClick={() => onChange("decided")}
+        label="Decided"
+        count={decidedCount}
+        tone="muted"
+      />
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  label,
+  count,
+  tone,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count: number;
+  tone: "warning" | "muted";
+}) {
+  return (
+    <button
+      role="tab"
+      aria-selected={active}
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 font-medium transition-colors",
+        active
+          ? "bg-background text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <span>{label}</span>
+      {count > 0 ? (
+        <span
+          className={cn(
+            "inline-flex h-4 min-w-[1.1rem] items-center justify-center rounded-full px-1 font-mono text-[10px]",
+            tone === "warning"
+              ? "bg-warning/15 text-warning"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function DecidedRow({ contract }: { contract: TrustContractDTO }) {
+  const decidedAt = contract.decided_at ?? contract.created_at;
+  const isApproved =
+    contract.status === "approved" || contract.status === "consumed";
+  return (
+    <li className="rounded-md border border-border bg-card p-3">
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-0.5">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                RISK_DOT[contract.risk_level],
+              )}
+            />
+            <span className="truncate text-sm font-medium">{contract.title}</span>
+          </div>
+          {contract.preview ? (
+            <p className="line-clamp-2 pl-3.5 text-[11px] text-muted-foreground">
+              {contract.preview}
+            </p>
+          ) : null}
+          <p className="pl-3.5 text-[10px] text-muted-foreground">
+            {contract.source} ·{" "}
+            <Clock className="-mt-0.5 mr-0.5 inline size-2.5" aria-hidden />
+            {formatRelative(decidedAt)}
+            {contract.decision_note ? ` · "${contract.decision_note}"` : ""}
+          </p>
+        </div>
+        <DecisionBadge
+          status={contract.status}
+          tone={isApproved ? "approved" : "denied"}
+        />
+      </div>
+    </li>
+  );
+}
+
+function DecisionBadge({
+  status,
+  tone,
+}: {
+  status: TrustContractDTO["status"];
+  tone: "approved" | "denied";
+}) {
+  const label =
+    status === "consumed"
+      ? "Approved · consumed"
+      : status.charAt(0).toUpperCase() + status.slice(1);
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 self-start rounded-full border px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide",
+        tone === "approved"
+          ? "border-success/30 bg-success/10 text-success"
+          : "border-destructive/30 bg-destructive/10 text-destructive",
+      )}
+    >
+      {tone === "approved" ? (
+        <Check className="size-3" aria-hidden />
+      ) : (
+        <X className="size-3" aria-hidden />
+      )}
+      {label}
+    </span>
   );
 }
 

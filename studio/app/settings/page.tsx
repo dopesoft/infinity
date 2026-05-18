@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Check,
   ChevronDown,
@@ -84,12 +85,20 @@ const SECTIONS: SectionMeta[] = [
   { id: "canvas", label: "Canvas", description: "Workspace root, preview URL, auto-open", icon: LayoutPanelLeft },
 ];
 
+function isSectionId(v: string | null): v is SectionId {
+  return !!v && SECTIONS.some((s) => s.id === v);
+}
+
 export default function SettingsPage() {
   const [status, setStatus] = useState<CoreStatus | null>(null);
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [mcp, setMCP] = useState<MCPStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const [active, setActive] = useState<SectionId>("general");
+  const searchParams = useSearchParams();
+  const requestedSection = searchParams?.get("section") ?? null;
+  const [active, setActive] = useState<SectionId>(
+    isSectionId(requestedSection) ? requestedSection : "general",
+  );
 
   async function refresh() {
     setLoading(true);
@@ -105,18 +114,14 @@ export default function SettingsPage() {
   }, []);
 
   // Honour ?section=<id> so deep-links from the redirected /trust
-  // page, dashboard, and notifications land on the right section.
+  // page, dashboard, notifications, and the TrustToast land on the right
+  // section — including when the user is *already* on /settings and the
+  // toast does router.push("/settings?section=trust") without remounting.
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("section");
-    if (
-      requested &&
-      ["general", "trust", "dashboard", "notifications", "tools", "mcp", "canvas"].includes(
-        requested,
-      )
-    ) {
-      setActive(requested as SectionId);
+    if (isSectionId(requestedSection)) {
+      setActive(requestedSection);
     }
-  }, []);
+  }, [requestedSection]);
 
   const counts = useMemo<Partial<Record<SectionId, number>>>(
     () => ({ tools: tools.length, mcp: mcp.length }),
