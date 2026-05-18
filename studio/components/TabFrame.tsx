@@ -24,9 +24,9 @@ export function TabFrame({
 }) {
   return (
     <div className="flex h-app min-h-app flex-col bg-background">
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b bg-background/95 px-3 pt-safe backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 lg:relative lg:h-16">
+      <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-2 border-b bg-background/95 px-3 pt-safe backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 lg:relative lg:h-[72px]">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href="/live" className="flex items-center gap-2 text-foreground">
+          <Link href="/" className="flex items-center gap-2 text-foreground">
             <InfinityIcon className="size-6 shrink-0" aria-hidden />
             <span className="hidden text-sm font-semibold tracking-tight sm:inline">
               infinity
