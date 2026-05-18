@@ -187,6 +187,31 @@ function ModelChip({
 export { VENDORS as MODEL_VENDORS };
 export type { VendorId };
 
+// Single global draft slot — what the boss typed survives navigating away,
+// switching tabs, iOS Safari backgrounding, or any remount of /live. Restored
+// on mount and cleared on send. Single-user product, one slot is right.
+// Mirrors the pattern in components/Composer.tsx.
+const DRAFT_KEY = "infinity:prompt-box:draft";
+
+function readStoredDraft(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredDraft(value: string) {
+  if (typeof window === "undefined") return;
+  try {
+    if (value) window.localStorage.setItem(DRAFT_KEY, value);
+    else window.localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* private mode / quota — best-effort only */
+  }
+}
+
 // voiceCaptionLabel maps the voice state machine to the small uppercase
 // label that sits above the rolling caption text. Kept here (rather than
 // inside the hook) so the same label surfaces consistently anywhere the
@@ -280,12 +305,34 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       onVoiceAssistantDelta,
     } = props;
 
+    // Empty on first server render; hydrated from localStorage in the mount
+    // effect below so SSR markup stays deterministic. Only the uncontrolled
+    // path persists — when the parent passes `value`, it owns the source of
+    // truth.
     const [internalValue, setInternalValue] = React.useState("");
+    const isControlled = controlledValue !== undefined;
     const value = controlledValue ?? internalValue;
     const setValue = (v: string) => {
       if (onValueChange) onValueChange(v);
       else setInternalValue(v);
     };
+
+    // Hydrate the in-progress draft from localStorage after mount so SSR
+    // matches and a remount (route change, tab switch, iOS Safari
+    // backgrounding+restore) restores what the boss was typing.
+    React.useEffect(() => {
+      if (isControlled) return;
+      const stored = readStoredDraft();
+      if (stored) setInternalValue(stored);
+    }, [isControlled]);
+
+    // Mirror every keystroke into localStorage. Cheap (single key, small
+    // string) and iOS Safari's kill-tab path doesn't fire beforeunload
+    // reliably, so we can't batch on unload.
+    React.useEffect(() => {
+      if (isControlled) return;
+      writeStoredDraft(internalValue);
+    }, [internalValue, isControlled]);
 
     const [internalModelId, setInternalModelId] = React.useState<string>(
       () => defaultModelFor(findVendor(vendorId ?? null)),
