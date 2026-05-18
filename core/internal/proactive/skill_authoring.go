@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -134,6 +135,9 @@ func scanSkillOpportunities(ctx context.Context, pool *pgxpool.Pool) []Finding {
 		if err := rows.Scan(&signature, &hits, &lastSeen); err != nil {
 			continue
 		}
+		if lowValueToolSignature(signature) {
+			continue
+		}
 		sigHash := shortHash(signature)
 		// Cheap dedup against active skills - if any active skill's name
 		// or description text already references the same tool chain
@@ -148,7 +152,6 @@ func scanSkillOpportunities(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			signature, hits, skillPatternWindow, lastSeen.UTC().Format(time.RFC3339),
 		)
 		tag := "skill_pattern:" + sigHash
-		ResolveQuestionsBySourceTag(ctx, pool, tag)
 		inserted := insertHealingQuestionWithTag(ctx, pool,
 			question, rationale, "skill_opportunity", tag, nil, 7)
 		if !inserted {
@@ -265,7 +268,6 @@ func scanSkillDrift(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			skillName, hits, lastSeen.UTC().Format(time.RFC3339), samplePath,
 		)
 		tag := "skill_drift:" + skillName
-		ResolveQuestionsBySourceTag(ctx, pool, tag)
 		inserted := insertHealingQuestionWithTag(ctx, pool,
 			question, rationale, "skill_drift", tag, nil, 7)
 		if !inserted {
@@ -300,6 +302,23 @@ func mapsToActiveSkill(ctx context.Context, pool *pgxpool.Pool, signature string
 		WHERE position($1 in v.skill_md) > 0
 	`, signature).Scan(&hit)
 	return hit > 0
+}
+
+func lowValueToolSignature(signature string) bool {
+	parts := strings.Split(signature, " -> ")
+	substantive := map[string]struct{}{}
+	for _, p := range parts {
+		tool := strings.TrimSpace(p)
+		switch tool {
+		case "", "load_tools", "system_map", "surface_item", "surface_update", "notify":
+			continue
+		}
+		substantive[tool] = struct{}{}
+	}
+	// A repeated single tool is not a reusable multi-step recipe. It is
+	// usually batching/pagination (e.g. Gmail fetch sweeps) and should be
+	// handled by the existing domain skill, not surfaced every heartbeat.
+	return len(substantive) <= 1
 }
 
 // loadActiveSkillBody returns the active SKILL.md body for the given

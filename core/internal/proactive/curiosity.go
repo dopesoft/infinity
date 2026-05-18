@@ -15,13 +15,13 @@ import (
 // questions, it FINDS gaps and surfaces them.
 //
 // Four signal types:
-//   1. low_confidence  - semantic memories whose strength has decayed under
-//                        0.35 but haven't been forgotten yet.
-//   2. contradiction   - unresolved 'contradicts' edges where both memories
-//                        are still active.
-//   3. uncovered_mention - graph nodes referenced repeatedly with no memory
-//                          providing context.
-//   4. high_surprise   - predictions where surprise_score >= 0.8.
+//  1. low_confidence  - semantic memories whose strength has decayed under
+//     0.35 but haven't been forgotten yet.
+//  2. contradiction   - unresolved 'contradicts' edges where both memories
+//     are still active.
+//  3. uncovered_mention - graph nodes referenced repeatedly with no memory
+//     providing context.
+//  4. high_surprise   - predictions where surprise_score >= 0.8.
 //
 // Each gap writes a row to mem_curiosity_questions (unique on the open
 // question text). The heartbeat surfaces them as findings, and Studio can
@@ -206,18 +206,21 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 // aren't actually worth surfacing as a "should I rework the prompt?"
 // card. Two common false positives:
 //
-//   1. Empty-collection returns. `{"count":0,"items":[]}` /
-//      `[]` / `{}` mean "the tool worked fine, there was just nothing
-//      to return." Not a prompt-rework signal - the boss doesn't need
-//      a heartbeat card for an empty list.
+//  1. Empty-collection returns. `{"count":0,"items":[]}` /
+//     `[]` / `{}` mean "the tool worked fine, there was just nothing
+//     to return." Not a prompt-rework signal - the boss doesn't need
+//     a heartbeat card for an empty list.
 //
-//   2. Expected == actual after normalisation. The prediction matched
-//      reality; the surprise scorer triggered on whitespace / case /
-//      JSON-key ordering noise rather than semantic divergence.
+//  2. Expected == actual after normalisation. The prediction matched
+//     reality; the surprise scorer triggered on whitespace / case /
+//     JSON-key ordering noise rather than semantic divergence.
 //
 // Returns true when the question SHOULD be suppressed (don't create
 // a curiosity row). The caller continues to the next surprise row.
 func shouldSuppressHighSurpriseQuestion(tool, expected, actual string) bool {
+	if strings.EqualFold(strings.TrimSpace(tool), "notify") {
+		return true
+	}
 	a := strings.TrimSpace(actual)
 	if a == "" || a == "{}" || a == "[]" || a == "null" {
 		return true
@@ -290,7 +293,7 @@ func (c *CuriosityScan) ListOpen(ctx context.Context, limit int) ([]CuriosityQue
 		limit = 5
 	}
 	rows, err := c.pool.Query(ctx, `
-		SELECT id::text, question, rationale, source_kind, importance, created_at
+		SELECT id::text, question, rationale, source_kind, COALESCE(source_tag, ''), importance, created_at
 		  FROM mem_curiosity_questions
 		 WHERE status = 'open'
 		 ORDER BY importance DESC, created_at DESC
@@ -303,7 +306,7 @@ func (c *CuriosityScan) ListOpen(ctx context.Context, limit int) ([]CuriosityQue
 	var out []CuriosityQuestion
 	for rows.Next() {
 		var q CuriosityQuestion
-		if err := rows.Scan(&q.ID, &q.Question, &q.Rationale, &q.SourceKind, &q.Importance, &q.CreatedAt); err != nil {
+		if err := rows.Scan(&q.ID, &q.Question, &q.Rationale, &q.SourceKind, &q.SourceTag, &q.Importance, &q.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -317,6 +320,7 @@ type CuriosityQuestion struct {
 	Question   string `json:"question"`
 	Rationale  string `json:"rationale"`
 	SourceKind string `json:"source_kind"`
+	SourceTag  string `json:"source_tag"`
 	Importance int    `json:"importance"`
 	CreatedAt  any    `json:"created_at"`
 }
@@ -345,6 +349,10 @@ func CuriosityChecklist(pool *pgxpool.Pool) Checklist {
 				// "uncovered_mention") lets the chat formatter explain
 				// precisely why this question surfaced.
 				Source: q.SourceKind,
+				// Carry the question's own tag into mem_heartbeat_findings.
+				// Without this, every heartbeat wrapped the same open
+				// question in an untagged finding, defeating DB dedupe.
+				SourceTag: q.SourceTag,
 				// CuriosityID lets the chat surface offer "Approve & fix"
 				// - it round-trips to /api/curiosity/questions/:id/decide.
 				CuriosityID: q.ID,

@@ -21,8 +21,9 @@ import (
 // two minutes until the underlying state changes.
 //
 // Key shape:
-//   curiosity findings → "cur:<id>"        (existing semantics)
-//   everything else    → "fp:<sha256 of Kind|Source|Title>"
+//
+//	curiosity findings → "cur:<id>"        (existing semantics)
+//	everything else    → "fp:<sha256 of Kind|Source|Title>"
 //
 // Once a fingerprint is seen, identical findings stay silent in chat
 // until the process restarts or the underlying condition resolves. The
@@ -140,10 +141,10 @@ func (s *Server) broadcastProactive(ev wsServerEvent) {
 // chat bubble in every active session. Wired from serve.go alongside
 // the procedural-memory write-through so the boss sees:
 //
-//   🤖 skill learned
-//   I just created a skill called "create_habit_pursuit" - when you
-//   ask me to set up another habit like this, I'll know exactly what
-//   to do.
+//	🤖 skill learned
+//	I just created a skill called "create_habit_pursuit" - when you
+//	ask me to set up another habit like this, I'll know exactly what
+//	to do.
 //
 // Renders through the same proactive_message path as heartbeat
 // findings; finding_kind="skill_promoted" tells Studio to swap in the
@@ -216,8 +217,10 @@ func (s *Server) onHeartbeatFinding(ctx context.Context, f proactive.Finding) {
 // fatigue - the boss can still see them in the Heartbeat tab.
 func shouldSurfaceFinding(f proactive.Finding) bool {
 	switch f.Kind {
-	case "surprise", "curiosity", "security":
+	case "security":
 		return true
+	case "surprise", "curiosity":
+		return f.PreApproved
 	}
 	return false
 }

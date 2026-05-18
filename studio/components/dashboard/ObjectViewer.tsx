@@ -257,6 +257,21 @@ function ViewerActions({
     }
   }
 
+  async function dismissCuriosity() {
+    if (item.kind !== "approval" || item.data.kind !== "curiosity") return;
+    setDismissing(true);
+    try {
+      const res = await authedFetch(`/api/curiosity/questions/${item.data.id}/decide`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision: "dismissed" }),
+      });
+      if (res.ok && onResolved) onResolved(item);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
   async function discuss() {
     const id = (item.data as { id?: string }).id ?? "";
     setSeeding(true);
@@ -298,6 +313,19 @@ function ViewerActions({
     }
     if (item.kind === "approval" && item.data.kind === "code_proposal") {
       return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
+    }
+    if (item.kind === "approval" && item.data.kind === "curiosity") {
+      return (
+        <button
+          type="button"
+          onClick={dismissCuriosity}
+          disabled={dismissing}
+          className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+        >
+          <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+          {dismissing ? "Dismissing..." : "Dismiss"}
+        </button>
+      );
     }
     if (item.kind === "activity") {
       // Heartbeat findings + curiosity questions surface in Activity.
