@@ -101,15 +101,57 @@ type PrepItem struct {
 	Rationale string `json:"rationale,omitempty"`
 }
 
+// EventAttendee mirrors the calendar package shape one-for-one but
+// stays in the dashboard DTO package so the studio fetcher doesn't have
+// to import the calendar internal types.
+type EventAttendee struct {
+	Email          string `json:"email"`
+	DisplayName    string `json:"displayName,omitempty"`
+	ResponseStatus string `json:"responseStatus,omitempty"`
+	Self           bool   `json:"self,omitempty"`
+	Organizer      bool   `json:"organizer,omitempty"`
+	Optional       bool   `json:"optional,omitempty"`
+}
+
+// EventOrganizer is the event organizer block surfaced to the modal.
+type EventOrganizer struct {
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Self        bool   `json:"self,omitempty"`
+}
+
+// EventConferenceEntryPoint - one Join-link row (Meet, Zoom, dial-in).
+type EventConferenceEntryPoint struct {
+	Type  string `json:"type"`
+	URI   string `json:"uri"`
+	Label string `json:"label,omitempty"`
+}
+
+// EventConference - the conference data block for the modal's video row.
+type EventConference struct {
+	SolutionName string                      `json:"solutionName,omitempty"`
+	IconURI      string                      `json:"iconUri,omitempty"`
+	EntryPoints  []EventConferenceEntryPoint `json:"entryPoints,omitempty"`
+}
+
 type CalendarEvent struct {
-	ID             string     `json:"id"`
-	Title          string     `json:"title"`
-	StartsAt       time.Time  `json:"startsAt"`
-	EndsAt         *time.Time `json:"endsAt,omitempty"`
-	Location       string     `json:"location,omitempty"`
-	Attendees      []string   `json:"attendees,omitempty"`
-	Classification string     `json:"classification"`
-	Prep           []PrepItem `json:"prep"`
+	ID             string          `json:"id"`
+	Title          string          `json:"title"`
+	StartsAt       time.Time       `json:"startsAt"`
+	EndsAt         *time.Time      `json:"endsAt,omitempty"`
+	AllDay         bool            `json:"allDay,omitempty"`
+	Location       string          `json:"location,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Attendees      []EventAttendee `json:"attendees,omitempty"`
+	Organizer      EventOrganizer  `json:"organizer,omitempty"`
+	Conference     EventConference `json:"conference,omitempty"`
+	Recurrence     []string        `json:"recurrence,omitempty"`
+	HTMLLink       string          `json:"htmlLink,omitempty"`
+	HangoutLink    string          `json:"hangoutLink,omitempty"`
+	ResponseStatus string          `json:"responseStatus,omitempty"`
+	AccountID      string          `json:"accountId,omitempty"`
+	Classification string          `json:"classification"`
+	Prep           []PrepItem      `json:"prep"`
 }
 
 type FollowUp struct {
@@ -390,9 +432,16 @@ func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
 	// active right now (ends_at >= now). Past events are excluded -
 	// the dashboard surface is "what's coming," not history.
 	rows, err := a.Pool.Query(ctx, `
-		SELECT id, title, starts_at, ends_at, location,
+		SELECT id, title, starts_at, ends_at, COALESCE(all_day, FALSE), location,
+		       COALESCE(description, ''),
 		       COALESCE(attendees, '[]'::jsonb), classification,
-		       COALESCE(prep, '[]'::jsonb)
+		       COALESCE(prep, '[]'::jsonb),
+		       COALESCE(organizer, '{}'::jsonb),
+		       COALESCE(conference, '{}'::jsonb),
+		       COALESCE(recurrence, '[]'::jsonb),
+		       COALESCE(html_link, ''), COALESCE(hangout_link, ''),
+		       COALESCE(response_status, ''),
+		       COALESCE(account_id, '')
 		FROM mem_calendar_events
 		WHERE (ends_at IS NULL AND starts_at >= NOW() - INTERVAL '1 day')
 		   OR ends_at >= NOW()
@@ -406,21 +455,61 @@ func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
 	var out []CalendarEvent
 	for rows.Next() {
 		var e CalendarEvent
-		var attendeesRaw, prepRaw []byte
+		var (
+			attendeesRaw, prepRaw, organizerRaw,
+			conferenceRaw, recurrenceRaw []byte
+		)
 		if err := rows.Scan(
-			&e.ID, &e.Title, &e.StartsAt, &e.EndsAt, &e.Location,
+			&e.ID, &e.Title, &e.StartsAt, &e.EndsAt, &e.AllDay, &e.Location,
+			&e.Description,
 			&attendeesRaw, &e.Classification, &prepRaw,
+			&organizerRaw, &conferenceRaw, &recurrenceRaw,
+			&e.HTMLLink, &e.HangoutLink, &e.ResponseStatus, &e.AccountID,
 		); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal(attendeesRaw, &e.Attendees)
+		e.Attendees = decodeAttendees(attendeesRaw)
 		_ = json.Unmarshal(prepRaw, &e.Prep)
+		_ = json.Unmarshal(organizerRaw, &e.Organizer)
+		_ = json.Unmarshal(conferenceRaw, &e.Conference)
+		_ = json.Unmarshal(recurrenceRaw, &e.Recurrence)
 		if e.Prep == nil {
 			e.Prep = []PrepItem{}
 		}
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// decodeAttendees handles both shapes the column may carry:
+//
+//   - legacy: ["alice@x", "bob@y"] (string array - pre-058 polls)
+//   - native: [{email, displayName, responseStatus, …}] (post-058 sync)
+//
+// String entries become EventAttendee{Email: s}. The native sync
+// always writes objects so over time the legacy shape fades out.
+func decodeAttendees(raw []byte) []EventAttendee {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	// Try the rich shape first.
+	var objs []EventAttendee
+	if err := json.Unmarshal(raw, &objs); err == nil {
+		return objs
+	}
+	// Fall back to string list.
+	var strs []string
+	if err := json.Unmarshal(raw, &strs); err == nil {
+		out := make([]EventAttendee, 0, len(strs))
+		for _, s := range strs {
+			if s == "" {
+				continue
+			}
+			out = append(out, EventAttendee{Email: s})
+		}
+		return out
+	}
+	return nil
 }
 
 // followupSurfaceKeys are the surface names that route an agent-surfaced

@@ -61,13 +61,58 @@ export type PrepItem = {
   rationale?: string;
 };
 
+// Google Calendar invitation response — the value the boss can set
+// (accepted/declined/tentative) plus needsAction for "RSVP pending".
+// Null = the boss is the organizer (no self-response slot).
+export type EventResponseStatus =
+  | "accepted"
+  | "declined"
+  | "tentative"
+  | "needsAction";
+
+export type EventAttendee = {
+  email: string;
+  displayName?: string;
+  responseStatus?: EventResponseStatus;
+  self?: boolean;
+  organizer?: boolean;
+  optional?: boolean;
+};
+
+export type EventOrganizer = {
+  email?: string;
+  displayName?: string;
+  self?: boolean;
+};
+
+export type EventConferenceEntryPoint = {
+  type: string; // "video" | "phone" | "sip" | "more"
+  uri: string;
+  label?: string;
+};
+
+export type EventConference = {
+  solutionName?: string;
+  iconUri?: string;
+  entryPoints?: EventConferenceEntryPoint[];
+};
+
 export type CalendarEvent = {
   id: string;
   title: string;
   startsAt: string; // ISO
   endsAt?: string;
+  allDay?: boolean;
   location?: string;
-  attendees?: string[];
+  description?: string;
+  attendees?: EventAttendee[];
+  organizer?: EventOrganizer;
+  conference?: EventConference;
+  recurrence?: string[];
+  htmlLink?: string;
+  hangoutLink?: string;
+  responseStatus?: EventResponseStatus;
+  accountId?: string;
   classification: CalendarEventClass;
   prep: PrepItem[]; // can be empty for routine events
 };

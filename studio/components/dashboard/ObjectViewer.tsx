@@ -24,9 +24,12 @@ import {
   MapPin,
   MessageCircle,
   Quote,
+  Repeat,
   Sparkles,
   Target,
   Terminal,
+  Users,
+  Video,
   X,
 } from "lucide-react";
 import { authedFetch } from "@/lib/api";
@@ -349,6 +352,15 @@ function ViewerActions({
         </button>
       );
     }
+    if (item.kind === "event") {
+      // RSVP buttons live in the footer per the attached design ("Are you
+      // attending?" bar). Only render when the boss is an invitee (has a
+      // self responseStatus) - organizer-owned events have no self slot
+      // and accept/decline doesn't apply.
+      const ev = item.data;
+      if (!ev.responseStatus) return null;
+      return <RsvpButtons event={ev} onResolved={onResolved} item={item} />;
+    }
     return null;
   }
 
@@ -385,6 +397,120 @@ function OpenInButton({ href, label }: { href: string; label: string }) {
       className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent"
     >
       <ArrowRight className="size-3.5" aria-hidden />
+      {label}
+    </button>
+  );
+}
+
+// RsvpButtons - "Are you attending?" footer block matching the attached
+// design. Three buttons (Yes / Maybe / No), the current response is
+// highlighted, in-flight state pulses. Routes through /api/calendar/
+// events/:id/respond which itself wraps in runs.Track so the spinner
+// survives navigation/refresh.
+function RsvpButtons({
+  event,
+  onResolved,
+  item,
+}: {
+  event: CalendarEvent;
+  onResolved?: (item: DashboardItem) => void;
+  item: DashboardItem;
+}) {
+  const [pending, setPending] = React.useState<string | null>(null);
+  const [current, setCurrent] = React.useState<string | undefined>(
+    event.responseStatus,
+  );
+
+  const respond = React.useCallback(
+    async (response: "accepted" | "tentative" | "declined") => {
+      if (pending) return;
+      setPending(response);
+      try {
+        const res = await authedFetch(
+          `/api/calendar/events/${encodeURIComponent(event.id)}/respond`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ response }),
+          },
+        );
+        if (res.ok) {
+          setCurrent(response);
+          if (onResolved) onResolved(item);
+        }
+      } finally {
+        setPending(null);
+      }
+    },
+    [pending, event.id, onResolved, item],
+  );
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="mr-auto text-[13px] text-muted-foreground">
+        Are you attending?
+      </span>
+      <RsvpChoice
+        label="Yes"
+        active={current === "accepted"}
+        pending={pending === "accepted"}
+        tone="accepted"
+        onClick={() => respond("accepted")}
+        disabled={!!pending}
+      />
+      <RsvpChoice
+        label="Maybe"
+        active={current === "tentative"}
+        pending={pending === "tentative"}
+        tone="tentative"
+        onClick={() => respond("tentative")}
+        disabled={!!pending}
+      />
+      <RsvpChoice
+        label="No"
+        active={current === "declined"}
+        pending={pending === "declined"}
+        tone="declined"
+        onClick={() => respond("declined")}
+        disabled={!!pending}
+      />
+    </div>
+  );
+}
+
+function RsvpChoice({
+  label,
+  active,
+  pending,
+  tone,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  active: boolean;
+  pending: boolean;
+  tone: "accepted" | "tentative" | "declined";
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  const activeClass = {
+    accepted: "border-success bg-success text-white",
+    tentative: "border-amber-500 bg-amber-500 text-white",
+    declined: "border-rose-500 bg-rose-500 text-white",
+  }[tone];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "inline-flex h-10 items-center gap-1.5 rounded-md border px-3 text-[13px] font-medium transition-colors disabled:opacity-60",
+        active
+          ? activeClass
+          : "border-border bg-background text-foreground hover:bg-accent",
+        pending && "animate-pulse",
+      )}
+    >
       {label}
     </button>
   );
@@ -511,57 +637,347 @@ function TodoBody({ t }: { t: Todo }) {
 // ── CalendarEvent ─────────────────────────────────────────────────────────
 function EventBody({ e }: { e: CalendarEvent }) {
   const openPrep = e.prep.filter((p) => !p.done);
+  const attendees = e.attendees ?? [];
+  // Roll the per-attendee response statuses into a single summary line
+  // ("4 yes, 1 maybe, 1 decline") matching the attached design. Needs-action
+  // entries are folded into "pending" so the line never grows past three
+  // segments. Self is included in the count — feels less odd than excluding.
+  const counts = attendees.reduce(
+    (acc, a) => {
+      switch (a.responseStatus) {
+        case "accepted":
+          acc.yes++;
+          break;
+        case "tentative":
+          acc.maybe++;
+          break;
+        case "declined":
+          acc.no++;
+          break;
+        default:
+          acc.pending++;
+      }
+      return acc;
+    },
+    { yes: 0, maybe: 0, no: 0, pending: 0 },
+  );
+  const attendeeSummary = [
+    counts.yes ? `${counts.yes} yes` : "",
+    counts.maybe ? `${counts.maybe} maybe` : "",
+    counts.no ? `${counts.no} decline` : "",
+    counts.pending ? `${counts.pending} pending` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const recurrenceLabel = readableRecurrence(e.recurrence);
+  const videoEntry =
+    e.conference?.entryPoints?.find((ep) => ep.type === "video") ?? null;
+  const videoUrl = videoEntry?.uri ?? e.hangoutLink ?? null;
+  const videoLabel =
+    videoEntry?.label ??
+    (e.conference?.solutionName
+      ? `Join ${e.conference.solutionName}`
+      : "Join video call");
+
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-          {e.classification}
-        </span>
-        <span className="font-mono" suppressHydrationWarning>
-          {dayLabel(e.startsAt)} · {clockTime(e.startsAt)}
-          {e.endsAt ? ` – ${clockTime(e.endsAt)}` : ""}
-        </span>
+    <div className="space-y-4 pt-3">
+      {/* Date / time / duration — single header row */}
+      <p
+        className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-foreground"
+        suppressHydrationWarning
+      >
+        <span className="font-medium">{dayLabel(e.startsAt)}</span>
+        {!e.allDay ? (
+          <>
+            <span className="font-mono text-muted-foreground">
+              {clockTime(e.startsAt)}
+              {e.endsAt ? ` – ${clockTime(e.endsAt)}` : ""}
+            </span>
+            {e.endsAt ? (
+              <span className="text-[12px] text-muted-foreground">
+                ({formatDuration(new Date(e.endsAt).getTime() - new Date(e.startsAt).getTime())})
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span className="font-mono text-muted-foreground">All day</span>
+        )}
+      </p>
+
+      {/* Recurrence, location, video — icon-prefixed metadata rows */}
+      <div className="space-y-2.5">
+        {recurrenceLabel ? (
+          <EventMetaRow icon={Repeat}>{recurrenceLabel}</EventMetaRow>
+        ) : null}
+        {e.location ? (
+          <EventMetaRow icon={MapPin}>{e.location}</EventMetaRow>
+        ) : null}
+        {videoUrl ? (
+          <EventMetaRow icon={Video}>
+            <a
+              href={videoUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex items-center gap-1 break-all text-info hover:underline"
+            >
+              {videoLabel}
+              <ExternalLink className="size-3 shrink-0" aria-hidden />
+            </a>
+          </EventMetaRow>
+        ) : null}
       </div>
-      {e.location ? (
-        <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-          <MapPin className="size-3.5" aria-hidden />
-          {e.location}
-        </p>
+
+      {/* Attendees: summary line + avatar/email chip rows with status icons */}
+      {attendees.length > 0 ? (
+        <div className="space-y-2.5">
+          <EventMetaRow icon={Users}>
+            {attendeeSummary || `${attendees.length} invited`}
+          </EventMetaRow>
+          <ul className="flex flex-wrap gap-2 pl-6">
+            {attendees.map((a) => (
+              <li
+                key={a.email}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 py-1 pl-1 pr-2 text-[12px]"
+              >
+                <AttendeeAvatar name={a.displayName ?? a.email} />
+                <span className="max-w-[180px] truncate font-medium text-foreground">
+                  {a.displayName ?? a.email}
+                </span>
+                <AttendeeStatusIcon status={a.responseStatus} />
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
+
+      {/* Description with expand-on-overflow */}
+      {e.description ? (
+        <ExpandableDescription text={e.description} />
+      ) : null}
+
+      {/* Open in Google */}
+      {e.htmlLink ? (
+        <ModalUrl
+          href={e.htmlLink}
+          icon={<ExternalLink className="size-3.5" aria-hidden />}
+        >
+          Open in Google Calendar
+        </ModalUrl>
+      ) : null}
+
+      {/* Prep checklist (Jarvis-derived) */}
       {e.prep.length > 0 ? (
         <ModalSection meta={`${openPrep.length}/${e.prep.length} prep open`}>
           <ul className="space-y-2">
             {e.prep.map((p) => (
               <li key={p.id} className="flex items-start gap-2">
                 {p.done ? (
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />
+                  <CheckCircle2
+                    className="mt-0.5 size-4 shrink-0 text-success"
+                    aria-hidden
+                  />
                 ) : (
-                  <Circle className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <Circle
+                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                    aria-hidden
+                  />
                 )}
                 <div className="min-w-0 flex-1">
                   <p
                     className={cn(
                       "text-[13px]",
-                      p.done ? "text-muted-foreground line-through" : "text-foreground",
+                      p.done
+                        ? "text-muted-foreground line-through"
+                        : "text-foreground",
                     )}
                   >
                     {p.label}
                   </p>
                   {p.rationale ? (
-                    <p className="mt-0.5 text-[11px] italic text-muted-foreground">{p.rationale}</p>
+                    <p className="mt-0.5 text-[11px] italic text-muted-foreground">
+                      {p.rationale}
+                    </p>
                   ) : null}
                 </div>
               </li>
             ))}
           </ul>
         </ModalSection>
-      ) : (
-        <p className="text-[12px] text-muted-foreground">
-          No prep items for this event - Jarvis didn&apos;t flag anything you need to do beforehand.
-        </p>
-      )}
+      ) : null}
     </div>
   );
+}
+
+// EventMetaRow: icon + content row used for recurrence/location/video/
+// attendee-summary. Keeps spacing + icon size consistent across rows.
+function EventMetaRow({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2 text-[13px] text-foreground">
+      <Icon
+        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1 break-words">{children}</div>
+    </div>
+  );
+}
+
+// AttendeeAvatar: 20px circle with the first letter of the display name.
+// No image fetch — avatars on a calendar invite would mean per-row HTTP
+// to Google and a CSP allowlist; the initial bubble is sufficient for
+// the visual rhythm the design calls for.
+function AttendeeAvatar({ name }: { name: string }) {
+  const initial = (name?.trim()?.[0] ?? "?").toUpperCase();
+  return (
+    <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium uppercase text-muted-foreground">
+      {initial}
+    </span>
+  );
+}
+
+// AttendeeStatusIcon: the small green/orange/red badge appended to each
+// attendee chip per the attached design (green ✓ = accepted, orange ?
+// = tentative, red × = declined, blank = needs-action / unknown).
+function AttendeeStatusIcon({ status }: { status?: string }) {
+  switch (status) {
+    case "accepted":
+      return (
+        <span
+          aria-label="accepted"
+          className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-success text-[10px] text-white"
+        >
+          <CheckCircle2 className="size-3" aria-hidden />
+        </span>
+      );
+    case "tentative":
+      return (
+        <span
+          aria-label="tentative"
+          className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[10px] text-white"
+        >
+          ?
+        </span>
+      );
+    case "declined":
+      return (
+        <span
+          aria-label="declined"
+          className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-rose-500 text-[10px] text-white"
+        >
+          <X className="size-3" aria-hidden />
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
+// ExpandableDescription: shows the first ~180 chars with a "Show all"
+// affordance per the design. Click expands in place; collapse not
+// offered (boss never asked to re-hide).
+function ExpandableDescription({ text }: { text: string }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const collapseLimit = 180;
+  const needsExpand = text.length > collapseLimit;
+  const shown = expanded || !needsExpand ? text : text.slice(0, collapseLimit) + "…";
+  return (
+    <div className="flex items-start gap-2 text-[13px] text-foreground">
+      <span
+        aria-hidden
+        className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground/40"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="whitespace-pre-wrap break-words leading-relaxed">{shown}</p>
+        {needsExpand && !expanded ? (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="mt-1 text-[12px] font-medium text-info hover:underline"
+          >
+            Show all
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// readableRecurrence: tries to surface a one-line description of a Google
+// RRULE blob. The native sync stores RRULE strings verbatim
+// (e.g. "RRULE:FREQ=MONTHLY;BYDAY=1TH"); we render a best-effort
+// English label. When parsing fails we fall back to "Recurring event"
+// so the row stays informative without leaking RRULE syntax.
+function readableRecurrence(rec?: string[]): string | null {
+  if (!rec || rec.length === 0) return null;
+  const rule = rec.find((r) => r.startsWith("RRULE:")) ?? rec[0];
+  if (!rule) return null;
+  const body = rule.replace(/^RRULE:/, "");
+  const parts = Object.fromEntries(
+    body
+      .split(";")
+      .map((seg) => seg.split("="))
+      .filter((kv) => kv.length === 2)
+      .map(([k, v]) => [k.toUpperCase(), v]),
+  ) as Record<string, string>;
+  const freq = parts.FREQ;
+  const interval = Number(parts.INTERVAL ?? "1");
+  const byday = parts.BYDAY;
+  const days: Record<string, string> = {
+    MO: "Mon",
+    TU: "Tue",
+    WE: "Wed",
+    TH: "Thu",
+    FR: "Fri",
+    SA: "Sat",
+    SU: "Sun",
+  };
+  if (freq === "DAILY") {
+    return interval > 1 ? `Every ${interval} days` : "Daily";
+  }
+  if (freq === "WEEKLY") {
+    if (byday) {
+      const labels = byday.split(",").map((d) => days[d] ?? d);
+      const prefix = interval > 1 ? `Every ${interval} weeks` : "Weekly";
+      return `${prefix} on ${labels.join(", ")}`;
+    }
+    return interval > 1 ? `Every ${interval} weeks` : "Weekly";
+  }
+  if (freq === "MONTHLY") {
+    if (byday) {
+      // "1TH" → first Thursday, "-1FR" → last Friday
+      const match = byday.match(/^(-?\d+)([A-Z]{2})$/);
+      if (match) {
+        const ord = Number(match[1]);
+        const day = days[match[2]] ?? match[2];
+        const ordLabel =
+          ord === -1
+            ? "last"
+            : ord === 1
+              ? "first"
+              : ord === 2
+                ? "second"
+                : ord === 3
+                  ? "third"
+                  : ord === 4
+                    ? "fourth"
+                    : `${ord}th`;
+        const prefix = interval > 1 ? `Every ${interval} months` : "Monthly";
+        return `${prefix} on the ${ordLabel} ${day}`;
+      }
+    }
+    return interval > 1 ? `Every ${interval} months` : "Monthly";
+  }
+  if (freq === "YEARLY") {
+    return interval > 1 ? `Every ${interval} years` : "Yearly";
+  }
+  return "Recurring event";
 }
 
 // ── Reflection ────────────────────────────────────────────────────────────

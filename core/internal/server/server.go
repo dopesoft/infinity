@@ -9,6 +9,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/calendar"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
@@ -115,6 +116,12 @@ type Config struct {
 	// realtime publication on mem_runs (migration 035) handles updates;
 	// this endpoint exists for the cold-load case. Nil-safe.
 	RunsAPI *runs.API
+	// CalendarAPI registers /api/calendar/* - Accept/Decline RSVP,
+	// per-account sync trigger, accounts list. Nil-safe: missing
+	// Composio admin key or no connected calendar account disables
+	// the routes and Studio renders a "no calendar connected" empty
+	// state in the Upcoming card.
+	CalendarAPI *calendar.API
 }
 
 type Server struct {
@@ -232,6 +239,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.RunsAPI != nil {
 		cfg.RunsAPI.Routes(mux)
+	}
+	if cfg.CalendarAPI != nil {
+		cfg.CalendarAPI.Routes(mux)
 	}
 
 	// Auth middleware. /health and /auth/* stay open so the studio can

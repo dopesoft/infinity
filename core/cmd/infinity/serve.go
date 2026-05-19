@@ -15,6 +15,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/calendar"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
@@ -847,6 +848,82 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
+			// Native Google Calendar sync. Uses Composio's tools.proxy to
+			// pass through to Google Calendar v3 with the connected_account's
+			// OAuth token attached server-side (token never leaves Composio).
+			// Incremental syncToken pattern means each 2-min tick is one
+			// thin HTTP call per account returning only deltas. Provides
+			// the substrate for the dashboard Upcoming card + Accept/Decline
+			// modal + agent calendar_* tools.
+			var (
+				calendarSyncer *calendar.Syncer
+				calendarTicker *calendar.Ticker
+				calendarAPI    *calendar.API
+			)
+			if pool != nil && composioExec != nil && connectorsCache != nil {
+				selfEmailFor := func(accountID string) string {
+					return connectorsCache.Identities()[accountID]
+				}
+				calProvider := calendar.NewGoogleProvider(composioExec, selfEmailFor)
+				calStore := calendar.NewStore(pool)
+				calendarSyncer = calendar.NewSyncer(calProvider, calStore, pipeline)
+
+				// Ticker: every 2 min, walk every connected googlecalendar
+				// account. Account discovery routes through the connectors
+				// cache so a new Google grant lights up sync within one
+				// cache refresh cycle (~60s) - no restart needed.
+				listAccounts := func() []string {
+					by := connectorsCache.AccountsByToolkit()
+					ids := []string{}
+					for _, a := range by["googlecalendar"] {
+						if a != nil && a.Status != "" && a.Status != "disabled" {
+							ids = append(ids, a.ID)
+						}
+					}
+					return ids
+				}
+				calendarTicker = calendar.NewTicker(calendarSyncer, listAccounts, 2*time.Minute)
+
+				// Studio-facing accounts list folds in the per-account
+				// sync-state row (last_tick_at + last_error) so the UI can
+				// surface "last synced 30s ago" / "auth expired."
+				listAccountDTOs := func() []calendar.AccountDTO {
+					accounts := connectorsCache.AccountsByToolkit()["googlecalendar"]
+					out := make([]calendar.AccountDTO, 0, len(accounts))
+					idents := connectorsCache.Identities()
+					for _, a := range accounts {
+						if a == nil {
+							continue
+						}
+						dto := calendar.AccountDTO{
+							ID:    a.ID,
+							Alias: a.Alias,
+							Email: idents[a.ID],
+						}
+						st, _ := calStore.LoadSyncState(context.Background(), a.ID, "primary")
+						if st != nil {
+							if !st.LastTickAt.IsZero() {
+								dto.LastSyncAt = st.LastTickAt.Format(time.RFC3339)
+							}
+							dto.LastError = st.LastError
+							dto.SyncedCount = st.EventsSeen
+						}
+						out = append(out, dto)
+					}
+					return out
+				}
+				calendarAPI = calendar.NewAPI(calendarSyncer, listAccountDTOs)
+
+				// Agent-facing calendar tools (calendar_respond, _sync_now,
+				// _create, _patch, _delete). Jarvis routes through these
+				// instead of raw composio__GOOGLECALENDAR_* verbs - same
+				// Provider path the ticker uses, so behaviour is identical
+				// across automated sync, agent intent, and Studio clicks.
+				calendar.RegisterTools(registry, calendarSyncer)
+
+				fmt.Println("  calendar: native Google sync ready (Composio proxy, 2m tick)")
+			}
+
 			// Cron scheduler + Sentinel manager. Both degrade gracefully when
 			// no DB pool is configured. The scheduler now runs a composite
 			// executor - agent jobs (system_event / isolated_agent_turn) go
@@ -1065,6 +1142,7 @@ func serveCmd() *cobra.Command {
 				BridgePrefs:    activeBridgePrefs,
 				Turns:          turnStore,
 				RunsAPI:        runs.NewAPI(pool),
+				CalendarAPI:    calendarAPI,
 			})
 
 			// Late-bind the Voyager auto-promote → chat-bubble notifier. The
@@ -1082,6 +1160,13 @@ func serveCmd() *cobra.Command {
 			if connectorsCache != nil {
 				connectorsCache.Start(ctx)
 				defer connectorsCache.Stop()
+			}
+
+			// Calendar sync ticker starts after the cache so the very first
+			// tick already has the connected-accounts snapshot to walk.
+			if calendarTicker != nil {
+				calendarTicker.Start(ctx)
+				defer calendarTicker.Stop()
 			}
 
 			// Pre-register every Composio toolkit verb the boss has
