@@ -113,6 +113,7 @@ export type CalendarEvent = {
   hangoutLink?: string;
   responseStatus?: EventResponseStatus;
   accountId?: string;
+  accountLabel?: string;
   classification: CalendarEventClass;
   prep: PrepItem[]; // can be empty for routine events
 };

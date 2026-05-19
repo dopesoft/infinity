@@ -23,16 +23,15 @@ import type {
   DashboardItem,
 } from "@/lib/dashboard/types";
 
-/* Upcoming - calendar feed, 6 months out, no empty weeks.
+/* Upcoming - calendar feed, 6 months out, flat list.
  *
- * Events are grouped by day, and any day without events is omitted
- * entirely (per the boss's request - "no empty weeks"). Long stretches
- * with no events get a single thin "nothing scheduled · 12 days" row
- * inside the scroll so the temporal gap is still legible without
- * burning vertical space.
+ * No day-bucket headers, no "X days clear" gap rows - the boss wants
+ * one continuous list of future events sorted by start time. Each
+ * row carries its own inline date so the temporal context still
+ * reads at a glance without section breaks.
  *
- * Each event shows a prep count badge if any prep items remain open.
- * Classification icons make event types scannable at a glance.
+ * Visible height is locked to ~4 rows; the rest scroll inside the
+ * card so the dashboard column never grows unbounded.
  */
 
 const CLASS_ICON: Record<CalendarEventClass, LucideIcon> = {
@@ -47,8 +46,10 @@ const CLASS_ICON: Record<CalendarEventClass, LucideIcon> = {
   other: CalendarDays,
 };
 
-type DayBucket = { dayStart: number; events: CalendarEvent[] };
-type Row = { kind: "day"; bucket: DayBucket } | { kind: "gap"; days: number };
+// Approximate height of one EventRow (px) with the typical chip row
+// rendered. 4 rows × ROW_PX defines the visible viewport before
+// scrolling kicks in.
+const ROW_PX = 82;
 
 export function UpcomingCard({
   events,
@@ -57,36 +58,11 @@ export function UpcomingCard({
   events: CalendarEvent[];
   onOpen: (item: DashboardItem) => void;
 }) {
-  const rows = useMemo<Row[]>(() => {
+  const future = useMemo(() => {
     const today = startOfDay(new Date());
-    // Group by day-start for stable bucketing across the 6-month range.
-    const buckets = new Map<number, CalendarEvent[]>();
-    for (const e of events) {
-      const k = startOfDay(e.startsAt);
-      if (k < today) continue;
-      const arr = buckets.get(k) ?? [];
-      arr.push(e);
-      buckets.set(k, arr);
-    }
-    const sortedDays = Array.from(buckets.entries()).sort((a, b) => a[0] - b[0]);
-    // Insert "gap" rows when consecutive buckets are >1 day apart, but
-    // skip gaps for very small differences (today → tomorrow is no gap).
-    const out: Row[] = [];
-    let prevDay: number | null = null;
-    for (const [day, evs] of sortedDays) {
-      if (prevDay !== null) {
-        const dayDiff = Math.round((day - prevDay) / (24 * 60 * 60 * 1000)) - 1;
-        if (dayDiff >= 2) {
-          out.push({ kind: "gap", days: dayDiff });
-        }
-      }
-      out.push({
-        kind: "day",
-        bucket: { dayStart: day, events: evs.sort((a, b) => a.startsAt.localeCompare(b.startsAt)) },
-      });
-      prevDay = day;
-    }
-    return out;
+    return events
+      .filter((e) => startOfDay(e.startsAt) >= today)
+      .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   }, [events]);
 
   return (
@@ -97,51 +73,23 @@ export function UpcomingCard({
       action={{ label: "next 6 months", href: "/cron" }}
     >
       <div className="overflow-hidden rounded-xl border bg-card">
-        <div className="max-h-[460px] overflow-y-auto scroll-touch">
+        <div
+          className="overflow-y-auto scroll-touch"
+          style={{ maxHeight: `${ROW_PX * 4}px` }}
+        >
           <ol className="divide-y divide-border/60">
-            {rows.length === 0 ? (
+            {future.length === 0 ? (
               <li className="px-3 py-6 text-center text-xs text-muted-foreground">
                 Nothing scheduled in the next 6 months.
               </li>
             ) : (
-              rows.map((row, i) => {
-                if (row.kind === "gap") {
-                  return (
-                    <li
-                      key={`gap-${i}`}
-                      className="bg-muted/20 px-3 py-1.5 text-center font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                    >
-                      · {row.days} {row.days === 1 ? "day" : "days"} clear ·
-                    </li>
-                  );
-                }
-                const b = row.bucket;
-                const label = dayLabel(new Date(b.dayStart).toISOString());
-                return (
-                  <li key={`day-${b.dayStart}`}>
-                    <div className="sticky top-0 z-10 flex items-baseline gap-2 bg-card/95 px-3 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-card/85">
-                      <span className="text-[11px] font-semibold tracking-tight text-foreground" suppressHydrationWarning>
-                        {label}
-                      </span>
-                      <span className="font-mono text-[10px] text-muted-foreground" suppressHydrationWarning>
-                        {new Date(b.dayStart).toLocaleDateString([], {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </span>
-                    </div>
-                    <ul>
-                      {b.events.map((e) => (
-                        <EventRow
-                          key={e.id}
-                          e={e}
-                          onClick={() => onOpen({ kind: "event", data: e })}
-                        />
-                      ))}
-                    </ul>
-                  </li>
-                );
-              })
+              future.map((e) => (
+                <EventRow
+                  key={e.id}
+                  e={e}
+                  onClick={() => onOpen({ kind: "event", data: e })}
+                />
+              ))
             )}
           </ol>
         </div>
@@ -153,6 +101,17 @@ export function UpcomingCard({
 function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
   const Icon = CLASS_ICON[e.classification] ?? CalendarDays;
   const openPrep = e.prep.filter((p) => !p.done).length;
+  // Conference / video provider for the optional 'meet' / 'zoom' chip.
+  const videoSolution = (
+    e.conference?.solutionName ??
+    (e.hangoutLink ? "Meet" : "")
+  ).trim();
+  // RSVP chip: only render for invitees (events with a self
+  // responseStatus). Organizer events have null/undefined.
+  const rsvp = e.responseStatus;
+  // Recurrence chip: any non-empty recurrence array → "recurring".
+  const isRecurring = Array.isArray(e.recurrence) && e.recurrence.length > 0;
+
   return (
     <li>
       <motion.button
@@ -174,20 +133,33 @@ function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <span
-              className="font-mono text-[11px] text-muted-foreground"
-              suppressHydrationWarning
-            >
-              {clockTime(e.startsAt)}
-            </span>
             <span className="truncate text-sm font-medium text-foreground">{e.title}</span>
           </div>
-          {e.location ? (
-            <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground">
-              <MapPin className="size-3 shrink-0" aria-hidden />
-              {e.location}
-            </p>
-          ) : null}
+          <p
+            className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-muted-foreground"
+            suppressHydrationWarning
+          >
+            <span className="font-medium text-foreground/80">{dayLabel(e.startsAt)}</span>
+            <span className="font-mono">{clockTime(e.startsAt)}</span>
+            {e.location ? (
+              <>
+                <span aria-hidden>·</span>
+                <MapPin className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">{e.location}</span>
+              </>
+            ) : null}
+          </p>
+          {/* Chip row - account first (which calendar), then derived
+              attribution (rsvp state, conference provider, recurring,
+              classification). Same chip primitive shape as FollowUps. */}
+          {(e.accountLabel || rsvp || videoSolution || isRecurring) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              {e.accountLabel ? <Chip tone="muted">{e.accountLabel}</Chip> : null}
+              {rsvp ? <Chip tone={rsvpTone(rsvp)}>{rsvpLabel(rsvp)}</Chip> : null}
+              {videoSolution ? <Chip tone="info">{videoSolution}</Chip> : null}
+              {isRecurring ? <Chip tone="muted">recurring</Chip> : null}
+            </div>
+          )}
         </div>
         {openPrep > 0 ? (
           <span
@@ -200,4 +172,48 @@ function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
       </motion.button>
     </li>
   );
+}
+
+// Chip - matches the FollowUps card chip shape exactly (rounded-md,
+// thin border, font-mono uppercase 10px text). Tone tints bg/text/border
+// for known signals; defaults to muted neutral for free-form strings.
+function Chip({
+  children,
+  tone = "muted",
+}: {
+  children: React.ReactNode;
+  tone?: "muted" | "info" | "warn" | "success" | "danger";
+}) {
+  const cls = {
+    muted: "border-border bg-muted text-muted-foreground",
+    info: "border-info/30 bg-info/10 text-info",
+    warn: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+    success: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+    danger: "border-rose-500/30 bg-rose-500/10 text-rose-400",
+  }[tone];
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 max-w-full items-center truncate rounded-md border px-1.5 font-mono text-[10px] uppercase tracking-wider",
+        cls,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function rsvpTone(s: string): "muted" | "success" | "warn" | "danger" {
+  if (s === "accepted") return "success";
+  if (s === "tentative") return "warn";
+  if (s === "declined") return "danger";
+  return "muted";
+}
+
+function rsvpLabel(s: string): string {
+  if (s === "accepted") return "going";
+  if (s === "tentative") return "maybe";
+  if (s === "declined") return "declined";
+  if (s === "needsAction") return "rsvp";
+  return s;
 }

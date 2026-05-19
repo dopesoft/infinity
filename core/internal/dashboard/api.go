@@ -150,6 +150,11 @@ type CalendarEvent struct {
 	HangoutLink    string          `json:"hangoutLink,omitempty"`
 	ResponseStatus string          `json:"responseStatus,omitempty"`
 	AccountID      string          `json:"accountId,omitempty"`
+	// AccountLabel is the human-readable label for the owning account
+	// (alias if set, else discovered identity email, else empty). Lets
+	// the Upcoming card render an "kai@dopesoft.io" chip without the
+	// client having to load /api/calendar/accounts separately.
+	AccountLabel   string          `json:"accountLabel,omitempty"`
 	Classification string          `json:"classification"`
 	Prep           []PrepItem      `json:"prep"`
 }
@@ -428,6 +433,14 @@ func (a *API) loadTodos(ctx context.Context) ([]Todo, error) {
 }
 
 func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
+	// One-shot read of the connector identity + alias maps so we can
+	// label each event with its owning account's email/alias instead
+	// of the opaque ca_xxx id. Both are stored as JSON blobs in
+	// infinity_meta keyed by accountId. Either query failing leaves
+	// the map empty; downstream just emits AccountLabel = "" which the
+	// dashboard tolerates.
+	idents := loadAccountLabels(ctx, a.Pool)
+
 	// Forward-looking window: 6 months from today, plus events still
 	// active right now (ends_at >= now). Past events are excluded -
 	// the dashboard surface is "what's coming," not history.
@@ -476,9 +489,43 @@ func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
 		if e.Prep == nil {
 			e.Prep = []PrepItem{}
 		}
+		if e.AccountID != "" {
+			e.AccountLabel = idents[e.AccountID]
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// loadAccountLabels reads connectors_aliases + connectors_identities
+// from infinity_meta and returns one merged map of accountID -> label.
+// Alias wins (boss's chosen human name), identity (oauth email) is the
+// fallback. Empty map on any error - downstream renders accountLabel=""
+// which the dashboard handles gracefully.
+func loadAccountLabels(ctx context.Context, pool *pgxpool.Pool) map[string]string {
+	out := map[string]string{}
+	if pool == nil {
+		return out
+	}
+	for _, key := range []string{"connectors_identities", "connectors_aliases"} {
+		var raw string
+		if err := pool.QueryRow(ctx, `SELECT value FROM infinity_meta WHERE key = $1`, key).Scan(&raw); err != nil {
+			continue
+		}
+		if raw == "" {
+			continue
+		}
+		m := map[string]string{}
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			continue
+		}
+		for k, v := range m {
+			if v != "" {
+				out[k] = v // aliases load second and overwrite identities, by design
+			}
+		}
+	}
+	return out
 }
 
 // decodeAttendees handles both shapes the column may carry:

@@ -24,7 +24,6 @@ import {
   Loader2,
   MapPin,
   MessageCircle,
-  MoreVertical,
   Quote,
   Repeat,
   Sparkles,
@@ -171,10 +170,21 @@ function EventHeader({ event }: { event: CalendarEvent }) {
   const pillTone = classificationTone(cls);
   return (
     <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 sm:px-5">
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2">
         <h2 className="min-w-0 flex-1 text-[20px] font-semibold leading-tight tracking-tight text-foreground sm:text-[22px]">
           {event.title}
         </h2>
+        {event.htmlLink ? (
+          <a
+            href={event.htmlLink}
+            target="_blank"
+            rel="noreferrer noopener"
+            aria-label="Open in Google Calendar"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ExternalLink className="size-4" aria-hidden />
+          </a>
+        ) : null}
         <span
           className={cn(
             "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[12px] font-medium capitalize",
@@ -183,13 +193,6 @@ function EventHeader({ event }: { event: CalendarEvent }) {
         >
           {cls}
         </span>
-        <button
-          type="button"
-          aria-label="More options"
-          className="-mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <MoreVertical className="size-4" aria-hidden />
-        </button>
       </div>
       <p
         className="flex flex-wrap items-baseline gap-x-3 text-[13px] text-foreground/80"
