@@ -617,12 +617,23 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 	// (2) Agent-surfaced items the recipe dropped into surface='followups'
 	// (or aliases). Same card, same chips, same dismiss path - Rule #1
 	// says one surface concept, one place to render.
+	//
+	// EXCLUDE source='agent' rows: when Jarvis writes a status note about
+	// his own work (e.g. "inbox triage blocker on primary Gmail") via
+	// surface_item with surface='followups', he is NOT a follow-up the
+	// boss owes a reply to - he's an internal observation. Those still
+	// land on the dashboard, just in the generic agent SurfaceCard
+	// (which the followup branch in loadSurface excludes inverse of this
+	// filter, so there's no double-render). Anything coming from a real
+	// connector (source='gmail', 'gmail_triage', 'inbox_triage', etc.)
+	// is a genuine pending follow-up and stays in this card.
 	srows, err := a.Pool.Query(ctx, `
 		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''),
 		       COALESCE(metadata, '{}'::jsonb), created_at
 		FROM mem_surface_items
 		WHERE surface = ANY($1::text[])
+		  AND source <> 'agent'
 		  AND (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
 		ORDER BY importance DESC NULLS LAST, created_at DESC
 		LIMIT 50
@@ -754,16 +765,27 @@ func indexAny(s, chars string) int {
 // with one generic SurfaceCard - a new surface the agent invents appears
 // on the dashboard with zero backend changes.
 func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error) {
-	// Skip follow-up-aliased surfaces here - they get folded into the
-	// Follow-ups card by loadFollowUps, and rendering them generically
-	// too would double the row.
+	// Skip follow-up-aliased surfaces - they get folded into the
+	// Follow-ups card by loadFollowUps. EXCEPTION: agent-authored rows
+	// (source='agent') in those same surfaces are NOT real follow-ups
+	// (they're Jarvis's status notes / observations). Instead of
+	// spawning a NEW section for them, we REWRITE their surface key to
+	// 'system' so they join the existing System card. Boss already
+	// has 4 distinct dashboard regions (alerts, system, questions,
+	// activity) - operational agent notes belong with the rest of
+	// the system-level chatter.
 	rows, err := a.Pool.Query(ctx, `
-		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
+		SELECT id::text,
+		       CASE
+		         WHEN source = 'agent' AND surface = ANY($1::text[]) THEN 'system'
+		         ELSE surface
+		       END AS surface,
+		       kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''), importance,
 		       importance_reason, metadata, status, created_at
 		FROM mem_surface_items
 		WHERE (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
-		  AND surface <> ALL($1::text[])
+		  AND (surface <> ALL($1::text[]) OR source = 'agent')
 		ORDER BY surface, importance DESC NULLS LAST, created_at DESC
 		LIMIT 200
 	`, followupSurfaceKeys)
