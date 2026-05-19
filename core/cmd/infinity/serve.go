@@ -864,7 +864,22 @@ func serveCmd() *cobra.Command {
 				selfEmailFor := func(accountID string) string {
 					return connectorsCache.Identities()[accountID]
 				}
-				calProvider := calendar.NewGoogleProvider(composioExec, selfEmailFor)
+				// userIDFor: Composio's execute API requires the entity_id
+				// (user_id) alongside connected_account_id on every call -
+				// it 1811s otherwise. The cache's Account.UserID carries
+				// the entity slug the boss connected with ("dopesoft",
+				// "mr khaya", ...), looked up per account on each call.
+				userIDFor := func(accountID string) string {
+					for _, accs := range connectorsCache.AccountsByToolkit() {
+						for _, a := range accs {
+							if a != nil && a.ID == accountID {
+								return a.UserID
+							}
+						}
+					}
+					return ""
+				}
+				calProvider := calendar.NewGoogleProvider(composioExec, selfEmailFor, userIDFor)
 				calStore := calendar.NewStore(pool)
 				calendarSyncer = calendar.NewSyncer(calProvider, calStore, pipeline)
 

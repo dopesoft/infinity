@@ -1,21 +1,29 @@
-// google.go - Google Calendar v3 provider through Composio's tools.proxy.
+// google.go - Google Calendar v3 provider through Composio's native actions.
 //
-// We do not hold an OAuth token. Every call routes through Composio's
-// /api/v3/tools/proxy, which attaches the connected_account's current
-// access token (refreshing as needed) and forwards the call to
-// www.googleapis.com. The upstream JSON comes back unmodified.
+// Composio does NOT expose a generic /v3/tools/proxy passthrough (their
+// docs hint at it but the endpoint 404s in production). They DO publish
+// every Google Calendar v3 verb we need as a first-class action:
 //
-// We use only documented Google Calendar v3 endpoints:
+//   GOOGLECALENDAR_EVENTS_LIST    full or windowed pull
+//   GOOGLECALENDAR_SYNC_EVENTS    incremental via syncToken
+//   GOOGLECALENDAR_PATCH_EVENT    partial update (used for RSVP)
+//   GOOGLECALENDAR_FIND_EVENT     single-event read (used pre-RSVP)
+//   GOOGLECALENDAR_CREATE_EVENT   new event
+//   GOOGLECALENDAR_DELETE_EVENT   cancel
 //
-//   List:        GET    /calendar/v3/calendars/{calendarId}/events
-//                       ?syncToken=… | ?timeMin=…&timeMax=…&pageToken=…
-//   Patch RSVP:  PATCH  /calendar/v3/calendars/{calendarId}/events/{eventId}
-//                       body: { attendees: [{email: SELF, responseStatus: …}] }
-//                       Note: setting the boss's response is done via PATCH
-//                       on the event with the self-attendee carrying the new
-//                       responseStatus. Per Google's docs this is the
-//                       supported pattern (there is no /respond endpoint).
-//   Patch/Create/Delete: standard CRUD on the same /events resource.
+// Each call returns Composio's standard envelope:
+//
+//   { "data": {...google response...}, "successful": true, "error": null }
+//
+// where `data` IS the Google API response verbatim (items + nextSyncToken
+// + nextPageToken etc.), so our existing parseGoogleEvent decoder reads
+// it unchanged. The boss's OAuth token never leaves Composio; the
+// connected_account + entity (user_id) tuple identifies the grant.
+//
+// CRITICAL: every execute call MUST carry both `connected_account_id`
+// AND `user_id` - Composio rejects with code 1811
+// (ActionExecute_ConnectedAccountEntityIdRequired) otherwise. The
+// userIDFor callback resolves account -> entity via the connectors cache.
 
 package calendar
 
@@ -31,32 +39,74 @@ import (
 
 const (
 	providerSlug      = "google_calendar"
-	googleCalendarAPI = "/calendar/v3"
 	defaultCalendarID = "primary"
 	defaultPageSize   = 250
+
+	actEventsList  = "GOOGLECALENDAR_EVENTS_LIST"
+	actSyncEvents  = "GOOGLECALENDAR_SYNC_EVENTS"
+	actPatchEvent  = "GOOGLECALENDAR_PATCH_EVENT"
+	actFindEvent   = "GOOGLECALENDAR_FIND_EVENT"
+	actCreateEvent = "GOOGLECALENDAR_CREATE_EVENT"
+	actDeleteEvent = "GOOGLECALENDAR_DELETE_EVENT"
 )
 
-// GoogleProvider implements Provider against Google Calendar via Composio.
-// `selfEmailFor` is a hook the sync layer fills so we know the boss's own
-// email address per account (needed when writing the RSVP patch). The
-// connector identity cache populates this from GMAIL/CALENDAR identity
-// discovery; we just read it.
+// GoogleProvider implements Provider against Google Calendar via Composio
+// native actions. selfEmailFor returns the boss's email per account
+// (needed when writing an RSVP). userIDFor returns the Composio entity_id
+// per account (mandatory for every execute call). Both nil-safe: missing
+// resolvers surface clear errors instead of silent failures.
 type GoogleProvider struct {
 	exec         *connectors.ExecuteClient
 	selfEmailFor func(accountID string) string
+	userIDFor    func(accountID string) string
 }
 
-// NewGoogleProvider builds the provider. exec is required; selfEmailFor
-// may be nil (Respond will return an error when called without it).
-func NewGoogleProvider(exec *connectors.ExecuteClient, selfEmailFor func(accountID string) string) *GoogleProvider {
-	return &GoogleProvider{exec: exec, selfEmailFor: selfEmailFor}
+// NewGoogleProvider builds the provider. exec is required; both callbacks
+// may be nil (Respond / Execute return descriptive errors when called).
+func NewGoogleProvider(
+	exec *connectors.ExecuteClient,
+	selfEmailFor func(accountID string) string,
+	userIDFor func(accountID string) string,
+) *GoogleProvider {
+	return &GoogleProvider{
+		exec:         exec,
+		selfEmailFor: selfEmailFor,
+		userIDFor:    userIDFor,
+	}
 }
 
 func (g *GoogleProvider) Slug() string { return providerSlug }
 
-// List - one page of events. Either incremental (syncToken set) or full
-// (timeMin/timeMax). Google forbids combining syncToken with timeMin -
-// callers honor that by leaving SyncToken empty for full syncs.
+// execute is the one place every Composio call goes through so we can
+// guarantee user_id is attached. Returns the raw json envelope `data`
+// field on success, or a descriptive error on failure.
+func (g *GoogleProvider) execute(ctx context.Context, slug, accountID string, args map[string]any) (json.RawMessage, error) {
+	if g.userIDFor == nil {
+		return nil, fmt.Errorf("calendar: no user_id resolver wired for %s", slug)
+	}
+	entity := strings.TrimSpace(g.userIDFor(accountID))
+	if entity == "" {
+		return nil, fmt.Errorf("calendar: no entity/user_id known for account %s (Composio requires user_id with every execute)", accountID)
+	}
+	resp, err := g.exec.Execute(ctx, connectors.ExecuteRequest{
+		Slug:               slug,
+		ConnectedAccountID: accountID,
+		UserID:             entity,
+		Arguments:          args,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Successful {
+		return nil, fmt.Errorf("composio %s: %s", slug, resp.Error)
+	}
+	return resp.Data, nil
+}
+
+// List - one page of events. Routes to SYNC_EVENTS when SyncToken is
+// set (incremental), EVENTS_LIST otherwise (full window). On a 410
+// GONE Composio surfaces an error string containing "410" or "Sync
+// token is no longer valid" - we detect either and return FullResync.
 func (g *GoogleProvider) List(ctx context.Context, accountID string, opts ListOptions) (*ListPage, error) {
 	calID := opts.CalendarID
 	if calID == "" {
@@ -67,17 +117,19 @@ func (g *GoogleProvider) List(ctx context.Context, accountID string, opts ListOp
 		pageSize = defaultPageSize
 	}
 
-	params := []connectors.ProxyParam{
-		{Name: "maxResults", Value: fmt.Sprintf("%d", pageSize), In: "query"},
-		{Name: "singleEvents", Value: "true", In: "query"},
-		{Name: "showDeleted", Value: "true", In: "query"},
+	args := map[string]any{
+		"calendarId":   calID,
+		"maxResults":   pageSize,
+		"singleEvents": true,
+		"showDeleted":  true,
 	}
+
+	var slug string
 	if opts.SyncToken != "" {
-		params = append(params, connectors.ProxyParam{Name: "syncToken", Value: opts.SyncToken, In: "query"})
+		slug = actSyncEvents
+		args["syncToken"] = opts.SyncToken
 	} else {
-		// Full sync window. Default to "starting yesterday" so freshly
-		// past events are still visible while ongoing today, and cap
-		// out at +6mo so the initial pull stays bounded.
+		slug = actEventsList
 		tmin := opts.TimeMin
 		if tmin.IsZero() {
 			tmin = time.Now().AddDate(0, 0, -1)
@@ -86,35 +138,26 @@ func (g *GoogleProvider) List(ctx context.Context, accountID string, opts ListOp
 		if tmax.IsZero() {
 			tmax = time.Now().AddDate(0, 6, 0)
 		}
-		params = append(params,
-			connectors.ProxyParam{Name: "timeMin", Value: tmin.UTC().Format(time.RFC3339), In: "query"},
-			connectors.ProxyParam{Name: "timeMax", Value: tmax.UTC().Format(time.RFC3339), In: "query"},
-			connectors.ProxyParam{Name: "orderBy", Value: "startTime", In: "query"},
-		)
+		args["timeMin"] = tmin.UTC().Format(time.RFC3339)
+		args["timeMax"] = tmax.UTC().Format(time.RFC3339)
+		args["orderBy"] = "startTime"
 	}
 	if opts.PageToken != "" {
-		params = append(params, connectors.ProxyParam{Name: "pageToken", Value: opts.PageToken, In: "query"})
+		args["pageToken"] = opts.PageToken
 	}
 
-	resp, err := g.exec.Proxy(ctx, connectors.ProxyRequest{
-		ConnectedAccountID: accountID,
-		Endpoint:           googleCalendarAPI + "/calendars/" + calID + "/events",
-		Method:             "GET",
-		Parameters:         params,
-	})
+	data, err := g.execute(ctx, slug, accountID, args)
 	if err != nil {
-		// Detect Google's 410 GONE for an invalid syncToken; signal a
-		// full-resync to the caller instead of returning an error.
-		if strings.Contains(err.Error(), "410") {
+		// Detect sync-token expiry and trigger a full re-sync at the
+		// next loop iteration. Google + Composio both put "410" or
+		// "Sync token is no longer valid" in the error string.
+		es := strings.ToLower(err.Error())
+		if strings.Contains(es, "410") ||
+			strings.Contains(es, "sync token") ||
+			strings.Contains(es, "synctoken") {
 			return &ListPage{FullResync: true}, nil
 		}
 		return nil, err
-	}
-	if !resp.Successful {
-		if strings.Contains(strings.ToLower(resp.Error), "gone") || resp.Status == 410 {
-			return &ListPage{FullResync: true}, nil
-		}
-		return nil, fmt.Errorf("google list: %s (status=%d)", resp.Error, resp.Status)
 	}
 
 	var raw struct {
@@ -122,7 +165,7 @@ func (g *GoogleProvider) List(ctx context.Context, accountID string, opts ListOp
 		NextPageToken string            `json:"nextPageToken"`
 		NextSyncToken string            `json:"nextSyncToken"`
 	}
-	if err := json.Unmarshal(resp.Data, &raw); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("google list decode: %w", err)
 	}
 
@@ -132,10 +175,8 @@ func (g *GoogleProvider) List(ctx context.Context, accountID string, opts ListOp
 		SyncToken: raw.NextSyncToken,
 	}
 	for _, item := range raw.Items {
-		ev, err := parseGoogleEvent(item, accountID, calID)
-		if err != nil {
-			// Skip malformed rows rather than fail the whole page; one
-			// odd event shouldn't drop the entire sync.
+		ev, perr := parseGoogleEvent(item, accountID, calID)
+		if perr != nil {
 			continue
 		}
 		out.Events = append(out.Events, ev)
@@ -143,10 +184,9 @@ func (g *GoogleProvider) List(ctx context.Context, accountID string, opts ListOp
 	return out, nil
 }
 
-// Respond patches the boss's attendee row with a new responseStatus.
-// Google's API requires us to PATCH the event with the FULL attendee
-// list including the boss's row updated; we read the current state via
-// a quick GET to avoid clobbering other attendees' responses.
+// Respond patches the boss's attendee row. Composio's PATCH_EVENT accepts
+// `attendees` as a top-level argument; we round-trip via FIND_EVENT so we
+// don't clobber other invitees' responses.
 func (g *GoogleProvider) Respond(ctx context.Context, accountID, calendarID, remoteID string, response Response) (*Event, error) {
 	if !response.Valid() {
 		return nil, fmt.Errorf("invalid response %q", response)
@@ -163,13 +203,10 @@ func (g *GoogleProvider) Respond(ctx context.Context, accountID, calendarID, rem
 		calID = defaultCalendarID
 	}
 
-	// Pull current event so we round-trip the existing attendee list.
 	current, err := g.getEvent(ctx, accountID, calID, remoteID)
 	if err != nil {
 		return nil, err
 	}
-	// Update the matching attendee row in-place; if the boss isn't on the
-	// list yet (rare - happens when an invitation lands via aliasing), add.
 	var found bool
 	attendees := current.Attendees
 	for i, a := range attendees {
@@ -188,85 +225,72 @@ func (g *GoogleProvider) Respond(ctx context.Context, accountID, calendarID, rem
 		})
 	}
 
-	patchBody := map[string]any{
-		"attendees": attendeesToGoogle(attendees),
+	args := map[string]any{
+		"calendarId":  calID,
+		"eventId":     remoteID,
+		"attendees":   attendeesToGoogle(attendees),
+		"sendUpdates": "externalOnly",
 	}
-	resp, err := g.exec.Proxy(ctx, connectors.ProxyRequest{
-		ConnectedAccountID: accountID,
-		Endpoint:           googleCalendarAPI + "/calendars/" + calID + "/events/" + remoteID,
-		Method:             "PATCH",
-		Parameters: []connectors.ProxyParam{
-			// sendUpdates=externalOnly notifies non-self attendees (the
-			// organizer + invitees) without spamming the boss with a
-			// copy of his own RSVP. Standard for invitee RSVPs.
-			{Name: "sendUpdates", Value: "externalOnly", In: "query"},
-		},
-		Body: patchBody,
-	})
+	data, err := g.execute(ctx, actPatchEvent, accountID, args)
 	if err != nil {
 		return nil, err
 	}
-	if !resp.Successful {
-		return nil, fmt.Errorf("google respond: %s (status=%d)", resp.Error, resp.Status)
-	}
-	ev, err := parseGoogleEvent(resp.Data, accountID, calID)
+	ev, err := parseGoogleEvent(data, accountID, calID)
 	if err != nil {
 		return nil, err
 	}
 	return &ev, nil
 }
 
-// Patch applies a partial update. Patch keys map 1:1 to Google's Event
-// resource (title -> "summary", description, location, start, end, …).
-// The caller is responsible for building the Google-shaped patch body;
-// this is intentionally low-level so the agent tool can pass through
-// rich shapes the user typed in chat.
+// Patch applies a partial update. Composio's PATCH_EVENT accepts the
+// same fields Google's Event resource does, flattened into argument
+// keys (summary, description, location, start, end, attendees, ...).
+// Caller-provided keys are merged into the call body verbatim alongside
+// the required calendarId + eventId.
 func (g *GoogleProvider) Patch(ctx context.Context, accountID, calendarID, remoteID string, patch map[string]any) (*Event, error) {
 	calID := calendarID
 	if calID == "" {
 		calID = defaultCalendarID
 	}
-	resp, err := g.exec.Proxy(ctx, connectors.ProxyRequest{
-		ConnectedAccountID: accountID,
-		Endpoint:           googleCalendarAPI + "/calendars/" + calID + "/events/" + remoteID,
-		Method:             "PATCH",
-		Body:               patch,
-	})
+	args := map[string]any{
+		"calendarId": calID,
+		"eventId":    remoteID,
+	}
+	for k, v := range patch {
+		args[k] = v
+	}
+	data, err := g.execute(ctx, actPatchEvent, accountID, args)
 	if err != nil {
 		return nil, err
 	}
-	if !resp.Successful {
-		return nil, fmt.Errorf("google patch: %s (status=%d)", resp.Error, resp.Status)
-	}
-	ev, err := parseGoogleEvent(resp.Data, accountID, calID)
+	ev, err := parseGoogleEvent(data, accountID, calID)
 	if err != nil {
 		return nil, err
 	}
 	return &ev, nil
 }
 
-// Create posts a new event. draft is the raw Google-shape body.
+// Create posts a new event. `draft` is the flat argument map Composio's
+// CREATE_EVENT accepts (summary, start, end, description, location,
+// attendees, ...). We add calendarId + sendUpdates=all so invitees
+// receive the invitation email.
 func (g *GoogleProvider) Create(ctx context.Context, accountID, calendarID string, draft map[string]any) (*Event, error) {
 	calID := calendarID
 	if calID == "" {
 		calID = defaultCalendarID
 	}
-	resp, err := g.exec.Proxy(ctx, connectors.ProxyRequest{
-		ConnectedAccountID: accountID,
-		Endpoint:           googleCalendarAPI + "/calendars/" + calID + "/events",
-		Method:             "POST",
-		Parameters: []connectors.ProxyParam{
-			{Name: "sendUpdates", Value: "all", In: "query"},
-		},
-		Body: draft,
-	})
+	args := map[string]any{
+		"calendarId":  calID,
+		"sendUpdates": "all",
+	}
+	for k, v := range draft {
+		args[k] = v
+	}
+	data, err := g.execute(ctx, actCreateEvent, accountID, args)
 	if err != nil {
 		return nil, err
 	}
-	if !resp.Successful {
-		return nil, fmt.Errorf("google create: %s (status=%d)", resp.Error, resp.Status)
-	}
-	ev, err := parseGoogleEvent(resp.Data, accountID, calID)
+	ev, err := parseGoogleEvent(data, accountID, calID)
 	if err != nil {
 		return nil, err
 	}
@@ -280,41 +304,33 @@ func (g *GoogleProvider) Delete(ctx context.Context, accountID, calendarID, remo
 	if calID == "" {
 		calID = defaultCalendarID
 	}
-	resp, err := g.exec.Proxy(ctx, connectors.ProxyRequest{
-		ConnectedAccountID: accountID,
-		Endpoint:           googleCalendarAPI + "/calendars/" + calID + "/events/" + remoteID,
-		Method:             "DELETE",
-		Parameters: []connectors.ProxyParam{
-			{Name: "sendUpdates", Value: "all", In: "query"},
-		},
-	})
+	args := map[string]any{
+		"calendarId":  calID,
+		"eventId":     remoteID,
+		"sendUpdates": "all",
+	}
+	_, err := g.execute(ctx, actDeleteEvent, accountID, args)
 	if err != nil {
 		if strings.Contains(err.Error(), "404") {
 			return nil
 		}
 		return err
 	}
-	if !resp.Successful && resp.Status != 404 {
-		return fmt.Errorf("google delete: %s (status=%d)", resp.Error, resp.Status)
-	}
 	return nil
 }
 
-// getEvent is the internal GET we use to round-trip an event before a
-// patch (to preserve other attendees' responses on an RSVP).
+// getEvent is the internal read we use to round-trip an event before a
+// RSVP patch (to preserve other invitees' responses).
 func (g *GoogleProvider) getEvent(ctx context.Context, accountID, calendarID, remoteID string) (*Event, error) {
-	resp, err := g.exec.Proxy(ctx, connectors.ProxyRequest{
-		ConnectedAccountID: accountID,
-		Endpoint:           googleCalendarAPI + "/calendars/" + calendarID + "/events/" + remoteID,
-		Method:             "GET",
-	})
+	args := map[string]any{
+		"calendarId": calendarID,
+		"eventId":    remoteID,
+	}
+	data, err := g.execute(ctx, actFindEvent, accountID, args)
 	if err != nil {
 		return nil, err
 	}
-	if !resp.Successful {
-		return nil, fmt.Errorf("google get: %s (status=%d)", resp.Error, resp.Status)
-	}
-	ev, err := parseGoogleEvent(resp.Data, accountID, calendarID)
+	ev, err := parseGoogleEvent(data, accountID, calendarID)
 	if err != nil {
 		return nil, err
 	}
@@ -322,8 +338,7 @@ func (g *GoogleProvider) getEvent(ctx context.Context, accountID, calendarID, re
 }
 
 // attendeesToGoogle reshapes our Attendee slice into the wire format
-// Google expects on a PATCH body. We strip empty/derived fields to
-// keep the payload small and avoid sending back nulls.
+// Google (and Composio's PATCH_EVENT) expects.
 func attendeesToGoogle(in []Attendee) []map[string]any {
 	out := make([]map[string]any, 0, len(in))
 	for _, a := range in {
@@ -348,9 +363,9 @@ func attendeesToGoogle(in []Attendee) []map[string]any {
 	return out
 }
 
-// parseGoogleEvent decodes one item from events.list (or one event
-// resource from get/patch/create) into our Event shape. Tolerant of
-// missing fields - everything is optional in Google's response.
+// parseGoogleEvent decodes one item from events.list (or one full event
+// resource) into our Event shape. Tolerant of missing fields - every
+// field on Google's Event resource is optional in the response.
 func parseGoogleEvent(raw json.RawMessage, accountID, calendarID string) (Event, error) {
 	var src struct {
 		ID          string `json:"id"`
@@ -420,7 +435,6 @@ func parseGoogleEvent(raw json.RawMessage, accountID, calendarID string) (Event,
 		},
 	}
 
-	// Start/end: dateTime (timed event) or date (all-day).
 	if src.Start.DateTime != "" {
 		if t, err := time.Parse(time.RFC3339, src.Start.DateTime); err == nil {
 			out.StartsAt = t
@@ -441,7 +455,6 @@ func parseGoogleEvent(raw json.RawMessage, accountID, calendarID string) (Event,
 		}
 	}
 
-	// Attendees + self-response extraction.
 	for _, a := range src.Attendees {
 		out.Attendees = append(out.Attendees, Attendee{
 			Email:          a.Email,
@@ -456,7 +469,6 @@ func parseGoogleEvent(raw json.RawMessage, accountID, calendarID string) (Event,
 		}
 	}
 
-	// Conference data: collapse to our slim shape.
 	if src.ConferenceData.Solution.Name != "" || len(src.ConferenceData.EntryPoints) > 0 {
 		conf := ConferenceData{
 			SolutionName: src.ConferenceData.Solution.Name,

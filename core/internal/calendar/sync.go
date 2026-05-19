@@ -153,6 +153,15 @@ func (s *Syncer) RunOnce(ctx context.Context, accountID, calendarID string) Sync
 		})
 	}
 
+	if res.Error != "" {
+		// Errors go to stderr (default log.Printf) so Railway tags them
+		// as 'error' per CLAUDE.md logging discipline. infoLog stays on
+		// stdout for happy-path lines below.
+		slog.Warn("calendar sync failed",
+			"account", accountID, "calendar", calendarID,
+			"pages", res.Pages, "events", res.Events,
+			"duration_ms", res.DurationMS, "err", res.Error)
+	}
 	infoLog.Printf("sync %s/%s: pages=%d events=%d duration=%dms full=%v",
 		accountID, calendarID, res.Pages, res.Events, res.DurationMS, res.FullResync)
 	return res
