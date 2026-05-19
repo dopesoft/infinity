@@ -34,7 +34,8 @@ export function TodosCard({
       badge={open.length}
       action={doneCount > 0 ? { label: `${doneCount} done`, href: "/memory" } : undefined}
     >
-      <div className="space-y-2 rounded-xl border bg-card p-3">
+      {/* No inner card wrapper - Section already provides chrome. */}
+      <div className="space-y-2">
         <ScrollList max={4}>
           <ul className="space-y-1">
             {open.map((t) => (

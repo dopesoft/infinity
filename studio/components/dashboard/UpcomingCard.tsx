@@ -94,7 +94,10 @@ export function UpcomingCard({
       delay={0.15}
       action={{ label: "next 6 months", href: "/cron" }}
     >
-      <div className="overflow-hidden rounded-xl border bg-card">
+      {/* No inner card wrapper - Section already owns the rounded
+          chrome. overflow-hidden stays on the scroll viewport so
+          sticky month headers clip cleanly inside the card. */}
+      <div className="overflow-hidden">
         <div
           className="overflow-y-auto scroll-touch"
           style={{ maxHeight: `${ROW_PX * 4}px` }}

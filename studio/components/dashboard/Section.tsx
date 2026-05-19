@@ -64,7 +64,12 @@ export function Section({
         className,
       )}
     >
-      <header className="flex items-center justify-between gap-3 px-4 pb-3 pt-4 sm:px-5">
+      {/* Header height is locked to h-12 (48px) regardless of whether an
+          `action` link is present so every dashboard card lines up.
+          Previously the header inflated to fit the h-7 action button and
+          collapsed when absent - cards in the same row had ~8px height
+          drift. */}
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 px-4 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
           {Icon ? (
             <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />

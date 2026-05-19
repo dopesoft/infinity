@@ -32,7 +32,10 @@ export function PursuitsCard({
       delay={0.05}
       action={{ label: "manage", href: "/memory" }}
     >
-      <div className="space-y-2.5 rounded-xl border bg-card p-3">
+      {/* No inner card wrapper - Section already provides the rounded
+          chrome. Adding a second rounded-xl border bg-card inside the
+          Section produced the "double card" cutoff at corners. */}
+      <div className="space-y-2.5">
         <ScrollList max={4}>
           <ul className="space-y-1">
             {habits.map((p) => (
