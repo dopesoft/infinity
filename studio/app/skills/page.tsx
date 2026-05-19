@@ -178,7 +178,7 @@ export default function SkillsPage() {
               open so the list/detail switcheroo isn't crowded. */}
           <aside
             className={cn(
-              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto bg-background px-4 py-4 scroll-touch sm:px-6 lg:w-72 lg:px-4 lg:border-r",
+              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto bg-background px-4 py-4 scroll-touch sm:px-6 lg:w-96 lg:px-4 lg:border-r",
               showDetail ? "hidden lg:block" : "block",
             )}
           >
