@@ -67,6 +67,10 @@ export interface ResponsiveModalProps {
   bodyClassName?: string;
   /** Optional className for the underlying Dialog/Drawer content node. */
   contentClassName?: string;
+  /** Optional className for the footer wrapper. Use to override the default
+   *  `bg-muted/20` tint (e.g. event-style modals that want a lavender RSVP
+   *  bar). Default classes still apply unless overridden by your tokens. */
+  footerClassName?: string;
   children?: React.ReactNode;
 }
 
@@ -80,6 +84,7 @@ export function ResponsiveModal({
   size = "md",
   bodyClassName,
   contentClassName,
+  footerClassName,
   children,
 }: ResponsiveModalProps) {
   const isDesktop = useIsDesktop();
@@ -109,7 +114,10 @@ export function ResponsiveModal({
         // viewport - no more buttons glued to the modal's bottom
         // border on desktop. `gap-2` separates stacked actions when
         // they wrap on a narrow viewport.
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 pt-3 sm:px-5 pb-safe">
+        <div className={cn(
+          "flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 pt-3 sm:px-5 pb-safe",
+          footerClassName,
+        )}>
           {footer}
         </div>
       ) : null}

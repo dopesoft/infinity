@@ -18,11 +18,13 @@ import {
   Hash,
   HelpCircle,
   Inbox,
+  AlignLeft,
   Layers,
   ListTodo,
   Loader2,
   MapPin,
   MessageCircle,
+  MoreVertical,
   Quote,
   Repeat,
   Sparkles,
@@ -84,9 +86,17 @@ export function ObjectViewer({
   onResolved?: (item: DashboardItem) => void;
 }) {
   const open = item !== null;
-  // All overflow / Dialog-vs-Drawer / a11y handling is owned by
-  // ResponsiveModal. ObjectViewer just composes the header, body, and
-  // footer slots - same shape it would have in either form.
+  // Event modals get a tinted lavender footer + justify-between layout
+  // (label left, RSVP cluster right) matching the design ref. For
+  // organizer-owned events (no self responseStatus) we drop the footer
+  // entirely - there's nothing to RSVP and the design doesn't show a
+  // bar in that case either.
+  const isEvent = item?.kind === "event";
+  const isInviteeEvent = isEvent && !!item?.data && (item.data as CalendarEvent).responseStatus;
+  const hasFooter = !isEvent || isInviteeEvent;
+  const footerOverride = isEvent
+    ? "bg-violet-100/70 dark:bg-violet-950/40 justify-between"
+    : undefined;
   return (
     <ResponsiveModal
       open={open}
@@ -95,7 +105,8 @@ export function ObjectViewer({
       title={item ? getViewerTitle(item) : "Item"}
       description={item ? getViewerKindLabel(item) : undefined}
       header={item ? <ItemHeader item={item} /> : undefined}
-      footer={item ? <ViewerActions item={item} onResolved={onResolved} /> : undefined}
+      footer={item && hasFooter ? <ViewerActions item={item} onResolved={onResolved} /> : undefined}
+      footerClassName={footerOverride}
     >
       <AnimatePresence mode="wait">
         {item ? <ViewerBody key={getViewerKey(item)} item={item} /> : null}
@@ -106,12 +117,20 @@ export function ObjectViewer({
 
 function ItemHeader({ item }: { item: DashboardItem }) {
   const { Icon, label, tone } = headerMeta(item);
+  // Event kind gets a bespoke header per the design reference: large
+  // bold title, classification pill (tone-coded), kebab placeholder,
+  // date/duration subtitle row under the title. Hand-built instead of
+  // ResponsiveModalHeader because the design hierarchy is distinct
+  // enough that fitting it into the generic header was producing the
+  // wrong typography.
+  if (item.kind === "event") {
+    return <EventHeader event={item.data} />;
+  }
   // Surface items, follow-ups, saved, and reflections render the "calm
   // preview" header shape: no loud uppercase eyebrow above the title,
   // title grows to 2 lines for long subjects, and the kind / source /
   // time appear as a muted subtitle UNDER the title. Other kinds
-  // (approval, work, todo, event, pursuit) keep the original compact
-  // header where the eyebrow tells you what's about to happen.
+  // (approval, work, todo, pursuit) keep the original compact header.
   const useCalmHeader =
     item.kind === "surface" ||
     item.kind === "followup" ||
@@ -138,6 +157,122 @@ function ItemHeader({ item }: { item: DashboardItem }) {
       tone={tone}
     />
   );
+}
+
+// ── EventHeader ───────────────────────────────────────────────────────────
+//
+// Bespoke event modal header. Matches the design reference: large bold
+// title, classification pill (tone-coded) + kebab on the right, plain
+// sans-serif date/duration row under the title, separator at the bottom
+// to match other modal headers. NO icon + eyebrow combo; the shape is
+// distinct from every other kind's header.
+function EventHeader({ event }: { event: CalendarEvent }) {
+  const cls = (event.classification || "meeting").toLowerCase();
+  const pillTone = classificationTone(cls);
+  return (
+    <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 sm:px-5">
+      <div className="flex items-start gap-3">
+        <h2 className="min-w-0 flex-1 text-[20px] font-semibold leading-tight tracking-tight text-foreground sm:text-[22px]">
+          {event.title}
+        </h2>
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[12px] font-medium capitalize",
+            pillTone,
+          )}
+        >
+          {cls}
+        </span>
+        <button
+          type="button"
+          aria-label="More options"
+          className="-mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <MoreVertical className="size-4" aria-hidden />
+        </button>
+      </div>
+      <p
+        className="flex flex-wrap items-baseline gap-x-3 text-[13px] text-foreground/80"
+        suppressHydrationWarning
+      >
+        <span>{eventDateLine(event.startsAt)}</span>
+        {!event.allDay ? (
+          <>
+            <span>
+              {clockTime(event.startsAt)}
+              {event.endsAt ? ` – ${clockTime(event.endsAt)}` : ""}
+            </span>
+            {event.endsAt ? (
+              <span className="text-muted-foreground">
+                ({eventDuration(event.startsAt, event.endsAt)})
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span>All day</span>
+        )}
+      </p>
+    </header>
+  );
+}
+
+// classificationTone: orange "Meeting" pill in the design ref is the
+// default; other event kinds get distinct tints so the boss can spot
+// "flight" / "dinner" / "appointment" at a glance.
+function classificationTone(cls: string): string {
+  switch (cls) {
+    case "meeting":
+      return "bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300";
+    case "flight":
+    case "travel":
+      return "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300";
+    case "dinner":
+    case "lunch":
+      return "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300";
+    case "concert":
+    case "social":
+      return "bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300";
+    case "appointment":
+    case "interview":
+      return "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300";
+    case "wedding":
+      return "bg-pink-100 text-pink-700 dark:bg-pink-500/20 dark:text-pink-300";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+// eventDateLine: "Thu, 1st April, 2026" format from the design ref.
+// Uses ordinal suffix on the day. en-GB locale ordering (day-month-year).
+function eventDateLine(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const weekday = d.toLocaleDateString("en-GB", { weekday: "short" });
+  const day = d.getDate();
+  const month = d.toLocaleDateString("en-GB", { month: "long" });
+  const year = d.getFullYear();
+  return `${weekday}, ${day}${ordinalSuffix(day)} ${month}, ${year}`;
+}
+
+function ordinalSuffix(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return s[(v - 20) % 10] || s[v] || s[0];
+}
+
+// eventDuration: humanised gap between two ISO times. "(2 hours)",
+// "(30 min)", "(1 hour 30 min)". Matches the design ref parenthesised
+// duration appended to the time range.
+function eventDuration(startISO: string, endISO: string): string {
+  const ms = new Date(endISO).getTime() - new Date(startISO).getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  const hLabel = hours === 1 ? "1 hour" : `${hours} hours`;
+  if (rem === 0) return hLabel;
+  return `${hLabel} ${rem} min`;
 }
 
 // calmSubtitle: builds the muted meta strip rendered under the hero
@@ -364,6 +499,12 @@ function ViewerActions({
     return null;
   }
 
+  // Event modals own their entire footer (Are you attending? + RSVP
+  // cluster) per the design ref - no Discuss CTA. Every other kind
+  // keeps Discuss as the universal trailing primary.
+  if (item.kind === "event") {
+    return <>{renderSecondary()}</>;
+  }
   return (
     <>
       {renderSecondary()}
@@ -445,39 +586,51 @@ function RsvpButtons({
     [pending, event.id, onResolved, item],
   );
 
+  // RsvpButtons renders DIRECTLY into the modal's footer slot. The
+  // footer container already has `flex items-center justify-between`
+  // (we override `justify-end` via footerClassName at the modal site)
+  // plus the lavender bg. The label sits on the left, the three
+  // buttons cluster on the right.
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="mr-auto text-[13px] text-muted-foreground">
+    <>
+      <span className="text-[14px] text-foreground/90">
         Are you attending?
       </span>
-      <RsvpChoice
-        label="Yes"
-        active={current === "accepted"}
-        pending={pending === "accepted"}
-        tone="accepted"
-        onClick={() => respond("accepted")}
-        disabled={!!pending}
-      />
-      <RsvpChoice
-        label="Maybe"
-        active={current === "tentative"}
-        pending={pending === "tentative"}
-        tone="tentative"
-        onClick={() => respond("tentative")}
-        disabled={!!pending}
-      />
-      <RsvpChoice
-        label="No"
-        active={current === "declined"}
-        pending={pending === "declined"}
-        tone="declined"
-        onClick={() => respond("declined")}
-        disabled={!!pending}
-      />
-    </div>
+      <div className="flex items-center gap-2">
+        <RsvpChoice
+          label="Yes"
+          active={current === "accepted"}
+          pending={pending === "accepted"}
+          tone="accepted"
+          onClick={() => respond("accepted")}
+          disabled={!!pending}
+        />
+        <RsvpChoice
+          label="Maybe"
+          active={current === "tentative"}
+          pending={pending === "tentative"}
+          tone="tentative"
+          onClick={() => respond("tentative")}
+          disabled={!!pending}
+        />
+        <RsvpChoice
+          label="No"
+          active={current === "declined"}
+          pending={pending === "declined"}
+          tone="declined"
+          onClick={() => respond("declined")}
+          disabled={!!pending}
+        />
+      </div>
+    </>
   );
 }
 
+// RsvpChoice - the three buttons from the design ref. Yes is always
+// green-filled (matches design where "Yes" appears as a positive CTA
+// regardless of selection state); Maybe + No are white pills with
+// border. When ACTIVE (current response), the corresponding outlined
+// button fills with its tone color too.
 function RsvpChoice({
   label,
   active,
@@ -493,21 +646,26 @@ function RsvpChoice({
   onClick: () => void;
   disabled: boolean;
 }) {
-  const activeClass = {
-    accepted: "border-success bg-success text-white",
-    tentative: "border-amber-500 bg-amber-500 text-white",
-    declined: "border-rose-500 bg-rose-500 text-white",
-  }[tone];
+  // Yes is always green (per design ref - it's the affordance, not just
+  // a state indicator). Maybe + No are white-pill outlined and only
+  // fill when the boss has selected them.
+  const isYes = tone === "accepted";
+  const filled =
+    isYes || active
+      ? {
+          accepted: "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600",
+          tentative: "bg-amber-500 text-white border-amber-500 hover:bg-amber-600",
+          declined: "bg-rose-500 text-white border-rose-500 hover:bg-rose-600",
+        }[tone]
+      : "bg-background text-foreground border-border hover:bg-accent";
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "inline-flex h-10 items-center gap-1.5 rounded-md border px-3 text-[13px] font-medium transition-colors disabled:opacity-60",
-        active
-          ? activeClass
-          : "border-border bg-background text-foreground hover:bg-accent",
+        "inline-flex h-9 items-center justify-center rounded-md border px-4 text-[14px] font-medium transition-colors disabled:opacity-60",
+        filled,
         pending && "animate-pulse",
       )}
     >
@@ -638,10 +796,6 @@ function TodoBody({ t }: { t: Todo }) {
 function EventBody({ e }: { e: CalendarEvent }) {
   const openPrep = e.prep.filter((p) => !p.done);
   const attendees = e.attendees ?? [];
-  // Roll the per-attendee response statuses into a single summary line
-  // ("4 yes, 1 maybe, 1 decline") matching the attached design. Needs-action
-  // entries are folded into "pending" so the line never grows past three
-  // segments. Self is included in the count — feels less odd than excluding.
   const counts = attendees.reduce(
     (acc, a) => {
       switch (a.responseStatus) {
@@ -680,83 +834,62 @@ function EventBody({ e }: { e: CalendarEvent }) {
       ? `Join ${e.conference.solutionName}`
       : "Join video call");
 
+  // Per design ref: rows are generously spaced with consistent icon
+  // gutter, plain sans-serif text, links in blue. No bg, no borders on
+  // individual rows. Header (date/duration) lives in EventHeader and is
+  // intentionally not re-rendered here.
   return (
-    <div className="space-y-4 pt-3">
-      {/* Date / time / duration — single header row */}
-      <p
-        className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-foreground"
-        suppressHydrationWarning
-      >
-        <span className="font-medium">{dayLabel(e.startsAt)}</span>
-        {!e.allDay ? (
-          <>
-            <span className="font-mono text-muted-foreground">
-              {clockTime(e.startsAt)}
-              {e.endsAt ? ` – ${clockTime(e.endsAt)}` : ""}
-            </span>
-            {e.endsAt ? (
-              <span className="text-[12px] text-muted-foreground">
-                ({formatDuration(new Date(e.endsAt).getTime() - new Date(e.startsAt).getTime())})
-              </span>
-            ) : null}
-          </>
-        ) : (
-          <span className="font-mono text-muted-foreground">All day</span>
-        )}
-      </p>
+    <div className="space-y-4 pt-4">
+      {recurrenceLabel ? (
+        <EventMetaRow icon={Repeat}>{recurrenceLabel}</EventMetaRow>
+      ) : null}
+      {e.location ? (
+        <EventMetaRow icon={MapPin}>{e.location}</EventMetaRow>
+      ) : null}
+      {videoUrl ? (
+        <EventMetaRow icon={Video}>
+          <a
+            href={videoUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-baseline gap-1 break-all text-[15px] font-medium text-info hover:underline"
+          >
+            {videoLabel}
+            <ExternalLink className="size-3 shrink-0 self-center" aria-hidden />
+          </a>
+        </EventMetaRow>
+      ) : null}
 
-      {/* Recurrence, location, video — icon-prefixed metadata rows */}
-      <div className="space-y-2.5">
-        {recurrenceLabel ? (
-          <EventMetaRow icon={Repeat}>{recurrenceLabel}</EventMetaRow>
-        ) : null}
-        {e.location ? (
-          <EventMetaRow icon={MapPin}>{e.location}</EventMetaRow>
-        ) : null}
-        {videoUrl ? (
-          <EventMetaRow icon={Video}>
-            <a
-              href={videoUrl}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="inline-flex items-center gap-1 break-all text-info hover:underline"
-            >
-              {videoLabel}
-              <ExternalLink className="size-3 shrink-0" aria-hidden />
-            </a>
-          </EventMetaRow>
-        ) : null}
-      </div>
-
-      {/* Attendees: summary line + avatar/email chip rows with status icons */}
       {attendees.length > 0 ? (
-        <div className="space-y-2.5">
-          <EventMetaRow icon={Users}>
-            {attendeeSummary || `${attendees.length} invited`}
-          </EventMetaRow>
-          <ul className="flex flex-wrap gap-2 pl-6">
-            {attendees.map((a) => (
-              <li
-                key={a.email}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 py-1 pl-1 pr-2 text-[12px]"
-              >
-                <AttendeeAvatar name={a.displayName ?? a.email} />
-                <span className="max-w-[180px] truncate font-medium text-foreground">
-                  {a.displayName ?? a.email}
-                </span>
-                <AttendeeStatusIcon status={a.responseStatus} />
-              </li>
-            ))}
-          </ul>
-        </div>
+        <EventMetaRow icon={Users}>
+          <div className="space-y-2.5">
+            <p className="text-foreground">
+              {attendeeSummary || `${attendees.length} invited`}
+            </p>
+            <ul className="flex flex-wrap gap-2">
+              {attendees.map((a, idx) => (
+                <li
+                  key={a.email + idx}
+                  className="inline-flex items-center gap-2 rounded-full bg-muted/60 py-1 pl-1 pr-3 text-[13px] dark:bg-muted/40"
+                >
+                  <AttendeeAvatar name={a.displayName ?? a.email} index={idx} />
+                  <span className="max-w-[200px] truncate font-medium text-foreground">
+                    {a.displayName ?? a.email}
+                  </span>
+                  <AttendeeStatusIcon status={a.responseStatus} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        </EventMetaRow>
       ) : null}
 
-      {/* Description with expand-on-overflow */}
       {e.description ? (
-        <ExpandableDescription text={e.description} />
+        <EventMetaRow icon={AlignLeft}>
+          <ExpandableDescription text={e.description} />
+        </EventMetaRow>
       ) : null}
 
-      {/* Open in Google */}
       {e.htmlLink ? (
         <ModalUrl
           href={e.htmlLink}
@@ -766,7 +899,6 @@ function EventBody({ e }: { e: CalendarEvent }) {
         </ModalUrl>
       ) : null}
 
-      {/* Prep checklist (Jarvis-derived) */}
       {e.prep.length > 0 ? (
         <ModalSection meta={`${openPrep.length}/${e.prep.length} prep open`}>
           <ul className="space-y-2">
@@ -809,8 +941,9 @@ function EventBody({ e }: { e: CalendarEvent }) {
   );
 }
 
-// EventMetaRow: icon + content row used for recurrence/location/video/
-// attendee-summary. Keeps spacing + icon size consistent across rows.
+// EventMetaRow: icon + content row used for every body row in the event
+// modal. Larger text (15px) + larger icons (size-[18px]) and a wider
+// gutter than the generic ModalSection to match the design's airy feel.
 function EventMetaRow({
   icon: Icon,
   children,
@@ -819,48 +952,78 @@ function EventMetaRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2 text-[13px] text-foreground">
+    <div className="flex items-start gap-3 text-[15px] text-foreground">
       <Icon
-        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+        className="mt-0.5 size-[18px] shrink-0 text-muted-foreground"
         aria-hidden
       />
-      <div className="min-w-0 flex-1 break-words">{children}</div>
+      <div className="min-w-0 flex-1 break-words leading-relaxed">{children}</div>
     </div>
   );
 }
 
-// AttendeeAvatar: 20px circle with the first letter of the display name.
-// No image fetch — avatars on a calendar invite would mean per-row HTTP
-// to Google and a CSP allowlist; the initial bubble is sufficient for
-// the visual rhythm the design calls for.
-function AttendeeAvatar({ name }: { name: string }) {
+// AttendeeAvatar: 26px filled circle with the first letter. Color
+// derived from a stable hash of the name so the visual rhythm reads
+// "different people" the way photo avatars would in the design ref.
+// Photo fetching would require CSP + per-row HTTP to Google; the
+// colored initial circle is the agreed substitute.
+function AttendeeAvatar({ name, index }: { name: string; index: number }) {
   const initial = (name?.trim()?.[0] ?? "?").toUpperCase();
+  const tone = avatarTones[(hashStr(name) + index) % avatarTones.length];
   return (
-    <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium uppercase text-muted-foreground">
+    <span
+      className={cn(
+        "inline-flex size-[26px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold uppercase text-white",
+        tone,
+      )}
+    >
       {initial}
     </span>
   );
 }
 
-// AttendeeStatusIcon: the small green/orange/red badge appended to each
-// attendee chip per the attached design (green ✓ = accepted, orange ?
-// = tentative, red × = declined, blank = needs-action / unknown).
+const avatarTones = [
+  "bg-rose-500",
+  "bg-orange-500",
+  "bg-amber-500",
+  "bg-emerald-500",
+  "bg-teal-500",
+  "bg-sky-500",
+  "bg-indigo-500",
+  "bg-violet-500",
+  "bg-fuchsia-500",
+  "bg-pink-500",
+];
+
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+// AttendeeStatusIcon: filled circular badge appended to each chip per
+// the design ref - green ✓ (accepted), orange ? (tentative),
+// red × (declined). Returns null for needs-action so unanswered
+// invitees render as a bare chip (matches the design's two unstyled
+// rows for the four "yes" Floyd/Jane/Ronald/Annette chips).
 function AttendeeStatusIcon({ status }: { status?: string }) {
   switch (status) {
     case "accepted":
       return (
         <span
           aria-label="accepted"
-          className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-success text-[10px] text-white"
+          className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white"
         >
-          <CheckCircle2 className="size-3" aria-hidden />
+          <CheckCircle2 className="size-3" strokeWidth={3} aria-hidden />
         </span>
       );
     case "tentative":
       return (
         <span
           aria-label="tentative"
-          className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[10px] text-white"
+          className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-amber-500 text-[11px] font-bold text-white"
         >
           ?
         </span>
@@ -869,9 +1032,9 @@ function AttendeeStatusIcon({ status }: { status?: string }) {
       return (
         <span
           aria-label="declined"
-          className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-rose-500 text-[10px] text-white"
+          className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-rose-500 text-white"
         >
-          <X className="size-3" aria-hidden />
+          <X className="size-3" strokeWidth={3} aria-hidden />
         </span>
       );
     default:
@@ -879,32 +1042,26 @@ function AttendeeStatusIcon({ status }: { status?: string }) {
   }
 }
 
-// ExpandableDescription: shows the first ~180 chars with a "Show all"
-// affordance per the design. Click expands in place; collapse not
-// offered (boss never asked to re-hide).
+// ExpandableDescription: shows the first ~220 chars with a "Show all"
+// blue link affordance per the design. No bullet prefix - the parent
+// EventMetaRow's AlignLeft icon already serves that purpose.
 function ExpandableDescription({ text }: { text: string }) {
   const [expanded, setExpanded] = React.useState(false);
-  const collapseLimit = 180;
+  const collapseLimit = 220;
   const needsExpand = text.length > collapseLimit;
   const shown = expanded || !needsExpand ? text : text.slice(0, collapseLimit) + "…";
   return (
-    <div className="flex items-start gap-2 text-[13px] text-foreground">
-      <span
-        aria-hidden
-        className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground/40"
-      />
-      <div className="min-w-0 flex-1">
-        <p className="whitespace-pre-wrap break-words leading-relaxed">{shown}</p>
-        {needsExpand && !expanded ? (
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="mt-1 text-[12px] font-medium text-info hover:underline"
-          >
-            Show all
-          </button>
-        ) : null}
-      </div>
+    <div>
+      <p className="whitespace-pre-wrap break-words text-foreground">{shown}</p>
+      {needsExpand && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-1.5 text-[14px] font-medium text-info hover:underline"
+        >
+          Show all
+        </button>
+      ) : null}
     </div>
   );
 }
