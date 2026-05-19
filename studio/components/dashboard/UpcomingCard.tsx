@@ -113,7 +113,7 @@ export function UpcomingCard({
                 row.kind === "month" ? (
                   <li
                     key={`m-${row.label}-${i}`}
-                    className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
+                    className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-4 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
                   >
                     {row.label}
                   </li>
