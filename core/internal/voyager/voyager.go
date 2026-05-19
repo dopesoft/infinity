@@ -283,7 +283,15 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 		// MaterializeFromDB hook (see skills.MaterializeActiveSkills)
 		// re-syncs disk to match active rows in Postgres, so even if
 		// the disk write is lost we recover automatically.
-		version := nextVersionStamp()
+		// Bump from the currently-active version (if any) into the
+		// canonical v<MAJOR>.<MINOR>-<M-D-YYYY> shape. First-ever
+		// version of a brand-new skill falls back to v1.0-<today>.
+		var parentVersion string
+		_ = m.pool.QueryRow(ctx,
+			`SELECT COALESCE(active_version,'') FROM mem_skill_active WHERE skill_name = $1`,
+			name,
+		).Scan(&parentVersion)
+		version := skills.BumpVersion(parentVersion)
 		if err := m.persistSkillToDB(ctx, name, version, skillMD, description, riskLevel, importance, importanceReason); err != nil {
 			return err
 		}
@@ -392,11 +400,13 @@ func (m *Manager) persistSkillToDB(ctx context.Context, name, version, skillMD, 
 	return tx.Commit(ctx)
 }
 
-// nextVersionStamp returns a YYYYMMDDhhmmss-style version label. Lexically
-// sortable, human-readable, and unique enough for the auto-evolution path
-// where the boss only promotes one variant per (skill, second).
+// nextVersionStamp - REPLACED by skills.BumpVersion (see version.go in
+// the skills package). Kept as a deprecated no-op for any stragglers
+// in case I missed a caller; the linter will flag it as unused.
+//
+// Deprecated: use skills.BumpVersion(parent) instead.
 func nextVersionStamp() string {
-	return time.Now().UTC().Format("20060102-150405")
+	return skills.InitialVersion()
 }
 
 func safeName(s string) string {

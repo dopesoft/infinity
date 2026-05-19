@@ -100,7 +100,7 @@ func (a *API) handleSkillScoped(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case len(parts) == 1 && r.Method == http.MethodGet:
-		writeJSON(w, http.StatusOK, skill)
+		a.handleDetail(w, r, skill)
 	case len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet:
 		a.handleRuns(w, r, name)
 	case len(parts) == 2 && parts[1] == "tests" && r.Method == http.MethodGet:
@@ -109,9 +109,79 @@ func (a *API) handleSkillScoped(w http.ResponseWriter, r *http.Request) {
 		a.handleGenerateTests(w, r, skill)
 	case len(parts) == 2 && parts[1] == "invoke" && r.Method == http.MethodPost:
 		a.handleInvoke(w, r, name)
+	case len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodGet:
+		a.handleVersions(w, r, name)
+	case len(parts) == 2 && parts[1] == "promote" && r.Method == http.MethodPost:
+		a.handlePromote(w, r, name)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleDetail returns the in-memory Skill plus persisted fields
+// (created_at/updated_at) and a sample of the most recent run so the
+// Studio Overview tab can render those without a second HTTP call.
+func (a *API) handleDetail(w http.ResponseWriter, r *http.Request, skill *Skill) {
+	dto := &SkillDetailDTO{Skill: skill}
+	if a.store != nil {
+		if extra, err := a.store.LoadDetail(r.Context(), skill.Name); err == nil && extra != nil {
+			dto.CreatedAt = extra.CreatedAt
+			dto.UpdatedAt = extra.UpdatedAt
+			dto.LastRun = extra.LastRun
+			dto.TotalRuns = extra.TotalRuns
+		}
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+// handleVersions returns every row in mem_skill_versions for this
+// skill, newest first, with active=true flagged on the active row.
+func (a *API) handleVersions(w http.ResponseWriter, r *http.Request, name string) {
+	if a.store == nil {
+		writeJSON(w, http.StatusOK, []VersionEntry{})
+		return
+	}
+	versions, err := a.store.ListVersions(r.Context(), name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if versions == nil {
+		versions = []VersionEntry{}
+	}
+	writeJSON(w, http.StatusOK, versions)
+}
+
+// handlePromote flips mem_skill_active.active_version for the given
+// skill to the version supplied in the body.
+//
+//	POST /api/skills/:name/promote   {"version":"v1.0-5-19-2026"}
+func (a *API) handlePromote(w http.ResponseWriter, r *http.Request, name string) {
+	if a.store == nil {
+		http.Error(w, "no database", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(body.Version) == "" {
+		http.Error(w, "version required", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.PromoteVersion(r.Context(), name, body.Version); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Reload the registry so the agent immediately sees the promoted
+	// version on the next turn.
+	if a.registry != nil {
+		_, _ = a.registry.Reload(r.Context())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "active_version": body.Version})
 }
 
 func (a *API) handleRuns(w http.ResponseWriter, r *http.Request, name string) {

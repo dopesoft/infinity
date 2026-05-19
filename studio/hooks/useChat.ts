@@ -174,6 +174,17 @@ function mergeServerRows(
   // Convert server rows into ChatMessage shape with stable created_at
   // timestamps for ordering.
   const fromServer: ChatMessage[] = rows.map(rowToMessage);
+  // PRESERVE local tool messages. The server transcript rows do NOT
+  // carry toolCall / toolResult payloads (role+text only), so a naive
+  // merge that drops local in favour of server would erase the inline
+  // approval card (SkillProposalCard / ToolCallCard awaiting Approve /
+  // Deny). Net effect from the boss's POV: "approval dialog disappears
+  // when I click away or widen the column" because a navigation /
+  // reconcile reloads from server. We keep every local tool message;
+  // they sort back into place by created_at below.
+  const localToolMessages: ChatMessage[] = local.filter(
+    (m) => m.role === "tool" && !!m.toolCall,
+  );
   // Detect pending tail items to preserve (in-flight stream, watchdog
   // error bubble we don't want to silently erase).
   const pendingTail: ChatMessage[] = [];
@@ -211,7 +222,29 @@ function mergeServerRows(
     }
     return true;
   });
-  return [...fromServer, ...filteredPending];
+  // Dedup local tool messages against any server "tool" rows so we
+  // don't double-render. Server tool rows are bare role+text (no
+  // toolCall) - they render via the tool branch but ToolCallCard
+  // bails on !call so they show nothing. We drop those server tool
+  // rows in favour of the richer local one.
+  const localToolIds = new Set(
+    localToolMessages.map((m) => m.toolCall?.id).filter(Boolean) as string[],
+  );
+  const localToolTexts = new Set(localToolMessages.map((m) => m.text.trim()));
+  const fromServerSansTools = fromServer.filter((m) => {
+    if (m.role !== "tool") return true;
+    if (m.text && localToolTexts.has(m.text.trim())) return false;
+    if (localToolIds.size === 0) return true; // no local detail to prefer; keep server row
+    return true;
+  });
+  // Sort the local tool messages into the timeline by createdAt so a
+  // tool that fired mid-session lands in the right slot relative to
+  // the server-loaded user/assistant turns around it.
+  const merged: ChatMessage[] = [
+    ...fromServerSansTools,
+    ...localToolMessages,
+  ].sort((a, b) => a.createdAt - b.createdAt);
+  return [...merged, ...filteredPending];
 }
 
 // Mark the most recent pending `thinking` message as complete. Called whenever

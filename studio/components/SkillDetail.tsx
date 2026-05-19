@@ -1,22 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Hash, MousePointerSquareDashed, Play, RefreshCw, X } from "lucide-react";
+import { Check, Clock, Hash, History, MousePointerSquareDashed, Play, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RiskBadge } from "@/components/RiskBadge";
 import { EmptyState } from "@/components/EmptyState";
+import { cn } from "@/lib/utils";
 import {
   fetchSkill,
   fetchSkillRuns,
   fetchSkillTests,
+  fetchSkillVersions,
   generateSkillTests,
   invokeSkill,
+  promoteSkillVersion,
   type SkillDTO,
   type SkillRunDTO,
   type SkillSummaryDTO,
   type SkillTestDTO,
+  type SkillVersionEntry,
 } from "@/lib/api";
 
 export function SkillDetail({
@@ -29,6 +33,8 @@ export function SkillDetail({
   const [skill, setSkill] = useState<SkillDTO | null>(null);
   const [runs, setRuns] = useState<SkillRunDTO[]>([]);
   const [tests, setTests] = useState<SkillTestDTO[]>([]);
+  const [versions, setVersions] = useState<SkillVersionEntry[]>([]);
+  const [promotingVersion, setPromotingVersion] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
   const [argsText, setArgsText] = useState("{}");
@@ -37,6 +43,7 @@ export function SkillDetail({
     setSkill(null);
     setRuns([]);
     setTests([]);
+    setVersions([]);
     setRunResult(null);
     setArgsText("{}");
     if (!selected) return;
@@ -44,9 +51,36 @@ export function SkillDetail({
     fetchSkill(selected.name, ctrl.signal).then((s) => s && setSkill(s));
     fetchSkillRuns(selected.name, 25, ctrl.signal).then((r) => r && setRuns(r));
     fetchSkillTests(selected.name, ctrl.signal).then((t) => t && setTests(t));
+    fetchSkillVersions(selected.name, ctrl.signal).then((v) => v && setVersions(v));
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.name]);
+
+  async function refreshVersions() {
+    if (!selected) return;
+    const v = await fetchSkillVersions(selected.name);
+    if (v) setVersions(v);
+  }
+
+  async function promoteVersion(version: string) {
+    if (!selected) return;
+    setPromotingVersion(version);
+    try {
+      const ok = await promoteSkillVersion(selected.name, version);
+      if (ok) {
+        // Re-pull both versions (for active flag) and the skill detail
+        // (Overview shows the active version label + updated_at).
+        const [v, s] = await Promise.all([
+          fetchSkillVersions(selected.name),
+          fetchSkill(selected.name),
+        ]);
+        if (v) setVersions(v);
+        if (s) setSkill(s);
+      }
+    } finally {
+      setPromotingVersion(null);
+    }
+  }
 
   if (!selected) {
     return (
@@ -117,7 +151,7 @@ export function SkillDetail({
             <Badge variant="outline" className="font-mono">
               importance {selected.importance ?? 50}
             </Badge>
-            <Badge variant="outline" className="font-mono">v{selected.version}</Badge>
+            <Badge variant="outline" className="font-mono">{selected.version}</Badge>
             <Badge variant="secondary" className="font-mono">{selected.source}</Badge>
             {selected.network_egress?.length ? (
               <Badge variant="outline" className="font-mono">
@@ -139,7 +173,8 @@ export function SkillDetail({
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="run">Run</TabsTrigger>
             <TabsTrigger value="tests">Tests</TabsTrigger>
-            <TabsTrigger value="history">History</TabsTrigger>
+            <TabsTrigger value="runs">Runs</TabsTrigger>
+            <TabsTrigger value="versions">Versions</TabsTrigger>
             <TabsTrigger value="code">Code</TabsTrigger>
           </TabsList>
 
@@ -148,6 +183,33 @@ export function SkillDetail({
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : (
               <>
+                {/* Metadata strip: created / last updated / total runs.
+                    Reads from the detail DTO which the server flattens
+                    out of mem_skills + COUNT(mem_skill_runs). */}
+                <Section title="Timeline">
+                  <dl className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <dt className="text-muted-foreground">Created</dt>
+                      <dd className="font-mono" suppressHydrationWarning>
+                        {skill.created_at
+                          ? new Date(skill.created_at).toLocaleDateString()
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Last updated</dt>
+                      <dd className="font-mono" suppressHydrationWarning>
+                        {skill.updated_at
+                          ? new Date(skill.updated_at).toLocaleDateString()
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Total runs</dt>
+                      <dd className="font-mono">{skill.total_runs ?? 0}</dd>
+                    </div>
+                  </dl>
+                </Section>
                 <Section title="Trigger phrases">
                   {skill.trigger_phrases?.length ? (
                     <ul className="ml-4 list-disc text-sm">
@@ -198,6 +260,46 @@ export function SkillDetail({
                     Risk is execution danger. Importance is how central this skill is to autonomous behavior.
                   </p>
                 </Section>
+                {/* Last run sample - shows the boss what the skill was
+                    actually called with + what it produced the most
+                    recent time it ran. Powers the "show me an example"
+                    Overview expectation (#2 in the skill-review thread). */}
+                {skill.last_run ? (
+                  <Section title="Last run">
+                    <div className="space-y-2 text-xs">
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <Clock className="size-3" aria-hidden />
+                          <time suppressHydrationWarning>
+                            {new Date(skill.last_run.started_at).toLocaleString()}
+                          </time>
+                        </span>
+                        <span className="font-mono">
+                          {skill.last_run.trigger_source} ·{" "}
+                          <span className={skill.last_run.success ? "text-success" : "text-danger"}>
+                            {skill.last_run.success ? "ok" : "fail"}
+                          </span>
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                          Input
+                        </p>
+                        <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
+                          {JSON.stringify(skill.last_run.input ?? {}, null, 2)}
+                        </pre>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                          Output
+                        </p>
+                        <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
+                          {skill.last_run.output || "(empty)"}
+                        </pre>
+                      </div>
+                    </div>
+                  </Section>
+                ) : null}
               </>
             )}
           </TabsContent>
@@ -225,7 +327,7 @@ export function SkillDetail({
             )}
           </TabsContent>
 
-          <TabsContent value="history" className="space-y-2">
+          <TabsContent value="runs" className="space-y-2">
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">{runs.length} runs</p>
               <Button size="sm" variant="ghost" onClick={refreshRuns}>
@@ -257,6 +359,77 @@ export function SkillDetail({
                         {r.output}
                       </pre>
                     )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </TabsContent>
+
+          <TabsContent value="versions" className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">
+                {versions.length} version{versions.length === 1 ? "" : "s"}
+              </p>
+              <Button size="sm" variant="ghost" onClick={refreshVersions}>
+                <RefreshCw className="size-4" />
+              </Button>
+            </div>
+            {versions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No version history yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {versions.map((v) => (
+                  <li
+                    key={v.version}
+                    className={cn(
+                      "rounded-md border bg-card p-2 text-xs",
+                      v.active && "border-brand/60 bg-brand/5",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <code className="font-mono text-[12px] font-medium">
+                          {v.version}
+                        </code>
+                        {v.active ? (
+                          <Badge className="bg-brand text-brand-foreground">
+                            <Check className="mr-1 size-3" /> Active
+                          </Badge>
+                        ) : null}
+                        {v.source ? (
+                          <Badge variant="outline" className="font-mono text-[10px]">
+                            {v.source}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {!v.active ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={promotingVersion !== null}
+                          onClick={() => promoteVersion(v.version)}
+                        >
+                          {promotingVersion === v.version ? (
+                            <>
+                              <RefreshCw className="mr-1 size-3 animate-spin" />
+                              Promoting…
+                            </>
+                          ) : (
+                            <>
+                              <History className="mr-1 size-3" />
+                              Promote
+                            </>
+                          )}
+                        </Button>
+                      ) : null}
+                    </div>
+                    <p
+                      className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground"
+                      suppressHydrationWarning
+                    >
+                      <Clock className="size-3" aria-hidden />
+                      <time>{new Date(v.created_at).toLocaleString()}</time>
+                    </p>
                   </li>
                 ))}
               </ul>

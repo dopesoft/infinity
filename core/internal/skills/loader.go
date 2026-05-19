@@ -121,8 +121,12 @@ func skillFromFrontmatter(fm Frontmatter, body string) (*Skill, error) {
 	if fm.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if fm.Version == "" {
-		fm.Version = "0.0.1"
+	// Normalize to the canonical version format. Empty / non-canonical
+	// versions (legacy 0.0.1 semver, voyager timestamps like
+	// 20260519-031200, hand-typed weirdness) all get rewritten to
+	// v1.0-<today> so the agent + Studio see one shape everywhere.
+	if !IsCanonical(fm.Version) {
+		fm.Version = InitialVersion()
 	}
 	if fm.RiskLevel == "" {
 		fm.RiskLevel = RiskLow

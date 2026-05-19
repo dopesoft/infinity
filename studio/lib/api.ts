@@ -656,6 +656,20 @@ export type SkillDTO = {
   source: SkillSource;
   status: SkillStatus;
   path?: string;
+  // Detail-endpoint extras (server flattens mem_skills + last run).
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_run?: SkillRunDTO | null;
+  total_runs?: number;
+};
+
+export type SkillVersionEntry = {
+  version: string;
+  skill_md: string;
+  created_at: string;
+  active: boolean;
+  source?: string;
+  confidence: number;
 };
 
 export type SkillRunDTO = {
@@ -698,6 +712,31 @@ export const fetchSkillRuns = (name: string, limit = 25, signal?: AbortSignal) =
 
 export const fetchSkillTests = (name: string, signal?: AbortSignal) =>
   getJSON<SkillTestDTO[]>(`/api/skills/${encodeURIComponent(name)}/tests`, signal);
+
+export const fetchSkillVersions = (name: string, signal?: AbortSignal) =>
+  getJSON<SkillVersionEntry[]>(
+    `/api/skills/${encodeURIComponent(name)}/versions`,
+    signal,
+  );
+
+export async function promoteSkillVersion(
+  name: string,
+  version: string,
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(
+      `/api/skills/${encodeURIComponent(name)}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 export async function generateSkillTests(name: string): Promise<SkillTestDTO[] | null> {
   try {

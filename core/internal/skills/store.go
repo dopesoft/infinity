@@ -393,3 +393,107 @@ func containsAny(s string, needles ...string) bool {
 	}
 	return false
 }
+
+// LoadDetail fetches the persistent fields that complement the in-memory
+// Skill: created_at / updated_at from mem_skills, plus the most recent
+// successful (or any if none successful) run. Used by GET /api/skills/:name
+// to populate the Studio detail surface's Overview tab.
+func (s *Store) LoadDetail(ctx context.Context, name string) (*SkillDetailDTO, error) {
+	if s == nil || s.pool == nil {
+		return &SkillDetailDTO{}, nil
+	}
+	out := &SkillDetailDTO{}
+	var (
+		created, updated *time.Time
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT created_at, updated_at
+		  FROM mem_skills
+		 WHERE name = $1
+	`, name).Scan(&created, &updated)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	out.CreatedAt = created
+	out.UpdatedAt = updated
+
+	// Pull the most recent run as the "last run sample" for Overview 2b.
+	// Preference: most-recent successful; fall back to most-recent any.
+	runs, err := s.RecentRuns(ctx, name, 1)
+	if err == nil && len(runs) > 0 {
+		out.LastRun = &runs[0]
+	}
+
+	// Total count over all time so the Overview header can say "47 runs".
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM mem_skill_runs WHERE skill_name = $1`,
+		name,
+	).Scan(&total); err == nil {
+		out.TotalRuns = total
+	}
+	return out, nil
+}
+
+// ListVersions returns every row in mem_skill_versions for `name`, newest
+// first, with `Active` flagged on the row matching mem_skill_active.
+func (s *Store) ListVersions(ctx context.Context, name string) ([]VersionEntry, error) {
+	if s == nil || s.pool == nil {
+		return nil, nil
+	}
+	var activeVersion string
+	_ = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(active_version,'') FROM mem_skill_active WHERE skill_name = $1`,
+		name,
+	).Scan(&activeVersion)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT version, COALESCE(skill_md, ''), created_at,
+		       COALESCE(source, ''), COALESCE(confidence, 0.5)
+		  FROM mem_skill_versions
+		 WHERE skill_name = $1
+		 ORDER BY created_at DESC
+	`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VersionEntry
+	for rows.Next() {
+		var v VersionEntry
+		if err := rows.Scan(&v.Version, &v.SkillMD, &v.CreatedAt, &v.Source, &v.Confidence); err != nil {
+			return nil, err
+		}
+		v.Active = (v.Version == activeVersion)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// PromoteVersion flips mem_skill_active.active_version to the requested
+// version (must exist in mem_skill_versions). Returns an error if the
+// version row doesn't exist - safer than silently activating a missing
+// row that would break the loader on next refresh.
+func (s *Store) PromoteVersion(ctx context.Context, name, version string) error {
+	if s == nil || s.pool == nil {
+		return fmt.Errorf("no database")
+	}
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM mem_skill_versions WHERE skill_name = $1 AND version = $2)`,
+		name, version,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("version %q not found for skill %q", version, name)
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO mem_skill_active (skill_name, active_version)
+		VALUES ($1, $2)
+		ON CONFLICT (skill_name) DO UPDATE
+		  SET active_version = EXCLUDED.active_version,
+		      updated_at     = NOW()
+	`, name, version)
+	return err
+}

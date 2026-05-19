@@ -120,6 +120,32 @@ type SkillSummary struct {
 	SuccessRate      float64    `json:"success_rate"`
 }
 
+// SkillDetailDTO is the shape returned by GET /api/skills/:name. It
+// embeds the in-memory Skill so every existing field stays available
+// to the Studio detail surface, plus extras the store knows about
+// (created_at / updated_at from mem_skills) and a sample of the most
+// recent run so the Overview tab can render the boss's "show me what
+// the last run looked like" expectation without a second HTTP call.
+type SkillDetailDTO struct {
+	*Skill
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	LastRun   *Run       `json:"last_run,omitempty"`
+	TotalRuns int        `json:"total_runs"`
+}
+
+// VersionEntry is one row in the skill's version history. Returned by
+// GET /api/skills/:name/versions. Active marks the currently-live
+// version per the mem_skill_active pointer.
+type VersionEntry struct {
+	Version    string    `json:"version"`
+	SkillMD    string    `json:"skill_md"`
+	CreatedAt  time.Time `json:"created_at"`
+	Active     bool      `json:"active"`
+	Source     string    `json:"source,omitempty"`
+	Confidence float64   `json:"confidence"`
+}
+
 // Match is a skill matched by trigger fuzzy-matching against a user message.
 type Match struct {
 	Skill  *Skill  `json:"skill"`

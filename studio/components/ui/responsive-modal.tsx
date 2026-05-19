@@ -13,6 +13,7 @@ import {
   DrawerDescription,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { useEffect, useState } from "react";
 import { useIsDesktop } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +72,11 @@ export interface ResponsiveModalProps {
    *  `bg-muted/20` tint (e.g. event-style modals that want a lavender RSVP
    *  bar). Default classes still apply unless overridden by your tokens. */
   footerClassName?: string;
+  /** When true (default), clicking outside the modal or pressing Escape
+   *  closes it. For approval-style modals where every dismissal must be
+   *  explicit (Approve / Close button), set this to false so casual
+   *  taps and stray Escape presses can't discard the decision surface. */
+  dismissOnOutsideClick?: boolean;
   children?: React.ReactNode;
 }
 
@@ -85,9 +91,27 @@ export function ResponsiveModal({
   bodyClassName,
   contentClassName,
   footerClassName,
+  dismissOnOutsideClick = true,
   children,
 }: ResponsiveModalProps) {
   const isDesktop = useIsDesktop();
+  // LOCK the Dialog-vs-Drawer choice for the duration the modal is open.
+  // Otherwise, when the window crosses the lg breakpoint mid-decision
+  // (boss widens / narrows the chat column past 1024px), useIsDesktop
+  // flips, the wrapper swaps Dialog<->Drawer, Radix fires
+  // onOpenChange(false) during unmount, and the parent's open state
+  // collapses to false - the approval dialog disappears mid-tap. Once
+  // closed we release the lock so the next open picks the correct
+  // primitive for the current viewport.
+  const [lockedDesktop, setLockedDesktop] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (open && lockedDesktop === null) {
+      setLockedDesktop(isDesktop);
+    } else if (!open && lockedDesktop !== null) {
+      setLockedDesktop(null);
+    }
+  }, [open, isDesktop, lockedDesktop]);
+  const effectiveIsDesktop = lockedDesktop ?? isDesktop;
 
   // Shared inner shell. Same JSX tree for Dialog and Drawer so the body /
   // header / footer behave identically across breakpoints - the ONLY
@@ -124,10 +148,19 @@ export function ResponsiveModal({
     </div>
   );
 
-  if (isDesktop) {
+  // Block outside-click / Escape dismissals when the caller asked for
+  // explicit-only closure. Approve / Close buttons remain the only exits.
+  const blockDismiss = !dismissOnOutsideClick
+    ? (e: Event) => e.preventDefault()
+    : undefined;
+
+  if (effectiveIsDesktop) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
+          onPointerDownOutside={blockDismiss}
+          onEscapeKeyDown={blockDismiss}
+          onInteractOutside={blockDismiss}
           className={cn(
             "flex max-h-[90dvh] flex-col p-0",
             SIZE_CLS[size],

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
@@ -101,7 +102,30 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 		// agent to fold into its own context. The LLM caller is in charge
 		// of executing the instruction. This is the pattern used by the
 		// majority of OpenClaw and Hermes skills.
-		return FormatLLMPrompt(skill, args), nil
+		prompt := FormatLLMPrompt(skill, args)
+		// Persist an invocation row so the Studio Skill Detail's Runs +
+		// Overview "last run" sample populate for instruction-only skills
+		// too. Without this branch, the entire mem_skill_runs table stayed
+		// empty for the 90%-case skill (no executable, just a recipe). We
+		// can't observe the agent's downstream actions from here, so the
+		// row's `output` captures the prompt the agent received and
+		// duration_ms stays 0 (the invocation itself is instantaneous;
+		// the LLM work happens AFTER this return).
+		if t.r != nil && t.r.store != nil {
+			now := time.Now().UTC()
+			_, _ = t.r.store.RecordRun(ctx, &Run{
+				SkillName:     skill.Name,
+				Version:       skill.Version,
+				TriggerSource: "conversation",
+				Input:         args,
+				Output:        prompt,
+				Success:       true,
+				DurationMS:    0,
+				StartedAt:     now,
+				EndedAt:       &now,
+			})
+		}
+		return prompt, nil
 	}
 	res, _, err := t.runner.Invoke(ctx, "", name, args, "conversation")
 	if err != nil {
