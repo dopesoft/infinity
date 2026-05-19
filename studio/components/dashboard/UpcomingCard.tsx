@@ -93,10 +93,11 @@ export function UpcomingCard({
       Icon={CalendarRange}
       delay={0.15}
       action={{ label: "next 6 months", href: "/cron" }}
+      noPad
     >
-      {/* No inner card wrapper - Section already owns the rounded
-          chrome. overflow-hidden stays on the scroll viewport so
-          sticky month headers clip cleanly inside the card. */}
+      {/* noPad on Section means the month header background spans the
+          full card width edge-to-edge. Individual event rows still get
+          horizontal breathing room via their own px-4 below. */}
       <div className="overflow-hidden">
         <div
           className="overflow-y-auto scroll-touch"
@@ -104,7 +105,7 @@ export function UpcomingCard({
         >
           <ol className="divide-y divide-border/60">
             {rows.length === 0 ? (
-              <li className="px-3 py-6 text-center text-xs text-muted-foreground">
+              <li className="px-4 py-6 text-center text-xs text-muted-foreground">
                 Nothing scheduled in the next 6 months.
               </li>
             ) : (
@@ -112,7 +113,7 @@ export function UpcomingCard({
                 row.kind === "month" ? (
                   <li
                     key={`m-${row.label}-${i}`}
-                    className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
+                    className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
                   >
                     {row.label}
                   </li>
@@ -153,7 +154,7 @@ function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
         onClick={onClick}
         whileHover={{ x: 2 }}
         transition={{ duration: 0.12 }}
-        className="flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
+        className="flex w-full items-start gap-2.5 px-4 py-2 text-left transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
       >
         <span
           className={cn(
