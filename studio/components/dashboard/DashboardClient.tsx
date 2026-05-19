@@ -270,9 +270,27 @@ export function DashboardClient() {
             </div>
           )}
 
+          {(s.approvals || s.followups) && (
+            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
+              {s.approvals && (
+                <ApprovalsCard approvals={filtered.approvals} onOpen={openViewer} />
+              )}
+              {s.followups && (
+                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
+              )}
+            </div>
+          )}
+
+          {s.reflection && reflection && (
+            <ReflectionCard reflection={reflection} onOpen={openViewer} />
+          )}
+
           {/* Generic surface contract - every group the agent surfaced via
               `surface_item`, each rendered by one generic SurfaceCard. A new
-              surface the agent invents appears here with zero new code. */}
+              surface the agent invents (alerts, system, digest, ...) appears
+              here with zero new code. Sits BELOW Questions/Followups and
+              Reflection so the boss-facing sections lead and agent-invented
+              surfaces follow. */}
           {Object.keys(filtered.surfaceItems).length > 0 && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
               {Object.entries(filtered.surfaceItems).map(([surfaceKey, items], i) => (
@@ -284,21 +302,6 @@ export function DashboardClient() {
                   onOpen={openViewer}
                 />
               ))}
-            </div>
-          )}
-
-          {s.reflection && reflection && (
-            <ReflectionCard reflection={reflection} onOpen={openViewer} />
-          )}
-
-          {(s.approvals || s.followups) && (
-            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
-              {s.approvals && (
-                <ApprovalsCard approvals={filtered.approvals} onOpen={openViewer} />
-              )}
-              {s.followups && (
-                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
-              )}
             </div>
           )}
 

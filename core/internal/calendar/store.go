@@ -187,7 +187,9 @@ func (s *Store) UpsertEvent(ctx context.Context, ev *Event) error {
 		    $14, $15, $16::jsonb, $17::jsonb,
 		    $18, $19::jsonb, $20, NOW()
 		)
-		ON CONFLICT (source, (source_ref->>'remote_id')) DO UPDATE SET
+		ON CONFLICT (source, (source_ref->>'remote_id'))
+		    WHERE source_ref ? 'remote_id'
+		DO UPDATE SET
 		    title           = EXCLUDED.title,
 		    location        = EXCLUDED.location,
 		    attendees       = EXCLUDED.attendees,
