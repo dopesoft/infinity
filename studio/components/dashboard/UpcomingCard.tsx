@@ -51,6 +51,10 @@ const CLASS_ICON: Record<CalendarEventClass, LucideIcon> = {
 // scrolling kicks in.
 const ROW_PX = 82;
 
+type Row =
+  | { kind: "month"; label: string }
+  | { kind: "event"; event: CalendarEvent };
+
 export function UpcomingCard({
   events,
   onOpen,
@@ -58,11 +62,29 @@ export function UpcomingCard({
   events: CalendarEvent[];
   onOpen: (item: DashboardItem) => void;
 }) {
-  const future = useMemo(() => {
+  const rows = useMemo<Row[]>(() => {
     const today = startOfDay(new Date());
-    return events
+    const future = events
       .filter((e) => startOfDay(e.startsAt) >= today)
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+    const out: Row[] = [];
+    let lastMonth = "";
+    for (const e of future) {
+      const d = new Date(e.startsAt);
+      // Stable monthKey so we never re-render the same header twice
+      // even across timezone boundaries. Compare via getFullYear() +
+      // getMonth() rather than locale string.
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (key !== lastMonth) {
+        out.push({
+          kind: "month",
+          label: d.toLocaleDateString([], { month: "long", year: "numeric" }),
+        });
+        lastMonth = key;
+      }
+      out.push({ kind: "event", event: e });
+    }
+    return out;
   }, [events]);
 
   return (
@@ -78,18 +100,27 @@ export function UpcomingCard({
           style={{ maxHeight: `${ROW_PX * 4}px` }}
         >
           <ol className="divide-y divide-border/60">
-            {future.length === 0 ? (
+            {rows.length === 0 ? (
               <li className="px-3 py-6 text-center text-xs text-muted-foreground">
                 Nothing scheduled in the next 6 months.
               </li>
             ) : (
-              future.map((e) => (
-                <EventRow
-                  key={e.id}
-                  e={e}
-                  onClick={() => onOpen({ kind: "event", data: e })}
-                />
-              ))
+              rows.map((row, i) =>
+                row.kind === "month" ? (
+                  <li
+                    key={`m-${row.label}-${i}`}
+                    className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
+                  >
+                    {row.label}
+                  </li>
+                ) : (
+                  <EventRow
+                    key={row.event.id}
+                    e={row.event}
+                    onClick={() => onOpen({ kind: "event", data: row.event })}
+                  />
+                ),
+              )
             )}
           </ol>
         </div>

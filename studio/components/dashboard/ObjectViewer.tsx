@@ -169,7 +169,7 @@ function EventHeader({ event }: { event: CalendarEvent }) {
   const cls = (event.classification || "meeting").toLowerCase();
   const pillTone = classificationTone(cls);
   return (
-    <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 sm:px-5">
+    <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 pr-12 sm:px-5 sm:pr-14">
       <div className="flex items-start gap-2">
         <h2 className="min-w-0 flex-1 text-[20px] font-semibold leading-tight tracking-tight text-foreground sm:text-[22px]">
           {event.title}
