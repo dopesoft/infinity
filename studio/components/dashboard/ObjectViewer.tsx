@@ -170,24 +170,26 @@ function EventHeader({ event }: { event: CalendarEvent }) {
   const pillTone = classificationTone(cls);
   return (
     <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 pr-12 sm:px-5 sm:pr-14">
-      <div className="flex items-start gap-2">
+      <div className="flex items-center gap-2">
         <h2 className="min-w-0 flex-1 text-[20px] font-semibold leading-tight tracking-tight text-foreground sm:text-[22px]">
           {event.title}
         </h2>
+        {/* Both right-side affordances are h-6 so they vertically center
+            cleanly against the title baseline (items-center on the row). */}
         {event.htmlLink ? (
           <a
             href={event.htmlLink}
             target="_blank"
             rel="noreferrer noopener"
             aria-label="Open in Google Calendar"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ExternalLink className="size-4" aria-hidden />
           </a>
         ) : null}
         <span
           className={cn(
-            "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[12px] font-medium capitalize",
+            "inline-flex h-6 shrink-0 items-center rounded-full px-2.5 text-[12px] font-medium capitalize leading-none",
             pillTone,
           )}
         >
@@ -847,7 +849,22 @@ function EventBody({ e }: { e: CalendarEvent }) {
         <EventMetaRow icon={Repeat}>{recurrenceLabel}</EventMetaRow>
       ) : null}
       {e.location ? (
-        <EventMetaRow icon={MapPin}>{e.location}</EventMetaRow>
+        <EventMetaRow icon={MapPin}>
+          {/* Location is ALWAYS clickable. Google Maps' search-by-text
+              endpoint handles both real addresses ("450 N State St,
+              Chicago") and free-form room names ("Running with Scissors –
+              Meeting Room") - the latter just runs a text search and
+              shows the best match, which is harmless when there is none.
+              Cheaper than parsing for address-ness and missing edge cases. */}
+          <a
+            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(e.location)}`}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-baseline gap-1 break-words text-foreground hover:text-info hover:underline"
+          >
+            {e.location}
+          </a>
+        </EventMetaRow>
       ) : null}
       {videoUrl ? (
         <EventMetaRow icon={Video}>
@@ -891,15 +908,6 @@ function EventBody({ e }: { e: CalendarEvent }) {
         <EventMetaRow icon={AlignLeft}>
           <ExpandableDescription text={e.description} />
         </EventMetaRow>
-      ) : null}
-
-      {e.htmlLink ? (
-        <ModalUrl
-          href={e.htmlLink}
-          icon={<ExternalLink className="size-3.5" aria-hidden />}
-        >
-          Open in Google Calendar
-        </ModalUrl>
       ) : null}
 
       {e.prep.length > 0 ? (
