@@ -115,11 +115,6 @@ function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium text-foreground">{f.from}</span>
-          {f.subject ? (
-            <span className="hidden truncate text-xs text-muted-foreground sm:inline">
-              · {f.subject}
-            </span>
-          ) : null}
           <span
             className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground"
             suppressHydrationWarning
@@ -127,6 +122,16 @@ function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
             {relTime(f.receivedAt)}
           </span>
         </div>
+        {f.subject ? (
+          // Subject lives on its own line under the sender so it gets
+          // the full row width before truncation kicks in. line-clamp-2
+          // lets long subjects ("Your digital statement is ready for
+          // review for account ending …") show two lines max instead
+          // of the prior single inline-with-name ellipsis.
+          <p className="mt-0.5 line-clamp-2 break-words text-[12px] text-muted-foreground">
+            {f.subject}
+          </p>
+        ) : null}
         {account || classification || intent || mode ? (
           // Account → classification → intent → mode. Rectangular
           // rounded chips with thin borders so they read as distinct
