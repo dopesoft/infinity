@@ -37,33 +37,58 @@ func loadApprovalTTL() time.Duration {
 //
 // Policy (overridable via env):
 //
-//   • claude_code__bash, claude_code__write, claude_code__edit  → high-risk → queue
+//   • claude_code__write, claude_code__edit                      → allow (source
+//     edits are git-reversible; gating them is what made walk-away coding
+//     impossible — the whole point of this gate is to NOT do that)
+//   • claude_code__bash                                          → CONTENT-AWARE:
+//       - read-only git (status/diff/log/…)        → allow
+//       - any non-filesystem-destructive command   → allow (go build, npm test,
+//                                                     git commit, mkdir, …)
+//       - filesystem-destructive command           → queue (rm/rmdir/shred/dd/
+//                                                     mkfs/truncate/find -delete/
+//                                                     mv …/dev/null, …)
 //   • claude_code__read, claude_code__ls, claude_code__grep,
-//     claude_code__glob                                          → low-risk → allow
+//     claude_code__glob                                          → allow
 //   • everything else                                            → allow
 //
+// The boss explicitly scoped "deletes and shit" to *filesystem deletes*. Git
+// history/remote rewrites, DB drops, and deploys are deliberately NOT gated by
+// this path (git is handled by the boss; deploys are blocked elsewhere). Widen
+// the destructive set via env if that changes.
+//
 // Override:
-//   $INFINITY_CLAUDE_CODE_AUTOAPPROVE   comma list of tool suffixes that always allow
-//                                       (e.g. "bash,edit" if you trust the box)
-//   $INFINITY_CLAUDE_CODE_BLOCK         comma list of tool suffixes to always queue
-//                                       (default = "bash,write,edit")
+//   $INFINITY_CLAUDE_CODE_AUTOAPPROVE        comma list of tool suffixes that
+//                                            always allow (e.g. "bash" for full
+//                                            trust on the box)
+//   $INFINITY_CLAUDE_CODE_BLOCK              comma list of tool suffixes subject
+//                                            to gating (default = "bash"; add
+//                                            "write,edit" to gate those again)
+//   $INFINITY_CLAUDE_CODE_BASH_GATE_ALL=true restore legacy behavior: gate EVERY
+//                                            bash (except read-only git), not
+//                                            just destructive ones
+//   $INFINITY_CLAUDE_CODE_BASH_DESTRUCTIVE   comma list of extra substrings that
+//                                            mark a bash command destructive
 type ClaudeCodeGate struct {
-	trust      *TrustStore
-	autoAllow  map[string]struct{}
-	alwaysGate map[string]struct{}
-	gitReadOK  map[string]struct{} // git subcommands that bypass bash-gating
-	ttl        time.Duration
+	trust           *TrustStore
+	autoAllow       map[string]struct{}
+	alwaysGate      map[string]struct{}
+	gitReadOK       map[string]struct{} // git subcommands that bypass bash-gating
+	bashDestructive map[string]struct{} // extra substrings that mark bash destructive
+	gateAllBash     bool                // legacy: gate every non-readonly-git bash
+	ttl             time.Duration
 }
 
 func NewClaudeCodeGate(trust *TrustStore) *ClaudeCodeGate {
 	gitRead := parseToolSet(envOr("INFINITY_CANVAS_GIT_READ_AUTOAPPROVE",
 		"status,diff,log,show,branch,remote,fetch,rev-parse,ls-files,ls-tree,blame,config"))
 	return &ClaudeCodeGate{
-		trust:      trust,
-		autoAllow:  parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_AUTOAPPROVE")),
-		alwaysGate: parseToolSet(envOr("INFINITY_CLAUDE_CODE_BLOCK", "bash,write,edit")),
-		gitReadOK:  gitRead,
-		ttl:        loadApprovalTTL(),
+		trust:           trust,
+		autoAllow:       parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_AUTOAPPROVE")),
+		alwaysGate:      parseToolSet(envOr("INFINITY_CLAUDE_CODE_BLOCK", "bash")),
+		gitReadOK:       gitRead,
+		bashDestructive: parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_BASH_DESTRUCTIVE")),
+		gateAllBash:     strings.EqualFold(strings.TrimSpace(os.Getenv("INFINITY_CLAUDE_CODE_BASH_GATE_ALL")), "true"),
+		ttl:             loadApprovalTTL(),
 	}
 }
 
@@ -101,6 +126,108 @@ func (g *ClaudeCodeGate) isReadOnlyGit(input map[string]any) bool {
 	return ok
 }
 
+// destructiveBashCmds are leading executables that delete or destroy
+// filesystem state. Matched against the executable token of every
+// sub-command (split across shell separators), with path prefixes and
+// common wrappers (sudo/time/nice/xargs/…) stripped first. Scoped to
+// FILESYSTEM destruction per the boss's choice — git/DB/deploy verbs are
+// intentionally absent here.
+var destructiveBashCmds = map[string]struct{}{
+	"rm": {}, "rmdir": {}, "unlink": {}, "shred": {},
+	"dd": {}, "mkfs": {}, "truncate": {}, "wipefs": {}, "blkdiscard": {},
+}
+
+// bashWrappers are command prefixes that delegate to the next token, so the
+// real executable sits one (or more) tokens deeper: `sudo rm`, `xargs rm`,
+// `time rm`, `env FOO=1 rm`. We skip past these to find what actually runs.
+var bashWrappers = map[string]struct{}{
+	"sudo": {}, "doas": {}, "time": {}, "nice": {}, "nohup": {},
+	"env": {}, "command": {}, "xargs": {}, "stdbuf": {}, "ionice": {},
+}
+
+// splitShellSegments breaks a command line into the individual commands a
+// shell would run, splitting on the operators that chain or pipe commands
+// (`;`, `&&`, `||`, `|`, newlines) and on subshell boundaries (`$(`, backtick,
+// braces) so a destructive call hidden inside `foo && rm -rf x` or `$(rm x)`
+// is examined on its own.
+func splitShellSegments(cmd string) []string {
+	repl := strings.NewReplacer(
+		"&&", "\x00", "||", "\x00", "|", "\x00", ";", "\x00",
+		"\n", "\x00", "\r", "\x00", "$(", "\x00", ")", "\x00",
+		"`", "\x00", "{", "\x00", "}", "\x00",
+	)
+	parts := strings.Split(repl.Replace(cmd), "\x00")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// isDestructiveBash reports whether a claude_code__bash invocation runs a
+// filesystem-destructive command. Conservative-but-targeted: it inspects the
+// leading executable of every chained sub-command (after stripping path
+// prefixes, leading `VAR=val` assignments, and wrapper commands) plus a few
+// argument-shape patterns (`find … -delete`, `find … -exec rm`, `mv …
+// /dev/null`). Note: `>`/`>>` redirects are treated as NON-destructive — they
+// overwrite-in-place like an edit and are git-reversible, and gating every
+// redirect would reintroduce exactly the friction this gate exists to remove.
+func (g *ClaudeCodeGate) isDestructiveBash(input map[string]any) bool {
+	raw, _ := input["command"].(string)
+	cmd := strings.TrimSpace(raw)
+	if cmd == "" {
+		return false
+	}
+	low := strings.ToLower(cmd)
+
+	for _, seg := range splitShellSegments(low) {
+		// Env-extended substring patterns: any match anywhere in the segment.
+		for p := range g.bashDestructive {
+			if strings.Contains(seg, p) {
+				return true
+			}
+		}
+
+		toks := strings.Fields(seg)
+		// Skip leading `VAR=val` assignments and wrapper commands to reach the
+		// executable that actually runs.
+		i := 0
+		for i < len(toks) {
+			t := toks[i]
+			if eq := strings.IndexByte(t, '='); eq > 0 && !strings.HasPrefix(t, "-") && !strings.ContainsAny(t[:eq], "/") {
+				i++ // VAR=val
+				continue
+			}
+			exe := t
+			if idx := strings.LastIndexByte(exe, '/'); idx >= 0 {
+				exe = exe[idx+1:] // /usr/bin/rm -> rm
+			}
+			if _, wrap := bashWrappers[exe]; wrap {
+				i++ // sudo/xargs/time/… — look one deeper
+				continue
+			}
+			// `exe` is the real command for this segment.
+			if _, bad := destructiveBashCmds[exe]; bad {
+				return true
+			}
+			// mkfs comes in per-filesystem variants: mkfs.ext4, mkfs.xfs, …
+			if strings.HasPrefix(exe, "mkfs") {
+				return true
+			}
+			if exe == "find" && (strings.Contains(seg, "-delete") || strings.Contains(seg, "-exec rm")) {
+				return true
+			}
+			if exe == "mv" && strings.Contains(seg, "/dev/null") {
+				return true
+			}
+			break
+		}
+	}
+	return false
+}
+
 func parseToolSet(raw string) map[string]struct{} {
 	out := make(map[string]struct{})
 	for _, p := range strings.Split(raw, ",") {
@@ -136,13 +263,24 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		return agent.GateDecision{Allow: true}
 	}
 
-	// Canvas surface: claude_code__bash gets a narrow read-only git allow-list.
-	// Read-only verbs cannot change disk or remote state, so gating them just
-	// blocks the IDE-style status polling and frustrates the boss without any
-	// safety win. Mutations (commit/push/pull/reset/checkout) still fall
-	// through to the normal Trust queue below.
-	if suffix == "bash" && g.isReadOnlyGit(input) {
-		return agent.GateDecision{Allow: true}
+	// claude_code__bash is content-aware. The boss wants to walk away while
+	// Jarvis writes code, so the default is to ALLOW bash and only stop for
+	// filesystem-destructive commands.
+	//
+	//   • read-only git (status/diff/log/…)  → allow (IDE-style polling)
+	//   • non-destructive command            → allow (go build, npm test,
+	//                                           git commit, mkdir, …)
+	//   • filesystem-destructive command     → fall through to the queue
+	//
+	// $INFINITY_CLAUDE_CODE_BASH_GATE_ALL=true restores the legacy behavior of
+	// gating every non-readonly-git bash.
+	if suffix == "bash" {
+		if g.isReadOnlyGit(input) {
+			return agent.GateDecision{Allow: true}
+		}
+		if !g.gateAllBash && !g.isDestructiveBash(input) {
+			return agent.GateDecision{Allow: true}
+		}
 	}
 
 	// All approval state lives in mem_trust_contracts - no in-memory cache
@@ -191,9 +329,22 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 		}
 	}
 
+	reasoning := "Claude Code requested a gated action on the home Mac."
+	title := fmt.Sprintf("Run %s on home Mac", toolName)
+	if suffix == "bash" && !g.gateAllBash {
+		reasoning = "Claude Code wants to run a filesystem-destructive shell " +
+			"command (delete/overwrite-of-disk-state) on the home Mac. " +
+			"Everything else in this coding session runs unattended — this " +
+			"one stopped because it can destroy files."
+		title = "Destructive command on home Mac"
+	} else {
+		reasoning = "Claude Code requested a gated action (" + suffix + ") on the " +
+			"home Mac. Gated because INFINITY_CLAUDE_CODE_BLOCK includes this verb."
+	}
+
 	preview := buildPreview(toolName, input)
 	id, err := g.trust.Queue(ctx, &TrustContract{
-		Title:     fmt.Sprintf("Run %s on home Mac", toolName),
+		Title:     title,
 		RiskLevel: "high",
 		Source:    "claude_code_gate",
 		ActionSpec: map[string]any{
@@ -202,9 +353,8 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 			"session_id": sessionID,
 			"project":    project,
 		},
-		Reasoning: "Claude Code requested a write/edit/exec on the home Mac. Gated for safety because " +
-			"INFINITY_CLAUDE_CODE_BLOCK includes this verb.",
-		Preview: preview,
+		Reasoning: reasoning,
+		Preview:   preview,
 	})
 	if err != nil {
 		log.Printf("ClaudeCodeGate: %s queue err=%v", toolName, err)
