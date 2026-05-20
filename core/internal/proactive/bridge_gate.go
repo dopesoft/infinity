@@ -17,24 +17,30 @@ import (
 // modifying surfaces, so a Trust contract is the right safety layer
 // regardless of which one ends up serving the call.
 //
-// Policy:
+// Policy mirrors ClaudeCodeGate so the boss can walk away while Jarvis
+// writes code, no matter which surface serves it:
 //
-//   • fs_save, fs_edit, bash_run, git_commit, git_push, git_pull,
-//     git_stage                               → high-risk → queue
-//   • fs_read, fs_ls, git_status, git_diff    → read-only → allow
+//   • fs_save, fs_edit                        → allow (git-reversible edits)
+//   • git_commit, git_stage, git_pull         → allow (local / inbound)
+//   • bash_run                                → CONTENT-AWARE: only
+//     filesystem-destructive commands queue; reads/builds/edits run free
+//   • git_push, project_create                → queue (outward: publishes to
+//     GitHub under the boss's PAT / creates a remote repo)
+//   • fs_read, fs_ls, git_status, git_diff    → allow (read-only)
 //
 // Override:
-//   $INFINITY_BRIDGE_AUTOAPPROVE   comma list of tool names that always allow
-//   $INFINITY_BRIDGE_BLOCK         comma list of tool names to always queue
-//
-// Default block list is conservative because writes propagate to GitHub
-// (the Cloud bridge has git push wired against the boss's PAT). One
-// blind `git push --force` is enough; gate everything that mutates.
+//   $INFINITY_BRIDGE_AUTOAPPROVE        comma list of tool names that always allow
+//   $INFINITY_BRIDGE_BLOCK              comma list of tool names subject to gating
+//                                       (default = "bash_run,git_push,project_create")
+//   $INFINITY_BRIDGE_BASH_GATE_ALL=true gate EVERY bash_run, not just destructive
+//   $INFINITY_CLAUDE_CODE_BASH_DESTRUCTIVE  shared extra destructive substrings
 type BridgeGate struct {
-	trust      *TrustStore
-	autoAllow  map[string]struct{}
-	alwaysGate map[string]struct{}
-	ttl        time.Duration
+	trust           *TrustStore
+	autoAllow       map[string]struct{}
+	alwaysGate      map[string]struct{}
+	bashDestructive map[string]struct{}
+	gateAllBash     bool
+	ttl             time.Duration
 }
 
 func NewBridgeGate(trust *TrustStore) *BridgeGate {
@@ -42,9 +48,19 @@ func NewBridgeGate(trust *TrustStore) *BridgeGate {
 		trust:     trust,
 		autoAllow: parseToolSet(os.Getenv("INFINITY_BRIDGE_AUTOAPPROVE")),
 		alwaysGate: parseToolSet(envOr("INFINITY_BRIDGE_BLOCK",
-			"fs_save,fs_edit,bash_run,git_commit,git_push,git_pull,git_stage,project_create")),
-		ttl: loadApprovalTTL(),
+			"bash_run,git_push,project_create")),
+		bashDestructive: parseToolSet(os.Getenv("INFINITY_CLAUDE_CODE_BASH_DESTRUCTIVE")),
+		gateAllBash:     strings.EqualFold(strings.TrimSpace(os.Getenv("INFINITY_BRIDGE_BASH_GATE_ALL")), "true"),
+		ttl:             loadApprovalTTL(),
 	}
+}
+
+// isDestructiveBash reports whether a bash_run invocation runs a
+// filesystem-destructive command. Bridge bash uses the "cmd" input key
+// (claude_code__bash uses "command"); the classifier itself is shared.
+func (g *BridgeGate) isDestructiveBash(input map[string]any) bool {
+	raw, _ := input["cmd"].(string)
+	return isDestructiveCommand(raw, g.bashDestructive)
 }
 
 func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) agent.GateDecision {
@@ -56,7 +72,15 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 		return agent.GateDecision{Allow: true}
 	}
 	if _, ok := g.alwaysGate[lower]; !ok {
-		return agent.GateDecision{Allow: true} // read-only / unknown verb
+		return agent.GateDecision{Allow: true} // read-only / allowed verb
+	}
+
+	// bash_run is content-aware (same policy as claude_code__bash): only
+	// filesystem-destructive commands stop. Reads, builds, and edits run
+	// unattended so the boss can walk away. $INFINITY_BRIDGE_BASH_GATE_ALL=true
+	// restores the legacy gate-every-bash behavior.
+	if lower == "bash_run" && !g.gateAllBash && !g.isDestructiveBash(input) {
+		return agent.GateDecision{Allow: true}
 	}
 
 	// Standing per-session approval shortcut - same pattern as
@@ -84,6 +108,17 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 	// Render a short human-readable command for the Trust card so the
 	// boss can decide without expanding the JSON every time.
 	summary := summariseBridgeCall(toolName, input)
+	reasoning := "Generic bridge primitive requested a gated action. Everything else in this " +
+		"coding session runs unattended; this one stopped because it can't be silently undone."
+	switch {
+	case lower == "bash_run":
+		reasoning = "Bridge wants to run a filesystem-destructive shell command (delete/overwrite-of-disk-state). " +
+			"Reads, builds, and edits run unattended — this one stopped because it can destroy files."
+	case lower == "git_push":
+		reasoning = "Bridge wants to push to GitHub under the boss's PAT. Outward-facing publish, so it stops for approval."
+	case lower == "project_create":
+		reasoning = "Bridge wants to scaffold a project (and may create a remote GitHub repo). Outward-facing, so it stops for approval."
+	}
 	id, err := g.trust.Queue(ctx, &TrustContract{
 		Title:     summary,
 		RiskLevel: "high",
@@ -94,9 +129,8 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 			"session_id": sessionID,
 			"project":    project,
 		},
-		Reasoning: "Generic bridge primitive (fs/bash/git) requested a write/exec on the active filesystem. " +
-			"Gated because INFINITY_BRIDGE_BLOCK includes this verb.",
-		Preview: summary,
+		Reasoning: reasoning,
+		Preview:   summary,
 	})
 	if err != nil {
 		log.Printf("BridgeGate: %s queue err=%v", toolName, err)

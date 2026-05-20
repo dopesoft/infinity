@@ -100,6 +100,54 @@ func TestAuthorizeBashAndEdits(t *testing.T) {
 	}
 }
 
+// TestBridgeGateAuthorize mirrors the claude_code policy on the generic bridge
+// surface: fs edits + safe bash_run flow, destructive bash_run + git_push stop.
+// This is the surface that actually generated the bulk of the boss's prompt
+// pile (read-only greps/seds/cats that should never have gated).
+func TestBridgeGateAuthorize(t *testing.T) {
+	g := NewBridgeGate(nil)
+	ctx := context.Background()
+
+	allow := func(tool string, in map[string]any) bool {
+		return g.Authorize(ctx, "sess-1", "infinity", tool, in).Allow
+	}
+	bashRun := func(cmd string) map[string]any { return map[string]any{"cmd": cmd} }
+
+	// Writing code flows freely.
+	if !allow("fs_save", map[string]any{"path": "x.go"}) {
+		t.Fatal("fs_save should be allowed without approval")
+	}
+	if !allow("fs_edit", map[string]any{"path": "x.go"}) {
+		t.Fatal("fs_edit should be allowed without approval")
+	}
+	if !allow("git_commit", map[string]any{"message": "wip"}) {
+		t.Fatal("git_commit should be allowed without approval")
+	}
+
+	// The bulk of the real pile: read-only exploration via bash_run.
+	for _, c := range []string{
+		"grep -RIn web_search core/", "sed -n '1,220p' serve.go",
+		"cat go.mod", "pwd && ls", "env | grep LLM", "go build ./...",
+	} {
+		if !allow("bash_run", bashRun(c)) {
+			t.Fatalf("safe bash_run %q should be allowed without approval", c)
+		}
+	}
+
+	// Destructive bash_run still stops.
+	if allow("bash_run", bashRun("rm -rf /workspace/infinity/dist")) {
+		t.Fatal("destructive bash_run (rm -rf) must not be auto-allowed")
+	}
+	// Outward-facing publish still stops.
+	if allow("git_push", map[string]any{"remote": "origin", "branch": "main"}) {
+		t.Fatal("git_push must not be auto-allowed")
+	}
+	// Non-bridge tools pass through.
+	if !allow("memory_search", map[string]any{"q": "x"}) {
+		t.Fatal("non-bridge tools must pass through")
+	}
+}
+
 // TestAuthorizeGateAllBash verifies the legacy escape hatch: with gateAllBash
 // set, even a harmless build command leaves the allow path.
 func TestAuthorizeGateAllBash(t *testing.T) {

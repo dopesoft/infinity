@@ -176,6 +176,15 @@ func splitShellSegments(cmd string) []string {
 // redirect would reintroduce exactly the friction this gate exists to remove.
 func (g *ClaudeCodeGate) isDestructiveBash(input map[string]any) bool {
 	raw, _ := input["command"].(string)
+	return isDestructiveCommand(raw, g.bashDestructive)
+}
+
+// isDestructiveCommand is the shared filesystem-destruction classifier used by
+// both ClaudeCodeGate (claude_code__bash, input key "command") and BridgeGate
+// (bash_run, input key "cmd"). `extra` is an optional set of additional
+// destructive substrings. Keeping one classifier means a delete is recognised
+// identically no matter which coding surface served the call.
+func isDestructiveCommand(raw string, extra map[string]struct{}) bool {
 	cmd := strings.TrimSpace(raw)
 	if cmd == "" {
 		return false
@@ -184,7 +193,7 @@ func (g *ClaudeCodeGate) isDestructiveBash(input map[string]any) bool {
 
 	for _, seg := range splitShellSegments(low) {
 		// Env-extended substring patterns: any match anywhere in the segment.
-		for p := range g.bashDestructive {
+		for p := range extra {
 			if strings.Contains(seg, p) {
 				return true
 			}
