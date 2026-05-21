@@ -33,7 +33,7 @@ const KIND_META: Record<
 export function ApprovalRow({ a, onClick }: { a: Approval; onClick: () => void }) {
   const meta = KIND_META[a.kind];
   return (
-    <TileCard onClick={onClick} tone={meta.tone}>
+    <TileCard onClick={onClick} tone={meta.tone} className="gap-3 p-3">
       <span
         className={cn(
           "flex size-9 shrink-0 items-center justify-center rounded-md border",

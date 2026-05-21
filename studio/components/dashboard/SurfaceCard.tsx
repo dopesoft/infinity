@@ -1,5 +1,6 @@
 "use client";
 
+import { AlertTriangle, Bell } from "lucide-react";
 import { TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
@@ -26,20 +27,19 @@ export function SurfaceRow({
   item: SurfaceItem;
   onClick: () => void;
 }) {
-  // Untitled UI list-row pattern:
-  //   line 1: sender (parsed from body's "From:" field) · time on the right
-  //   line 2: subject (item.title) — the heaviest type weight
-  //   line 3: assistant-written one-liner (importanceReason) — the "why"
-  // Importance is a discrete signal only: a 2px colored left edge when
-  // imp >= 50. No avatar bubble, no IMPORTANT/NOTABLE pill, no chips,
-  // no star, no 3-dot menu, no tags. Tapping the row opens ObjectViewer.
+  // Same icon-tile grammar as FollowUpRow / ApprovalRow so the whole
+  // "Surfaced by Jarvis" card reads as one calm, consistent list:
+  //   leading tile (tinted by importance) · title + time · sender/why subtext
+  // Importance is signalled by the tile tint plus a trailing alert glyph
+  // for the top tier - NOT a colored left-edge bar. Tapping opens ObjectViewer.
   const imp = typeof item.importance === "number" ? item.importance : null;
-  const edge =
-    imp != null && imp >= 80
-      ? "border-l-2 border-l-danger"
-      : imp != null && imp >= 50
-        ? "border-l-2 border-l-info"
-        : null;
+  const high = imp != null && imp >= 80;
+  const mid = imp != null && imp >= 50 && imp < 80;
+  const tile = high
+    ? "border-rose-400/40 bg-rose-400/15 text-rose-400"
+    : mid
+      ? "border-info/40 bg-info/15 text-info"
+      : "border-border bg-muted text-muted-foreground";
 
   // Sender comes from parsing the body's "From:" line. If parse misses,
   // fall back to the source label ("gmail-triage" → "gmail") so the row
@@ -57,30 +57,38 @@ export function SurfaceRow({
     parsed.find((f) => f.label.toLowerCase() === "why it matters")?.value ||
     parsed[0]?.value ||
     "";
+  // One muted subtext line: sender, then the "why" when present. Keeps the
+  // row to two lines so it stays slim like the rest of the dashboard rows.
+  const subtext = preview ? `${sender} — ${preview}` : sender;
 
   return (
-    <TileCard
-      onClick={onClick}
-      className={cn("flex-col items-stretch gap-1.5 p-4 sm:p-4", edge)}
-    >
-      <div className="flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
-          {sender}
-        </span>
-        <span
-          className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-          suppressHydrationWarning
-        >
-          {relTime(item.createdAt)}
-        </span>
-      </div>
-      <p className="line-clamp-2 break-words text-[14px] font-semibold leading-snug text-foreground">
-        {item.title}
-      </p>
-      {preview ? (
-        <p className="line-clamp-1 break-words text-[12.5px] text-muted-foreground">
-          {preview}
+    <TileCard onClick={onClick} className="gap-3 p-3">
+      <span
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-md border",
+          tile,
+        )}
+      >
+        <Bell className="size-4" aria-hidden />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {item.title}
+          </span>
+          <span
+            className="shrink-0 font-mono text-[10px] text-muted-foreground"
+            suppressHydrationWarning
+          >
+            {relTime(item.createdAt)}
+          </span>
+        </div>
+        <p className="mt-0.5 line-clamp-1 break-words text-[12px] text-muted-foreground">
+          {subtext}
         </p>
+      </div>
+      {high ? (
+        <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden />
       ) : null}
     </TileCard>
   );
