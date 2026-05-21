@@ -65,6 +65,10 @@ func DefaultLoadedTools() []string {
 		// Web reach - cheap and universally useful.
 		"web_search",
 		"http_fetch",
+		// Document generation - "make me a spreadsheet/report/deck" should
+		// work out of the box (boss wants it default). Renders via the
+		// workspace bridge's baked helpers; no-op if no workspace wired.
+		"document_create",
 		// Claude Code bridge - most boss sessions touch the home Mac.
 		"claude_code__Read",
 		"claude_code__Write",

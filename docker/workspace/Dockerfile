@@ -38,16 +38,43 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         build-essential \
         python3 \
         python3-pip \
+        python3-venv \
         pipx \
         jq \
         ripgrep \
         less \
         nano \
         unzip \
+        # ── document-generation stack (models Claude's file-ops skills) ──
+        # LibreOffice headless: the quiet workhorse for format conversion,
+        # XLSX formula recalc, and rendering Office docs to PDF/images.
+        libreoffice-calc \
+        libreoffice-writer \
+        libreoffice-impress \
+        # PDF toolchain: poppler (pdftotext/pdfimages/pdf2image), qpdf,
+        # pdftk (merge/split/form-fill), ghostscript, tesseract OCR.
+        poppler-utils \
+        qpdf \
+        pdftk-java \
+        ghostscript \
+        tesseract-ocr \
+        fonts-liberation \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g pnpm \
     && rm -rf /var/lib/apt/lists/*
+
+# Baked document-generation helpers. document_create (core tool) dispatches
+# the structured spec to these via the /docgen endpoint, so the agent never
+# hand-writes docx/pptx code (that's the jank we're avoiding).
+#   DOCX/PPTX → JavaScript (docx-js / pptxgenjs)  — cleaner Office output
+#   XLSX/PDF  → Python (openpyxl / reportlab + pypdf/pdfplumber/OCR)
+COPY docgen/ /opt/docgen/
+RUN cd /opt/docgen \
+    && npm install --omit=dev --no-audit --no-fund \
+    && python3 -m venv venv \
+    && ./venv/bin/pip install --no-cache-dir -r requirements.txt
+ENV DOCGEN_DIR=/opt/docgen
 
 WORKDIR /workspace
 ENV WORKSPACE_ROOT=/workspace

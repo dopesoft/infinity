@@ -63,6 +63,23 @@ type wsServerEvent struct {
 	// stream, so it streams continuously across every observe/act/extract
 	// call for the whole browser session.
 	BrowserFrame *wsBrowserFrame `json:"browser_frame,omitempty"`
+	// DocumentCreated fires when document_create produces a file, so Studio
+	// opens a NEW tab with the rendered report + download. Rides the
+	// per-session broadcaster like browser frames. Cloud-first: the markdown
+	// rides the event (no fetch) and binaries download via the cloud-direct
+	// /api/workspace/download proxy — works from any device regardless of the
+	// session's Mac/Cloud bridge.
+	DocumentCreated *wsDocumentCreated `json:"document_created,omitempty"`
+}
+
+// wsDocumentCreated tells Studio to open a generated document in a new tab.
+type wsDocumentCreated struct {
+	Format   string `json:"format"`
+	Filename string `json:"filename"`
+	Path     string `json:"path"`               // cloud workspace path (for download)
+	Bytes    int64  `json:"bytes,omitempty"`
+	Markdown string `json:"markdown,omitempty"` // rendered inline for md/report formats
+	PDFPath  string `json:"pdf_path,omitempty"` // sibling PDF for preview, when also_pdf
 }
 
 // wsBrowserFrame is one screencast frame for the Studio Preview pane (live browser).

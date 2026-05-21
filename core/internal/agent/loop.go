@@ -1034,10 +1034,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			})
 			// Auto-name the session after the first complete exchange.
 			// MaybeName is cheap when the session is already named (one
-			// indexed lookup); it runs Haiku async only when we need a
-			// fresh title. Safe to call on every turn.
+			// indexed lookup); it drafts a title async only when we need a
+			// fresh one. Safe to call on every turn. Use turnText, not
+			// userMsg: on the resume path (Discuss-with-Jarvis seeded
+			// sessions) userMsg is empty and turnText carries the seeded
+			// opening message, so those sessions get a title too instead of
+			// staying nameless in the sessions drawer.
 			if l.namer != nil {
-				l.namer.MaybeName(s.ID, userMsg, resp.Text)
+				l.namer.MaybeName(s.ID, turnText, resp.Text)
 			}
 			// Auto-compaction: if this turn's reported input crossed the
 			// threshold, run compaction in the background so the *next*

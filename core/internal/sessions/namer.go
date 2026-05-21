@@ -1,7 +1,9 @@
 // Package sessions owns session-level metadata that lives outside the agent
-// loop's in-memory map. Right now that's auto-naming via Haiku - turning a
+// loop's in-memory map. Right now that's auto-naming - turning a
 // freshly-minted session's first exchange into a 3-5 word title so the
-// Live header drawer doesn't show "chs3-djnc" garbage.
+// Live header drawer doesn't show "chs3-djnc" garbage. Titling runs through
+// the boss's active Studio model selection (see SetActiveModelFn); when no
+// override is set it falls back to the cheap Haiku default below.
 package sessions
 
 import (
@@ -15,7 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// haikuModel is the default model for naming. Override with INFINITY_SESSION_NAME_MODEL.
+// haikuModel is the fallback model for naming, used only when the boss has
+// no active model selection wired (SetActiveModelFn) or it resolves empty.
+// Override the fallback itself with INFINITY_SESSION_NAME_MODEL.
 const haikuModel = "claude-haiku-4-5-20251001"
 
 // Drafter is the minimal LLM dependency we need. Implemented by *llm.Anthropic
@@ -35,6 +39,41 @@ type Namer struct {
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
+
+	// modelFn resolves the boss's live Studio model selection (the same
+	// resolver the agent loop uses). When set and non-empty it overrides
+	// the static fallback above so titles use whatever model is picked in
+	// Settings. Guarded because naming runs on detached goroutines.
+	modelMu sync.RWMutex
+	modelFn func(ctx context.Context) string
+}
+
+// SetActiveModelFn wires the namer to the boss's live model selection so
+// session titles are drafted with the same model Studio chats use. fn returns
+// the selected model id (empty when no override is set, in which case naming
+// falls back to the Haiku default). Wired once at boot.
+func (n *Namer) SetActiveModelFn(fn func(ctx context.Context) string) {
+	if n == nil {
+		return
+	}
+	n.modelMu.Lock()
+	n.modelFn = fn
+	n.modelMu.Unlock()
+}
+
+// activeModel returns the model to title with: the boss's Studio selection
+// when wired and non-empty, else the cheap Haiku fallback so naming never
+// gets pinned to an expensive model just because none was explicitly chosen.
+func (n *Namer) activeModel(ctx context.Context) string {
+	n.modelMu.RLock()
+	fn := n.modelFn
+	n.modelMu.RUnlock()
+	if fn != nil {
+		if m := strings.TrimSpace(fn(ctx)); m != "" {
+			return m
+		}
+	}
+	return n.model
 }
 
 func NewNamer(pool *pgxpool.Pool, drafter Drafter, model string) *Namer {
@@ -155,7 +194,7 @@ func (n *Namer) draftName(ctx context.Context, userMsg, assistantMsg string) (st
 		truncate(userMsg, 1200),
 		truncate(assistantMsg, 1200),
 	)
-	raw, err := n.drafter.Draft(ctx, n.model, namingSystem, prompt, 60)
+	raw, err := n.drafter.Draft(ctx, n.activeModel(ctx), namingSystem, prompt, 60)
 	if err != nil {
 		return "", err
 	}

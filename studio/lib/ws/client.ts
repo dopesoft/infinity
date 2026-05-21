@@ -56,13 +56,27 @@ export type WSEvent =
   // time. The CanvasBrowser component renders frame into an <img>. These
   // ride the per-session broadcaster (not the turn stream), so they flow
   // continuously for the whole browser session.
-  | { type: "browser_frame"; session_id: string; browser_frame: WSBrowserFrame };
+  | { type: "browser_frame"; session_id: string; browser_frame: WSBrowserFrame }
+  // document_created fires when document_create produces a file. Studio opens
+  // a NEW tab: rendered markdown inline for reports, a download card for
+  // binaries. Cloud-first — markdown rides the event, binaries fetch via the
+  // cloud-direct /api/workspace/download proxy (works on any device).
+  | { type: "document_created"; session_id: string; document_created: WSDocumentCreated };
 
 export type WSBrowserFrame = {
   seq: number;
   frame: string; // data:image/jpeg;base64,...
   url?: string;
   browser_session_id?: string;
+};
+
+export type WSDocumentCreated = {
+  format: string; // xlsx | docx | pptx | pdf | md
+  filename: string;
+  path: string; // cloud workspace path (for download)
+  bytes?: number;
+  markdown?: string; // rendered inline for md/report formats
+  pdf_path?: string; // sibling PDF for preview, when also_pdf
 };
 
 export type WSIntent = {

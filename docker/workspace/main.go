@@ -41,10 +41,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +72,7 @@ func main() {
 	mux.HandleFunc("/version", handleVersion)
 	mux.HandleFunc("/fs/ls", auth(handleFSList))
 	mux.HandleFunc("/fs/read", auth(handleFSRead))
+	mux.HandleFunc("/fs/raw", auth(handleFSRaw))
 	mux.HandleFunc("/fs/save", auth(handleFSSave))
 	mux.HandleFunc("/fs/edit", auth(handleFSEdit))
 	mux.HandleFunc("/bash", auth(handleBash))
@@ -80,6 +83,7 @@ func main() {
 	mux.HandleFunc("/git/push", auth(handleGitPush))
 	mux.HandleFunc("/git/pull", auth(handleGitPull))
 	mux.HandleFunc("/git/init", auth(handleGitInit))
+	mux.HandleFunc("/docgen", auth(handleDocgen))
 
 	addr := ":" + envDefault("PORT", "8080")
 	log.Printf("workspace bridge: listening on %s (root=%s)", addr, workspaceRoot)
@@ -174,9 +178,9 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service":      "workspace-bridge",
-		"git_sha":      strings.TrimSpace(os.Getenv("RAILWAY_GIT_COMMIT_SHA")),
-		"deployed_at":  strings.TrimSpace(os.Getenv("RAILWAY_DEPLOYMENT_CREATED_AT")),
+		"service":     "workspace-bridge",
+		"git_sha":     strings.TrimSpace(os.Getenv("RAILWAY_GIT_COMMIT_SHA")),
+		"deployed_at": strings.TrimSpace(os.Getenv("RAILWAY_DEPLOYMENT_CREATED_AT")),
 	})
 }
 
@@ -281,6 +285,42 @@ func handleFSRead(w http.ResponseWriter, r *http.Request) {
 		Start:     start,
 		End:       end,
 	})
+}
+
+// handleFSRaw streams a file's raw bytes — binary-safe, unlike /fs/read
+// (which JSON-encodes content as a string and would corrupt .xlsx/.docx/
+// .pptx). Core's /api/workspace/download proxies this so generated documents
+// download/preview in Studio from ANY device, independent of the session's
+// Mac/Cloud bridge. GET /fs/raw?path=...
+func handleFSRaw(w http.ResponseWriter, r *http.Request) {
+	resolved, err := resolvePath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	if info.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is a directory"})
+		return
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer f.Close()
+	ct := mime.TypeByExtension(filepath.Ext(resolved))
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	w.Header().Set("Content-Disposition", "inline; filename="+strconv.Quote(filepath.Base(resolved)))
+	_, _ = io.Copy(w, f)
 }
 
 type fsSaveRequest struct {
@@ -606,6 +646,137 @@ func handleGitInit(w http.ResponseWriter, r *http.Request) {
 	}
 	out, exit, _ := runGit(r.Context(), repo, "init", "-b", "main")
 	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "output": out, "exit_code": exit})
+}
+
+// ── docgen ─────────────────────────────────────────────────────────────────
+//
+// Renders a structured spec into a real Office/PDF file using the baked
+// helpers in $DOCGEN_DIR. Format dispatch:
+//
+//	xlsx → venv python render_xlsx.py   (openpyxl)
+//	docx → node render_docx.js          (docx-js)
+//	pptx → node render_pptx.js          (pptxgenjs)
+//	pdf  → venv python render_pdf.py    (reportlab)
+//	md   → write content.markdown verbatim (rendered in Studio)
+//
+// The spec is the request's `content` object, piped to the helper on stdin.
+// The file lands in the workspace volume (so the canvas file browser shows
+// it). When `also_pdf` is set, LibreOffice headless renders a sibling .pdf
+// for visual review (decks/docs).
+type docgenRequest struct {
+	Format   string          `json:"format"`
+	Filename string          `json:"filename"`
+	Content  json.RawMessage `json:"content"`
+	AlsoPDF  bool            `json:"also_pdf,omitempty"`
+}
+
+func docgenDir() string { return envDefault("DOCGEN_DIR", "/opt/docgen") }
+
+func handleDocgen(w http.ResponseWriter, r *http.Request) {
+	var req docgenRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(req.Format))
+	if format == "" || strings.TrimSpace(req.Filename) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format and filename are required"})
+		return
+	}
+	out, err := resolvePath(req.Filename)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	dir := docgenDir()
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+
+	var runErr error
+	switch format {
+	case "md", "markdown":
+		var c struct {
+			Markdown string `json:"markdown"`
+		}
+		_ = json.Unmarshal(req.Content, &c)
+		runErr = os.WriteFile(out, []byte(c.Markdown), 0o644)
+	case "xlsx":
+		runErr = runDocgenHelper(ctx, dir, "venv/bin/python", "render_xlsx.py", out, req.Content)
+	case "pdf":
+		runErr = runDocgenHelper(ctx, dir, "venv/bin/python", "render_pdf.py", out, req.Content)
+	case "docx":
+		runErr = runDocgenHelper(ctx, dir, "node", "render_docx.js", out, req.Content)
+	case "pptx":
+		runErr = runDocgenHelper(ctx, dir, "node", "render_pptx.js", out, req.Content)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported format: " + format})
+		return
+	}
+	if runErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": runErr.Error()})
+		return
+	}
+
+	resp := map[string]any{"path": out, "format": format}
+	if info, err := os.Stat(out); err == nil {
+		resp["bytes"] = info.Size()
+	}
+	// Optional: render a sibling PDF for visual review via LibreOffice.
+	if req.AlsoPDF && format != "pdf" && format != "md" {
+		if pdfPath, err := sofficeToPDF(ctx, out); err == nil {
+			resp["pdf_path"] = pdfPath
+		} else {
+			resp["pdf_error"] = err.Error()
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// runDocgenHelper executes a baked helper (python venv or node) with the
+// spec piped on stdin and the output path as the first arg. cwd is the
+// docgen dir so node's require() resolves the local node_modules.
+func runDocgenHelper(ctx context.Context, dir, interp, script, out string, spec json.RawMessage) error {
+	bin := interp
+	if !filepath.IsAbs(interp) && strings.Contains(interp, "/") {
+		bin = filepath.Join(dir, interp) // e.g. venv/bin/python
+	}
+	cmd := exec.CommandContext(ctx, bin, filepath.Join(dir, script), out)
+	cmd.Dir = dir
+	if len(spec) == 0 {
+		spec = json.RawMessage("{}")
+	}
+	cmd.Stdin = strings.NewReader(string(spec))
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(combined))
+		if len(msg) > 600 {
+			msg = msg[:600] + "…"
+		}
+		return fmt.Errorf("%s %s: %v: %s", interp, script, err, msg)
+	}
+	return nil
+}
+
+// sofficeToPDF renders an Office file to a sibling PDF via LibreOffice
+// headless. Returns the produced PDF path.
+func sofficeToPDF(ctx context.Context, src string) (string, error) {
+	outDir := filepath.Dir(src)
+	cmd := exec.CommandContext(ctx, "soffice", "--headless", "--convert-to", "pdf", "--outdir", outDir, src)
+	// soffice needs a writable HOME for its profile.
+	cmd.Env = append(os.Environ(), "HOME="+workspaceRoot)
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("soffice: %v: %s", err, strings.TrimSpace(string(combined)))
+	}
+	pdf := strings.TrimSuffix(src, filepath.Ext(src)) + ".pdf"
+	if _, err := os.Stat(pdf); err != nil {
+		return "", fmt.Errorf("soffice produced no pdf")
+	}
+	return pdf, nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────

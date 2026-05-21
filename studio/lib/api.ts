@@ -255,6 +255,35 @@ export async function closeBrowserSession(id: string): Promise<boolean> {
   }
 }
 
+// fetchWorkspaceBlob pulls a file's raw bytes from the CLOUD workspace via
+// the cloud-direct proxy (works on any device, independent of the session
+// bridge). Returns a Blob so binaries never round-trip as text. Used for
+// generated-document download + inline PDF preview.
+export async function fetchWorkspaceBlob(path: string): Promise<Blob | null> {
+  try {
+    const res = await authedFetch(`/api/workspace/download?path=${encodeURIComponent(path)}`);
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch {
+    return null;
+  }
+}
+
+// downloadWorkspaceFile triggers a browser "save as" for a workspace file.
+export async function downloadWorkspaceFile(path: string, filename: string): Promise<boolean> {
+  const blob = await fetchWorkspaceBlob(path);
+  if (!blob) return false;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return true;
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null> {
   try {
     const res = await authedFetch(path, { signal });

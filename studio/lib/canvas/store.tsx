@@ -33,11 +33,25 @@ import {
 
 export type DevicePreset = "mobile" | "tablet" | "desktop";
 
-export type CanvasTabKind = "preview" | "file";
+export type CanvasTabKind = "preview" | "file" | "document";
 
 export type CanvasTab =
   | { kind: "preview"; id: "preview" }
-  | { kind: "file"; id: string; path: string };
+  | { kind: "file"; id: string; path: string }
+  | { kind: "document"; id: string; filename: string; format: string; path: string };
+
+// DocMeta is a generated document opened in a Studio tab. markdown rides the
+// ws event for reports (rendered inline); binaries (xlsx/docx/pptx) download
+// via the cloud-direct proxy keyed on `path`.
+export type DocMeta = {
+  id: string; // = path
+  filename: string;
+  format: string;
+  path: string;
+  bytes?: number;
+  markdown?: string;
+  pdfPath?: string;
+};
 
 type Persisted = {
   root: string;
@@ -117,6 +131,11 @@ type CanvasStoreValue = {
   browserSessionId: string;
   setBrowserSessionId: (id: string) => void;
 
+  // Generated documents (each opens as its own closeable tab).
+  documents: DocMeta[];
+  openDocument: (doc: DocMeta) => void;
+  closeDocument: (id: string) => void;
+
   // Dirty tracking
   dirtyPaths: Set<string>;
   markDirty: (path: string) => void;
@@ -148,6 +167,7 @@ export function CanvasStoreProvider({
   const [rightMode, setRightModeInternal] = useState<"preview" | "file">("preview");
   const [browserActive, setBrowserActive] = useState(false);
   const [browserSessionId, setBrowserSessionId] = useState("");
+  const [documents, setDocuments] = useState<DocMeta[]>([]);
 
   // openPaths is the source of truth for non-preview tabs.
   const [openPaths, setOpenPaths] = useState<string[]>([]);
@@ -269,6 +289,16 @@ export function CanvasStoreProvider({
     [],
   );
 
+  const openDocument = useCallback((doc: DocMeta) => {
+    setDocuments((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
+    setActiveTabId(doc.id);
+  }, [setActiveTabId]);
+
+  const closeDocument = useCallback((id: string) => {
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+    setActiveTabIdInternal((cur) => (cur === id ? "preview" : cur));
+  }, []);
+
   const openFile = useCallback(
     (path: string) => {
       setOpenPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
@@ -347,8 +377,10 @@ export function CanvasStoreProvider({
     return [
       { kind: "preview", id: "preview" } as const,
       ...openPaths.map((p) => ({ kind: "file", id: fileTabId(p), path: p }) as const),
+      ...documents.map((d) =>
+        ({ kind: "document", id: d.id, filename: d.filename, format: d.format, path: d.path }) as const),
     ];
-  }, [openPaths]);
+  }, [openPaths, documents]);
 
   const value = useMemo<CanvasStoreValue>(
     () => ({
@@ -376,6 +408,9 @@ export function CanvasStoreProvider({
       setBrowserActive,
       browserSessionId,
       setBrowserSessionId,
+      documents,
+      openDocument,
+      closeDocument,
       dirtyPaths,
       markDirty,
       clearDirty,
@@ -402,6 +437,9 @@ export function CanvasStoreProvider({
       setRightMode,
       browserActive,
       browserSessionId,
+      documents,
+      openDocument,
+      closeDocument,
       dirtyPaths,
       markDirty,
       clearDirty,

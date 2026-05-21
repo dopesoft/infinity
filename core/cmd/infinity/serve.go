@@ -95,6 +95,9 @@ func serveCmd() *cobra.Command {
 				activeBridgeRouter  *bridge.Router
 				activeBridgePrefs   tools.PreferenceFetcher
 				browserReg          *browser.Registry
+				docCreate           *tools.DocumentCreate
+				workspaceRawBase    string // cloud workspace URL for the doc download proxy
+				workspaceToken      string
 				notifySkillPromoted func(name, description string)
 			)
 
@@ -305,6 +308,17 @@ func serveCmd() *cobra.Command {
 					// internally and indexes itself into mem_artifacts.
 					tools.RegisterArtifactTools(registry, p)
 					tools.RegisterProjectTools(registry, p, activeBridgeRouter, activeBridgePrefs)
+					// document_create — generate .xlsx/.docx/.pptx/.pdf/.md via
+					// the workspace bridge's baked helpers (openpyxl/docx-js/
+					// pptxgenjs/reportlab). Cloud-only (the stack lives in the
+					// workspace image), so it targets cloudURL directly.
+					workspaceRawBase = cloudURL
+					workspaceToken = os.Getenv("WORKSPACE_BRIDGE_TOKEN")
+					if dc := tools.NewDocumentCreate(cloudURL, workspaceToken); dc != nil {
+						docCreate = dc
+						registry.Register(dc)
+						fmt.Println("  document_create: configured")
+					}
 					macStatusStr := "unset"
 					if macURL != "" {
 						macStatusStr = "configured"
@@ -500,7 +514,7 @@ func serveCmd() *cobra.Command {
 			if pool != nil {
 				if a, ok := provider.(*llm.Anthropic); ok {
 					sessionNamer = sessions.NewNamer(pool, a, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
-					fmt.Printf("  sessions: auto-naming via Haiku enabled\n")
+					fmt.Printf("  sessions: auto-naming enabled (follows Settings model, Haiku fallback)\n")
 				}
 			}
 
@@ -696,6 +710,13 @@ func serveCmd() *cobra.Command {
 				if pool != nil {
 					modelSettings := settings.New(pool)
 					loop.SetActiveModelFn(modelSettings.GetModel)
+					// Route session auto-naming through the same active-model
+					// resolver so titles are drafted with the boss's Studio
+					// selection instead of being pinned to Haiku. Falls back
+					// to Haiku when no model override is set.
+					if sessionNamer != nil {
+						sessionNamer.SetActiveModelFn(modelSettings.GetModel)
+					}
 				}
 			}
 
@@ -1167,37 +1188,39 @@ func serveCmd() *cobra.Command {
 				browserClose = browserReg.Close
 			}
 			srv := server.New(server.Config{
-				Addr:           addr,
-				Version:        version,
-				Loop:           loop,
-				MCP:            mcp,
-				Pool:           pool,
-				Store:          store,
-				Searcher:       searcher,
-				SkillsAPI:      skillsAPI,
-				ProactiveAPI:   proactiveAPI,
-				CronAPI:        cronAPI,
-				SentinelAPI:    sentinelAPI,
-				VoyagerAPI:     voyagerAPI,
-				Auth:           authVerifier,
-				Trust:          trustStore,
-				Namer:          sessionNamer,
-				IntentDetector: intentDetector,
-				IntentStore:    intentDB,
-				WAL:            walStore,
-				WorkingBuffer:  workingBuf,
-				Heartbeat:      heartbeat,
-				LLMRegistry:    llmRegistry,
-				Connectors:     connectorsCache,
-				Voice:          voiceMinter,
-				PushAPI:        pushAPI,
-				DashboardAPI:   dashboardAPI,
-				BridgeRouter:   activeBridgeRouter,
-				BridgePrefs:    activeBridgePrefs,
-				Turns:          turnStore,
-				RunsAPI:        runs.NewAPI(pool),
-				CalendarAPI:    calendarAPI,
-				BrowserClose:   browserClose,
+				Addr:             addr,
+				Version:          version,
+				Loop:             loop,
+				MCP:              mcp,
+				Pool:             pool,
+				Store:            store,
+				Searcher:         searcher,
+				SkillsAPI:        skillsAPI,
+				ProactiveAPI:     proactiveAPI,
+				CronAPI:          cronAPI,
+				SentinelAPI:      sentinelAPI,
+				VoyagerAPI:       voyagerAPI,
+				Auth:             authVerifier,
+				Trust:            trustStore,
+				Namer:            sessionNamer,
+				IntentDetector:   intentDetector,
+				IntentStore:      intentDB,
+				WAL:              walStore,
+				WorkingBuffer:    workingBuf,
+				Heartbeat:        heartbeat,
+				LLMRegistry:      llmRegistry,
+				Connectors:       connectorsCache,
+				Voice:            voiceMinter,
+				PushAPI:          pushAPI,
+				DashboardAPI:     dashboardAPI,
+				BridgeRouter:     activeBridgeRouter,
+				BridgePrefs:      activeBridgePrefs,
+				Turns:            turnStore,
+				RunsAPI:          runs.NewAPI(pool),
+				CalendarAPI:      calendarAPI,
+				BrowserClose:     browserClose,
+				WorkspaceRawBase: workspaceRawBase,
+				WorkspaceToken:   workspaceToken,
 			})
 
 			// Late-bind the Voyager auto-promote → chat-bubble notifier. The
@@ -1213,6 +1236,13 @@ func serveCmd() *cobra.Command {
 				browserReg.SetSink(func(chatID string, f browser.Frame) {
 					srv.EmitBrowserFrame(chatID, f.Seq, f.Frame, f.URL, f.BrowserID)
 				})
+			}
+			// Late-bind document_create's "open in a new tab" emitter to the
+			// server's per-session broadcaster.
+			if docCreate != nil {
+				docCreate.Emit = func(sessionID, format, filename, path, markdown, pdfPath string, bytes int64) {
+					srv.EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, bytes)
+				}
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

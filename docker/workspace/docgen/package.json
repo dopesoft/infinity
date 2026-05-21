@@ -1,0 +1,9 @@
+{
+  "name": "infinity-docgen",
+  "private": true,
+  "description": "Baked document-generation helpers for the workspace bridge. docx-js + pptxgenjs produce cleaner Office output than the python equivalents (matches Claude's file-ops skill stack).",
+  "dependencies": {
+    "docx": "^9.0.0",
+    "pptxgenjs": "^3.12.0"
+  }
+}

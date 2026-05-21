@@ -1,0 +1,13 @@
+# Document-generation stack for the workspace bridge — models Claude's
+# file-ops skill stack. XLSX + PDF + OCR are Python; DOCX + PPTX are
+# JavaScript (docx-js / pptxgenjs, see package.json) because the JS
+# libraries produce cleaner Office output.
+openpyxl==3.1.*
+pandas==2.2.*
+reportlab==4.2.*
+pypdf==5.1.*
+pdfplumber==0.11.*
+pypdfium2==4.30.*
+pdf2image==1.17.*
+pytesseract==0.3.*
+markdown==3.7.*
