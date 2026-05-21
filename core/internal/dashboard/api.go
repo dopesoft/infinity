@@ -34,7 +34,7 @@ import (
 // client. Nil-safe: when unset, the message endpoint returns empty bodies
 // and the UI falls back to the plain-text preview it already holds.
 type MessageFetcher interface {
-	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, err error)
+	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []string, err error)
 }
 
 type API struct {
@@ -1866,19 +1866,22 @@ func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
 	// No fetcher wired (no Composio) or no message id to fetch → empty bodies.
 	// The UI falls back to the preview it already holds. Not an error.
 	if a.Fetcher == nil || messageID == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": ""})
+		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": "", "attachments": []string{}})
 		return
 	}
 
-	html, text, err := a.Fetcher.FetchMessage(ctx, source, accountHint, messageID)
+	html, text, attachments, err := a.Fetcher.FetchMessage(ctx, source, accountHint, messageID)
 	if err != nil {
 		a.Logger.Warn("followup message: fetch", "id", id, "source", source, "err", err)
 		// Degrade quietly: 200 with empty bodies so the viewer falls back to
 		// preview rather than surfacing a scary error for a transient upstream.
-		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": ""})
+		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": "", "attachments": []string{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"html": html, "text": text})
+	if attachments == nil {
+		attachments = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"html": html, "text": text, "attachments": attachments})
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ import {
   Mail,
   MapPin,
   MessageCircle,
+  Paperclip,
   Quote,
   Repeat,
   Sparkles,
@@ -1329,7 +1330,7 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   // The full email is fetched lazily on open (nothing is loaded at poll
   // time). Connector-poll rows already carry plain text in f.body; surface
   // rows arrive with only a summary and pull the real email here.
-  const { html, text, loading } = useFollowupMessage(f);
+  const { html, text, attachments, loading } = useFollowupMessage(f);
   const richHtml = (html ?? f.html ?? "").trim();
   const plain = (text ?? "").trim() || (f.body ?? "").trim();
 
@@ -1351,16 +1352,26 @@ function FollowUpBody({ f }: { f: FollowUp }) {
         </span>
       </ModalChips>
 
-      {/* From / Subject - labeled rows, vertically centered so the label
-          reads on the same line as its value. */}
-      <div className="mt-3 divide-y divide-border rounded-lg border border-border bg-muted/20 px-3">
-        <ModalField label="From" align="center">
-          <span className="font-medium text-foreground">{f.from}</span>
-        </ModalField>
+      {/* From / Subject - each a flex row with symmetric padding +
+          items-center so the label and value sit dead-center in their row. */}
+      <div className="mt-3 overflow-hidden rounded-lg border border-border bg-muted/20">
+        <div className="flex items-center gap-4 px-3 py-3">
+          <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            From
+          </span>
+          <span className="min-w-0 flex-1 break-words text-[13px] font-medium text-foreground">
+            {f.from}
+          </span>
+        </div>
         {f.subject ? (
-          <ModalField label="Subject" align="center">
-            {f.subject}
-          </ModalField>
+          <div className="flex items-center gap-4 border-t border-border px-3 py-3">
+            <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              Subject
+            </span>
+            <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/90">
+              {f.subject}
+            </span>
+          </div>
         ) : null}
       </div>
 
@@ -1394,11 +1405,21 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           <ModalPre>{plain}</ModalPre>
         ) : loading ? (
           <MessageSkeleton />
+        ) : attachments.length > 0 ? (
+          // No text body, but the email carries attachments - say so plainly
+          // instead of falling back to the stale list subtext.
+          <p className="text-[13px] text-muted-foreground">
+            This email has no text body{attachments.length === 1 ? " - just an attachment." : " - just attachments."}
+          </p>
         ) : (
           <p className="text-[13px] text-muted-foreground">
             {f.preview?.trim() || "No message content available."}
           </p>
         )}
+
+        {/* Attachments, whatever the body state. */}
+        <AttachmentChips names={attachments} />
+
         {/* When we already show plain text but a richer HTML fetch is still
             in flight, hint at the upgrade without blocking the read. */}
         {!richHtml && plain && loading ? (
@@ -1434,36 +1455,64 @@ function metaStr(m: Record<string, unknown> | undefined, ...keys: string[]): str
 // Lazily fetch the full email body for a follow-up when the viewer opens.
 // Nothing is loaded at poll time, so this is the only place the (possibly
 // large) HTML body is retrieved - and only for the item actually opened.
-function useFollowupMessage(f: FollowUp): {
+type FetchedMessage = {
   html: string;
   text: string;
+  attachments: string[];
   loading: boolean;
-} {
-  const [state, setState] = React.useState<{ html: string; text: string; loading: boolean }>({
+};
+
+function useFollowupMessage(f: FollowUp): FetchedMessage {
+  const [state, setState] = React.useState<FetchedMessage>({
     html: "",
     text: "",
+    attachments: [],
     loading: true,
   });
   React.useEffect(() => {
     let alive = true;
-    setState({ html: "", text: "", loading: true });
+    setState({ html: "", text: "", attachments: [], loading: true });
     const origin = f.origin ?? "followup";
     authedFetch(
       `/api/followups/message?id=${encodeURIComponent(f.id)}&origin=${encodeURIComponent(origin)}`,
     )
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("message fetch failed"))))
-      .then((d: { html?: string; text?: string }) => {
+      .then((d: { html?: string; text?: string; attachments?: string[] }) => {
         if (!alive) return;
-        setState({ html: d.html ?? "", text: d.text ?? "", loading: false });
+        setState({
+          html: d.html ?? "",
+          text: d.text ?? "",
+          attachments: Array.isArray(d.attachments) ? d.attachments : [],
+          loading: false,
+        });
       })
       .catch(() => {
-        if (alive) setState({ html: "", text: "", loading: false });
+        if (alive) setState({ html: "", text: "", attachments: [], loading: false });
       });
     return () => {
       alive = false;
     };
   }, [f.id, f.origin]);
   return state;
+}
+
+// Attachment chips - paperclip + filename. So an attachment-only email
+// (empty body) shows what it actually carries instead of looking blank.
+function AttachmentChips({ names }: { names: string[] }) {
+  if (names.length === 0) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {names.map((name, i) => (
+        <span
+          key={`${name}-${i}`}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 text-[12px] text-foreground/80"
+        >
+          <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="min-w-0 truncate">{name}</span>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 // A calm three-bar shimmer while the email body loads.

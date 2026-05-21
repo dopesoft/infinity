@@ -334,31 +334,19 @@ export function ModalField({
   label,
   children,
   className,
-  /** Desktop vertical alignment of label vs value. "start" (default) keeps
-   *  the label at the top - right for multi-line paragraph values.
-   *  "center" vertically centers both - right for single-line key/value
-   *  rows (From / Subject / account) so the label reads on the value's line. */
-  align = "start",
 }: {
   label: string;
   className?: string;
   children: React.ReactNode;
-  align?: "start" | "center";
 }) {
   return (
     <div
       className={cn(
         "grid min-w-0 grid-cols-1 gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:gap-4 sm:py-3.5",
-        align === "center" && "sm:items-center",
         className,
       )}
     >
-      <div
-        className={cn(
-          "min-w-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground",
-          align === "start" && "sm:pt-px",
-        )}
-      >
+      <div className="min-w-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:pt-px">
         {label}
       </div>
       <div className="min-w-0 break-words text-[13px] leading-relaxed text-foreground/90">

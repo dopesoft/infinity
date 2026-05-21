@@ -74,21 +74,34 @@ func specForSource(source string) (fetchSpec, bool) {
 	return fetchSpec{}, false
 }
 
-// FetchMessage returns the (html, text) bodies of one message. Either may be
-// empty - callers fall back to the plain-text preview they already hold.
-// A non-nil error means the fetch genuinely failed (transport / upstream);
-// an unsupported source returns ("", "", nil) so the UI degrades quietly.
-func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, err error) {
+// FetchMessage returns the HTML + plain-text bodies and attachment filenames
+// of one message. Any field may be empty - callers fall back to the preview
+// they already hold. A non-nil error means the fetch genuinely failed
+// (transport / upstream); an unsupported source returns zero values + nil so
+// the UI degrades quietly.
+func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []string, err error) {
 	if f == nil || f.exec == nil {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
-		return "", "", nil
+		return "", "", nil, nil
 	}
-	spec, ok := specForSource(source)
+	// Determine the message TOOLKIT. The composite external_id encodes it as
+	// its first segment ("gmail:ca_x:msgid"), which is authoritative - the
+	// surface row's `source` column is the AUTHOR ("agent", "cron", a skill
+	// name), NOT the toolkit. Prefer the prefix; fall back to `source` for
+	// raw (non-composite) ids from the connector poller.
+	toolkitHint := source
+	if i := strings.Index(messageID, ":"); i > 0 {
+		toolkitHint = messageID[:i]
+	}
+	spec, ok := specForSource(toolkitHint)
 	if !ok {
-		return "", "", nil
+		spec, ok = specForSource(source)
+	}
+	if !ok {
+		return "", "", nil, nil
 	}
 
 	// Surfaced external ids are composite for global uniqueness, e.g.
@@ -98,7 +111,7 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 	// account the message lives in.
 	realID, embeddedAcct := normalizeGmailID(messageID)
 	if realID == "" {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	if embeddedAcct != "" {
 		accountHint = embeddedAcct
@@ -120,18 +133,18 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 		Arguments:          args,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("fetch message: %w", err)
+		return "", "", nil, fmt.Errorf("fetch message: %w", err)
 	}
 	if resp == nil || !resp.Successful {
 		msg := "unknown"
 		if resp != nil && resp.Error != "" {
 			msg = resp.Error
 		}
-		return "", "", fmt.Errorf("fetch message: upstream unsuccessful: %s", msg)
+		return "", "", nil, fmt.Errorf("fetch message: upstream unsuccessful: %s", msg)
 	}
 
-	html, text = extractMessageBodies(resp.Data)
-	return html, text, nil
+	html, text, attachments = extractMessage(resp.Data)
+	return html, text, attachments, nil
 }
 
 // resolveAccount turns an account hint into a (connected_account_id, entity)
@@ -202,24 +215,83 @@ func normalizeGmailID(raw string) (msgID, account string) {
 	return msgID, account
 }
 
-// extractMessageBodies walks a Gmail message resource (however Composio
-// wraps it) and returns the first text/html and text/plain bodies, decoded
-// from base64url. Defensive against wrapper nesting (data / response_data /
-// message) and multipart trees of arbitrary depth.
-func extractMessageBodies(raw json.RawMessage) (html, text string) {
+// extractMessage walks a Gmail message resource (however Composio wraps it)
+// and returns the text/html body, the plain-text body, and attachment
+// filenames. Defensive against wrapper nesting (data / response_data /
+// message) and multipart trees of arbitrary depth. Falls back to Composio's
+// pre-decoded top-level `messageText` when the payload has no text/plain part.
+func extractMessage(raw json.RawMessage) (html, text string, attachments []string) {
 	if len(raw) == 0 {
-		return "", ""
+		return "", "", nil
 	}
 	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil {
-		return "", ""
+		return "", "", nil
 	}
-	payload := findPayload(root)
-	if payload == nil {
-		return "", ""
+	// Body: walk the MIME tree for html + plain parts.
+	if payload := findPayload(root); payload != nil {
+		htmlData, textData := walkParts(payload)
+		html = decodeB64URL(htmlData)
+		text = decodeB64URL(textData)
 	}
-	htmlData, textData := walkParts(payload)
-	return decodeB64URL(htmlData), decodeB64URL(textData)
+	// Plain-text fallback: Composio surfaces a pre-decoded `messageText` at
+	// the top level (and under common wrappers). Prefer the richer of the two.
+	if strings.TrimSpace(text) == "" {
+		text = strings.TrimSpace(messageTextField(root))
+	}
+	// Attachments: filenames so an attachment-only email (empty body) still
+	// shows what it carries instead of looking blank.
+	attachments = attachmentNames(root)
+	return html, text, attachments
+}
+
+// messageTextField pulls Composio's convenience plain-text field, tolerating
+// the same wrapper nesting as findPayload.
+func messageTextField(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	if s, ok := m["messageText"].(string); ok && strings.TrimSpace(s) != "" {
+		return s
+	}
+	for _, key := range []string{"data", "response_data", "message", "messageData", "result"} {
+		if nested, ok := m[key].(map[string]any); ok {
+			if s := messageTextField(nested); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// attachmentNames extracts attachment filenames from the message resource,
+// tolerating wrapper nesting. Real (named) attachments only - inline parts
+// without a filename are skipped.
+func attachmentNames(m map[string]any) []string {
+	if m == nil {
+		return nil
+	}
+	var out []string
+	if list, ok := m["attachmentList"].([]any); ok {
+		for _, a := range list {
+			if am, ok := a.(map[string]any); ok {
+				if name, _ := am["filename"].(string); strings.TrimSpace(name) != "" {
+					out = append(out, strings.TrimSpace(name))
+				}
+			}
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, key := range []string{"data", "response_data", "message", "messageData", "result"} {
+		if nested, ok := m[key].(map[string]any); ok {
+			if names := attachmentNames(nested); len(names) > 0 {
+				return names
+			}
+		}
+	}
+	return nil
 }
 
 // findPayload locates the Gmail "payload" object, tolerating the common
