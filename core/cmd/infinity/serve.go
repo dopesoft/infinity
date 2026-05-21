@@ -833,9 +833,10 @@ func serveCmd() *cobra.Command {
 				connectorPoller = connectors.NewPoller(pool, composioExec, pipeline)
 				// Wire the followup triager so newly-polled emails get
 				// metadata.intent / mode / classification chips populated
-				// asynchronously - same Gmail cron, one extra Haiku call
-				// per inbound message. Anthropic-only for now (mirrors the
-				// IntentFlow detector + Haiku summarizer constraint); other
+				// asynchronously - same Gmail cron, one extra classify call
+				// per inbound message on the boss's SELECTED model (no
+				// hardcoded Haiku; INFINITY_TRIAGE_MODEL overrides). Anthropic
+				// provider required to construct (the unwrap below); other
 				// providers degrade to no-classification, row still lands.
 				if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
 					connectorPoller.SetTriager(triage.New(triage.Config{
@@ -1120,6 +1121,13 @@ func serveCmd() *cobra.Command {
 			var dashboardAPI *dashboard.API
 			if pool != nil {
 				dashboardAPI = dashboard.NewAPI(pool, nil)
+				// Lazy email-body fetcher for GET /api/followups/message:
+				// pulls the full HTML on open (never at poll time) so the
+				// ObjectViewer can render the real email. Nil-safe - without
+				// Composio the Message pane falls back to preview text.
+				if composioExec != nil {
+					dashboardAPI.Fetcher = connectors.NewMessageFetcher(composioExec, connectorsCache)
+				}
 				fmt.Println("  dashboard: aggregator wired")
 			}
 

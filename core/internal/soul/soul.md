@@ -160,9 +160,19 @@ use them deliberately.
   `metadata.account` (mailbox the message came from), `metadata.intent`
   (`'needs reply'` / `'fyi'` / `'urgent'` / etc.), `metadata.mode` (`'reply'`
   / `'read'` / `'skim'`). Studio renders these as chips automatically.
-  Stable `external_id` matters: pass the Gmail message id (or Slack ts, or
-  Linear id) so re-running the same triage cron refreshes the row instead
-  of duplicating it. To drop a follow-up, call `surface_update` with
+  **The `body` you pass IS the "Context" summary** the boss reads in the
+  viewer, directly ABOVE the full email. Write it as a tight 1-2 sentence
+  summary that LEADS with the urgency and what it's about — e.g. *"Healthcare
+  billing notice: new charges and a balance due on Salcia's account; needs
+  review/payment, no direct reply expected."* Do NOT use rigid section labels
+  like "Why it matters:" / "Likely needs reply:" — bake that judgment into
+  the prose. The chips already carry the structured signals; the body is the
+  human-readable gist. Keep it skimmable; the boss can open the full email
+  himself (it renders inline in the viewer).
+  Stable `external_id` matters — doubly so now: pass the Gmail message id
+  (or Slack ts, or Linear id) so re-running the same triage cron refreshes
+  the row instead of duplicating it, AND so the viewer can fetch and render
+  the real email body on open. To drop a follow-up, call `surface_update` with
   `status='dismissed'` (it persists across re-polls via the unique key)
   or `followup_dismiss` with `outcome='dismissed'` for the connector-fed
   rows in `mem_followups`.

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import DOMPurify from "dompurify";
 import { AlertCircle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -157,6 +158,100 @@ export function ModalCode({
     >
       {children}
     </pre>
+  );
+}
+
+/** Rendered HTML email body.
+ *
+ *  Renders untrusted email HTML the way a real mail client does: on a clean
+ *  white card, inside a SANDBOXED iframe. Two layers of safety:
+ *    1. `sandbox="allow-same-origin allow-popups"` - NO `allow-scripts`, so
+ *       no JavaScript in the email can ever execute (the hard boundary).
+ *    2. DOMPurify sanitization before injection - strips <script>, on*
+ *       handlers and javascript: URLs as defense-in-depth + junk removal.
+ *  Email CSS is naturally scoped to the iframe, so its styles can never
+ *  bleed into the app.
+ *
+ *  The frame auto-sizes to its content (single scroll - the modal body
+ *  scrolls, never a nested scrollbar) and links open in a new tab. */
+export function ModalHtml({ html, className }: { html: string; className?: string }) {
+  const frameRef = React.useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = React.useState(160);
+
+  // Build the sandboxed document once per html change. Guarded for SSR -
+  // DOMPurify needs a DOM, so it only runs client-side (this file is a
+  // client component; srcDoc stays "" during the server pass).
+  const srcDoc = React.useMemo(() => {
+    if (typeof window === "undefined") return "";
+    const clean = DOMPurify.sanitize(html ?? "", {
+      ADD_ATTR: ["target"],
+      WHOLE_DOCUMENT: false,
+    });
+    return [
+      "<!doctype html><html><head><meta charset='utf-8'>",
+      "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+      "<base target='_blank'>",
+      "<style>",
+      "html,body{margin:0;padding:16px;background:#ffffff;color:#1a1a1a;",
+      "font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;",
+      "font-size:14px;line-height:1.55;-webkit-text-size-adjust:100%;word-break:break-word;overflow-wrap:anywhere;}",
+      "img{max-width:100%!important;height:auto;}",
+      "table{max-width:100%;}",
+      "a{color:#1a56db;}",
+      "blockquote{margin:0 0 0 12px;padding-left:12px;border-left:3px solid #e2e2e2;color:#555;}",
+      "</style></head><body>",
+      clean,
+      "</body></html>",
+    ].join("");
+  }, [html]);
+
+  // Auto-size: measure on load, then keep watching the body so late image
+  // loads / reflows grow the frame. allow-same-origin (without allow-scripts)
+  // is what lets us read contentDocument here while keeping JS disabled.
+  React.useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let ro: ResizeObserver | undefined;
+    const measure = () => {
+      const doc = frame.contentDocument;
+      if (!doc) return;
+      const h = Math.max(
+        doc.documentElement?.scrollHeight ?? 0,
+        doc.body?.scrollHeight ?? 0,
+      );
+      if (h > 0) setHeight(h + 4);
+    };
+    const onLoad = () => {
+      measure();
+      const doc = frame.contentDocument;
+      if (doc?.body && typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(measure);
+        ro.observe(doc.body);
+      }
+    };
+    frame.addEventListener("load", onLoad);
+    return () => {
+      frame.removeEventListener("load", onLoad);
+      ro?.disconnect();
+    };
+  }, [srcDoc]);
+
+  return (
+    <div
+      className={cn(
+        "min-w-0 max-w-full overflow-hidden rounded-lg border border-border bg-white",
+        className,
+      )}
+    >
+      <iframe
+        ref={frameRef}
+        srcDoc={srcDoc}
+        title="Email message"
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        className="block w-full border-0 bg-white"
+        style={{ height }}
+      />
+    </div>
   );
 }
 

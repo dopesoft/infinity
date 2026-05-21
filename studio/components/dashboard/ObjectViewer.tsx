@@ -22,6 +22,7 @@ import {
   Layers,
   ListTodo,
   Loader2,
+  Mail,
   MapPin,
   MessageCircle,
   Quote,
@@ -43,10 +44,12 @@ import {
   ModalCode,
   ModalDl,
   ModalField,
+  ModalHtml,
   ModalPre,
   ModalSection,
   ModalUrl,
 } from "@/components/ui/modal-content";
+import { Chip, classificationTone, intentTone, modeTone } from "./Chip";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
@@ -167,7 +170,7 @@ function ItemHeader({ item }: { item: DashboardItem }) {
 // distinct from every other kind's header.
 function EventHeader({ event }: { event: CalendarEvent }) {
   const cls = (event.classification || "meeting").toLowerCase();
-  const pillTone = classificationTone(cls);
+  const pillTone = eventClassificationTone(cls);
   return (
     <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 pr-12 sm:px-5 sm:pr-14">
       <div className="flex items-center gap-2">
@@ -221,10 +224,12 @@ function EventHeader({ event }: { event: CalendarEvent }) {
   );
 }
 
-// classificationTone: orange "Meeting" pill in the design ref is the
+// eventClassificationTone: orange "Meeting" pill in the design ref is the
 // default; other event kinds get distinct tints so the boss can spot
-// "flight" / "dinner" / "appointment" at a glance.
-function classificationTone(cls: string): string {
+// "flight" / "dinner" / "appointment" at a glance. (Distinct from the
+// email-chip classificationTone imported from ./Chip - this one returns a
+// full className string for the bespoke event pill.)
+function eventClassificationTone(cls: string): string {
   switch (cls) {
     case "meeting":
       return "bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300";
@@ -415,6 +420,40 @@ function ViewerActions({
     }
   }
 
+  async function dismissSurface() {
+    if (item.kind !== "surface") return;
+    setDismissing(true);
+    try {
+      const res = await authedFetch("/api/followups/dismiss", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: item.data.id, origin: "surface" }),
+      });
+      if (res.ok && onResolved) onResolved(item);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  // Folded "system" notes in the Activity feed carry a dismiss handle
+  // (origin + id) mapping back to mem_surface_items, so they stay clearable
+  // through the same endpoint without inventing a per-kind route.
+  async function dismissActivity() {
+    if (item.kind !== "activity" || !item.data.dismiss) return;
+    const { id, origin } = item.data.dismiss;
+    setDismissing(true);
+    try {
+      const res = await authedFetch("/api/followups/dismiss", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, origin }),
+      });
+      if (res.ok && onResolved) onResolved(item);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
   async function discuss() {
     const id = (item.data as { id?: string }).id ?? "";
     setSeeding(true);
@@ -470,9 +509,39 @@ function ViewerActions({
         </button>
       );
     }
+    if (item.kind === "surface") {
+      // Everything Jarvis surfaces (alerts, insights, digest, …) is
+      // dismissable in one tap. Persistence is server-side (status =
+      // 'dismissed' on mem_surface_items); the realtime publication keeps
+      // the row gone across refresh / device.
+      return (
+        <button
+          type="button"
+          onClick={dismissSurface}
+          disabled={dismissing}
+          className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+        >
+          <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+          {dismissing ? "Dismissing..." : "Dismiss"}
+        </button>
+      );
+    }
     if (item.kind === "activity") {
-      // Heartbeat findings + curiosity questions surface in Activity.
-      // All actionable in Lab Fix-this.
+      // Folded operational "system" notes carry a dismiss handle → clear
+      // them in one tap. Heartbeat findings have none → Open in Lab.
+      if (item.data.dismiss) {
+        return (
+          <button
+            type="button"
+            onClick={dismissActivity}
+            disabled={dismissing}
+            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+          >
+            <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+            {dismissing ? "Dismissing..." : "Dismiss"}
+          </button>
+        );
+      }
       return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
     }
     if (item.kind === "followup") {
@@ -1250,24 +1319,60 @@ function FollowUpBody({ f }: { f: FollowUp }) {
         : f.source === "imessage"
           ? MessageCircle
           : Inbox;
+
+  // Triage chips - same shared Chip primitive + tone mapping the Follow-ups
+  // card uses, so the viewer and the card never drift.
+  const classification = metaStr(f.metadata, "classification", "category");
+  const intent = metaStr(f.metadata, "intent");
+  const mode = metaStr(f.metadata, "mode", "action");
+
+  // The full email is fetched lazily on open (nothing is loaded at poll
+  // time). Connector-poll rows already carry plain text in f.body; surface
+  // rows arrive with only a summary and pull the real email here.
+  const { html, text, loading } = useFollowupMessage(f);
+  const richHtml = (html ?? f.html ?? "").trim();
+  const plain = (text ?? "").trim() || (f.body ?? "").trim();
+
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-          <SourceIcon className="size-3" aria-hidden /> {f.source}
-        </span>
-        {f.account ? <span className="font-mono">· {f.account}</span> : null}
-        <span className="font-mono" suppressHydrationWarning>
-          · {relTime(f.receivedAt)}
-        </span>
-      </div>
-      <div className="space-y-1">
-        <p className="text-[13px] font-medium text-foreground">From: {f.from}</p>
-        {f.subject ? (
-          <p className="text-[13px] text-foreground/85">Subject: {f.subject}</p>
+    <div className="space-y-1 pt-3">
+      {/* Source · account · time + triage chips */}
+      <ModalChips>
+        <Chip tone="muted" icon={<SourceIcon className="size-3" aria-hidden />}>
+          {f.source}
+        </Chip>
+        {f.account ? <Chip tone="muted">{f.account}</Chip> : null}
+        {classification ? (
+          <Chip tone={classificationTone(classification)}>{classification}</Chip>
         ) : null}
+        {intent ? <Chip tone={intentTone(intent)}>{intent}</Chip> : null}
+        {mode ? <Chip tone={modeTone(mode)}>{mode}</Chip> : null}
+        <span className="ml-auto font-mono text-[11px] text-muted-foreground" suppressHydrationWarning>
+          {relTime(f.receivedAt)}
+        </span>
+      </ModalChips>
+
+      {/* From / Subject - labeled rows with hairline dividers */}
+      <div className="mt-3 divide-y divide-border rounded-lg border border-border bg-muted/20 px-3">
+        <ModalField label="From">{f.from}</ModalField>
+        {f.subject ? <ModalField label="Subject">{f.subject}</ModalField> : null}
       </div>
+
+      {/* Context (summary) - ABOVE the email, under From/Subject. Stays
+          silent when there's no triage summary (raw poll rows). */}
+      {f.summary?.trim() ? (
+        <ModalSection
+          label="Context"
+          icon={<Sparkles className="size-3.5 shrink-0 text-brand" aria-hidden />}
+          className="border-brand/20 bg-brand/[0.04]"
+        >
+          <ModalPre>{f.summary.trim()}</ModalPre>
+        </ModalSection>
+      ) : null}
+
+      {/* Message - the real email, rendered as HTML when available. */}
       <ModalSection
+        label="Message"
+        icon={<Mail className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
         meta={
           f.threadUrl ? (
             <ModalUrl href={f.threadUrl} icon={<ExternalLink className="size-3" aria-hidden />}>
@@ -1276,13 +1381,92 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           ) : null
         }
       >
-        <ModalPre>{f.body ?? f.preview}</ModalPre>
+        {richHtml ? (
+          <ModalHtml html={richHtml} />
+        ) : plain ? (
+          <ModalPre>{plain}</ModalPre>
+        ) : loading ? (
+          <MessageSkeleton />
+        ) : (
+          <p className="text-[13px] text-muted-foreground">
+            {f.preview?.trim() || "No message content available."}
+          </p>
+        )}
+        {/* When we already show plain text but a richer HTML fetch is still
+            in flight, hint at the upgrade without blocking the read. */}
+        {!richHtml && plain && loading ? (
+          <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" aria-hidden /> loading full message…
+          </p>
+        ) : null}
       </ModalSection>
+
       {f.draft ? (
-        <ModalSection meta="Jarvis drafted">
+        <ModalSection
+          label="Draft"
+          icon={<Sparkles className="size-3.5 shrink-0 text-brand" aria-hidden />}
+          meta="Jarvis drafted"
+        >
           <ModalPre>{f.draft}</ModalPre>
         </ModalSection>
       ) : null}
+    </div>
+  );
+}
+
+// Pull a string-valued field from a follow-up's metadata bag.
+function metaStr(m: Record<string, unknown> | undefined, ...keys: string[]): string {
+  if (!m) return "";
+  for (const k of keys) {
+    const v = m[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+// Lazily fetch the full email body for a follow-up when the viewer opens.
+// Nothing is loaded at poll time, so this is the only place the (possibly
+// large) HTML body is retrieved - and only for the item actually opened.
+function useFollowupMessage(f: FollowUp): {
+  html: string;
+  text: string;
+  loading: boolean;
+} {
+  const [state, setState] = React.useState<{ html: string; text: string; loading: boolean }>({
+    html: "",
+    text: "",
+    loading: true,
+  });
+  React.useEffect(() => {
+    let alive = true;
+    setState({ html: "", text: "", loading: true });
+    const origin = f.origin ?? "followup";
+    authedFetch(
+      `/api/followups/message?id=${encodeURIComponent(f.id)}&origin=${encodeURIComponent(origin)}`,
+    )
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("message fetch failed"))))
+      .then((d: { html?: string; text?: string }) => {
+        if (!alive) return;
+        setState({ html: d.html ?? "", text: d.text ?? "", loading: false });
+      })
+      .catch(() => {
+        if (alive) setState({ html: "", text: "", loading: false });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [f.id, f.origin]);
+  return state;
+}
+
+// A calm three-bar shimmer while the email body loads.
+function MessageSkeleton() {
+  return (
+    <div className="space-y-2" aria-hidden>
+      <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+      <div className="h-3 w-full animate-pulse rounded bg-muted" />
+      <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+      <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
     </div>
   );
 }

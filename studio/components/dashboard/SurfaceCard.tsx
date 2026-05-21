@@ -1,99 +1,38 @@
 "use client";
 
-import { CircleDot } from "lucide-react";
-import { Section, TileCard } from "./Section";
-import { ScrollList } from "./ScrollList";
+import { TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import { extractFromSender, parseLabeledBody } from "@/lib/dashboard/parseBody";
-import type { DashboardItem, SurfaceItem } from "@/lib/dashboard/types";
+import type { SurfaceItem } from "@/lib/dashboard/types";
 
-/* SurfaceCard - the ONE generic renderer for the dashboard surface
- * contract (mem_surface_items). Every item the agent surfaces via the
- * `surface_item` tool lands here, grouped by `surface` key. There is no
- * per-source widget: a triage skill, a connector poll, a cron, or the
+/* SurfaceRow - a single row of the generic surface contract
+ * (mem_surface_items). Every item the agent surfaces via the `surface_item`
+ * tool renders through this row, regardless of its `surface` key. There is
+ * no per-source widget: a triage skill, a connector poll, a cron, or the
  * agent itself can invent a new `surface` and it renders with zero new
- * frontend code. Tap a row → ObjectViewer with the full item.
+ * frontend code.
  *
- * This is the Rule #1 payoff on the Studio side - the app adapts to
+ * Surfaces no longer get their own per-key card - they're merged into the
+ * unified "Surfaced by Jarvis" card (SurfacedCard), which renders this row
+ * for every `kind:"surface"` item. Tap a row → ObjectViewer with the full
+ * item. This is the Rule #1 payoff on the Studio side - the app adapts to
  * whatever the agent assembles.
  */
-
-// A few well-known surfaces get a friendlier title + action link. The map
-// is a nicety, not a gate - an unknown surface still renders, with a
-// titleized key and no action.
-const SURFACE_META: Record<
-  string,
-  { title: string; action?: { label: string; href: string } }
-> = {
-  followups: { title: "Follow-ups", action: { label: "see inbox", href: "/memory" } },
-  // Jarvis's OWN goals (mem_agent_goals) - what the agent is working toward
-  // for the boss. Distinct from the boss's Pursuits card (mem_pursuits).
-  agenda: { title: "Jarvis's agenda" },
-  health: { title: "Needs attention" },
-  approvals: { title: "Approvals" },
-  alerts: { title: "Alerts" },
-  digest: { title: "Digest" },
-  insights: { title: "Insights" },
-  briefing: { title: "Briefing" },
-};
-
-function titleize(key: string): string {
-  return key.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-export function SurfaceCard({
-  surface,
-  items,
-  delay = 0,
-  onOpen,
+export function SurfaceRow({
+  item,
+  onClick,
 }: {
-  surface: string;
-  items: SurfaceItem[];
-  delay?: number;
-  onOpen: (item: DashboardItem) => void;
+  item: SurfaceItem;
+  onClick: () => void;
 }) {
-  const meta = SURFACE_META[surface];
-  return (
-    <Section
-      title={meta?.title ?? titleize(surface)}
-      Icon={CircleDot}
-      delay={delay}
-      badge={items.length}
-      action={meta?.action}
-    >
-      {items.length === 0 ? (
-        <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-          Nothing surfaced here yet.
-        </div>
-      ) : (
-        <ScrollList max={4}>
-          <ul className="space-y-1.5">
-            {items.map((it) => (
-              <li key={it.id}>
-                <SurfaceRow
-                  item={it}
-                  onClick={() => onOpen({ kind: "surface", data: it })}
-                />
-              </li>
-            ))}
-          </ul>
-        </ScrollList>
-      )}
-    </Section>
-  );
-}
-
-function SurfaceRow({ item, onClick }: { item: SurfaceItem; onClick: () => void }) {
   // Untitled UI list-row pattern:
   //   line 1: sender (parsed from body's "From:" field) · time on the right
   //   line 2: subject (item.title) — the heaviest type weight
   //   line 3: assistant-written one-liner (importanceReason) — the "why"
   // Importance is a discrete signal only: a 2px colored left edge when
   // imp >= 50. No avatar bubble, no IMPORTANT/NOTABLE pill, no chips,
-  // no star, no 3-dot menu, no tags. Tapping the row opens ObjectViewer
-  // (the only action). All "act on it" is funnelled through Discuss
-  // with Jarvis inside the modal.
+  // no star, no 3-dot menu, no tags. Tapping the row opens ObjectViewer.
   const imp = typeof item.importance === "number" ? item.importance : null;
   const edge =
     imp != null && imp >= 80

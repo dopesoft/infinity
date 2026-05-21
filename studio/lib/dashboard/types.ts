@@ -165,8 +165,17 @@ export type FollowUp = {
   preview: string;
   receivedAt: string;
   unread?: boolean;
-  // full content surfaced in ObjectViewer
+  // full content surfaced in ObjectViewer (plain text; connector-poll rows
+  // carry this, surface rows fetch the full email lazily on open).
   body?: string;
+  // Agent triage summary (urgency + what it's about). Rendered in the
+  // ObjectViewer "Context" pane, ABOVE the email itself. Absent on raw
+  // connector-poll rows that haven't been triaged.
+  summary?: string;
+  // Rendered HTML email body. NOT in the dashboard payload - fetched lazily
+  // via GET /api/followups/message when the viewer opens. Typed here so the
+  // fetch result is shaped against the same model.
+  html?: string;
   threadUrl?: string;
   // optional pre-drafted reply from the agent
   draft?: string;
@@ -184,9 +193,9 @@ export type FollowUp = {
 // ── Surface items (the generic dashboard surface contract) ───────────────────
 // Mirror of core/internal/surface.Item. ANY producer - a skill recipe, a
 // connector poll, a cron, the agent mid-conversation - writes items through
-// the `surface_item` tool; the dashboard groups them by `surface` and renders
-// each group with one generic SurfaceCard. A new surface the agent invents
-// appears with zero new frontend code.
+// the `surface_item` tool; the dashboard merges every surface into the one
+// "Surfaced by Jarvis" card (SurfacedCard), rendering each via SurfaceRow. A
+// new surface the agent invents appears with zero new frontend code.
 export type SurfaceItem = {
   id: string;
   surface: string; // dashboard region: "followups" | "alerts" | "digest" | …
@@ -267,7 +276,8 @@ export type ActivityKind =
   | "completed"
   | "alert"
   | "memory"
-  | "reflection";
+  | "reflection"
+  | "system"; // operational agent notes folded in from the old System card
 
 export type ActivityEvent = {
   id: string;
@@ -276,6 +286,9 @@ export type ActivityEvent = {
   detail?: string;
   at: string;
   future?: boolean;
+  // Populated only for rows the boss can clear from their detail view
+  // (folded system notes). Maps back to the dismiss endpoint's table.
+  dismiss?: { origin: "surface"; id: string };
 };
 
 // ── Memory telemetry footer ──────────────────────────────────────────────────

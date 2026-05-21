@@ -44,8 +44,9 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
     description: "The latest insight from Jarvis's metacognition loop. One per day.",
   },
   approvals: {
-    title: "Approvals",
-    description: "Trust requests, code proposals, and curiosity questions waiting on you.",
+    title: "Surfaced by Jarvis",
+    description:
+      "Everything the agent raises - approvals, code proposals, curiosity questions, alerts, and insights - in one importance-sorted list.",
   },
   followups: {
     title: "Follow-ups",

@@ -51,19 +51,24 @@ type Config struct {
 	Model    string
 }
 
-// New builds a Triager with the Haiku default. Returns nil when no
-// provider is configured so callers can degrade gracefully (the chips
-// just don't populate, but the row still lands on the dashboard).
+// New builds a Triager. Returns nil when no provider is configured so
+// callers can degrade gracefully (the chips just don't populate, but the
+// row still lands on the dashboard).
+//
+// Model resolution: an explicit cfg.Model wins (the INFINITY_TRIAGE_MODEL
+// override). When it's empty the Triager uses the provider's CURRENTLY
+// SELECTED model at call time (see Classify) - i.e. whatever the boss
+// picked in Settings. We deliberately do NOT pin Haiku here: classification
+// is cheap, but the boss pays per inbound email and would rather spend his
+// selected model than a hardcoded one. Set INFINITY_TRIAGE_MODEL only to
+// opt back into a dedicated cheap classifier.
 func New(cfg Config) *Triager {
 	if cfg.Provider == nil {
 		return nil
 	}
-	if cfg.Model == "" {
-		cfg.Model = "claude-haiku-4-5-20251001"
-	}
 	return &Triager{
 		provider: cfg.Provider,
-		model:    cfg.Model,
+		model:    strings.TrimSpace(cfg.Model),
 	}
 }
 
@@ -87,11 +92,19 @@ func (t *Triager) Classify(ctx context.Context, subject, from, body string) Deci
 		safe(from), safe(subject), safe(body),
 	)
 
+	// Resolve the model at call time: explicit override wins, otherwise
+	// track the provider's currently-selected model so a Settings change
+	// propagates here without restarting the poller.
+	model := t.model
+	if model == "" {
+		model = t.provider.Model()
+	}
+
 	out := make(chan llm.StreamEvent, 16)
 	respCh := make(chan llm.Response, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		resp, err := t.provider.Stream(ctx, t.model, systemPrompt,
+		resp, err := t.provider.Stream(ctx, model, systemPrompt,
 			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
 			nil, out)
 		if err != nil {

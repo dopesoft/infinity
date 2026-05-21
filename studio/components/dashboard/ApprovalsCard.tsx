@@ -1,56 +1,23 @@
 "use client";
 
 import { AlertTriangle, FileCode, HelpCircle, Terminal } from "lucide-react";
-import { Section, TileCard } from "./Section";
-import { ScrollList } from "./ScrollList";
+import { TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
-import type { Approval, ApprovalKind, DashboardItem } from "@/lib/dashboard/types";
+import type { Approval, ApprovalKind } from "@/lib/dashboard/types";
 
-/* Approvals - items where the agent is waiting on the boss.
+/* ApprovalRow - a single agent-raised approval/question row.
  *
  * Three flavors land here:
  *  - trust_* - high-risk tool calls gated by ClaudeCodeGate
  *  - code_proposal - Voyager source extractor drafts
  *  - curiosity - questions Jarvis has for you
  *
- * Tapping a row opens the ObjectViewer with the full payload - bash args
- * for trust, diff for code, question + context for curiosity.
+ * These no longer get their own "Questions" card - they're merged into
+ * the unified "Surfaced by Jarvis" card (SurfacedCard), which renders this
+ * row for every `kind:"approval"` item. Tapping a row opens the
+ * ObjectViewer with the full payload.
  */
-export function ApprovalsCard({
-  approvals,
-  onOpen,
-}: {
-  approvals: Approval[];
-  onOpen: (item: DashboardItem) => void;
-}) {
-  const emptyText = "No open questions from Jarvis.";
-
-  return (
-    <Section
-      title="Questions"
-      Icon={HelpCircle}
-      delay={0.25}
-      badge={approvals.length}
-    >
-      {approvals.length === 0 ? (
-        <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-          {emptyText}
-        </div>
-      ) : (
-        <ScrollList max={4}>
-          <ul className="space-y-2">
-            {approvals.map((a) => (
-              <li key={a.id}>
-                <ApprovalRow a={a} onClick={() => onOpen({ kind: "approval", data: a })} />
-              </li>
-            ))}
-          </ul>
-        </ScrollList>
-      )}
-    </Section>
-  );
-}
 
 const KIND_META: Record<
   ApprovalKind,
@@ -63,7 +30,7 @@ const KIND_META: Record<
   curiosity: { Icon: HelpCircle, tone: "info", label: "asks" },
 };
 
-function ApprovalRow({ a, onClick }: { a: Approval; onClick: () => void }) {
+export function ApprovalRow({ a, onClick }: { a: Approval; onClick: () => void }) {
   const meta = KIND_META[a.kind];
   return (
     <TileCard onClick={onClick} tone={meta.tone}>

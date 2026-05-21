@@ -27,9 +27,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// MessageFetcher retrieves the full rendered content (HTML + plain text) of
+// a single follow-up message on demand. Implemented by
+// connectors.MessageFetcher and injected in serve.go; kept as a local
+// interface so the dashboard package doesn't hard-depend on the Composio
+// client. Nil-safe: when unset, the message endpoint returns empty bodies
+// and the UI falls back to the plain-text preview it already holds.
+type MessageFetcher interface {
+	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, err error)
+}
+
 type API struct {
 	Pool   *pgxpool.Pool
 	Logger *slog.Logger
+	// Fetcher is the lazy email-body retriever for GET /api/followups/message.
+	// Optional; nil degrades the Message pane to preview-only.
+	Fetcher MessageFetcher
 }
 
 func NewAPI(pool *pgxpool.Pool, logger *slog.Logger) *API {
@@ -45,6 +58,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("/api/dashboard", a.handleDashboard)
 	mux.HandleFunc("/api/followups/dismiss", a.handleFollowupDismiss)
+	mux.HandleFunc("/api/followups/message", a.handleFollowupMessage)
 }
 
 // Response is the single payload returned to Studio. Each section is a
@@ -167,6 +181,11 @@ type FollowUp struct {
 	Subject    string    `json:"subject,omitempty"`
 	Preview    string    `json:"preview"`
 	Body       string    `json:"body,omitempty"`
+	// Summary is the agent's triage summary (urgency + what it's about),
+	// rendered in the ObjectViewer's "Context" pane ABOVE the email. For
+	// surface-origin rows this is the agent-authored body; connector-poll
+	// rows have none (raw mail only) unless a recipe attached one.
+	Summary    string    `json:"summary,omitempty"`
 	ThreadURL  string    `json:"threadUrl,omitempty"`
 	Draft      string    `json:"draft,omitempty"`
 	Unread     bool      `json:"unread"`
@@ -255,11 +274,24 @@ type ToolCall struct {
 
 type ActivityEvent struct {
 	ID     string    `json:"id"`
-	Kind   string    `json:"kind"` // scheduled | completed | alert | memory | reflection
+	Kind   string    `json:"kind"` // scheduled | completed | alert | memory | reflection | system
 	Title  string    `json:"title"`
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
 	Future bool      `json:"future,omitempty"`
+	// Dismiss is populated only for rows that the boss can clear from
+	// their detail view (currently the folded operational "system" notes,
+	// origin="surface"). Heartbeat findings / reflections leave it nil and
+	// keep their "Open in Lab" deep-link instead.
+	Dismiss *ActivityDismiss `json:"dismiss,omitempty"`
+}
+
+// ActivityDismiss carries the table + id an activity row maps back to so
+// the dashboard can dismiss it through the existing dismiss endpoint
+// without inventing a per-kind route.
+type ActivityDismiss struct {
+	Origin string `json:"origin"` // "surface"
+	ID     string `json:"id"`
 }
 
 // WorkItem mirrors studio/lib/dashboard/types.ts WorkItem. Each row maps
@@ -671,13 +703,17 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		}
 		account := strFromMeta(meta, "account", "mailbox")
 		f := FollowUp{
-			ID:         id,
-			Source:     sourceFromMeta(source, kind, meta),
-			Account:    account,
-			From:       from,
-			Subject:    firstNonEmpty(strFromMeta(meta, "subject"), title),
-			Preview:    firstNonEmpty(subtitle, strFromMeta(meta, "preview")),
-			Body:       body,
+			ID:      id,
+			Source:  sourceFromMeta(source, kind, meta),
+			Account: account,
+			From:    from,
+			Subject: firstNonEmpty(strFromMeta(meta, "subject"), title),
+			Preview: firstNonEmpty(subtitle, strFromMeta(meta, "preview")),
+			// The agent-authored body IS the triage summary - it goes in the
+			// "Context" pane. The full email is fetched lazily on open via
+			// /api/followups/message (keyed by this row's external_id), so
+			// Body stays empty here and the dashboard payload stays lean.
+			Summary:    body,
 			ThreadURL:  firstNonEmpty(url, strFromMeta(meta, "thread_url", "url")),
 			Draft:      strFromMeta(meta, "draft"),
 			Unread:     true,
@@ -765,27 +801,27 @@ func indexAny(s, chars string) int {
 // with one generic SurfaceCard - a new surface the agent invents appears
 // on the dashboard with zero backend changes.
 func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error) {
-	// Skip follow-up-aliased surfaces - they get folded into the
-	// Follow-ups card by loadFollowUps. EXCEPTION: agent-authored rows
-	// (source='agent') in those same surfaces are NOT real follow-ups
-	// (they're Jarvis's status notes / observations). Instead of
-	// spawning a NEW section for them, we REWRITE their surface key to
-	// 'system' so they join the existing System card. Boss already
-	// has 4 distinct dashboard regions (alerts, system, questions,
-	// activity) - operational agent notes belong with the rest of
-	// the system-level chatter.
+	// Two surface classes never reach the unified "Surfaced by Jarvis"
+	// card:
+	//   1. follow-up-aliased surfaces (followups/inbox/email) - folded
+	//      into the Follow-ups card by loadFollowUps.
+	//   2. operational agent notes - the agent's own status observations
+	//      (source='agent' in a follow-up surface) plus any literal
+	//      surface='system'. These are log entries, not action items, so
+	//      loadActivity folds them into the Activity stream instead. We
+	//      simply exclude them here.
+	// Everything else (alerts, insights, digest, briefing, health,
+	// agenda, …) flows through unchanged - a new surface key the agent
+	// invents still appears on the dashboard with zero backend changes.
 	rows, err := a.Pool.Query(ctx, `
-		SELECT id::text,
-		       CASE
-		         WHEN source = 'agent' AND surface = ANY($1::text[]) THEN 'system'
-		         ELSE surface
-		       END AS surface,
+		SELECT id::text, surface,
 		       kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''), importance,
 		       importance_reason, metadata, status, created_at
 		FROM mem_surface_items
 		WHERE (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
-		  AND (surface <> ALL($1::text[]) OR source = 'agent')
+		  AND surface <> ALL($1::text[])
+		  AND surface <> 'system'
 		ORDER BY surface, importance DESC NULLS LAST, created_at DESC
 		LIMIT 200
 	`, followupSurfaceKeys)
@@ -1162,6 +1198,42 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 			})
 		}
 		refRows.Close()
+	}
+
+	// Operational agent notes - what used to be the standalone "System"
+	// card. The agent's own status observations (source='agent' in a
+	// follow-up surface) and any literal surface='system' are log entries,
+	// not action items, so they live in the Activity stream. They keep a
+	// dismiss handle so the boss can still clear a stale one from its
+	// detail view; loadSurface excludes them from the Surfaced card.
+	sysRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, title, COALESCE(NULLIF(subtitle,''), importance_reason, ''), created_at
+		FROM mem_surface_items
+		WHERE (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
+		  AND ((source = 'agent' AND surface = ANY($1::text[])) OR surface = 'system')
+		ORDER BY created_at DESC
+		LIMIT 20
+	`, followupSurfaceKeys)
+	if err == nil {
+		for sysRows.Next() {
+			var (
+				id, title, detail string
+				createdAt         time.Time
+			)
+			if err := sysRows.Scan(&id, &title, &detail, &createdAt); err != nil {
+				sysRows.Close()
+				return nil, err
+			}
+			out = append(out, ActivityEvent{
+				ID:      "sys-" + id,
+				Kind:    "system",
+				Title:   title,
+				Detail:  detail,
+				At:      createdAt,
+				Dismiss: &ActivityDismiss{Origin: "surface", ID: id},
+			})
+		}
+		sysRows.Close()
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
@@ -1724,6 +1796,91 @@ func (a *API) handleFollowupDismiss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleFollowupMessage lazily resolves and returns the full email body for
+// one follow-up. Nothing is fetched at poll time, so this is the ONLY place
+// the (potentially large) HTML body is retrieved - and only when the boss
+// actually opens the item. Response: { html, text } - either may be "".
+//
+//	GET /api/followups/message?id=<row id>&origin=followup|surface
+func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no pool")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	origin := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("origin")))
+	if origin == "" {
+		origin = "followup"
+	}
+
+	ctx := r.Context()
+	var source, accountHint, messageID string
+	switch origin {
+	case "followup":
+		err := a.Pool.QueryRow(ctx, `
+			SELECT source, COALESCE(account, ''),
+			       COALESCE(source_ref->>'remote_id', '')
+			  FROM mem_followups
+			 WHERE id::text = $1
+		`, id).Scan(&source, &accountHint, &messageID)
+		if err != nil {
+			a.Logger.Warn("followup message: followup row", "id", id, "err", err)
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+	case "surface":
+		// Prefer the matching connector-poll row's account (a clean ca_...
+		// connected_account_id) over the surface metadata hint, which may be
+		// a bare email. With multiple Gmail accounts the ca_ id is the only
+		// thing that resolves unambiguously upstream.
+		err := a.Pool.QueryRow(ctx, `
+			SELECT s.source,
+			       COALESCE(NULLIF(mf.account, ''),
+			                s.metadata->>'account',
+			                s.metadata->>'connected_account_id', ''),
+			       COALESCE(s.external_id, '')
+			  FROM mem_surface_items s
+			  LEFT JOIN mem_followups mf
+			         ON COALESCE(s.external_id, '') <> ''
+			        AND mf.source_ref->>'remote_id' = s.external_id
+			 WHERE s.id::text = $1
+		`, id).Scan(&source, &accountHint, &messageID)
+		if err != nil {
+			a.Logger.Warn("followup message: surface row", "id", id, "err", err)
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+	default:
+		writeErr(w, http.StatusBadRequest, "unknown origin")
+		return
+	}
+
+	// No fetcher wired (no Composio) or no message id to fetch → empty bodies.
+	// The UI falls back to the preview it already holds. Not an error.
+	if a.Fetcher == nil || messageID == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": ""})
+		return
+	}
+
+	html, text, err := a.Fetcher.FetchMessage(ctx, source, accountHint, messageID)
+	if err != nil {
+		a.Logger.Warn("followup message: fetch", "id", id, "source", source, "err", err)
+		// Degrade quietly: 200 with empty bodies so the viewer falls back to
+		// preview rather than surfacing a scary error for a transient upstream.
+		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": ""})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"html": html, "text": text})
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

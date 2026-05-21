@@ -8,6 +8,7 @@ import {
   Brain,
   CheckCircle2,
   Clock4,
+  Server,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
@@ -33,6 +34,7 @@ const KIND_META: Record<
   alert: { Icon: AlertTriangle, tone: "warning" },
   memory: { Icon: Brain, tone: "info" },
   reflection: { Icon: Sparkles, tone: "procedural" },
+  system: { Icon: Server, tone: "muted" }, // folded-in operational agent notes
 };
 
 const DOT_CLS = {

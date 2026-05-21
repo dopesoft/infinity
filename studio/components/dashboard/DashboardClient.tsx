@@ -7,9 +7,8 @@ import { PursuitsCard } from "./PursuitsCard";
 import { TodosCard } from "./TodosCard";
 import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
-import { ApprovalsCard } from "./ApprovalsCard";
+import { SurfacedCard } from "./SurfacedCard";
 import { FollowUpsCard } from "./FollowUpsCard";
-import { SurfaceCard } from "./SurfaceCard";
 import { AgentWorkBoard } from "./AgentWorkBoard";
 import { SavedCard } from "./SavedCard";
 import { ActivityCard } from "./ActivityCard";
@@ -54,6 +53,27 @@ const ZERO_MEMORY_STATS: MemoryStats = {
   procedural: 0,
   streakDays: 0,
 };
+
+// surfacedWeight ranks the merged "Surfaced by Jarvis" list so genuine
+// decisions (tool-permission + code-change approvals) sit at the top and a
+// time-sensitive yes/no never hides under low-importance FYIs. Surface
+// items fall back to their own importance (0-100, undefined → 40).
+function surfacedWeight(it: DashboardItem): number {
+  if (it.kind === "approval") {
+    if (it.data.kind.startsWith("trust_")) return 100;
+    if (it.data.kind === "code_proposal") return 85;
+    return 55; // curiosity
+  }
+  if (it.kind === "surface") return it.data.importance ?? 40;
+  return 0;
+}
+
+function surfacedCreatedAt(it: DashboardItem): number {
+  if (it.kind === "approval" || it.kind === "surface") {
+    return new Date(it.data.createdAt).getTime();
+  }
+  return 0;
+}
 
 export function DashboardClient() {
   // Every section starts empty and is filled only by /api/dashboard.
@@ -151,6 +171,25 @@ export function DashboardClient() {
       setViewing(null);
       return;
     }
+    if (item.kind === "surface") {
+      const id = item.data.id;
+      setSurfaceItems((prev) => {
+        const next: Record<string, SurfaceItem[]> = {};
+        for (const [key, items] of Object.entries(prev)) {
+          const kept = items.filter((it) => it.id !== id);
+          if (kept.length) next[key] = kept;
+        }
+        return next;
+      });
+      setViewing(null);
+      return;
+    }
+    if (item.kind === "activity") {
+      const id = item.data.id;
+      setActivity((prev) => prev.filter((e) => e.id !== id));
+      setViewing(null);
+      return;
+    }
   }, []);
 
   const toggleHabit = useCallback((id: string) => {
@@ -222,6 +261,25 @@ export function DashboardClient() {
     };
   }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
 
+  // The unified "Surfaced by Jarvis" list - approvals + every agent surface
+  // (alerts, insights, digest, …) merged into one importance-sorted stream.
+  // Decisions rank to the top (see surfacedWeight). A new surface key the
+  // agent invents flows in here automatically; system/follow-up surfaces are
+  // routed elsewhere by the backend so they never appear.
+  const surfaced = useMemo<DashboardItem[]>(() => {
+    const merged: DashboardItem[] = [
+      ...filtered.approvals.map((a) => ({ kind: "approval", data: a }) as DashboardItem),
+      ...Object.values(filtered.surfaceItems)
+        .flat()
+        .map((it) => ({ kind: "surface", data: it }) as DashboardItem),
+    ];
+    merged.sort((a, b) => {
+      const w = surfacedWeight(b) - surfacedWeight(a);
+      return w !== 0 ? w : surfacedCreatedAt(b) - surfacedCreatedAt(a);
+    });
+    return merged;
+  }, [filtered.approvals, filtered.surfaceItems]);
+
   // Counter for the "need you" badge in the header - anything actionable.
   // High-importance surfaced items (80+) count too.
   const needYouCount =
@@ -270,11 +328,13 @@ export function DashboardClient() {
             </div>
           )}
 
+          {/* "Surfaced by Jarvis" - the ONE card for everything the agent
+              raises (approvals + curiosity + alerts + insights + any future
+              surface), importance-sorted, every row dismissable. Sits beside
+              Follow-ups (humans waiting on the boss). */}
           {(s.approvals || s.followups) && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
-              {s.approvals && (
-                <ApprovalsCard approvals={filtered.approvals} onOpen={openViewer} />
-              )}
+              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
               {s.followups && (
                 <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
               )}
@@ -283,26 +343,6 @@ export function DashboardClient() {
 
           {s.reflection && reflection && (
             <ReflectionCard reflection={reflection} onOpen={openViewer} />
-          )}
-
-          {/* Generic surface contract - every group the agent surfaced via
-              `surface_item`, each rendered by one generic SurfaceCard. A new
-              surface the agent invents (alerts, system, digest, ...) appears
-              here with zero new code. Sits BELOW Questions/Followups and
-              Reflection so the boss-facing sections lead and agent-invented
-              surfaces follow. */}
-          {Object.keys(filtered.surfaceItems).length > 0 && (
-            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
-              {Object.entries(filtered.surfaceItems).map(([surfaceKey, items], i) => (
-                <SurfaceCard
-                  key={surfaceKey}
-                  surface={surfaceKey}
-                  items={items}
-                  delay={0.15 + i * 0.05}
-                  onOpen={openViewer}
-                />
-              ))}
-            </div>
           )}
 
           {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
