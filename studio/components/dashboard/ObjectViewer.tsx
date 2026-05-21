@@ -100,11 +100,16 @@ export function ObjectViewer({
   const footerOverride = isEvent
     ? "bg-violet-100/70 dark:bg-violet-950/40 justify-between"
     : undefined;
+  // The email viewer gets a wider, fixed-height frame on desktop so it reads
+  // comfortably AND doesn't grow/shrink as the lazy email body loads. Other
+  // kinds keep the snug, content-sized `lg` modal.
+  const isFollowup = item?.kind === "followup";
   return (
     <ResponsiveModal
       open={open}
       onOpenChange={(o) => (!o ? onClose() : null)}
-      size="lg"
+      size={isFollowup ? "xl" : "lg"}
+      desktopHeight={isFollowup ? "tall" : "auto"}
       title={item ? getViewerTitle(item) : "Item"}
       description={item ? getViewerKindLabel(item) : undefined}
       header={item ? <ItemHeader item={item} /> : undefined}

@@ -37,7 +37,7 @@ import { cn } from "@/lib/utils";
  * are still exported (the global nav drawer, sessions drawer, etc. use
  * them) but content/preview/action modals route through here. */
 
-type Size = "sm" | "md" | "lg";
+type Size = "sm" | "md" | "lg" | "xl";
 
 // Dialog widths map to a single source of truth. Drawer is always full
 // viewport width (per the mobile pattern) so size only affects Dialog.
@@ -48,6 +48,17 @@ const SIZE_CLS: Record<Size, string> = {
   sm: "w-[min(96vw,28rem)] max-w-md",
   md: "w-[min(96vw,32rem)] max-w-lg",
   lg: "w-[min(96vw,42rem)] max-w-2xl",
+  xl: "w-[min(96vw,50rem)] max-w-[50rem]",
+};
+
+// Desktop height behaviour. "auto" sizes the Dialog to its content up to
+// 90dvh (default - right for short/bounded modals). "tall" pins a fixed
+// 85dvh so the modal never grows/shrinks as lazily-loaded content arrives
+// (right for the email viewer, whose body ranges from a one-line note to a
+// 86KB HTML email - the body scrolls instead of the frame jumping).
+const HEIGHT_CLS: Record<"auto" | "tall", string> = {
+  auto: "max-h-[90dvh]",
+  tall: "h-[85dvh]",
 };
 
 export interface ResponsiveModalProps {
@@ -64,6 +75,10 @@ export interface ResponsiveModalProps {
   footer?: React.ReactNode;
   /** Dialog max width on desktop. Default `md`. Drawer always spans full width. */
   size?: Size;
+  /** Desktop height behaviour. "auto" (default) sizes to content up to 90dvh;
+   *  "tall" pins a fixed 85dvh so the frame doesn't grow as content loads.
+   *  Drawer (mobile) ignores this. */
+  desktopHeight?: "auto" | "tall";
   /** Optional className for the body wrapper (the scrollable region). */
   bodyClassName?: string;
   /** Optional className for the underlying Dialog/Drawer content node. */
@@ -88,6 +103,7 @@ export function ResponsiveModal({
   header,
   footer,
   size = "md",
+  desktopHeight = "auto",
   bodyClassName,
   contentClassName,
   footerClassName,
@@ -162,7 +178,8 @@ export function ResponsiveModal({
           onEscapeKeyDown={blockDismiss}
           onInteractOutside={blockDismiss}
           className={cn(
-            "flex max-h-[90dvh] flex-col p-0",
+            "flex flex-col p-0",
+            HEIGHT_CLS[desktopHeight],
             SIZE_CLS[size],
             contentClassName,
           )}
