@@ -2,26 +2,11 @@
 
 import { useMemo } from "react";
 import { motion } from "framer-motion";
-import {
-  CalendarDays,
-  CalendarRange,
-  MapPin,
-  Plane,
-  Music2,
-  Users,
-  Utensils,
-  Stethoscope,
-  Briefcase,
-  type LucideIcon,
-} from "lucide-react";
+import { CalendarRange, MapPin } from "lucide-react";
 import { Section } from "./Section";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, startOfDay } from "@/lib/dashboard/format";
-import type {
-  CalendarEvent,
-  CalendarEventClass,
-  DashboardItem,
-} from "@/lib/dashboard/types";
+import type { CalendarEvent, DashboardItem } from "@/lib/dashboard/types";
 
 /* Upcoming - calendar feed, 6 months out, flat list.
  *
@@ -33,18 +18,6 @@ import type {
  * Visible height is locked to ~4 rows; the rest scroll inside the
  * card so the dashboard column never grows unbounded.
  */
-
-const CLASS_ICON: Record<CalendarEventClass, LucideIcon> = {
-  meeting: Briefcase,
-  concert: Music2,
-  flight: Plane,
-  dinner: Utensils,
-  appointment: Stethoscope,
-  travel: Plane,
-  social: Users,
-  personal: CalendarDays,
-  other: CalendarDays,
-};
 
 // Approximate height of one EventRow (px) with the typical chip row
 // rendered. 4 rows × ROW_PX defines the visible viewport before
@@ -134,7 +107,8 @@ export function UpcomingCard({
 }
 
 function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
-  const Icon = CLASS_ICON[e.classification] ?? CalendarDays;
+  // Day-of-month for the date tile (e.g. "13" for May 13th).
+  const day = new Date(e.startsAt).getDate();
   const openPrep = e.prep.filter((p) => !p.done).length;
   // Conference / video provider for the optional 'meet' / 'zoom' chip.
   const videoSolution = (
@@ -161,10 +135,12 @@ function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
             "flex size-8 shrink-0 items-center justify-center rounded-md border",
             openPrep > 0
               ? "border-rose-400/40 bg-rose-400/10 text-rose-400"
-              : "border-border bg-muted text-muted-foreground",
+              : "border-border bg-muted text-foreground/80",
           )}
         >
-          <Icon className="size-3.5" aria-hidden />
+          <span className="text-sm font-semibold tabular-nums leading-none" suppressHydrationWarning>
+            {day}
+          </span>
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
