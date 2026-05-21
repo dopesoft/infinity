@@ -47,15 +47,23 @@ type fetchSpec struct {
 	extra map[string]any
 }
 
+// Attachment is one email attachment's display + download metadata. ID is the
+// provider's internal attachment id (NOT the filename), needed to download.
+type Attachment struct {
+	Filename string `json:"name"`
+	MimeType string `json:"mimeType,omitempty"`
+	ID       string `json:"id"`
+}
+
 // sourceFetchSpec maps a follow-up source to its message-fetch verb. Keys
 // are matched case-insensitively and also against common aliases the
 // triager/surface producers use (e.g. "gmail_triage" → gmail).
 var sourceFetchSpec = map[string]fetchSpec{
 	"gmail": {
-		toolkit: "gmail",
-		verb:    "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
-		idArg:   "message_id",
-		extra:   map[string]any{"format": "full"},
+		toolkit:    "gmail",
+		verb:       "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+		idArg: "message_id",
+		extra: map[string]any{"format": "full"},
 	},
 }
 
@@ -74,24 +82,28 @@ func specForSource(source string) (fetchSpec, bool) {
 	return fetchSpec{}, false
 }
 
-// FetchMessage returns the HTML + plain-text bodies and attachment filenames
-// of one message. Any field may be empty - callers fall back to the preview
-// they already hold. A non-nil error means the fetch genuinely failed
-// (transport / upstream); an unsupported source returns zero values + nil so
-// the UI degrades quietly.
-func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []string, err error) {
-	if f == nil || f.exec == nil {
-		return "", "", nil, nil
-	}
+// resolved bundles everything needed to call a Composio message/attachment
+// verb for one item: the toolkit spec, the real provider message id, and the
+// connected_account_id + entity the execute API requires.
+type resolved struct {
+	spec   fetchSpec
+	realID string
+	caID   string
+	entity string
+}
+
+// resolve turns (source, accountHint, messageID) into a resolved bundle,
+// applying the toolkit-from-prefix and composite-id rules. ok=false means the
+// source isn't a fetchable toolkit (caller degrades quietly).
+func (f *MessageFetcher) resolve(source, accountHint, messageID string) (resolved, bool) {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
-		return "", "", nil, nil
+		return resolved{}, false
 	}
-	// Determine the message TOOLKIT. The composite external_id encodes it as
-	// its first segment ("gmail:ca_x:msgid"), which is authoritative - the
-	// surface row's `source` column is the AUTHOR ("agent", "cron", a skill
-	// name), NOT the toolkit. Prefer the prefix; fall back to `source` for
-	// raw (non-composite) ids from the connector poller.
+	// Determine the TOOLKIT. The composite external_id encodes it as its first
+	// segment ("gmail:ca_x:msgid"), which is authoritative - the surface row's
+	// `source` column is the AUTHOR ("agent", "cron", a skill name), NOT the
+	// toolkit. Prefer the prefix; fall back to `source` for raw poller ids.
 	toolkitHint := source
 	if i := strings.Index(messageID, ":"); i > 0 {
 		toolkitHint = messageID[:i]
@@ -101,35 +113,44 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 		spec, ok = specForSource(source)
 	}
 	if !ok {
-		return "", "", nil, nil
+		return resolved{}, false
 	}
-
-	// Surfaced external ids are composite for global uniqueness, e.g.
-	// "gmail:ca_lBW_QmdjwQhz:19e479e3b0de7403". Extract the real provider
-	// message id (Composio rejects the composite as "Invalid id value") and
-	// the embedded connected_account_id, which is authoritative for which
-	// account the message lives in.
+	// Composite ids ("gmail:ca_x:msgid") → real provider id + embedded account
+	// (Composio rejects the composite with "Invalid id value").
 	realID, embeddedAcct := normalizeGmailID(messageID)
 	if realID == "" {
-		return "", "", nil, nil
+		return resolved{}, false
 	}
 	if embeddedAcct != "" {
 		accountHint = embeddedAcct
 	}
+	// Composio 1811s unless BOTH connected_account_id AND the account entity
+	// (user_id) ride on the request (same constraint the calendar provider has).
+	caID, entity := f.resolveAccount(spec.toolkit, accountHint)
+	return resolved{spec: spec, realID: realID, caID: caID, entity: entity}, true
+}
 
-	args := map[string]any{spec.idArg: realID}
-	for k, v := range spec.extra {
+// FetchMessage returns the HTML + plain-text bodies and attachment metadata of
+// one message. Any field may be empty - callers fall back to the preview they
+// already hold. A non-nil error means the fetch genuinely failed (transport /
+// upstream); an unsupported source returns zero values + nil so the UI
+// degrades quietly.
+func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []Attachment, err error) {
+	if f == nil || f.exec == nil {
+		return "", "", nil, nil
+	}
+	r, ok := f.resolve(source, accountHint, messageID)
+	if !ok {
+		return "", "", nil, nil
+	}
+	args := map[string]any{r.spec.idArg: r.realID}
+	for k, v := range r.spec.extra {
 		args[k] = v
 	}
-
-	// Composio rejects with code 1811 unless BOTH connected_account_id AND
-	// the account's entity (user_id) ride on the request (same constraint
-	// the calendar provider handles). Resolve both from the cache.
-	caID, entity := f.resolveAccount(spec.toolkit, accountHint)
 	resp, err := f.exec.Execute(ctx, ExecuteRequest{
-		Slug:               spec.verb,
-		ConnectedAccountID: caID,
-		UserID:             entity,
+		Slug:               r.spec.verb,
+		ConnectedAccountID: r.caID,
+		UserID:             r.entity,
 		Arguments:          args,
 	})
 	if err != nil {
@@ -142,7 +163,6 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 		}
 		return "", "", nil, fmt.Errorf("fetch message: upstream unsuccessful: %s", msg)
 	}
-
 	html, text, attachments = extractMessage(resp.Data)
 	return html, text, attachments, nil
 }
@@ -220,7 +240,7 @@ func normalizeGmailID(raw string) (msgID, account string) {
 // filenames. Defensive against wrapper nesting (data / response_data /
 // message) and multipart trees of arbitrary depth. Falls back to Composio's
 // pre-decoded top-level `messageText` when the payload has no text/plain part.
-func extractMessage(raw json.RawMessage) (html, text string, attachments []string) {
+func extractMessage(raw json.RawMessage) (html, text string, attachments []Attachment) {
 	if len(raw) == 0 {
 		return "", "", nil
 	}
@@ -239,9 +259,9 @@ func extractMessage(raw json.RawMessage) (html, text string, attachments []strin
 	if strings.TrimSpace(text) == "" {
 		text = strings.TrimSpace(messageTextField(root))
 	}
-	// Attachments: filenames so an attachment-only email (empty body) still
-	// shows what it carries instead of looking blank.
-	attachments = attachmentNames(root)
+	// Attachments: name + mime + id so an attachment-only email (empty body)
+	// still shows what it carries, and the UI can download each one by id.
+	attachments = attachmentMeta(root)
 	return html, text, attachments
 }
 
@@ -264,21 +284,32 @@ func messageTextField(m map[string]any) string {
 	return ""
 }
 
-// attachmentNames extracts attachment filenames from the message resource,
-// tolerating wrapper nesting. Real (named) attachments only - inline parts
-// without a filename are skipped.
-func attachmentNames(m map[string]any) []string {
+// attachmentMeta extracts attachment {name, mime, id} from the message
+// resource, tolerating wrapper nesting. Real (named) attachments only -
+// inline parts without a filename are skipped. The id is the provider's
+// internal attachment id, needed to download the bytes later.
+func attachmentMeta(m map[string]any) []Attachment {
 	if m == nil {
 		return nil
 	}
-	var out []string
+	var out []Attachment
 	if list, ok := m["attachmentList"].([]any); ok {
 		for _, a := range list {
-			if am, ok := a.(map[string]any); ok {
-				if name, _ := am["filename"].(string); strings.TrimSpace(name) != "" {
-					out = append(out, strings.TrimSpace(name))
-				}
+			am, ok := a.(map[string]any)
+			if !ok {
+				continue
 			}
+			name, _ := am["filename"].(string)
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			id, _ := am["attachmentId"].(string)
+			mime, _ := am["mimeType"].(string)
+			out = append(out, Attachment{
+				Filename: strings.TrimSpace(name),
+				MimeType: strings.TrimSpace(mime),
+				ID:       strings.TrimSpace(id),
+			})
 		}
 	}
 	if len(out) > 0 {
@@ -286,8 +317,8 @@ func attachmentNames(m map[string]any) []string {
 	}
 	for _, key := range []string{"data", "response_data", "message", "messageData", "result"} {
 		if nested, ok := m[key].(map[string]any); ok {
-			if names := attachmentNames(nested); len(names) > 0 {
-				return names
+			if atts := attachmentMeta(nested); len(atts) > 0 {
+				return atts
 			}
 		}
 	}

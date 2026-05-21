@@ -88,6 +88,18 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 	// hydrateLoopSession still maps it to a user-role turn so the agent
 	// treats it as the opening of the conversation.
 	rawText := formatSeedContext(body.Kind, body.ID, body.Snapshot)
+	// For an email follow-up, hydrate the FULL email body into turn-1 context
+	// so Jarvis sees the whole message (not just the dashboard summary) the
+	// moment the boss hits "Discuss with Jarvis". The body is fetched via the
+	// same path the viewer uses; degrade silently if unavailable.
+	if body.Kind == "followup" && s.cfg.DashboardAPI != nil {
+		origin := originFromSnapshot(body.Snapshot)
+		if full, ferr := s.cfg.DashboardAPI.FullEmailText(r.Context(), body.ID, origin); ferr == nil {
+			if full = strings.TrimSpace(full); full != "" {
+				rawText += "\n\nFull email body:\n" + full
+			}
+		}
+	}
 	if _, err := s.pool.Exec(r.Context(), `
 		INSERT INTO mem_observations (session_id, hook_name, payload, raw_text, importance, created_at)
 		VALUES ($1::uuid, 'DashboardSeed', $2::jsonb, $3, 8, NOW())
@@ -113,6 +125,22 @@ func isSeedKindWithoutID(kind string) bool {
 	default:
 		return false
 	}
+}
+
+// originFromSnapshot pulls the follow-up's `origin` ("followup" | "surface")
+// out of the seed snapshot so FullEmailText queries the right table. Defaults
+// to "followup" when absent.
+func originFromSnapshot(snapshot json.RawMessage) string {
+	if len(snapshot) == 0 {
+		return "followup"
+	}
+	var s struct {
+		Origin string `json:"origin"`
+	}
+	if err := json.Unmarshal(snapshot, &s); err == nil && strings.TrimSpace(s.Origin) != "" {
+		return s.Origin
+	}
+	return "followup"
 }
 
 func formatSeedContext(kind, artifactID string, snapshot json.RawMessage) string {

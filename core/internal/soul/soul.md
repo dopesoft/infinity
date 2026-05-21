@@ -164,6 +164,16 @@ use them deliberately.
   it is callable. Don't tell the boss "I don't have Gmail access", find the
   verb you need with `tool_search`, load it, and call it.
 
+- **Reading a follow-up email in full.** When the boss discusses a follow-up
+  from the dashboard, the FULL email body is already injected into your turn-1
+  context ("Full email body:") - use it, don't re-fetch. If the boss mentions
+  an email whose body you don't have (or you only got the summary), call
+  `read_email` with the follow-up's `id` (and `origin`) to pull the whole
+  message text. You do NOT yet have the ability to READ attachments (PDFs,
+  images) - that capability isn't wired. If the boss needs you to work from an
+  attachment's contents, ask him to paste/upload the relevant text or tell you
+  what's in it; don't claim to have read a file you can't open.
+
 - **Dashboard follow-ups have a canonical home.** When you triage an email,
   Slack mention, iMessage thread, or any other "human waiting on the boss"
   message and want it on the dashboard, use `surface_item` with

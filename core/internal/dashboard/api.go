@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	htmlpkg "html"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -24,17 +25,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// MessageFetcher retrieves the full rendered content (HTML + plain text) of
-// a single follow-up message on demand. Implemented by
-// connectors.MessageFetcher and injected in serve.go; kept as a local
-// interface so the dashboard package doesn't hard-depend on the Composio
-// client. Nil-safe: when unset, the message endpoint returns empty bodies
-// and the UI falls back to the plain-text preview it already holds.
+// MessageFetcher retrieves the full rendered content (HTML + plain text +
+// attachment metadata) of a single follow-up message. Implemented by
+// connectors.MessageFetcher and injected in serve.go; kept as an interface so
+// the API stays nil-safe (when unset, the message endpoint degrades to empty).
 type MessageFetcher interface {
-	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []string, err error)
+	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []connectors.Attachment, err error)
 }
 
 type API struct {
@@ -1796,52 +1796,36 @@ func (a *API) handleFollowupDismiss(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleFollowupMessage lazily resolves and returns the full email body for
-// one follow-up. Nothing is fetched at poll time, so this is the ONLY place
-// the (potentially large) HTML body is retrieved - and only when the boss
-// actually opens the item. Response: { html, text } - either may be "".
-//
-//	GET /api/followups/message?id=<row id>&origin=followup|surface
-func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if a.Pool == nil {
-		writeErr(w, http.StatusServiceUnavailable, "no pool")
-		return
-	}
-	id := strings.TrimSpace(r.URL.Query().Get("id"))
+// resolveFollowupRef maps a follow-up (id, origin) to the (source,
+// accountHint, messageID) the fetcher needs. Shared by the message + the
+// attachment endpoints so the resolution stays in one place. Returns ok=false
+// after writing the HTTP error.
+// ResolveFollowupRefByID maps a follow-up (id, origin) to the (source,
+// accountHint, messageID) the fetcher needs. Non-HTTP so both the message/
+// attachment endpoints AND the seed/read_email paths share one resolver.
+func (a *API) ResolveFollowupRefByID(ctx context.Context, id, origin string) (source, accountHint, messageID string, err error) {
+	id = strings.TrimSpace(id)
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "id required")
-		return
+		return "", "", "", errors.New("id required")
 	}
-	origin := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("origin")))
+	origin = strings.TrimSpace(strings.ToLower(origin))
 	if origin == "" {
 		origin = "followup"
 	}
-
-	ctx := r.Context()
-	var source, accountHint, messageID string
 	switch origin {
 	case "followup":
-		err := a.Pool.QueryRow(ctx, `
+		err = a.Pool.QueryRow(ctx, `
 			SELECT source, COALESCE(account, ''),
 			       COALESCE(source_ref->>'remote_id', '')
 			  FROM mem_followups
 			 WHERE id::text = $1
 		`, id).Scan(&source, &accountHint, &messageID)
-		if err != nil {
-			a.Logger.Warn("followup message: followup row", "id", id, "err", err)
-			writeErr(w, http.StatusNotFound, "not found")
-			return
-		}
 	case "surface":
 		// Prefer the matching connector-poll row's account (a clean ca_...
 		// connected_account_id) over the surface metadata hint, which may be
 		// a bare email. With multiple Gmail accounts the ca_ id is the only
 		// thing that resolves unambiguously upstream.
-		err := a.Pool.QueryRow(ctx, `
+		err = a.Pool.QueryRow(ctx, `
 			SELECT s.source,
 			       COALESCE(NULLIF(mf.account, ''),
 			                s.metadata->>'account',
@@ -1853,33 +1837,183 @@ func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
 			        AND mf.source_ref->>'remote_id' = s.external_id
 			 WHERE s.id::text = $1
 		`, id).Scan(&source, &accountHint, &messageID)
-		if err != nil {
-			a.Logger.Warn("followup message: surface row", "id", id, "err", err)
-			writeErr(w, http.StatusNotFound, "not found")
-			return
-		}
 	default:
-		writeErr(w, http.StatusBadRequest, "unknown origin")
+		return "", "", "", errors.New("unknown origin")
+	}
+	return source, accountHint, messageID, err
+}
+
+// FullEmailText resolves a follow-up to its full email body as plain text -
+// the text/plain part when present, else the HTML stripped to text. Capped so
+// a giant marketing email can't blow the agent's context. Empty string (nil
+// error) when there's no fetcher or no message to read. Shared by the Discuss
+// seed enrichment and the read_email tool.
+func (a *API) FullEmailText(ctx context.Context, id, origin string) (string, error) {
+	if a == nil || a.Fetcher == nil {
+		return "", nil
+	}
+	source, account, messageID, err := a.ResolveFollowupRefByID(ctx, id, origin)
+	if err != nil {
+		return "", err
+	}
+	if messageID == "" {
+		return "", nil
+	}
+	html, text, _, err := a.Fetcher.FetchMessage(ctx, source, account, messageID)
+	if err != nil {
+		return "", err
+	}
+	body := strings.TrimSpace(text)
+	if body == "" {
+		body = html
+	}
+	// Composio's `text` field is often the raw HTML for HTML-only emails, so
+	// strip whenever the body looks like markup (not just when text was empty).
+	if looksHTML(body) {
+		body = stripHTML(body)
+	}
+	body = strings.TrimSpace(body)
+	const cap = 12000
+	if len(body) > cap {
+		body = body[:cap] + "\n…[truncated]"
+	}
+	return body, nil
+}
+
+// looksHTML is a cheap check for whether a body is HTML markup rather than
+// plain text, so we only run the tag-stripper when there's something to strip.
+func looksHTML(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "<!doctype") || strings.Contains(l, "<html") ||
+		strings.Contains(l, "</") || strings.Contains(l, "<br") ||
+		strings.Contains(l, "<div") || strings.Contains(l, "<table") ||
+		strings.Contains(l, "<p>") || strings.Contains(l, "<span")
+}
+
+// resolveFollowupRef is the HTTP wrapper around ResolveFollowupRefByID; it
+// reads id/origin from the query and writes the appropriate error.
+func (a *API) resolveFollowupRef(w http.ResponseWriter, r *http.Request) (source, accountHint, messageID string, ok bool) {
+	source, accountHint, messageID, err := a.ResolveFollowupRefByID(
+		r.Context(), r.URL.Query().Get("id"), r.URL.Query().Get("origin"))
+	if err != nil {
+		switch err.Error() {
+		case "id required", "unknown origin":
+			writeErr(w, http.StatusBadRequest, err.Error())
+		default:
+			a.Logger.Warn("followup ref", "err", err)
+			writeErr(w, http.StatusNotFound, "not found")
+		}
+		return "", "", "", false
+	}
+	return source, accountHint, messageID, true
+}
+
+// stripHTML reduces an HTML email body to readable plain text: drops
+// script/style blocks, strips tags, unescapes entities, collapses whitespace.
+// Good enough to hand the agent a legible version of an HTML-only email.
+func stripHTML(h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return ""
+	}
+	// Remove <script>…</script> and <style>…</style> blocks entirely.
+	for _, tag := range []string{"script", "style", "head"} {
+		for {
+			lo := strings.Index(strings.ToLower(h), "<"+tag)
+			if lo < 0 {
+				break
+			}
+			hi := strings.Index(strings.ToLower(h[lo:]), "</"+tag+">")
+			if hi < 0 {
+				h = h[:lo]
+				break
+			}
+			h = h[:lo] + " " + h[lo+hi+len(tag)+3:]
+		}
+	}
+	// Turn block-ish tags into newlines so the text doesn't run together.
+	repl := strings.NewReplacer("</p>", "\n", "<br>", "\n", "<br/>", "\n", "<br />", "\n", "</div>", "\n", "</tr>", "\n", "</li>", "\n")
+	h = repl.Replace(h)
+	// Strip all remaining tags.
+	var b strings.Builder
+	depth := 0
+	for _, r := range h {
+		switch r {
+		case '<':
+			depth++
+		case '>':
+			if depth > 0 {
+				depth--
+			}
+		default:
+			if depth == 0 {
+				b.WriteRune(r)
+			}
+		}
+	}
+	text := htmlpkg.UnescapeString(b.String())
+	// Drop email preheader padding (zero-width + nbsp runs senders use to push
+	// the preview text out) so the agent sees clean prose, not Unicode soup.
+	text = strings.NewReplacer(
+		"\u200c", "", "\u200b", "", "\ufeff", "", "\u00ad", "", "\u00a0", " ",
+	).Replace(text)
+	// Collapse runs of blank lines / spaces.
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	blank := 0
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			blank++
+			if blank > 1 {
+				continue
+			}
+		} else {
+			blank = 0
+		}
+		out = append(out, ln)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// handleFollowupMessage lazily resolves and returns the full email body +
+// attachment metadata for one follow-up. Nothing is fetched at poll time, so
+// this is the ONLY place the (potentially large) HTML body is retrieved - and
+// only when the boss actually opens the item.
+// Response: { html, text, attachments: [{name, mimeType, id}] }.
+//
+//	GET /api/followups/message?id=<row id>&origin=followup|surface
+func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no pool")
+		return
+	}
+	source, accountHint, messageID, ok := a.resolveFollowupRef(w, r)
+	if !ok {
 		return
 	}
 
+	empty := map[string]any{"html": "", "text": "", "attachments": []connectors.Attachment{}}
 	// No fetcher wired (no Composio) or no message id to fetch → empty bodies.
 	// The UI falls back to the preview it already holds. Not an error.
 	if a.Fetcher == nil || messageID == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": "", "attachments": []string{}})
+		writeJSON(w, http.StatusOK, empty)
 		return
 	}
-
-	html, text, attachments, err := a.Fetcher.FetchMessage(ctx, source, accountHint, messageID)
+	html, text, attachments, err := a.Fetcher.FetchMessage(r.Context(), source, accountHint, messageID)
 	if err != nil {
-		a.Logger.Warn("followup message: fetch", "id", id, "source", source, "err", err)
+		a.Logger.Warn("followup message: fetch", "source", source, "err", err)
 		// Degrade quietly: 200 with empty bodies so the viewer falls back to
 		// preview rather than surfacing a scary error for a transient upstream.
-		writeJSON(w, http.StatusOK, map[string]any{"html": "", "text": "", "attachments": []string{}})
+		writeJSON(w, http.StatusOK, empty)
 		return
 	}
 	if attachments == nil {
-		attachments = []string{}
+		attachments = []connectors.Attachment{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"html": html, "text": text, "attachments": attachments})
 }

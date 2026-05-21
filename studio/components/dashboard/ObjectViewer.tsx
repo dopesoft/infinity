@@ -1422,8 +1422,8 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           </p>
         )}
 
-        {/* Attachments, whatever the body state. */}
-        <AttachmentChips names={attachments} />
+        {/* Attachments present on the email (display only - see note below). */}
+        <AttachmentChips attachments={attachments} />
 
         {/* When we already show plain text but a richer HTML fetch is still
             in flight, hint at the upgrade without blocking the read. */}
@@ -1460,10 +1460,12 @@ function metaStr(m: Record<string, unknown> | undefined, ...keys: string[]): str
 // Lazily fetch the full email body for a follow-up when the viewer opens.
 // Nothing is loaded at poll time, so this is the only place the (possibly
 // large) HTML body is retrieved - and only for the item actually opened.
+type Attachment = { name: string; mimeType?: string; id: string };
+
 type FetchedMessage = {
   html: string;
   text: string;
-  attachments: string[];
+  attachments: Attachment[];
   loading: boolean;
 };
 
@@ -1482,7 +1484,7 @@ function useFollowupMessage(f: FollowUp): FetchedMessage {
       `/api/followups/message?id=${encodeURIComponent(f.id)}&origin=${encodeURIComponent(origin)}`,
     )
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("message fetch failed"))))
-      .then((d: { html?: string; text?: string; attachments?: string[] }) => {
+      .then((d: { html?: string; text?: string; attachments?: Attachment[] }) => {
         if (!alive) return;
         setState({
           html: d.html ?? "",
@@ -1501,19 +1503,27 @@ function useFollowupMessage(f: FollowUp): FetchedMessage {
   return state;
 }
 
-// Attachment chips - paperclip + filename. So an attachment-only email
-// (empty body) shows what it actually carries instead of looking blank.
-function AttachmentChips({ names }: { names: string[] }) {
-  if (names.length === 0) return null;
+// Attachment chips - paperclip + filename, clickable to open the file. On
+// click we fetch a short-lived download URL (GMAIL_GET_ATTACHMENT → presigned
+// URL) and open it in a new tab. The blank tab is opened synchronously so the
+// popup blocker doesn't eat it after the await.
+// Attachment chips - paperclip + filename, showing what the email carries.
+// Not clickable: we can't serve the bytes (the connector's download URL is
+// broken upstream, and direct provider download needs an OAuth token we don't
+// hold). Real in-app view/download is gated on that token; for now this is an
+// honest "here's what's attached" label.
+function AttachmentChips({ attachments }: { attachments: Attachment[] }) {
+  if (attachments.length === 0) return null;
   return (
     <div className="mt-3 flex flex-wrap gap-2">
-      {names.map((name, i) => (
+      {attachments.map((att, i) => (
         <span
-          key={`${name}-${i}`}
-          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 text-[12px] text-foreground/80"
+          key={`${att.id || att.name}-${i}`}
+          className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 text-[12px] text-foreground/85"
+          title={att.name}
         >
           <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="min-w-0 truncate">{name}</span>
+          <span className="min-w-0 truncate">{att.name}</span>
         </span>
       ))}
     </div>

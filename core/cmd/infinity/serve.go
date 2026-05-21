@@ -1174,7 +1174,11 @@ func serveCmd() *cobra.Command {
 				if composioExec != nil {
 					dashboardAPI.Fetcher = connectors.NewMessageFetcher(composioExec, connectorsCache)
 				}
-				fmt.Println("  dashboard: aggregator wired")
+				// read_email: lets the agent pull a follow-up's full email body
+				// on demand (when the summary in context isn't enough). Shares
+				// dashboard.FullEmailText with the Discuss-seed enrichment.
+				registry.Register(&tools.ReadEmail{Fetch: dashboardAPI.FullEmailText})
+				fmt.Println("  dashboard: aggregator wired (+read_email)")
 			}
 
 			var turnStore *memory.TurnStore
