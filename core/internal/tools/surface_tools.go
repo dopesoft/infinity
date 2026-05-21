@@ -42,20 +42,29 @@ func (t *surfaceItemTool) Name() string { return "surface_item" }
 func (t *surfaceItemTool) Description() string {
 	return "Put a ranked, structured item on the boss's dashboard. This is the " +
 		"standard contract for surfacing ANYTHING - an important email a triage " +
-		"recipe found, an alert, a digest entry, an insight. Pick a `surface` (the " +
-		"dashboard region: 'followups', 'alerts', 'digest', 'insights', or invent " +
-		"one) and a `kind` (semantic type for the icon: 'email', 'message', " +
-		"'alert', 'article', 'metric', 'event', 'finding'). Set `importance` 0-100 " +
-		"when you've judged it - the dashboard floats high-importance items to the " +
-		"top. Pass `external_id` (e.g. a Gmail message id) so re-running the same " +
-		"recipe refreshes the row instead of duplicating it. Put any extra " +
-		"structured payload in `metadata`. Returns the item id."
+		"recipe found, an alert, a digest entry, an insight. Choose the `surface` " +
+		"by WHO the item is for and what it is:\n" +
+		"  • 'followups' (aliases 'inbox'/'email') = a MESSAGE A PERSON is waiting " +
+		"on the boss to act on (email, DM, mention). MESSAGES ONLY - never your " +
+		"own notes. Renders in the Follow-ups card.\n" +
+		"  • 'system' = YOUR OWN operational/status note about your own work " +
+		"(a blocker, a failure, a completion, an observation - e.g. 'inbox triage " +
+		"blocked on primary Gmail'). NOT a message. Renders in the Activity log.\n" +
+		"  • 'alerts' / 'insights' / 'digest' = something for the boss to READ or " +
+		"DECIDE on (a flagged finding, a summary). Renders in the Surfaced card.\n" +
+		"Rule of thumb: if it is not a message from a person awaiting a reply, it " +
+		"does NOT go in 'followups'. Set `kind` (icon: 'email','message','alert'," +
+		"'article','metric','event','finding'). Set `importance` 0-100 when judged " +
+		"- the dashboard floats high-importance items to the top. Pass `external_id` " +
+		"(e.g. a Gmail message id) so re-running the same recipe refreshes the row " +
+		"instead of duplicating it. Put extra structured payload in `metadata`. " +
+		"Returns the item id."
 }
 func (t *surfaceItemTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"surface":           map[string]any{"type": "string", "description": "Dashboard region: 'followups', 'alerts', 'digest', 'insights', … (free-form)."},
+			"surface":           map[string]any{"type": "string", "description": "Dashboard region. 'followups' = a message a PERSON awaits a reply on (Follow-ups card, messages ONLY). 'system' = your own operational/status note (Activity log). 'alerts'/'insights'/'digest' = something to read/decide (Surfaced card). Never put your own notes in 'followups'."},
 			"title":             map[string]any{"type": "string", "description": "Headline shown on the card. Required."},
 			"kind":              map[string]any{"type": "string", "description": "Semantic type for the icon: 'email','message','alert','article','metric','event','finding'. Default 'item'."},
 			"source":            map[string]any{"type": "string", "description": "Who produced this - your skill name, a connector slug, a cron name. Default 'agent'."},

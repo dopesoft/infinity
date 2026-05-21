@@ -177,6 +177,18 @@ use them deliberately.
   or `followup_dismiss` with `outcome='dismissed'` for the connector-fed
   rows in `mem_followups`.
 
+- **Follow-ups is for MESSAGES ONLY - never your own notes.** The
+  `followups`/`inbox`/`email` surfaces are exclusively for messages a person
+  is waiting on the boss to act on (emails, DMs, mentions). Your OWN status or
+  operational notes - "inbox triage blocked on primary Gmail", "couldn't reach
+  the Slack API", "finished the nightly sweep", any observation about your own
+  work - are NOT follow-ups. File those with `surface='system'`; they render in
+  the Activity log where operational events belong. Things for the boss to read
+  or decide on (a flagged insight, a digest, an alert) go to `surface='alerts'`
+  or `surface='insights'` and render in the Surfaced card. Rule of thumb: if it
+  is not a message from a person awaiting a reply, it does NOT go in followups.
+  The boss explicitly wants Follow-ups to be email/messages and nothing else.
+
 - **Multi-account routing.** The boss can authorise the same toolkit more than
   once (e.g. personal + work Gmail). When that happens, the `<connected_accounts>`
   block at the top of your prompt lists each `connected_account_id` with its

@@ -646,26 +646,24 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		return out, err
 	}
 
-	// (2) Agent-surfaced items the recipe dropped into surface='followups'
-	// (or aliases). Same card, same chips, same dismiss path - Rule #1
-	// says one surface concept, one place to render.
-	//
-	// EXCLUDE source='agent' rows: when Jarvis writes a status note about
-	// his own work (e.g. "inbox triage blocker on primary Gmail") via
-	// surface_item with surface='followups', he is NOT a follow-up the
-	// boss owes a reply to - he's an internal observation. Those still
-	// land on the dashboard, just in the generic agent SurfaceCard
-	// (which the followup branch in loadSurface excludes inverse of this
-	// filter, so there's no double-render). Anything coming from a real
-	// connector (source='gmail', 'gmail_triage', 'inbox_triage', etc.)
-	// is a genuine pending follow-up and stays in this card.
+	// (2) Surfaced items the agent OR a connector dropped into
+	// surface='followups' (or aliases inbox/email). Two hard rules the boss
+	// set, enforced HERE so it can't regress no matter how a row is filed:
+	//   • EMAILS ONLY. `kind = 'email'` is required. A non-email row in this
+	//     surface (a status note, an alert, a 'finding') never renders in
+	//     Follow-ups. The boss does not want non-emails in this card, period.
+	//   • Author-agnostic. Source doesn't matter - Jarvis's own triage output
+	//     (source='agent') is as much an email-waiting as a connector poll, so
+	//     no source filter. loadSurface excludes this surface set from the
+	//     generic-card path and loadActivity no longer ingests it, so there's
+	//     no double-render and nothing spills into Activity.
 	srows, err := a.Pool.Query(ctx, `
 		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''),
 		       COALESCE(metadata, '{}'::jsonb), created_at
 		FROM mem_surface_items
 		WHERE surface = ANY($1::text[])
-		  AND source <> 'agent'
+		  AND kind = 'email'
 		  AND (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
 		ORDER BY importance DESC NULLS LAST, created_at DESC
 		LIMIT 50
@@ -1200,20 +1198,20 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 		refRows.Close()
 	}
 
-	// Operational agent notes - what used to be the standalone "System"
-	// card. The agent's own status observations (source='agent' in a
-	// follow-up surface) and any literal surface='system' are log entries,
-	// not action items, so they live in the Activity stream. They keep a
-	// dismiss handle so the boss can still clear a stale one from its
-	// detail view; loadSurface excludes them from the Surfaced card.
+	// Genuine operational agent notes - ONLY a literal surface='system'.
+	// These are status observations ("inbox triage blocker on primary
+	// Gmail"), not messages, so they belong in the log. Email-shaped items
+	// (surface=followups/inbox/email) are deliberately NOT pulled here -
+	// they live in the Follow-ups card, period. They keep a dismiss handle
+	// so the boss can clear a stale one from its detail view.
 	sysRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, title, COALESCE(NULLIF(subtitle,''), importance_reason, ''), created_at
 		FROM mem_surface_items
 		WHERE (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
-		  AND ((source = 'agent' AND surface = ANY($1::text[])) OR surface = 'system')
+		  AND surface = 'system'
 		ORDER BY created_at DESC
 		LIMIT 20
-	`, followupSurfaceKeys)
+	`)
 	if err == nil {
 		for sysRows.Next() {
 			var (
