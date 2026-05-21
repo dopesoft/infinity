@@ -56,6 +56,21 @@ type wsServerEvent struct {
 	// backed by a mem_curiosity_questions row, so the chat card can offer
 	// an "Approve & fix" action that round-trips to the decide endpoint.
 	CuriosityID string `json:"curiosity_id,omitempty"`
+	// BrowserFrame is set on type="browser_frame" frames — a live CDP
+	// screencast frame from the cloud browser, routed to the session's
+	// Studio tab so the boss watches Jarvis drive in real time. This rides
+	// the per-session broadcaster (sessionSender), NOT the turn's RunEvent
+	// stream, so it streams continuously across every observe/act/extract
+	// call for the whole browser session.
+	BrowserFrame *wsBrowserFrame `json:"browser_frame,omitempty"`
+}
+
+// wsBrowserFrame is one screencast frame for the Studio Preview pane (live browser).
+type wsBrowserFrame struct {
+	Seq              int    `json:"seq"`
+	Frame            string `json:"frame"`                        // data:image/jpeg;base64,...
+	URL              string `json:"url,omitempty"`                // current page URL for the toolbar
+	BrowserSessionID string `json:"browser_session_id,omitempty"` // for the Stop button + run status
 }
 
 type wsToolEvent struct {

@@ -123,7 +123,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
           )}
           aria-hidden={store.activeTabId !== "preview"}
         >
-          <CanvasPreview />
+          <CanvasPreview sessionId={chat.sessionId} />
         </div>
         {store.tabs.map((tab) => {
           if (tab.kind !== "file") return null;

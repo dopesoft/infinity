@@ -3,10 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MonitorPlay, MonitorX, Sparkles, Loader2, AlertTriangle } from "lucide-react";
 import { CanvasPreviewToolbar } from "@/components/canvas/CanvasPreviewToolbar";
+import { CanvasBrowserView } from "@/components/canvas/CanvasBrowser";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
 import { useWebSocket } from "@/lib/ws/provider";
+import { useRuns } from "@/lib/runs/useRuns";
 import { isCodeChangeTool } from "@/lib/canvas/detection";
 import { useProjectContext } from "@/lib/canvas/useCurrentProject";
+import { closeBrowserSession } from "@/lib/api";
 
 /**
  * CanvasPreview - body of the Preview tab.
@@ -30,11 +33,51 @@ import { useProjectContext } from "@/lib/canvas/useCurrentProject";
  */
 const AUTO_REFRESH_DEBOUNCE_MS = 600;
 
-export function CanvasPreview() {
+export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   const store = useCanvasStore();
   const ws = useWebSocket();
   const projectCtx = useProjectContext();
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Live cloud-browser screencast. We reuse THIS tab (Preview) to show the
+  // stream rather than spawning a second tab — when a browser session is
+  // live, the screencast takes over the Preview surface (see early return
+  // below). Frames ride the per-session WS broadcaster, so they keep
+  // flowing across every observe/act/extract and survive refresh.
+  const [browserFrame, setBrowserFrame] = useState<string | null>(null);
+  const [browserUrl, setBrowserUrl] = useState<string>("");
+  const [stoppingBrowser, setStoppingBrowser] = useState(false);
+  const { latest: browserRun } = useRuns({ kind: "browser.session", limit: 5 });
+  const browserRunning = browserRun?.status === "running";
+
+  useEffect(() => {
+    return ws.subscribe((ev) => {
+      if (ev.type !== "browser_frame") return;
+      if (sessionId && ev.session_id && ev.session_id !== sessionId) return;
+      const f = ev.browser_frame;
+      setBrowserFrame(f.frame);
+      if (f.url) setBrowserUrl(f.url);
+      if (f.browser_session_id) store.setBrowserSessionId(f.browser_session_id);
+      if (!store.browserActive) {
+        store.setBrowserActive(true);
+        // Pull focus to Preview so the boss sees the browser drive.
+        if (store.activeTabId !== "preview") store.setActiveTabId("preview");
+      }
+    });
+  }, [ws, store, sessionId]);
+
+  const handleStopBrowser = useCallback(async () => {
+    if (stoppingBrowser) return;
+    setStoppingBrowser(true);
+    try {
+      if (store.browserSessionId) await closeBrowserSession(store.browserSessionId);
+    } finally {
+      setStoppingBrowser(false);
+      store.setBrowserActive(false);
+      setBrowserFrame(null);
+      setBrowserUrl("");
+    }
+  }, [stoppingBrowser, store]);
 
   // The session decides the surface. Sessions WITHOUT a project_path are
   // chat-only - show the "no app yet" empty state and skip the iframe.
@@ -164,6 +207,22 @@ export function CanvasPreview() {
   // of a device preset - you want to see what the app looks like at that
   // size, framed against neutral chrome. Desktop is the default; render
   // it like a real browser window flush against its container.
+  // Live browser session takes over the Preview surface — the boss watches
+  // Jarvis drive here rather than in a separate tab. Stop returns to the
+  // app preview. (All hooks above have already run, so this early return
+  // is safe.)
+  if (store.browserActive) {
+    return (
+      <CanvasBrowserView
+        frame={browserFrame}
+        url={browserUrl}
+        running={browserRunning}
+        stopping={stoppingBrowser}
+        onStop={() => void handleStopBrowser()}
+      />
+    );
+  }
+
   // No project on this session - Canvas is a passive surface. Show a
   // "tell the agent what to build" empty state instead of trying to
   // proxy through the bridge. This is the v1 path for new sessions.

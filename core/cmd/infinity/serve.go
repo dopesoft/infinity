@@ -15,6 +15,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/browser"
 	"github.com/dopesoft/infinity/core/internal/calendar"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
@@ -93,6 +94,7 @@ func serveCmd() *cobra.Command {
 				llmRegistry         *llm.Registry
 				activeBridgeRouter  *bridge.Router
 				activeBridgePrefs   tools.PreferenceFetcher
+				browserReg          *browser.Registry
 				notifySkillPromoted func(name, description string)
 			)
 
@@ -312,6 +314,25 @@ func serveCmd() *cobra.Command {
 						cloudStatusStr = "configured"
 					}
 					fmt.Printf("  bridges: mac=%s cloud=%s\n", macStatusStr, cloudStatusStr)
+
+					// Cloud browser bridge — the observe/act/extract verb set
+					// over a real headless Chromium, with a live screencast
+					// the boss watches in Studio's Preview pane. Generic
+					// building block (Rule #1): no per-site logic, the
+					// "how to browse" recipe is the seeded web-browsing skill.
+					browserURL := strings.TrimSpace(os.Getenv("BROWSER_SIDECAR_URL"))
+					if browserURL == "" && strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != "" {
+						browserURL = "http://browser.railway.internal:8080"
+					}
+					if bc := browser.New(browserURL, os.Getenv("BROWSER_BRIDGE_TOKEN")); bc != nil {
+						browserReg = browser.NewRegistry(bc, runs.New(p))
+						for _, t := range browserReg.AllTools() {
+							registry.Register(t)
+						}
+						fmt.Printf("  browser: configured (%s)\n", browserURL)
+					} else {
+						fmt.Printf("  browser: unset (set BROWSER_SIDECAR_URL to enable)\n")
+					}
 					// mem_substrate - mem_list / mem_act / action_register
 					// / action_list. The generic, bounded read/write
 					// surface over every mem_* table. Combined with
@@ -615,6 +636,10 @@ func serveCmd() *cobra.Command {
 						proactive.NewGitHubGate(earlyTrust),
 						proactive.NewComposioGate(earlyTrust),
 						proactive.NewBridgeGate(earlyTrust),
+						// BrowserGate → browser_*. Normal browsing runs
+						// unattended; only transactional acts (buy/pay/
+						// checkout/delete-account) queue a Trust contract.
+						proactive.NewBrowserGate(earlyTrust),
 						// LoopGate is the safety net: hard-blocks the same
 						// exact tool+input repeating ≥3 times in 60s, and
 						// routes through Trust when a session blows past
@@ -1135,6 +1160,12 @@ func serveCmd() *cobra.Command {
 			if pool != nil {
 				turnStore = memory.NewTurnStore(pool)
 			}
+			// browserClose backs Studio's "Stop" button on the Preview pane (live browser).
+			// nil when the browser backend isn't configured (route 503s).
+			var browserClose func(ctx context.Context, sessionID string) error
+			if browserReg != nil {
+				browserClose = browserReg.Close
+			}
 			srv := server.New(server.Config{
 				Addr:           addr,
 				Version:        version,
@@ -1166,6 +1197,7 @@ func serveCmd() *cobra.Command {
 				Turns:          turnStore,
 				RunsAPI:        runs.NewAPI(pool),
 				CalendarAPI:    calendarAPI,
+				BrowserClose:   browserClose,
 			})
 
 			// Late-bind the Voyager auto-promote → chat-bubble notifier. The
@@ -1173,6 +1205,15 @@ func serveCmd() *cobra.Command {
 			// arrive before this point) but its target needed the server
 			// instance to exist.
 			notifySkillPromoted = srv.BroadcastSkillPromoted
+
+			// Late-bind the browser frame sink now that the server (which
+			// owns the per-session WS broadcaster) exists. Frames stream to
+			// the chat session's Studio tab for the whole browser session.
+			if browserReg != nil {
+				browserReg.SetSink(func(chatID string, f browser.Frame) {
+					srv.EmitBrowserFrame(chatID, f.Seq, f.Frame, f.URL, f.BrowserID)
+				})
+			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()

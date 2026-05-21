@@ -122,6 +122,11 @@ type Config struct {
 	// the routes and Studio renders a "no calendar connected" empty
 	// state in the Upcoming card.
 	CalendarAPI *calendar.API
+	// BrowserClose tears down a live cloud-browser session (Studio's "Stop"
+	// button on the live browser in the Preview pane). Provided as a closure so the server stays
+	// decoupled from the browser package. Nil-safe: the route 503s when
+	// the browser backend isn't configured.
+	BrowserClose func(ctx context.Context, sessionID string) error
 }
 
 type Server struct {
@@ -286,6 +291,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/profile", s.handleProfile)
 	mux.HandleFunc("/api/gym", s.handleGym)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
+	mux.HandleFunc("/api/browser/session/", s.handleBrowserClose)
 	mux.HandleFunc("/api/canvas/fs/ls", s.handleCanvasFSList)
 	mux.HandleFunc("/api/canvas/fs/read", s.handleCanvasFSRead)
 	mux.HandleFunc("/api/canvas/fs/save", s.handleCanvasFSSave)

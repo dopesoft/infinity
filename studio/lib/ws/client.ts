@@ -50,7 +50,20 @@ export type WSEvent =
       text: string;
       finding_kind?: string;
       curiosity_id?: string;
-    };
+    }
+  // browser_frame is one live CDP screencast frame from the cloud browser,
+  // routed to this session's tab so the boss watches Jarvis drive in real
+  // time. The CanvasBrowser component renders frame into an <img>. These
+  // ride the per-session broadcaster (not the turn stream), so they flow
+  // continuously for the whole browser session.
+  | { type: "browser_frame"; session_id: string; browser_frame: WSBrowserFrame };
+
+export type WSBrowserFrame = {
+  seq: number;
+  frame: string; // data:image/jpeg;base64,...
+  url?: string;
+  browser_session_id?: string;
+};
 
 export type WSIntent = {
   token: "silent" | "fast_intervention" | "full_assistance";

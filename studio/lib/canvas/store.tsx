@@ -106,6 +106,17 @@ type CanvasStoreValue = {
   rightMode: "preview" | "file"; // current focus
   setRightMode: (m: "preview" | "file") => void;
 
+  // Live cloud browser. When a screencast frame arrives, browserActive
+  // flips on and the PREVIEW tab takes over to show the live stream (we
+  // reuse Preview rather than spawning a second tab). It flips off when the
+  // session closes / the boss stops it. browserSessionId is the live
+  // session id (for the Stop button + RunIndicator). Transient — a live
+  // session re-announces itself via incoming frames after a refresh.
+  browserActive: boolean;
+  setBrowserActive: (on: boolean) => void;
+  browserSessionId: string;
+  setBrowserSessionId: (id: string) => void;
+
   // Dirty tracking
   dirtyPaths: Set<string>;
   markDirty: (path: string) => void;
@@ -135,6 +146,8 @@ export function CanvasStoreProvider({
   const [bridgeOk, setBridgeOk] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
   const [rightMode, setRightModeInternal] = useState<"preview" | "file">("preview");
+  const [browserActive, setBrowserActive] = useState(false);
+  const [browserSessionId, setBrowserSessionId] = useState("");
 
   // openPaths is the source of truth for non-preview tabs.
   const [openPaths, setOpenPaths] = useState<string[]>([]);
@@ -359,6 +372,10 @@ export function CanvasStoreProvider({
       closeAllFiles,
       rightMode,
       setRightMode,
+      browserActive,
+      setBrowserActive,
+      browserSessionId,
+      setBrowserSessionId,
       dirtyPaths,
       markDirty,
       clearDirty,
@@ -383,6 +400,8 @@ export function CanvasStoreProvider({
       closeAllFiles,
       rightMode,
       setRightMode,
+      browserActive,
+      browserSessionId,
       dirtyPaths,
       markDirty,
       clearDirty,

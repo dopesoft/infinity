@@ -241,6 +241,20 @@ export async function authedFetch(path: string, init: RequestInit = {}): Promise
   return send();
 }
 
+// closeBrowserSession tears down a live cloud-browser session (Studio's
+// "Stop" button on the Browser tab). The agent normally closes its own
+// session via browser_close; this is the boss's manual kill switch.
+export async function closeBrowserSession(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/browser/session/${encodeURIComponent(id)}/close`, {
+      method: "POST",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null> {
   try {
     const res = await authedFetch(path, { signal });

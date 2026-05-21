@@ -41,6 +41,7 @@ const (
 	KindVoyagerExtract  Kind = "voyager.extract"
 	KindGymExtract      Kind = "gym.extract"
 	KindSentinel        Kind = "sentinel"
+	KindBrowserSession  Kind = "browser.session"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

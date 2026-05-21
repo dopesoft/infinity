@@ -85,6 +85,14 @@ func IsComposioTool(name string) bool {
 	return strings.HasPrefix(name, "composio__")
 }
 
+// IsBrowserTool reports whether a tool belongs to the cloud-browser verb
+// set (browser_open, browser_navigate, browser_observe, browser_act,
+// browser_extract, browser_screenshot, browser_close). Used by BrowserGate
+// so it can no-op on every other tool call. All share the `browser_` prefix.
+func IsBrowserTool(name string) bool {
+	return strings.HasPrefix(name, "browser_")
+}
+
 // IsBridgeTool reports whether a tool is one of the generic bridge
 // primitives (fs_*, bash_run, git_*) OR a higher-level bridge-backed
 // orchestration tool like project_create. These all route per-session
