@@ -4,7 +4,7 @@ import { AlertTriangle, Bell } from "lucide-react";
 import { TileCard } from "./Section";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
-import { extractFromSender, parseLabeledBody } from "@/lib/dashboard/parseBody";
+import { parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type { SurfaceItem } from "@/lib/dashboard/types";
 
 /* SurfaceRow - a single row of the generic surface contract
@@ -27,11 +27,12 @@ export function SurfaceRow({
   item: SurfaceItem;
   onClick: () => void;
 }) {
-  // Same icon-tile grammar as FollowUpRow / ApprovalRow so the whole
-  // "Surfaced by Jarvis" card reads as one calm, consistent list:
-  //   leading tile (tinted by importance) · title + time · sender/why subtext
-  // Importance is signalled by the tile tint plus a trailing alert glyph
-  // for the top tier - NOT a colored left-edge bar. Tapping opens ObjectViewer.
+  // A surfaced item is something Jarvis raised - it has no "sender". The two
+  // lines that matter are WHAT it is (title) and WHY it was raised
+  // (importanceReason). Same icon-tile grammar as the other dashboard rows:
+  //   leading tile (tinted by importance) · title + time · the "why" subtext
+  // Importance shows through the tile tint + a trailing alert glyph for the
+  // top tier - never a colored left-edge bar. Tapping opens ObjectViewer.
   const imp = typeof item.importance === "number" ? item.importance : null;
   const high = imp != null && imp >= 80;
   const mid = imp != null && imp >= 50 && imp < 80;
@@ -41,25 +42,15 @@ export function SurfaceRow({
       ? "border-info/40 bg-info/15 text-info"
       : "border-border bg-muted text-muted-foreground";
 
-  // Sender comes from parsing the body's "From:" line. If parse misses,
-  // fall back to the source label ("gmail-triage" → "gmail") so the row
-  // still has a stable lead. Never show the noisy pipe-subtitle.
+  // The "why": prefer the assistant-written reason, then an explicit
+  // subtitle, then a labelled body field. Never the raw multi-line body.
   const parsed = parseLabeledBody(item.body);
-  const sender =
-    extractFromSender(parsed) ??
-    (item.source ? humaniseSource(item.source) : item.kind || "item");
-
-  // Preview line. Prefer the assistant-written "why" (importanceReason).
-  // Fall back to the first labelled body field's value, then to nothing.
-  // Never the raw multi-line body dump.
-  const preview =
+  const why =
     item.importanceReason?.trim() ||
+    item.subtitle?.trim() ||
     parsed.find((f) => f.label.toLowerCase() === "why it matters")?.value ||
     parsed[0]?.value ||
     "";
-  // One muted subtext line: sender, then the "why" when present. Keeps the
-  // row to two lines so it stays slim like the rest of the dashboard rows.
-  const subtext = preview ? `${sender} — ${preview}` : sender;
 
   return (
     <TileCard onClick={onClick} className="gap-3 p-3">
@@ -83,20 +74,15 @@ export function SurfaceRow({
             {relTime(item.createdAt)}
           </span>
         </div>
-        <p className="mt-0.5 line-clamp-1 break-words text-[12px] text-muted-foreground">
-          {subtext}
-        </p>
+        {why ? (
+          <p className="mt-0.5 line-clamp-1 break-words text-[12px] text-muted-foreground">
+            {why}
+          </p>
+        ) : null}
       </div>
       {high ? (
         <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden />
       ) : null}
     </TileCard>
   );
-}
-
-// gmail-triage → "gmail". slack-triage → "slack". Falls back to the
-// source verbatim when no hyphen split is meaningful.
-function humaniseSource(s: string): string {
-  const head = s.split(/[-_]/)[0];
-  return head.length > 0 ? head : s;
 }
