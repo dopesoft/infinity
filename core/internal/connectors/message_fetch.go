@@ -55,7 +55,7 @@ var sourceFetchSpec = map[string]fetchSpec{
 		toolkit: "gmail",
 		verb:    "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
 		idArg:   "message_id",
-		extra:   map[string]any{"format": "full", "user_id": "me"},
+		extra:   map[string]any{"format": "full"},
 	},
 }
 
@@ -91,14 +91,32 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 		return "", "", nil
 	}
 
-	args := map[string]any{spec.idArg: messageID}
+	// Surfaced external ids are composite for global uniqueness, e.g.
+	// "gmail:ca_lBW_QmdjwQhz:19e479e3b0de7403". Extract the real provider
+	// message id (Composio rejects the composite as "Invalid id value") and
+	// the embedded connected_account_id, which is authoritative for which
+	// account the message lives in.
+	realID, embeddedAcct := normalizeGmailID(messageID)
+	if realID == "" {
+		return "", "", nil
+	}
+	if embeddedAcct != "" {
+		accountHint = embeddedAcct
+	}
+
+	args := map[string]any{spec.idArg: realID}
 	for k, v := range spec.extra {
 		args[k] = v
 	}
 
+	// Composio rejects with code 1811 unless BOTH connected_account_id AND
+	// the account's entity (user_id) ride on the request (same constraint
+	// the calendar provider handles). Resolve both from the cache.
+	caID, entity := f.resolveAccount(spec.toolkit, accountHint)
 	resp, err := f.exec.Execute(ctx, ExecuteRequest{
 		Slug:               spec.verb,
-		ConnectedAccountID: f.resolveAccount(spec.toolkit, accountHint),
+		ConnectedAccountID: caID,
+		UserID:             entity,
 		Arguments:          args,
 	})
 	if err != nil {
@@ -116,40 +134,72 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 	return html, text, nil
 }
 
-// resolveAccount turns an account hint into a connected_account_id. The hint
-// may already BE a connected_account_id (ca_...), an email/identity, or an
-// alias. When it's an email/alias we walk the cache's accounts for the
-// toolkit; when there's exactly one account for the toolkit we use it; when
-// nothing resolves we return the hint verbatim (Composio auto-resolves a
-// single-account toolkit server-side anyway).
-func (f *MessageFetcher) resolveAccount(toolkit, hint string) string {
+// resolveAccount turns an account hint into a (connected_account_id, entity)
+// pair. The hint may already BE a connected_account_id (ca_...), an
+// email/identity, or an alias. We match it to a cached account to recover
+// the entity (Composio user_id), which the execute API requires alongside
+// the account id. Falls back to the hint verbatim with an empty entity when
+// nothing resolves (degrades to the 1811 error → empty body → preview).
+func (f *MessageFetcher) resolveAccount(toolkit, hint string) (caID, entity string) {
 	hint = strings.TrimSpace(hint)
-	if strings.HasPrefix(hint, "ca_") {
-		return hint
-	}
+	caID = hint
 	if f.cache == nil {
-		return hint
+		return caID, ""
 	}
 	accounts := f.cache.AccountsByToolkit()[strings.ToLower(toolkit)]
-	if len(accounts) == 0 {
-		return hint
-	}
-	if hint != "" {
-		needle := strings.ToLower(hint)
-		for _, a := range accounts {
-			if a == nil {
-				continue
+	// When the hint isn't already a ca_ id, match it (email / identity /
+	// alias) to one of the toolkit's accounts; or use the sole account.
+	if !strings.HasPrefix(hint, "ca_") {
+		var match *Account
+		if hint != "" {
+			needle := strings.ToLower(hint)
+			for _, a := range accounts {
+				if a == nil {
+					continue
+				}
+				if strings.EqualFold(a.IdentityHint, hint) || strings.EqualFold(a.Alias, hint) ||
+					(needle != "" && strings.Contains(strings.ToLower(a.IdentityHint), needle)) {
+					match = a
+					break
+				}
 			}
-			if strings.EqualFold(a.IdentityHint, hint) || strings.EqualFold(a.Alias, hint) ||
-				strings.Contains(strings.ToLower(a.IdentityHint), needle) {
-				return a.ID
+		}
+		if match == nil && len(accounts) == 1 {
+			match = accounts[0]
+		}
+		if match != nil {
+			caID = match.ID
+		}
+	}
+	// Recover the entity (user_id) for the chosen account id by scanning all
+	// toolkits (mirrors serve.go's userIDFor used by the calendar provider).
+	for _, accs := range f.cache.AccountsByToolkit() {
+		for _, a := range accs {
+			if a != nil && a.ID == caID {
+				return caID, a.UserID
 			}
 		}
 	}
-	if len(accounts) == 1 && accounts[0] != nil {
-		return accounts[0].ID
+	return caID, ""
+}
+
+// normalizeGmailID unpacks a (possibly composite) external id into the raw
+// Gmail message id and any embedded connected_account_id. Surfaced ids look
+// like "gmail:ca_xxx:19e479e3b0de7403" (provider:account:messageId); raw ids
+// like "19e479e3b0de7403" pass through unchanged.
+func normalizeGmailID(raw string) (msgID, account string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !strings.Contains(raw, ":") {
+		return raw, ""
 	}
-	return hint
+	parts := strings.Split(raw, ":")
+	msgID = strings.TrimSpace(parts[len(parts)-1])
+	for _, p := range parts {
+		if strings.HasPrefix(p, "ca_") {
+			account = p
+		}
+	}
+	return msgID, account
 }
 
 // extractMessageBodies walks a Gmail message resource (however Composio

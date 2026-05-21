@@ -1351,10 +1351,17 @@ function FollowUpBody({ f }: { f: FollowUp }) {
         </span>
       </ModalChips>
 
-      {/* From / Subject - labeled rows with hairline dividers */}
+      {/* From / Subject - labeled rows, vertically centered so the label
+          reads on the same line as its value. */}
       <div className="mt-3 divide-y divide-border rounded-lg border border-border bg-muted/20 px-3">
-        <ModalField label="From">{f.from}</ModalField>
-        {f.subject ? <ModalField label="Subject">{f.subject}</ModalField> : null}
+        <ModalField label="From" align="center">
+          <span className="font-medium text-foreground">{f.from}</span>
+        </ModalField>
+        {f.subject ? (
+          <ModalField label="Subject" align="center">
+            {f.subject}
+          </ModalField>
+        ) : null}
       </div>
 
       {/* Context (summary) - ABOVE the email, under From/Subject. Stays
