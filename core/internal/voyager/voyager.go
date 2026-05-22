@@ -312,12 +312,30 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 		}
 	}
 
-	_, err := m.pool.Exec(ctx, `
+	if _, err := m.pool.Exec(ctx, `
 		UPDATE mem_skill_proposals
 		SET status = $2, decided_at = NOW()
 		WHERE id = $1
-	`, id, decision)
-	return err
+	`, id, decision); err != nil {
+		return err
+	}
+
+	// Promoting makes the skill active, so any *other* pending create-new
+	// candidates of the same name (duplicate proposals from earlier sessions)
+	// are now moot — retire them so the Candidate panel doesn't keep showing
+	// stale siblings. Patch/improvement candidates (parent_skill set) are left
+	// alone; they target the skill we just promoted, not a fresh creation.
+	if decision == "promoted" {
+		if _, err := m.pool.Exec(ctx, `
+			UPDATE mem_skill_proposals
+			   SET status = 'superseded', decided_at = NOW()
+			 WHERE id <> $1 AND status = 'candidate' AND parent_skill IS NULL
+			   AND name = (SELECT name FROM mem_skill_proposals WHERE id = $1)
+		`, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) writeSkillToDisk(name, skillMD string) error {

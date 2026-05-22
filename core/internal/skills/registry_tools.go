@@ -412,6 +412,7 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 		}
 		out, _ := json.Marshal(map[string]any{
 			"status":            "live",
+			"active":            true,
 			"name":              name,
 			"version":           sk.Version,
 			"importance":        importance,
@@ -431,12 +432,13 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 	}
 	out, _ := json.Marshal(map[string]any{
 		"status":            "pending",
+		"active":            false,
 		"id":                id,
 		"name":              name,
 		"risk_level":        string(risk),
 		"importance":        importance,
 		"importance_reason": importanceReason,
-		"message":           fmt.Sprintf("Skill %q filed as a candidate (risk=%s). The boss promotes it in the Skills tab.", name, risk),
+		"message":           fmt.Sprintf("Skill %q is NOT installed yet — risk=%s means it can't auto-activate. It's filed as a candidate awaiting the boss's approval; tell them to Promote it in the Skills tab (Candidate filter). Do not describe it as installed or live.", name, risk),
 	})
 	return string(out), nil
 }

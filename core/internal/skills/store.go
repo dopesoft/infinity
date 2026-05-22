@@ -91,6 +91,23 @@ func (s *Store) UpsertSkill(ctx context.Context, sk *Skill) error {
 	if err != nil {
 		return fmt.Errorf("upsert mem_skill_active: %w", err)
 	}
+
+	// When a skill becomes active, retire any pending "create this skill"
+	// candidates of the same name so the Candidate panel self-cleans — this is
+	// the only thing that reconciles mem_skill_proposals against an activation
+	// that didn't go through the Promote button (chat install via Registry.Put,
+	// boot-time Reload of an already-shipped skill, etc). Patch/improvement
+	// candidates (parent_skill set: GEPA frontier, merged drafts, optimize)
+	// target an already-active skill and stay pending by design.
+	if sk.Status == StatusActive {
+		if _, err = tx.Exec(ctx, `
+			UPDATE mem_skill_proposals
+			   SET status = 'superseded', decided_at = NOW()
+			 WHERE name = $1 AND status = 'candidate' AND parent_skill IS NULL
+		`, sk.Name); err != nil {
+			return fmt.Errorf("supersede candidate proposals for %q: %w", sk.Name, err)
+		}
+	}
 	return tx.Commit(ctx)
 }
 
