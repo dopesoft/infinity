@@ -5,6 +5,7 @@ import { ArrowDown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
+import { AgentTeamCard } from "@/components/AgentTeamCard";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { SkillProposalCard } from "@/components/SkillProposalCard";
 import { DashboardContextCard } from "@/components/DashboardContextCard";
@@ -95,7 +96,13 @@ export function ConversationStream({
               // render as a rich proposal card so "new skill proposed" is
               // glanceable. Everything else falls back to the generic
               // tool-call card.
-              SKILL_TOOL_NAMES.has(m.toolCall?.name ?? "") ? (
+              m.toolCall?.name === "agent_team_start" ? (
+                <div className="flex justify-start">
+                  <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+                    <AgentTeamCard message={m} />
+                  </div>
+                </div>
+              ) : SKILL_TOOL_NAMES.has(m.toolCall?.name ?? "") ? (
                 <div className="flex justify-start">
                   <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                     <SkillProposalCard message={m} />

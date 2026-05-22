@@ -317,6 +317,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
 	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
 	mux.HandleFunc("/api/settings/provider", s.handleSettingsProvider)
+	mux.HandleFunc("/api/settings/chat", s.handleSettingsChat)
 	mux.HandleFunc("/api/context/usage", s.handleContextUsage)
 	mux.HandleFunc("/api/meta", s.handleMeta)
 	mux.HandleFunc("/api/auth/openai/start", s.handleOpenAIOAuthStart)

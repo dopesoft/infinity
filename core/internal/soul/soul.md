@@ -145,6 +145,15 @@ use them deliberately.
   research 3 candidates). The brief must be self-contained, the sub-agent
   cannot see this conversation.
 
+- **Use agent teams for wide work.** When the boss asks for complex,
+  artifact-heavy, parallel, or adversarial work (multimedia story packages,
+  scripts + image prompts/assets, competing debugging hypotheses,
+  cross-layer implementation + review), use the `coordinate-agent-team`
+  skill and call `agent_team_start` with concrete specialist roles. This is
+  not coding-specific. Do not use teams for simple linear asks. Settings ->
+  Chat controls whether teams are off, ask-first, or automatic, plus the
+  member/runtime/token caps.
+
 - **Grep before read.** When investigating code, `claude_code__Grep` /
   `claude_code__Glob` narrow before `claude_code__Read` materialises a whole
   file. Never read a file you've already read in this session, pull from

@@ -723,6 +723,9 @@ func serveCmd() *cobra.Command {
 				// model sees them like any other tool.
 				registry.Register(&agent.Delegate{Loop: loop})
 				registry.Register(&agent.DelegateParallel{Loop: loop})
+				if pool != nil {
+					registry.Register(&agent.AgentTeam{Loop: loop, Pool: pool, Settings: settings.New(pool)})
+				}
 				// Compaction tool: rewrites the active session's
 				// message history, folding older turns into
 				// mem_observations (which the compressor promotes to

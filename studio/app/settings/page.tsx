@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LayoutPanelLeft,
   Loader2,
+  MessageSquare,
   Plug,
   PlugZap,
   RefreshCw,
@@ -41,10 +42,13 @@ import {
   disconnectOpenAIOAuth,
   exchangeOpenAIOAuth,
   fetchCoreStatus,
+  fetchChatSettings,
   fetchMCP,
   fetchOpenAIOAuthStatus,
   fetchTools,
   startOpenAIOAuth,
+  saveChatSettings,
+  type ChatSettings,
   type CoreStatus,
   type MCPStatus,
   type OpenAIOAuthStartResponse,
@@ -61,6 +65,7 @@ import {
 
 type SectionId =
   | "general"
+  | "chat"
   | "dashboard"
   | "notifications"
   | "tools"
@@ -77,6 +82,7 @@ type SectionMeta = {
 
 const SECTIONS: SectionMeta[] = [
   { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
+  { id: "chat", label: "Chat", description: "Live chat behavior, agent teams, budgets", icon: MessageSquare },
   { id: "trust", label: "Trust", description: "Approve high-risk actions Jarvis is asking for + audit what you've already trusted", icon: ShieldCheck },
   { id: "dashboard", label: "Dashboard", description: "Pick which Dashboard sections show on /", icon: LayoutDashboard },
   { id: "notifications", label: "Notifications", description: "iOS-style push notifications on iPhone + Mac", icon: Bell },
@@ -286,6 +292,8 @@ function SectionContent({
   switch (active) {
     case "general":
       return <GeneralSection status={status} />;
+    case "chat":
+      return <ChatSettingsSection />;
     case "trust":
       return <TrustSection />;
     case "dashboard":
@@ -319,6 +327,234 @@ function SectionHeader({ title, description }: { title: string; description: str
       <h2 className="text-base font-semibold tracking-tight">{title}</h2>
       <p className="text-xs text-muted-foreground">{description}</p>
     </div>
+  );
+}
+
+const DEFAULT_CHAT_SETTINGS: ChatSettings = {
+  agent_teams: "auto",
+  team_aggressiveness: "full_tilt",
+  show_team_activity: "detailed",
+  default_team_card_state: "expanded",
+  max_agents_per_team: 6,
+  max_parallel_teams: 2,
+  max_runtime_seconds: 600,
+  max_team_tokens: 120000,
+  max_tool_calls: 120,
+  allow_artifact_agents: true,
+  allow_code_agents: true,
+  allow_connector_agents: true,
+  require_action_approval: true,
+  model_policy: "same_as_chat",
+  show_token_usage: true,
+  show_worker_summaries: true,
+  show_artifacts: true,
+};
+
+function ChatSettingsSection() {
+  const [draft, setDraft] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchChatSettings(ac.signal).then((s) => {
+      if (s) setDraft(s);
+      setLoading(false);
+    });
+    return () => ac.abort();
+  }, []);
+
+  function patch(next: Partial<ChatSettings>) {
+    setDraft((cur) => ({ ...cur, ...next }));
+    setSavedAt(null);
+  }
+
+  async function save() {
+    setSaving(true);
+    setErr(null);
+    const res = await saveChatSettings(draft);
+    setSaving(false);
+    if (!res) {
+      setErr("Chat settings save failed.");
+      return;
+    }
+    setDraft(res);
+    setSavedAt(Date.now());
+  }
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader
+        title="Chat"
+        description="Controls for the /live chat experience. Agent teams use these caps and display preferences when Jarvis splits complex work into specialist agents."
+      />
+
+      <div className="space-y-3 rounded-md border bg-background p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold tracking-tight">Agent teams</h3>
+          <Badge variant="secondary" className="font-mono text-[10px]">
+            {loading ? "loading" : draft.team_aggressiveness.replace("_", " ")}
+          </Badge>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FieldLabel label="Agent teams">
+            <NativeSelect
+              value={draft.agent_teams}
+              onChange={(v) => patch({ agent_teams: v as ChatSettings["agent_teams"] })}
+            >
+              <option value="off">Off</option>
+              <option value="ask">Ask first</option>
+              <option value="auto">Auto</option>
+            </NativeSelect>
+          </FieldLabel>
+          <FieldLabel label="Aggressiveness">
+            <NativeSelect
+              value={draft.team_aggressiveness}
+              onChange={(v) => patch({ team_aggressiveness: v as ChatSettings["team_aggressiveness"] })}
+            >
+              <option value="conservative">Conservative</option>
+              <option value="balanced">Balanced</option>
+              <option value="full_tilt">Full tilt</option>
+            </NativeSelect>
+          </FieldLabel>
+          <NumberField
+            label="Max agents"
+            value={draft.max_agents_per_team}
+            min={1}
+            max={12}
+            onChange={(v) => patch({ max_agents_per_team: v })}
+          />
+          <NumberField
+            label="Max parallel teams"
+            value={draft.max_parallel_teams}
+            min={1}
+            max={6}
+            onChange={(v) => patch({ max_parallel_teams: v })}
+          />
+          <NumberField
+            label="Runtime seconds"
+            value={draft.max_runtime_seconds}
+            min={60}
+            max={3600}
+            onChange={(v) => patch({ max_runtime_seconds: v })}
+          />
+          <NumberField
+            label="Team token budget"
+            value={draft.max_team_tokens}
+            min={1000}
+            max={1000000}
+            onChange={(v) => patch({ max_team_tokens: v })}
+          />
+          <NumberField
+            label="Team tool-call budget"
+            value={draft.max_tool_calls}
+            min={1}
+            max={500}
+            onChange={(v) => patch({ max_tool_calls: v })}
+          />
+          <FieldLabel label="Worker model policy">
+            <NativeSelect value={draft.model_policy} onChange={(v) => patch({ model_policy: v })}>
+              <option value="same_as_chat">Same as chat</option>
+            </NativeSelect>
+          </FieldLabel>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <ToggleRow label="Allow artifact agents" checked={draft.allow_artifact_agents} onChange={(v) => patch({ allow_artifact_agents: v })} />
+          <ToggleRow label="Allow code-writing agents" checked={draft.allow_code_agents} onChange={(v) => patch({ allow_code_agents: v })} />
+          <ToggleRow label="Allow connector/action agents" checked={draft.allow_connector_agents} onChange={(v) => patch({ allow_connector_agents: v })} />
+          <ToggleRow label="Require approval for external/destructive actions" checked={draft.require_action_approval} onChange={(v) => patch({ require_action_approval: v })} />
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-md border bg-background p-3">
+        <h3 className="text-sm font-semibold tracking-tight">Chat visibility</h3>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FieldLabel label="Team activity">
+            <NativeSelect
+              value={draft.show_team_activity}
+              onChange={(v) => patch({ show_team_activity: v as ChatSettings["show_team_activity"] })}
+            >
+              <option value="off">Off</option>
+              <option value="compact">Compact</option>
+              <option value="detailed">Detailed</option>
+            </NativeSelect>
+          </FieldLabel>
+          <FieldLabel label="Default team card">
+            <NativeSelect
+              value={draft.default_team_card_state}
+              onChange={(v) => patch({ default_team_card_state: v as ChatSettings["default_team_card_state"] })}
+            >
+              <option value="collapsed">Collapsed</option>
+              <option value="expanded">Expanded</option>
+            </NativeSelect>
+          </FieldLabel>
+          <ToggleRow label="Show token usage" checked={draft.show_token_usage} onChange={(v) => patch({ show_token_usage: v })} />
+          <ToggleRow label="Show worker summaries" checked={draft.show_worker_summaries} onChange={(v) => patch({ show_worker_summaries: v })} />
+          <ToggleRow label="Show artifacts" checked={draft.show_artifacts} onChange={(v) => patch({ show_artifacts: v })} />
+        </div>
+      </div>
+
+      {err && <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>}
+      <div className="flex items-center justify-end gap-2">
+        {savedAt && <span className="text-xs text-muted-foreground">Saved</span>}
+        <Button onClick={save} disabled={saving || loading}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (next: number) => void;
+}) {
+  return (
+    <FieldLabel label={label}>
+      <Input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value || min))}
+      />
+    </FieldLabel>
+  );
+}
+
+function ToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+      <span className="min-w-0">{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="size-5 shrink-0 accent-foreground"
+      />
+    </label>
   );
 }
 
@@ -1087,4 +1323,3 @@ function SearchBar({
     </div>
   );
 }
-

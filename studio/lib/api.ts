@@ -21,6 +21,26 @@ export type MCPStatus = {
   tested: string;
 };
 
+export type ChatSettings = {
+  agent_teams: "off" | "ask" | "auto";
+  team_aggressiveness: "conservative" | "balanced" | "full_tilt";
+  show_team_activity: "off" | "compact" | "detailed";
+  default_team_card_state: "collapsed" | "expanded";
+  max_agents_per_team: number;
+  max_parallel_teams: number;
+  max_runtime_seconds: number;
+  max_team_tokens: number;
+  max_tool_calls: number;
+  allow_artifact_agents: boolean;
+  allow_code_agents: boolean;
+  allow_connector_agents: boolean;
+  require_action_approval: boolean;
+  model_policy: "same_as_chat" | string;
+  show_token_usage: boolean;
+  show_worker_summaries: boolean;
+  show_artifacts: boolean;
+};
+
 export type SessionDTO = {
   id: string;
   name?: string;
@@ -296,6 +316,23 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T | null>
 
 export const fetchCoreStatus = (signal?: AbortSignal) =>
   getJSON<CoreStatus>("/api/status", signal);
+
+export const fetchChatSettings = (signal?: AbortSignal) =>
+  getJSON<ChatSettings>("/api/settings/chat", signal);
+
+export async function saveChatSettings(settings: ChatSettings): Promise<ChatSettings | null> {
+  try {
+    const res = await authedFetch("/api/settings/chat", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ChatSettings;
+  } catch {
+    return null;
+  }
+}
 
 // Server-tracked long-action progress. Every long server action (cron,
 // skill, heartbeat, voyager.optimize, gym.extract, sentinel, …) books

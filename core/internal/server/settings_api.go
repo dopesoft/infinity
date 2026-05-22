@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/dopesoft/infinity/core/internal/settings"
 )
 
 // settingsModelResponse is the on-the-wire shape for GET/PUT
@@ -15,10 +17,10 @@ import (
 // `source` field tells Studio whether the user has explicitly chosen
 // ("user") or is riding the boot default ("default") - drives chip UX.
 type settingsModelResponse struct {
-	Model        string   `json:"model"`
-	DefaultModel string   `json:"default_model"`
-	Provider     string   `json:"provider"`
-	Source       string   `json:"source"`
+	Model        string `json:"model"`
+	DefaultModel string `json:"default_model"`
+	Provider     string `json:"provider"`
+	Source       string `json:"source"`
 	// AvailableProviders is the set of provider ids the runtime knows
 	// how to swap to (creds present + registry-registered). Studio uses
 	// it to gray out vendor picker rows whose credentials aren't wired.
@@ -152,6 +154,31 @@ func (s *Server) handleSettingsProvider(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeJSON(w, http.StatusOK, s.buildSettingsModelResponse(r.Context()))
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleSettingsChat(w http.ResponseWriter, r *http.Request) {
+	if s.settings == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "settings store not configured"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.settings.GetChatSettings(r.Context()))
+	case http.MethodPut, http.MethodPost:
+		var body settings.ChatSettings
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if err := s.settings.SetChatSettings(r.Context(), body); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.settings.GetChatSettings(r.Context()))
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
