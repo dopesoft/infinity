@@ -117,7 +117,7 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 		if err := rows.Scan(&id, &name, &status, &lastRun); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Cron job %q is failing. Fix the routing?", name)
+		question := fmt.Sprintf("Cron job %q is failing. Fix it?", name)
 		rationale := truncate(status, 600)
 		if lastRun != nil {
 			rationale = fmt.Sprintf("Last fired %s. %s",
