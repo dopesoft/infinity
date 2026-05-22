@@ -362,8 +362,18 @@ func serveCmd() *cobra.Command {
 
 					switch {
 					case camoMac != nil && camoCloud != nil:
-						browserBackend = browser.NewRoutingBackend(camoMac, camoCloud)
-						fmt.Printf("  browser: camoufox routed (mac=%s + cloud=%s, mac-first)\n", camoMacURL, camoCloudURL)
+						// Browser follows the session's bridge selector (mac/cloud
+						// pin honoured, auto = Mac-first by health). Adapt the
+						// bridge PreferenceFetcher to a plain-string func so the
+						// browser package stays decoupled from the bridge package.
+						browserPref := func(ctx context.Context, chatID string) string {
+							if activeBridgePrefs == nil {
+								return ""
+							}
+							return string(activeBridgePrefs(ctx, chatID))
+						}
+						browserBackend = browser.NewRoutingBackend(camoMac, camoCloud, browserPref)
+						fmt.Printf("  browser: camoufox routed (mac=%s + cloud=%s, follows bridge selector; auto=mac-first)\n", camoMacURL, camoCloudURL)
 					case camoMac != nil:
 						browserBackend = camoMac
 						fmt.Printf("  browser: camoufox mac (%s)\n", camoMacURL)

@@ -1,28 +1,44 @@
 package browser
 
 // RoutingBackend composes a Mac (home, residential-IP) and a Cloud (Railway)
-// browser backend and routes each session to one of them. It prefers the Mac
-// whenever that instance is reachable: anti-detect spoofs the fingerprint but
-// NOT the IP, and a residential IP is what actually defeats DataDome/Cloudflare
-// IP reputation — a datacenter IP undercuts the whole point. Cloud is the
-// fallback when the home box is offline.
+// browser backend and routes each NEW session to one of them.
 //
-// Health is scoped to the browser backends themselves (their own /health), not
-// to the coding/fs bridge — so browsing doesn't go dark just because Claude Code
-// on the Mac is down, and vice versa. Once a session is created on a backend,
-// every later call for that session id sticks to the same backend (the tab
-// lives there).
+// It honours the session's bridge selector (the same mac/cloud/auto preference
+// that routes coding + files):
+//
+//   - "mac"   → the Mac residential browser (falls back to Cloud if Mac errors)
+//   - "cloud" → the Railway browser          (falls back to Mac if Cloud errors)
+//   - "auto"/"" → Mac-first by health, Cloud fallback. Mac-first because
+//     anti-detect spoofs the fingerprint but NOT the IP, and a residential IP is
+//     what actually defeats DataDome/Cloudflare IP reputation — a datacenter IP
+//     undercuts the whole point.
+//
+// The health check is scoped to the browser backends themselves (their own
+// /health), NOT to the coding/fs bridge — so browsing doesn't go dark just
+// because Claude Code on the Mac is down, and a pinned side that's unreachable
+// still falls back rather than hard-failing. Once a session is created on a
+// backend, every later call for that session id sticks to the same backend (the
+// tab lives there).
 
 import (
 	"context"
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
+
+// PrefFunc returns the bridge preference ("mac" | "cloud" | "auto" | "") for a
+// chat session. It's a plain-string mirror of bridge.Preference so the browser
+// package stays decoupled from the bridge package (the same trick bridge's own
+// PrefFetcher uses to dodge an import cycle). A nil PrefFunc, or "", means auto.
+type PrefFunc func(ctx context.Context, chatID string) string
 
 type RoutingBackend struct {
 	mac   Backend
 	cloud Backend
+	pref  PrefFunc // session bridge preference; nil => always auto
 
 	healthTTL time.Duration
 
@@ -34,11 +50,13 @@ type RoutingBackend struct {
 
 // NewRoutingBackend returns a router over the two backends. Either may be nil
 // (e.g. only Cloud configured); a router with both nil should not be built —
-// callers use a single backend directly in that case.
-func NewRoutingBackend(mac, cloud Backend) *RoutingBackend {
+// callers use a single backend directly in that case. pref supplies the
+// per-session mac/cloud/auto selector; pass nil for always-auto.
+func NewRoutingBackend(mac, cloud Backend, pref PrefFunc) *RoutingBackend {
 	return &RoutingBackend{
 		mac:       mac,
 		cloud:     cloud,
+		pref:      pref,
 		healthTTL: 5 * time.Second,
 		owner:     make(map[string]Backend),
 	}
@@ -67,15 +85,40 @@ func (r *RoutingBackend) macHealthy(ctx context.Context) bool {
 	return up
 }
 
-// pick chooses the backend for a NEW session: Mac when reachable, else Cloud.
+// prefFor reads the session's bridge selector from ctx. "" / nil PrefFunc =>
+// auto.
+func (r *RoutingBackend) prefFor(ctx context.Context) string {
+	if r.pref == nil {
+		return "auto"
+	}
+	return r.pref(ctx, tools.SessionIDFromContext(ctx))
+}
+
+// pick chooses the backend for a NEW session, honouring the session's bridge
+// selector. For an explicit mac/cloud pin we return the pinned backend without
+// a health probe and let CreateSession's fallback handle it if that side is
+// down; for auto we prefer Mac when its /health is reachable.
 func (r *RoutingBackend) pick(ctx context.Context) Backend {
-	if r.mac != nil && r.macHealthy(ctx) {
+	switch r.prefFor(ctx) {
+	case "cloud":
+		if r.cloud != nil {
+			return r.cloud
+		}
 		return r.mac
-	}
-	if r.cloud != nil {
+	case "mac":
+		if r.mac != nil {
+			return r.mac
+		}
 		return r.cloud
+	default: // "auto" / "": Mac-first by health, Cloud fallback.
+		if r.mac != nil && r.macHealthy(ctx) {
+			return r.mac
+		}
+		if r.cloud != nil {
+			return r.cloud
+		}
+		return r.mac // last resort: let the error surface from the call
 	}
-	return r.mac // last resort: let the error surface from the call
 }
 
 func (r *RoutingBackend) other(b Backend) Backend {
