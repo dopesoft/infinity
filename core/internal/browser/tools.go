@@ -99,7 +99,7 @@ func (t *NavigateTool) Execute(ctx context.Context, input map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	res, err := t.Reg.client.Navigate(ctx, id, url)
+	res, err := t.Reg.backend.Navigate(ctx, id, url)
 	if err != nil {
 		return "", err
 	}
@@ -133,7 +133,7 @@ func (t *ObserveTool) Execute(ctx context.Context, input map[string]any) (string
 	if err != nil {
 		return "", err
 	}
-	res, err := t.Reg.client.Observe(ctx, id)
+	res, err := t.Reg.backend.Observe(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -227,7 +227,7 @@ func (t *ActTool) Execute(ctx context.Context, input map[string]any) (string, er
 		return "", errors.New("action is required (click|type|select|press|scroll|clear)")
 	}
 	value, _ := input["value"].(string)
-	res, err := t.Reg.client.Act(ctx, id, ActRequest{Index: idx, Action: action, Value: value})
+	res, err := t.Reg.backend.Act(ctx, id, ActRequest{Index: idx, Action: action, Value: value})
 	if err != nil {
 		return "", err
 	}
@@ -268,7 +268,7 @@ func (t *ExtractTool) Execute(ctx context.Context, input map[string]any) (string
 	if err != nil {
 		return "", err
 	}
-	res, err := t.Reg.client.Extract(ctx, id, "markdown")
+	res, err := t.Reg.backend.Extract(ctx, id, "markdown")
 	if err != nil {
 		return "", err
 	}

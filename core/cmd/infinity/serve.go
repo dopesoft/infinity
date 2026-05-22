@@ -329,23 +329,65 @@ func serveCmd() *cobra.Command {
 					}
 					fmt.Printf("  bridges: mac=%s cloud=%s\n", macStatusStr, cloudStatusStr)
 
-					// Cloud browser bridge — the observe/act/extract verb set
-					// over a real headless Chromium, with a live screencast
-					// the boss watches in Studio's Preview pane. Generic
-					// building block (Rule #1): no per-site logic, the
-					// "how to browse" recipe is the seeded web-browsing skill.
-					browserURL := strings.TrimSpace(os.Getenv("BROWSER_SIDECAR_URL"))
-					if browserURL == "" && strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != "" {
-						browserURL = "http://browser.railway.internal:8080"
+					// Browser bridge — the observe/act/extract verb set with a
+					// live screencast the boss watches in Studio's Preview pane.
+					// Generic building block (Rule #1): no per-site logic, the
+					// "how to browse" recipe is the seeded browser skill. The
+					// engine is chosen by env:
+					//   - Camoufox anti-detect server (camofox-browser) on the
+					//     home Mac (residential IP — preferred) and/or the Cloud
+					//     (Railway). Mac-first because anti-detect spoofs the
+					//     fingerprint but not the IP, and a residential IP is what
+					//     actually beats Cloudflare/DataDome.
+					//   - the legacy chromedp/Chromium sidecar (docker/browser) as
+					//     fallback when no Camoufox URL is configured.
+					var browserBackend browser.Backend
+					camoKey := os.Getenv("CAMOFOX_API_KEY")
+					camoUser := os.Getenv("CAMOFOX_USER_ID")
+					cfID := os.Getenv("CF_ACCESS_CLIENT_ID")
+					cfSecret := os.Getenv("CF_ACCESS_CLIENT_SECRET")
+					camoCloudURL := strings.TrimSpace(os.Getenv("CAMOFOX_URL"))
+					if camoCloudURL == "" && camoKey != "" && strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != "" {
+						camoCloudURL = "http://camofox.railway.internal:9377"
 					}
-					if bc := browser.New(browserURL, os.Getenv("BROWSER_BRIDGE_TOKEN")); bc != nil {
-						browserReg = browser.NewRegistry(bc, runs.New(p))
+					camoMacURL := strings.TrimSpace(os.Getenv("CAMOFOX_URL_MAC"))
+
+					var camoMac, camoCloud browser.Backend
+					if b := browser.NewCamofoxBackend(camoMacURL, camoKey, camoUser, cfID, cfSecret); b != nil {
+						camoMac = b
+					}
+					if b := browser.NewCamofoxBackend(camoCloudURL, camoKey, camoUser, "", ""); b != nil {
+						camoCloud = b
+					}
+
+					switch {
+					case camoMac != nil && camoCloud != nil:
+						browserBackend = browser.NewRoutingBackend(camoMac, camoCloud)
+						fmt.Printf("  browser: camoufox routed (mac=%s + cloud=%s, mac-first)\n", camoMacURL, camoCloudURL)
+					case camoMac != nil:
+						browserBackend = camoMac
+						fmt.Printf("  browser: camoufox mac (%s)\n", camoMacURL)
+					case camoCloud != nil:
+						browserBackend = camoCloud
+						fmt.Printf("  browser: camoufox cloud (%s)\n", camoCloudURL)
+					default:
+						browserURL := strings.TrimSpace(os.Getenv("BROWSER_SIDECAR_URL"))
+						if browserURL == "" && strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != "" {
+							browserURL = "http://browser.railway.internal:8080"
+						}
+						if bc := browser.New(browserURL, os.Getenv("BROWSER_BRIDGE_TOKEN")); bc != nil {
+							browserBackend = bc
+							fmt.Printf("  browser: chromedp sidecar (%s)\n", browserURL)
+						}
+					}
+
+					if browserBackend != nil {
+						browserReg = browser.NewRegistry(browserBackend, runs.New(p))
 						for _, t := range browserReg.AllTools() {
 							registry.Register(t)
 						}
-						fmt.Printf("  browser: configured (%s)\n", browserURL)
 					} else {
-						fmt.Printf("  browser: unset (set BROWSER_SIDECAR_URL to enable)\n")
+						fmt.Printf("  browser: unset (set CAMOFOX_URL / CAMOFOX_URL_MAC or BROWSER_SIDECAR_URL to enable)\n")
 					}
 					// mem_substrate - mem_list / mem_act / action_register
 					// / action_list. The generic, bounded read/write

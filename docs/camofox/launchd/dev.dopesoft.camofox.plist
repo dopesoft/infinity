@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs the Camoufox anti-detect browser server on the home Mac, bound to
+  127.0.0.1:9377, using the SAME pinned image as the Cloud (Railway) service so
+  both bridges stay on one version. cloudflared exposes :9377 at
+  camo.dopesoft.io behind Cloudflare Access (same service token as the
+  claude_code bridge). Core reaches it via CAMOFOX_URL_MAC.
+
+  This is the STRONG anti-detect path: the Mac's residential IP is what gets
+  past Cloudflare/DataDome IP reputation that a datacenter IP can't.
+
+  Set the bearer first so the plist can read it:
+      launchctl setenv CAMOFOX_API_KEY '<same secret as the Cloud camofox service>'
+  Update to a new upstream version by bumping the image tag below + kickstart:
+      launchctl kickstart -k gui/$(id -u)/dev.dopesoft.camofox
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.dopesoft.camofox</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <!-- --rm so a crash leaves no dangling container; the named container
+             lets KeepAlive restart cleanly. Profile volume persists cookies/
+             logins across restarts. CAMOFOX_HOST=0.0.0.0 inside the container,
+             but we publish only to 127.0.0.1 on the host so nothing is exposed
+             except through the Cloudflare tunnel. -->
+        <string>exec docker run --rm --name camofox \
+            -p 127.0.0.1:9377:9377 \
+            -e CAMOFOX_HOST=0.0.0.0 \
+            -e CAMOFOX_PORT=9377 \
+            -e CAMOFOX_API_KEY="$CAMOFOX_API_KEY" \
+            -v "$HOME/.camofox:/home/node/.camofox" \
+            ghcr.io/redf0x1/camofox-browser:2.4.3</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/camofox.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/infinity-coder/camofox.err</string>
+</dict>
+</plist>

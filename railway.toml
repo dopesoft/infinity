@@ -136,3 +136,47 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 healthcheckPath = "/health"
 healthcheckTimeout = 30
+
+# camofox — Jarvis's ANTI-DETECT browser bridge (Camoufox / Firefox). Same
+# observe → act → extract verb set as `browser` above, but the engine spoofs
+# device fingerprints at the C++ level so it passes Cloudflare / DataDome /
+# bot-walls that block the chromedp `browser`. Core picks it ahead of the
+# chromedp sidecar whenever CAMOFOX_URL / CAMOFOX_URL_MAC is set (see
+# core/internal/browser + core/cmd/infinity/serve.go).
+#
+# docker/camofox/Dockerfile is a thin pin over the upstream GHCR image
+# (ghcr.io/redf0x1/camofox-browser) — UPDATE = bump CAMOFOX_VERSION in that
+# Dockerfile + redeploy; our Go adapter speaks their stable REST contract so a
+# version bump touches no Go. Full runbook + Mac residential setup:
+# docs/camofox/SETUP.md.
+#
+#   Required env on the camofox service (set in the Railway dashboard):
+#     CAMOFOX_API_KEY=<secret>      # bearer guarding every interaction route
+#                                   # (CAMOFOX_HOST/PORT are baked by the Dockerfile)
+#   Optional (residential exit — recommended; a datacenter IP undercuts stealth):
+#     PROXY_HOST / PROXY_PORT / PROXY_USERNAME / PROXY_PASSWORD
+#
+#   On the CORE service set:
+#     CAMOFOX_URL=http://camofox.railway.internal:9377   # (auto-defaulted on Railway when CAMOFOX_API_KEY is set)
+#     CAMOFOX_API_KEY=<same secret as the camofox service>
+#     CAMOFOX_USER_ID=jarvis                              # optional; stable canonical fingerprint owner
+#   And for the home-Mac residential instance (the strong anti-detect path):
+#     CAMOFOX_URL_MAC=https://camo.dopesoft.io            # Cloudflare-Access-fronted tunnel
+#     CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET       # already set for the claude_code bridge — reused
+#
+# Enable App Sleeping so the Cloud instance scales to zero; the first browse
+# after sleep wakes it (~10-20s, Firefox cold start) and Core retries.
+[[services]]
+name = "camofox"
+
+[services.source]
+rootDirectory = "docker/camofox"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+
+[services.deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/health"
+healthcheckTimeout = 30

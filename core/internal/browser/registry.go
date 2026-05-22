@@ -28,7 +28,7 @@ const idleReap = 35 * time.Minute
 // to Studio. The relay lifetime equals the browser session — NOT a single
 // tool call — so the boss watches continuously across observe/act/extract.
 type Registry struct {
-	client  *Client
+	backend Backend
 	tracker *runs.Tracker
 
 	mu           sync.Mutex
@@ -47,21 +47,21 @@ type entry struct {
 	done      bool
 }
 
-func NewRegistry(client *Client, tracker *runs.Tracker) *Registry {
+func NewRegistry(backend Backend, tracker *runs.Tracker) *Registry {
 	r := &Registry{
-		client:       client,
+		backend:      backend,
 		tracker:      tracker,
 		sessions:     make(map[string]*entry),
 		latestByChat: make(map[string]string),
 	}
-	if client != nil {
+	if backend != nil {
 		go r.janitor()
 	}
 	return r
 }
 
 // Enabled reports whether the browser backend is configured.
-func (r *Registry) Enabled() bool { return r != nil && r.client != nil }
+func (r *Registry) Enabled() bool { return r != nil && r.backend != nil }
 
 // SetSink wires the frame broadcaster. Called once from serve.go after the
 // HTTP server (which owns the WS session map) is constructed.
@@ -83,7 +83,7 @@ func (r *Registry) emit(chatID string, f Frame) {
 // Open creates a browser session, books a mem_runs row, and starts the
 // screencast relay. chatID is the Studio chat session the frames route to.
 func (r *Registry) Open(ctx context.Context, chatID, url string) (*SessionInfo, error) {
-	info, err := r.client.CreateSession(ctx, url)
+	info, err := r.backend.CreateSession(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (r *Registry) Open(ctx context.Context, chatID, url string) (*SessionInfo, 
 // relay streams frames from the sidecar to the chat session until ctx ends
 // or the sidecar stream closes.
 func (r *Registry) relay(ctx context.Context, e *entry) {
-	frames, err := r.client.SubscribeScreencast(ctx, e.browserID)
+	frames, err := r.backend.SubscribeScreencast(ctx, e.browserID)
 	if err != nil {
 		log.Printf("browser: screencast subscribe failed for %s: %v", e.browserID, err)
 		return
@@ -186,7 +186,7 @@ func (r *Registry) URL(browserID string) string {
 // Close tears down a session: stops the sidecar browser, ends the relay,
 // closes the mem_runs row.
 func (r *Registry) Close(ctx context.Context, browserID string) error {
-	err := r.client.Close(ctx, browserID)
+	err := r.backend.Close(ctx, browserID)
 	r.finish(ctx, browserID, err)
 	return err
 }
