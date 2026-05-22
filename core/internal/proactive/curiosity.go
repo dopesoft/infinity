@@ -71,12 +71,13 @@ func (c *CuriosityScan) Run(ctx context.Context) (int, error) {
 
 func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 	rows, err := c.pool.Query(ctx, `
-		SELECT id::text, COALESCE(title, ''), COALESCE(content, '')
+		SELECT id::text, COALESCE(title, ''), COALESCE(content, ''), COALESCE(project, '')
 		  FROM mem_memories
 		 WHERE tier = 'semantic'
 		   AND status = 'active'
 		   AND strength < 0.35
 		   AND created_at < NOW() - INTERVAL '24 hours'
+		   AND COALESCE(project, '') <> '_self'
 		 ORDER BY strength ASC, updated_at ASC
 		 LIMIT 5
 	`)
@@ -86,11 +87,15 @@ func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 	defer rows.Close()
 	n := 0
 	for rows.Next() {
-		var id, title, content string
-		if err := rows.Scan(&id, &title, &content); err != nil {
+		var id, title, content, project string
+		if err := rows.Scan(&id, &title, &content, &project); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Is this still true: %s?", shortQuestion(title, content))
+		subject, ok := lowConfidenceQuestionSubject(title, content, project)
+		if !ok {
+			continue
+		}
+		question := fmt.Sprintf("Is this still true: %s?", subject)
 		rationale := "Semantic memory has decayed below confidence threshold - ask the boss to confirm or retire it."
 		if c.insertQuestion(ctx, question, rationale, "low_confidence", []string{id}, 6) {
 			n++
@@ -388,6 +393,32 @@ func shortQuestion(title, content string) string {
 		t = strings.TrimSpace(content)
 	}
 	return clipShort(t, 100)
+}
+
+func lowConfidenceQuestionSubject(title, content, project string) (string, bool) {
+	if strings.TrimSpace(project) == "_self" {
+		return "", false
+	}
+
+	t := strings.TrimSpace(title)
+	c := strings.TrimSpace(content)
+	if isGenericProfileLabel(t) && c != "" {
+		t = c
+	}
+	if t == "" {
+		t = c
+	}
+	t = clipShort(t, 100)
+	return t, t != ""
+}
+
+func isGenericProfileLabel(title string) bool {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "name", "role", "active projects", "communication style", "working hours", "key relationships", "anything else":
+		return true
+	default:
+		return false
+	}
 }
 
 func clipShort(s string, n int) string {
