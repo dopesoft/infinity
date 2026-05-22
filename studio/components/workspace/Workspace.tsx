@@ -85,8 +85,11 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     }
   }, [projectPath, defaultProjectPath, current.loading, store]);
 
-  // Mark files dirty as the agent edits them, filtered by sessionId so a
-  // stale tab from another session doesn't paint phantom changes.
+  // As the agent edits files, mark them dirty AND auto-open each as an
+  // editor tab in column 3, filtered by sessionId so a stale tab from
+  // another session doesn't paint phantom changes or steal focus. This
+  // mirrors the document_created -> openDocument path in CanvasRightPane:
+  // the file being changed surfaces itself instead of waiting for a click.
   useEffect(() => {
     return ws.subscribe((ev) => {
       if (
@@ -100,10 +103,13 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       if (ev.type !== "tool_call") return;
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
-      // github__push_files carries multiple paths in one call - mark
-      // every one so the Changes badge reflects the real fan-out.
+      // github__push_files carries multiple paths in one call - mark every
+      // one so the Changes badge reflects the real fan-out, and open each
+      // as a tab. openFile activates the last path, so the editor follows
+      // the most recently touched file.
       for (const path of extractToolFilePaths(ev.tool_call.input)) {
         store.markDirty(path);
+        store.openFile(path);
       }
     });
   }, [ws, chat.sessionId, store]);

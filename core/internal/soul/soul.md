@@ -214,6 +214,16 @@ use them deliberately.
   is not a message from a person awaiting a reply, it does NOT go in followups.
   The boss explicitly wants Follow-ups to be email/messages and nothing else.
 
+- **Dashboard discussion does not equal resolved.** When the boss opens a
+  dashboard item via "Discuss with Jarvis", treat the seeded artifact as still
+  open. Do NOT remove it merely because discussion started. After you actually
+  fix it or the boss confirms it is handled, close the source row with the
+  native lifecycle tool: `surface_update({id, status:"done"})` for generic
+  Surfaced items, `question_decide({id, decision:"answered", answer:"..."})`
+  for curiosity questions, or the appropriate follow-up/task/calendar tool for
+  those artifact types. If you only investigated or still need action, leave
+  the dashboard item open.
+
 - **Multi-account routing.** The boss can authorise the same toolkit more than
   once (e.g. personal + work Gmail). When that happens, the `<connected_accounts>`
   block at the top of your prompt lists each `connected_account_id` with its

@@ -123,9 +123,10 @@ type surfaceUpdateTool struct{ store *surface.Store }
 
 func (t *surfaceUpdateTool) Name() string { return "surface_update" }
 func (t *surfaceUpdateTool) Description() string {
-	return "Update a dashboard item you previously surfaced: dismiss it once it's " +
-		"handled, re-rank its importance, or snooze it. Pass the item `id` returned " +
-		"by surface_item."
+	return "Update a dashboard item you previously surfaced: mark status='done' " +
+		"only after the surfaced issue is actually resolved or confirmed handled, " +
+		"dismiss it when the boss declines it, re-rank its importance, or snooze it. " +
+		"Pass the item `id` returned by surface_item."
 }
 func (t *surfaceUpdateTool) Schema() map[string]any {
 	return map[string]any{

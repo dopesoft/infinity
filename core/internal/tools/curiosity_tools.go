@@ -88,8 +88,9 @@ func (t *questionDecide) Name() string { return "question_decide" }
 func (t *questionDecide) Description() string {
 	return "Resolve a curiosity question by id. decision='dismissed' removes it " +
 		"from the dashboard (boss decided not to act). 'answered' marks it " +
-		"handled with an optional answer string. 'approved' records that the " +
-		"boss said go and the agent should act on it. Mirrors the same endpoint " +
+		"handled with an optional answer string - use it only after the answer or " +
+		"fix is actually confirmed. 'approved' records that the boss said go and " +
+		"the agent should act on it. Mirrors the same endpoint " +
 		"the dashboard's dismiss button hits - UI updates live."
 }
 func (t *questionDecide) Schema() map[string]any {

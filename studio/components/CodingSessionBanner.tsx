@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { ArrowRight, LayoutPanelLeft, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWebSocket } from "@/lib/ws/provider";
@@ -10,42 +8,45 @@ import { isCodeChangeTool } from "@/lib/canvas/detection";
 import { cn } from "@/lib/utils";
 
 /**
- * CodingSessionBanner - first claude_code__edit/write/multiedit in a Live
- * session triggers this banner. It surfaces a one-tap link to Canvas where
- * the boss can review the diff and watch the preview update.
+ * CodingSessionBanner - mobile-only nudge into the Canvas mode.
+ *
+ * On desktop the unified /live workspace already shows the edited file in
+ * column 3: every code-change tool call auto-opens an editor tab there (see
+ * Workspace.tsx). No banner is needed, so this surface is hidden at lg+.
+ *
+ * On mobile, Canvas is a separate swipe-away mode, so the first
+ * claude_code__edit/write/multiedit in a session surfaces a one-tap jump to
+ * it via the `workspace:set-mode` event (handled by useWorkspaceMode). We no
+ * longer navigate to `/canvas` - that route was folded into /live and now
+ * just redirects back here, which is why the old "Open" button went nowhere.
  *
  * Dismissal:
- *   - Click the X → dismissed for this session (sessionStorage).
- *   - Click "Open in Canvas" → routes + dismisses.
+ *   - Click the X -> dismissed for this session (sessionStorage).
+ *   - Click "View" -> switches to Canvas mode + dismisses.
  *   - Auto-fades after 45s if neither action.
  *
- * Auto-open: if Settings → Canvas → "Auto-open Canvas" is enabled, we
- * navigate directly the first time without showing the banner.
+ * Auto-open: if Settings -> Canvas -> "Auto-open Canvas" is enabled, we jump
+ * to Canvas mode directly the first time without showing the banner.
  */
 
 const DISMISS_KEY_PREFIX = "infinity:canvas:bannerDismissed:";
 const AUTO_OPEN_KEY = "infinity:canvas:autoOpen";
 const FADE_AFTER_MS = 45_000;
 
+function jumpToCanvas() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent("workspace:set-mode", { detail: { mode: "canvas" } }),
+  );
+}
+
 export function CodingSessionBanner({ sessionId }: { sessionId: string }) {
   const ws = useWebSocket();
-  const pathname = usePathname();
   const [show, setShow] = useState(false);
 
-  // Reset when the session changes; respect prior dismissal of this session.
+  // Reset when the session changes.
   useEffect(() => {
-    if (!sessionId) {
-      setShow(false);
-      return;
-    }
-    if (typeof window === "undefined") return;
-    try {
-      const dismissed = window.sessionStorage.getItem(DISMISS_KEY_PREFIX + sessionId);
-      if (dismissed === "1") setShow(false);
-      else setShow(false);
-    } catch {
-      /* ignore */
-    }
+    setShow(false);
   }, [sessionId]);
 
   // Subscribe for the first relevant tool call.
@@ -59,8 +60,8 @@ export function CodingSessionBanner({ sessionId }: { sessionId: string }) {
         const dismissed = window.sessionStorage.getItem(DISMISS_KEY_PREFIX + sessionId);
         if (dismissed === "1") return;
         const autoOpen = window.localStorage.getItem(AUTO_OPEN_KEY) === "1";
-        if (autoOpen && pathname !== "/canvas") {
-          window.location.assign("/canvas");
+        if (autoOpen) {
+          jumpToCanvas();
           return;
         }
       } catch {
@@ -68,7 +69,7 @@ export function CodingSessionBanner({ sessionId }: { sessionId: string }) {
       }
       setShow(true);
     });
-  }, [ws, sessionId, pathname]);
+  }, [ws, sessionId]);
 
   // Auto-fade after FADE_AFTER_MS so the banner doesn't camp forever.
   useEffect(() => {
@@ -88,12 +89,12 @@ export function CodingSessionBanner({ sessionId }: { sessionId: string }) {
     }
   }
 
-  if (!show || pathname === "/canvas") return null;
+  if (!show) return null;
 
   return (
     <div
       className={cn(
-        "mx-3 mt-2 flex items-center gap-2 rounded-lg border border-info/30 bg-info/10 px-3 py-2 text-xs shadow-sm",
+        "mx-3 mt-2 flex items-center gap-2 rounded-lg border border-info/30 bg-info/10 px-3 py-2 text-xs shadow-sm lg:hidden",
         "animate-in fade-in slide-in-from-top-1 duration-300",
       )}
       role="status"
@@ -102,14 +103,20 @@ export function CodingSessionBanner({ sessionId }: { sessionId: string }) {
       <div className="min-w-0 flex-1">
         <p className="font-medium">Coding session detected</p>
         <p className="text-[11px] text-muted-foreground">
-          Watch diffs and live preview in Canvas.
+          The file being changed is open in Canvas.
         </p>
       </div>
-      <Link href="/canvas" onClick={dismiss}>
-        <Button size="sm" variant="default" className="h-8 gap-1 text-xs">
-          Open <ArrowRight className="size-3" />
-        </Button>
-      </Link>
+      <Button
+        size="sm"
+        variant="default"
+        className="h-8 gap-1 text-xs"
+        onClick={() => {
+          jumpToCanvas();
+          dismiss();
+        }}
+      >
+        View <ArrowRight className="size-3" />
+      </Button>
       <Button
         type="button"
         size="icon"

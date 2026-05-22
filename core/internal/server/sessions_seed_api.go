@@ -25,9 +25,8 @@ import (
 //
 // The Discuss-with-Jarvis CTA in ObjectViewer hits this endpoint and
 // navigates the user to /live?session=<id>. From there everything is
-// normal session behavior - replies stream over the WS, future turns
-// can call task_done / followup_dismiss / etc. to mutate the source
-// artifact back from chat.
+// normal session behavior - replies stream over the WS, and Jarvis closes the
+// source artifact only after the work is actually resolved.
 func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
