@@ -23,6 +23,11 @@ import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
 
+// Ceiling on auto-opened editor tabs per session. Each open file mounts a
+// Monaco instance; past this the agent's edits still mark files dirty but
+// don't auto-open, so a large refactor can't melt the browser.
+const MAX_AUTO_OPEN_TABS = 8;
+
 /**
  * Workspace - the unified /live surface that merges the old Live + Canvas
  * tabs into one work environment.
@@ -104,12 +109,32 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
       // github__push_files carries multiple paths in one call - mark every
-      // one so the Changes badge reflects the real fan-out, and open each
-      // as a tab. openFile activates the last path, so the editor follows
-      // the most recently touched file.
+      // one so the Changes badge reflects the real fan-out. Auto-open each
+      // as a tab so column 3 surfaces the file being changed; openFile
+      // re-activates an already-open path, so the editor follows the most
+      // recently touched file.
+      //
+      // Cap how many tabs we auto-open: every open file mounts a Monaco
+      // instance (CanvasRightPane keeps all tabs mounted), so a 20+ file
+      // refactor would spawn 20+ editors and choke the browser - badly on
+      // mobile. Beyond the cap we still markDirty (the Files column shows
+      // the dot), the boss just opens those by hand. We never evict an
+      // existing tab, so an unsaved editor buffer can't be destroyed.
+      let openFileTabs = store.tabs.reduce(
+        (n, t) => (t.kind === "file" ? n + 1 : n),
+        0,
+      );
       for (const path of extractToolFilePaths(ev.tool_call.input)) {
         store.markDirty(path);
-        store.openFile(path);
+        const alreadyOpen = store.tabs.some(
+          (t) => t.kind === "file" && t.path === path,
+        );
+        if (alreadyOpen) {
+          store.openFile(path); // re-focus the file being changed
+        } else if (openFileTabs < MAX_AUTO_OPEN_TABS) {
+          store.openFile(path);
+          openFileTabs += 1;
+        }
       }
     });
   }, [ws, chat.sessionId, store]);
