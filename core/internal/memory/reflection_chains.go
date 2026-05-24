@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -23,9 +24,29 @@ type ReflectionChain struct {
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
-// BuildReflectionChains clusters repeated reflection lessons across sessions.
-// It is deterministic and cheap: if a lesson shows up 2+ times with similar
-// keywords, it becomes a meta-lesson the Memory tab can show as a chain.
+// chainCosineThreshold is the minimum cosine similarity for two lesson
+// embeddings to land in the same chain. Reflection lessons are paraphrases of
+// the same insight ("skill returned docs not execution data" vs "skill
+// response was recipe metadata, not results") that share almost no exact
+// keywords, so the previous alphabetical-first-5-keyword key never grouped
+// them and the table stayed empty. Embedding similarity catches the paraphrase.
+const chainCosineThreshold = 0.72
+
+type chainItem struct {
+	id         string
+	text       string
+	confidence float64
+	at         time.Time
+	vec        []float32
+}
+
+// BuildReflectionChains clusters repeated reflection lessons across sessions
+// into meta-lessons the Memory tab shows as chains and the
+// ReflectionChainsProvider injects into the system prompt. Clustering is by
+// embedding cosine similarity (paraphrase-robust); if the embedder is
+// unavailable it falls back to the lexical keyword key so the loop still runs
+// in a degraded deployment. A cluster needs ≥2 distinct source reflections to
+// become a chain.
 func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, error) {
 	if r == nil || r.pool == nil {
 		return 0, nil
@@ -44,13 +65,7 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 		return 0, err
 	}
 	defer rows.Close()
-	type item struct {
-		id         string
-		text       string
-		confidence float64
-		at         time.Time
-	}
-	clusters := map[string][]item{}
+	var items []chainItem
 	for rows.Next() {
 		var id, raw string
 		var at time.Time
@@ -64,24 +79,25 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 			if text == "" {
 				continue
 			}
-			key := reflectionTopic(text)
-			if key == "" {
-				continue
-			}
-			clusters[key] = append(clusters[key], item{id: id, text: text, confidence: lesson.Confidence, at: at})
+			items = append(items, chainItem{id: id, text: text, confidence: lesson.Confidence, at: at})
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+
+	clusters := r.clusterLessons(ctx, items)
+
 	upserted := 0
-	for topic, items := range clusters {
+	for _, members := range clusters {
 		seen := map[string]bool{}
 		var ids []string
 		var first, last time.Time
 		conf := 0.0
-		best := items[0].text
-		for _, it := range items {
+		best := members[0].text
+		var allText []string
+		for _, it := range members {
+			allText = append(allText, it.text)
 			if !seen[it.id] {
 				ids = append(ids, it.id)
 				seen[it.id] = true
@@ -98,6 +114,10 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 			}
 		}
 		if len(ids) < 2 {
+			continue
+		}
+		topic := clusterTopic(allText)
+		if topic == "" {
 			continue
 		}
 		_, err := r.pool.Exec(ctx, `
@@ -119,6 +139,146 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 		upserted++
 	}
 	return upserted, nil
+}
+
+// clusterLessons groups lesson items semantically. It embeds each lesson and
+// greedily clusters by cosine similarity against running centroids. If
+// embedding yields too few vectors (embedder down / stubbed), it falls back to
+// grouping by the lexical keyword key so the loop degrades instead of failing.
+func (r *Reflector) clusterLessons(ctx context.Context, items []chainItem) [][]chainItem {
+	// Embed each distinct lesson text once.
+	vecByText := map[string][]float32{}
+	embedded := 0
+	for i := range items {
+		t := items[i].text
+		if v, ok := vecByText[t]; ok {
+			items[i].vec = v
+			if v != nil {
+				embedded++
+			}
+			continue
+		}
+		v, err := r.embedder.Embed(ctx, t)
+		if err != nil || len(v) == 0 {
+			vecByText[t] = nil
+			continue
+		}
+		vecByText[t] = v
+		items[i].vec = v
+		embedded++
+	}
+
+	// Lexical fallback when embeddings are unavailable.
+	if embedded < 2 {
+		byKey := map[string][]chainItem{}
+		for _, it := range items {
+			key := reflectionTopic(it.text)
+			if key == "" {
+				continue
+			}
+			byKey[key] = append(byKey[key], it)
+		}
+		out := make([][]chainItem, 0, len(byKey))
+		for _, v := range byKey {
+			out = append(out, v)
+		}
+		return out
+	}
+
+	// Greedy cosine clustering against incremental centroids.
+	type cluster struct {
+		centroid []float32
+		members  []chainItem
+	}
+	var clusters []*cluster
+	for _, it := range items {
+		if it.vec == nil {
+			continue // skip un-embeddable items in the semantic pass
+		}
+		bestIdx, bestSim := -1, chainCosineThreshold
+		for ci, c := range clusters {
+			if sim := cosine(it.vec, c.centroid); sim >= bestSim {
+				bestSim = sim
+				bestIdx = ci
+			}
+		}
+		if bestIdx < 0 {
+			clusters = append(clusters, &cluster{centroid: append([]float32(nil), it.vec...), members: []chainItem{it}})
+			continue
+		}
+		c := clusters[bestIdx]
+		// Incremental centroid mean.
+		n := float32(len(c.members))
+		for d := range c.centroid {
+			c.centroid[d] = (c.centroid[d]*n + it.vec[d]) / (n + 1)
+		}
+		c.members = append(c.members, it)
+	}
+	out := make([][]chainItem, 0, len(clusters))
+	for _, c := range clusters {
+		out = append(out, c.members)
+	}
+	return out
+}
+
+// cosine returns the cosine similarity of two equal-length vectors. Returns 0
+// for mismatched or zero-norm inputs.
+func cosine(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+}
+
+// clusterTopic derives a stable dedup key for a cluster from the most frequent
+// salient keywords across all member lessons. Aggregating over the whole
+// cluster (rather than one member's first-5 keywords) keeps the key stable
+// across nightly runs as long as the cluster's dominant vocabulary persists,
+// so ON CONFLICT (topic) updates the same chain instead of spawning duplicates.
+func clusterTopic(texts []string) string {
+	freq := map[string]int{}
+	for _, t := range texts {
+		seen := map[string]bool{}
+		for _, w := range reflectionKeywords(t) {
+			if seen[w] {
+				continue
+			}
+			seen[w] = true
+			freq[w]++
+		}
+	}
+	type kv struct {
+		w string
+		n int
+	}
+	var kvs []kv
+	for w, n := range freq {
+		kvs = append(kvs, kv{w, n})
+	}
+	sort.Slice(kvs, func(i, j int) bool {
+		if kvs[i].n != kvs[j].n {
+			return kvs[i].n > kvs[j].n
+		}
+		return kvs[i].w < kvs[j].w
+	})
+	var keep []string
+	for _, k := range kvs {
+		keep = append(keep, k.w)
+		if len(keep) >= 4 {
+			break
+		}
+	}
+	sort.Strings(keep)
+	return strings.Join(keep, ":")
 }
 
 func (r *Reflector) ReflectionChains(ctx context.Context, limit int) ([]ReflectionChain, error) {
@@ -153,21 +313,30 @@ func (r *Reflector) ReflectionChains(ctx context.Context, limit int) ([]Reflecti
 	return out, rows.Err()
 }
 
-func reflectionTopic(text string) string {
+var reflectionStopWords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "as": true, "before": true,
+	"be": true, "for": true, "from": true, "in": true, "is": true, "it": true,
+	"of": true, "on": true, "or": true, "the": true, "to": true, "with": true,
+	"when": true, "you": true, "your": true, "should": true, "must": true,
+}
+
+// reflectionKeywords returns the salient (non-stopword, ≥4 char) lowercased
+// words of a lesson, in document order. Shared by clusterTopic (aggregate
+// keying) and reflectionTopic (lexical fallback).
+func reflectionKeywords(text string) []string {
 	words := reflectionWordRe.FindAllString(strings.ToLower(text), -1)
-	stop := map[string]bool{
-		"a": true, "an": true, "and": true, "are": true, "as": true, "before": true,
-		"be": true, "for": true, "from": true, "in": true, "is": true, "it": true,
-		"of": true, "on": true, "or": true, "the": true, "to": true, "with": true,
-		"when": true, "you": true, "your": true, "should": true, "must": true,
-	}
 	var keep []string
 	for _, w := range words {
-		if len(w) < 4 || stop[w] {
+		if len(w) < 4 || reflectionStopWords[w] {
 			continue
 		}
 		keep = append(keep, w)
 	}
+	return keep
+}
+
+func reflectionTopic(text string) string {
+	keep := reflectionKeywords(text)
 	sort.Strings(keep)
 	if len(keep) > 5 {
 		keep = keep[:5]

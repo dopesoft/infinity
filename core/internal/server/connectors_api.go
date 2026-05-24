@@ -24,6 +24,7 @@ import (
 //	GET    /api/connectors/composio/toolkits?q=&limit=&cursor=
 //	GET    /api/connectors/composio/connected
 //	POST   /api/connectors/composio/connect           body: { toolkit_slug }
+//	POST   /api/connectors/composio/accounts/{id}/refresh
 //	DELETE /api/connectors/composio/accounts/{id}
 //
 // All four pass through Composio's JSON response untouched so Studio can
@@ -354,24 +355,101 @@ func extractConnectedAccountID(body map[string]any) string {
 }
 
 func (s *Server) handleComposioAccount(w http.ResponseWriter, r *http.Request) {
-	// Path: /api/connectors/composio/accounts/{id}
-	id := strings.TrimPrefix(r.URL.Path, "/api/connectors/composio/accounts/")
-	id = strings.Trim(id, "/")
+	// Paths:
+	//   /api/connectors/composio/accounts/{id}
+	//   /api/connectors/composio/accounts/{id}/refresh
+	rest := strings.TrimPrefix(r.URL.Path, "/api/connectors/composio/accounts/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id := ""
+	if len(parts) > 0 {
+		id = strings.TrimSpace(parts[0])
+	}
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account id required"})
 		return
 	}
+	action := ""
+	if len(parts) > 1 {
+		action = strings.TrimSpace(parts[1])
+	}
 	switch r.Method {
+	case http.MethodPost:
+		if action != "refresh" {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only supports /refresh"})
+			return
+		}
+		s.handleComposioAccountRefresh(w, r, id)
 	case http.MethodDelete:
+		if action != "" {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "DELETE only supports account root"})
+			return
+		}
 		proxyComposio(w, r, http.MethodDelete, "/connected_accounts/"+url.PathEscape(id), nil)
 		if s.connectors != nil {
 			go func() { _ = s.connectors.Refresh(r.Context()) }()
 		}
 	case http.MethodGet:
+		if action != "" {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only supports account root"})
+			return
+		}
 		proxyComposio(w, r, http.MethodGet, "/connected_accounts/"+url.PathEscape(id), nil)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": fmt.Sprintf("%s not allowed", r.Method)})
 	}
+}
+
+func (s *Server) handleComposioAccountRefresh(w http.ResponseWriter, r *http.Request, id string) {
+	key := composioRESTKey()
+	if key == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "set COMPOSIO_API_KEY on core to refresh connections",
+		})
+		return
+	}
+	req, err := http.NewRequestWithContext(
+		r.Context(),
+		http.MethodPost,
+		composioAPIBase+"/connected_accounts/"+url.PathEscape(id)+"/refresh",
+		nil,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	applyComposioAuth(req, key)
+	resp, err := composioHTTP.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "composio upstream unreachable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if s.connectors != nil {
+		go func() { _ = s.connectors.Refresh(r.Context()) }()
+	}
+	if resp.StatusCode < 400 {
+		var src map[string]any
+		if jerr := json.Unmarshal(body, &src); jerr == nil {
+			out := map[string]any{}
+			if v, ok := src["redirect_url"].(string); ok && v != "" {
+				out["redirect_url"] = v
+			}
+			if v, ok := src["redirectUrl"].(string); ok && v != "" {
+				out["redirect_url"] = v
+			}
+			if accountID := extractConnectedAccountID(src); accountID != "" {
+				out["id"] = accountID
+			} else {
+				out["id"] = id
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
 }
 
 // handleComposioAliases is the alias CRUD surface. Used by Studio's

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/hooks"
+	"github.com/dopesoft/infinity/core/internal/proposals"
 )
 
 // Heuristic thresholds for a session being "skill-worthy". Tuned against the
@@ -233,6 +235,30 @@ func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stat
 	}
 	if strings.TrimSpace(draft.ImportanceReason) == "" {
 		draft.ImportanceReason = inferProposalImportanceReason(draft.Name, draft.Description, draft.Reasoning, draft.SkillMD)
+	}
+
+	// Dedup-before-create: the session extractor is a second skill-create path
+	// (alongside the agent's skill_propose), so it must consult the same gate or
+	// it re-mints "session_pattern_*" near-duplicates of skills that already
+	// exist. If the draft duplicates an active skill, route it through the merge
+	// machinery (one accumulating draft per parent_skill) instead of a new row.
+	if match := proposals.FindDuplicateSkill(ctx, m.pool, m.llm, draft.Name, draft.Description); match != "" {
+		_, err := proposals.UpsertCandidate(ctx, m.pool, m.llm, slog.Default(), proposals.CandidateDraft{
+			Name:             match + "-update",
+			ParentSkill:      match,
+			Description:      truncate(draft.Description, 200),
+			Reasoning:        "Auto-routed from session extractor (duplicate of " + match + "): " + truncate(draft.Reasoning, 400),
+			SkillMD:          draft.SkillMD,
+			RiskLevel:        strings.ToLower(draft.RiskLevel),
+			Importance:       draft.Importance,
+			ImportanceReason: draft.ImportanceReason,
+			Source:           "auto_evolved",
+		})
+		if err == nil {
+			return nil // merged into existing skill's draft; no standalone row, no verify pass
+		}
+		// On merge failure, fall through to a standalone insert rather than
+		// dropping the signal.
 	}
 
 	var proposalID string

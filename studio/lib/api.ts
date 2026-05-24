@@ -1565,6 +1565,34 @@ export async function initiateComposioConnect(
   }
 }
 
+export async function refreshComposioAccount(
+  id: string,
+): Promise<{ redirect_url?: string; id?: string; error?: string }> {
+  try {
+    const res = await authedFetch(
+      `/api/connectors/composio/accounts/${encodeURIComponent(id)}/refresh`,
+      { method: "POST" },
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      const msg =
+        ((body?.error as Record<string, unknown>)?.message as string) ??
+        (body?.error as string) ??
+        `HTTP ${res.status}`;
+      return { error: msg };
+    }
+    return {
+      redirect_url:
+        (body.redirect_url as string | undefined) ??
+        (body.redirectUrl as string | undefined) ??
+        ((body.connection_data as Record<string, unknown> | undefined)?.redirect_url as string | undefined),
+      id: body.id as string | undefined,
+    };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
 export async function disconnectComposioAccount(id: string): Promise<boolean> {
   try {
     const res = await authedFetch(

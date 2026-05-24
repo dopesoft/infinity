@@ -28,6 +28,7 @@ import {
   fetchComposioConnected,
   fetchComposioToolkits,
   initiateComposioConnect,
+  refreshComposioAccount,
   setComposioAlias,
   type ComposioAliasMap,
   type ComposioConnectedAccount,
@@ -188,7 +189,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
         name: first.toolkit?.name ?? slug,
         source: "via Composio",
         logo: first.toolkit?.logo,
-        accounts: accs.map((a) => ({
+        accounts: visibleConnectorAccounts(accs, aliases).map((a) => ({
           id: a.id,
           accountId: a.id,
           ok: ((a.status ?? "").toUpperCase() || "ACTIVE") === "ACTIVE",
@@ -233,7 +234,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   }
 
   async function handleConnect(slug: string, opts: { userId: string; alias: string }) {
-    setConnecting(slug);
+    setConnecting(connectKey(slug));
     const r = await initiateComposioConnect(slug, opts);
     setConnecting(null);
     if (r.error) {
@@ -246,20 +247,19 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   }
 
   async function handleReconnect(
-    slug: string,
-    name: string,
-    logo: string | undefined,
     account: ActiveAccount,
   ) {
-    const alias = (account.alias || account.identityHint || account.userId || "").trim();
-    if (!alias) {
-      requestConnect(slug, name, logo);
+    if (!account.accountId) return;
+    setConnecting(reconnectKey(account.accountId));
+    const r = await refreshComposioAccount(account.accountId);
+    setConnecting(null);
+    if (r.error) {
+      // eslint-disable-next-line no-alert
+      alert(`Couldn't start reconnect: ${r.error}`);
       return;
     }
-    await handleConnect(slug, {
-      userId: (account.userId || alias).trim(),
-      alias,
-    });
+    if (r.redirect_url) window.open(r.redirect_url, "_blank", "noopener,noreferrer");
+    setTimeout(() => loadConnected(), 3000);
   }
 
   async function handleDisconnect(id: string, label: string) {
@@ -410,12 +410,7 @@ function ActiveList({
   onBrowse: () => void;
   onAliasSave: (accountId: string, alias: string) => void;
   onAddAnother: (slug: string, name: string, logo?: string) => void;
-  onReconnect: (
-    slug: string,
-    name: string,
-    logo: string | undefined,
-    account: ActiveAccount,
-  ) => void;
+  onReconnect: (account: ActiveAccount) => void;
   connecting: string | null;
 }) {
   if (groups.length === 0 && !loading && !query) {
@@ -477,12 +472,7 @@ function ActiveGroupCard({
   onDisconnect: (id: string, label: string) => void;
   onAliasSave: (accountId: string, alias: string) => void;
   onAddAnother: (slug: string, name: string, logo?: string) => void;
-  onReconnect: (
-    slug: string,
-    name: string,
-    logo: string | undefined,
-    account: ActiveAccount,
-  ) => void;
+  onReconnect: (account: ActiveAccount) => void;
   connecting: string | null;
 }) {
   const matchedTool = Boolean(
@@ -549,11 +539,11 @@ function ActiveGroupCard({
               <button
                 type="button"
                 onClick={() => onAddAnother(group.slug, group.name, group.logo)}
-                disabled={connecting === group.slug}
+                disabled={connecting === connectKey(group.slug)}
                 className="inline-flex h-7 shrink-0 items-center gap-1 rounded border bg-background px-2 text-[11px] font-medium hover:bg-accent"
               >
                 <Plus className="size-3" />
-                {connecting === group.slug ? "Opening…" : "Add another"}
+                {connecting === connectKey(group.slug) ? "Opening…" : "Add another"}
               </button>
             </div>
           )}
@@ -566,8 +556,8 @@ function ActiveGroupCard({
                 kind={group.kind}
                 onDisconnect={onDisconnect}
                 onAliasSave={onAliasSave}
-                onReconnect={() => onReconnect(group.slug, group.name, group.logo, a)}
-                reconnecting={connecting === group.slug}
+                onReconnect={() => onReconnect(a)}
+                reconnecting={Boolean(a.accountId && connecting === reconnectKey(a.accountId))}
                 highlightTool={highlightTool}
               />
             ))}
@@ -755,7 +745,48 @@ function AccountSubRow({
 
 function isReconnectableAccount(account: ActiveAccount) {
   if (account.ok) return false;
-  const status = account.statusText.toUpperCase();
+  return isBadConnectorStatus(account.statusText.toUpperCase());
+}
+
+function visibleConnectorAccounts(
+  accounts: ComposioConnectedAccount[],
+  aliases: ComposioAliasMap,
+) {
+  const byIdentity = new Map<string, ComposioConnectedAccount>();
+  for (const account of accounts) {
+    const key = connectorIdentityKey(account, aliases);
+    const existing = byIdentity.get(key);
+    if (!existing || connectorAccountDisplayRank(account) > connectorAccountDisplayRank(existing)) {
+      byIdentity.set(key, account);
+    }
+  }
+  return Array.from(byIdentity.values()).sort((a, b) => {
+    const rank = connectorAccountDisplayRank(b) - connectorAccountDisplayRank(a);
+    if (rank !== 0) return rank;
+    return Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? "");
+  });
+}
+
+function connectorIdentityKey(account: ComposioConnectedAccount, aliases: ComposioAliasMap) {
+  const slug = (account.toolkit?.slug ?? "unknown").toLowerCase();
+  const identity = (aliases[account.id] || extractIdentityHint(account) || account.user_id || "")
+    .trim()
+    .toLowerCase();
+  return identity ? `${slug}:${identity}` : `${slug}:${account.id}`;
+}
+
+function connectorAccountDisplayRank(account: ComposioConnectedAccount) {
+  const status = (account.status ?? "ACTIVE").toUpperCase();
+  const statusRank =
+    status === "ACTIVE" ? 500 :
+      status === "INITIATED" || status === "INITIALIZING" || status === "PENDING" ? 400 :
+        isBadConnectorStatus(status) ? 100 :
+          300;
+  const created = Date.parse(account.created_at ?? "");
+  return statusRank + (Number.isFinite(created) ? created / 1_000_000_000_000_000 : 0);
+}
+
+function isBadConnectorStatus(status: string) {
   return (
     status === "REVOKED" ||
     status === "EXPIRED" ||
@@ -767,6 +798,14 @@ function isReconnectableAccount(account: ActiveAccount) {
     status.includes("EXPIRED") ||
     status.includes("REVOKED")
   );
+}
+
+function connectKey(slug: string) {
+  return `connect:${slug}`;
+}
+
+function reconnectKey(accountId: string) {
+  return `reconnect:${accountId}`;
 }
 
 function BrowseList({
@@ -814,7 +853,7 @@ function BrowseList({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {toolkits.map((t) => {
             const isConnected = connectedSlugs.has((t.slug ?? "").toLowerCase());
-            const busy = connecting === t.slug;
+            const busy = connecting === connectKey(t.slug);
             return (
               <article
                 key={t.slug}

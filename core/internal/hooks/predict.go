@@ -92,18 +92,26 @@ func (p *PredictionRecorder) handlePost(ctx context.Context, ev Event) error {
 	if actual == "" {
 		actual = ev.Text
 	}
-	// Pull the expected prediction we wrote at PreToolUse so we can score
-	// surprise without making a second LLM call. We don't strictly need the
-	// expected text - Resolve only needs surprise + matched - but doing the
-	// pull lets us tune the heuristic. The current implementation scores
-	// surprise inline using the actual+name+input we have.
-	matched, surprise := memory.SurpriseFor(toolName+" "+jsonShort(ev.Payload["input"]), actual)
+	// When the failure hook fires, guarantee the actual classifies as an error
+	// even if the loop didn't prefix it - so SurpriseFor sees an error outcome.
 	if ev.Name == PostToolUseFailure {
-		matched = false
-		if surprise < 0.5 {
-			surprise = 0.5
+		la := strings.ToLower(strings.TrimSpace(actual))
+		if !strings.HasPrefix(la, "error:") && !strings.HasPrefix(la, "blocked:") {
+			actual = "error: " + actual
 		}
 	}
+	// Pull the expected prediction we wrote at PreToolUse so surprise is scored
+	// against what we actually predicted (success vs error vs empty), not the
+	// raw tool name + input. One indexed lookup; no LLM call. SurpriseFor then
+	// compares outcome classes, so a successful JSON result scores low surprise
+	// and a genuine error scores high.
+	expected, _ := p.store.ExpectedFor(ctx, callID)
+	if expected == "" {
+		// No stored prediction - fall back to a success-flavored expectation so
+		// the outcome class still drives the score.
+		expected = "expect " + toolName + " to return a usable result"
+	}
+	matched, surprise := memory.SurpriseFor(expected, actual)
 	if err := p.store.Resolve(ctx, callID, actual, matched, surprise); err != nil {
 		return fmt.Errorf("predict.resolve %s: %w", toolName, err)
 	}

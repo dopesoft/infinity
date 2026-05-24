@@ -319,16 +319,26 @@ func insertHealingQuestionWithTag(
 	if question == "" {
 		return false
 	}
-	tag, err := pool.Exec(ctx, `
-		INSERT INTO mem_curiosity_questions
-		  (question, rationale, source_kind, source_ids, importance, status, source_tag)
-		VALUES ($1, $2, $3, $4::uuid[], $5, 'open', $6)
-		ON CONFLICT DO NOTHING
-	`, question, rationale, sourceKind, uuidArray(sourceIDs), importance, sourceTag)
+	// Route through UpsertQuestion - the canonical path - so every detector
+	// inherits the cooldown precheck (a dismissed tag stays silent for 24h)
+	// and the pattern-suppression check (a pattern_key the boss dismissed 3+
+	// times is suppressed durably via procedural memory). The old raw INSERT
+	// bypassed both, which is how a single dismissed "Crystallize X?" question
+	// regenerated hundreds of times. Returns true only on a fresh insert, so
+	// callers still emit one Finding per genuinely-new condition.
+	_, isNew, _, err := UpsertQuestion(ctx, pool, slog.Default(), QuestionDraft{
+		Question:   question,
+		Rationale:  rationale,
+		SourceKind: sourceKind,
+		SourceTag:  sourceTag,
+		SourceIDs:  sourceIDs,
+		Importance: importance,
+		Sample:     question,
+	})
 	if err != nil {
 		return false
 	}
-	return tag.RowsAffected() > 0
+	return isNew
 }
 
 // ResolveQuestionsBySourceTag marks every open curiosity question with

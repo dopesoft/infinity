@@ -55,8 +55,8 @@ type CloseFields struct {
 	ToolCallCount int
 	// Status is one of: ok | empty | errored | interrupted. The caller
 	// computes which based on the run outcome.
-	Status string
-	Error  string
+	Status  string
+	Error   string
 	Summary string
 }
 
@@ -114,12 +114,12 @@ func (s *TurnStore) IncrementToolCalls(ctx context.Context, turnID string) error
 // where the silent gap used to be.
 //
 // Why this is load-bearing:
-//   • The agent loop's `closeTurn` runs in a deferred goroutine. If the
+//   - The agent loop's `closeTurn` runs in a deferred goroutine. If the
 //     core process dies mid-turn (deploy, OOM, panic that escapes the
 //     recover, host kill), the row is stranded at status='in_flight'
 //     forever and the user is stuck staring at their own prompt with no
 //     reply, no error, no way to know the agent isn't still thinking.
-//   • Studio's chat reload (sessions_messages_api.go) reconstructs the
+//   - Studio's chat reload (sessions_messages_api.go) reconstructs the
 //     transcript from `UserPromptSubmit + TaskCompleted` observations.
 //     Without a TaskCompleted, the transcript ends on the user's prompt
 //     and the boss can't tell that anything went wrong — they just see
@@ -185,7 +185,7 @@ func (s *TurnStore) RecoverStranded(ctx context.Context) (int, error) {
 		           stop_reason = COALESCE(NULLIF(t.stop_reason, ''), 'recovered')
 		      FROM stranded
 		     WHERE t.id = stranded.id
-		 RETURNING t.id::text, t.session_id::text, COALESCE(t.user_id::text, '')
+		 RETURNING t.id::text, t.session_id::text, COALESCE(t.user_id::text, '') AS user_id
 		)
 		SELECT id, session_id, user_id FROM closed
 	`, recoveryError, "(interrupted)")

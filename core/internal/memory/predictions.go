@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -100,6 +101,63 @@ func (p *PredictionStore) Resolve(ctx context.Context, toolCallID, actual string
 	return err
 }
 
+// SweepStale closes predictions left unresolved past olderThan - they were
+// recorded at PreToolUse but their PostToolUse hook never fired (the session
+// died mid-call, the loop dropped the post event, etc). Without this they
+// accumulate forever as orphaned "open" rows. Mirrors TurnStore.RecoverStranded
+// and runs.RecoverStranded: call it at boot (single-instance core ⇒ anything
+// unresolved and older than the window is definitively abandoned). They are
+// resolved with surprise=0 / matched=false and a marker actual, so they are
+// closed but never mined as high-surprise. Returns the number swept.
+func (p *PredictionStore) SweepStale(ctx context.Context, olderThan time.Duration) (int, error) {
+	if p == nil || p.pool == nil {
+		return 0, nil
+	}
+	if olderThan <= 0 {
+		olderThan = time.Hour
+	}
+	cutoff := time.Now().Add(-olderThan)
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE mem_predictions
+		   SET actual = COALESCE(NULLIF(actual, ''), '(unresolved: tool post-hook never fired)'),
+		       matched = false,
+		       surprise_score = 0,
+		       resolved_at = NOW()
+		 WHERE resolved_at IS NULL
+		   AND created_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("sweep stale predictions: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// ExpectedFor returns the prediction sentence recorded at PreToolUse for a
+// given tool_call_id, so the resolver can score surprise against what we
+// actually predicted rather than re-deriving it. Returns "" when no open
+// prediction exists. Indexed by idx_predictions_call.
+func (p *PredictionStore) ExpectedFor(ctx context.Context, toolCallID string) (string, error) {
+	if p == nil || p.pool == nil || strings.TrimSpace(toolCallID) == "" {
+		return "", nil
+	}
+	var expected string
+	err := p.pool.QueryRow(ctx, `
+		SELECT COALESCE(expected, '')
+		  FROM mem_predictions
+		 WHERE tool_call_id = $1
+		   AND resolved_at IS NULL
+		 ORDER BY created_at DESC
+		 LIMIT 1
+	`, toolCallID).Scan(&expected)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return expected, nil
+}
+
 // HighSurprise returns the most recent high-surprise predictions, used by
 // the curiosity scanner + Studio Memory tab. threshold defaults to 0.7.
 func (p *PredictionStore) HighSurprise(ctx context.Context, threshold float64, limit int) ([]PredictionRow, error) {
@@ -153,58 +211,109 @@ type PredictionRow struct {
 	ResolvedAt    time.Time `json:"resolved_at,omitempty"`
 }
 
-// SurpriseFor compares an expectation to an actual result and returns a
-// 0..1 surprise score. Cheap heuristic: tokenize, compute jaccard on lowered
-// words. This is intentionally not LLM-driven - we want post-hoc scoring
-// to be free. The score is rough but consistent, and high values correctly
-// flag "the tool returned something nothing like what we predicted."
-func SurpriseFor(expected, actual string) (matched bool, surprise float64) {
-	e := strings.ToLower(strings.TrimSpace(expected))
-	a := strings.ToLower(strings.TrimSpace(actual))
-	if e == "" || a == "" {
-		return false, 0
-	}
-	// Hard match on common signals first.
-	if strings.HasPrefix(a, "error:") || strings.HasPrefix(a, "blocked:") {
-		// Did we predict an error? Then it's not surprising.
-		if strings.Contains(e, "error") || strings.Contains(e, "fail") || strings.Contains(e, "block") {
-			return true, 0.2
-		}
-		return false, 0.9
-	}
-	eTokens := tokenSet(e)
-	aTokens := tokenSet(a)
-	if len(eTokens) == 0 || len(aTokens) == 0 {
-		return false, 0.5
-	}
-	inter := 0
-	for t := range eTokens {
-		if _, ok := aTokens[t]; ok {
-			inter++
-		}
-	}
-	union := len(eTokens) + len(aTokens) - inter
-	if union == 0 {
-		return false, 0.5
-	}
-	jaccard := float64(inter) / float64(union)
-	// Jaccard ≥ 0.3 is "matched-ish"; surprise inversely tracks similarity.
-	matched = jaccard >= 0.3
-	surprise = 1.0 - jaccard
-	return matched, surprise
+// OutcomeClass buckets a tool result into one of three coarse outcomes. This
+// is what surprise is actually scored against - whether the call succeeded,
+// came back empty, or errored - NOT the literal bytes.
+//
+// The previous implementation tokenized the prediction sentence and the raw
+// result and scored 1 - jaccard(words). An English prediction ("expect X to
+// return a usable result") shares almost no tokens with a JSON blob, so every
+// successful call scored ~1.0 surprise. That made the metric meaningless and
+// poisoned every downstream consumer: Gym training-example mining (which pulls
+// "high-surprise" rows) and the curiosity high_surprise detector were both
+// selecting essentially at random. Outcome-class comparison fixes that: a
+// successful JSON-returning call scores low, a genuine error scores high.
+type OutcomeClass string
+
+const (
+	OutcomeOK    OutcomeClass = "ok"
+	OutcomeEmpty OutcomeClass = "empty"
+	OutcomeError OutcomeClass = "error"
+)
+
+// errorSignals / emptySignals are matched case-insensitively as substrings of
+// the actual result. Kept deliberately tight to avoid mislabeling legitimate
+// content as an error.
+var errorSignals = []string{
+	`"error":`, `"ok":false`, `"success":false`, `"status":"error"`,
+	"exit status 1", "nonzero exit", "non-zero exit", "panic:",
+	"traceback (most recent", "unauthorized", "forbidden",
+	"permission denied", "context deadline exceeded", "sqlstate",
+	"401 invalid", "invalid api key",
 }
 
-func tokenSet(s string) map[string]struct{} {
-	out := map[string]struct{}{}
-	for _, raw := range strings.FieldsFunc(s, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
-	}) {
-		if len(raw) < 3 {
-			continue
-		}
-		out[raw] = struct{}{}
+var emptySignals = []string{
+	`"count":0`, `"items":[]`, `"results":[]`, `"matches":[]`, `"rows":[]`,
+	`"data":[]`, "no results", "not found", "0 results",
+}
+
+// ClassifyActual buckets a tool's actual output into ok / empty / error.
+func ClassifyActual(actual string) OutcomeClass {
+	a := strings.ToLower(strings.TrimSpace(actual))
+	if a == "" {
+		return OutcomeEmpty
 	}
-	return out
+	if strings.HasPrefix(a, "error:") || strings.HasPrefix(a, "blocked:") ||
+		strings.HasPrefix(a, "failed") {
+		return OutcomeError
+	}
+	for _, sig := range errorSignals {
+		if strings.Contains(a, sig) {
+			return OutcomeError
+		}
+	}
+	if a == "{}" || a == "[]" || a == "null" {
+		return OutcomeEmpty
+	}
+	for _, sig := range emptySignals {
+		if strings.Contains(a, sig) {
+			return OutcomeEmpty
+		}
+	}
+	return OutcomeOK
+}
+
+// expectedClass reads the prediction sentence and decides whether it
+// anticipated success or failure. Our heuristic predictions are all
+// success-flavored ("succeed", "non-empty", "2xx", "exit 0"); a drafted
+// prediction can explicitly anticipate an error.
+func expectedClass(expected string) OutcomeClass {
+	e := strings.ToLower(expected)
+	if strings.Contains(e, "error") || strings.Contains(e, "fail") ||
+		strings.Contains(e, "block") || strings.Contains(e, "denied") ||
+		strings.Contains(e, "non-zero") || strings.Contains(e, "empty result") {
+		return OutcomeError
+	}
+	return OutcomeOK
+}
+
+// SurpriseFor compares an expectation to an actual result and returns a
+// 0..1 surprise score (0 = perfectly predicted, 1 = totally unexpected) plus
+// whether the outcome class matched the prediction. Deterministic and free -
+// no LLM call. High surprise now correctly flags "we expected success and hit
+// an error/empty", which is exactly the curriculum signal we want.
+func SurpriseFor(expected, actual string) (matched bool, surprise float64) {
+	if strings.TrimSpace(actual) == "" {
+		return false, 0.5
+	}
+	exp := expectedClass(expected)
+	act := ClassifyActual(actual)
+	switch {
+	case exp == act && act == OutcomeError:
+		return true, 0.2 // correctly predicted a failure - low surprise, still informative
+	case exp == act:
+		return true, 0.1 // predicted success, got success (or empty==empty)
+	case exp == OutcomeOK && act == OutcomeEmpty:
+		return false, 0.5 // expected a usable result, got nothing back
+	case exp == OutcomeOK && act == OutcomeError:
+		return false, 0.9 // expected success, hit an error - the signal we care about
+	case exp == OutcomeError && act == OutcomeOK:
+		return false, 0.7 // braced for failure, it worked - worth noticing
+	case exp == OutcomeError && act == OutcomeEmpty:
+		return false, 0.45
+	default:
+		return false, 0.5
+	}
 }
 
 func truncateText(s string, n int) string {

@@ -39,11 +39,11 @@ type Summarizer interface {
 
 // CompressedFacts is the structured shape we expect the LLM to return.
 type CompressedFacts struct {
-	Type      string         `json:"type"`     // decision | fact | error | preference | event
-	Title     string         `json:"title"`    // ≤80 chars
-	Summary   string         `json:"summary"`  // 1-3 sentences
-	Concepts  []string       `json:"concepts"` // free-text concepts
-	Entities  []Entity       `json:"entities"` // typed entities → mem_graph_nodes
+	Type      string         `json:"type"`      // decision | fact | error | preference | event
+	Title     string         `json:"title"`     // ≤80 chars
+	Summary   string         `json:"summary"`   // 1-3 sentences
+	Concepts  []string       `json:"concepts"`  // free-text concepts
+	Entities  []Entity       `json:"entities"`  // typed entities → mem_graph_nodes
 	Relations []RelationFact `json:"relations"` // typed edges → mem_graph_edges
 	Files     []string       `json:"files"`
 }
@@ -99,6 +99,18 @@ func (c *Compressor) Compress(ctx context.Context, observationID, project string
 		return err
 	}
 	if strings.TrimSpace(rawText) == "" {
+		return nil
+	}
+
+	// Plumbing guard: the batch compressor (CompressNewObservations) pulls
+	// EVERY uncompressed observation regardless of hook, so PreToolUse markers
+	// and tool-loader traces ("load_tools: {...}") were being memorialized as
+	// episodic facts ("Tool loader initialized with 29 active tools"). Those
+	// are the agent operating its own machinery, not knowledge worth keeping -
+	// drop them at the single boundary every compress path crosses, before
+	// spending a Haiku call. The capture path's shouldCompress already excludes
+	// these hooks; this closes the batch path's gap too.
+	if isLowValueObservation(hookName, rawText) {
 		return nil
 	}
 
@@ -306,8 +318,8 @@ func (c *Compressor) autoLinkNeighbours(ctx context.Context, memID string, emb [
 		return nil
 	}
 	const (
-		k         = 4
-		simFloor  = 0.65
+		k        = 4
+		simFloor = 0.65
 	)
 	rows, err := c.pool.Query(ctx, `
 		SELECT id::text, 1 - (embedding <=> $1) AS sim
@@ -354,6 +366,31 @@ func (c *Compressor) autoLinkNeighbours(ctx context.Context, memID string, emb [
 	return nil
 }
 
+// lowValueObsPrefixes are raw_text prefixes for the agent's own introspection
+// / plumbing tool results. Their memory ("loaded 29 tools", "searched for
+// tools") is mechanics, not knowledge, and was polluting episodic retrieval.
+var lowValueObsPrefixes = []string{
+	"load_tools:", "tool_search:", "system_map:", "skill_proposal_get:",
+	"surface_list:", "surface_update:", "mem_list:", "mem_get:",
+	"question_list:", "extension_list:", "followup_list:", "recall:",
+}
+
+// isLowValueObservation reports whether an observation is agent plumbing not
+// worth compressing into a memory. PreToolUse rows are pre-execution markers
+// with no outcome; the listed prefixes are introspection/loader tool results.
+func isLowValueObservation(hookName, rawText string) bool {
+	if hookName == "PreToolUse" {
+		return true
+	}
+	t := strings.TrimSpace(strings.ToLower(rawText))
+	for _, p := range lowValueObsPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func importanceForFactType(t string) int {
 	switch strings.ToLower(t) {
 	case "decision":
@@ -392,6 +429,12 @@ func (c *Compressor) CompressNewObservations(ctx context.Context, batchSize int)
 		WHERE ms.observation_id IS NULL
 		  AND o.created_at > NOW() - INTERVAL '24 hours'
 		  AND COALESCE(LENGTH(o.raw_text), 0) > 0
+		  -- Skip agent plumbing at the source: pre-execution markers and
+		  -- tool-loader / introspection results aren't memory-worthy.
+		  -- (Compress() also guards via isLowValueObservation; this just
+		  -- avoids fetching rows we'd immediately drop.)
+		  AND o.hook_name <> 'PreToolUse'
+		  AND o.raw_text NOT LIKE 'load_tools:%'
 		ORDER BY o.created_at DESC
 		LIMIT $1
 	`, batchSize)

@@ -61,10 +61,19 @@ func (r *Registry) Reload(ctx context.Context) ([]LoadError, error) {
 	r.mu.Unlock()
 
 	// Best-effort sync into the database so the Studio Skills tab can list
-	// skills even with the in-memory cache cold.
+	// skills even with the in-memory cache cold. Each upsert gets its OWN
+	// bounded timeout rather than sharing the caller's deadline across the
+	// whole loop: against the Supabase session pooler a single slow upsert
+	// would otherwise consume the shared budget and cascade "context
+	// deadline exceeded" into every remaining skill (the boot symptom where
+	// ~10 skills failed to load). A per-skill cap isolates the slow one and
+	// lets the rest through; cancellation still propagates from the parent.
 	if store != nil {
 		for _, s := range skills {
-			if err := store.UpsertSkill(ctx, s); err != nil {
+			uctx, ucancel := context.WithTimeout(ctx, 8*time.Second)
+			err := store.UpsertSkill(uctx, s)
+			ucancel()
+			if err != nil {
 				errs = append(errs, LoadError{Path: s.Path, Err: fmt.Sprintf("upsert: %v", err)})
 			}
 		}

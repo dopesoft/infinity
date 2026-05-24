@@ -125,3 +125,35 @@ func TestComposioConnectWorksWithProjectAPIKey(t *testing.T) {
 		t.Fatalf("response missing redirect URL: %s", rr.Body.String())
 	}
 }
+
+func TestComposioAccountRefreshUsesExistingConnectedAccount(t *testing.T) {
+	t.Setenv("COMPOSIO_API_KEY", "project-key")
+	t.Setenv("COMPOSIO_ADMIN_API_KEY", "")
+
+	var sawPath, sawAPIKey string
+	withComposioHTTP(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sawPath = r.URL.Path
+		sawAPIKey = r.Header.Get("x-api-key")
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		return jsonResp(http.StatusOK, `{"id":"ca_existing","redirect_url":"https://example.test/reauth"}`), nil
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/connectors/composio/accounts/ca_existing/refresh", nil)
+	(&Server{}).handleComposioAccount(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if sawPath != "/api/v3/connected_accounts/ca_existing/refresh" {
+		t.Fatalf("proxied path = %q", sawPath)
+	}
+	if sawAPIKey != "project-key" {
+		t.Fatalf("x-api-key = %q, want project-key", sawAPIKey)
+	}
+	if !strings.Contains(rr.Body.String(), "https://example.test/reauth") {
+		t.Fatalf("response missing redirect URL: %s", rr.Body.String())
+	}
+}

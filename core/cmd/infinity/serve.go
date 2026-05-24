@@ -135,6 +135,36 @@ func serveCmd() *cobra.Command {
 					}
 					rcancel()
 
+					// Stranded-run recovery: same logic for mem_runs. A row
+					// still 'running' at boot was booked by a previous process
+					// that died before Finish fired (deploy/crash), so it would
+					// spin forever in the UI (the nightly-cognition "stuck
+					// running" symptom). Single-instance core ⇒ any 'running'
+					// row at startup is orphaned. Close them before WS comes up.
+					rrctx, rrcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+					if n, err := runs.New(p).RecoverStranded(rrctx); err != nil {
+						log.Printf("run recovery: %v", err)
+					} else if n > 0 {
+						infoLog := log.New(os.Stdout, "", log.LstdFlags)
+						infoLog.Printf("run recovery: closed %d stranded running mem_runs row(s) from prior boot", n)
+					}
+					rrcancel()
+
+					// Stranded-prediction recovery: predictions recorded at
+					// PreToolUse whose PostToolUse hook never fired (session died
+					// mid-call) sit unresolved forever and pile up. Close anything
+					// unresolved older than 1h - same single-instance logic as the
+					// turn/run sweeps above. They resolve with surprise=0 so they
+					// never get mined as high-surprise curriculum.
+					prctx, prcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+					if n, err := memory.NewPredictionStore(p).SweepStale(prctx, time.Hour); err != nil {
+						log.Printf("prediction sweep: %v", err)
+					} else if n > 0 {
+						infoLog := log.New(os.Stdout, "", log.LstdFlags)
+						infoLog.Printf("prediction sweep: closed %d stranded unresolved prediction(s) from prior boot", n)
+					}
+					prcancel()
+
 					// Learning hub - turns dashboard interactions into
 					// procedural memories. When the boss bulk-dismisses
 					// N+ questions in the same pattern_key, a row in
@@ -466,7 +496,7 @@ func serveCmd() *cobra.Command {
 				// the disk file from the DB whenever the file is missing
 				// or drifted, so Railway's ephemeral container filesystem
 				// never causes skill loss between deploys.
-				mctx, mcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+				mctx, mcancel := context.WithTimeout(cmd.Context(), 45*time.Second)
 				if written, err := skills.MaterializeActiveSkills(mctx, pool, skillsRoot); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: materialize skills: %v\n", err)
 				} else if written > 0 {
@@ -474,7 +504,7 @@ func serveCmd() *cobra.Command {
 				}
 				mcancel()
 			}
-			loadCtx, loadCancel := context.WithTimeout(cmd.Context(), 15*time.Second)
+			loadCtx, loadCancel := context.WithTimeout(cmd.Context(), 90*time.Second)
 			if errs, err := skillRegistry.Reload(loadCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: skills reload: %v\n", err)
 			} else if len(errs) > 0 {

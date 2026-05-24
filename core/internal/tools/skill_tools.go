@@ -38,7 +38,7 @@ func RegisterSkillTools(r *Registry, pool *pgxpool.Pool, drafter SkillToolsDraft
 	if r == nil || pool == nil {
 		return
 	}
-	r.Register(&skillProposeTool{pool: pool})
+	r.Register(&skillProposeTool{pool: pool, drafter: drafter})
 	r.Register(&skillOptimizeTool{pool: pool, drafter: drafter})
 	r.Register(&skillProposalGetTool{pool: pool})
 }
@@ -46,7 +46,8 @@ func RegisterSkillTools(r *Registry, pool *pgxpool.Pool, drafter SkillToolsDraft
 // ── skill_propose ───────────────────────────────────────────────────────────
 
 type skillProposeTool struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	drafter SkillToolsDrafter
 }
 
 func (t *skillProposeTool) Name() string { return "skill_propose" }
@@ -129,6 +130,43 @@ func (t *skillProposeTool) Execute(ctx context.Context, input map[string]any) (s
 	importanceReason = strings.TrimSpace(importanceReason)
 	if importanceReason == "" {
 		importanceReason = inferSkillImportanceReason(name, desc, reasoning, skillMD)
+	}
+
+	// Dedup-before-create (root fix for catalog duplication). The merge
+	// machinery only engaged for UPDATES (skill_optimize sets parent_skill);
+	// brand-new proposals went in blind, so the agent kept minting near-dupes
+	// ("gmail-triage", "load-then-sweep-gmail", "inbox-triage-update", …) for
+	// the same capability. Here we check the existing catalog FIRST: if the
+	// proposal is essentially an existing skill, route it through the same
+	// UpsertCandidate merge path with parent_skill set, so it accumulates into
+	// that skill's one draft instead of spawning a new row.
+	if match := proposals.FindDuplicateSkill(ctx, t.pool, t.drafter, name, desc); match != "" {
+		res, err := proposals.UpsertCandidate(ctx, t.pool, t.drafter, slog.Default(), proposals.CandidateDraft{
+			Name:             match + "-update",
+			ParentSkill:      match,
+			Description:      desc,
+			Reasoning:        "Auto-routed from skill_propose (duplicate of existing skill " + match + "): " + reasoning,
+			SkillMD:          skillMD,
+			RiskLevel:        risk,
+			Importance:       importance,
+			ImportanceReason: importanceReason,
+			Source:           "agent",
+		})
+		if err == nil {
+			out, _ := json.Marshal(map[string]any{
+				"status":       "merged_into_existing",
+				"id":           res.ID,
+				"parent_skill": match,
+				"revision":     res.Revision,
+				"conflicts":    res.Conflicts,
+				"message": fmt.Sprintf(
+					"Skill %q already covers this. Instead of creating a duplicate, I merged your version into %q's pending draft (now v%d). The boss reviews it in the Skills tab. If you truly meant a distinct skill, propose again with a clearly different name + description.",
+					match, match, res.Revision),
+			})
+			return string(out), nil
+		}
+		// On merge failure, fall through to a normal standalone insert rather
+		// than losing the proposal.
 	}
 
 	id := uuid.NewString()

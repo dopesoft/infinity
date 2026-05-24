@@ -27,7 +27,7 @@ func RollupAgentMetrics(ctx context.Context, pool *pgxpool.Pool) {
 	}{
 		// avg_quality_score - the critic's self-score across today's sessions.
 		{"avg_quality_score", `
-			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size, updated_at)
+			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size)
 			SELECT CURRENT_DATE,
 			       'avg_quality_score',
 			       '',
@@ -44,7 +44,7 @@ func RollupAgentMetrics(ctx context.Context, pool *pgxpool.Pool) {
 		`},
 		// cost_usd_total - total spend across all categories today.
 		{"cost_usd_total", `
-			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size, updated_at)
+			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size)
 			SELECT CURRENT_DATE,
 			       'cost_usd_total',
 			       '',
@@ -61,7 +61,7 @@ func RollupAgentMetrics(ctx context.Context, pool *pgxpool.Pool) {
 		`},
 		// avg_surprise - how often the agent was wrong about tool outcomes.
 		{"avg_surprise", `
-			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size, updated_at)
+			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size)
 			SELECT CURRENT_DATE,
 			       'avg_surprise',
 			       '',
@@ -79,7 +79,7 @@ func RollupAgentMetrics(ctx context.Context, pool *pgxpool.Pool) {
 		`},
 		// skill_success_rate per skill - one row per skill that ran today.
 		{"skill_success_rate", `
-			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size, updated_at)
+			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size)
 			SELECT CURRENT_DATE,
 			       'skill_success_rate',
 			       skill_name,
@@ -97,7 +97,7 @@ func RollupAgentMetrics(ctx context.Context, pool *pgxpool.Pool) {
 		`},
 		// tool_error_rate per tool - fraction of predictions that didn't match.
 		{"tool_error_rate", `
-			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size, updated_at)
+			INSERT INTO mem_agent_metrics (day, metric_name, dimension, value, sample_size)
 			SELECT CURRENT_DATE,
 			       'tool_error_rate',
 			       tool_name,

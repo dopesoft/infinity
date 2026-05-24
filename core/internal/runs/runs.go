@@ -15,6 +15,7 @@ package runs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -166,6 +167,35 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 	`, h.id, status, end, end.Sub(h.start).Milliseconds(), errStr, summary)
 	// Clear id so a second Finish call no-ops.
 	h.id = ""
+}
+
+// RecoverStranded closes every mem_runs row still marked 'running' at boot.
+// A 'running' row was booked by Begin in a previous process that has since
+// died (deploy, crash, OOM); the in-process Handle that would have called
+// Finish is gone, so without this sweep the row spins forever in the UI (the
+// exact symptom: a nightly-cognition run stuck 'running' for hours). Core is
+// a single Railway instance, so any 'running' row visible at startup is
+// definitively orphaned. Mirrors memory.TurnStore.RecoverStranded; call it
+// once at boot. Returns the number of rows closed.
+func (t *Tracker) RecoverStranded(ctx context.Context) (int, error) {
+	if t == nil || t.pool == nil {
+		return 0, nil
+	}
+	tag, err := t.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET status = 'error',
+		       ended_at = COALESCE(ended_at, NOW()),
+		       duration_ms = COALESCE(duration_ms,
+		           LEAST(2147483647, GREATEST(0,
+		               EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
+		       error = COALESCE(NULLIF(error, ''), 'core restarted while run was in flight'),
+		       result_summary = COALESCE(NULLIF(result_summary, ''), '(interrupted by restart)')
+		 WHERE status = 'running'
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("recover stranded runs: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // Progress updates the optional 0..1 progress + label mid-flight. Safe

@@ -304,13 +304,40 @@ func mapsToActiveSkill(ctx context.Context, pool *pgxpool.Pool, signature string
 	return hit > 0
 }
 
+// metaTools are the agent's own introspection / plumbing verbs. A 3-tool
+// window made of these is the agent operating itself (searching for tools,
+// loading them, recalling memory, surfacing items) - never a reusable domain
+// recipe worth crystallizing into a skill. Surfacing them as "opportunities"
+// was the dominant source of curiosity noise (e.g. tool_search -> load_tools
+// -> skills_invoke, remember -> load_tools -> recall, surface_item x3).
+var metaTools = map[string]struct{}{
+	"":                   {},
+	"load_tools":         {},
+	"tool_search":        {},
+	"system_map":         {},
+	"skills_invoke":      {},
+	"skill_proposal_get": {},
+	"skill_optimize":     {},
+	"skill_propose":      {},
+	"surface_item":       {},
+	"surface_update":     {},
+	"surface_list":       {},
+	"notify":             {},
+	"remember":           {},
+	"recall":             {},
+	"mem_list":           {},
+	"mem_get":            {},
+	"question_list":      {},
+	"extension_list":     {},
+	"followup_list":      {},
+}
+
 func lowValueToolSignature(signature string) bool {
 	parts := strings.Split(signature, " -> ")
 	substantive := map[string]struct{}{}
 	for _, p := range parts {
 		tool := strings.TrimSpace(p)
-		switch tool {
-		case "", "load_tools", "system_map", "surface_item", "surface_update", "notify":
+		if _, meta := metaTools[tool]; meta {
 			continue
 		}
 		substantive[tool] = struct{}{}
@@ -318,6 +345,8 @@ func lowValueToolSignature(signature string) bool {
 	// A repeated single tool is not a reusable multi-step recipe. It is
 	// usually batching/pagination (e.g. Gmail fetch sweeps) and should be
 	// handled by the existing domain skill, not surfaced every heartbeat.
+	// Likewise a window made entirely of meta/plumbing tools collapses to
+	// zero substantive tools and is filtered here.
 	return len(substantive) <= 1
 }
 
