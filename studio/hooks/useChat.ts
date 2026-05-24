@@ -80,6 +80,13 @@ type ServerRow = {
   kind?: string;
   seed_kind?: string;
   curiosity_id?: string;
+  // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
+  // survives navigation/reload. tool_output present = completed.
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  tool_output?: string;
+  tool_is_error?: boolean;
 };
 
 // rowToMessage converts a canonical server transcript row into the local
@@ -88,6 +95,31 @@ type ServerRow = {
 // notably the `seeded` flag that routes the Discuss-with-Jarvis context
 // block to DashboardContextCard instead of a plain user bubble.
 function rowToMessage(r: ServerRow): ChatMessage {
+  // Reconstruct a tool-call card from a persisted PostToolUse row so the
+  // inline ToolCallCard survives navigation/reload (the history endpoint used
+  // to omit tool events, so cards vanished on return).
+  if (r.role === "tool" && r.tool_call_id) {
+    const msg: ChatMessage = {
+      id: makeId(),
+      role: "tool",
+      text: "",
+      createdAt: new Date(r.created_at).getTime() || Date.now(),
+      toolCall: {
+        id: r.tool_call_id,
+        name: r.tool_name ?? "",
+        input: r.tool_input,
+      },
+    };
+    if (r.tool_output != null) {
+      msg.toolResult = {
+        id: r.tool_call_id,
+        name: r.tool_name ?? "",
+        output: r.tool_output,
+        is_error: r.tool_is_error || undefined,
+      };
+    }
+    return msg;
+  }
   return {
     id: makeId(),
     role: r.role,
@@ -222,20 +254,20 @@ function mergeServerRows(
     }
     return true;
   });
-  // Dedup local tool messages against any server "tool" rows so we
-  // don't double-render. Server tool rows are bare role+text (no
-  // toolCall) - they render via the tool branch but ToolCallCard
-  // bails on !call so they show nothing. We drop those server tool
-  // rows in favour of the richer local one.
+  // Dedup tool cards by id. Server now returns RICH tool rows (reconstructed
+  // from PostToolUse), so on reload they rebuild the cards. During a live
+  // session the local message is freshest (it has the streaming/awaiting
+  // state), so when both exist we keep the local one and drop the server copy.
+  // On a cold reload there's no local copy → the reconstructed server card is
+  // kept. This is what makes tool cards survive navigation.
   const localToolIds = new Set(
     localToolMessages.map((m) => m.toolCall?.id).filter(Boolean) as string[],
   );
-  const localToolTexts = new Set(localToolMessages.map((m) => m.text.trim()));
   const fromServerSansTools = fromServer.filter((m) => {
     if (m.role !== "tool") return true;
-    if (m.text && localToolTexts.has(m.text.trim())) return false;
-    if (localToolIds.size === 0) return true; // no local detail to prefer; keep server row
-    return true;
+    const id = m.toolCall?.id;
+    if (id && localToolIds.has(id)) return false; // prefer the live local card
+    return true; // reconstructed-only (reload) — keep it
   });
   // Sort the local tool messages into the timeline by createdAt so a
   // tool that fired mid-session lands in the right slot relative to

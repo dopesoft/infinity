@@ -29,6 +29,14 @@ type sessionMessageDTO struct {
 	// curiosity question (best-effort, by artifact-title match). When set,
 	// the card renders an "Approve & fix" action.
 	CuriosityID string `json:"curiosity_id,omitempty"`
+	// Tool-call reconstruction (role="tool"): rebuilt from the captured
+	// PostToolUse observation so the inline ToolCallCard survives navigation
+	// and reload instead of vanishing. ToolInput is the raw arguments JSON.
+	ToolCallID  string          `json:"tool_call_id,omitempty"`
+	ToolName    string          `json:"tool_name,omitempty"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolOutput  string          `json:"tool_output,omitempty"`
+	ToolIsError bool            `json:"tool_is_error,omitempty"`
 }
 
 // handleSessionMessages serves /api/sessions/{id}/messages by reading the
@@ -80,7 +88,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		SELECT hook_name, COALESCE(raw_text, ''), COALESCE(payload::text, ''), created_at
 		FROM mem_observations
 		WHERE session_id = $1
-		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure')
 		  AND EXISTS (
 		    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
 		  )
@@ -101,6 +109,34 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+
+		// Tool calls: rebuild the inline ToolCallCard from the captured
+		// PostToolUse observation so it survives navigation/reload instead of
+		// only living in transient WS state. The payload carries the tool name,
+		// arguments, output, and the tool_call_id the live card used.
+		if hook == "PostToolUse" || hook == "PostToolUseFailure" {
+			var p struct {
+				Name       string          `json:"name"`
+				Input      json.RawMessage `json:"input"`
+				Output     string          `json:"output"`
+				ToolCallID string          `json:"tool_call_id"`
+			}
+			_ = json.Unmarshal([]byte(payload), &p)
+			if strings.TrimSpace(p.ToolCallID) == "" {
+				continue
+			}
+			out = append(out, sessionMessageDTO{
+				Role:        "tool",
+				CreatedAt:   createdAt.UTC().Format(time.RFC3339),
+				ToolCallID:  p.ToolCallID,
+				ToolName:    p.Name,
+				ToolInput:   p.Input,
+				ToolOutput:  p.Output,
+				ToolIsError: hook == "PostToolUseFailure",
+			})
+			continue
+		}
+
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
