@@ -123,7 +123,7 @@ export function CanvasFileTab({
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    fetchCanvasFSRead(path).then((r) => {
+    fetchCanvasFSRead(path, sessionId).then((r) => {
       if (cancelled) return;
       setLoading(false);
       if (!r) {
@@ -142,7 +142,7 @@ export function CanvasFileTab({
       }
     });
     if (isDirty) {
-      fetchCanvasGitShow(path).then((r) => {
+      fetchCanvasGitShow(path, undefined, sessionId).then((r) => {
         if (cancelled) return;
         if (!r) return;
         // Use HEAD as the diff baseline regardless of `found` - when

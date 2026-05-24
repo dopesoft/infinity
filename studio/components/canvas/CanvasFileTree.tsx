@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ChevronDown,
@@ -75,6 +75,11 @@ export function CanvasFileTree({
 } = {}) {
   const store = useCanvasStore();
   const projectCtx = useProjectContext();
+  // Session id via ref so the empty-dep onToggle/onRefresh callbacks always
+  // read the current value (used to route fs listing to this session's bridge —
+  // Cloud lists /workspace, not the Mac repo).
+  const sessionIdRef = useRef<string>("");
+  sessionIdRef.current = projectCtx?.sessionId ?? "";
   const [root, setRoot] = useState<Node | null>(null);
   const [filter, setFilter] = useState("");
 
@@ -91,7 +96,7 @@ export function CanvasFileTree({
     }
     const next = makeRootNode(store.root);
     setRoot(next);
-    void loadChildren(next.path).then((entries) => {
+    void loadChildren(next.path, sessionIdRef.current).then((entries) => {
       setRoot((prev) => {
         if (!prev || prev.path !== next.path) return prev;
         return {
@@ -110,7 +115,7 @@ export function CanvasFileTree({
         const nextExpanded = !n.expanded;
         if (nextExpanded && !n.children && n.type === "dir") {
           // Kick a load.
-          void loadChildren(n.path).then((entries) => {
+          void loadChildren(n.path, sessionIdRef.current).then((entries) => {
             setRoot((p) =>
               p
                 ? updateNode(p, n.path, (m) => ({
@@ -131,7 +136,7 @@ export function CanvasFileTree({
   const onRefresh = useCallback((targetPath: string) => {
     setRoot((prev) => {
       if (!prev) return prev;
-      void loadChildren(targetPath).then((entries) => {
+      void loadChildren(targetPath, sessionIdRef.current).then((entries) => {
         setRoot((p) =>
           p
             ? updateNode(p, targetPath, (m) => ({
@@ -383,8 +388,8 @@ function EmptyRoot() {
 
 // ---- helpers ---------------------------------------------------------------
 
-async function loadChildren(path: string): Promise<FSEntry[]> {
-  const res = await fetchCanvasFSList(path);
+async function loadChildren(path: string, sessionId: string): Promise<FSEntry[]> {
+  const res = await fetchCanvasFSList(path, sessionId);
   return res?.entries ?? [];
 }
 

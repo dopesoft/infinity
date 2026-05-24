@@ -142,6 +142,13 @@ type CanvasStoreValue = {
   markDirty: (path: string) => void;
   clearDirty: () => void;
 
+  // Bumped whenever the session's bridge preference changes (Mac ↔ Cloud ↔
+  // auto). Consumers that derive the workspace root or list files key off this
+  // so switching the bridge re-roots the tree to that bridge's filesystem
+  // (/workspace for Cloud, the Mac repo for Mac) and refreshes immediately.
+  bridgeEpoch: number;
+  bumpBridgeEpoch: () => void;
+
   // Live file content — what the canvas file tab renders instead of the disk
   // read while present, so the boss watches a file fill in AS Jarvis writes it.
   // Populated two ways: pushToolInputDelta (token-by-token, while the model
@@ -179,6 +186,7 @@ export function CanvasStoreProvider({
   const [previewRefreshKey, setRefreshKey] = useState(0);
   const [bridgeOk, setBridgeOk] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
+  const [bridgeEpoch, setBridgeEpoch] = useState(0);
   const [liveContent, setLiveContent] = useState<Map<string, string>>(() => new Map());
   const [liveStreaming, setLiveStreaming] = useState<Set<string>>(() => new Set());
   // Per-tool-id raw partial-JSON accumulation. A ref (not state) because deltas
@@ -392,6 +400,7 @@ export function CanvasStoreProvider({
   }, []);
 
   const clearDirty = useCallback(() => setDirtyPaths(new Set()), []);
+  const bumpBridgeEpoch = useCallback(() => setBridgeEpoch((n) => n + 1), []);
 
   // pushToolInputDelta accumulates one streamed tool-argument chunk, extracts
   // the file path (opens the tab the instant it's known) and the content so
@@ -515,6 +524,8 @@ export function CanvasStoreProvider({
       dirtyPaths,
       markDirty,
       clearDirty,
+      bridgeEpoch,
+      bumpBridgeEpoch,
       liveContent,
       liveStreaming,
       pushToolInputDelta,
@@ -549,6 +560,8 @@ export function CanvasStoreProvider({
       dirtyPaths,
       markDirty,
       clearDirty,
+      bridgeEpoch,
+      bumpBridgeEpoch,
       liveContent,
       liveStreaming,
       pushToolInputDelta,

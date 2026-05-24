@@ -79,9 +79,9 @@ export function CanvasGitPanel({
 
   const refresh = useCallback(async () => {
     if (!store.root) return;
-    const next = await fetchCanvasGitStatus(store.root);
+    const next = await fetchCanvasGitStatus(store.root, sessionId ?? "");
     if (next) setStatus(next);
-  }, [store.root]);
+  }, [store.root, sessionId]);
 
   useEffect(() => {
     // When the workspace root clears (session has no project_path -
@@ -181,6 +181,10 @@ export function CanvasGitPanel({
   const staged = (status?.entries ?? []).filter((e) => e.staged);
   const unstaged = (status?.entries ?? []).filter((e) => !e.staged && e.status !== "U");
   const untracked = (status?.entries ?? []).filter((e) => e.status === "U");
+  // Files Jarvis wrote/edited this session (from tool calls), independent of
+  // git. This is what makes edits show in Changes even when the workspace root
+  // isn't a git repo (e.g. a /workspace scratch dir on the cloud computer).
+  const sessionWrites = Array.from(store.dirtyPaths).sort();
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -278,12 +282,31 @@ export function CanvasGitPanel({
             Set a workspace root first.
           </div>
         )}
-        {store.root && status === null && (
+        {store.root && status === null && sessionWrites.length === 0 && (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
           </div>
         )}
-        {store.root && status && status.entries.length === 0 && (
+        {/* What Jarvis touched this session — independent of git, with a count
+            in the header ("This session · 5"). Shows files written to non-repo
+            dirs (e.g. a /workspace scratch dir) that git status would miss.
+            Clicking a row opens it in the canvas. */}
+        {store.root && sessionWrites.length > 0 && (
+          <GitGroup
+            title="This session"
+            entries={sessionWrites.map((p) => ({
+              path:
+                store.root && p.startsWith(store.root + "/")
+                  ? p.slice(store.root.length + 1)
+                  : p,
+              status: "M",
+              staged: false,
+            }))}
+            repo={store.root}
+            onOpen={openFile}
+          />
+        )}
+        {store.root && status && status.entries.length === 0 && sessionWrites.length === 0 && (
           <div className="px-3 py-6 text-xs text-muted-foreground">
             Working tree clean.
           </div>

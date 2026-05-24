@@ -100,8 +100,14 @@ async function postJSON<T>(path: string, body: unknown): Promise<T | null> {
   }
 }
 
-export const fetchCanvasConfig = (signal?: AbortSignal) =>
-  getJSON<CanvasConfig>("/api/canvas/config", signal);
+// sessionId lets Core resolve the session's bridge (Mac vs Cloud) and return a
+// bridge-aware default root — /workspace for Cloud sessions so the canvas opens
+// on the volume the agent actually writes to.
+export const fetchCanvasConfig = (sessionId = "", signal?: AbortSignal) =>
+  getJSON<CanvasConfig>(
+    `/api/canvas/config${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    signal,
+  );
 
 // Deploy-staleness snapshot. Core polls GitHub main HEAD every 5 min and
 // compares to RAILWAY_GIT_COMMIT_SHA. Studio surfaces the gap in the
@@ -129,17 +135,21 @@ export const fetchCanvasDebug = (path: string, signal?: AbortSignal) =>
     signal,
   );
 
-export const fetchCanvasFSList = (path = "", signal?: AbortSignal) =>
-  getJSON<FSListResponse>(
-    `/api/canvas/fs/ls${path ? `?path=${encodeURIComponent(path)}` : ""}`,
-    signal,
-  );
+// sessionId routes the listing to this session's bridge — Cloud sessions list
+// the /workspace volume (where fs_save lands), not the Mac repo over MCP.
+export const fetchCanvasFSList = (path = "", sessionId = "", signal?: AbortSignal) => {
+  const qs = new URLSearchParams();
+  if (path) qs.set("path", path);
+  if (sessionId) qs.set("session_id", sessionId);
+  const q = qs.toString();
+  return getJSON<FSListResponse>(`/api/canvas/fs/ls${q ? `?${q}` : ""}`, signal);
+};
 
-export const fetchCanvasFSRead = (path: string, signal?: AbortSignal) =>
-  getJSON<FSReadResponse>(
-    `/api/canvas/fs/read?path=${encodeURIComponent(path)}`,
-    signal,
-  );
+export const fetchCanvasFSRead = (path: string, sessionId = "", signal?: AbortSignal) => {
+  const qs = new URLSearchParams({ path });
+  if (sessionId) qs.set("session_id", sessionId);
+  return getJSON<FSReadResponse>(`/api/canvas/fs/read?${qs.toString()}`, signal);
+};
 
 export const saveCanvasFile = (input: {
   path: string;
@@ -148,20 +158,23 @@ export const saveCanvasFile = (input: {
   session_id?: string;
 }) => postJSON<FSSaveResponse>(`/api/canvas/fs/save`, input);
 
-export const fetchCanvasGitStatus = (repo: string, signal?: AbortSignal) =>
-  getJSON<GitStatusResponse>(
-    `/api/canvas/git/status?repo=${encodeURIComponent(repo)}`,
-    signal,
-  );
+// sessionId routes git status to this session's bridge — Cloud runs `git
+// status` on the /workspace volume, so the Changes tab reflects cloud work.
+export const fetchCanvasGitStatus = (repo: string, sessionId = "", signal?: AbortSignal) => {
+  const qs = new URLSearchParams({ repo });
+  if (sessionId) qs.set("session_id", sessionId);
+  return getJSON<GitStatusResponse>(`/api/canvas/git/status?${qs.toString()}`, signal);
+};
 
 export const fetchCanvasGitDiff = (
-  input: { repo: string; path?: string; staged?: boolean },
+  input: { repo: string; path?: string; staged?: boolean; session_id?: string },
   signal?: AbortSignal,
 ) => {
   const qs = new URLSearchParams();
   qs.set("repo", input.repo);
   if (input.path) qs.set("path", input.path);
   if (input.staged) qs.set("staged", "1");
+  if (input.session_id) qs.set("session_id", input.session_id);
   return getJSON<GitDiffResponse>(`/api/canvas/git/diff?${qs.toString()}`, signal);
 };
 
@@ -180,10 +193,12 @@ export type GitShowResponse = {
 export const fetchCanvasGitShow = (
   path: string,
   ref?: string,
+  sessionId = "",
   signal?: AbortSignal,
 ) => {
   const qs = new URLSearchParams({ path });
   if (ref) qs.set("ref", ref);
+  if (sessionId) qs.set("session_id", sessionId);
   return getJSON<GitShowResponse>(`/api/canvas/git/show?${qs.toString()}`, signal);
 };
 

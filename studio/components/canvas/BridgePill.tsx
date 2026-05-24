@@ -35,7 +35,15 @@ type Tone = "success" | "info" | "warning" | "danger" | "muted";
 
 const POLL_MS = 10_000;
 
-export function BridgePill({ sessionId }: { sessionId: string | null }) {
+export function BridgePill({
+  sessionId,
+  onPreferenceChange,
+}: {
+  sessionId: string | null;
+  // Fired after the boss switches the bridge (Mac ↔ Cloud ↔ auto) so the canvas
+  // can re-root the file tree to that bridge's filesystem and refresh.
+  onPreferenceChange?: (pref: Preference) => void;
+}) {
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [session, setSession] = useState<BridgeSessionView | null>(null);
   const [open, setOpen] = useState(false);
@@ -122,6 +130,8 @@ export function BridgePill({ sessionId }: { sessionId: string | null }) {
       // server's freshest probe (the POST forces a re-probe upstream).
       const s = await fetchBridgeStatus();
       if (s) setStatus(s);
+      // Tell the canvas to re-root to the new bridge's filesystem + refresh.
+      onPreferenceChange?.(next);
     } finally {
       setSavingPref(null);
     }

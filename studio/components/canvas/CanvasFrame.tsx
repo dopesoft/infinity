@@ -50,10 +50,12 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   // of being blanked, so chat-only sessions default to "working on
   // Jarvis itself." Fetched once per mount; cheap, cached.
   const [defaultProjectPath, setDefaultProjectPath] = useState<string>("");
+  const sessionId = current.session?.id ?? "";
   useEffect(() => {
     const ac = new AbortController();
     void (async () => {
-      const cfg = await fetchCanvasConfig(ac.signal);
+      // Session-aware: Cloud sessions get /workspace as the default root.
+      const cfg = await fetchCanvasConfig(sessionId, ac.signal);
       if (cfg?.default_project_path) setDefaultProjectPath(cfg.default_project_path);
     })();
     // Pre-warm the cloud workspace from Railway App Sleeping. Fire-and-forget;
@@ -62,7 +64,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
     // so the first user-driven `bridge_*` call doesn't pay the cold-start.
     void fetchBridgeStatus(ac.signal).catch(() => {});
     return () => ac.abort();
-  }, []);
+  }, [sessionId, store.bridgeEpoch]);
 
   // Project = session. The file tree, git panel, and preview re-scope
   // to whatever project_path the current session points at. When the

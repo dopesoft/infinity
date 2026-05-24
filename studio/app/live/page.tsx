@@ -49,7 +49,9 @@ function LivePageInner() {
   // project_path effect in <Workspace> takes over from there.
   useEffect(() => {
     const ac = new AbortController();
-    fetchCanvasConfig(ac.signal).then((cfg) => {
+    // No session yet at first paint; pass "". Workspace's per-session effect
+    // re-fetches with the session id and re-asserts the bridge-aware root.
+    fetchCanvasConfig("", ac.signal).then((cfg) => {
       if (!cfg) return;
       // Prefer the server-configured default project path (typically the
       // Jarvis repo) over the broader canvas root. This is the first-paint
@@ -118,7 +120,10 @@ function LivePageInner() {
           onRewind={undefined}
           extraActions={
             <>
-              <BridgePill sessionId={chat.sessionId || null} />
+              <BridgePill
+                sessionId={chat.sessionId || null}
+                onPreferenceChange={() => store.bumpBridgeEpoch()}
+              />
               <InfoModal
                 messages={chat.messages}
                 usedTokens={usedTokens}

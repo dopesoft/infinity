@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 )
 
@@ -489,6 +490,125 @@ type canvasTool interface {
 	Execute(ctx context.Context, input map[string]any) (string, error)
 }
 
+// cloudWorkspaceRoot is the display/browse root for Cloud sessions — the
+// persistent volume the cloud `workspace` bridge serves and the agent's
+// fs_save writes to. Matches WORKSPACE_ROOT in docker/workspace.
+const cloudWorkspaceRoot = "/workspace"
+
+// canvasCloudFS resolves whether THIS session's canvas filesystem ops should
+// land on the cloud workspace bridge — and returns that bridge when so. We
+// reuse the EXACT same routing the agent's fs_save tool uses
+// (bridge.Router.For honoring mem_sessions.bridge_preference), so the canvas
+// browses the same filesystem Jarvis writes to. Returns (nil,false) when the
+// session resolves to the Mac bridge (or no router), in which case the caller
+// keeps the existing Mac-MCP / local path untouched.
+//
+// This closes the bug where a Cloud session wrote to the cloud /workspace
+// volume but the canvas read the Mac's repo over MCP (macBridgeAvailable only
+// means "claude_code tool registered", not "this session is on the Mac").
+func (s *Server) canvasCloudFS(ctx context.Context, sessionID string) (bridge.Bridge, bool) {
+	if s.bridgeRouter == nil {
+		return nil, false
+	}
+	pref := bridge.PrefAuto
+	if s.bridgePrefs != nil && sessionID != "" {
+		pref = s.bridgePrefs(ctx, sessionID)
+	}
+	b, _, err := s.bridgeRouter.For(ctx, pref)
+	if err != nil || b == nil || b.Name() != bridge.KindCloud {
+		return nil, false
+	}
+	return b, true
+}
+
+// cloudBash runs a command on the cloud workspace bridge's /bash and returns
+// its merged stdout+stderr ("output") plus the exit code. Lets the canvas run
+// the SAME git commands Core runs on the Mac, but against the cloud /workspace
+// — so the Changes tab, diffs, and git mutations all reflect the cloud volume.
+func cloudBash(ctx context.Context, b bridge.Bridge, cmd string) (string, int, bool) {
+	body, status, ok := b.Post(ctx, "/bash", map[string]any{"cmd": cmd, "timeout_sec": 30})
+	if !ok || status >= 300 {
+		return "", -1, false
+	}
+	var resp struct {
+		Output   string `json:"output"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", -1, false
+	}
+	return resp.Output, resp.ExitCode, true
+}
+
+// cloudFSList lists a directory on the cloud workspace bridge and reshapes its
+// response into the canvas fsListResponse. Empty path → the workspace root.
+func (s *Server) cloudFSList(ctx context.Context, b bridge.Bridge, path string) (fsListResponse, bool) {
+	q := "/fs/ls"
+	if strings.TrimSpace(path) != "" {
+		q += "?path=" + url.QueryEscape(path)
+	}
+	body, status, ok := b.Get(ctx, q)
+	if !ok || status >= 300 {
+		return fsListResponse{}, false
+	}
+	var raw struct {
+		Root    string `json:"root"`
+		Entries []struct {
+			Name  string `json:"name"`
+			Path  string `json:"path"`
+			IsDir bool   `json:"is_dir"`
+			Size  int64  `json:"size"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fsListResponse{}, false
+	}
+	out := fsListResponse{Path: raw.Root, Root: cloudWorkspaceRoot, Entries: []fsEntry{}}
+	if out.Path == "" {
+		out.Path = cloudWorkspaceRoot
+	}
+	for _, e := range raw.Entries {
+		t := "file"
+		if e.IsDir {
+			t = "dir"
+		}
+		out.Entries = append(out.Entries, fsEntry{Name: e.Name, Type: t, Size: e.Size})
+	}
+	sortEntries(out.Entries)
+	return out, true
+}
+
+// cloudFSRead reads a file on the cloud workspace bridge and reshapes its
+// response into the canvas fsReadResponse (computing language + sha, which the
+// bridge doesn't return).
+func (s *Server) cloudFSRead(ctx context.Context, b bridge.Bridge, path string) (fsReadResponse, bool) {
+	if strings.TrimSpace(path) == "" {
+		return fsReadResponse{}, false
+	}
+	body, status, ok := b.Get(ctx, "/fs/read?path="+url.QueryEscape(path))
+	if !ok || status >= 300 {
+		return fsReadResponse{}, false
+	}
+	var raw struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fsReadResponse{}, false
+	}
+	rp := raw.Path
+	if rp == "" {
+		rp = path
+	}
+	return fsReadResponse{
+		Path:     rp,
+		Content:  raw.Content,
+		Language: detectLanguage(rp),
+		SHA:      sha256Hex(raw.Content),
+		Size:     int64(len(raw.Content)),
+	}, true
+}
+
 // ---- Filesystem ------------------------------------------------------------
 
 type fsEntry struct {
@@ -506,6 +626,21 @@ type fsListResponse struct {
 
 func (s *Server) handleCanvasFSList(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
+
+	// Cloud sessions: browse the SAME cloud /workspace volume the agent writes
+	// to (not the Mac's repo over MCP). The cloud bridge validates the path
+	// against its own WORKSPACE_ROOT, so we pass it through without the Mac
+	// canvasRoot escape check. If cloud is chosen but the call fails, return
+	// empty rather than silently falling back to the Mac — honest, not wrong.
+	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+		if resp, ok := s.cloudFSList(r.Context(), cloud, path); ok {
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		writeJSON(w, http.StatusOK, fsListResponse{Path: cloudWorkspaceRoot, Root: cloudWorkspaceRoot, Entries: []fsEntry{}})
+		return
+	}
+
 	resolved, ok := resolveCanvasPath(path)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
@@ -727,6 +862,18 @@ type fsReadResponse struct {
 
 func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
+
+	// Cloud sessions: read from the cloud /workspace volume (same fs the agent
+	// wrote to), so opening a file Jarvis just created shows its real content.
+	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+		if resp, ok := s.cloudFSRead(r.Context(), cloud, path); ok {
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not readable on cloud workspace"})
+		return
+	}
+
 	resolved, ok := resolveCanvasPath(path)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
@@ -907,6 +1054,33 @@ func (s *Server) handleCanvasFSSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Cloud session: write straight to the cloud /workspace volume. This is the
+	// boss editing his own file in his own canvas on his own cloud computer — a
+	// direct manual action, so it saves immediately (no Trust queue; that gate
+	// exists for the AGENT's writes, and the cloud bridge is the same fs Jarvis
+	// already writes to through fs_save).
+	if cloud, ok := s.canvasCloudFS(r.Context(), req.SessionID); ok {
+		_, status, bok := cloud.Post(r.Context(), "/fs/save", map[string]any{
+			"path":    req.Path,
+			"content": req.Content,
+		})
+		if !bok || status >= 300 {
+			writeJSON(w, http.StatusBadGateway, fsSaveResponse{
+				Status: "denied",
+				Path:   req.Path,
+				Reason: "cloud workspace save failed",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, fsSaveResponse{
+			Status: "saved",
+			Path:   req.Path,
+			NewSHA: sha256Hex(req.Content),
+		})
+		return
+	}
+
 	resolved, ok := resolveCanvasPath(req.Path)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
@@ -1005,6 +1179,22 @@ type gitStatusResponse struct {
 }
 
 func (s *Server) handleCanvasGitStatus(w http.ResponseWriter, r *http.Request) {
+	// Cloud session: run git status on the cloud /workspace volume so the
+	// Changes tab reflects what Jarvis actually did there (not the Mac repo).
+	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+		repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+		if repo == "" {
+			repo = cloudWorkspaceRoot
+		}
+		out, _, bok := cloudBash(r.Context(), cloud, "git -C "+shellQuote(repo)+" status --porcelain=v2 --branch")
+		if bok {
+			writeJSON(w, http.StatusOK, parseGitStatusV2(out, repo))
+		} else {
+			writeJSON(w, http.StatusOK, gitStatusResponse{Repo: repo, Entries: []gitStatusEntry{}})
+		}
+		return
+	}
+
 	repo, ok := resolveCanvasPath(r.URL.Query().Get("repo"))
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo escapes INFINITY_CANVAS_ROOT"})
@@ -1076,6 +1266,30 @@ type gitDiffResponse struct {
 }
 
 func (s *Server) handleCanvasGitDiff(w http.ResponseWriter, r *http.Request) {
+	pathQ := r.URL.Query().Get("path")
+	stagedQ := r.URL.Query().Get("staged") == "1" || r.URL.Query().Get("staged") == "true"
+
+	// Cloud session: diff against the cloud /workspace volume.
+	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+		repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+		if repo == "" {
+			repo = cloudWorkspaceRoot
+		}
+		cmd := "git -C " + shellQuote(repo) + " diff --no-color"
+		if stagedQ {
+			cmd += " --staged"
+		}
+		if pathQ != "" {
+			cmd += " -- " + shellQuote(pathQ)
+		}
+		out, _, bok := cloudBash(r.Context(), cloud, cmd)
+		if !bok {
+			out = ""
+		}
+		writeJSON(w, http.StatusOK, gitDiffResponse{Path: pathQ, Staged: stagedQ, Diff: out})
+		return
+	}
+
 	repo, ok := resolveCanvasPath(r.URL.Query().Get("repo"))
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo escapes INFINITY_CANVAS_ROOT"})
@@ -1136,11 +1350,6 @@ type gitShowResponse struct {
 // belongs to.
 func (s *Server) handleCanvasGitShow(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	resolved, ok := resolveCanvasPath(path)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
-		return
-	}
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	if ref == "" {
 		ref = "HEAD"
@@ -1156,6 +1365,33 @@ func (s *Server) handleCanvasGitShow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Cloud session: show the file at <ref> from whatever repo it lives in on
+	// the cloud /workspace. We `cd` into the file's dir and let git resolve the
+	// repo (no local os.Stat walk — that would inspect the Core container, the
+	// wrong filesystem). Non-zero exit = untracked-at-ref → Found:false, so the
+	// diff renders the whole file as additions.
+	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+		if strings.TrimSpace(path) == "" {
+			writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: "", Found: false})
+			return
+		}
+		dir := filepath.Dir(path)
+		base := filepath.Base(path)
+		cmd := "cd " + shellQuote(dir) + " && git show " + shellQuote(ref+":./"+base)
+		out, exit, bok := cloudBash(r.Context(), cloud, cmd)
+		if !bok || exit != 0 {
+			writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: "", Found: false})
+			return
+		}
+		writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: out, Found: true})
+		return
+	}
+
+	resolved, ok := resolveCanvasPath(path)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
+		return
+	}
 	repoRoot, relPath, found := findRepoRoot(resolved)
 	if !found {
 		writeJSON(w, http.StatusOK, gitShowResponse{Path: path, Ref: ref, Content: "", Found: false})
@@ -1317,10 +1553,22 @@ func (s *Server) handleCanvasGitMutation(
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	repo, ok := resolveCanvasPath(req.Repo)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo escapes INFINITY_CANVAS_ROOT"})
-		return
+	// Cloud session: operate on the cloud /workspace repo (skip the Mac
+	// canvasRoot escape check; the cloud bridge validates against its own root).
+	cloudB, isCloud := s.canvasCloudFS(r.Context(), req.SessionID)
+	var repo string
+	if isCloud {
+		repo = strings.TrimSpace(req.Repo)
+		if repo == "" {
+			repo = cloudWorkspaceRoot
+		}
+	} else {
+		var rok bool
+		repo, rok = resolveCanvasPath(req.Repo)
+		if !rok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo escapes INFINITY_CANVAS_ROOT"})
+			return
+		}
 	}
 	for _, p := range req.Paths {
 		if strings.ContainsAny(p, "\n\r;|&`$<>") {
@@ -1374,6 +1622,27 @@ func (s *Server) handleCanvasGitMutation(
 			ContractID: id,
 			Status:     "denied",
 			Reason:     reason,
+		})
+		return
+	}
+
+	// Cloud session: execute the approved git command on the cloud /workspace
+	// volume (same fs the boss is viewing), not the Mac.
+	if isCloud {
+		out, exit, bok := cloudBash(r.Context(), cloudB, cmd)
+		if !bok || exit != 0 {
+			writeJSON(w, http.StatusOK, gitMutationResponse{
+				ContractID: id,
+				Status:     "denied",
+				Reason:     "cloud git " + verb + " failed",
+				Output:     out,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, gitMutationResponse{
+			ContractID: id,
+			Status:     "executed",
+			Output:     out,
 		})
 		return
 	}
@@ -1455,13 +1724,23 @@ type canvasConfigResponse struct {
 }
 
 func (s *Server) handleCanvasConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, canvasConfigResponse{
+	resp := canvasConfigResponse{
 		Root:               canvasRoot(),
 		RootIsSet:          strings.TrimSpace(os.Getenv("INFINITY_CANVAS_ROOT")) != "",
 		PreviewURL:         strings.TrimSpace(os.Getenv("INFINITY_CANVAS_PREVIEW_URL")),
 		MacBridgeOK:        s.macBridgeAvailable(),
 		DefaultProjectPath: canvasDefaultProjectPath(),
-	})
+	}
+	// Bridge-aware default: when this session resolves to the cloud bridge, the
+	// canvas should default to the cloud /workspace volume (where the agent's
+	// fs_save lands), NOT the Mac repo. Without this the tree opens on the Mac
+	// repo and the boss can't see what Jarvis wrote on cloud.
+	if _, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+		resp.Root = cloudWorkspaceRoot
+		resp.RootIsSet = true
+		resp.DefaultProjectPath = cloudWorkspaceRoot
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleCanvasDebug is a diagnostic endpoint. Returns:

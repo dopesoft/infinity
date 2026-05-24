@@ -65,12 +65,16 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   useEffect(() => {
     const ac = new AbortController();
     void (async () => {
-      const cfg = await fetchCanvasConfig(ac.signal);
+      // Pass the session so Core returns a bridge-aware default: Cloud sessions
+      // default to the /workspace volume (where fs_save lands), not the Mac repo.
+      const cfg = await fetchCanvasConfig(chat.sessionId ?? "", ac.signal);
       if (cfg?.default_project_path) setDefaultProjectPath(cfg.default_project_path);
     })();
     void fetchBridgeStatus(ac.signal).catch(() => {});
     return () => ac.abort();
-  }, []);
+    // bridgeEpoch: re-fetch when the boss switches Mac ↔ Cloud so the default
+    // root flips to that bridge's filesystem.
+  }, [chat.sessionId, store.bridgeEpoch]);
 
   // Project = session lifecycle. When the active session changes its
   // project_path, re-scope the canvas store. When the session has no
