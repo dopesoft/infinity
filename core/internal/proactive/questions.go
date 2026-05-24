@@ -146,7 +146,7 @@ func UpsertQuestion(
 		       evidence_log      = (
 		           SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
 		             FROM (
-		                 SELECT * FROM jsonb_array_elements(evidence_log || $2::jsonb) AS e
+		                 SELECT e FROM jsonb_array_elements(evidence_log || $2::jsonb) AS elem(e)
 		                 ORDER BY (e->>'at')::timestamptz DESC NULLS LAST
 		                 LIMIT $3
 		             ) trimmed
@@ -245,9 +245,9 @@ func UpsertFinding(
 		  evidence_log      = (
 		      SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
 		        FROM (
-		            SELECT * FROM jsonb_array_elements(
+		            SELECT e FROM jsonb_array_elements(
 		                mem_heartbeat_findings.evidence_log || EXCLUDED.evidence_log
-		            ) AS e
+		            ) AS elem(e)
 		            ORDER BY (e->>'at')::timestamptz DESC NULLS LAST
 		            LIMIT `+fmt.Sprintf("%d", evidenceCap)+`
 		        ) trimmed

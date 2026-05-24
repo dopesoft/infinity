@@ -257,11 +257,13 @@ func New(cfg Config) *Server {
 
 	// Auth middleware. /health and /auth/* stay open so the studio can
 	// probe liveness and complete the signup handshake before holding a
-	// token. WS authorizes inside handleWebSocket (it needs to send a
-	// 401 on the upgrade response, which middleware-401s break).
+	// token. /webhooks/* stays open for third-party callbacks and performs
+	// route-local verification when a provider supports shared secrets. WS
+	// authorizes inside handleWebSocket (it needs to send a 401 on the
+	// upgrade response, which middleware-401s break).
 	var handler http.Handler = mux
 	if cfg.Auth != nil {
-		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/auth/", "/ws"})(handler)
+		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/auth/", "/webhooks/", "/ws"})(handler)
 	}
 
 	s.http = &http.Server{
@@ -333,6 +335,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/connectors/composio/accounts/", s.handleComposioAccount)
 	mux.HandleFunc("/api/connectors/composio/aliases", s.handleComposioAliases)
 	mux.HandleFunc("/api/connectors/composio/cache", s.handleComposioCacheStatus)
+	mux.HandleFunc("/webhooks/composio", s.handleComposioWebhook)
 
 	// Voice - OpenAI Realtime over WebRTC. Browser holds the audio
 	// pipes, Core mints the key, runs tools, and persists turns.
