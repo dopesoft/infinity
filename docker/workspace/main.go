@@ -121,6 +121,117 @@ func initEnv() {
 		_ = exec.Command("git", "config", "--global",
 			"credential.https://github.com.helper", helper).Run()
 	}
+
+	// Lay the disk out as a self-contained computer: Jarvis's own code at
+	// <root>/infinity (so he can fix himself) and user projects at
+	// <root>/projects/<name> (each its own git repo). Idempotent + runs every
+	// boot; safe to leave wired forever.
+	bootstrapLayout()
+}
+
+// bootstrapLayout splits the workspace volume into infinity/ (self) + projects/
+// (apps), migrating the legacy layout where the volume ROOT was the infinity
+// checkout. Non-destructive: it MOVES the existing checkout (working tree +
+// .git + any uncommitted work) into <root>/infinity rather than deleting
+// anything, so nothing is ever lost. On a fresh/empty volume it clones infinity
+// instead. Never fatal — a bootstrap hiccup must not take the bridge down, so
+// every failure logs and returns, leaving the disk as-is.
+func bootstrapLayout() {
+	selfDir := filepath.Join(workspaceRoot, "infinity")
+	projectsDir := filepath.Join(workspaceRoot, "projects")
+
+	// The projects store always exists — it's the disk-like home for apps.
+	if err := os.MkdirAll(projectsDir, 0o755); err != nil {
+		log.Printf("bootstrap: mkdir projects: %v", err)
+	}
+
+	// Already migrated (self-clone in place) — nothing to do.
+	if isDir(filepath.Join(selfDir, ".git")) {
+		log.Printf("bootstrap: self-clone present at %s", selfDir)
+		return
+	}
+
+	// Legacy layout: the volume root IS the infinity checkout. Relocate it into
+	// infinity/ by MOVING every root entry (except the new dirs) — preserves
+	// uncommitted work, deletes nothing.
+	if isDir(filepath.Join(workspaceRoot, ".git")) {
+		log.Printf("bootstrap: relocating legacy /workspace checkout into %s (move, non-destructive)", selfDir)
+		if dirty := gitDirty(workspaceRoot); dirty {
+			log.Printf("bootstrap: NOTE legacy checkout has uncommitted changes — moving preserves them all")
+		}
+		if !relocateRootCheckout(selfDir) {
+			log.Printf("bootstrap: relocation incomplete; leaving layout as-is (re-runs next boot)")
+		} else {
+			log.Printf("bootstrap: relocation complete — self now at %s", selfDir)
+		}
+		return
+	}
+
+	// Fresh volume: clone infinity into infinity/. Auth rides the credential
+	// helper configured above, so the URL carries no token (nothing to leak).
+	owner := envDefault("INFINITY_REPO_OWNER", "DopeSoft")
+	repo := envDefault("INFINITY_REPO_NAME", "infinity")
+	url := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+	log.Printf("bootstrap: empty volume — cloning %s/%s into %s", owner, repo, selfDir)
+	cmd := exec.Command("git", "clone", url, selfDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("bootstrap: clone failed: %v (%s)", err, lastLine(string(out)))
+	}
+}
+
+// relocateRootCheckout moves every entry at the workspace root (except the new
+// infinity/ + projects/ dirs and volume artifacts) into selfDir. Returns true
+// once selfDir holds a .git. os.Rename within one volume is atomic + cheap.
+func relocateRootCheckout(selfDir string) bool {
+	if err := os.MkdirAll(selfDir, 0o755); err != nil {
+		log.Printf("bootstrap: mkdir self: %v", err)
+		return false
+	}
+	entries, err := os.ReadDir(workspaceRoot)
+	if err != nil {
+		log.Printf("bootstrap: readdir root: %v", err)
+		return false
+	}
+	skip := map[string]bool{"infinity": true, "projects": true, ".bootstrap.sh": true, "lost+found": true}
+	moved := 0
+	for _, e := range entries {
+		if skip[e.Name()] {
+			continue
+		}
+		if err := os.Rename(filepath.Join(workspaceRoot, e.Name()), filepath.Join(selfDir, e.Name())); err != nil {
+			log.Printf("bootstrap: move %s: %v", e.Name(), err)
+			return false // abort on first failure — partial move re-runs next boot
+		}
+		moved++
+	}
+	log.Printf("bootstrap: moved %d root entries into %s", moved, selfDir)
+	return isDir(filepath.Join(selfDir, ".git"))
+}
+
+// gitDirty reports whether the repo at dir has uncommitted changes. Best-effort;
+// used only to log that a move preserves them.
+func gitDirty(dir string) bool {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// lastLine returns the final non-empty line of s (for compact error logs).
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 func envDefault(key, fallback string) string {

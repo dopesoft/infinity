@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
@@ -27,12 +28,19 @@ import (
 // Returns 503 if the Cloud bridge is unreachable or not configured,
 // so Studio can fall through quietly.
 
+// cloudSelfRepoDir is where the cloud workspace keeps Jarvis's own infinity
+// checkout after the layout split (see docker/workspace bootstrapLayout). The
+// volume root is a neutral container; the self-repo lives in this subdir.
+const cloudSelfRepoDir = "/workspace/infinity"
+
 type workspaceGitStatus struct {
 	Branch        string `json:"branch"`
 	LocalSHA      string `json:"local_sha"`
 	RemoteSHA     string `json:"remote_sha"`
 	Behind        bool   `json:"behind"`
 	CommitsBehind int    `json:"commits_behind"`
+	Ahead         bool   `json:"ahead"`
+	CommitsAhead  int    `json:"commits_ahead"`
 	Repo          string `json:"repo"`
 }
 
@@ -59,8 +67,19 @@ func (s *Server) handleBridgeWorkspaceGitStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// 1. Local: rev-parse HEAD on the cloud workspace.
-	localSHA, branch := readWorkspaceHead(r.Context(), cloud)
+	// ?path= selects WHICH checkout to report on. Empty = Jarvis's self-repo
+	// (/workspace/infinity), compared against DopeSoft/infinity main via the
+	// deploy tracker's GitHub client. A project path = an arbitrary repo under
+	// /workspace/projects, reported against ITS OWN upstream with local git
+	// (fetch + rev-list) so the badge is correct per-project, no hardcoding.
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path != "" {
+		writeJSON(w, http.StatusOK, projectAheadBehind(r.Context(), cloud, path))
+		return
+	}
+
+	// 1. Local: rev-parse HEAD on the self-repo.
+	localSHA, branch := readWorkspaceHead(r.Context(), cloud, cloudSelfRepoDir)
 	if localSHA == "" {
 		writeJSON(w, http.StatusOK, workspaceGitStatus{Behind: false})
 		return
@@ -83,6 +102,46 @@ func (s *Server) handleBridgeWorkspaceGitStatus(w http.ResponseWriter, r *http.R
 		out.CommitsBehind = globalDeployTracker.fetchCompareAheadBy(r.Context(), localSHA, remote)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// projectAheadBehind reports ahead/behind for an arbitrary project repo against
+// its OWN upstream, using local git on the cloud bridge (a quiet fetch then
+// rev-list). No GitHub API, no remote-URL parsing — works for any repo with a
+// tracked upstream. Returns a zeroed status (Behind/Ahead false) when the dir
+// isn't a repo or has no upstream, so the UI just shows "in sync".
+func projectAheadBehind(ctx context.Context, cloud interface {
+	Post(ctx context.Context, path string, body any) ([]byte, int, bool)
+}, dir string) workspaceGitStatus {
+	cmd := "cd " + shellQuote(dir) + " && " +
+		"git fetch --quiet 2>/dev/null; " +
+		"git rev-parse --abbrev-ref HEAD 2>/dev/null; " +
+		"git rev-list --left-right --count '@{u}...HEAD' 2>/dev/null"
+	body, status, ok := cloud.Post(ctx, "/bash", map[string]any{"cmd": cmd, "timeout_sec": 30})
+	if !ok || status >= 300 {
+		return workspaceGitStatus{}
+	}
+	out := strings.TrimSpace(extractJSONField(string(body), "output"))
+	lines := strings.Split(out, "\n")
+	res := workspaceGitStatus{}
+	if len(lines) >= 1 {
+		res.Branch = strings.TrimSpace(lines[0])
+	}
+	// rev-list --left-right --count @{u}...HEAD → "<behind>\t<ahead>"
+	// (left = upstream-only = behind; right = HEAD-only = ahead).
+	if len(lines) >= 2 {
+		fields := strings.Fields(lines[1])
+		if len(fields) == 2 {
+			if b, err := strconv.Atoi(fields[0]); err == nil && b > 0 {
+				res.Behind = true
+				res.CommitsBehind = b
+			}
+			if a, err := strconv.Atoi(fields[1]); err == nil && a > 0 {
+				res.Ahead = true
+				res.CommitsAhead = a
+			}
+		}
+	}
+	return res
 }
 
 // POST /api/bridge/workspace/git-pull
@@ -119,7 +178,7 @@ func (s *Server) handleBridgeWorkspaceGitPull(w http.ResponseWriter, r *http.Req
 	}
 
 	body, status, ok := cloud.Post(r.Context(), "/bash", map[string]any{
-		"cmd":         "git pull --ff-only",
+		"cmd":         "cd " + shellQuote(cloudSelfRepoDir) + " && git pull --ff-only",
 		"timeout_sec": 60,
 	})
 	pullOut := strings.TrimSpace(extractJSONField(string(body), "output"))
@@ -133,7 +192,7 @@ func (s *Server) handleBridgeWorkspaceGitPull(w http.ResponseWriter, r *http.Req
 	}
 
 	// Re-read status so the UI updates in one roundtrip.
-	localSHA, branch := readWorkspaceHead(r.Context(), cloud)
+	localSHA, branch := readWorkspaceHead(r.Context(), cloud, cloudSelfRepoDir)
 	remote := fetchRemoteHead(r.Context(), branch)
 	fresh := workspaceGitStatus{
 		Branch:    branch,
@@ -158,9 +217,9 @@ func (s *Server) handleBridgeWorkspaceGitPull(w http.ResponseWriter, r *http.Req
 // the bridge stays primitive (Rule #1: building blocks, not bespoke).
 func readWorkspaceHead(ctx context.Context, cloud interface {
 	Post(ctx context.Context, path string, body any) ([]byte, int, bool)
-}) (sha, branch string) {
+}, dir string) (sha, branch string) {
 	body, status, ok := cloud.Post(ctx, "/bash", map[string]any{
-		"cmd":         "git rev-parse HEAD && git rev-parse --abbrev-ref HEAD",
+		"cmd":         "git -C " + shellQuote(dir) + " rev-parse HEAD && git -C " + shellQuote(dir) + " rev-parse --abbrev-ref HEAD",
 		"timeout_sec": 10,
 	})
 	if !ok || status >= 300 {

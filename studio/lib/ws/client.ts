@@ -67,7 +67,12 @@ export type WSEvent =
   // a NEW tab: rendered markdown inline for reports, a download card for
   // binaries. Cloud-first — markdown rides the event, binaries fetch via the
   // cloud-direct /api/workspace/download proxy (works on any device).
-  | { type: "document_created"; session_id: string; document_created: WSDocumentCreated };
+  | { type: "document_created"; session_id: string; document_created: WSDocumentCreated }
+  // project_changed fires when the session's active project switches (agent
+  // called project_open/create/clone, or the boss switched it on another
+  // device). Studio re-scopes the canvas to project_path instantly instead of
+  // waiting on the 1.5s session poll. project_path "" = back to Jarvis's own code.
+  | { type: "project_changed"; session_id: string; project_changed: { project_path: string } };
 
 export type WSBrowserFrame = {
   seq: number;

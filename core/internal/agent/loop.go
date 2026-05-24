@@ -257,6 +257,13 @@ type Loop struct {
 	costMu sync.RWMutex
 	costs  CostRecorder
 
+	// projectFetcher resolves a session's ACTIVE project (a short label derived
+	// from mem_sessions.project_path) at the start of each turn, so observations
+	// captured during the turn are tagged with the project being worked on. Was
+	// always empty before — memory wasn't project-aware. Nil-safe + hot-swap.
+	projectMu      sync.RWMutex
+	projectFetcher func(ctx context.Context, sessionID string) string
+
 	mu       sync.Mutex
 	sessions map[string]*Session
 
@@ -678,6 +685,24 @@ func (l *Loop) ToolCatalogBlock(active *tools.ActiveSet) string {
 	return buildToolCatalogBlock(l.tools, active, nil)
 }
 
+// SetProjectFetcher wires the active-project resolver (reads mem_sessions and
+// derives a short project label from project_path). Set once at boot.
+func (l *Loop) SetProjectFetcher(fn func(ctx context.Context, sessionID string) string) {
+	l.projectMu.Lock()
+	l.projectFetcher = fn
+	l.projectMu.Unlock()
+}
+
+func (l *Loop) projectFor(ctx context.Context, sessionID string) string {
+	l.projectMu.RLock()
+	fn := l.projectFetcher
+	l.projectMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn(ctx, sessionID)
+}
+
 func (l *Loop) GetOrCreateSession(id string) *Session {
 	l.mu.Lock()
 	if id == "" {
@@ -820,6 +845,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	}
 
 	s := l.GetOrCreateSession(sessionID)
+
+	// Tag this turn's observations with the session's ACTIVE project so memory
+	// stays per-project coherent when the boss switches projects mid-conversation.
+	if p := l.projectFor(ctx, sessionID); p != "" {
+		s.Project = p
+	}
 
 	// Open a mem_turns row for this turn. The id flows into every
 	// fireHook payload below as `turn_id` so capture.go can stamp it on

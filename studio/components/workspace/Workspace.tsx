@@ -128,6 +128,19 @@ export function Workspace({ chat }: { chat: ChatHook }) {
         return;
       }
 
+      // Active project switched (agent ran project_open/create/clone) — re-scope
+      // the canvas to the new project instantly instead of waiting on the 1.5s
+      // session poll. Empty path = back to Jarvis's own code (the disk/self).
+      if (ev.type === "project_changed") {
+        const next = ev.project_changed.project_path?.trim() ?? "";
+        if (next && next !== store.root) {
+          store.setRoot(next);
+          store.closeAllFiles();
+          store.clearDirty();
+        }
+        return;
+      }
+
       // Live token stream: the model is WRITING the tool args. Open the file
       // the instant its path is known and type the content in as it arrives,
       // so the boss watches Jarvis code in real time instead of staring at a

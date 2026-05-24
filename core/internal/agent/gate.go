@@ -111,7 +111,7 @@ func IsBridgeTool(name string) bool {
 		"bash_run",
 		"git_status", "git_diff", "git_stage", "git_commit",
 		"git_push", "git_pull",
-		"project_create":
+		"project_create", "project_clone":
 		return true
 	}
 	return false

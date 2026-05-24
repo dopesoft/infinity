@@ -6,6 +6,7 @@ import { SessionHeader } from "@/components/SessionHeader";
 import { InfoModal } from "@/components/workspace/InfoModal";
 import { Workspace } from "@/components/workspace/Workspace";
 import { BridgePill } from "@/components/canvas/BridgePill";
+import { ProjectBreadcrumb } from "@/components/canvas/ProjectBreadcrumb";
 import { CanvasStoreProvider, useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasConfig } from "@/lib/canvas/api";
 import { fetchSessions } from "@/lib/api";
@@ -120,6 +121,7 @@ function LivePageInner() {
           onRewind={undefined}
           extraActions={
             <>
+              <ProjectBreadcrumb sessionId={chat.sessionId || null} />
               <BridgePill
                 sessionId={chat.sessionId || null}
                 onPreferenceChange={() => store.bumpBridgeEpoch()}

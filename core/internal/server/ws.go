@@ -77,6 +77,16 @@ type wsServerEvent struct {
 	// args simply never emit these and the canvas falls back to opening the
 	// file with the complete content from the tool_call event.
 	ToolInputDelta *wsToolInputDelta `json:"tool_input_delta,omitempty"`
+	// ProjectChanged fires when the session's active project switches (agent
+	// called project_open/create/clone, or the boss switched it) so Studio
+	// re-scopes the canvas instantly instead of waiting on the 1.5s poll.
+	ProjectChanged *wsProjectChanged `json:"project_changed,omitempty"`
+}
+
+// wsProjectChanged tells Studio the session is now scoped to a different project
+// (or back to Jarvis's own code when project_path is "").
+type wsProjectChanged struct {
+	ProjectPath string `json:"project_path"`
 }
 
 // wsToolInputDelta is one chunk of a tool call's arguments as the model writes

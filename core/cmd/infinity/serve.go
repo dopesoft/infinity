@@ -32,6 +32,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/projects"
 	"github.com/dopesoft/infinity/core/internal/proposals"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/runs"
@@ -96,6 +97,8 @@ func serveCmd() *cobra.Command {
 				activeBridgePrefs   tools.PreferenceFetcher
 				browserReg          *browser.Registry
 				docCreate           *tools.DocumentCreate
+				projectTools        *tools.ProjectTools
+				projectProvider     *projects.Provider
 				workspaceRawBase    string // cloud workspace URL for the doc download proxy
 				workspaceToken      string
 				notifySkillPromoted func(name, description string)
@@ -337,7 +340,7 @@ func serveCmd() *cobra.Command {
 					// app-bootstrap tool; it routes through the bridge
 					// internally and indexes itself into mem_artifacts.
 					tools.RegisterArtifactTools(registry, p)
-					tools.RegisterProjectTools(registry, p, activeBridgeRouter, activeBridgePrefs)
+					projectTools = tools.RegisterProjectTools(registry, p, activeBridgeRouter, activeBridgePrefs)
 					// document_create — generate .xlsx/.docx/.pptx/.pdf/.md via
 					// the workspace bridge's baked helpers (openpyxl/docx-js/
 					// pptxgenjs/reportlab). Cloud-only (the stack lives in the
@@ -675,6 +678,14 @@ func serveCmd() *cobra.Command {
 				if pool != nil {
 					memProviders = append(memProviders, worldmodel.NewGoalsProvider(pool))
 				}
+				// Active project: inject "you're scoped to project X at <path>"
+				// every turn so the agent never silently works in the wrong repo,
+				// and back the loop's per-turn memory project-tag with the same
+				// resolution.
+				if pool != nil {
+					projectProvider = projects.NewProvider(pool)
+					memProviders = append(memProviders, projectProvider)
+				}
 				// Cross-session lessons: mem_reflection_chains clusters repeated
 				// reflection lessons across sessions. This provider round-robins
 				// among the top-confidence chains so the agent picks up patterns
@@ -748,6 +759,11 @@ func serveCmd() *cobra.Command {
 					)
 				}
 				loop = agent.New(cfg)
+				// Tag each turn's observations with the session's active project
+				// (derived from project_path) so memory is project-coherent.
+				if projectProvider != nil {
+					loop.SetProjectFetcher(projectProvider.ProjectFetcher())
+				}
 				// Register the delegate + delegate_parallel sub-agent
 				// spawners now that the loop exists. They live in the
 				// agent package (need direct Loop access) but register
@@ -1334,6 +1350,14 @@ func serveCmd() *cobra.Command {
 				docCreate.Emit = func(sessionID, format, filename, path, markdown, pdfPath string, bytes int64) {
 					srv.EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, bytes)
 				}
+			}
+			// Late-bind the project-switch WS push so the canvas re-scopes
+			// instantly when the agent switches the active project (vs the 1.5s
+			// session poll).
+			if projectTools != nil {
+				projectTools.SetNotify(func(sessionID, projectPath string) {
+					srv.EmitProjectChanged(sessionID, projectPath)
+				})
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

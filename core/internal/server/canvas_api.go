@@ -54,6 +54,21 @@ const (
 	canvasGitPollInterval = 1 * time.Second
 )
 
+// EmitProjectChanged pushes a project-switch to the session's Studio tab so the
+// canvas re-scopes instantly (vs the 1.5s poll). Called when the agent switches
+// the active project (project_open/create/clone) or the boss switches it. Rides
+// the per-session broadcaster; nil-safe when no tab is connected.
+func (s *Server) EmitProjectChanged(sessionID, projectPath string) {
+	if s == nil || sessionID == "" {
+		return
+	}
+	s.sessionSender(sessionID)(wsServerEvent{
+		Type:           "project_changed",
+		SessionID:      sessionID,
+		ProjectChanged: &wsProjectChanged{ProjectPath: projectPath},
+	})
+}
+
 // canvasRoot returns the configured workspace root. Defaults to $HOME on the
 // Mac side; the env override exists so the boss can scope Canvas to a single
 // project directory if they want.

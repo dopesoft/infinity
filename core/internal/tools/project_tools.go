@@ -38,14 +38,58 @@ import (
 // RegisterProjectTools wires `project_create` (and any future project_*
 // tools) into the registry. Depends on the same bridge router + prefs
 // the generic bridge_* tools use.
-func RegisterProjectTools(r *Registry, pool *pgxpool.Pool, router *bridge.Router, prefs PreferenceFetcher) {
-	r.Register(&projectCreate{pool: pool, router: router, prefs: prefs})
+// ProjectTools holds the registered project tools so serve.go can late-bind the
+// project-changed WS notifier (the broadcaster only exists after the server is
+// constructed) — same late-bind pattern as document_create's emitter.
+type ProjectTools struct {
+	create *projectCreate
+	clone  *projectClone
+	open   *projectOpen
+}
+
+// SetNotify wires the project-switch WS push onto every project tool so a switch
+// re-scopes the canvas instantly instead of waiting on the 1.5s session poll.
+func (pt *ProjectTools) SetNotify(fn func(sessionID, projectPath string)) {
+	if pt == nil {
+		return
+	}
+	pt.create.notify = fn
+	pt.clone.notify = fn
+	pt.open.notify = fn
+}
+
+func RegisterProjectTools(r *Registry, pool *pgxpool.Pool, router *bridge.Router, prefs PreferenceFetcher) *ProjectTools {
+	create := &projectCreate{pool: pool, router: router, prefs: prefs}
+	clone := &projectClone{pool: pool, router: router, prefs: prefs}
+	open := &projectOpen{pool: pool, router: router, prefs: prefs}
+	r.Register(create)
+	r.Register(clone)
+	r.Register(open)
+	return &ProjectTools{create: create, clone: clone, open: open}
+}
+
+// resolveProjectsRoot returns the per-bridge projects store — the disk-like home
+// for apps, kept SEPARATE from Jarvis's self-clone. Cloud: /workspace/projects
+// (sibling of /workspace/infinity); Mac: ~/Dev/projects. Override per device with
+// INFINITY_PROJECTS_ROOT / INFINITY_DEFAULT_PROJECTS_ROOT_MAC.
+func resolveProjectsRoot(b bridge.Bridge) string {
+	if root := strings.TrimSpace(os.Getenv("INFINITY_PROJECTS_ROOT")); root != "" {
+		return strings.TrimRight(root, "/")
+	}
+	if b.Name() == bridge.KindCloud {
+		return "/workspace/projects"
+	}
+	if root := strings.TrimSpace(os.Getenv("INFINITY_DEFAULT_PROJECTS_ROOT_MAC")); root != "" {
+		return strings.TrimRight(root, "/")
+	}
+	return "/Users/n0m4d/Dev/projects"
 }
 
 type projectCreate struct {
 	pool   *pgxpool.Pool
 	router *bridge.Router
 	prefs  PreferenceFetcher
+	notify func(sessionID, projectPath string)
 }
 
 func (t *projectCreate) Name() string { return "project_create" }
@@ -121,23 +165,8 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 		return "", fmt.Errorf("project_create: %s", why)
 	}
 
-	// Path layout. Configurable via env so the boss can pick the
-	// projects-root per device. Defaults to <root>/projects.
-	root := os.Getenv("INFINITY_PROJECTS_ROOT")
-	if root == "" {
-		// Sensible per-bridge default. Cloud workspace volume mounts
-		// at /workspace; Mac canvas root defaults to $HOME (typically
-		// /Users/<user>/Dev).
-		if b.Name() == bridge.KindCloud {
-			root = "/workspace/projects"
-		} else {
-			root = os.Getenv("INFINITY_DEFAULT_PROJECTS_ROOT_MAC")
-			if root == "" {
-				root = "/Users/n0m4d/Dev/projects"
-			}
-		}
-	}
-	projectPath := strings.TrimRight(root, "/") + "/" + slug
+	root := resolveProjectsRoot(b)
+	projectPath := root + "/" + slug
 
 	// 1 + 2. Create dir + run scaffold template.
 	scaffoldCmd := buildScaffoldCommand(tmpl, root, slug, description, rawName)
@@ -204,6 +233,9 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 			projectPath, sessionID,
 		)
 	}
+	if t.notify != nil && sessionID != "" {
+		t.notify(sessionID, projectPath)
+	}
 
 	// 6. Index the project as a mem_artifacts row.
 	virtualPath := "/projects/" + slug
@@ -238,6 +270,241 @@ func (t *projectCreate) Execute(ctx context.Context, in map[string]any) (string,
 	}
 	if pushErr != "" {
 		result["github_warning"] = pushErr
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+// ── project_clone ──────────────────────────────────────────────────────────
+
+type projectClone struct {
+	pool   *pgxpool.Pool
+	router *bridge.Router
+	prefs  PreferenceFetcher
+	notify func(sessionID, projectPath string)
+}
+
+func (t *projectClone) Name() string { return "project_clone" }
+func (t *projectClone) Description() string {
+	return "Clone an existing git repo onto the active bridge (Mac or Cloud) and open it as a project. " +
+		"Lands it in the projects store (cloud: /workspace/projects/<name>, separate from Jarvis's own " +
+		"infinity code), sets the session's project_path so the canvas scopes to it, and indexes it as a " +
+		"mem_artifacts row so it shows in the project switcher. Use whenever the boss says 'clone this repo " +
+		"and let's work on it' or gives a GitHub URL to work from. GitHub auth rides the bridge's credential " +
+		"helper. After cloning, install deps with the cloud-workspace patterns as needed."
+}
+func (t *projectClone) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"repo_url": map[string]any{
+				"type":        "string",
+				"description": "Git URL to clone, e.g. https://github.com/owner/repo.git",
+			},
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Optional project name/dir. Defaults to the repo name from the URL.",
+			},
+			"branch": map[string]any{
+				"type":        "string",
+				"description": "Optional branch to check out.",
+			},
+			"tags": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		},
+		"required": []string{"repo_url"},
+	}
+}
+
+func (t *projectClone) Execute(ctx context.Context, in map[string]any) (string, error) {
+	rawURL := strings.TrimSpace(strString(in, "repo_url"))
+	if rawURL == "" {
+		return "", errors.New("repo_url required")
+	}
+	// The URL + branch are interpolated into a bash command — reject shell
+	// metacharacters so nothing can smuggle a command past the bridge.
+	const bad = " \t\n\r;|&`$<>()\"'\\"
+	if strings.ContainsAny(rawURL, bad) {
+		return "", errors.New("repo_url contains invalid characters")
+	}
+	branch := strings.TrimSpace(strString(in, "branch"))
+	if branch != "" && strings.ContainsAny(branch, bad) {
+		return "", errors.New("branch contains invalid characters")
+	}
+	name := strings.TrimSpace(strString(in, "name"))
+	slug := slugify(name)
+	if slug == "" {
+		slug = slugFromRepoURL(rawURL)
+	}
+	if slug == "" {
+		return "", errors.New("could not derive a project name from the url - pass name")
+	}
+	tags := stringSliceOrEmpty(in, "tags")
+
+	b, why, err := pickBridge(ctx, t.router, t.prefs)
+	if err != nil {
+		return "", fmt.Errorf("project_clone: %s", why)
+	}
+
+	root := resolveProjectsRoot(b)
+	projectPath := root + "/" + slug
+
+	// Clone into the projects store. mkdir -p the root first so a fresh volume
+	// works. Auth for github rides the bridge's credential helper (no token in
+	// the command).
+	cloneCmd := "git clone "
+	if branch != "" {
+		cloneCmd += "--branch " + shellSingleQuote(branch) + " "
+	}
+	cloneCmd += shellSingleQuote(rawURL) + " " + shellSingleQuote(projectPath)
+	full := "mkdir -p " + shellSingleQuote(root) + " && " + cloneCmd
+	out, status, ok := b.Post(ctx, "/bash", map[string]any{"cmd": full, "timeout_sec": 300})
+	if !ok || status >= 300 {
+		return "", fmt.Errorf("project_clone: clone failed on %s (status=%d): %s",
+			b.Name(), status, truncateForError(string(out), 600))
+	}
+
+	// Scope the session to the new project.
+	sessionID := SessionIDFromContext(ctx)
+	if sessionID != "" && t.pool != nil {
+		_, _ = t.pool.Exec(ctx,
+			`UPDATE mem_sessions SET project_path = $1 WHERE id::text = $2`,
+			projectPath, sessionID,
+		)
+	}
+	if t.notify != nil && sessionID != "" {
+		t.notify(sessionID, projectPath)
+	}
+
+	githubURL := ""
+	if strings.Contains(rawURL, "github.com") {
+		githubURL = strings.TrimSuffix(rawURL, ".git")
+	}
+	displayName := name
+	if displayName == "" {
+		displayName = slug
+	}
+	virtualPath := "/projects/" + slug
+	artifactID, artErr := insertProjectArtifact(ctx, t.pool, projectArtifact{
+		Slug:        slug,
+		Name:        displayName,
+		Description: "Cloned from " + rawURL,
+		Template:    "cloned",
+		StoragePath: projectPath,
+		Bridge:      string(b.Name()),
+		GitHubURL:   githubURL,
+		Tags:        tags,
+		SessionID:   sessionID,
+		VirtualPath: virtualPath,
+	})
+	if artErr != nil {
+		logInfo("project_clone: mem_artifacts insert failed: %v", artErr)
+	}
+
+	result := map[string]any{
+		"slug":         slug,
+		"name":         displayName,
+		"project_path": projectPath,
+		"virtual_path": virtualPath,
+		"bridge":       string(b.Name()),
+		"source_url":   rawURL,
+		"github_url":   githubURL,
+		"artifact_id":  artifactID,
+		"session_id":   sessionID,
+	}
+	outJSON, _ := json.Marshal(result)
+	return string(outJSON), nil
+}
+
+// slugFromRepoURL extracts a directory slug from a git URL's final path
+// segment (strips a trailing .git), e.g. https://github.com/x/cool-repo.git →
+// "cool-repo".
+func slugFromRepoURL(url string) string {
+	u := strings.TrimRight(strings.TrimSpace(url), "/")
+	u = strings.TrimSuffix(u, ".git")
+	if i := strings.LastIndexAny(u, "/:"); i >= 0 {
+		u = u[i+1:]
+	}
+	return slugify(u)
+}
+
+// ── project_open ───────────────────────────────────────────────────────────
+
+type projectOpen struct {
+	pool   *pgxpool.Pool
+	router *bridge.Router
+	prefs  PreferenceFetcher
+	notify func(sessionID, projectPath string)
+}
+
+func (t *projectOpen) Name() string { return "project_open" }
+func (t *projectOpen) Description() string {
+	return "Switch the current session to an already-known project (one previously created or cloned) so the canvas, git, and memory re-scope to it. Use to jump between projects mid-conversation — 'open my-app', 'switch to the client repo'. Pass the project name (as shown in the switcher), or an absolute path. NEW project → project_create; external repo → project_clone. Switching to a different project from your own infinity code is how you avoid silently working in the wrong tree."
+}
+func (t *projectOpen) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Project name/slug to switch to (as shown in the project switcher).",
+			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Optional absolute path to switch to directly instead of resolving by name.",
+			},
+		},
+	}
+}
+
+func (t *projectOpen) Execute(ctx context.Context, in map[string]any) (string, error) {
+	path := strings.TrimSpace(strString(in, "path"))
+	name := strings.TrimSpace(strString(in, "name"))
+	if path == "" && name == "" {
+		return "", errors.New("pass a project name or path to open")
+	}
+
+	// Active bridge — used to prefer a project that lives on the machine the
+	// session is currently using (a /workspace path on cloud won't exist on Mac).
+	bridgeKind := ""
+	if t.router != nil {
+		if b, _, err := pickBridge(ctx, t.router, t.prefs); err == nil && b != nil {
+			bridgeKind = string(b.Name())
+		}
+	}
+
+	if path == "" {
+		if t.pool == nil {
+			return "", errors.New("project registry unavailable")
+		}
+		row := t.pool.QueryRow(ctx, `
+			SELECT storage_path FROM mem_artifacts
+			WHERE kind = 'project' AND deleted_at IS NULL AND storage_path <> ''
+			  AND (lower(name) = lower($1) OR virtual_path = '/projects/' || $1 OR storage_path LIKE '%/' || $1)
+			ORDER BY (bridge = $2) DESC, created_at DESC
+			LIMIT 1`, name, bridgeKind)
+		if err := row.Scan(&path); err != nil || strings.TrimSpace(path) == "" {
+			return "", fmt.Errorf("no known project matches %q - create it (project_create) or clone it (project_clone) first", name)
+		}
+	}
+
+	sessionID := SessionIDFromContext(ctx)
+	if sessionID != "" && t.pool != nil {
+		_, _ = t.pool.Exec(ctx,
+			`UPDATE mem_sessions SET project_path = $1 WHERE id::text = $2`,
+			path, sessionID,
+		)
+	}
+	if t.notify != nil && sessionID != "" {
+		t.notify(sessionID, path)
+	}
+
+	result := map[string]any{
+		"project_path": path,
+		"session_id":   sessionID,
+		"switched":     true,
 	}
 	out, _ := json.Marshal(result)
 	return string(out), nil
