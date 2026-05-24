@@ -30,6 +30,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { extractStreamingContent, extractStreamingPath } from "./streaming";
 
 export type DevicePreset = "mobile" | "tablet" | "desktop";
 
@@ -140,6 +141,20 @@ type CanvasStoreValue = {
   dirtyPaths: Set<string>;
   markDirty: (path: string) => void;
   clearDirty: () => void;
+
+  // Live file content — what the canvas file tab renders instead of the disk
+  // read while present, so the boss watches a file fill in AS Jarvis writes it.
+  // Populated two ways: pushToolInputDelta (token-by-token, while the model
+  // streams the tool args) and setPendingFile (the full content from a
+  // completed tool_call — the model-agnostic floor for providers that don't
+  // stream tool args). liveStreaming marks paths still actively receiving
+  // deltas, so the editor stays read-only and auto-scrolls. endLiveFile drops
+  // the buffer on tool_result so the tab reloads the authoritative disk file.
+  liveContent: Map<string, string>;
+  liveStreaming: Set<string>;
+  pushToolInputDelta: (toolId: string, name: string, delta: string) => void;
+  setPendingFile: (path: string, content: string) => void;
+  endLiveFile: (path: string) => void;
 };
 
 const CanvasStoreContext = createContext<CanvasStoreValue | null>(null);
@@ -164,6 +179,11 @@ export function CanvasStoreProvider({
   const [previewRefreshKey, setRefreshKey] = useState(0);
   const [bridgeOk, setBridgeOk] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
+  const [liveContent, setLiveContent] = useState<Map<string, string>>(() => new Map());
+  const [liveStreaming, setLiveStreaming] = useState<Set<string>>(() => new Set());
+  // Per-tool-id raw partial-JSON accumulation. A ref (not state) because deltas
+  // are high-frequency and we only re-render when extracted path/content change.
+  const toolRawRef = useRef<Map<string, { raw: string; path: string | null; name: string }>>(new Map());
   const [rightMode, setRightModeInternal] = useState<"preview" | "file">("preview");
   const [browserActive, setBrowserActive] = useState(false);
   const [browserSessionId, setBrowserSessionId] = useState("");
@@ -373,6 +393,87 @@ export function CanvasStoreProvider({
 
   const clearDirty = useCallback(() => setDirtyPaths(new Set()), []);
 
+  // pushToolInputDelta accumulates one streamed tool-argument chunk, extracts
+  // the file path (opens the tab the instant it's known) and the content so
+  // far, and pushes it into the live buffer. Gate to code-change tools at the
+  // call site (Workspace) — the store stays generic.
+  const pushToolInputDelta = useCallback(
+    (toolId: string, name: string, delta: string) => {
+      const entry = toolRawRef.current.get(toolId) ?? { raw: "", path: null as string | null, name };
+      entry.raw += delta;
+      if (name) entry.name = name;
+      if (!entry.path) {
+        const p = extractStreamingPath(entry.raw);
+        if (p) {
+          entry.path = p;
+          openFile(p);
+          markDirty(p);
+          setLiveStreaming((prev) => {
+            const next = new Set(prev);
+            next.add(p);
+            return next;
+          });
+        }
+      }
+      toolRawRef.current.set(toolId, entry);
+      if (entry.path) {
+        const content = extractStreamingContent(entry.raw);
+        if (content != null) {
+          const path = entry.path;
+          setLiveContent((prev) => {
+            const next = new Map(prev);
+            next.set(path, content);
+            return next;
+          });
+        }
+      }
+    },
+    [openFile, markDirty],
+  );
+
+  // setPendingFile is the model-agnostic floor: the complete content from a
+  // finished tool_call. Opens the file and shows the full content immediately,
+  // even when the provider couldn't stream per-token deltas. Reconciles
+  // whatever streamed (the complete input is authoritative until disk write).
+  const setPendingFile = useCallback(
+    (path: string, content: string) => {
+      openFile(path);
+      markDirty(path);
+      setLiveContent((prev) => {
+        const next = new Map(prev);
+        next.set(path, content);
+        return next;
+      });
+      setLiveStreaming((prev) => {
+        if (!prev.has(path)) return prev;
+        const next = new Set(prev);
+        next.delete(path); // tool_call done — no longer actively streaming
+        return next;
+      });
+    },
+    [openFile, markDirty],
+  );
+
+  // endLiveFile drops the live buffer (on tool_result) so the file tab reloads
+  // the authoritative on-disk content (enabling real diff + edit).
+  const endLiveFile = useCallback((path: string) => {
+    setLiveStreaming((prev) => {
+      if (!prev.has(path)) return prev;
+      const next = new Set(prev);
+      next.delete(path);
+      return next;
+    });
+    setLiveContent((prev) => {
+      if (!prev.has(path)) return prev;
+      const next = new Map(prev);
+      next.delete(path);
+      return next;
+    });
+    for (const [id, entry] of toolRawRef.current) {
+      if (entry.path === path) toolRawRef.current.delete(id);
+    }
+  }, []);
+
   const tabs = useMemo<CanvasTab[]>(() => {
     return [
       { kind: "preview", id: "preview" } as const,
@@ -414,6 +515,11 @@ export function CanvasStoreProvider({
       dirtyPaths,
       markDirty,
       clearDirty,
+      liveContent,
+      liveStreaming,
+      pushToolInputDelta,
+      setPendingFile,
+      endLiveFile,
     }),
     [
       root,
@@ -443,6 +549,11 @@ export function CanvasStoreProvider({
       dirtyPaths,
       markDirty,
       clearDirty,
+      liveContent,
+      liveStreaming,
+      pushToolInputDelta,
+      setPendingFile,
+      endLiveFile,
     ],
   );
 

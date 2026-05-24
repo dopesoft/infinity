@@ -15,6 +15,12 @@ export type WSEvent =
   | { type: "delta"; session_id: string; text: string }
   | { type: "thinking"; session_id: string; text: string }
   | { type: "tool_call"; session_id: string; tool_call: WSToolEvent }
+  // tool_input_delta streams the model writing a tool call's arguments live —
+  // e.g. the file content for an edit — BEFORE the tool runs. Studio opens the
+  // file in the canvas and types it in as deltas arrive. id/name correlate to
+  // the eventual tool_call. Model-agnostic: providers that can't stream tool
+  // args never send these and the canvas falls back to the full tool_call.
+  | { type: "tool_input_delta"; session_id: string; tool_input_delta: WSToolInputDelta }
   | { type: "tool_result"; session_id: string; tool_result: WSToolEvent }
   | {
       type: "complete";
@@ -84,6 +90,12 @@ export type WSIntent = {
   confidence: number;
   reason?: string;
   suggested_action?: string;
+};
+
+export type WSToolInputDelta = {
+  id: string; // matches the eventual tool_call.id
+  name: string; // tool name, e.g. fs_edit / claude_code__write
+  delta: string; // raw partial-JSON chunk of the tool arguments
 };
 
 export type WSToolEvent = {

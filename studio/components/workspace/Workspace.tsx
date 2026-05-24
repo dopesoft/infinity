@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   ResizableHandle,
@@ -17,7 +17,12 @@ import {
   CurrentProjectProvider,
 } from "@/lib/canvas/useCurrentProject";
 import { useWebSocket } from "@/lib/ws/provider";
-import { isCodeChangeTool, extractToolFilePaths } from "@/lib/canvas/detection";
+import {
+  isCodeChangeTool,
+  extractToolFilePaths,
+  extractToolFilePath,
+  extractToolPreview,
+} from "@/lib/canvas/detection";
 import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
 import type { useChat } from "@/hooks/useChat";
 
@@ -95,16 +100,53 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   // another session doesn't paint phantom changes or steal focus. This
   // mirrors the document_created -> openDocument path in CanvasRightPane:
   // the file being changed surfaces itself instead of waiting for a click.
+  const toolPathsRef = useRef<Map<string, string[]>>(new Map());
+  // Latest store / sessionId via refs so the WS subscription mounts ONCE and
+  // never re-subscribes. Critical: the store identity changes on every
+  // streamed token (liveContent updates), so depending on it here would tear
+  // down and re-subscribe per token — dropping deltas and making the live
+  // stream choppy. Refs keep the handler stable while always reading current
+  // state.
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const sessionIdRef = useRef(chat.sessionId);
+  sessionIdRef.current = chat.sessionId;
   useEffect(() => {
     return ws.subscribe((ev) => {
+      const store = storeRef.current;
+      const sessionId = sessionIdRef.current;
       if (
         "session_id" in ev &&
         ev.session_id &&
-        chat.sessionId &&
-        ev.session_id !== chat.sessionId
+        sessionId &&
+        ev.session_id !== sessionId
       ) {
         return;
       }
+
+      // Live token stream: the model is WRITING the tool args. Open the file
+      // the instant its path is known and type the content in as it arrives,
+      // so the boss watches Jarvis code in real time instead of staring at a
+      // stale tool call. Gate to code-change tools when the name is known;
+      // path extraction guards the rest (non-file tools yield no path).
+      if (ev.type === "tool_input_delta") {
+        const d = ev.tool_input_delta;
+        if (d.name && !isCodeChangeTool(d.name)) return;
+        store.pushToolInputDelta(d.id, d.name, d.delta);
+        return;
+      }
+
+      // Tool finished: drop the live buffer so the tab reloads the
+      // authoritative on-disk file (real diff + editable).
+      if (ev.type === "tool_result") {
+        const paths = toolPathsRef.current.get(ev.tool_result.id);
+        if (paths) {
+          for (const p of paths) store.endLiveFile(p);
+          toolPathsRef.current.delete(ev.tool_result.id);
+        }
+        return;
+      }
+
       if (ev.type !== "tool_call") return;
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
@@ -120,12 +162,26 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       // mobile. Beyond the cap we still markDirty (the Files column shows
       // the dot), the boss just opens those by hand. We never evict an
       // existing tab, so an unsaved editor buffer can't be destroyed.
+      const input = ev.tool_call.input;
+      const paths = extractToolFilePaths(input);
+      toolPathsRef.current.set(ev.tool_call.id, paths);
+      const primaryPath = extractToolFilePath(input);
+      const primaryContent = extractToolPreview(input);
       let openFileTabs = store.tabs.reduce(
         (n, t) => (t.kind === "file" ? n + 1 : n),
         0,
       );
-      for (const path of extractToolFilePaths(ev.tool_call.input)) {
+      for (const path of paths) {
         store.markDirty(path);
+        // Floor (model-agnostic): show the COMPLETE content the model wrote,
+        // immediately. Covers providers that couldn't stream per-token deltas
+        // and reconciles whatever did stream — the full input is authoritative
+        // until tool_result reloads from disk. Only the primary single-file
+        // path carries inline content; multi-file pushes open normally.
+        if (path === primaryPath && primaryContent) {
+          store.setPendingFile(path, primaryContent);
+          continue;
+        }
         const alreadyOpen = store.tabs.some(
           (t) => t.kind === "file" && t.path === path,
         );
@@ -137,7 +193,7 @@ export function Workspace({ chat }: { chat: ChatHook }) {
         }
       }
     });
-  }, [ws, chat.sessionId, store]);
+  }, [ws]);
 
   // Mount gate - react-resizable-panels reads localStorage on first paint
   // so SSR vs CSR diverge; render a stable skeleton until the client takes

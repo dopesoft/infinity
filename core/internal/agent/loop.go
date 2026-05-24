@@ -748,9 +748,16 @@ type RunEvent struct {
 	ThinkingDelta string          `json:"thinking_delta,omitempty"`
 	ToolCall      *ToolEvent      `json:"tool_call,omitempty"`
 	ToolResult    *ToolEvent      `json:"tool_result,omitempty"`
-	Usage         *llm.TokenUsage `json:"usage,omitempty"`
-	Error         string          `json:"error,omitempty"`
-	StopReason    string          `json:"stop_reason,omitempty"`
+	// Set on EventToolInputDelta: the model writing a tool call's arguments
+	// live, before the call runs. ToolCallID/ToolName identify the call;
+	// InputDelta is the raw partial-JSON chunk. Drives the canvas opening the
+	// file and streaming its content as it's generated.
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	InputDelta string          `json:"input_delta,omitempty"`
+	Usage      *llm.TokenUsage `json:"usage,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	StopReason string          `json:"stop_reason,omitempty"`
 }
 
 type ToolEvent struct {
@@ -772,12 +779,13 @@ type ToolEvent struct {
 type EventKind string
 
 const (
-	EventDelta      EventKind = "delta"
-	EventThinking   EventKind = "thinking"
-	EventToolCall   EventKind = "tool_call"
-	EventToolResult EventKind = "tool_result"
-	EventComplete   EventKind = "complete"
-	EventError      EventKind = "error"
+	EventDelta          EventKind = "delta"
+	EventThinking       EventKind = "thinking"
+	EventToolCall       EventKind = "tool_call"
+	EventToolInputDelta EventKind = "tool_input_delta"
+	EventToolResult     EventKind = "tool_result"
+	EventComplete       EventKind = "complete"
+	EventError          EventKind = "error"
 )
 
 // Run drives one turn of the agent loop. steerCh is optional - when non-nil,
@@ -947,6 +955,19 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
 			case llm.StreamThinking:
 				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: ev.ThinkingDelta})
+			case llm.StreamToolInputDelta:
+				// Forward the live tool-argument chunk so the canvas can open
+				// the file and type it in as the model writes it. Best-effort
+				// preview — the subsequent EventToolCall carries authoritative
+				// full input. Purely additive; tool execution still runs off
+				// resp.ToolCalls after the stream completes.
+				emit(out, RunEvent{
+					Kind:       EventToolInputDelta,
+					SessionID:  s.ID,
+					ToolCallID: ev.ToolCallID,
+					ToolName:   ev.ToolName,
+					InputDelta: ev.InputDelta,
+				})
 			case llm.StreamError:
 				emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: ev.Err})
 			}

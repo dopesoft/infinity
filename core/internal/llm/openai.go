@@ -106,12 +106,37 @@ func (o *OpenAI) Stream(
 		streamErr error
 	)
 
+	// Correlate streamed function-argument chunks back to a tool call. The
+	// first chunk for a given index carries id + name; later chunks carry only
+	// the argument delta. We forward each as a StreamToolInputDelta so Studio
+	// can open the file in the canvas and type it in live.
+	type toolDeltaMeta struct{ id, name string }
+	toolDeltas := map[int64]toolDeltaMeta{}
+
 	for stream.Next() {
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
 				emit(out, StreamEvent{Kind: StreamText, TextDelta: choice.Delta.Content})
+			}
+			for _, tc := range choice.Delta.ToolCalls {
+				meta := toolDeltas[tc.Index]
+				if tc.ID != "" {
+					meta.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					meta.name = tc.Function.Name
+				}
+				toolDeltas[tc.Index] = meta
+				if tc.Function.Arguments != "" {
+					emit(out, StreamEvent{
+						Kind:       StreamToolInputDelta,
+						ToolCallID: meta.id,
+						ToolName:   meta.name,
+						InputDelta: tc.Function.Arguments,
+					})
+				}
 			}
 		}
 	}

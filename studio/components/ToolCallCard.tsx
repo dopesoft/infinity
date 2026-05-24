@@ -129,12 +129,26 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
   // (the file path, or the count when multiple). The tool name moves
   // into a small subscript so the boss can scan a transcript and pick
   // out file edits without parsing tool ids.
+  // Present-tense verb for a live code write, so a running card reads
+  // "Editing CanvasFileTab.tsx" — the boss can tell at a glance what Jarvis is
+  // doing right now (and the file is open + streaming in column 3). Once done,
+  // the bare filename + check icon conveys completion.
+  const runningVerb = (() => {
+    const k = shortToolKind(call.name);
+    if (k === "edit") return "Editing";
+    if (k === "write") return "Writing";
+    if (k === "save") return "Saving";
+    return "Updating";
+  })();
   const headerLabel = (() => {
     if (isCodeWrite) {
       if (filePaths.length > 1) {
-        return `${filePaths.length} files`;
+        return status === "running" ? `${runningVerb} ${filePaths.length} files` : `${filePaths.length} files`;
       }
-      if (filePath) return basename(filePath);
+      if (filePath) {
+        const base = basename(filePath);
+        return status === "running" ? `${runningVerb} ${base}` : base;
+      }
     }
     if (isRepoWrite && preview) {
       // Commit message / PR title - first line, trimmed.

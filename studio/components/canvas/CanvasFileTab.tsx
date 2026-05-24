@@ -70,6 +70,14 @@ export function CanvasFileTab({
 }) {
   const store = useCanvasStore();
   const isDirty = store.dirtyPaths.has(path);
+  // Live content: what Jarvis is writing RIGHT NOW (streamed token-by-token)
+  // or the complete content from a just-finished tool_call. When present we
+  // render it live instead of the disk read, so the boss watches the file
+  // fill in. Cleared on tool_result (endLiveFile) → falls back to the disk
+  // diff/edit flow below, which is authoritative.
+  const live = store.liveContent.get(path);
+  const isStreaming = store.liveStreaming.has(path);
+  const hasLive = live !== undefined;
   const [mode, setMode] = useState<Mode>(isDirty ? "diff" : "edit");
   // originalContent is the LEFT side of the diff editor. For a clean
   // file it equals on-disk (so diff vs your unsaved edits makes sense).
@@ -105,6 +113,12 @@ export function CanvasFileTab({
   // HEAD baseline as soon as it arrives.
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
+    // While the live buffer is showing (Jarvis writing, or full content from a
+    // just-finished tool_call), don't fetch — the on-disk file is pre-edit and
+    // would be stale. When endLiveFile clears the buffer (tool_result, file now
+    // written), hasLive flips false and this effect runs, reading the
+    // authoritative post-write content for the diff/edit view.
+    if (hasLive) return;
     if (!isActive && diskBaseline !== null) return; // Don't fetch background tabs.
     let cancelled = false;
     setLoading(true);
@@ -143,7 +157,7 @@ export function CanvasFileTab({
       cancelled = true;
     };
     // Reload on path change or explicit reload trigger.
-  }, [path, reloadKey, isActive, diskBaseline, isDirty]);
+  }, [path, reloadKey, isActive, diskBaseline, isDirty, hasLive]);
 
   // "Modified" means the Monaco buffer diverges from what's on disk
   // (i.e. the boss made unsaved edits). It is NOT the same as
@@ -284,12 +298,20 @@ export function CanvasFileTab({
 
       {/* Body */}
       <div className="relative min-h-0 flex-1">
-        {loading && (
+        {hasLive && (
+          <LiveStreamView
+            content={live ?? ""}
+            language={languageFromPath(path)}
+            theme={editorTheme}
+            beforeMount={handleEditorWillMount}
+          />
+        )}
+        {!hasLive && loading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         )}
-        {loadError && !loading && (
+        {!hasLive && loadError && !loading && (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm">
             <AlertCircle className="size-6 text-danger" />
             <p className="text-muted-foreground">{loadError}</p>
@@ -298,7 +320,7 @@ export function CanvasFileTab({
             </Button>
           </div>
         )}
-        {!loading && !loadError && originalContent !== null && currentContent !== null && (
+        {!hasLive && !loading && !loadError && originalContent !== null && currentContent !== null && (
           <>
             {mode === "diff" ? (
               <MonacoDiffEditor
@@ -349,9 +371,23 @@ export function CanvasFileTab({
 
       {/* Status bar */}
       <div className="flex h-7 shrink-0 items-center gap-2 border-t bg-muted/20 px-2 text-[10px] text-muted-foreground dark:bg-zinc-900/40">
-        <span className="font-mono uppercase">{language}</span>
+        <span className="font-mono uppercase">{hasLive ? languageFromPath(path) : language}</span>
         <span className="text-muted-foreground/40">·</span>
-        {mode === "diff" && (
+        {/* Live-writing indicator — what Jarvis is doing to this file right now. */}
+        {hasLive && (
+          <span className="flex items-center gap-1 text-info">
+            {isStreaming ? (
+              <>
+                <Loader2 className="size-3 animate-spin" /> Jarvis is writing…
+              </>
+            ) : (
+              <>
+                <Pencil className="size-3" /> Written
+              </>
+            )}
+          </span>
+        )}
+        {!hasLive && mode === "diff" && (
           <>
             <span
               className="font-mono"
@@ -366,39 +402,43 @@ export function CanvasFileTab({
             <span className="text-muted-foreground/40">·</span>
           </>
         )}
-        {saveState.status === "idle" && isModified && <span className="text-warning">Modified</span>}
-        {saveState.status === "idle" && !isModified && isDirty && diffSource === "head" && (
-          <span className="text-warning" title="Jarvis edited this file this session - not yet committed">
-            Jarvis-edited
-          </span>
-        )}
-        {saveState.status === "idle" && !isModified && !(isDirty && diffSource === "head") && <span>Clean</span>}
-        {saveState.status === "saving" && (
-          <span className="flex items-center gap-1">
-            <Loader2 className="size-3 animate-spin" /> Saving…
-          </span>
-        )}
-        {saveState.status === "pending" && (
-          <a
-            href="/trust"
-            className="inline-flex items-center gap-1 text-warning hover:underline"
-            title="Open Trust queue"
-          >
-            <ArrowUpRightFromSquare className="size-3" /> Pending approval
-          </a>
-        )}
-        {saveState.status === "saved" && (
-          <span className="flex items-center gap-1 text-success">
-            <Check className="size-3" /> Saved
-          </span>
-        )}
-        {saveState.status === "error" && (
-          <span className="flex items-center gap-1 text-danger" title={saveState.error}>
-            <AlertCircle className="size-3" /> {saveState.error}
-          </span>
+        {!hasLive && (
+          <>
+            {saveState.status === "idle" && isModified && <span className="text-warning">Modified</span>}
+            {saveState.status === "idle" && !isModified && isDirty && diffSource === "head" && (
+              <span className="text-warning" title="Jarvis edited this file this session - not yet committed">
+                Jarvis-edited
+              </span>
+            )}
+            {saveState.status === "idle" && !isModified && !(isDirty && diffSource === "head") && <span>Clean</span>}
+            {saveState.status === "saving" && (
+              <span className="flex items-center gap-1">
+                <Loader2 className="size-3 animate-spin" /> Saving…
+              </span>
+            )}
+            {saveState.status === "pending" && (
+              <a
+                href="/trust"
+                className="inline-flex items-center gap-1 text-warning hover:underline"
+                title="Open Trust queue"
+              >
+                <ArrowUpRightFromSquare className="size-3" /> Pending approval
+              </a>
+            )}
+            {saveState.status === "saved" && (
+              <span className="flex items-center gap-1 text-success">
+                <Check className="size-3" /> Saved
+              </span>
+            )}
+            {saveState.status === "error" && (
+              <span className="flex items-center gap-1 text-danger" title={saveState.error}>
+                <AlertCircle className="size-3" /> {saveState.error}
+              </span>
+            )}
+          </>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {mode === "edit" && (
+          {!hasLive && mode === "edit" && (
             <Button
               type="button"
               size="sm"
@@ -442,6 +482,82 @@ function ModeButton({
       {label}
     </button>
   );
+}
+
+// LiveStreamView renders the content Jarvis is writing right now — read-only,
+// auto-scrolling to the tail so the boss watches it fill in. Separate from the
+// disk-backed editor below so it has zero coupling to save/diff state; it just
+// mirrors the live buffer. When the tool finishes (endLiveFile) this unmounts
+// and the authoritative disk editor takes over.
+function LiveStreamView({
+  content,
+  language,
+  theme,
+  beforeMount,
+}: {
+  content: string;
+  language: string;
+  theme: string;
+  beforeMount: (monaco: typeof import("monaco-editor")) => void;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const edRef = useRef<any>(null);
+  // Auto-scroll to the last line on every content update so the newest tokens
+  // stay in view, the way a terminal follows output.
+  useEffect(() => {
+    const ed = edRef.current;
+    if (!ed || typeof ed.getModel !== "function") return;
+    try {
+      const model = ed.getModel();
+      if (model && typeof ed.revealLine === "function") {
+        ed.revealLine(model.getLineCount());
+      }
+    } catch {
+      /* editor not ready */
+    }
+  }, [content]);
+  return (
+    <MonacoEditor
+      height="100%"
+      language={language}
+      theme={theme}
+      value={content}
+      beforeMount={beforeMount}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      onMount={(editor: any) => {
+        edRef.current = editor;
+      }}
+      options={{
+        readOnly: true,
+        domReadOnly: true,
+        fontSize: 13,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        smoothScrolling: true,
+        wordWrap: "on",
+        automaticLayout: true,
+        renderValidationDecorations: "off",
+      }}
+    />
+  );
+}
+
+// languageFromPath guesses the Monaco language id from a file extension. Used
+// for the live stream view before the disk read (which carries the server's
+// detected language) has run. Falls back to plaintext.
+function languageFromPath(path: string): string {
+  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    mjs: "javascript", cjs: "javascript", go: "go", py: "python", rb: "ruby",
+    rs: "rust", java: "java", kt: "kotlin", swift: "swift", c: "c", h: "c",
+    cc: "cpp", cpp: "cpp", hpp: "cpp", cs: "csharp", php: "php", sh: "shell",
+    bash: "shell", zsh: "shell", sql: "sql", json: "json", jsonc: "json",
+    yaml: "yaml", yml: "yaml", toml: "ini", ini: "ini", md: "markdown",
+    mdx: "markdown", html: "html", htm: "html", css: "css", scss: "scss",
+    less: "less", xml: "xml", svg: "xml", dockerfile: "dockerfile",
+  };
+  return map[ext] ?? "plaintext";
 }
 
 function MonacoSkeleton() {

@@ -70,6 +70,22 @@ type wsServerEvent struct {
 	// /api/workspace/download proxy — works from any device regardless of the
 	// session's Mac/Cloud bridge.
 	DocumentCreated *wsDocumentCreated `json:"document_created,omitempty"`
+	// ToolInputDelta streams the model writing a tool call's arguments live —
+	// e.g. the file content for an edit — BEFORE the tool runs, so Studio opens
+	// the file in the canvas and types it in as it's generated. Rides the
+	// turn's RunEvent stream. Model-agnostic: providers that can't stream tool
+	// args simply never emit these and the canvas falls back to opening the
+	// file with the complete content from the tool_call event.
+	ToolInputDelta *wsToolInputDelta `json:"tool_input_delta,omitempty"`
+}
+
+// wsToolInputDelta is one chunk of a tool call's arguments as the model writes
+// them. ID/Name match the eventual tool_call so Studio can correlate; Delta is
+// the raw partial-JSON argument fragment.
+type wsToolInputDelta struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Delta string `json:"delta"`
 }
 
 // wsDocumentCreated tells Studio to open a generated document in a new tab.
@@ -516,6 +532,21 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 						AwaitingApproval: ev.ToolCall.AwaitingApproval,
 						ContractID:       ev.ToolCall.ContractID,
 						Preview:          ev.ToolCall.Preview,
+					},
+				})
+			}
+		case agent.EventToolInputDelta:
+			// Live tool-argument tokens → Studio opens the file in the canvas
+			// and types it in as the model writes it. Skip empty/idless chunks
+			// (some providers send the name/id before any argument bytes).
+			if ev.InputDelta != "" {
+				send(wsServerEvent{
+					Type:      "tool_input_delta",
+					SessionID: ev.SessionID,
+					ToolInputDelta: &wsToolInputDelta{
+						ID:    ev.ToolCallID,
+						Name:  ev.ToolName,
+						Delta: ev.InputDelta,
 					},
 				})
 			}

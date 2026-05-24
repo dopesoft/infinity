@@ -655,6 +655,11 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 	scanner.Buffer(make([]byte, 0, 4096), 4*1024*1024)
 
 	pending := make(map[string]*pendingToolCall)
+	// function_call_arguments.delta keys on the output item id (fc_…), which is
+	// NOT the call_id `pending` is keyed by — so index pending calls by item id
+	// too, otherwise the per-token argument deltas can't be resolved (and the
+	// live canvas stream would silently never fire on this path).
+	byItem := make(map[string]*pendingToolCall)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -703,6 +708,9 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 		case "response.output_item.added":
 			if call := decodePendingCall(evt.Item); call != nil {
 				pending[call.ID] = call
+				if call.ItemID != "" {
+					byItem[call.ItemID] = call
+				}
 			}
 		case "response.output_item.done":
 			// Fallback path: some Responses-API model variants (and partial
@@ -738,18 +746,35 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 				}
 			}
 		case "response.function_call_arguments.delta":
-			if pc := pending[evt.ItemID]; pc != nil {
+			pc := pending[evt.ItemID]
+			if pc == nil {
+				pc = byItem[evt.ItemID]
+			}
+			if pc != nil && evt.Delta != "" {
 				pc.Arguments += evt.Delta
+				emit(out, StreamEvent{
+					Kind:       StreamToolInputDelta,
+					ToolCallID: pc.ID,
+					ToolName:   pc.Name,
+					InputDelta: evt.Delta,
+				})
 			}
 		case "response.function_call_arguments.done":
-			if pc := pending[evt.ItemID]; pc != nil {
+			pc := pending[evt.ItemID]
+			if pc == nil {
+				pc = byItem[evt.ItemID]
+			}
+			if pc != nil {
 				if evt.Arguments != "" {
 					pc.Arguments = evt.Arguments
 				}
-				tc := finalizeToolCall(pc)
-				resp.ToolCalls = append(resp.ToolCalls, tc)
-				emit(out, StreamEvent{Kind: StreamToolCall, ToolCall: &tc})
-				delete(pending, evt.ItemID)
+				if !toolCallAlreadyEmitted(resp.ToolCalls, pc.ID) {
+					tc := finalizeToolCall(pc)
+					resp.ToolCalls = append(resp.ToolCalls, tc)
+					emit(out, StreamEvent{Kind: StreamToolCall, ToolCall: &tc})
+				}
+				delete(pending, pc.ID)
+				delete(byItem, pc.ItemID)
 			}
 		case
 			// Lifecycle events that carry no payload we need to act on.
@@ -818,7 +843,8 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 }
 
 type pendingToolCall struct {
-	ID        string
+	ID        string // call_id — the id the finalized ToolCall carries
+	ItemID    string // output item id (fc_…) — what function_call_arguments.delta keys on
 	Name      string
 	Arguments string
 }
@@ -844,7 +870,7 @@ func decodePendingCall(raw json.RawMessage) *pendingToolCall {
 	if id == "" {
 		id = item.ID
 	}
-	return &pendingToolCall{ID: id, Name: item.Name, Arguments: item.Arguments}
+	return &pendingToolCall{ID: id, ItemID: item.ID, Name: item.Name, Arguments: item.Arguments}
 }
 
 func finalizeToolCall(pc *pendingToolCall) ToolCall {

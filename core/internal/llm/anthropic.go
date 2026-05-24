@@ -160,6 +160,14 @@ func (a *Anthropic) Stream(
 	var msg anthropic.Message
 	var resp Response
 
+	// Correlate streamed input_json_delta chunks back to the tool block they
+	// belong to. content_block_start announces a tool_use block (id + name) at
+	// an index; subsequent input_json_delta events carry that index. We forward
+	// each chunk as a StreamToolInputDelta so Studio can open the file in the
+	// canvas and type it in live as the model writes the tool arguments.
+	type toolBlockMeta struct{ id, name string }
+	toolBlocks := map[int64]toolBlockMeta{}
+
 	for stream.Next() {
 		event := stream.Current()
 		if err := msg.Accumulate(event); err != nil {
@@ -168,6 +176,10 @@ func (a *Anthropic) Stream(
 		}
 
 		switch ev := event.AsAny().(type) {
+		case anthropic.ContentBlockStartEvent:
+			if tub, ok := ev.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
+				toolBlocks[ev.Index] = toolBlockMeta{id: tub.ID, name: tub.Name}
+			}
 		case anthropic.ContentBlockDeltaEvent:
 			switch d := ev.Delta.AsAny().(type) {
 			case anthropic.TextDelta:
@@ -177,6 +189,16 @@ func (a *Anthropic) Stream(
 			case anthropic.ThinkingDelta:
 				if d.Thinking != "" {
 					emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: d.Thinking})
+				}
+			case anthropic.InputJSONDelta:
+				if d.PartialJSON != "" {
+					meta := toolBlocks[ev.Index]
+					emit(out, StreamEvent{
+						Kind:       StreamToolInputDelta,
+						ToolCallID: meta.id,
+						ToolName:   meta.name,
+						InputDelta: d.PartialJSON,
+					})
 				}
 			}
 		}

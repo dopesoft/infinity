@@ -54,19 +54,31 @@ type StreamEvent struct {
 	TextDelta     string          `json:"text_delta,omitempty"`
 	ThinkingDelta string          `json:"thinking_delta,omitempty"`
 	ToolCall      *ToolCall       `json:"tool_call,omitempty"`
-	StopReason    string          `json:"stop_reason,omitempty"`
-	Usage         *TokenUsage     `json:"usage,omitempty"`
-	Err           string          `json:"err,omitempty"`
+	// Tool-input streaming: a StreamToolInputDelta carries the model writing a
+	// tool call's arguments live, BEFORE the tool runs and before the final
+	// StreamToolCall. ToolCallID/ToolName identify which call (set as soon as
+	// the provider knows them); InputDelta is the raw partial-JSON argument
+	// chunk. Model-agnostic: providers that can stream tool args emit these;
+	// ones that can't simply fall back to the complete StreamToolCall, so
+	// consumers treat deltas as a best-effort live preview that the final tool
+	// call reconciles authoritatively.
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolName   string      `json:"tool_name,omitempty"`
+	InputDelta string      `json:"input_delta,omitempty"`
+	StopReason string      `json:"stop_reason,omitempty"`
+	Usage      *TokenUsage `json:"usage,omitempty"`
+	Err        string      `json:"err,omitempty"`
 }
 
 type StreamEventKind string
 
 const (
-	StreamText     StreamEventKind = "text"
-	StreamThinking StreamEventKind = "thinking"
-	StreamToolCall StreamEventKind = "tool_call"
-	StreamComplete StreamEventKind = "complete"
-	StreamError    StreamEventKind = "error"
+	StreamText           StreamEventKind = "text"
+	StreamThinking       StreamEventKind = "thinking"
+	StreamToolCall       StreamEventKind = "tool_call"
+	StreamToolInputDelta StreamEventKind = "tool_input_delta"
+	StreamComplete       StreamEventKind = "complete"
+	StreamError          StreamEventKind = "error"
 )
 
 type Provider interface {
