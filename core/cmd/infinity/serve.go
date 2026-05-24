@@ -579,12 +579,14 @@ func serveCmd() *cobra.Command {
 			//
 			// composioKeyFn is shared across the cache, the execute client,
 			// and the toolkit-verb registrar so a Railway env hot-swap
-			// propagates everywhere without restart.
+			// propagates everywhere without restart. COMPOSIO_API_KEY is the
+			// canonical Composio project key; COMPOSIO_ADMIN_API_KEY is only a
+			// deprecated fallback name from older Infinity deployments.
 			composioKeyFn := func() string {
-				if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
+				if v := strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY")); v != "" {
 					return v
 				}
-				return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY"))
+				return strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY"))
 			}
 			var (
 				connectorsCache *connectors.Cache
@@ -927,8 +929,8 @@ func serveCmd() *cobra.Command {
 
 			// Connector poller - deterministic Composio tools.execute path
 			// (no LLM) that connector_poll cron jobs ride on. Reads the
-			// same admin/consumer key resolution the connectors cache uses
-			// so a Railway env swap propagates without restart.
+			// same project-key getter the connectors cache uses so a Railway
+			// env swap propagates without restart.
 			var connectorPoller *connectors.Poller
 			if pool != nil && composioExec != nil {
 				connectorPoller = connectors.NewPoller(pool, composioExec, pipeline)

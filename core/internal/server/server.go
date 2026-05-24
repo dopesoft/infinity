@@ -118,7 +118,7 @@ type Config struct {
 	RunsAPI *runs.API
 	// CalendarAPI registers /api/calendar/* - Accept/Decline RSVP,
 	// per-account sync trigger, accounts list. Nil-safe: missing
-	// Composio admin key or no connected calendar account disables
+	// Composio project key or no connected calendar account disables
 	// the routes and Studio renders a "no calendar connected" empty
 	// state in the Upcoming card.
 	CalendarAPI *calendar.API

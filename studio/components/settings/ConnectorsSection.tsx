@@ -726,7 +726,7 @@ function BrowseList({
       {error ? (
         <ComposioErrorBanner
           message={error}
-          hint="If the error mentions undeployed routes, push core. If it mentions 401/invalid key, set COMPOSIO_ADMIN_API_KEY (workspace admin tier - separate from the MCP consumer key)."
+          hint="If the error mentions undeployed routes, push core. If it mentions 401/invalid key, set COMPOSIO_API_KEY to the Composio Project API Key."
         />
       ) : toolkits.length === 0 && loading ? (
         <p className="text-sm text-muted-foreground">Loading catalog…</p>

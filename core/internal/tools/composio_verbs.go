@@ -51,8 +51,8 @@ const composioToolsBase = "https://backend.composio.dev/api/v3"
 
 // composioVerbDef is the relevant subset of Composio's /api/v3/tools row.
 type composioVerbDef struct {
-	Slug            string         `json:"slug"`             // e.g. "GMAIL_FETCH_EMAILS"
-	Name            string         `json:"name"`             // human label
+	Slug            string         `json:"slug"` // e.g. "GMAIL_FETCH_EMAILS"
+	Name            string         `json:"name"` // human label
 	Description     string         `json:"description"`
 	Toolkit         composioVerbTK `json:"toolkit"`
 	InputParameters map[string]any `json:"input_parameters"` // JSON Schema object
@@ -296,7 +296,7 @@ func (s *ComposioVerbSync) Sync(ctx context.Context) (added, removed, toolkitsAc
 	}
 	key := strings.TrimSpace(s.KeyFn())
 	if key == "" {
-		return 0, 0, 0, fmt.Errorf("no Composio key (set COMPOSIO_ADMIN_API_KEY)")
+		return 0, 0, 0, fmt.Errorf("no Composio key (set COMPOSIO_API_KEY)")
 	}
 	live := s.Cache.AccountsByToolkit()
 

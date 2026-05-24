@@ -35,30 +35,25 @@ const composioAPIBase = "https://backend.composio.dev/api/v3"
 // timeout because Composio's catalog endpoint occasionally takes ~2s.
 var composioHTTP = &http.Client{Timeout: 20 * time.Second}
 
-// composioRESTKey prefers the workspace admin API key over the consumer
-// key for REST calls. Composio's /api/v3/* endpoints (toolkit catalog,
-// workspace-level connected_accounts) reject `x-consumer-api-key`
-// outright - the consumer key is for the MCP gateway and per-user calls
-// only. Both are read fresh each call so a Railway env swap takes effect
-// without a restart.
-//
-// Returns (key, isAdmin). When isAdmin=false the only credential we have
-// is the consumer key; the REST catalog browser will still 401, but the
-// proxy stays consistent so a future workspace key drops in cleanly.
-func composioRESTKey() (string, bool) {
-	if v := strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY")); v != "" {
-		return v, true
+// composioRESTKey returns the Composio project API key for REST calls.
+// Composio v3 authenticates /toolkits, /connected_accounts, /auth_configs,
+// and tools.execute with x-api-key. COMPOSIO_ADMIN_API_KEY is a deprecated
+// Infinity-era name; keep it only as a backwards-compatible fallback so old
+// deployments do not go dark during the rename.
+func composioRESTKey() string {
+	if v := strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY")); v != "" {
+		return v
 	}
-	return strings.TrimSpace(os.Getenv("COMPOSIO_API_KEY")), false
+	return strings.TrimSpace(os.Getenv("COMPOSIO_ADMIN_API_KEY"))
 }
 
 // proxyComposio forwards an authenticated request to Composio and copies
 // the response body verbatim. Centralised so each handler stays a 3-liner.
 func proxyComposio(w http.ResponseWriter, r *http.Request, method, path string, body io.Reader) {
-	key, isAdmin := composioRESTKey()
+	key := composioRESTKey()
 	if key == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no Composio key on core (set COMPOSIO_ADMIN_API_KEY for catalog browse, COMPOSIO_API_KEY is the MCP consumer key only)",
+			"error": "no Composio project API key on core (set COMPOSIO_API_KEY)",
 		})
 		return
 	}
@@ -68,15 +63,7 @@ func proxyComposio(w http.ResponseWriter, r *http.Request, method, path string, 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// Send the appropriate header for the key tier. Admin → x-api-key +
-	// Bearer; consumer-only fallback → x-consumer-api-key (will 401 on
-	// /api/v3/* but the page surfaces that clearly).
-	if isAdmin {
-		req.Header.Set("x-api-key", key)
-		req.Header.Set("Authorization", "Bearer "+key)
-	} else {
-		req.Header.Set("x-consumer-api-key", key)
-	}
+	applyComposioAuth(req, key)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -165,16 +152,10 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	aliasPending, _ := in["alias"].(string)
 
-	key, isAdmin := composioRESTKey()
+	key := composioRESTKey()
 	if key == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "set COMPOSIO_ADMIN_API_KEY on core to initiate connections",
-		})
-		return
-	}
-	if !isAdmin {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "connection initiation requires the workspace admin key (COMPOSIO_ADMIN_API_KEY), not the consumer MCP key",
+			"error": "set COMPOSIO_API_KEY on core to initiate connections",
 		})
 		return
 	}
@@ -183,7 +164,7 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 	// flow into two steps. Step 1: locate (or create) an auth_config for
 	// this toolkit. Step 2: POST to /connected_accounts/link with the
 	// auth_config_id + user_id to receive the OAuth redirect URL.
-	authConfigID, err := findOrCreateAuthConfig(r.Context(), key, isAdmin, slug)
+	authConfigID, err := findOrCreateAuthConfig(r.Context(), key, slug)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "auth_config: " + err.Error()})
 		return
@@ -203,7 +184,7 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyComposioAuth(req, key, isAdmin)
+	applyComposioAuth(req, key)
 
 	resp, err := composioHTTP.Do(req)
 	if err != nil {
@@ -255,16 +236,12 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-// applyComposioAuth sets the right credential headers on `req` given
-// the key tier. Centralises the admin vs consumer branching so every
-// upstream call uses the same shape.
-func applyComposioAuth(req *http.Request, key string, isAdmin bool) {
-	if isAdmin {
-		req.Header.Set("x-api-key", key)
-		req.Header.Set("Authorization", "Bearer "+key)
-		return
-	}
-	req.Header.Set("x-consumer-api-key", key)
+// applyComposioAuth sets Composio's project-key REST headers. Keep this in
+// one place so browse, connect, auth-config, account CRUD, and future REST
+// calls cannot drift back to the old x-consumer-api-key path.
+func applyComposioAuth(req *http.Request, key string) {
+	req.Header.Set("x-api-key", key)
+	req.Header.Set("Authorization", "Bearer "+key)
 }
 
 // findOrCreateAuthConfig returns an auth_config_id for the given
@@ -276,7 +253,7 @@ func applyComposioAuth(req *http.Request, key string, isAdmin bool) {
 // user action, not a hot path. If two concurrent connects race on
 // the create step we end up with two equivalent configs, and the
 // next list returns whichever; both are valid.
-func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug string) (string, error) {
+func findOrCreateAuthConfig(ctx context.Context, key string, slug string) (string, error) {
 	// 1) List existing configs filtered by toolkit slug. Composio's
 	//    response wraps each row in `{ "auth_config": {...} }` or
 	//    flat depending on the endpoint - handle both.
@@ -285,7 +262,7 @@ func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug 
 	if err != nil {
 		return "", err
 	}
-	applyComposioAuth(req, key, isAdmin)
+	applyComposioAuth(req, key)
 	resp, err := composioHTTP.Do(req)
 	if err != nil {
 		return "", err
@@ -329,7 +306,7 @@ func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug 
 		return "", err
 	}
 	creq.Header.Set("Content-Type", "application/json")
-	applyComposioAuth(creq, key, isAdmin)
+	applyComposioAuth(creq, key)
 	cresp, err := composioHTTP.Do(creq)
 	if err != nil {
 		return "", err
@@ -356,7 +333,6 @@ func findOrCreateAuthConfig(ctx context.Context, key string, isAdmin bool, slug 
 	}
 	return "", fmt.Errorf("auth_config create: missing id in response: %s", truncate(string(cbody), 300))
 }
-
 
 // extractConnectedAccountID pulls the new connected_account id out of
 // Composio's initiate response. The field can live under different
@@ -444,13 +420,116 @@ func (s *Server) handleComposioAliases(w http.ResponseWriter, r *http.Request) {
 // Studio can show "last refreshed Xs ago" + error state without
 // re-implementing the math.
 func (s *Server) handleComposioCacheStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return
+	}
 	if s.connectors == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "connectors cache not configured"})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.connectors.Status())
+	out := map[string]any{
+		"cache": s.connectors.Status(),
+		"rest":  composioRESTHealth(r.Context()),
+		"mcp":   s.composioMCPHealth(),
+		"gmail": s.composioGmailHealth(),
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // composioCache is the package-level placeholder while we wait for the
 // Server struct field. Real wiring lives on s.connectors set in server.go.
 var _ = (*connectors.Cache)(nil)
+
+type composioRESTHealthStatus struct {
+	Configured bool   `json:"configured"`
+	OK         bool   `json:"ok"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+func composioRESTHealth(ctx context.Context) composioRESTHealthStatus {
+	key := composioRESTKey()
+	if key == "" {
+		return composioRESTHealthStatus{Configured: false, Error: "COMPOSIO_API_KEY not set"}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, composioAPIBase+"/connected_accounts?limit=1", nil)
+	if err != nil {
+		return composioRESTHealthStatus{Configured: true, Error: err.Error()}
+	}
+	applyComposioAuth(req, key)
+	resp, err := composioHTTP.Do(req)
+	if err != nil {
+		return composioRESTHealthStatus{Configured: true, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return composioRESTHealthStatus{
+			Configured: true,
+			OK:         false,
+			StatusCode: resp.StatusCode,
+			Error:      truncate(strings.TrimSpace(string(body)), 300),
+		}
+	}
+	return composioRESTHealthStatus{Configured: true, OK: true, StatusCode: resp.StatusCode}
+}
+
+func (s *Server) composioMCPHealth() map[string]any {
+	out := map[string]any{
+		"configured": s != nil && s.mcp != nil,
+		"connected":  false,
+		"tools":      0,
+	}
+	if s == nil || s.mcp == nil {
+		out["error"] = "mcp manager not configured"
+		return out
+	}
+	for _, st := range s.mcp.Statuses() {
+		if st.Name != "composio" {
+			continue
+		}
+		out["connected"] = st.Connected
+		out["tools"] = len(st.Tools)
+		if st.Error != "" {
+			out["error"] = st.Error
+		}
+		return out
+	}
+	out["error"] = "composio mcp server not configured"
+	return out
+}
+
+func (s *Server) composioGmailHealth() map[string]any {
+	out := map[string]any{
+		"active":           0,
+		"reconnect_needed": 0,
+		"accounts":         0,
+		"statuses":         map[string]int{},
+	}
+	if s == nil || s.connectors == nil {
+		return out
+	}
+	statuses := map[string]int{}
+	active := 0
+	reconnect := 0
+	accounts := s.connectors.AccountsByToolkit()["gmail"]
+	for _, acc := range accounts {
+		st := strings.ToUpper(strings.TrimSpace(acc.Status))
+		if st == "" {
+			st = "UNKNOWN"
+		}
+		statuses[st]++
+		if st == "ACTIVE" {
+			active++
+		}
+		if st == "REVOKED" || st == "EXPIRED" || st == "FAILED" {
+			reconnect++
+		}
+	}
+	out["active"] = active
+	out["reconnect_needed"] = reconnect
+	out["accounts"] = len(accounts)
+	out["statuses"] = statuses
+	return out
+}

@@ -73,11 +73,10 @@ servers:
   # MCP. Tools register as composio__<TOOLKIT>_<VERB>, e.g.
   # composio__GITHUB_CREATE_ISSUE, composio__GMAIL_SEND_EMAIL.
   #
-  # AUTH NOTE: Composio's MCP gateway authenticates with the consumer key
-  # via `x-consumer-api-key: <raw>` — NOT `Authorization: Bearer`. The
-  # workspace admin API key (used for the catalog REST proxy in
-  # connectors_api.go) is a separate credential and goes in
-  # COMPOSIO_ADMIN_API_KEY when you want the /connectors browse tab to work.
+  # AUTH NOTE: COMPOSIO_API_KEY is the Composio Project API Key. The MCP
+  # gateway still authenticates with `x-consumer-api-key: <raw>` here, while
+  # Infinity's REST proxy sends the SAME project key as `x-api-key` for
+  # /toolkits, /connected_accounts, /auth_configs, and tools.execute.
   #
   # Why Composio instead of registering every OAuth app ourselves:
   #   - Skips 6+ months of vendor-by-vendor OAuth app registration
@@ -86,8 +85,7 @@ servers:
   #   - Multi-tenant story is shipped: pass per-user entity_id and they handle the rest
   #
   # Setup:
-  #   railway variables --service core --set COMPOSIO_API_KEY=ck_...   (consumer key, for MCP)
-  #   railway variables --service core --set COMPOSIO_ADMIN_API_KEY=... (workspace key, for catalog REST)
+  #   railway variables --service core --set COMPOSIO_API_KEY=... (Composio Project API Key)
   - name: composio
     transport: http
     enabled: true

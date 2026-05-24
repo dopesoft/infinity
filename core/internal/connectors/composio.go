@@ -50,19 +50,19 @@ type ExecuteRequest struct {
 // action-specific shape (gmail messages, calendar events, etc.) without
 // us pre-defining every payload.
 type ExecuteResponse struct {
-	Successful bool            `json:"successful"`
-	Error      string          `json:"error,omitempty"`
-	Data       json.RawMessage `json:"data,omitempty"`
-	LogID      string          `json:"log_id,omitempty"`
-	SessionInfo any            `json:"session_info,omitempty"`
+	Successful  bool            `json:"successful"`
+	Error       string          `json:"error,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	LogID       string          `json:"log_id,omitempty"`
+	SessionInfo any             `json:"session_info,omitempty"`
 }
 
 // ExecuteClient calls Composio's tools.execute endpoint.
 //
 // Unlike cache.New which takes a key getter, this client takes a getter too
-// so a Railway env hot-swap propagates without restart. Same admin-key
-// preference as connectors_api.go: COMPOSIO_ADMIN_API_KEY first, fallback
-// to COMPOSIO_API_KEY.
+// so a Railway env hot-swap propagates without restart. Callers should pass
+// the Composio project API key (COMPOSIO_API_KEY); the old
+// COMPOSIO_ADMIN_API_KEY name is supported only as a caller-side fallback.
 type ExecuteClient struct {
 	keyFn      func() string
 	httpClient *http.Client
@@ -95,7 +95,7 @@ func (c *ExecuteClient) Execute(ctx context.Context, req ExecuteRequest) (*Execu
 	}
 	key := strings.TrimSpace(c.keyFn())
 	if key == "" {
-		return nil, fmt.Errorf("execute: no Composio API key (set COMPOSIO_ADMIN_API_KEY)")
+		return nil, fmt.Errorf("execute: no Composio API key (set COMPOSIO_API_KEY)")
 	}
 
 	body, err := json.Marshal(req)
@@ -135,4 +135,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
-

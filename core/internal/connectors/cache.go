@@ -35,7 +35,7 @@ type Account struct {
 	ToolkitName  string    `json:"toolkit_name"`
 	Status       string    `json:"status"`
 	Alias        string    `json:"alias,omitempty"`
-	UserID       string    `json:"user_id,omitempty"` // the entity id passed to Composio at Connect
+	UserID       string    `json:"user_id,omitempty"`       // the entity id passed to Composio at Connect
 	IdentityHint string    `json:"identity_hint,omitempty"` // best-effort email/username extracted from Composio meta
 	CreatedAt    time.Time `json:"created_at,omitempty"`
 }
@@ -70,9 +70,9 @@ type Cache struct {
 	httpClient *http.Client
 	refresh    time.Duration
 
-	mu          sync.RWMutex
-	byToolkit   map[string][]*Account
-	aliases     map[string]string
+	mu        sync.RWMutex
+	byToolkit map[string][]*Account
+	aliases   map[string]string
 	// identities is the agent-discovered overlay: account_id → real
 	// upstream identity (email / handle / username). Written by the
 	// generic `connector_identity_set` tool - Composio's list response
@@ -96,9 +96,9 @@ type Cache struct {
 	cancel context.CancelFunc
 }
 
-// New builds the cache. `adminKey` is a getter so we read Composio's
-// admin key every refresh and pick up Railway env changes without a
-// restart (mirrors composioRESTKey in connectors_api.go).
+// New builds the cache. `adminKey` is the historical parameter name; callers
+// now pass the Composio project API key getter. The getter is read every
+// refresh so Railway env changes take effect without a restart.
 func New(pool *pgxpool.Pool, adminKey func() string) *Cache {
 	return &Cache{
 		pool:       pool,
@@ -462,7 +462,7 @@ func (c *Cache) saveAliases(ctx context.Context, m map[string]string) error {
 func (c *Cache) loadAccounts(ctx context.Context) ([]*Account, error) {
 	key := c.adminKey()
 	if key == "" {
-		return nil, fmt.Errorf("COMPOSIO_ADMIN_API_KEY not set")
+		return nil, fmt.Errorf("COMPOSIO_API_KEY not set")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBaseURL+"/connected_accounts?limit=200", nil)
 	if err != nil {
