@@ -122,8 +122,15 @@ func (s *Server) bridgeSessionSet(w http.ResponseWriter, r *http.Request, id str
 		http.Error(w, "db not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// UPSERT, not UPDATE: a brand-new chat often has no mem_sessions row yet
+	// (the row is created lazily on first capture). A plain UPDATE would hit 0
+	// rows, silently no-op, and the pill would snap back to "auto" — exactly the
+	// "I pick Cloud and it reverts" bug. Insert the row if missing so the pin
+	// always lands for the id the pill sends.
 	if _, err := s.pool.Exec(r.Context(),
-		`UPDATE mem_sessions SET bridge_preference = $1 WHERE id::text = $2`,
+		`INSERT INTO mem_sessions (id, bridge_preference, started_at)
+		 VALUES ($2, $1, NOW())
+		 ON CONFLICT (id) DO UPDATE SET bridge_preference = EXCLUDED.bridge_preference`,
 		body.Preference, id,
 	); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

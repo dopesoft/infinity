@@ -139,9 +139,11 @@ export function ResponsiveModal({
         className={cn(
           // Body is always the scroll container. min-w-0 + overflow-x-hidden
           // prevent long unbroken content (URLs, JSON, diff) from pushing
-          // the modal frame past the viewport.
+          // the modal frame past the viewport. pt-4 gives content breathing
+          // room under the header — without it every modal's first row hugs
+          // the header border.
           "min-h-0 min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto scroll-touch",
-          "px-4 pb-4 sm:px-5",
+          "px-4 pb-4 pt-4 sm:px-5",
           bodyClassName,
         )}
       >
