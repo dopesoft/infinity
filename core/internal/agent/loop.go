@@ -29,6 +29,12 @@ type SkillMatcher interface {
 	MatchAndPrefix(message string, limit int) string
 }
 
+// maxDelegateSpawnsPerTurn hard-caps how many sub-agents a single turn can
+// spawn. Defends against a runaway model firing dozens of `delegate` calls at
+// once (the storm that left 100 spinning delegates). Legit parallel work rarely
+// needs more than a handful.
+const maxDelegateSpawnsPerTurn = 8
+
 // defaultSystemPrompt is the fallback when no soul has been loaded.
 // In practice the soul package always supplies one (embedded soul.md);
 // this exists only so a misconfigured Loop still has a sane persona.
@@ -731,7 +737,7 @@ func (l *Loop) GetOrCreateSession(id string) *Session {
 		// run this outside l.mu so a slow DB doesn't stall every other
 		// session lookup. The lookup is keyed by PK - sub-ms on a healthy
 		// pool - but the timeout caps the worst case.
-		if store := l.UsageStore(); store != nil {
+		if store := l.UsageStore(); store != nil && !IsEphemeralSessionID(id) {
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			snap, err := store.Hydrate(ctx, id)
 			cancel()
@@ -871,7 +877,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			}
 		}
 	}
-	if rec := l.turnRecorder(); rec != nil {
+	if rec := l.turnRecorder(); rec != nil && !IsEphemeralSessionID(s.ID) {
 		if id, err := rec.Open(ctx, s.ID, turnText, model); err == nil {
 			turnID = id
 		} else {
@@ -879,6 +885,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}
 	}
 	toolCallCount := 0
+	// Per-turn delegate-spawn counter. A runaway model can emit dozens of
+	// `delegate` tool calls in a single message (each spawns a sub-agent); this
+	// hard-caps spawns per turn so a storm can never happen again.
+	delegateSpawns := 0
 
 	// An empty userMsg is the "resume" path: run one turn against the
 	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
@@ -1013,7 +1023,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// Persist counters so a process restart doesn't reset the meter
 		// to 0% on a session with real history. Best-effort + detached
 		// context so the user-visible turn isn't gated on the DB write.
-		if store := l.UsageStore(); store != nil && (resp.Usage.Input > 0 || resp.Usage.Output > 0) {
+		if store := l.UsageStore(); store != nil && !IsEphemeralSessionID(s.ID) && (resp.Usage.Input > 0 || resp.Usage.Output > 0) {
 			snap := s.UsageSnapshot()
 			sessionID := s.ID
 			go func() {
@@ -1108,6 +1118,29 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()
 			toolCallCount++
+
+			// Delegate fan-out cap. Spawning a sub-agent is expensive and a
+			// confused model can fire dozens in one turn (the "100 spinning
+			// delegates" storm). Past the cap, refuse and tell the model to do
+			// the work itself — delegation is for genuinely parallel,
+			// independent sub-tasks, not for work it can do directly.
+			if tc.Name == "delegate" || tc.Name == "delegate_parallel" {
+				delegateSpawns++
+				if delegateSpawns > maxDelegateSpawnsPerTurn {
+					capMsg := fmt.Sprintf(
+						"BLOCKED: delegate cap reached (%d this turn, max %d). Stop delegating — do this task DIRECTLY with your own tools (project_create, fs_save, document_create, etc.). Delegation is only for a few genuinely parallel, independent sub-tasks.",
+						delegateSpawns, maxDelegateSpawnsPerTurn)
+					emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
+						ID: tc.ID, Name: tc.Name, Input: tc.Input, StartedAt: startedAt,
+					}})
+					emit(out, RunEvent{Kind: EventToolResult, SessionID: s.ID, ToolResult: &ToolEvent{
+						ID: tc.ID, Name: tc.Name, Output: capMsg, IsError: true,
+						StartedAt: startedAt, EndedAt: time.Now().UTC(),
+					}})
+					s.Append(llm.Message{Role: llm.RoleTool, Content: capMsg, ToolCallID: tc.ID, ToolName: tc.Name})
+					continue
+				}
+			}
 			if rec := l.turnRecorder(); rec != nil && turnID != "" {
 				// Best-effort bump on the in-flight row so /logs reflects
 				// the running count even while the turn is mid-stream.
@@ -1284,8 +1317,19 @@ func (l *Loop) drainSteer(ch <-chan string, s *Session) {
 	}
 }
 
+// IsEphemeralSessionID reports whether a session is an ephemeral delegate
+// sub-agent (id like "delegate:<uuid>"). These children are NOT persisted:
+// their session ids are not valid UUIDs (so every mem_* / honcho write would
+// throw SQLSTATE 22P02), and conceptually they're throwaway — only the summary
+// they return to the parent matters, and the PARENT session captures that.
+// Skipping persistence here is what stops the "invalid input syntax for type
+// uuid" storm and keeps delegate chatter out of memory.
+func IsEphemeralSessionID(id string) bool {
+	return strings.HasPrefix(id, delegateSessionIDPrefix)
+}
+
 func (l *Loop) fireHook(name, sessionID, project, text string, payload map[string]any) {
-	if l.hooks == nil {
+	if l.hooks == nil || IsEphemeralSessionID(sessionID) {
 		return
 	}
 	l.hooks.Emit(name, sessionID, project, text, payload)
@@ -1296,7 +1340,7 @@ func (l *Loop) fireHook(name, sessionID, project, text string, payload map[strin
 // mem_predictions row. When turnID is empty (no recorder wired) the
 // payload is left untouched.
 func (l *Loop) fireHookT(turnID, name, sessionID, project, text string, payload map[string]any) {
-	if l.hooks == nil {
+	if l.hooks == nil || IsEphemeralSessionID(sessionID) {
 		return
 	}
 	if turnID != "" {

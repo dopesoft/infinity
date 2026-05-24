@@ -218,6 +218,18 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
               )}
             </Section>
           )}
+          {status === "running" && !result && (
+            <Section title="Status">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3 shrink-0 animate-spin" />
+                <span>
+                  {call.name === "delegate" || call.name === "delegate_parallel"
+                    ? "Sub-agent working…"
+                    : "Running…"}
+                </span>
+              </div>
+            </Section>
+          )}
           <Section title="Input">
             <pre className="min-w-0 max-w-full overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-[11px] leading-snug sm:text-xs">
               {JSON.stringify(call.input ?? {}, null, 2)}
