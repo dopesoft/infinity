@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,12 +17,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
 
 const composioWebhookMaxBytes = 1 << 20
+const composioWebhookTolerance = 5 * time.Minute
 
 type composioWebhookSummary struct {
 	Event     string
@@ -38,14 +44,19 @@ func (s *Server) handleComposioWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "COMPOSIO_WEBHOOK_SECRET not configured"})
 		return
 	}
-	if !composioWebhookAuthorized(r) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, composioWebhookMaxBytes))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := verifyComposioWebhookRequest(r, body); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 
-	defer r.Body.Close()
 	var payload map[string]any
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, composioWebhookMaxBytes))
+	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&payload); err != nil {
 		if err == io.EOF {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty JSON body"})
@@ -63,7 +74,6 @@ func (s *Server) handleComposioWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	findingID, surfaceID := "", ""
-	var err error
 	if composioWebhookIsFailure(summary) {
 		findingID, surfaceID, err = s.recordComposioWebhookFailure(r.Context(), summary, payload)
 		if err != nil {
@@ -104,6 +114,84 @@ func composioWebhookAuthorized(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func verifyComposioWebhookRequest(r *http.Request, body []byte) error {
+	signature := strings.TrimSpace(r.Header.Get("webhook-signature"))
+	webhookID := strings.TrimSpace(r.Header.Get("webhook-id"))
+	timestamp := strings.TrimSpace(r.Header.Get("webhook-timestamp"))
+	if signature == "" && webhookID == "" && timestamp == "" {
+		if composioWebhookAuthorized(r) {
+			return nil
+		}
+		return errors.New("missing webhook signature")
+	}
+	if err := verifyComposioWebhookSignature(webhookID, timestamp, body, signature); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyComposioWebhookSignature(webhookID, timestamp string, body []byte, signature string) error {
+	secret := strings.TrimSpace(os.Getenv("COMPOSIO_WEBHOOK_SECRET"))
+	if secret == "" {
+		return errors.New("missing webhook secret")
+	}
+	if strings.TrimSpace(webhookID) == "" || strings.TrimSpace(timestamp) == "" || strings.TrimSpace(signature) == "" {
+		return errors.New("missing webhook signature headers")
+	}
+	if err := validateComposioWebhookTimestamp(timestamp, time.Now()); err != nil {
+		return err
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(webhookID))
+	mac.Write([]byte("."))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	for _, received := range composioWebhookSignatureCandidates(signature) {
+		if hmac.Equal([]byte(expected), []byte(received)) {
+			return nil
+		}
+	}
+	return errors.New("invalid webhook signature")
+}
+
+func validateComposioWebhookTimestamp(timestamp string, now time.Time) error {
+	ts, err := strconv.ParseInt(strings.TrimSpace(timestamp), 10, 64)
+	if err != nil {
+		return errors.New("invalid webhook timestamp")
+	}
+	at := time.Unix(ts, 0)
+	if at.After(now.Add(composioWebhookTolerance)) || at.Before(now.Add(-composioWebhookTolerance)) {
+		return errors.New("webhook timestamp outside tolerance")
+	}
+	return nil
+}
+
+func composioWebhookSignatureCandidates(signature string) []string {
+	parts := strings.Fields(signature)
+	if len(parts) == 0 {
+		parts = []string{signature}
+	}
+	out := make([]string, 0, len(parts)*2)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		segments := strings.Split(part, ",")
+		candidate := strings.TrimSpace(segments[len(segments)-1])
+		if candidate != "" {
+			out = append(out, candidate)
+		}
+		if idx := strings.LastIndex(candidate, "="); idx >= 0 && idx+1 < len(candidate) {
+			out = append(out, strings.TrimSpace(candidate[idx+1:]))
+		}
+	}
+	return out
 }
 
 func (s *Server) recordComposioWebhookFailure(

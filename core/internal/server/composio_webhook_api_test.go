@@ -1,9 +1,14 @@
 package server
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestComposioWebhookSummaryDetectsExpiredGmailAccount(t *testing.T) {
@@ -96,4 +101,44 @@ func TestComposioWebhookAuthRequiresSecret(t *testing.T) {
 	if !composioWebhookAuthorized(req) {
 		t.Fatal("webhook should accept matching bearer secret")
 	}
+}
+
+func TestVerifyComposioWebhookSignature(t *testing.T) {
+	t.Setenv("COMPOSIO_WEBHOOK_SECRET", "composio-signing-secret")
+	body := []byte(`{"type":"composio.connected_account.expired","data":{"id":"ca_123"}}`)
+	id := "evt_123"
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	signature := "v1," + signComposioWebhookForTest("composio-signing-secret", id, timestamp, body)
+
+	if err := verifyComposioWebhookSignature(id, timestamp, body, signature); err != nil {
+		t.Fatalf("verifyComposioWebhookSignature() error = %v", err)
+	}
+	if err := verifyComposioWebhookSignature(id, timestamp, []byte(`{"changed":true}`), signature); err == nil {
+		t.Fatal("changed body should fail signature verification")
+	}
+}
+
+func TestVerifyComposioWebhookRequestPrefersSignatureOverURLToken(t *testing.T) {
+	t.Setenv("COMPOSIO_WEBHOOK_SECRET", "composio-signing-secret")
+	body := []byte(`{"type":"composio.trigger.disabled","data":{"id":"ti_123"}}`)
+	id := "evt_123"
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/composio?token=composio-signing-secret", nil)
+	req.Header.Set("webhook-id", id)
+	req.Header.Set("webhook-timestamp", timestamp)
+	req.Header.Set("webhook-signature", "v1,bad")
+	if err := verifyComposioWebhookRequest(req, body); err == nil {
+		t.Fatal("bad signature should fail even when URL token matches")
+	}
+}
+
+func signComposioWebhookForTest(secret, id, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(id))
+	mac.Write([]byte("."))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }

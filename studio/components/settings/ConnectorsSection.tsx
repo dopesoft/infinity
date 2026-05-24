@@ -10,6 +10,7 @@ import {
   Link as LinkIcon,
   Pencil,
   Plus,
+  RefreshCcw,
   Search,
   X,
 } from "lucide-react";
@@ -244,6 +245,23 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
     setTimeout(() => loadConnected(), 3000);
   }
 
+  async function handleReconnect(
+    slug: string,
+    name: string,
+    logo: string | undefined,
+    account: ActiveAccount,
+  ) {
+    const alias = (account.alias || account.identityHint || account.userId || "").trim();
+    if (!alias) {
+      requestConnect(slug, name, logo);
+      return;
+    }
+    await handleConnect(slug, {
+      userId: (account.userId || alias).trim(),
+      alias,
+    });
+  }
+
   async function handleDisconnect(id: string, label: string) {
     // eslint-disable-next-line no-alert
     if (!confirm(`Disconnect ${label}? Tools that depend on it will stop working.`)) return;
@@ -312,6 +330,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
           onBrowse={() => setTab("browse")}
           onAliasSave={handleAliasSave}
           onAddAnother={(slug, name, logo) => requestConnect(slug, name, logo)}
+          onReconnect={handleReconnect}
           connecting={connecting}
         />
       )}
@@ -379,6 +398,7 @@ function ActiveList({
   onBrowse,
   onAliasSave,
   onAddAnother,
+  onReconnect,
   connecting,
 }: {
   groups: ActiveGroup[];
@@ -390,6 +410,12 @@ function ActiveList({
   onBrowse: () => void;
   onAliasSave: (accountId: string, alias: string) => void;
   onAddAnother: (slug: string, name: string, logo?: string) => void;
+  onReconnect: (
+    slug: string,
+    name: string,
+    logo: string | undefined,
+    account: ActiveAccount,
+  ) => void;
   connecting: string | null;
 }) {
   if (groups.length === 0 && !loading && !query) {
@@ -428,6 +454,7 @@ function ActiveList({
             onDisconnect={onDisconnect}
             onAliasSave={onAliasSave}
             onAddAnother={onAddAnother}
+            onReconnect={onReconnect}
             connecting={connecting}
           />
         ))}
@@ -442,6 +469,7 @@ function ActiveGroupCard({
   onDisconnect,
   onAliasSave,
   onAddAnother,
+  onReconnect,
   connecting,
 }: {
   group: ActiveGroup;
@@ -449,6 +477,12 @@ function ActiveGroupCard({
   onDisconnect: (id: string, label: string) => void;
   onAliasSave: (accountId: string, alias: string) => void;
   onAddAnother: (slug: string, name: string, logo?: string) => void;
+  onReconnect: (
+    slug: string,
+    name: string,
+    logo: string | undefined,
+    account: ActiveAccount,
+  ) => void;
   connecting: string | null;
 }) {
   const matchedTool = Boolean(
@@ -532,6 +566,8 @@ function ActiveGroupCard({
                 kind={group.kind}
                 onDisconnect={onDisconnect}
                 onAliasSave={onAliasSave}
+                onReconnect={() => onReconnect(group.slug, group.name, group.logo, a)}
+                reconnecting={connecting === group.slug}
                 highlightTool={highlightTool}
               />
             ))}
@@ -548,6 +584,8 @@ function AccountSubRow({
   kind,
   onDisconnect,
   onAliasSave,
+  onReconnect,
+  reconnecting,
   highlightTool,
 }: {
   account: ActiveAccount;
@@ -555,6 +593,8 @@ function AccountSubRow({
   kind: "native" | "composio";
   onDisconnect: (id: string, label: string) => void;
   onAliasSave: (accountId: string, alias: string) => void;
+  onReconnect: () => void;
+  reconnecting: boolean;
   highlightTool?: string;
 }) {
   const [editingAlias, setEditingAlias] = useState(false);
@@ -579,6 +619,7 @@ function AccountSubRow({
     account.alias?.trim() ||
     account.identityHint ||
     (kind === "composio" ? account.accountId?.slice(-8) ?? "account" : account.id);
+  const reconnectable = kind === "composio" && isReconnectableAccount(account);
 
   return (
     <li className="flex items-start gap-2 rounded-md border border-border/40 bg-background px-2.5 py-2">
@@ -678,18 +719,53 @@ function AccountSubRow({
       </div>
 
       {kind === "composio" && account.accountId && (
-        <button
-          type="button"
-          onClick={() => onDisconnect(account.accountId!, displayLabel)}
-          className="inline-flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[10px] text-muted-foreground hover:bg-danger/10 hover:text-danger"
-          aria-label={`Disconnect ${displayLabel}`}
-        >
-          <X className="size-3" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {reconnectable && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={onReconnect}
+              disabled={reconnecting}
+              className="size-7 text-info hover:bg-info/10 hover:text-info"
+              aria-label={`Reconnect ${displayLabel}`}
+              title={`Reconnect ${displayLabel}`}
+            >
+              <RefreshCcw className={cn("size-3", reconnecting && "animate-spin")} aria-hidden />
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => onDisconnect(account.accountId!, displayLabel)}
+            className="size-7 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+            aria-label={`Disconnect ${displayLabel}`}
+            title={`Disconnect ${displayLabel}`}
+          >
+            <X className="size-3" aria-hidden />
+          </Button>
+        </div>
       )}
       {/* Suppress unused-prop warning */}
       <span className="sr-only">{groupName}</span>
     </li>
+  );
+}
+
+function isReconnectableAccount(account: ActiveAccount) {
+  if (account.ok) return false;
+  const status = account.statusText.toUpperCase();
+  return (
+    status === "REVOKED" ||
+    status === "EXPIRED" ||
+    status === "INACTIVE" ||
+    status === "DISABLED" ||
+    status === "ERROR" ||
+    status.includes("FAILED") ||
+    status.includes("UNAUTHORIZED") ||
+    status.includes("EXPIRED") ||
+    status.includes("REVOKED")
   );
 }
 
