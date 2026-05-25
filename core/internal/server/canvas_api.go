@@ -1594,72 +1594,33 @@ func (s *Server) handleCanvasGitMutation(
 		}
 	}
 
-	title, cmd, cerr := compose(req, repo)
+	_, cmd, cerr := compose(req, repo)
 	if cerr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": cerr.Error()})
 		return
 	}
 
-	if s.trust == nil {
-		writeJSON(w, http.StatusServiceUnavailable, gitMutationResponse{
-			Status: "denied",
-			Reason: "trust store not configured; git mutations disabled",
-		})
-		return
-	}
+	// Interactive boss action: this endpoint is JWT-authed and the boss clicked
+	// the button in Canvas, so it IS explicit authorization - run it directly,
+	// no Trust queue, no wait. (Autonomous agent git_push still routes through
+	// BridgeGate; only these boss-driven Canvas verbs run free, including the
+	// outward push, because a human deliberately initiated it.)
 
-	id, err := s.trust.Queue(r.Context(), &proactive.TrustContract{
-		Title:     title,
-		RiskLevel: "high",
-		Source:    "canvas_git_" + verb,
-		ActionSpec: map[string]any{
-			"tool":       "claude_code__Bash",
-			"input":      map[string]any{"command": cmd},
-			"session_id": req.SessionID,
-			"canvas_git": verb,
-			"repo":       repo,
-		},
-		Reasoning: "Canvas git " + verb + " on the home Mac. Reviewed before execution because the verb mutates state.",
-		Preview:   cmd,
-	})
-	if err != nil || id == "" {
-		writeJSON(w, http.StatusInternalServerError, gitMutationResponse{
-			Status: "denied",
-			Reason: "could not queue approval",
-		})
-		return
-	}
-
-	// Block until the boss decides - same model the agent loop's gate
-	// uses. We give 15 min. Once approved, run the bash command and
-	// echo the output back to the studio.
-	decision, reason := s.waitForTrustDecision(r.Context(), id, canvasGitWaitTimeout)
-	if !decision {
-		writeJSON(w, http.StatusOK, gitMutationResponse{
-			ContractID: id,
-			Status:     "denied",
-			Reason:     reason,
-		})
-		return
-	}
-
-	// Cloud session: execute the approved git command on the cloud /workspace
-	// volume (same fs the boss is viewing), not the Mac.
+	// Cloud session: execute on the cloud /workspace volume (the same fs the
+	// boss is viewing), not the Mac.
 	if isCloud {
 		out, exit, bok := cloudBash(r.Context(), cloudB, cmd)
 		if !bok || exit != 0 {
 			writeJSON(w, http.StatusOK, gitMutationResponse{
-				ContractID: id,
-				Status:     "denied",
-				Reason:     "cloud git " + verb + " failed",
-				Output:     out,
+				Status: "denied",
+				Reason: "cloud git " + verb + " failed",
+				Output: out,
 			})
 			return
 		}
 		writeJSON(w, http.StatusOK, gitMutationResponse{
-			ContractID: id,
-			Status:     "executed",
-			Output:     out,
+			Status: "executed",
+			Output: out,
 		})
 		return
 	}
@@ -1667,29 +1628,26 @@ func (s *Server) handleCanvasGitMutation(
 	t, err := s.canvasMCP("claude_code__Bash")
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, gitMutationResponse{
-			ContractID: id,
-			Status:     "denied",
-			Reason:     "mac bridge unavailable after approval",
+			Status: "denied",
+			Reason: "mac bridge unavailable",
 		})
 		return
 	}
 	out, execErr := t.Execute(r.Context(), map[string]any{"command": cmd})
-	// Unwrap Claude Code's {"stdout":"...","stderr":"...",...} envelope so
-	// the studio toast shows just the command output, not the JSON.
+	// Unwrap Claude Code's {"stdout":"...","stderr":"...",...} envelope so the
+	// studio toast shows just the command output, not the JSON.
 	clean := unwrapBashStdout(out)
 	if execErr != nil {
 		writeJSON(w, http.StatusOK, gitMutationResponse{
-			ContractID: id,
-			Status:     "denied",
-			Reason:     execErr.Error(),
-			Output:     clean,
+			Status: "denied",
+			Reason: execErr.Error(),
+			Output: clean,
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, gitMutationResponse{
-		ContractID: id,
-		Status:     "executed",
-		Output:     clean,
+		Status: "executed",
+		Output: clean,
 	})
 }
 

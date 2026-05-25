@@ -7,7 +7,6 @@ import {
   GitBranch,
   GitCommit,
   Loader2,
-  Plus,
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -75,6 +74,9 @@ export function CanvasGitPanel({
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [commitOpen, setCommitOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  // When true the commit flow continues straight into a push - that's the
+  // "Push to GitHub" one-tap ship. Commit-only sets it false.
+  const [pushAfterCommit, setPushAfterCommit] = useState(true);
   const isDesktop = useIsDesktop();
 
   const refresh = useCallback(async () => {
@@ -97,45 +99,73 @@ export function CanvasGitPanel({
     return () => clearInterval(id);
   }, [refresh, store.root]);
 
-  const onStageAll = async () => {
-    setBusy("stage");
-    setToast(null);
-    const res = await canvasGitStage({ repo: store.root, session_id: sessionId ?? undefined });
-    setBusy(null);
-    if (res?.status === "executed") {
-      setToast({ kind: "ok", text: "Staged." });
-      void refresh();
-    } else if (res?.contract_id) {
-      setToast({
-        kind: "ok",
-        text: "Approve in Trust to stage.",
-      });
-    } else {
-      setToast({ kind: "err", text: res?.reason ?? "Stage failed." });
-    }
-  };
-
+  // onCommit stages everything, commits, and (when invoked from "Push to
+  // GitHub") pushes - so the boss never has to think about stage→commit→push
+  // as three separate steps. Commit-only stops after the commit.
   const onCommit = async () => {
     const msg = commitMessage.trim();
     if (!msg) return;
     setBusy("commit");
     setToast(null);
     setCommitOpen(false);
+
+    // Stage all first so untracked/unstaged files are included - no separate
+    // "stage" step for the boss to remember. Harmless on an already-clean tree.
+    await canvasGitStage({ repo: store.root, session_id: sessionId ?? undefined });
+
     const res = await canvasGitCommit({
       repo: store.root,
       message: msg,
       session_id: sessionId ?? undefined,
     });
-    setBusy(null);
-    if (res?.status === "executed") {
-      setToast({ kind: "ok", text: "Committed." });
-      setCommitMessage("");
-      void refresh();
-    } else if (res?.contract_id) {
-      setToast({ kind: "ok", text: "Approve in Trust to commit." });
-    } else {
-      setToast({ kind: "err", text: res?.reason ?? "Commit failed." });
+    if (res?.status !== "executed") {
+      setBusy(null);
+      setToast(
+        res?.contract_id
+          ? { kind: "ok", text: "Approve in Trust to commit." }
+          : { kind: "err", text: res?.reason ?? "Commit failed." },
+      );
+      return;
     }
+    setCommitMessage("");
+
+    if (!pushAfterCommit) {
+      setBusy(null);
+      setToast({ kind: "ok", text: "Committed." });
+      void refresh();
+      return;
+    }
+
+    // Continue straight into the push - this is the GitHub ship.
+    setBusy("push");
+    const pr = await canvasGitPush({
+      repo: store.root,
+      remote: "origin",
+      branch: status?.branch,
+      session_id: sessionId ?? undefined,
+    });
+    setBusy(null);
+    if (pr?.status === "executed") {
+      setToast({ kind: "ok", text: "Pushed to GitHub." });
+    } else if (pr?.contract_id) {
+      setToast({ kind: "ok", text: "Committed - approve in Trust to finish the push." });
+    } else {
+      setToast({ kind: "err", text: pr?.reason ?? "Committed, but push failed." });
+    }
+    void refresh();
+  };
+
+  // onShipToGitHub is the single "deploy my code to GitHub" action. If there's
+  // uncommitted work, it opens the commit dialog (which then commits + pushes);
+  // if the tree is clean but has unpushed commits, it pushes straight away.
+  const onShipToGitHub = () => {
+    const hasUncommitted = (status?.entries ?? []).length > 0 || store.dirtyPaths.size > 0;
+    if (hasUncommitted) {
+      setPushAfterCommit(true);
+      setCommitOpen(true);
+      return;
+    }
+    void onPush();
   };
 
   const onPush = async () => {
@@ -185,6 +215,8 @@ export function CanvasGitPanel({
   // git. This is what makes edits show in Changes even when the workspace root
   // isn't a git repo (e.g. a /workspace scratch dir on the cloud computer).
   const sessionWrites = Array.from(store.dirtyPaths).sort();
+  const hasChanges = (status?.entries ?? []).length > 0 || sessionWrites.length > 0;
+  const canShip = hasChanges || (status?.ahead ?? 0) > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -215,52 +247,62 @@ export function CanvasGitPanel({
         </Button>
       </div>
 
-      {/* Actions */}
-      <div className="grid grid-cols-2 gap-1 border-b px-2 py-1.5 text-xs">
+      {/* Actions - ONE obvious "ship to GitHub" primary (stage + commit + push
+          in a single flow), with commit-only and pull as secondary. */}
+      <div className="space-y-1.5 border-b px-2 py-2">
         <Button
           type="button"
-          size="sm"
-          variant="ghost"
-          className="h-8 justify-start gap-1.5"
-          disabled={!store.root || !!busy || (status?.entries ?? []).length === 0}
-          onClick={() => void onStageAll()}
+          className="h-9 w-full justify-center gap-2 bg-brand font-medium text-brand-foreground hover:bg-brand/90"
+          disabled={!store.root || !!busy || !canShip}
+          onClick={onShipToGitHub}
+          title="Stage, commit, and push everything to GitHub"
         >
-          {busy === "stage" ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-          Stage all
+          {busy === "push" || busy === "commit" ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <ArrowUpFromLine className="size-4" />
+          )}
+          Push to GitHub
+          {(status?.ahead ?? 0) > 0 && !hasChanges && (
+            <span className="font-mono text-[11px] opacity-80">↑{status?.ahead}</span>
+          )}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="h-8 justify-start gap-1.5"
-          disabled={!store.root || !!busy || staged.length === 0}
-          onClick={() => setCommitOpen(true)}
-        >
-          <GitCommit className="size-3.5" />
-          Commit
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="h-8 justify-start gap-1.5"
-          disabled={!store.root || !!busy}
-          onClick={() => void onPush()}
-        >
-          {busy === "push" ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowUpFromLine className="size-3.5" />}
-          Push
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="h-8 justify-start gap-1.5"
-          disabled={!store.root || !!busy}
-          onClick={() => void onPull()}
-        >
-          {busy === "pull" ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />}
-          Pull
-        </Button>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 justify-center gap-1.5"
+            disabled={!store.root || !!busy || !hasChanges}
+            onClick={() => {
+              setPushAfterCommit(false);
+              setCommitOpen(true);
+            }}
+            title="Commit locally without pushing"
+          >
+            <GitCommit className="size-3.5" />
+            Commit only
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 justify-center gap-1.5"
+            disabled={!store.root || !!busy}
+            onClick={() => void onPull()}
+            title="Pull latest from GitHub"
+          >
+            {busy === "pull" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <ArrowDownToLine className="size-3.5" />
+            )}
+            Pull
+            {(status?.behind ?? 0) > 0 && (
+              <span className="font-mono text-[11px] opacity-80">↓{status?.behind}</span>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Toast */}
@@ -321,10 +363,11 @@ export function CanvasGitPanel({
         <Dialog open={commitOpen} onOpenChange={setCommitOpen}>
           <DialogContent className="max-w-lg gap-0 p-0">
             <DialogHeader>
-              <DialogTitle>Commit changes</DialogTitle>
+              <DialogTitle>{pushAfterCommit ? "Push to GitHub" : "Commit changes"}</DialogTitle>
               <DialogDescription>
-                {staged.length} file{staged.length === 1 ? "" : "s"} staged.
-                This will queue a Trust contract on your Mac.
+                {pushAfterCommit
+                  ? "Stages everything, commits with this message, then pushes to GitHub."
+                  : "Stages everything and commits locally - no push."}
               </DialogDescription>
             </DialogHeader>
             <div className="px-4">
@@ -341,9 +384,19 @@ export function CanvasGitPanel({
               <DialogClose asChild>
                 <Button variant="ghost">Cancel</Button>
               </DialogClose>
-              <Button onClick={() => void onCommit()} disabled={!commitMessage.trim() || busy === "commit"}>
-                {busy === "commit" ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
-                Commit
+              <Button
+                className={cn(pushAfterCommit && "bg-brand text-brand-foreground hover:bg-brand/90")}
+                onClick={() => void onCommit()}
+                disabled={!commitMessage.trim() || busy === "commit" || busy === "push"}
+              >
+                {busy === "commit" || busy === "push" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : pushAfterCommit ? (
+                  <ArrowUpFromLine className="size-4" />
+                ) : (
+                  <GitCommit className="size-4" />
+                )}
+                {pushAfterCommit ? "Commit & push" : "Commit"}
               </Button>
             </div>
           </DialogContent>
@@ -352,10 +405,11 @@ export function CanvasGitPanel({
         <Drawer open={commitOpen} onOpenChange={setCommitOpen}>
           <DrawerContent>
             <DrawerHeader className="text-left">
-              <DrawerTitle>Commit changes</DrawerTitle>
+              <DrawerTitle>{pushAfterCommit ? "Push to GitHub" : "Commit changes"}</DrawerTitle>
               <DrawerDescription>
-                {staged.length} file{staged.length === 1 ? "" : "s"} staged.
-                This will queue a Trust contract on your Mac.
+                {pushAfterCommit
+                  ? "Stages everything, commits with this message, then pushes to GitHub."
+                  : "Stages everything and commits locally - no push."}
               </DrawerDescription>
             </DrawerHeader>
             <div className="px-4">
@@ -372,9 +426,19 @@ export function CanvasGitPanel({
               <DrawerClose asChild>
                 <Button variant="ghost">Cancel</Button>
               </DrawerClose>
-              <Button onClick={() => void onCommit()} disabled={!commitMessage.trim() || busy === "commit"}>
-                {busy === "commit" ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
-                Commit
+              <Button
+                className={cn(pushAfterCommit && "bg-brand text-brand-foreground hover:bg-brand/90")}
+                onClick={() => void onCommit()}
+                disabled={!commitMessage.trim() || busy === "commit" || busy === "push"}
+              >
+                {busy === "commit" || busy === "push" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : pushAfterCommit ? (
+                  <ArrowUpFromLine className="size-4" />
+                ) : (
+                  <GitCommit className="size-4" />
+                )}
+                {pushAfterCommit ? "Commit & push" : "Commit"}
               </Button>
             </DrawerFooter>
           </DrawerContent>

@@ -19,8 +19,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { useProjectContext } from "@/lib/canvas/useCurrentProject";
 import { fetchCanvasFSList, fetchCanvasDebug, type FSEntry } from "@/lib/canvas/api";
 import { DeployStatusRow } from "@/components/canvas/DeployStatusRow";
-import { BridgeSourceRow } from "@/components/canvas/BridgeSourceRow";
-import { CloudWorkspaceStalenessRow } from "@/components/canvas/CloudWorkspaceStalenessRow";
+import { WorkspaceStatusBar } from "@/components/canvas/WorkspaceStatusBar";
 import { LibrarySection } from "@/components/canvas/LibrarySection";
 import { cn } from "@/lib/utils";
 
@@ -222,19 +221,14 @@ export function CanvasFileTree({
           </>
         )}
       </div>
-      {/* Deploy-staleness banner sits between the filter row and the tree.
-          Renders only when Jarvis's running binary is behind main, or for
-          a brief beat after catching up so the boss sees the green tick. */}
+      {/* Jarvis's own-deploy nudge - silent unless Core's running binary is
+          behind main (a redeploy is pending). About the AGENT, not the files,
+          so it only shows when actionable. */}
       <DeployStatusRow />
-      {/* Source label - declares which bridge owns the filesystem currently
-          rendered (Mac vs Cloud). Same visual mass as DeployStatusRow.
-          Hidden when the bridge is unconfigured or no active kind yet. */}
-      <BridgeSourceRow sessionId={projectCtx?.sessionId || null} />
-      {/* Cloud-workspace staleness. Same shape as DeployStatusRow but
-          for the Railway workspace volume's local checkout being
-          behind origin/<branch>. Renders only when the active bridge
-          for this session is Cloud AND the workspace is behind. */}
-      <CloudWorkspaceStalenessRow sessionId={projectCtx?.sessionId || null} />
+      {/* The one coherent file-status line: source (Cloud/Mac) + active project
+          + that project's repo sync state (synced / behind+pull / ahead).
+          Replaces the old source label + infinity-staleness banners. */}
+      <WorkspaceStatusBar sessionId={projectCtx?.sessionId || null} />
       {/* Library - mem_artifacts grouped by kind. Lives INSIDE the
           Files tab (not a separate /library route) so the boss has one
           place to browse everything Jarvis has made. Click a project →

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { fetchDeployStatus, type DeployStatus } from "@/lib/canvas/api";
 import { cn } from "@/lib/utils";
 
@@ -49,29 +49,22 @@ export function DeployStatusRow() {
     }
   };
 
-  if (!status.behind) {
-    // Subtle up-to-date row - confirms Railway is running the latest main.
-    // We used to show the running commit SHA here, but a 7-char hash is
-    // meaningless without context - say "Railway" so the boss knows what
-    // the green check is confirming.
-    return (
-      <div className="flex shrink-0 items-center gap-2 border-b bg-success/5 px-3 py-1.5 text-[11px] text-success">
-        <Check className="size-3.5" aria-hidden />
-        <span>Railway is up to date</span>
-      </div>
-    );
-  }
+  // Silent when synced. This row is about JARVIS'S OWN deployed code (Core's
+  // running binary vs main), NOT the files on screen - so it only earns space
+  // when there's something actionable: a redeploy is pending. The green
+  // "up to date" row was just noise stacked above the file tree.
+  if (!status.behind) return null;
 
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning">
       <Loader2 className="size-3.5 animate-spin" aria-hidden />
       <span className="min-w-0 flex-1 truncate">
-        Railway is behind by{" "}
+        Jarvis&rsquo;s deployed code is behind main by{" "}
         <span className="font-semibold">
           {status.commits_behind || "≥1"} commit
           {status.commits_behind === 1 ? "" : "s"}
         </span>{" "}
-        - waiting for redeploy
+        - redeploying
       </span>
       <button
         type="button"

@@ -59,7 +59,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
       if (cfg?.default_project_path) setDefaultProjectPath(cfg.default_project_path);
     })();
     // Pre-warm the cloud workspace from Railway App Sleeping. Fire-and-forget;
-    // we don't care about the result here - the BridgePill / BridgeSourceRow
+    // we don't care about the result here - the BridgePill / WorkspaceStatusBar
     // do their own status fetches. The goal is just to wake the container
     // so the first user-driven `bridge_*` call doesn't pay the cold-start.
     void fetchBridgeStatus(ac.signal).catch(() => {});

@@ -41,6 +41,8 @@ type workspaceGitStatus struct {
 	CommitsBehind int    `json:"commits_behind"`
 	Ahead         bool   `json:"ahead"`
 	CommitsAhead  int    `json:"commits_ahead"`
+	Dirty         bool   `json:"dirty"`       // uncommitted working-tree changes present
+	DirtyCount    int    `json:"dirty_count"` // number of changed/untracked paths
 	Repo          string `json:"repo"`
 }
 
@@ -112,10 +114,15 @@ func (s *Server) handleBridgeWorkspaceGitStatus(w http.ResponseWriter, r *http.R
 func projectAheadBehind(ctx context.Context, cloud interface {
 	Post(ctx context.Context, path string, body any) ([]byte, int, bool)
 }, dir string) workspaceGitStatus {
+	// Three lines out: branch, "<behind>\t<ahead>", "<dirty-count>". The dirty
+	// count (uncommitted working-tree + untracked paths) is what surfaces
+	// "there are files to commit/ship" for a project repo - distinct from
+	// ahead (committed-but-unpushed) and behind (remote-only).
 	cmd := "cd " + shellQuote(dir) + " && " +
 		"git fetch --quiet 2>/dev/null; " +
 		"git rev-parse --abbrev-ref HEAD 2>/dev/null; " +
-		"git rev-list --left-right --count '@{u}...HEAD' 2>/dev/null"
+		"git rev-list --left-right --count '@{u}...HEAD' 2>/dev/null; " +
+		"git status --porcelain 2>/dev/null | wc -l"
 	body, status, ok := cloud.Post(ctx, "/bash", map[string]any{"cmd": cmd, "timeout_sec": 30})
 	if !ok || status >= 300 {
 		return workspaceGitStatus{}
@@ -139,6 +146,12 @@ func projectAheadBehind(ctx context.Context, cloud interface {
 				res.Ahead = true
 				res.CommitsAhead = a
 			}
+		}
+	}
+	if len(lines) >= 3 {
+		if d, err := strconv.Atoi(strings.TrimSpace(lines[2])); err == nil && d > 0 {
+			res.Dirty = true
+			res.DirtyCount = d
 		}
 	}
 	return res
@@ -177,8 +190,17 @@ func (s *Server) handleBridgeWorkspaceGitPull(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// ?path= selects WHICH checkout to pull, matching git-status. Empty =
+	// Jarvis's self-repo (/workspace/infinity); a project path pulls that
+	// project so the staleness banner is "pull THE REPO I'm looking at".
+	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	dir := cloudSelfRepoDir
+	if reqPath != "" {
+		dir = reqPath
+	}
+
 	body, status, ok := cloud.Post(r.Context(), "/bash", map[string]any{
-		"cmd":         "cd " + shellQuote(cloudSelfRepoDir) + " && git pull --ff-only",
+		"cmd":         "cd " + shellQuote(dir) + " && git pull --ff-only",
 		"timeout_sec": 60,
 	})
 	pullOut := strings.TrimSpace(extractJSONField(string(body), "output"))
@@ -191,18 +213,24 @@ func (s *Server) handleBridgeWorkspaceGitPull(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Re-read status so the UI updates in one roundtrip.
-	localSHA, branch := readWorkspaceHead(r.Context(), cloud, cloudSelfRepoDir)
-	remote := fetchRemoteHead(r.Context(), branch)
-	fresh := workspaceGitStatus{
-		Branch:    branch,
-		LocalSHA:  localSHA,
-		RemoteSHA: remote,
-		Repo:      globalDeployTracker.owner + "/" + globalDeployTracker.repo,
-	}
-	if remote != "" && remote != localSHA {
-		fresh.Behind = true
-		fresh.CommitsBehind = globalDeployTracker.fetchCompareAheadBy(r.Context(), localSHA, remote)
+	// Re-read status so the UI updates in one roundtrip. A project path uses
+	// local git (its own upstream); the self-repo uses the GitHub-API compare.
+	var fresh workspaceGitStatus
+	if reqPath != "" {
+		fresh = projectAheadBehind(r.Context(), cloud, dir)
+	} else {
+		localSHA, branch := readWorkspaceHead(r.Context(), cloud, cloudSelfRepoDir)
+		remote := fetchRemoteHead(r.Context(), branch)
+		fresh = workspaceGitStatus{
+			Branch:    branch,
+			LocalSHA:  localSHA,
+			RemoteSHA: remote,
+			Repo:      globalDeployTracker.owner + "/" + globalDeployTracker.repo,
+		}
+		if remote != "" && remote != localSHA {
+			fresh.Behind = true
+			fresh.CommitsBehind = globalDeployTracker.fetchCompareAheadBy(r.Context(), localSHA, remote)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,

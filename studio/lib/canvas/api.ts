@@ -279,11 +279,21 @@ export type BridgeWorkspaceGitStatus = {
   remote_sha: string;
   behind: boolean;
   commits_behind: number;
+  ahead?: boolean;
+  commits_ahead?: number;
+  dirty?: boolean;
+  dirty_count?: number;
   repo: string;
 };
 
-export const fetchBridgeWorkspaceGitStatus = (signal?: AbortSignal) =>
-  getJSON<BridgeWorkspaceGitStatus>("/api/bridge/workspace/git-status", signal);
+// projectPath selects WHICH checkout to report on: a project dir reports that
+// repo vs its own upstream; omitted = Jarvis's /workspace/infinity self-repo vs
+// main. Passing the active project keeps the staleness banner about the repo
+// the boss is actually in, not always infinity.
+export const fetchBridgeWorkspaceGitStatus = (projectPath?: string, signal?: AbortSignal) => {
+  const qs = projectPath ? `?path=${encodeURIComponent(projectPath)}` : "";
+  return getJSON<BridgeWorkspaceGitStatus>(`/api/bridge/workspace/git-status${qs}`, signal);
+};
 
 // Trigger a fast-forward `git pull` on the cloud workspace and return
 // the fresh status. Server-side runs `git pull --ff-only` via the
@@ -298,11 +308,13 @@ export type BridgeWorkspaceGitPullResult = {
   error?: string;
 };
 
-export const pullBridgeWorkspace = () =>
-  postJSON<BridgeWorkspaceGitPullResult>(
-    "/api/bridge/workspace/git-pull",
+export const pullBridgeWorkspace = (projectPath?: string) => {
+  const qs = projectPath ? `?path=${encodeURIComponent(projectPath)}` : "";
+  return postJSON<BridgeWorkspaceGitPullResult>(
+    `/api/bridge/workspace/git-pull${qs}`,
     {},
   );
+};
 
 // ---- Library (mem_artifacts grouped) -------------------------------------
 //

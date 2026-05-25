@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Files, GitBranch } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CanvasFileTree } from "@/components/canvas/CanvasFileTree";
@@ -24,6 +24,15 @@ export function WorkspaceFilesColumn({
 }) {
   const store = useCanvasStore();
   const [tab, setTab] = useState<"files" | "git">("files");
+
+  // The status bar's "N to commit / N to push" jumps here - one channel so the
+  // bar (deep in the Files tree) can flip this column to the Changes tab where
+  // commit/push to GitHub actually live.
+  useEffect(() => {
+    const open = () => setTab("git");
+    window.addEventListener("workspace:open-changes", open);
+    return () => window.removeEventListener("workspace:open-changes", open);
+  }, []);
 
   // Wrap store.openFile to surface the path up to the parent so mobile can
   // auto-jump to the Canvas mode. Desktop ignores this - both columns are
