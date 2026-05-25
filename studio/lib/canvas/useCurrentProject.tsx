@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { fetchSessions, canvasProjectActivate, canvasProjectStatus, type SessionDTO, type ProjectDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useWebSocket } from "@/lib/ws/provider";
 
 const SESSION_KEY = "infinity:sessionId";
 
@@ -84,6 +85,22 @@ export function useCurrentProject(): CurrentProject {
   useRealtime("mem_sessions", () => {
     if (sessionId) loadSession();
   });
+
+  // Deterministic refresh: project_create/clone/open fire a `project_changed`
+  // WS event the instant they set mem_sessions.project_path. Supabase realtime
+  // SHOULD also catch that UPDATE, but it can lag or drop across a reconnect -
+  // which left the canvas stuck on "no project" after a build, so the preview
+  // never activated. Listening to the WS event guarantees the new project_path
+  // lands the moment the agent sets it, without a page reload.
+  const ws = useWebSocket();
+  useEffect(() => {
+    return ws.subscribe((ev) => {
+      if (ev.type !== "project_changed") return;
+      if (ev.session_id && sessionId && ev.session_id !== sessionId) return;
+      if (sessionId) loadSession();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws, sessionId]);
 
   // When the session has a project_path, activate it on the bridge and start
   // polling its status. Re-activate only when the path actually changes.
