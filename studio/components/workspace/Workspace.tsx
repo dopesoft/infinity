@@ -158,6 +158,13 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       if (ev.type === "tool_result") {
         const paths = toolPathsRef.current.get(ev.tool_result.id);
         if (paths) {
+          // Authoritative edit location: fs_edit returns the exact start_line
+          // it changed. Carry it so the diff reveals THAT line - no client-side
+          // text guessing. Single-path edits only (multi-file pushes have none).
+          if (paths.length === 1) {
+            const line = parseStartLine(ev.tool_result.output);
+            if (line > 0) store.markEditFocus(paths[0], line);
+          }
           for (const p of paths) store.endLiveFile(p);
           toolPathsRef.current.delete(ev.tool_result.id);
         }
@@ -285,4 +292,15 @@ export function Workspace({ chat }: { chat: ChatHook }) {
       </div>
     </CurrentProjectProvider>
   );
+}
+
+// parseStartLine pulls the authoritative `start_line` the backend's fs_edit
+// reports out of the tool-result output (which is the bridge's JSON, possibly
+// prefixed with "[bridge=cloud] "). Regex so it's robust to the prefix/envelope.
+function parseStartLine(output: string | undefined): number {
+  if (!output) return 0;
+  const m = output.match(/"start_line"\s*:\s*(\d+)/);
+  if (!m) return 0;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }

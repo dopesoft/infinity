@@ -532,10 +532,16 @@ func handleFSEdit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Authoritative edit location: the 1-based line where the (first) match sat.
+	// Content before the match is unchanged, so this is exactly where the new
+	// text now starts in the updated file - the canvas reveals THIS line instead
+	// of guessing by matching text.
+	startLine := strings.Count(original[:strings.Index(original, req.OldString)], "\n") + 1
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":         resolved,
 		"replacements": count,
 		"bytes":        len(updated),
+		"start_line":   startLine,
 	})
 }
 

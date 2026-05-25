@@ -78,6 +78,12 @@ export function CanvasFileTab({
   const live = store.liveContent.get(path);
   const isStreaming = store.liveStreaming.has(path);
   const hasLive = live !== undefined;
+  // What Jarvis last wrote into THIS file (full content or an edit's new text).
+  // Survives endLiveFile so the diff can locate the section just changed.
+  const lastLive = store.lastLive.get(path);
+  // Authoritative edit line from the backend (fs_edit's start_line). Preferred
+  // over any client-side text matching when present.
+  const editFocus = store.editFocus.get(path);
   const [mode, setMode] = useState<Mode>(isDirty ? "diff" : "edit");
   // originalContent is the LEFT side of the diff editor. For a clean
   // file it equals on-disk (so diff vs your unsaved edits makes sense).
@@ -253,6 +259,16 @@ export function CanvasFileTab({
   // disposed before DiffEditorWidget model got reset".
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editorRef = useRef<any>(null);
+  // Latest "what Jarvis just wrote here" + the backend's authoritative edit
+  // line, held in refs so the mount handler reads current values without being
+  // re-created.
+  const lastLiveRef = useRef<string | undefined>(lastLive);
+  lastLiveRef.current = lastLive;
+  const editFocusRef = useRef<number | undefined>(editFocus);
+  editFocusRef.current = editFocus;
+  // Remembers the section we last jumped to, so re-diffs don't yank the boss
+  // back to the same change while he's reading.
+  const lastFocusedRef = useRef<string>("");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEditorMount = useCallback((editor: any) => {
     editorRef.current = editor;
@@ -260,6 +276,56 @@ export function CanvasFileTab({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleDiffEditorMount = useCallback((editor: any) => {
     editorRef.current = editor;
+    // Jump to the section Jarvis just edited - NOT line 1, and NOT just the
+    // first change (so a 2nd/3rd edit lower in the file pulls focus to it).
+    // We locate the most-recently-written text (lastLive) in the modified side
+    // and reveal it; fall back to the first diff change if we can't find it.
+    // Re-runs on every onDidUpdateDiff (each edit re-diffs), guarded so it only
+    // jumps when the target actually changed.
+    const focusEdited = () => {
+      try {
+        const mod =
+          typeof editor.getModifiedEditor === "function" ? editor.getModifiedEditor() : null;
+        if (!mod || typeof mod.revealLineInCenter !== "function") return;
+        const model = typeof mod.getModel === "function" ? mod.getModel() : null;
+        const text: string =
+          model && typeof model.getValue === "function" ? model.getValue() : "";
+        let line = 0;
+        // 1. AUTHORITATIVE: the backend (fs_edit) told us the exact line it
+        //    changed. No guessing.
+        if (editFocusRef.current && editFocusRef.current > 0) {
+          line = editFocusRef.current;
+        } else {
+          // 2. Exact text: locate the FULL text Jarvis last wrote (not a
+          //    heuristic line) in the modified content. Deterministic for the
+          //    Mac path / writes where the backend didn't report a line.
+          const written = lastLiveRef.current;
+          if (written && text) {
+            const idx = text.indexOf(written);
+            if (idx >= 0) line = text.slice(0, idx).split("\n").length;
+          }
+        }
+        // 3. Last resort: the first diff change.
+        if (line === 0 && typeof editor.getLineChanges === "function") {
+          const ch = editor.getLineChanges();
+          if (ch && ch.length > 0) line = ch[0].modifiedStartLineNumber || 1;
+        }
+        if (line === 0) return;
+        const key = `${path}@${line}`;
+        if (lastFocusedRef.current === key) return; // already showing this edit
+        lastFocusedRef.current = key;
+        mod.revealLineInCenter(line);
+        if (typeof mod.setPosition === "function") {
+          mod.setPosition({ lineNumber: line, column: 1 });
+        }
+      } catch {
+        /* diff not ready yet — onDidUpdateDiff will retry */
+      }
+    };
+    if (typeof editor.onDidUpdateDiff === "function") {
+      editor.onDidUpdateDiff(() => focusEdited());
+    }
+    focusEdited(); // in case the diff is already computed
   }, []);
   useEffect(() => {
     return () => {

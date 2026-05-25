@@ -160,6 +160,9 @@ type CanvasStoreValue = {
   // the buffer on tool_result so the tab reloads the authoritative disk file.
   liveContent: Map<string, string>;
   liveStreaming: Set<string>;
+  lastLive: Map<string, string>;
+  editFocus: Map<string, number>;
+  markEditFocus: (path: string, line: number) => void;
   pushToolInputDelta: (toolId: string, name: string, delta: string) => void;
   setPendingFile: (path: string, content: string) => void;
   endLiveFile: (path: string) => void;
@@ -190,6 +193,24 @@ export function CanvasStoreProvider({
   const [bridgeEpoch, setBridgeEpoch] = useState(0);
   const [liveContent, setLiveContent] = useState<Map<string, string>>(() => new Map());
   const [liveStreaming, setLiveStreaming] = useState<Set<string>>(() => new Set());
+  // lastLive remembers the most recent thing Jarvis WROTE into each file this
+  // session (a full-write's content, or an edit's new text). Unlike
+  // liveContent it survives endLiveFile, so after the file flips to its disk
+  // diff the editor can jump to the section that was just edited - even on the
+  // 2nd/3rd edit to the same file.
+  const [lastLive, setLastLive] = useState<Map<string, string>>(() => new Map());
+  // editFocus is the AUTHORITATIVE 1-based line where the backend applied the
+  // most recent edit to each file (start_line from fs_edit). The diff reveals
+  // exactly this line - no client-side text matching. Set from the tool result.
+  const [editFocus, setEditFocus] = useState<Map<string, number>>(() => new Map());
+  const markEditFocus = useCallback((path: string, line: number) => {
+    if (!path || !(line > 0)) return;
+    setEditFocus((prev) => {
+      const next = new Map(prev);
+      next.set(path, line);
+      return next;
+    });
+  }, []);
   // Per-tool-id raw partial-JSON accumulation. A ref (not state) because deltas
   // are high-frequency and we only re-render when extracted path/content change.
   const toolRawRef = useRef<Map<string, { raw: string; path: string | null; name: string }>>(new Map());
@@ -435,6 +456,11 @@ export function CanvasStoreProvider({
             next.set(path, content);
             return next;
           });
+          setLastLive((prev) => {
+            const next = new Map(prev);
+            next.set(path, content);
+            return next;
+          });
         }
       }
     },
@@ -450,6 +476,11 @@ export function CanvasStoreProvider({
       openFile(path);
       markDirty(path);
       setLiveContent((prev) => {
+        const next = new Map(prev);
+        next.set(path, content);
+        return next;
+      });
+      setLastLive((prev) => {
         const next = new Map(prev);
         next.set(path, content);
         return next;
@@ -530,6 +561,9 @@ export function CanvasStoreProvider({
       bumpBridgeEpoch,
       liveContent,
       liveStreaming,
+      lastLive,
+      editFocus,
+      markEditFocus,
       pushToolInputDelta,
       setPendingFile,
       endLiveFile,
@@ -566,6 +600,9 @@ export function CanvasStoreProvider({
       bumpBridgeEpoch,
       liveContent,
       liveStreaming,
+      lastLive,
+      editFocus,
+      markEditFocus,
       pushToolInputDelta,
       setPendingFile,
       endLiveFile,
