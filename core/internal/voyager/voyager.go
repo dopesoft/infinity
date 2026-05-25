@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -36,6 +37,11 @@ import (
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// infoLog writes success/info lines to STDOUT so Railway tags them info, not
+// error (stdlib log defaults to stderr → red rows). Failures keep using the
+// stdlib log to stderr. See the logging rule in CLAUDE.md.
+var infoLog = log.New(os.Stdout, "", log.LstdFlags)
 
 // Manager is the single entry point for the auto-skill loop. Construct one in
 // serve.go, register hooks against it, and mount its HTTP routes.
@@ -262,45 +268,53 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 	}
 
 	if decision == "promoted" {
-		var name, skillMD, description, riskLevel, importanceReason string
+		var name, parentSkill, skillMD, description, riskLevel, importanceReason string
 		var importance int
 		err := m.pool.QueryRow(ctx, `
 			SELECT name,
+			       COALESCE(parent_skill, ''),
 			       COALESCE(skill_md, ''),
 			       COALESCE(description, ''),
 			       COALESCE(risk_level, 'low'),
 			       COALESCE(importance, 50),
 			       COALESCE(importance_reason, '')
 			  FROM mem_skill_proposals WHERE id = $1
-		`, id).Scan(&name, &skillMD, &description, &riskLevel, &importance, &importanceReason)
+		`, id).Scan(&name, &parentSkill, &skillMD, &description, &riskLevel, &importance, &importanceReason)
 		if err != nil {
 			return err
 		}
+		// CRITICAL anti-fragmentation rule: a proposal that targets an
+		// existing skill (parent_skill set - every GEPA optimization and every
+		// merged draft does) promotes IN PLACE as a new version of the PARENT.
+		// It must NOT materialize under the proposal's own name (which the
+		// extractor mints as "<parent>-update"), or approving an improvement
+		// silently spawns a duplicate skill (inbox-triage + inbox-triage-update)
+		// AND swaps the canonical out from under the boss. Only a genuinely new
+		// skill (no parent) materializes under its own name.
+		targetName := name
+		if strings.TrimSpace(parentSkill) != "" {
+			targetName = strings.TrimSpace(parentSkill)
+		}
 		// Persist to Postgres FIRST so the skill survives any container
 		// restart (Railway redeploys wipe the ephemeral filesystem).
-		// Disk write is then a derivative - used by the loader to
-		// populate the in-memory registry. On every boot the
-		// MaterializeFromDB hook (see skills.MaterializeActiveSkills)
-		// re-syncs disk to match active rows in Postgres, so even if
-		// the disk write is lost we recover automatically.
-		// Bump from the currently-active version (if any) into the
-		// canonical v<MAJOR>.<MINOR>-<M-D-YYYY> shape. First-ever
-		// version of a brand-new skill falls back to v1.0-<today>.
+		// Bump from the TARGET skill's currently-active version into the
+		// canonical v<MAJOR>.<MINOR>-<M-D-YYYY> shape.
 		var parentVersion string
 		_ = m.pool.QueryRow(ctx,
 			`SELECT COALESCE(active_version,'') FROM mem_skill_active WHERE skill_name = $1`,
-			name,
+			targetName,
 		).Scan(&parentVersion)
 		version := skills.BumpVersion(parentVersion)
-		if err := m.persistSkillToDB(ctx, name, version, skillMD, description, riskLevel, importance, importanceReason); err != nil {
+		if err := m.persistSkillToDB(ctx, targetName, version, skillMD, description, riskLevel, importance, importanceReason); err != nil {
 			return err
 		}
-		if err := m.writeSkillToDisk(name, skillMD); err != nil {
+		if err := m.writeSkillToDisk(targetName, skillMD); err != nil {
 			return err
 		}
 		if m.skillsReg != nil {
 			_, _ = m.skillsReg.Reload(ctx)
 		}
+		infoLog.Printf("voyager: promoted proposal %s into skill %q version %s (parent_skill=%q)", id, targetName, version, parentSkill)
 		if m.onPromoted != nil {
 			// Fire async - procedural-memory writes embed text via Haiku
 			// and shouldn't block the Trust-queue response.
@@ -308,32 +322,41 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 				bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				m.onPromoted(bg, n, d, md)
-			}(name, description, skillMD)
+			}(targetName, description, skillMD)
 		}
+
+		if _, err := m.pool.Exec(ctx, `
+			UPDATE mem_skill_proposals
+			SET status = $2, decided_at = NOW()
+			WHERE id = $1
+		`, id, decision); err != nil {
+			return err
+		}
+
+		// Promoting an improvement makes the TARGET skill current, so every
+		// other open candidate for that same skill (whether it's a create-new
+		// duplicate or another patch) is now moot - retire them so approving
+		// one draft clears the rest of that skill's pile instead of leaving
+		// the boss to approve/decline N near-identical siblings. A candidate's
+		// effective target is parent_skill when set, else its own name.
+		if _, err := m.pool.Exec(ctx, `
+			UPDATE mem_skill_proposals
+			   SET status = 'superseded', decided_at = NOW()
+			 WHERE id <> $1 AND status = 'candidate'
+			   AND COALESCE(NULLIF(parent_skill, ''), name) = $2
+		`, id, targetName); err != nil {
+			return err
+		}
+		return nil
 	}
 
+	// Rejected: just flip the row.
 	if _, err := m.pool.Exec(ctx, `
 		UPDATE mem_skill_proposals
 		SET status = $2, decided_at = NOW()
 		WHERE id = $1
 	`, id, decision); err != nil {
 		return err
-	}
-
-	// Promoting makes the skill active, so any *other* pending create-new
-	// candidates of the same name (duplicate proposals from earlier sessions)
-	// are now moot — retire them so the Candidate panel doesn't keep showing
-	// stale siblings. Patch/improvement candidates (parent_skill set) are left
-	// alone; they target the skill we just promoted, not a fresh creation.
-	if decision == "promoted" {
-		if _, err := m.pool.Exec(ctx, `
-			UPDATE mem_skill_proposals
-			   SET status = 'superseded', decided_at = NOW()
-			 WHERE id <> $1 AND status = 'candidate' AND parent_skill IS NULL
-			   AND name = (SELECT name FROM mem_skill_proposals WHERE id = $1)
-		`, id); err != nil {
-			return err
-		}
 	}
 	return nil
 }

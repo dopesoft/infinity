@@ -237,9 +237,20 @@ function ProposalRow({
               </span>
             )}
           </div>
-          <p className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground lg:text-[11px]">
-            {proposal.description || proposal.reasoning}
+          {/* What DROVE this + when — so an inline approve isn't blind.
+              The boss kept approving from the row without seeing why. */}
+          <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
+            {driverLine(proposal)}
           </p>
+          {/* The actual WHY (reasoning), not the generic skill description. */}
+          <p className="mt-0.5 line-clamp-3 text-xs leading-snug text-muted-foreground lg:text-[11px]">
+            {proposal.reasoning || proposal.description || "No rationale recorded."}
+          </p>
+          {proposal.parent_skill && (
+            <p className="mt-1 text-[10px] text-muted-foreground/70">
+              Tap to review the full diff &amp; change history before approving.
+            </p>
+          )}
         </button>
         <div className="flex shrink-0 gap-1">
           <Button size="icon" variant="ghost" className="size-11 text-success hover:bg-success/10 lg:size-9" onClick={() => onDecide(proposal.id, "promoted")} disabled={busy} aria-label="Promote">
@@ -368,4 +379,36 @@ function groupProposals(proposals: SkillProposalDTO[]): Group[] {
 function formatScore(score?: number) {
   if (typeof score !== "number") return "-";
   return score.toFixed(score > 1 ? 1 : 2);
+}
+
+// driverLine answers "what drove this proposal, and when" in one glance, so an
+// inline approve isn't blind. Drafts accrue across sessions (revision = how
+// many times the extractor merged into it); frontier candidates come from a
+// GEPA optimization run; standalone are one-off proposals.
+function driverLine(p: SkillProposalDTO): string {
+  const when = relTime(p.created_at);
+  if (p.frontier_run_id) {
+    return `GEPA optimization${typeof p.score === "number" ? ` · scored ${formatScore(p.score)}` : ""} · ${when}`;
+  }
+  if (p.proposal_kind === "draft") {
+    const rev = p.revision ?? 1;
+    return rev > 1
+      ? `Merged from ${rev} sessions · updated ${when}`
+      : `Drafted from a session · ${when}`;
+  }
+  return `Proposed ${when}`;
+}
+
+function relTime(iso?: string): string {
+  if (!iso) return "unknown time";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "unknown time";
+  const secs = Math.max(1, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  return `${days}d ago`;
 }
