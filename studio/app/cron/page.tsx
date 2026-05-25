@@ -26,9 +26,15 @@ import {
   type SentinelDTO,
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useTabParam } from "@/lib/useTabParam";
 import { RunIndicator } from "@/lib/runs";
 
+const CRON_TABS = ["cron", "sentinel"] as const;
+type CronTab = (typeof CRON_TABS)[number];
+
 export default function CronPage() {
+  // Active tab persists in ?tab=<id> so a refresh keeps Cron vs Sentinels.
+  const [tab, setTab] = useTabParam<CronTab>("tab", "cron", CRON_TABS);
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-safe scroll-touch">
@@ -37,7 +43,11 @@ export default function CronPage() {
             Cron
           </h1>
         </div>
-        <Tabs defaultValue="cron" className="flex flex-col">
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v as CronTab)}
+          className="flex flex-col"
+        >
           <div className="px-4 pb-3 sm:px-6 lg:px-8">
             <PageTabsList scrollable>
               <PageTabsTrigger value="cron">Cron</PageTabsTrigger>

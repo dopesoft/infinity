@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTabParam } from "@/lib/useTabParam";
 import {
   ArrowRight,
   BookOpen,
@@ -44,6 +45,7 @@ import { cn } from "@/lib/utils";
  */
 
 type LabTab = "open" | "fixed" | "lessons" | "gym";
+const LAB_TABS: LabTab[] = ["open", "fixed", "lessons", "gym"];
 
 type GymCandidate = {
   source_kind: string;
@@ -143,25 +145,13 @@ const SOURCE_LABEL: Record<string, { label: string; tone: "info" | "warning" | "
 
 export default function LabPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<LabTab>("open");
+  // Active tab lives in ?tab=<id> so a refresh / back-forward / bookmark keeps
+  // the tab. Unknown legacy slugs (proposals, skills) fall through the allowed
+  // list back to "open", which preserves the old forward-aliasing behaviour.
+  const [tab, setTab] = useTabParam<LabTab>("tab", "open", LAB_TABS);
   const [data, setData] = useState<LabSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<Record<string, "fixing" | "dismissing" | null>>({});
-
-  useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    // Map legacy slugs forward so old links from email notifications,
-    // chat seeds, and bookmarks keep landing on the right tab.
-    const aliased =
-      requested === "proposals"
-        ? "open"
-        : requested === "skills"
-          ? null
-          : requested;
-    if (aliased && ["open", "fixed", "lessons", "gym"].includes(aliased)) {
-      setTab(aliased as LabTab);
-    }
-  }, []);
 
   async function load() {
     setLoading(true);

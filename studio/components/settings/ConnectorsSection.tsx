@@ -21,6 +21,7 @@ import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-ta
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { useTabParam } from "@/lib/useTabParam";
 import { cn } from "@/lib/utils";
 import {
   disconnectComposioAccount,
@@ -51,7 +52,9 @@ import {
 type Tab = "active" | "browse" | "custom";
 
 export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
-  const [tab, setTab] = useState<Tab>("active");
+  // Sub-tab persists in ?connectors=<id> (distinct from settings' ?section=)
+  // so a refresh on /settings?section=mcp keeps active/browse/custom.
+  const [tab, setTab] = useTabParam<Tab>("connectors", "active", ["active", "browse", "custom"]);
 
   const [connected, setConnected] = useState<ComposioConnectedAccount[]>([]);
   const [connectedError, setConnectedError] = useState<string | null>(null);

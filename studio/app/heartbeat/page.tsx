@@ -33,6 +33,7 @@ import {
 } from "@/lib/api";
 import { seedSession } from "@/lib/dashboard/seed";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useTabParam } from "@/lib/useTabParam";
 import { useRuns } from "@/lib/runs";
 
 /* Heartbeat - system pulse monitor.
@@ -150,7 +151,12 @@ export default function HeartbeatPage() {
   const running = heartbeatRun?.status === "running";
   const [last, setLast] = useState<HeartbeatRunSummaryDTO | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<EventFilter>("all");
+  // Active stream filter persists in ?filter=<id> so a refresh keeps the view.
+  const [filter, setFilter] = useTabParam<EventFilter>(
+    "filter",
+    "all",
+    ["all", "findings", "intent", "runs"],
+  );
 
   async function loadAll() {
     setLoading(true);

@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { fetchTraces, type TurnRowDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useTabParam } from "@/lib/useTabParam";
 import { TurnRow } from "@/components/logs/TurnRow";
 
 /* /logs - LangSmith-style turn-by-turn list.
@@ -45,7 +46,12 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
 export default function LogsPage() {
   const [turns, setTurns] = useState<TurnRowDTO[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  // Status tab persists in ?status=<id> so a refresh keeps the filter.
+  const [statusFilter, setStatusFilter] = useTabParam<StatusFilter>(
+    "status",
+    "all",
+    STATUS_FILTERS,
+  );
   const [query, setQuery] = useState("");
 
   const load = useCallback(async () => {

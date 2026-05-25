@@ -16,6 +16,7 @@ import {
   type TrustContractDTO,
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useTabParam } from "@/lib/useTabParam";
 
 const RISK_DOT: Record<TrustContractDTO["risk_level"], string> = {
   low: "bg-success",
@@ -53,7 +54,9 @@ const DECIDED_STATUSES = ["approved", "consumed", "denied"] as const;
  * dashboard side-card; this is the surface the boss bulk-clears from.
  */
 export function TrustReviewPanel() {
-  const [tab, setTab] = useState<Tab>("pending");
+  // Sub-tab persists in ?trust=<id> (distinct from settings' ?section=) so a
+  // refresh on /settings?section=trust keeps pending vs decided.
+  const [tab, setTab] = useTabParam<Tab>("trust", "pending", ["pending", "decided"]);
   const [pending, setPending] = useState<TrustContractDTO[] | null>(null);
   const [decided, setDecided] = useState<TrustContractDTO[] | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});

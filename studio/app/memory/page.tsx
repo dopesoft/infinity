@@ -20,6 +20,7 @@ import { MemoryDetail } from "@/components/MemoryDetail";
 import { BossProfilePanel } from "@/components/BossProfilePanel";
 import { KnowledgeGraphPanel } from "@/components/KnowledgeGraphPanel";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useTabParam } from "@/lib/useTabParam";
 import { cn } from "@/lib/utils";
 import {
   fetchMemories,
@@ -54,7 +55,8 @@ export default function MemoryPage() {
   const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showDetail, setShowDetail] = useState(false);
-  const [view, setView] = useState<View>("memories");
+  // Active view tab persists in ?view=<id> so a refresh keeps the tab.
+  const [view, setView] = useTabParam<View>("view", "memories", VIEWS);
   const [tier, setTier] = useState<TierFilter>("all");
   const [reflections, setReflections] = useState<ReflectionDTO[]>([]);
   const [reflectionChains, setReflectionChains] = useState<ReflectionChainDTO[]>([]);

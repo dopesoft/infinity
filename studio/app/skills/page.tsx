@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { fetchSkills, type SkillSummaryDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useTabParam } from "@/lib/useTabParam";
 
 const STATUS_FILTERS = ["all", "active", "candidate", "archived"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
@@ -33,7 +34,12 @@ export default function SkillsPage() {
   const [loading, setLoading] = useState(true);
   const [showDetail, setShowDetail] = useState(false);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  // Active status tab persists in ?status=<id> so a refresh keeps the view.
+  const [statusFilter, setStatusFilter] = useTabParam<StatusFilter>(
+    "status",
+    "active",
+    STATUS_FILTERS,
+  );
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
 
   async function load() {
@@ -47,15 +53,9 @@ export default function SkillsPage() {
     load();
   }, []);
 
-  // Honour ?tab=<status> so deep-links from /lab Recently fixed,
-  // dashboard, or the SkillProposalCard land on the right filter
-  // (Active by default; Candidate when the boss is here to triage).
-  useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested && (STATUS_FILTERS as readonly string[]).includes(requested)) {
-      setStatusFilter(requested as StatusFilter);
-    }
-  }, []);
+  // The active status filter is URL-backed (?status=<id>) via useTabParam, so
+  // deep-links land on the right filter and a refresh keeps it — no separate
+  // sync effect needed.
 
   useRealtime(["mem_skills", "mem_skill_runs"], load);
 
