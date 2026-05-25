@@ -173,6 +173,16 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 // the entity (Composio user_id), which the execute API requires alongside
 // the account id. Falls back to the hint verbatim with an empty entity when
 // nothing resolves (degrades to the 1811 error → empty body → preview).
+//
+// Health redirect: surfaced follow-ups embed the connected_account_id that
+// was live when they were captured ("gmail:ca_OLD:msgid"). If the boss later
+// revokes+reconnects, that embedded id goes REVOKED and a new ACTIVE account
+// is minted - so a literal use of the embedded id keeps 422ing forever. When
+// the resolved account is dead/missing we re-point at a healthy account of
+// the SAME mailbox (identity-matched), so old follow-ups render through the
+// new connection. We only cross to a different account when the dead account's
+// identity is unknown (single-mailbox case) - never silently fetch a
+// different known mailbox (wrong message id → 404 / leak).
 func (f *MessageFetcher) resolveAccount(toolkit, hint string) (caID, entity string) {
 	hint = strings.TrimSpace(hint)
 	caID = hint
@@ -180,40 +190,81 @@ func (f *MessageFetcher) resolveAccount(toolkit, hint string) (caID, entity stri
 		return caID, ""
 	}
 	accounts := f.cache.AccountsByToolkit()[strings.ToLower(toolkit)]
-	// When the hint isn't already a ca_ id, match it (email / identity /
-	// alias) to one of the toolkit's accounts; or use the sole account.
-	if !strings.HasPrefix(hint, "ca_") {
-		var match *Account
-		if hint != "" {
-			needle := strings.ToLower(hint)
-			for _, a := range accounts {
-				if a == nil {
-					continue
-				}
-				if strings.EqualFold(a.IdentityHint, hint) || strings.EqualFold(a.Alias, hint) ||
-					(needle != "" && strings.Contains(strings.ToLower(a.IdentityHint), needle)) {
-					match = a
-					break
-				}
+
+	// Find the account the hint points at: a ca_ id is matched by id, anything
+	// else by identity / alias; a bare hint with a single account uses it.
+	var chosen *Account
+	if strings.HasPrefix(hint, "ca_") {
+		for _, a := range accounts {
+			if a != nil && a.ID == hint {
+				chosen = a
+				break
 			}
 		}
-		if match == nil && len(accounts) == 1 {
-			match = accounts[0]
-		}
-		if match != nil {
-			caID = match.ID
+	} else if hint != "" {
+		needle := strings.ToLower(hint)
+		for _, a := range accounts {
+			if a == nil {
+				continue
+			}
+			if strings.EqualFold(a.IdentityHint, hint) || strings.EqualFold(a.Alias, hint) ||
+				strings.Contains(strings.ToLower(a.IdentityHint), needle) {
+				chosen = a
+				break
+			}
 		}
 	}
-	// Recover the entity (user_id) for the chosen account id by scanning all
-	// toolkits (mirrors serve.go's userIDFor used by the calendar provider).
-	for _, accs := range f.cache.AccountsByToolkit() {
-		for _, a := range accs {
-			if a != nil && a.ID == caID {
-				return caID, a.UserID
-			}
+	if chosen == nil && hint == "" && len(accounts) == 1 {
+		chosen = accounts[0]
+	}
+
+	// Dead/missing → redirect to the healthiest same-toolkit account.
+	if !accountActive(chosen) {
+		if alt := bestActiveAccount(accounts, chosen); alt != nil {
+			chosen = alt
 		}
+	}
+
+	if chosen != nil {
+		return chosen.ID, chosen.UserID
 	}
 	return caID, ""
+}
+
+// accountActive reports whether a Composio account is usable for execute.
+// Composio stores the upstream state verbatim ("ACTIVE", "REVOKED", ...).
+func accountActive(a *Account) bool {
+	return a != nil && strings.EqualFold(strings.TrimSpace(a.Status), "ACTIVE")
+}
+
+// bestActiveAccount picks the healthiest replacement for a dead/missing
+// account among same-toolkit accounts. If the dead account's identity is
+// known, ONLY an ACTIVE account of the same identity qualifies (same mailbox →
+// the embedded message id is still valid after a re-auth); we never cross to a
+// different known mailbox. If the dead identity is unknown (or there is no
+// dead account), we fall back to the most recently connected ACTIVE account -
+// in the common single-mailbox case that's the reconnect we want.
+func bestActiveAccount(accounts []*Account, dead *Account) *Account {
+	deadIdentity := ""
+	if dead != nil {
+		deadIdentity = strings.TrimSpace(dead.IdentityHint)
+	}
+	var newest *Account
+	for _, a := range accounts {
+		if !accountActive(a) {
+			continue
+		}
+		if deadIdentity != "" {
+			if strings.EqualFold(strings.TrimSpace(a.IdentityHint), deadIdentity) {
+				return a
+			}
+			continue // known mailbox, but this active account is a different one
+		}
+		if newest == nil || a.CreatedAt.After(newest.CreatedAt) {
+			newest = a
+		}
+	}
+	return newest
 }
 
 // normalizeGmailID unpacks a (possibly composite) external id into the raw

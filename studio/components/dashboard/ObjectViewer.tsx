@@ -1335,9 +1335,15 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   // The full email is fetched lazily on open (nothing is loaded at poll
   // time). Connector-poll rows already carry plain text in f.body; surface
   // rows arrive with only a summary and pull the real email here.
-  const { html, text, attachments, loading } = useFollowupMessage(f);
+  const { html, text, attachments, loading, error } = useFollowupMessage(f);
   const richHtml = (html ?? f.html ?? "").trim();
-  const plain = (text ?? "").trim() || (f.body ?? "").trim();
+  // f.body is the real plain-text email ONLY on connector-poll rows. On
+  // surface rows f.body is the list-chip subtext ("mr khaya • action likely
+  // needed…") — NOT the email — so we never render it as the message body;
+  // the real email arrives via the lazy fetch (text/html). This is what kept
+  // showing the chip summary inside the opened modal.
+  const pollBody = f.origin === "surface" ? "" : (f.body ?? "").trim();
+  const plain = (text ?? "").trim() || pollBody;
 
   return (
     <div className="space-y-1 pt-3">
@@ -1416,9 +1422,23 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           <p className="text-[13px] text-muted-foreground">
             This email has no text body{attachments.length === 1 ? " - just an attachment." : " - just attachments."}
           </p>
+        ) : error ? (
+          // The fetch failed (commonly a revoked/expired connector account).
+          // Show an honest error — NEVER the list-chip subtext — and point at
+          // the real source so the boss can still read it + knows to reconnect.
+          <div className="space-y-1.5">
+            <p className="inline-flex items-center gap-1.5 text-[13px] text-warning">
+              <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
+              Couldn&apos;t load the full email.
+            </p>
+            <p className="text-[12px] text-muted-foreground">
+              The {f.source} connection may need reconnecting (Settings → Connectors).
+              {f.threadUrl ? " You can still open it in " + f.source + " above." : ""}
+            </p>
+          </div>
         ) : (
           <p className="text-[13px] text-muted-foreground">
-            {f.preview?.trim() || "No message content available."}
+            No message content available.
           </p>
         )}
 
@@ -1467,6 +1487,11 @@ type FetchedMessage = {
   text: string;
   attachments: Attachment[];
   loading: boolean;
+  // True when the lazy fetch genuinely failed (transport / upstream 4xx, e.g.
+  // a revoked connector account). Distinct from "fetched fine but the email
+  // has no body" so the UI can show an honest error instead of silently
+  // falling back to the list-chip subtext.
+  error: boolean;
 };
 
 function useFollowupMessage(f: FollowUp): FetchedMessage {
@@ -1475,10 +1500,11 @@ function useFollowupMessage(f: FollowUp): FetchedMessage {
     text: "",
     attachments: [],
     loading: true,
+    error: false,
   });
   React.useEffect(() => {
     let alive = true;
-    setState({ html: "", text: "", attachments: [], loading: true });
+    setState({ html: "", text: "", attachments: [], loading: true, error: false });
     const origin = f.origin ?? "followup";
     authedFetch(
       `/api/followups/message?id=${encodeURIComponent(f.id)}&origin=${encodeURIComponent(origin)}`,
@@ -1491,10 +1517,11 @@ function useFollowupMessage(f: FollowUp): FetchedMessage {
           text: d.text ?? "",
           attachments: Array.isArray(d.attachments) ? d.attachments : [],
           loading: false,
+          error: false,
         });
       })
       .catch(() => {
-        if (alive) setState({ html: "", text: "", attachments: [], loading: false });
+        if (alive) setState({ html: "", text: "", attachments: [], loading: false, error: true });
       });
     return () => {
       alive = false;
@@ -1841,7 +1868,6 @@ function headerMeta(item: DashboardItem): {
   }
 }
 
-// Keep these imports referenced so tree-shaking doesn't complain about
-// unused declarations in the union-meta switch above.
+// Keep this import referenced so tree-shaking doesn't complain about an
+// unused declaration in the union-meta switch above.
 void Loader2;
-void AlertTriangle;
