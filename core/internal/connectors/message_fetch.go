@@ -75,8 +75,11 @@ func specForSource(source string) (fetchSpec, bool) {
 	if spec, ok := sourceFetchSpec[s]; ok {
 		return spec, true
 	}
-	// Alias fold: triage/inbox/email producers all describe Gmail today.
-	if strings.Contains(s, "gmail") || s == "email" || s == "inbox" || strings.Contains(s, "mail") {
+	// Alias fold: triage/inbox/email producers all describe Gmail today, so a
+	// source like "inbox-triage" / "gmail-triage" / "email" resolves to the
+	// Gmail fetch verb even when the external id is bare (no toolkit prefix).
+	if strings.Contains(s, "gmail") || s == "email" || strings.Contains(s, "inbox") ||
+		strings.Contains(s, "mail") {
 		return sourceFetchSpec["gmail"], true
 	}
 	return fetchSpec{}, false
@@ -207,7 +210,12 @@ func (f *MessageFetcher) resolveAccount(toolkit, hint string) (caID, entity stri
 			if a == nil {
 				continue
 			}
-			if strings.EqualFold(a.IdentityHint, hint) || strings.EqualFold(a.Alias, hint) ||
+			// Match the hint against the entity (user_id), the OAuth identity
+			// (email), or the alias. The hint is often the Composio entity
+			// label ("mr khaya", "malabie industries") that surface rows store
+			// in metadata.account, so user_id is the primary signal.
+			if strings.EqualFold(a.UserID, hint) || strings.EqualFold(a.IdentityHint, hint) ||
+				strings.EqualFold(a.Alias, hint) ||
 				strings.Contains(strings.ToLower(a.IdentityHint), needle) {
 				chosen = a
 				break
@@ -238,33 +246,38 @@ func accountActive(a *Account) bool {
 }
 
 // bestActiveAccount picks the healthiest replacement for a dead/missing
-// account among same-toolkit accounts. If the dead account's identity is
-// known, ONLY an ACTIVE account of the same identity qualifies (same mailbox →
-// the embedded message id is still valid after a re-auth); we never cross to a
-// different known mailbox. If the dead identity is unknown (or there is no
-// dead account), we fall back to the most recently connected ACTIVE account -
-// in the common single-mailbox case that's the reconnect we want.
+// account among same-toolkit accounts. When we know which mailbox the dead
+// account was (its entity user_id and/or OAuth identity), ONLY an ACTIVE
+// account of the SAME mailbox qualifies - re-authing a mailbox keeps its
+// message ids valid, and we must never cross into a different known mailbox
+// (wrong message id → 404 / wrong email). The entity (user_id) is the primary
+// match because Composio reuses it across a revoke+reconnect of the same
+// mailbox and it is always populated; identity (email) is the secondary
+// signal. Only when the dead mailbox is entirely unknown do we fall back to
+// the most recently connected ACTIVE account (the single-mailbox reconnect).
 func bestActiveAccount(accounts []*Account, dead *Account) *Account {
-	deadIdentity := ""
+	deadUser, deadIdentity := "", ""
 	if dead != nil {
+		deadUser = strings.TrimSpace(dead.UserID)
 		deadIdentity = strings.TrimSpace(dead.IdentityHint)
 	}
+	known := deadUser != "" || deadIdentity != ""
 	var newest *Account
 	for _, a := range accounts {
 		if !accountActive(a) {
 			continue
 		}
-		if deadIdentity != "" {
-			if strings.EqualFold(strings.TrimSpace(a.IdentityHint), deadIdentity) {
-				return a
-			}
-			continue // known mailbox, but this active account is a different one
+		if deadUser != "" && strings.EqualFold(strings.TrimSpace(a.UserID), deadUser) {
+			return a
 		}
-		if newest == nil || a.CreatedAt.After(newest.CreatedAt) {
+		if deadIdentity != "" && strings.EqualFold(strings.TrimSpace(a.IdentityHint), deadIdentity) {
+			return a
+		}
+		if !known && (newest == nil || a.CreatedAt.After(newest.CreatedAt)) {
 			newest = a
 		}
 	}
-	return newest
+	return newest // nil when the dead mailbox is known but unmatched
 }
 
 // normalizeGmailID unpacks a (possibly composite) external id into the raw

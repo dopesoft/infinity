@@ -1992,6 +1992,23 @@ func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "no pool")
 		return
 	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	origin := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("origin")))
+	if origin == "" {
+		origin = "followup"
+	}
+
+	// Serve the stored body FIRST. Email bodies are immutable, so once we've
+	// captured one a live re-fetch is pure cost - and, crucially, it makes the
+	// viewer revocation-proof: a connector going REVOKED later can never blank
+	// an email we already rendered once.
+	if html, text, ok := a.storedFollowupBody(r.Context(), id, origin); ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"html": html, "text": text, "attachments": []connectors.Attachment{},
+		})
+		return
+	}
+
 	source, accountHint, messageID, ok := a.resolveFollowupRef(w, r)
 	if !ok {
 		return
@@ -2007,15 +2024,76 @@ func (a *API) handleFollowupMessage(w http.ResponseWriter, r *http.Request) {
 	html, text, attachments, err := a.Fetcher.FetchMessage(r.Context(), source, accountHint, messageID)
 	if err != nil {
 		a.Logger.Warn("followup message: fetch", "source", source, "err", err)
-		// Degrade quietly: 200 with empty bodies so the viewer falls back to
-		// preview rather than surfacing a scary error for a transient upstream.
+		// We have no stored copy AND the live fetch failed (commonly a revoked
+		// account with no reconnected twin yet). Return an explicit error flag
+		// so the viewer shows an honest "couldn't load — reconnect" state
+		// instead of silently rendering the stale list subtext.
+		empty["error"] = "fetch_failed"
 		writeJSON(w, http.StatusOK, empty)
 		return
 	}
 	if attachments == nil {
 		attachments = []connectors.Attachment{}
 	}
+	// Capture-on-fetch: persist the body so every later open is instant and
+	// survives the connector being revoked. Best-effort - a cache write failure
+	// must never block returning the email we just fetched.
+	a.cacheFollowupBody(r.Context(), id, origin, html, text)
 	writeJSON(w, http.StatusOK, map[string]any{"html": html, "text": text, "attachments": attachments})
+}
+
+// storedFollowupBody returns a previously-captured email body for a follow-up.
+// ok=true only when there is a non-empty stored html OR text, so a row that
+// merely has the columns present (NULL) still takes the live-fetch path.
+func (a *API) storedFollowupBody(ctx context.Context, id, origin string) (html, text string, ok bool) {
+	if a.Pool == nil || id == "" {
+		return "", "", false
+	}
+	table := "mem_followups"
+	if origin == "surface" {
+		table = "mem_surface_items"
+	}
+	// table is from a fixed all-list above, never user input - safe to format.
+	var h, t *string
+	err := a.Pool.QueryRow(ctx,
+		"SELECT cached_html, cached_text FROM "+table+" WHERE id::text = $1", id,
+	).Scan(&h, &t)
+	if err != nil {
+		return "", "", false
+	}
+	if h != nil {
+		html = *h
+	}
+	if t != nil {
+		text = *t
+	}
+	if strings.TrimSpace(html) == "" && strings.TrimSpace(text) == "" {
+		return "", "", false
+	}
+	return html, text, true
+}
+
+// cacheFollowupBody persists a freshly-fetched email body onto the follow-up
+// row so future opens serve it without a live connector call. Best-effort:
+// errors are logged, never surfaced - the caller already has the body to
+// return.
+func (a *API) cacheFollowupBody(ctx context.Context, id, origin, html, text string) {
+	if a.Pool == nil || id == "" {
+		return
+	}
+	if strings.TrimSpace(html) == "" && strings.TrimSpace(text) == "" {
+		return
+	}
+	table := "mem_followups"
+	if origin == "surface" {
+		table = "mem_surface_items"
+	}
+	if _, err := a.Pool.Exec(ctx,
+		"UPDATE "+table+" SET cached_html = $1, cached_text = $2 WHERE id::text = $3",
+		html, text, id,
+	); err != nil {
+		a.Logger.Warn("followup message: cache body", "id", id, "origin", origin, "err", err)
+	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

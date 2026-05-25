@@ -92,8 +92,8 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 			INSERT INTO mem_surface_items
 			  (surface, kind, source, external_id, title, subtitle, body, url,
 			   importance, importance_reason, metadata, status, snoozed_until,
-			   expires_at, scored_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15)
+			   expires_at, scored_at, cached_html, cached_text)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17)
 			ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL
 			DO UPDATE SET
 			  surface           = EXCLUDED.surface,
@@ -109,11 +109,17 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 			  metadata          = EXCLUDED.metadata,
 			  expires_at        = EXCLUDED.expires_at,
 			  scored_at         = COALESCE(EXCLUDED.scored_at, mem_surface_items.scored_at),
+			  -- Keep a captured body across re-poll: only overwrite when the new
+			  -- run actually carries one, so a later body-less refresh never
+			  -- wipes a durable email we already stored.
+			  cached_html       = COALESCE(NULLIF(EXCLUDED.cached_html, ''), mem_surface_items.cached_html),
+			  cached_text       = COALESCE(NULLIF(EXCLUDED.cached_text, ''), mem_surface_items.cached_text),
 			  updated_at        = NOW()
 			RETURNING id::text
 		`, it.Surface, it.Kind, it.Source, it.ExternalID, it.Title, it.Subtitle,
 			it.Body, nullStr(it.URL), it.Importance, it.ImportanceReason,
-			string(metaJSON), string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored).Scan(&id)
+			string(metaJSON), string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored,
+			it.CachedHTML, it.CachedText).Scan(&id)
 		if err != nil {
 			return "", fmt.Errorf("surface: upsert: %w", err)
 		}
@@ -125,12 +131,14 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO mem_surface_items
 		  (surface, kind, source, title, subtitle, body, url, importance,
-		   importance_reason, metadata, status, snoozed_until, expires_at, scored_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14)
+		   importance_reason, metadata, status, snoozed_until, expires_at, scored_at,
+		   cached_html, cached_text)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)
 		RETURNING id::text
 	`, it.Surface, it.Kind, it.Source, it.Title, it.Subtitle, it.Body,
 		nullStr(it.URL), it.Importance, it.ImportanceReason, string(metaJSON),
-		string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored).Scan(&id)
+		string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored,
+		it.CachedHTML, it.CachedText).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("surface: insert: %w", err)
 	}

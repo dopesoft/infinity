@@ -1510,14 +1510,19 @@ function useFollowupMessage(f: FollowUp): FetchedMessage {
       `/api/followups/message?id=${encodeURIComponent(f.id)}&origin=${encodeURIComponent(origin)}`,
     )
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("message fetch failed"))))
-      .then((d: { html?: string; text?: string; attachments?: Attachment[] }) => {
+      .then((d: { html?: string; text?: string; attachments?: Attachment[]; error?: string }) => {
         if (!alive) return;
+        const html = d.html ?? "";
+        const text = d.text ?? "";
         setState({
-          html: d.html ?? "",
-          text: d.text ?? "",
+          html,
+          text,
           attachments: Array.isArray(d.attachments) ? d.attachments : [],
           loading: false,
-          error: false,
+          // The endpoint returns 200 with an `error` marker when it had no
+          // stored copy and the live fetch failed (e.g. revoked account). Only
+          // treat it as an error when we genuinely got no body to show.
+          error: Boolean(d.error) && !html.trim() && !text.trim(),
         });
       })
       .catch(() => {

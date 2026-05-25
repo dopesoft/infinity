@@ -14,12 +14,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
+
+// FollowupBodyFetcher retrieves a message's full rendered body (HTML + text)
+// for durable capture at surface time. Satisfied by connectors.MessageFetcher
+// and injected (late-bound in serve.go) so the generic surface tool stays
+// vendor-agnostic - it asks "give me the body for this id", never "call Gmail".
+type FollowupBodyFetcher interface {
+	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []connectors.Attachment, err error)
+}
 
 // RegisterSurfaceTools wires surface_item + surface_update + surface_list.
 // No-op when pool is nil so chat-only / no-DB deployments don't break
@@ -36,7 +46,14 @@ func RegisterSurfaceTools(r *Registry, pool *pgxpool.Pool) {
 
 // ── surface_item ────────────────────────────────────────────────────────────
 
-type surfaceItemTool struct{ store *surface.Store }
+type surfaceItemTool struct {
+	store   *surface.Store
+	fetcher FollowupBodyFetcher // late-bound; nil until serve.go wires it
+}
+
+// SetBodyFetcher injects the durable-body fetcher after registration (the
+// fetcher is constructed later in boot than the tool registry).
+func (t *surfaceItemTool) SetBodyFetcher(f FollowupBodyFetcher) { t.fetcher = f }
 
 func (t *surfaceItemTool) Name() string { return "surface_item" }
 func (t *surfaceItemTool) Description() string {
@@ -71,6 +88,8 @@ func (t *surfaceItemTool) Schema() map[string]any {
 			"external_id":       map[string]any{"type": "string", "description": "Stable id from the source system (Gmail message id, Slack ts, …). Enables upsert-on-rerun."},
 			"subtitle":          map[string]any{"type": "string", "description": "Secondary line under the title."},
 			"body":              map[string]any{"type": "string", "description": "Full content shown when the boss expands the item."},
+			"body_html":         map[string]any{"type": "string", "description": "For email/message follow-ups: the FULL rendered HTML body, fetched once now (e.g. GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID format=full). Persisted so the boss can read the whole email from the dashboard WITHOUT a live connector call - durable even if the account is later revoked. Always pass this when surfacing an email so it never goes blank."},
+			"body_text":         map[string]any{"type": "string", "description": "Plain-text fallback body for an email/message follow-up, persisted alongside body_html for the same durability. Pass when you have it."},
 			"url":               map[string]any{"type": "string", "description": "Deep link to the source (thread URL, article URL)."},
 			"importance":        map[string]any{"type": "integer", "description": "0-100 ranking. Omit if you haven't judged it. 80+ = urgent, 50-79 = notable, <50 = routine."},
 			"importance_reason": map[string]any{"type": "string", "description": "One line explaining the importance score."},
@@ -89,6 +108,8 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 		ExternalID:       strString(in, "external_id"),
 		Subtitle:         strString(in, "subtitle"),
 		Body:             strString(in, "body"),
+		CachedHTML:       strString(in, "body_html"),
+		CachedText:       strString(in, "body_text"),
 		URL:              strString(in, "url"),
 		ImportanceReason: strString(in, "importance_reason"),
 	}
@@ -103,6 +124,22 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 		exp := time.Now().UTC().Add(time.Duration(v * float64(time.Hour)))
 		it.ExpiresAt = &exp
 	}
+
+	// Durable email body: for a follow-up email surfaced with a stable id and
+	// no body already supplied, fetch + store the full rendered body NOW, while
+	// the connector is healthy. The boss can then read the whole email from the
+	// dashboard later with NO live connector call - even if the account is
+	// revoked before he ever opens it. The fetch + MIME decode run in Go
+	// (connectors.MessageFetcher), never through the model. Best-effort: a miss
+	// just leaves the lazy open-time path (which also caches) to fill it later.
+	if it.CachedHTML == "" && it.CachedText == "" && t.fetcher != nil &&
+		it.ExternalID != "" && isFollowupEmailItem(it.Surface, it.Kind) {
+		if html, text, _, ferr := t.fetcher.FetchMessage(ctx, it.Source, metaAccountHint(it.Metadata), it.ExternalID); ferr == nil {
+			it.CachedHTML = html
+			it.CachedText = text
+		}
+	}
+
 	id, err := t.store.Upsert(ctx, it)
 	if err != nil {
 		return "", err
@@ -127,6 +164,21 @@ func isFollowupEmailItem(surfaceName, kind string) bool {
 		return kind == "email"
 	}
 	return false
+}
+
+// metaAccountHint pulls the connector account hint a producer stashed in
+// metadata (a ca_ connected_account_id, an email, or an entity label) so the
+// body fetcher can resolve which account to read from. Empty when absent.
+func metaAccountHint(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	for _, k := range []string{"connected_account_id", "account"} {
+		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // ── surface_update ──────────────────────────────────────────────────────────

@@ -1279,7 +1279,21 @@ func serveCmd() *cobra.Command {
 				// ObjectViewer can render the real email. Nil-safe - without
 				// Composio the Message pane falls back to preview text.
 				if composioExec != nil {
-					dashboardAPI.Fetcher = connectors.NewMessageFetcher(composioExec, connectorsCache)
+					msgFetcher := connectors.NewMessageFetcher(composioExec, connectorsCache)
+					dashboardAPI.Fetcher = msgFetcher
+					// Late-bind the same fetcher into surface_item (registered
+					// before the fetcher existed) so a triage run captures a
+					// durable email body at surface time - the body survives a
+					// later connector revoke without any live call on open.
+					if msgFetcher != nil {
+						if st, ok := registry.Get("surface_item"); ok {
+							if setter, ok := st.(interface {
+								SetBodyFetcher(tools.FollowupBodyFetcher)
+							}); ok {
+								setter.SetBodyFetcher(msgFetcher)
+							}
+						}
+					}
 				}
 				// read_email: lets the agent pull a follow-up's full email body
 				// on demand (when the summary in context isn't enough). Shares

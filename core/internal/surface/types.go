@@ -42,6 +42,14 @@ type Item struct {
 	Title            string         `json:"title"`
 	Subtitle         string         `json:"subtitle,omitempty"`
 	Body             string         `json:"body,omitempty"`
+	// CachedHTML / CachedText carry a pre-rendered message body (e.g. the full
+	// HTML email a triage recipe already fetched) so the dashboard renders it
+	// WITHOUT a live connector call - durable even if the connector is later
+	// revoked. Write-mostly: deliberately NOT selected by the list queries (an
+	// HTML email is 50-200KB and would bloat every list load); the
+	// single-message endpoint reads these columns directly.
+	CachedHTML       string         `json:"cachedHtml,omitempty"`
+	CachedText       string         `json:"cachedText,omitempty"`
 	URL              string         `json:"url,omitempty"`
 	Importance       *int           `json:"importance,omitempty"`
 	ImportanceReason string         `json:"importanceReason,omitempty"`
