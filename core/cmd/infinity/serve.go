@@ -596,11 +596,15 @@ func serveCmd() *cobra.Command {
 			// call per new session, async, idempotent). Requires Anthropic
 			// provider + DB pool; degrades to no-op otherwise.
 			var sessionNamer *sessions.Namer
-			if pool != nil {
-				if a, ok := provider.(*llm.Anthropic); ok {
-					sessionNamer = sessions.NewNamer(pool, a, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
-					fmt.Printf("  sessions: auto-naming enabled (follows Settings model, Haiku fallback)\n")
-				}
+			if pool != nil && provider != nil {
+				// Title with the boss's ACTIVE provider + model - the same one
+				// chat uses (SetActiveModelFn wires the live Studio selection
+				// below). Provider-agnostic via llm.Provider.Stream, so titling
+				// works on gpt-5.4 / ChatGPT Plan, Anthropic, anything - the set
+				// model names the session. (Before this it was Anthropic-only
+				// and went silent the moment the boss switched to gpt-5.4.)
+				sessionNamer = sessions.NewNamer(pool, provider, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
+				fmt.Printf("  sessions: auto-naming enabled (uses the active Studio model)\n")
 			}
 
 			// Connectors cache: live picture of Composio connected accounts +

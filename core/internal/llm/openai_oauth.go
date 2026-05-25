@@ -577,14 +577,19 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 	}
 	// Reasoning-capable models compute thinking tokens internally regardless
 	// of this flag, but the SUMMARY text only streams when we explicitly
-	// request it. Without `reasoning.summary` the UI's "Jarvis is thinking"
-	// pill stays empty even though the model is actually reasoning. We ask
-	// for "auto" so the upstream picks whichever shape its current model
-	// supports (concise/detailed). Skipped for non-reasoning models
-	// (gpt-4o, gpt-4.1) where the param would error.
+	// request it. "auto" returns a terse summary - the boss wants to actually
+	// watch the model reason ("the user wants a dashboard called pulse, so…"),
+	// so we ask for "detailed", which streams a much fuller reasoning narrative
+	// (still a summary - OpenAI never exposes raw chain-of-thought). Override
+	// with INFINITY_OPENAI_REASONING_SUMMARY (auto|concise|detailed) if needed.
+	// Skipped for non-reasoning models (gpt-4o, gpt-4.1) where it would error.
 	if modelSupportsReasoning(model) {
+		summary := strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_SUMMARY"))
+		if summary == "" {
+			summary = "detailed"
+		}
 		body["reasoning"] = map[string]any{
-			"summary": "auto",
+			"summary": summary,
 		}
 	}
 	if len(tools) > 0 {

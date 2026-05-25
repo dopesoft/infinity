@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { MonitorPlay, X, Lock, FileText } from "lucide-react";
+import { MonitorPlay, X, Lock, FileText, SquareTerminal } from "lucide-react";
 import { CanvasPreview } from "@/components/canvas/CanvasPreview";
+import { CanvasTerminal } from "@/components/canvas/CanvasTerminal";
 import { CanvasFileTab } from "@/components/canvas/CanvasFileTab";
 import { DocumentTab } from "@/components/canvas/DocumentTab";
 import { useCanvasStore } from "@/lib/canvas/store";
@@ -87,6 +88,29 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
               >
                 <MonitorPlay className="size-3.5" />
                 <span>Preview</span>
+                <Lock className="size-2.5 text-muted-foreground/60" aria-hidden />
+              </button>
+            );
+          }
+          if (tab.kind === "terminal") {
+            return (
+              <button
+                key={tab.id}
+                data-tab-id={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => store.setActiveTabId(tab.id)}
+                className={cn(
+                  "group inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
+                  isActive
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                )}
+                title="Terminal - your shell + Jarvis's commands (pinned)"
+              >
+                <SquareTerminal className="size-3.5" />
+                <span>Terminal</span>
                 <Lock className="size-2.5 text-muted-foreground/60" aria-hidden />
               </button>
             );
@@ -185,6 +209,17 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
           aria-hidden={store.activeTabId !== "preview"}
         >
           <CanvasPreview sessionId={chat.sessionId} />
+        </div>
+        {/* Terminal kept mounted so scrollback + Jarvis's command feed survive
+            tab switches (same reason Preview/Monaco stay mounted). */}
+        <div
+          className={cn(
+            "absolute inset-0 transition-opacity",
+            store.activeTabId === "terminal" ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+          aria-hidden={store.activeTabId !== "terminal"}
+        >
+          <CanvasTerminal sessionId={chat.sessionId} />
         </div>
         {store.tabs.map((tab) => {
           if (tab.kind !== "file") return null;

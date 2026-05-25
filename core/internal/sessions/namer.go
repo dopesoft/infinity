@@ -2,8 +2,10 @@
 // loop's in-memory map. Right now that's auto-naming - turning a
 // freshly-minted session's first exchange into a 3-5 word title so the
 // Live header drawer doesn't show "chs3-djnc" garbage. Titling runs through
-// the boss's active Studio model selection (see SetActiveModelFn); when no
-// override is set it falls back to the cheap Haiku default below.
+// the boss's ACTIVE provider + model (the same one chat uses, via
+// SetActiveModelFn) - so whatever model is set in Settings (gpt-5.4,
+// Sonnet, …) names the session. Provider-agnostic: it calls the standard
+// llm.Provider.Stream, not a vendor-specific draft method.
 package sessions
 
 import (
@@ -14,28 +16,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// haikuModel is the fallback model for naming, used only when the boss has
-// no active model selection wired (SetActiveModelFn) or it resolves empty.
-// Override the fallback itself with INFINITY_SESSION_NAME_MODEL.
-const haikuModel = "claude-haiku-4-5-20251001"
-
-// Drafter is the minimal LLM dependency we need. Implemented by *llm.Anthropic
-// via its Draft method (declared as a method on Anthropic; we narrow the
-// interface here so the namer doesn't pull the whole llm.Provider surface).
-type Drafter interface {
-	Draft(ctx context.Context, model, system, userPrompt string, maxTokens int64) (string, error)
-}
 
 // Namer renames sessions whose `name` column is NULL by asking a small model
 // to summarize the first user→assistant exchange in 3-5 words. Best-effort,
 // asynchronous, and idempotent - losing a name race never blocks the agent.
 type Namer struct {
-	pool    *pgxpool.Pool
-	drafter Drafter
-	model   string
+	pool     *pgxpool.Pool
+	provider llm.Provider
+	model    string // optional INFINITY_SESSION_NAME_MODEL override; "" = active/default
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -61,9 +52,10 @@ func (n *Namer) SetActiveModelFn(fn func(ctx context.Context) string) {
 	n.modelMu.Unlock()
 }
 
-// activeModel returns the model to title with: the boss's Studio selection
-// when wired and non-empty, else the cheap Haiku fallback so naming never
-// gets pinned to an expensive model just because none was explicitly chosen.
+// activeModel returns the model to title with: the boss's live Studio
+// selection (the same model chat uses) when wired, else an optional
+// INFINITY_SESSION_NAME_MODEL override, else "" so the active provider picks
+// its own default. No vendor coupling - whatever the boss set names the session.
 func (n *Namer) activeModel(ctx context.Context) string {
 	n.modelMu.RLock()
 	fn := n.modelFn
@@ -76,13 +68,10 @@ func (n *Namer) activeModel(ctx context.Context) string {
 	return n.model
 }
 
-func NewNamer(pool *pgxpool.Pool, drafter Drafter, model string) *Namer {
-	if model == "" {
-		model = haikuModel
-	}
+func NewNamer(pool *pgxpool.Pool, provider llm.Provider, model string) *Namer {
 	return &Namer{
 		pool:     pool,
-		drafter:  drafter,
+		provider: provider,
 		model:    model,
 		inflight: map[string]struct{}{},
 	}
@@ -98,7 +87,7 @@ func NewNamer(pool *pgxpool.Pool, drafter Drafter, model string) *Namer {
 // The work runs on a detached context so the request lifecycle ending
 // (WebSocket disconnect, etc.) does not cancel the Haiku call mid-flight.
 func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
-	if n == nil || n.pool == nil || n.drafter == nil {
+	if n == nil || n.pool == nil || n.provider == nil {
 		return
 	}
 	if sessionID == "" || strings.TrimSpace(userMsg) == "" {
@@ -194,11 +183,34 @@ func (n *Namer) draftName(ctx context.Context, userMsg, assistantMsg string) (st
 		truncate(userMsg, 1200),
 		truncate(assistantMsg, 1200),
 	)
-	raw, err := n.drafter.Draft(ctx, n.activeModel(ctx), namingSystem, prompt, 60)
-	if err != nil {
-		return "", err
+	// One-shot completion via the active provider's Stream (the only method on
+	// llm.Provider). We don't want the token stream - just the final text - so
+	// we drain the event channel and read Response.Text. The caller owns the
+	// channel and closes it after Stream returns (same convention as the loop).
+	out := make(chan llm.StreamEvent, 64)
+	var resp llm.Response
+	var serr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, serr = n.provider.Stream(
+			ctx,
+			n.activeModel(ctx),
+			namingSystem,
+			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
+			nil,
+			out,
+		)
+		close(out)
+	}()
+	for range out {
+		// drain - we only need the final aggregated text
 	}
-	return cleanTitle(raw), nil
+	<-done
+	if serr != nil {
+		return "", serr
+	}
+	return cleanTitle(resp.Text), nil
 }
 
 func truncate(s string, n int) string {

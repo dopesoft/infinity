@@ -1651,6 +1651,91 @@ func (s *Server) handleCanvasGitMutation(
 	})
 }
 
+// ---- Terminal (interactive boss shell) ------------------------------------
+//
+// The Canvas Terminal tab runs commands the boss types himself, on whichever
+// bridge the session is on (cloud /workspace or the Mac). It executes directly
+// - no Trust queue - because the endpoint is JWT-authed and the boss typed the
+// command; it's the same "you clicked it, it runs" model as the git buttons.
+// Jarvis's OWN shell commands still flow through bash_run / claude_code__Bash
+// and their gates; the terminal just mirrors those into the same view via the
+// WS tool stream (Studio side).
+
+type terminalExecRequest struct {
+	Command   string `json:"command"`
+	SessionID string `json:"session_id"`
+	Cwd       string `json:"cwd,omitempty"`
+}
+
+type terminalExecResponse struct {
+	Output   string `json:"output"`
+	ExitCode int    `json:"exit_code"`
+	Ok       bool   `json:"ok"`
+	Bridge   string `json:"bridge"`
+	Error    string `json:"error,omitempty"`
+}
+
+func (s *Server) handleCanvasTerminalExec(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+	var req terminalExecRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	cmd := strings.TrimSpace(req.Command)
+	if cmd == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "command required"})
+		return
+	}
+	if cwd := strings.TrimSpace(req.Cwd); cwd != "" {
+		cmd = "cd " + shellQuote(cwd) + " && " + cmd
+	}
+
+	// Cloud session: run on the cloud /workspace bridge (longer timeout than
+	// the canvas's quick git calls - terminal commands can be npm installs).
+	if cloudB, isCloud := s.canvasCloudFS(r.Context(), req.SessionID); isCloud {
+		body, status, ok := cloudB.Post(r.Context(), "/bash", map[string]any{"cmd": cmd, "timeout_sec": 180})
+		if !ok || status >= 300 {
+			writeJSON(w, http.StatusBadGateway, terminalExecResponse{Bridge: "cloud", Error: "cloud bridge unreachable"})
+			return
+		}
+		var resp struct {
+			Output   string `json:"output"`
+			ExitCode int    `json:"exit_code"`
+		}
+		_ = json.Unmarshal(body, &resp)
+		writeJSON(w, http.StatusOK, terminalExecResponse{
+			Output:   resp.Output,
+			ExitCode: resp.ExitCode,
+			Ok:       resp.ExitCode == 0,
+			Bridge:   "cloud",
+		})
+		return
+	}
+
+	// Mac session: run through the claude_code__Bash tool over the bridge.
+	t, err := s.canvasMCP("claude_code__Bash")
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, terminalExecResponse{Bridge: "mac", Error: "mac bridge unavailable"})
+		return
+	}
+	out, execErr := t.Execute(r.Context(), map[string]any{"command": cmd})
+	clean := unwrapBashStdout(out)
+	if execErr != nil {
+		writeJSON(w, http.StatusOK, terminalExecResponse{
+			Output: clean,
+			Ok:     false,
+			Bridge: "mac",
+			Error:  execErr.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, terminalExecResponse{Output: clean, Ok: true, Bridge: "mac"})
+}
+
 // waitForTrustDecision polls the trust store. Mirrors proactive.ClaudeCodeGate's
 // loop without coupling to it - the Canvas HTTP layer doesn't have a
 // gate.ToolGate interface available, so we read the store directly.

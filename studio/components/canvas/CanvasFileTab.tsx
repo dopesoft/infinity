@@ -502,7 +502,34 @@ function LiveStreamView({
 }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const edRef = useRef<any>(null);
-  // Auto-scroll to the last line on every content update so the newest tokens
+
+  // Typewriter reveal: catch a `displayed` buffer up to the streamed `content`
+  // at a capped rate, so the boss WATCHES the code type in even when the model
+  // (esp. gpt-5.x reasoning) dumps its tool-call args in a few big bursts
+  // instead of trickling them. The effect re-runs as `displayed` advances and
+  // stops once it has caught up to `content`.
+  const [displayed, setDisplayed] = useState("");
+  useEffect(() => {
+    if (displayed === content) return;
+    // New stream, or a buffer that diverged (shouldn't happen mid-file) → snap
+    // rather than "un-type" what's already shown.
+    if (content.length < displayed.length || !content.startsWith(displayed)) {
+      setDisplayed(content);
+      return;
+    }
+    const raf = requestAnimationFrame(() => {
+      setDisplayed((cur) => {
+        if (cur.length >= content.length) return cur;
+        // Reveal proportional to the gap (min 4 chars/frame): small streams
+        // keep pace, big bursts catch up fast but still visibly flow.
+        const step = Math.max(4, Math.ceil((content.length - cur.length) / 20));
+        return content.slice(0, cur.length + step);
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [content, displayed]);
+
+  // Auto-scroll to the last line as the reveal advances so the newest tokens
   // stay in view, the way a terminal follows output.
   useEffect(() => {
     const ed = edRef.current;
@@ -515,13 +542,13 @@ function LiveStreamView({
     } catch {
       /* editor not ready */
     }
-  }, [content]);
+  }, [displayed]);
   return (
     <MonacoEditor
       height="100%"
       language={language}
       theme={theme}
-      value={content}
+      value={displayed}
       beforeMount={beforeMount}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       onMount={(editor: any) => {

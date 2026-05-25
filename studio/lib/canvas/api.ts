@@ -316,6 +316,35 @@ export const pullBridgeWorkspace = (projectPath?: string) => {
   );
 };
 
+// ---- Terminal (Canvas Terminal tab) --------------------------------------
+// Runs a boss-typed command on the session's bridge (cloud /workspace or Mac).
+// Executes directly - the boss typed it. Jarvis's own shell commands surface
+// in the same tab via the WS tool stream, not this call.
+export type TerminalExecResult = {
+  output: string;
+  exit_code: number;
+  ok: boolean;
+  bridge: string;
+  error?: string;
+};
+
+export async function runTerminalCommand(
+  command: string,
+  sessionId: string,
+): Promise<TerminalExecResult | null> {
+  try {
+    const res = await authedFetch(`/api/canvas/terminal/exec`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command, session_id: sessionId }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as TerminalExecResult;
+  } catch {
+    return null;
+  }
+}
+
 // ---- Library (mem_artifacts grouped) -------------------------------------
 //
 // The Files tab IS the library - `<LibrarySection>` at the top renders this

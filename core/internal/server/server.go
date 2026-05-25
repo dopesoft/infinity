@@ -317,6 +317,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/stop", s.handleCanvasProjectStop)
 	mux.HandleFunc("/api/canvas/project/active", s.handleCanvasProjectActive)
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
+	// Canvas Terminal - boss-typed interactive shell on the session's bridge
+	// (cloud /workspace or Mac). Executes directly (boss typed it); Jarvis's
+	// own commands surface in the same tab via the WS tool stream.
+	mux.HandleFunc("/api/canvas/terminal/exec", s.handleCanvasTerminalExec)
 	// Browser-facing live-preview proxy. JWT-exempt (see HTTPMiddleware list):
 	// an iframe can't attach the Supabase bearer, and this serves only the
 	// single boss's own project preview through to the active cloud bridge.
