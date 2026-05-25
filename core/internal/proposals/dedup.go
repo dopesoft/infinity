@@ -54,7 +54,28 @@ func FindDuplicateSkill(ctx context.Context, pool *pgxpool.Pool, drafter Drafter
 		}
 	}
 
-	// Tier 2: conservative LLM judge over the catalog.
+	// Tier 2: canonical-capability intent match. Some capabilities the system
+	// relies on (email triage being the scarred example) kept re-spawning under
+	// fresh names - gmail-triage, triage_emails_to_dashboard, scheduled-gmail-
+	// followup-triage - because the LLM judge (tier 3) is deliberately
+	// conservative and the names don't normalize-match. A proposal that is
+	// clearly "that capability again" by deterministic keyword signature routes
+	// into the canonical skill regardless, so the capability stays ONE skill
+	// that gets improved instead of cloned. Generic + data-driven: add a new
+	// canonicalIntent entry, not a new code branch.
+	hay := strings.ToLower(name + " " + desc)
+	for _, ci := range canonicalIntents {
+		if !ci.matches(hay) {
+			continue
+		}
+		for _, s := range catalog { // only route to the canonical if it's actually active
+			if s.name == ci.canonical {
+				return ci.canonical
+			}
+		}
+	}
+
+	// Tier 3: conservative LLM judge over the catalog.
 	if drafter == nil {
 		return ""
 	}
@@ -82,6 +103,47 @@ func FindDuplicateSkill(ctx context.Context, pool *pgxpool.Pool, drafter Drafter
 		}
 	}
 	return ""
+}
+
+// canonicalIntent is a deterministic "this is capability X again" signature.
+// A proposal matches when its lowercased name+description contains at least
+// one token from EVERY group in `allOf` (each group is an OR of synonyms).
+// Requiring a hit in every group keeps the match tight - a triage proposal
+// must name BOTH the triage intent AND the email domain, so unrelated email
+// skills (e.g. an "email newsletter summarizer") don't get swept in.
+type canonicalIntent struct {
+	canonical string     // active skill all matches route into
+	allOf     [][]string // AND of (OR groups); every group must hit
+}
+
+func (ci canonicalIntent) matches(hay string) bool {
+	for _, group := range ci.allOf {
+		hit := false
+		for _, kw := range group {
+			if strings.Contains(hay, kw) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	return len(ci.allOf) > 0
+}
+
+// canonicalIntents is the registry of capabilities that must stay ONE skill.
+// This is the data, not code: extend it when a new core capability starts
+// re-spawning clones. inbox-triage is here because email triage fragmented
+// into 8 competing skills and a clone dismissed days of real follow-ups.
+var canonicalIntents = []canonicalIntent{
+	{
+		canonical: "inbox-triage",
+		allOf: [][]string{
+			{"triage", "inbox", "follow-up", "followup", "follow up", "sweep"},
+			{"email", "gmail", "inbox", "mail", "message"},
+		},
+	},
 }
 
 // NormalizeSkillName lowercases, unifies separators, and strips trailing

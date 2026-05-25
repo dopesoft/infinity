@@ -30,7 +30,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,12 +45,45 @@ import (
 // agent that occasionally runs multi-tool skills; bump
 // repeatWindow/sessionWindow if you legitimately need higher throughput.
 const (
-	repeatWindow   = 60 * time.Second
-	repeatLimit    = 3 // same exact call this many times in repeatWindow → block
+	repeatWindow = 60 * time.Second
+	repeatLimit  = 3 // same exact call this many times in repeatWindow → block
 
 	sessionWindow      = 5 * time.Minute
-	sessionCallCeiling = 50 // total tool calls in sessionWindow → Trust gate
+	sessionCallCeiling = 50 // total NON-code-write calls in sessionWindow → Trust gate (chat sessions)
+
+	// codingCallCeiling is the much higher ceiling used once a session is
+	// recognised as a coding session (it has a project, or it has fired any
+	// code-write tool). Writing a real app is legitimately hundreds of tool
+	// calls; the flat chat ceiling was throttling builds mid-flight. The
+	// same-call repeat guard (repeatLimit) is the real anti-loop and stays
+	// in force for every session regardless.
+	codingCallCeiling = 400
 )
+
+// codeWriteTools are the file-mutating verbs that make up the legitimate
+// bulk of a build. They do NOT count toward the session ceiling (a 200-file
+// scaffold shouldn't trip a runaway-loop guard) and their presence is what
+// flags a session as "coding" so the higher ceiling applies. The same-call
+// repeat guard still covers them, so a stuck loop re-writing the identical
+// file is still caught.
+var codeWriteTools = map[string]struct{}{
+	"fs_save":                   {},
+	"fs_edit":                   {},
+	"claude_code__write":        {},
+	"claude_code__edit":         {},
+	"claude_code__multiedit":    {},
+	"claude_code__notebookedit": {},
+	"project_create":            {},
+	"document_create":           {},
+}
+
+// isCodeWriteTool reports whether a tool is a file-mutating code-write verb,
+// case-insensitively (the MCP bridge spells them claude_code__Write while the
+// native tools are lower_snake). Exempt from the ceiling count.
+func isCodeWriteTool(tool string) bool {
+	_, ok := codeWriteTools[strings.ToLower(tool)]
+	return ok
+}
 
 // LoopGate is the agent.ToolGate that catches retry loops + runaway
 // sessions. Pluggable on top of the existing GateChain - every tool call
@@ -60,8 +96,15 @@ const (
 type LoopGate struct {
 	trust *proactive.TrustStore
 
-	mu      sync.Mutex
-	calls   map[string][]callEntry // key = sessionID, value = recent calls
+	// chatCeiling / codeCeiling are the effective ceilings, env-overridable
+	// so a heavy workflow can get headroom without a redeploy:
+	//   INFINITY_SESSION_CALL_CEILING  → chat ceiling (default 50)
+	//   INFINITY_CODING_CALL_CEILING   → coding ceiling (default 400)
+	chatCeiling int
+	codeCeiling int
+
+	mu    sync.Mutex
+	calls map[string][]callEntry // key = sessionID, value = recent calls
 }
 
 type callEntry struct {
@@ -72,9 +115,38 @@ type callEntry struct {
 
 func NewLoopGate(trust *proactive.TrustStore) *LoopGate {
 	return &LoopGate{
-		trust: trust,
-		calls: make(map[string][]callEntry),
+		trust:       trust,
+		chatCeiling: envInt("INFINITY_SESSION_CALL_CEILING", sessionCallCeiling),
+		codeCeiling: envInt("INFINITY_CODING_CALL_CEILING", codingCallCeiling),
+		calls:       make(map[string][]callEntry),
 	}
+}
+
+// envInt reads a positive integer from an env var, falling back to def when
+// unset or unparseable. Keeps the ceilings tunable without a redeploy.
+func envInt(key string, def int) int {
+	if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// effectiveCeiling returns the ceiling that applies to a session given
+// whether it has been recognised as coding. Defends against a zero value
+// from a partially-constructed gate (tests) by falling back to the consts.
+func (g *LoopGate) effectiveCeiling(coding bool) int {
+	if coding {
+		if g.codeCeiling > 0 {
+			return g.codeCeiling
+		}
+		return codingCallCeiling
+	}
+	if g.chatCeiling > 0 {
+		return g.chatCeiling
+	}
+	return sessionCallCeiling
 }
 
 func (g *LoopGate) Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) agent.GateDecision {
@@ -83,16 +155,23 @@ func (g *LoopGate) Authorize(ctx context.Context, sessionID, project, toolName s
 	}
 	now := time.Now()
 	hash := callHash(toolName, input)
+	thisIsCodeWrite := isCodeWriteTool(toolName)
 
 	g.mu.Lock()
 	entries := pruneCalls(g.calls[sessionID], now)
 	repeatCount := 0
+	countedCount := 0 // non-code-write calls in window (the runaway signal)
+	coding := project != "" || thisIsCodeWrite
 	for _, e := range entries {
 		if e.hash == hash && now.Sub(e.at) <= repeatWindow {
 			repeatCount++
 		}
+		if isCodeWriteTool(e.tool) {
+			coding = true // a session that has written code is a coding session
+		} else {
+			countedCount++
+		}
 	}
-	sessionCount := len(entries) // already pruned to sessionWindow
 	// Record the new call regardless of decision so the next iteration sees
 	// the increased count. Blocked calls still count as "the agent tried"
 	// - if it keeps trying, the count keeps climbing and we keep blocking.
@@ -100,6 +179,9 @@ func (g *LoopGate) Authorize(ctx context.Context, sessionID, project, toolName s
 	g.calls[sessionID] = entries
 	g.mu.Unlock()
 
+	// Repeat guard is universal — it fires for EVERY tool, code-write
+	// included, because re-running the identical call is the real loop. This
+	// is unchanged by the coding-aware ceiling below.
 	if repeatCount >= repeatLimit {
 		return agent.GateDecision{
 			Allow: false,
@@ -107,8 +189,16 @@ func (g *LoopGate) Authorize(ctx context.Context, sessionID, project, toolName s
 				toolName, repeatCount+1, repeatWindow),
 		}
 	}
-	if sessionCount+1 > sessionCallCeiling {
-		return g.gateThroughTrust(ctx, sessionID, project, toolName, sessionCount+1)
+	// Session ceiling counts only non-code-write calls, against a ceiling
+	// that's much higher for coding sessions. A build firing hundreds of
+	// fs_save/edit calls no longer trips "keep going?"; a chat session
+	// spraying web_search/http_fetch still does.
+	newCounted := countedCount
+	if !thisIsCodeWrite {
+		newCounted++
+	}
+	if newCounted > g.effectiveCeiling(coding) {
+		return g.gateThroughTrust(ctx, sessionID, project, toolName, newCounted)
 	}
 	return agent.GateDecision{Allow: true}
 }
@@ -128,11 +218,11 @@ func (g *LoopGate) gateThroughTrust(ctx context.Context, sessionID, project, too
 		RiskLevel: "medium",
 		Source:    "loop_gate",
 		ActionSpec: map[string]any{
-			"tool":          toolName,
-			"session_id":    sessionID,
-			"project":       project,
+			"tool":            toolName,
+			"session_id":      sessionID,
+			"project":         project,
 			"calls_in_window": count,
-			"window_seconds": int(sessionWindow.Seconds()),
+			"window_seconds":  int(sessionWindow.Seconds()),
 		},
 		Reasoning: rationale,
 		Preview:   fmt.Sprintf("Allow %s and keep this session running?", toolName),
@@ -235,7 +325,14 @@ func (g *LoopGate) StatsFor(sessionID string) SessionStats {
 	// Most-repeated (hash → tool, count) inside the repeat window.
 	tally := make(map[string]int, len(entries))
 	toolForHash := make(map[string]string, len(entries))
+	countedCount := 0 // non-code-write calls — the figure the ceiling tracks
+	coding := false
 	for _, e := range entries {
+		if isCodeWriteTool(e.tool) {
+			coding = true
+		} else {
+			countedCount++
+		}
 		if now.Sub(e.at) > repeatWindow {
 			continue
 		}
@@ -250,10 +347,13 @@ func (g *LoopGate) StatsFor(sessionID string) SessionStats {
 		}
 	}
 	g.mu.Unlock()
+	// Report the SAME counted/ceiling the gate enforces, so the agent's
+	// self-throttle signal matches the actual trip point. Code-write calls
+	// are excluded from the count and lift the session to the coding ceiling.
 	return SessionStats{
-		CallsInWindow: len(entries),
+		CallsInWindow: countedCount,
 		WindowSeconds: int(sessionWindow.Seconds()),
-		Ceiling:       sessionCallCeiling,
+		Ceiling:       g.effectiveCeiling(coding),
 		TopHashCount:  topCount,
 		TopHashTool:   toolForHash[topHash],
 		RepeatLimit:   repeatLimit,

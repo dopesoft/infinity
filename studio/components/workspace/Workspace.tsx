@@ -212,6 +212,30 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     });
   }, [ws]);
 
+  // Auto-reveal the Canvas on MOBILE the instant the agent starts writing.
+  // On desktop the canvas is always the 3rd column, but on the phone the boss
+  // could be on the Chat pill when Jarvis begins coding and never see column 3
+  // "pop up". The store opens the file tab regardless; here we fire the same
+  // `workspace:set-mode` event the Files tap uses, but driven by the agent's
+  // write - so the canvas surfaces itself. We trigger ONCE per coding burst
+  // (first file tab appearing) and reset when all files close, so we never
+  // yank the boss back to canvas if he deliberately switches to Chat mid-burst.
+  // Desktop ignores `mode`, so this is a harmless no-op there.
+  const hadFileTabRef = useRef(false);
+  useEffect(() => {
+    const hasFileTab = store.tabs.some((t) => t.kind === "file");
+    if (hasFileTab && !hadFileTabRef.current) {
+      hadFileTabRef.current = true;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("workspace:set-mode", { detail: { mode: "canvas" } }),
+        );
+      }
+    } else if (!hasFileTab) {
+      hadFileTabRef.current = false;
+    }
+  }, [store.tabs]);
+
   // Mount gate - react-resizable-panels reads localStorage on first paint
   // so SSR vs CSR diverge; render a stable skeleton until the client takes
   // over.

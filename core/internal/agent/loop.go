@@ -773,12 +773,12 @@ func (l *Loop) Sessions() []*Session {
 
 // RunEvent is what we surface to transports (WebSocket/etc).
 type RunEvent struct {
-	Kind          EventKind       `json:"kind"`
-	SessionID     string          `json:"session_id"`
-	TextDelta     string          `json:"text_delta,omitempty"`
-	ThinkingDelta string          `json:"thinking_delta,omitempty"`
-	ToolCall      *ToolEvent      `json:"tool_call,omitempty"`
-	ToolResult    *ToolEvent      `json:"tool_result,omitempty"`
+	Kind          EventKind  `json:"kind"`
+	SessionID     string     `json:"session_id"`
+	TextDelta     string     `json:"text_delta,omitempty"`
+	ThinkingDelta string     `json:"thinking_delta,omitempty"`
+	ToolCall      *ToolEvent `json:"tool_call,omitempty"`
+	ToolResult    *ToolEvent `json:"tool_result,omitempty"`
 	// Set on EventToolInputDelta: the model writing a tool call's arguments
 	// live, before the call runs. ToolCallID/ToolName identify the call;
 	// InputDelta is the raw partial-JSON chunk. Drives the canvas opening the
@@ -848,6 +848,17 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// sub-agents that intentionally target a specific id are honored.
 	if strings.TrimSpace(model) == "" {
 		model = l.resolveActiveModel(ctx)
+	}
+
+	// Mark autonomous turns. A nil steer channel means the boss is not
+	// actively driving this turn (cron fire, heartbeat scan, delegate/team
+	// sub-agent) - only the live chat WS passes a real steer channel. Tools
+	// that perform irreversible, boss-owned dispositions (e.g. resolving a
+	// follow-up the boss hasn't dealt with) consult tools.IsAutonomous to
+	// refuse silent self-service during unattended work. The flag rides ctx
+	// into every derived toolCtx below.
+	if steerCh == nil {
+		ctx = tools.WithAutonomous(ctx)
 	}
 
 	s := l.GetOrCreateSession(sessionID)

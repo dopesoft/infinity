@@ -381,6 +381,14 @@ func (t *followupDismiss) Execute(ctx context.Context, in map[string]any) (strin
 	if id == "" {
 		return "", errors.New("id required")
 	}
+	// A follow-up is boss-owned: an AUTONOMOUS turn (cron/heartbeat/sub-agent)
+	// may NOT resolve it. Every mem_followups row is a message awaiting the
+	// boss's reply, and a scheduled triage run silently marking them handled
+	// is exactly what wiped days of real follow-ups. Interactive turns (live
+	// chat) are unaffected; the boss also dismisses directly from the UI.
+	if IsAutonomous(ctx) {
+		return "", errors.New("refusing to resolve a follow-up on an unattended turn: the boss dispositions his own follow-ups (in the UI or by an explicit request in live chat). Leave it open")
+	}
 	outcome := strDefault(in, "outcome", "replied")
 	status := "done"
 	if outcome == "dismissed" {
@@ -412,13 +420,13 @@ func (t *savedAdd) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"kind":             map[string]any{"type": "string", "enum": []string{"article", "link", "note", "quote"}, "default": "note"},
-			"title":            map[string]any{"type": "string"},
-			"body":             map[string]any{"type": "string"},
-			"url":              map[string]any{"type": "string"},
-			"source_label":     map[string]any{"type": "string"},
-			"reading_minutes":  map[string]any{"type": "integer"},
-			"tags":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"kind":            map[string]any{"type": "string", "enum": []string{"article", "link", "note", "quote"}, "default": "note"},
+			"title":           map[string]any{"type": "string"},
+			"body":            map[string]any{"type": "string"},
+			"url":             map[string]any{"type": "string"},
+			"source_label":    map[string]any{"type": "string"},
+			"reading_minutes": map[string]any{"type": "integer"},
+			"tags":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		},
 		"required": []string{"title"},
 	}

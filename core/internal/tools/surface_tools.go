@@ -117,6 +117,18 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 	return string(out), nil
 }
 
+// isFollowupEmailItem reports whether a surface item is a follow-up email -
+// the boss-owned class that no autonomous turn may resolve. Mirrors the
+// dashboard read filter (surface ∈ {followups,inbox,email} AND kind='email')
+// so the guard and the render agree on exactly which rows are protected.
+func isFollowupEmailItem(surfaceName, kind string) bool {
+	switch surfaceName {
+	case "followups", "inbox", "email":
+		return kind == "email"
+	}
+	return false
+}
+
 // ── surface_update ──────────────────────────────────────────────────────────
 
 type surfaceUpdateTool struct{ store *surface.Store }
@@ -126,7 +138,11 @@ func (t *surfaceUpdateTool) Description() string {
 	return "Update a dashboard item you previously surfaced: mark status='done' " +
 		"only after the surfaced issue is actually resolved or confirmed handled, " +
 		"dismiss it when the boss declines it, re-rank its importance, or snooze it. " +
-		"Pass the item `id` returned by surface_item."
+		"Pass the item `id` returned by surface_item. " +
+		"NEVER resolve a follow-up EMAIL (surface 'followups'/'inbox'/'email', kind " +
+		"'email') yourself - those are the boss's to disposition. Drafting a reply is " +
+		"NOT 'handled'; leave the follow-up open until the boss sends. On unattended " +
+		"runs this is enforced and will error."
 }
 func (t *surfaceUpdateTool) Schema() map[string]any {
 	return map[string]any{
@@ -149,6 +165,17 @@ func (t *surfaceUpdateTool) Execute(ctx context.Context, in map[string]any) (str
 	var p surface.Patch
 	if s := strString(in, "status"); s != "" {
 		st := surface.Status(s)
+		// Guard: an AUTONOMOUS turn (cron/heartbeat/sub-agent) may NOT
+		// resolve a follow-up EMAIL. The boss dispositions his own inbox -
+		// either in the UI or by an explicit request in live chat. This is
+		// the durable fix for the incident where a scheduled triage run
+		// dismissed days of real follow-ups (Amex, Intuit, …) on its own.
+		// Interactive turns are unaffected (IsAutonomous is false there).
+		if (st == surface.StatusDone || st == surface.StatusDismissed) && IsAutonomous(ctx) {
+			if it, gerr := t.store.Get(ctx, id); gerr == nil && it != nil && isFollowupEmailItem(it.Surface, it.Kind) {
+				return "", fmt.Errorf("refusing to auto-%s a follow-up email (%q) on an unattended turn: the boss dispositions his own follow-ups. Leave it open - surface a 'system' note if you think it's handled, but never resolve a follow-up email yourself", st, it.Title)
+			}
+		}
 		p.Status = &st
 	}
 	if v, ok := in["importance"].(float64); ok {

@@ -251,10 +251,15 @@ func (s *Store) SweepExpired(ctx context.Context) (int, error) {
 	if s == nil || s.pool == nil {
 		return 0, nil
 	}
+	// Follow-up emails are boss-owned and NEVER auto-expire - excluding them
+	// here is the second half of the "nothing automated resolves the boss's
+	// inbox" guarantee (the first half lives in the surface_update /
+	// followup_dismiss tool guards). A follow-up sits until the boss acts.
 	ct, err := s.pool.Exec(ctx, `
 		UPDATE mem_surface_items
 		   SET status = 'dismissed', decided_at = NOW(), updated_at = NOW()
 		 WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at < NOW()
+		   AND NOT (surface = ANY(ARRAY['followups','inbox','email']) AND kind = 'email')
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("surface: sweep expired: %w", err)

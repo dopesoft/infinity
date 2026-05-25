@@ -13,6 +13,31 @@ import "context"
 // implementation to plumb session arguments it doesn't need.
 type sessionContextKey struct{}
 type sessionIDContextKey struct{}
+type autonomousContextKey struct{}
+
+// WithAutonomous marks ctx as belonging to an AUTONOMOUS turn - one the boss
+// is not actively driving (a cron fire, a heartbeat scan, a delegated/team
+// sub-agent). The agent loop sets this whenever Run is invoked with a nil
+// steer channel. Tools that perform irreversible, boss-owned dispositions
+// (e.g. resolving a follow-up the boss hasn't actually dealt with) consult
+// it to refuse silent self-service during unattended work. Interactive boss
+// turns (the live chat WS, which always passes a steer channel) are never
+// marked, so the boss keeps full control.
+func WithAutonomous(ctx context.Context) context.Context {
+	return context.WithValue(ctx, autonomousContextKey{}, true)
+}
+
+// IsAutonomous reports whether the current turn is autonomous (see
+// WithAutonomous). Defaults to false so any path that forgot to mark the
+// context is treated as interactive - the safe default for capability, with
+// the explicit guards deciding what autonomous turns may not do.
+func IsAutonomous(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(autonomousContextKey{}).(bool)
+	return v
+}
 
 // WithSessionID stashes the current session's ID in ctx. Used by tools
 // that need to query session-scoped state (e.g., the bridge tools need

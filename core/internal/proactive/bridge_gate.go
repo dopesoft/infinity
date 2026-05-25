@@ -24,8 +24,11 @@ import (
 //   • git_commit, git_stage, git_pull         → allow (local / inbound)
 //   • bash_run                                → CONTENT-AWARE: only
 //     filesystem-destructive commands queue; reads/builds/edits run free
-//   • git_push, project_create                → queue (outward: publishes to
-//     GitHub under the boss's PAT / creates a remote repo)
+//   • project_create                          → CONTENT-AWARE: a local-only
+//     scaffold is git-reversible (like fs_save) and runs unattended; only a
+//     remote-repo creation (create_github=true) is outward-facing and queues
+//   • git_push                                → queue (outward: publishes to
+//     GitHub under the boss's PAT)
 //   • fs_read, fs_ls, git_status, git_diff    → allow (read-only)
 //
 // Override:
@@ -63,6 +66,16 @@ func (g *BridgeGate) isDestructiveBash(input map[string]any) bool {
 	return isDestructiveCommand(raw, g.bashDestructive)
 }
 
+// createsRemoteRepo reports whether a project_create invocation will create
+// an outward-facing GitHub repo. A local-only scaffold is git-reversible (it
+// writes files + does an initial local commit, same blast radius as fs_save),
+// so it runs unattended; only a remote-repo creation publishes under the
+// boss's PAT and is therefore the part that stops for approval.
+func (g *BridgeGate) createsRemoteRepo(input map[string]any) bool {
+	b, _ := input["create_github"].(bool)
+	return b
+}
+
 func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) agent.GateDecision {
 	if g == nil || !agent.IsBridgeTool(toolName) {
 		return agent.GateDecision{Allow: true}
@@ -80,6 +93,14 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 	// unattended so the boss can walk away. $INFINITY_BRIDGE_BASH_GATE_ALL=true
 	// restores the legacy gate-every-bash behavior.
 	if lower == "bash_run" && !g.gateAllBash && !g.isDestructiveBash(input) {
+		return agent.GateDecision{Allow: true}
+	}
+
+	// project_create is content-aware (same philosophy as bash_run): a
+	// local-only scaffold is git-reversible and runs unattended so the boss
+	// can walk away while Jarvis bootstraps. Only a remote-repo creation
+	// (create_github=true) is outward-facing and stops for approval.
+	if lower == "project_create" && !g.createsRemoteRepo(input) {
 		return agent.GateDecision{Allow: true}
 	}
 
