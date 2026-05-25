@@ -42,7 +42,7 @@ export function SurfacedCard({
           Nothing surfaced right now.
         </div>
       ) : (
-        <ScrollList max={6}>
+        <ScrollList max={4}>
           <ul className="space-y-2">
             {items.map((it) => (
               <li key={`${it.kind}-${it.data.id}`}>
