@@ -99,9 +99,14 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   // appends a cache-busting query param keyed to previewRefreshKey so every
   // click of ↻ (and every agent edit) forces a true reload.
   const baseUrl = useMemo(() => {
+    // A cloud project is served by the cloud bridge through Core's proxy -
+    // that's where the app physically lives, so it ALWAYS wins. This must come
+    // BEFORE previewUrl/env: a leftover Mac-tunnel URL (preview.dopesoft.io)
+    // persisted in localStorage was hijacking cloud previews ("refused to
+    // connect"). A manual URL-bar entry still applies to non-cloud previews.
+    if (isCloudPreview) return `${coreBaseURL()}/api/canvas/preview/`;
     const explicit = store.previewUrl?.trim();
     if (explicit) return explicit;
-    if (isCloudPreview) return `${coreBaseURL()}/api/canvas/preview/`;
     if (store.envPreviewUrl?.trim()) return store.envPreviewUrl.trim();
     return "";
   }, [store.previewUrl, store.envPreviewUrl, isCloudPreview]);
