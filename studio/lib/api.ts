@@ -95,6 +95,10 @@ export type ProjectDTO = {
   last_ready_at?: string;
   last_error?: string;
   last_used?: string;
+  // "cloud" when the preview is served by the cloud workspace bridge - Studio
+  // then points the preview iframe at Core's /api/canvas/preview proxy rather
+  // than the Mac dev-server tunnel.
+  bridge?: string;
 };
 
 export async function canvasProjectStart(body: {
@@ -239,7 +243,7 @@ export type PredictionDTO = {
   resolved_at?: string;
 };
 
-function coreBaseURL(): string {
+export function coreBaseURL(): string {
   if (typeof window === "undefined") return "";
   const explicit = process.env.NEXT_PUBLIC_CORE_URL;
   if (explicit) return explicit.replace(/\/$/, "");

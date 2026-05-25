@@ -263,7 +263,7 @@ func New(cfg Config) *Server {
 	// upgrade response, which middleware-401s break).
 	var handler http.Handler = mux
 	if cfg.Auth != nil {
-		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/auth/", "/webhooks/", "/ws"})(handler)
+		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/auth/", "/webhooks/", "/ws", "/api/canvas/preview/"})(handler)
 	}
 
 	s.http = &http.Server{
@@ -317,6 +317,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/project/stop", s.handleCanvasProjectStop)
 	mux.HandleFunc("/api/canvas/project/active", s.handleCanvasProjectActive)
 	mux.HandleFunc("/api/canvas/project/status", s.handleCanvasProjectStatus)
+	// Browser-facing live-preview proxy. JWT-exempt (see HTTPMiddleware list):
+	// an iframe can't attach the Supabase bearer, and this serves only the
+	// single boss's own project preview through to the active cloud bridge.
+	mux.HandleFunc("/api/canvas/preview/", s.handleCanvasPreview)
 	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
 	mux.HandleFunc("/api/settings/provider", s.handleSettingsProvider)
 	mux.HandleFunc("/api/settings/chat", s.handleSettingsChat)

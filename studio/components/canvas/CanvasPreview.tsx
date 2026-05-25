@@ -9,7 +9,7 @@ import { useWebSocket } from "@/lib/ws/provider";
 import { useRuns } from "@/lib/runs/useRuns";
 import { isCodeChangeTool } from "@/lib/canvas/detection";
 import { useProjectContext } from "@/lib/canvas/useCurrentProject";
-import { closeBrowserSession } from "@/lib/api";
+import { closeBrowserSession, coreBaseURL } from "@/lib/api";
 
 /**
  * CanvasPreview - body of the Preview tab.
@@ -87,16 +87,24 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   const hasProject = !!projectCtx?.session?.project_path?.trim();
   const projectStatus = projectCtx?.project?.status;
 
-  // Base URL the boss configured (toolbar URL bar / env). The iframe src
-  // appends a cache-busting query param keyed to previewRefreshKey so
-  // every click of ↻ forces a true reload - without this, Next.js dev's
-  // versioned chunks 404 because the cached HTML references old hashes.
+  // Cloud projects are served by the cloud workspace bridge through Core's
+  // /api/canvas/preview proxy (the project DTO is tagged bridge="cloud").
+  // Mac projects keep using the dev-server tunnel the boss configured. This
+  // is what makes the Preview tab render a cloud app (the pulse-board) with
+  // no manual URL - and a manual URL bar override still wins for both.
+  const isCloudPreview = projectCtx?.project?.bridge === "cloud";
+
+  // Base URL the iframe points at. Priority: explicit URL-bar override →
+  // cloud proxy (when the project is cloud) → env/Mac tunnel. The iframe src
+  // appends a cache-busting query param keyed to previewRefreshKey so every
+  // click of ↻ (and every agent edit) forces a true reload.
   const baseUrl = useMemo(() => {
     const explicit = store.previewUrl?.trim();
     if (explicit) return explicit;
+    if (isCloudPreview) return `${coreBaseURL()}/api/canvas/preview/`;
     if (store.envPreviewUrl?.trim()) return store.envPreviewUrl.trim();
     return "";
-  }, [store.previewUrl, store.envPreviewUrl]);
+  }, [store.previewUrl, store.envPreviewUrl, isCloudPreview]);
 
   // First-mount cache key - a single timestamp captured once per page load.
   // Together with previewRefreshKey, this guarantees the iframe URL is

@@ -85,6 +85,16 @@ func main() {
 	mux.HandleFunc("/git/init", auth(handleGitInit))
 	mux.HandleFunc("/docgen", auth(handleDocgen))
 
+	// Preview supervisor — boots a project's dev server (or serves it static)
+	// and fronts the running app. Core proxies the browser-facing prefix here;
+	// the /supervisor/* control plane matches the Mac bridge's contract so
+	// Core's /api/canvas/project/* handlers work across both bridges.
+	mux.HandleFunc("/supervisor/start", auth(handleSupervisorStart))
+	mux.HandleFunc("/supervisor/stop", auth(handleSupervisorStop))
+	mux.HandleFunc("/supervisor/status", auth(handleSupervisorStatus))
+	mux.HandleFunc("/supervisor/active", auth(handleSupervisorActive))
+	mux.HandleFunc(previewPrefix+"/", auth(handlePreview))
+
 	addr := ":" + envDefault("PORT", "8080")
 	log.Printf("workspace bridge: listening on %s (root=%s)", addr, workspaceRoot)
 	if err := http.ListenAndServe(addr, mux); err != nil {

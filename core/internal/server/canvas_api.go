@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
@@ -753,11 +755,11 @@ func localListDir(dir string) ([]fsEntry, error) {
 // parseLsOutput parses Claude Code's LS output, which is an indented-bullet
 // tree:
 //
-//	- /Users/n0m4d/Dev/
-//	  - infinity/
-//	    - core/
-//	  - other-project/
-//	  - notes.md
+//   - /Users/n0m4d/Dev/
+//   - infinity/
+//   - core/
+//   - other-project/
+//   - notes.md
 //
 // We extract only the direct children of `dir` (depth-1 entries - bullets
 // indented 2 spaces past the root line). Trailing "/" marks a directory.
@@ -1132,13 +1134,13 @@ func (s *Server) handleCanvasFSSave(w http.ResponseWriter, r *http.Request) {
 		RiskLevel: "high",
 		Source:    "canvas_save",
 		ActionSpec: map[string]any{
-			"tool":         "claude_code__Write",
-			"input":        map[string]any{"file_path": resolved, "content": req.Content},
-			"session_id":   req.SessionID,
-			"canvas_save":  true,
-			"base_sha":     req.BaseSHA,
-			"new_sha":      sha256Hex(req.Content),
-			"size":         len(req.Content),
+			"tool":          "claude_code__Write",
+			"input":         map[string]any{"file_path": resolved, "content": req.Content},
+			"session_id":    req.SessionID,
+			"canvas_save":   true,
+			"base_sha":      req.BaseSHA,
+			"new_sha":       sha256Hex(req.Content),
+			"size":          len(req.Content),
 			"resolved_path": resolved,
 		},
 		Reasoning: "Saving a file edited in the Canvas Monaco editor. " +
@@ -1180,7 +1182,7 @@ func buildSavePreview(path, content string) string {
 
 type gitStatusEntry struct {
 	Path   string `json:"path"`
-	Status string `json:"status"`  // M | A | D | R | U (untracked) | ? (mixed)
+	Status string `json:"status"` // M | A | D | R | U (untracked) | ? (mixed)
 	Staged bool   `json:"staged"`
 	Branch string `json:"branch,omitempty"`
 }
@@ -1894,7 +1896,7 @@ func head(s string, n int) string {
 // ---- helpers ---------------------------------------------------------------
 
 // shellQuote wraps a string in single quotes, escaping internal quotes the
-// POSIX-safe way: ' → '\''. Used everywhere we splice user-supplied tokens
+// POSIX-safe way: ' → '\”. Used everywhere we splice user-supplied tokens
 // into a bash command. Even with the gate's allow-list this is the
 // last-line defense: a single unquoted path with a space could change
 // semantics, and we want zero ambiguity.
@@ -1934,10 +1936,71 @@ func truncate(s string, n int) string {
 // the same way it does for /fs/ls and /git/status - service tokens never
 // touch the browser.
 
-// handleCanvasProjectStart POSTs to the bridge supervisor to bring a
+// ── Preview bridge resolution ────────────────────────────────────────────────
+//
+// The preview supervisor lives on BOTH bridges now: the Mac bridge fronts its
+// dev server on the Cloudflare tunnel (the historical path, reached via
+// directBridge*), and the cloud workspace bridge serves /supervisor/* +
+// /api/canvas/preview/* on the private network (reached via bridge.Bridge).
+//
+// Which one a session uses is decided exactly like fs_save: by the session's
+// resolved bridge. We remember the cloud bridge when a project is activated so
+// the browser-facing preview proxy (which carries no session) knows where to
+// route - single-user, one active preview, so a single cached pointer is
+// sufficient and race-free enough.
+
+var (
+	previewBridgeMu     sync.Mutex
+	previewBridgeActive bridge.Bridge // non-nil only when the active preview is on the cloud bridge
+)
+
+func setPreviewBridge(b bridge.Bridge) {
+	previewBridgeMu.Lock()
+	previewBridgeActive = b
+	previewBridgeMu.Unlock()
+}
+
+func getPreviewBridge() bridge.Bridge {
+	previewBridgeMu.Lock()
+	defer previewBridgeMu.Unlock()
+	return previewBridgeActive
+}
+
+// supervisorPost dispatches a /supervisor/* POST to the session's bridge:
+// the cloud bridge (and caches it for the preview proxy) when the session
+// resolves to cloud, otherwise the Mac tunnel via directBridgePost.
+func (s *Server) supervisorPost(ctx context.Context, sessionID, path string, body any) ([]byte, int, bool) {
+	if b, ok := s.canvasCloudFS(ctx, sessionID); ok {
+		setPreviewBridge(b)
+		respBody, status, callOK := b.Post(ctx, path, body)
+		return respBody, status, callOK
+	}
+	setPreviewBridge(nil) // Mac session - preview proxy stays out of the way
+	return directBridgePost(ctx, path, body)
+}
+
+// supervisorGet mirrors supervisorPost for reads. /status and /active GET carry
+// no session, so they fall back to the cached preview bridge (set by the last
+// activate) before defaulting to the Mac tunnel.
+func (s *Server) supervisorGet(ctx context.Context, sessionID, path string) ([]byte, bool) {
+	if sessionID != "" {
+		if b, ok := s.canvasCloudFS(ctx, sessionID); ok {
+			setPreviewBridge(b)
+			respBody, _, callOK := b.Get(ctx, path)
+			return respBody, callOK
+		}
+	}
+	if b := getPreviewBridge(); b != nil { // cached cloud bridge from the last activate
+		respBody, _, callOK := b.Get(ctx, path)
+		return respBody, callOK
+	}
+	return directBridgeGet(ctx, path)
+}
+
+// handleCanvasProjectStart POSTs to the session's bridge supervisor to bring a
 // project's dev server up. Body shape:
 //
-//	{"project_path": "/abs/path", "template": "nextjs", "activate": true}
+//	{"project_path": "/abs/path", "template": "nextjs", "session_id": "…"}
 //
 // Returns the bridge's project record (status + port).
 func (s *Server) handleCanvasProjectStart(w http.ResponseWriter, r *http.Request) {
@@ -1950,7 +2013,8 @@ func (s *Server) handleCanvasProjectStart(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	respBody, status, ok := directBridgePost(r.Context(), "/supervisor/start", body)
+	sid, _ := body["session_id"].(string)
+	respBody, status, ok := s.supervisorPost(r.Context(), sid, "/supervisor/start", body)
 	if !ok {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
 		return
@@ -1970,7 +2034,8 @@ func (s *Server) handleCanvasProjectStop(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	respBody, status, ok := directBridgePost(r.Context(), "/supervisor/stop", body)
+	sid, _ := body["session_id"].(string)
+	respBody, status, ok := s.supervisorPost(r.Context(), sid, "/supervisor/stop", body)
 	if !ok {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
 		return
@@ -1981,12 +2046,12 @@ func (s *Server) handleCanvasProjectStop(w http.ResponseWriter, r *http.Request)
 }
 
 // handleCanvasProjectActive serves both GET (current active project) and
-// POST (set active). On POST it also writes mark_run + last_run_at on
-// mem_sessions so the Studio sidebar shows the running project.
+// POST (set active). On POST it also writes last_run_at on mem_sessions so the
+// Studio sidebar shows the running project, and routes to the session's bridge.
 func (s *Server) handleCanvasProjectActive(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		respBody, ok := directBridgeGet(r.Context(), "/supervisor/active")
+		respBody, ok := s.supervisorGet(r.Context(), r.URL.Query().Get("session_id"), "/supervisor/active")
 		if !ok {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
 			return
@@ -2003,7 +2068,7 @@ func (s *Server) handleCanvasProjectActive(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 			return
 		}
-		respBody, status, ok := directBridgePost(r.Context(), "/supervisor/active", map[string]any{
+		respBody, status, ok := s.supervisorPost(r.Context(), body.SessionID, "/supervisor/active", map[string]any{
 			"project_path": body.ProjectPath,
 			"template":     body.Template,
 		})
@@ -2026,16 +2091,59 @@ func (s *Server) handleCanvasProjectActive(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleCanvasProjectStatus(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("session_id")
 	q := r.URL.RawQuery
 	urlPath := "/supervisor/status"
 	if q != "" {
 		urlPath += "?" + q
 	}
-	respBody, ok := directBridgeGet(r.Context(), urlPath)
+	respBody, ok := s.supervisorGet(r.Context(), sid, urlPath)
 	if !ok {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bridge unreachable"})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(respBody)
+}
+
+// handleCanvasPreview is the browser-facing reverse proxy for the live app
+// preview. The iframe loads /api/canvas/preview/* directly (no JWT - iframes
+// can't set headers, and this is the single boss's own project preview), and
+// Core proxies it to the active preview bridge on the private network,
+// attaching the bridge's bearer. The path is preserved end-to-end so the dev
+// server's base path lines up; WebSocket upgrades pass through for HMR.
+//
+// Cloud only: Mac sessions front their dev server on the Cloudflare tunnel and
+// Studio points the iframe straight there, so this proxy never serves them.
+func (s *Server) handleCanvasPreview(w http.ResponseWriter, r *http.Request) {
+	b := getPreviewBridge()
+	if b == nil || b.Name() != bridge.KindCloud || strings.TrimSpace(b.BaseURL()) == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "no cloud preview active - open a project on the cloud workspace first",
+		})
+		return
+	}
+	target, err := url.Parse(b.BaseURL())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "bad bridge url"})
+		return
+	}
+	token := strings.TrimSpace(os.Getenv("WORKSPACE_BRIDGE_TOKEN"))
+	proxy := &httputil.ReverseProxy{
+		FlushInterval: 100 * time.Millisecond, // stream HMR/SSE promptly
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.Host = target.Host
+			// Path is already /api/canvas/preview/* - preserve it so the
+			// bridge + dev-server base path match.
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "preview bridge unreachable"})
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
