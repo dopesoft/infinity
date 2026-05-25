@@ -447,9 +447,143 @@ func (s *Server) handleComposioAccountRefresh(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+
+	// Composio refuses to reinitiate an account that is fully dead
+	// (REVOKED / EXPIRED / FAILED) - the OAuth grant is gone, so there is
+	// nothing to "refresh". Its error reads e.g. "Cannot reinitiate
+	// redirectable account with invalid connection status REVOKED". The
+	// correct recovery is a FRESH connect under the same toolkit + entity,
+	// which mints a new connected_account and a new OAuth redirect. We do
+	// that transparently here so the boss's single "Reconnect" click works
+	// whether the account is merely stale (refresh) or dead (re-link).
+	if composioNeedsFreshLink(resp.StatusCode, body) {
+		if redirect, newID, ok := s.composioFreshLinkForAccount(r.Context(), key, id); ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"redirect_url": redirect,
+				"id":           newID,
+				"relinked":     true,
+			})
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
+}
+
+// composioNeedsFreshLink reports whether a failed /refresh response means
+// the account is dead and must be re-linked from scratch (vs. a transient
+// upstream error we should surface verbatim). Composio returns 4xx with a
+// message naming the terminal status; we match on the stable phrases rather
+// than a single status code because the code has drifted (400 vs 422) across
+// their API revisions.
+func composioNeedsFreshLink(status int, body []byte) bool {
+	if status < 400 {
+		return false
+	}
+	msg := strings.ToLower(string(body))
+	for _, marker := range []string{
+		"reinitiate",
+		"invalid connection status",
+		"revoked",
+		"expired",
+		"deleted",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// composioFreshLinkForAccount resolves a dead account's toolkit + entity from
+// the connectors cache and initiates a brand-new OAuth connection for the
+// same identity. Returns (redirect_url, new_account_id, true) on success.
+// Reuses the exact two-step link path handleComposioConnect uses so there is
+// one source of truth for "start an OAuth flow".
+func (s *Server) composioFreshLinkForAccount(ctx context.Context, key, accountID string) (string, string, bool) {
+	if s.connectors == nil {
+		return "", "", false
+	}
+	acct := s.lookupComposioAccount(accountID)
+	if acct == nil || acct.ToolkitSlug == "" {
+		return "", "", false
+	}
+	userID := strings.TrimSpace(acct.UserID)
+	if userID == "" {
+		userID = "default"
+	}
+
+	authConfigID, err := findOrCreateAuthConfig(ctx, key, acct.ToolkitSlug)
+	if err != nil {
+		return "", "", false
+	}
+	linkBody, _ := json.Marshal(map[string]string{
+		"auth_config_id": authConfigID,
+		"user_id":        userID,
+	})
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		composioAPIBase+"/connected_accounts/link",
+		strings.NewReader(string(linkBody)),
+	)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	applyComposioAuth(req, key)
+
+	resp, err := composioHTTP.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return "", "", false
+	}
+
+	var src map[string]any
+	if jerr := json.Unmarshal(body, &src); jerr != nil {
+		return "", "", false
+	}
+	redirect := ""
+	if v, ok := src["redirect_url"].(string); ok && v != "" {
+		redirect = v
+	} else if v, ok := src["redirectUrl"].(string); ok && v != "" {
+		redirect = v
+	}
+	if redirect == "" {
+		return "", "", false
+	}
+	newID := extractConnectedAccountID(src)
+
+	// Carry the alias forward so the re-linked account keeps its label, and
+	// refresh the cache so the new INITIATED row shows immediately.
+	if newID != "" && acct.Alias != "" {
+		_ = s.connectors.SetAlias(ctx, newID, acct.Alias)
+	}
+	go func() { _ = s.connectors.Refresh(context.Background()) }()
+
+	return redirect, newID, true
+}
+
+// lookupComposioAccount finds a cached account by its Composio id, scanning
+// the by-toolkit snapshot. Returns nil if not cached (e.g. the cache hasn't
+// refreshed since the account was created).
+func (s *Server) lookupComposioAccount(accountID string) *connectors.Account {
+	if s.connectors == nil {
+		return nil
+	}
+	for _, accts := range s.connectors.AccountsByToolkit() {
+		for _, a := range accts {
+			if a != nil && a.ID == accountID {
+				return a
+			}
+		}
+	}
+	return nil
 }
 
 // handleComposioAliases is the alias CRUD surface. Used by Studio's
