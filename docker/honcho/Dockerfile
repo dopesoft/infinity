@@ -35,6 +35,19 @@ RUN uv sync --frozen --no-group dev
 # insurance.
 RUN chmod -R a+rX /app /app/.venv && find /app/.venv/bin -type f -exec chmod a+x {} \;
 
+# Honest log routing. Railway tags by stream (stdout=info, stderr=error),
+# but Python's logging defaults to stderr, so uvicorn/app INFO lines show
+# up as fake red errors. log_config.json routes records by level
+# (<ERROR -> stdout, ERROR+ -> stderr) via honcho_log.MaxLevelFilter; the
+# uvicorn --log-config in the entrypoint installs it before src.main is
+# imported, so honcho's own logging.basicConfig() becomes a no-op and its
+# src.* loggers propagate into these handlers. alembic's console handler
+# defaults to stderr too — point it at stdout so its boot INFO lines stop
+# being mistagged (a real migration failure still aborts boot under
+# `set -e`, and its traceback still lands on stderr).
+COPY honcho_log.py log_config.json /app/
+RUN sed -i 's/args = (sys.stderr,)/args = (sys.stdout,)/' /app/alembic.ini
+
 # Run as root inside the container — Railway already sandboxes per-service
 # and the container has no persistent volumes, so the non-root pattern
 # isn't load-bearing here. (Upstream uses a non-root user; we drop that
@@ -113,7 +126,7 @@ echo "honcho-boot: alembic upgrade head"
 alembic upgrade head
 
 echo "honcho-boot: launching uvicorn on port ${PORT:-8000}"
-exec python -m uvicorn src.main:app --host 0.0.0.0 --port "${PORT:-8000}" --log-level info
+exec python -m uvicorn src.main:app --host 0.0.0.0 --port "${PORT:-8000}" --log-config /app/log_config.json
 EOF
 
 CMD ["/app/entrypoint.sh"]

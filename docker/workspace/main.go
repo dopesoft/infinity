@@ -64,6 +64,13 @@ var (
 	bootMu        sync.Once
 )
 
+// infoLog writes to stdout so Railway's log shipper tags these lines
+// severity=info. The stdlib `log` package writes to stderr by default,
+// which Railway stamps severity=error — so success/progress lines that
+// use plain log.Printf show up as fake red errors. Route info/success
+// here; reserve the default log.Printf (stderr) for genuine failures.
+var infoLog = log.New(os.Stdout, "", log.LstdFlags)
+
 func main() {
 	bootMu.Do(initEnv)
 
@@ -96,7 +103,7 @@ func main() {
 	mux.HandleFunc(previewPrefix+"/", auth(handlePreview))
 
 	addr := ":" + envDefault("PORT", "8080")
-	log.Printf("workspace bridge: listening on %s (root=%s)", addr, workspaceRoot)
+	infoLog.Printf("workspace bridge: listening on %s (root=%s)", addr, workspaceRoot)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("workspace bridge: %v", err)
 	}
@@ -157,7 +164,7 @@ func bootstrapLayout() {
 
 	// Already migrated (self-clone in place) — nothing to do.
 	if isDir(filepath.Join(selfDir, ".git")) {
-		log.Printf("bootstrap: self-clone present at %s", selfDir)
+		infoLog.Printf("bootstrap: self-clone present at %s", selfDir)
 		return
 	}
 
@@ -165,14 +172,14 @@ func bootstrapLayout() {
 	// infinity/ by MOVING every root entry (except the new dirs) — preserves
 	// uncommitted work, deletes nothing.
 	if isDir(filepath.Join(workspaceRoot, ".git")) {
-		log.Printf("bootstrap: relocating legacy /workspace checkout into %s (move, non-destructive)", selfDir)
+		infoLog.Printf("bootstrap: relocating legacy /workspace checkout into %s (move, non-destructive)", selfDir)
 		if dirty := gitDirty(workspaceRoot); dirty {
-			log.Printf("bootstrap: NOTE legacy checkout has uncommitted changes — moving preserves them all")
+			infoLog.Printf("bootstrap: NOTE legacy checkout has uncommitted changes — moving preserves them all")
 		}
 		if !relocateRootCheckout(selfDir) {
 			log.Printf("bootstrap: relocation incomplete; leaving layout as-is (re-runs next boot)")
 		} else {
-			log.Printf("bootstrap: relocation complete — self now at %s", selfDir)
+			infoLog.Printf("bootstrap: relocation complete — self now at %s", selfDir)
 		}
 		return
 	}
@@ -182,7 +189,7 @@ func bootstrapLayout() {
 	owner := envDefault("INFINITY_REPO_OWNER", "DopeSoft")
 	repo := envDefault("INFINITY_REPO_NAME", "infinity")
 	url := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
-	log.Printf("bootstrap: empty volume — cloning %s/%s into %s", owner, repo, selfDir)
+	infoLog.Printf("bootstrap: empty volume — cloning %s/%s into %s", owner, repo, selfDir)
 	cmd := exec.Command("git", "clone", url, selfDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("bootstrap: clone failed: %v (%s)", err, lastLine(string(out)))
@@ -214,7 +221,7 @@ func relocateRootCheckout(selfDir string) bool {
 		}
 		moved++
 	}
-	log.Printf("bootstrap: moved %d root entries into %s", moved, selfDir)
+	infoLog.Printf("bootstrap: moved %d root entries into %s", moved, selfDir)
 	return isDir(filepath.Join(selfDir, ".git"))
 }
 

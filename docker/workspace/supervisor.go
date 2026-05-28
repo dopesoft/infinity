@@ -149,7 +149,7 @@ func (s *supervisor) Start(projectPath, template string) previewProject {
 
 	if staticTemplate(template, resolved) {
 		s.active = &previewProject{Path: resolved, Template: template, Status: statusRunning, static: true}
-		log.Printf("supervisor: static preview ready for %s", resolved)
+		infoLog.Printf("supervisor: static preview ready for %s", resolved)
 		return *s.active
 	}
 
@@ -158,7 +158,7 @@ func (s *supervisor) Start(projectPath, template string) previewProject {
 	p.proxy = newDevProxy(target)
 	s.active = p
 	go s.boot(p)
-	log.Printf("supervisor: booting dev preview for %s (%s)", resolved, template)
+	infoLog.Printf("supervisor: booting dev preview for %s (%s)", resolved, template)
 	return *p
 }
 
@@ -219,7 +219,7 @@ func (s *supervisor) boot(p *previewProject) {
 			s.mu.Lock()
 			if s.active == p && p.Status == statusBooting {
 				p.Status = statusRunning
-				log.Printf("supervisor: dev preview ready on :%d for %s", devPort, p.Path)
+				infoLog.Printf("supervisor: dev preview ready on :%d for %s", devPort, p.Path)
 			}
 			s.mu.Unlock()
 			return
