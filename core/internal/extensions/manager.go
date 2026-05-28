@@ -2,9 +2,11 @@ package extensions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
@@ -16,14 +18,15 @@ type Manager struct {
 	store    *Store
 	registry *tools.Registry
 	mcp      *tools.MCPManager
+	router   *bridge.Router // for kind=cli: where install/check commands run
 	logger   *slog.Logger
 }
 
-func NewManager(store *Store, registry *tools.Registry, mcpManager *tools.MCPManager, logger *slog.Logger) *Manager {
+func NewManager(store *Store, registry *tools.Registry, mcpManager *tools.MCPManager, router *bridge.Router, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Manager{store: store, registry: registry, mcp: mcpManager, logger: logger}
+	return &Manager{store: store, registry: registry, mcp: mcpManager, router: router, logger: logger}
 }
 
 // LoadAll activates every enabled extension from the DB. Called once on
@@ -40,11 +43,23 @@ func (m *Manager) LoadAll(ctx context.Context) (int, error) {
 	loaded := 0
 	for _, ext := range exts {
 		if err := m.activate(ctx, ext); err != nil {
+			// Cloud workspace asleep at boot: leave the cli row untouched
+			// (don't flap it to error) - the heartbeat / next use re-probes.
+			if errors.Is(err, errCloudUnavailable) {
+				m.logger.Info("extensions: skipping cli activate (cloud workspace down)", "name", ext.Name)
+				continue
+			}
 			m.logger.Error("extensions: activate failed", "name", ext.Name, "err", err)
 			_ = m.store.SetStatus(ctx, ext.Name, StatusError, err.Error())
 			continue
 		}
-		_ = m.store.SetStatus(ctx, ext.Name, StatusActive, "")
+		// activate may have set a non-active status (cli pending_auth) plus
+		// auth fields - persist via the full upsert so they're not lost.
+		if ext.Kind == KindCLI {
+			_ = m.store.SetAuthState(ctx, ext.Name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError)
+		} else {
+			_ = m.store.SetStatus(ctx, ext.Name, StatusActive, "")
+		}
 		loaded++
 	}
 	return loaded, nil
@@ -72,8 +87,12 @@ func (m *Manager) Register(ctx context.Context, ext *Extension) error {
 		_, _ = m.store.Upsert(ctx, ext)
 		return err
 	}
-	ext.Status = StatusActive
-	ext.LastError = ""
+	// activate sets ext.Status for cli (active | pending_auth) and may set
+	// auth fields. For mcp/http_tool it leaves status unset → default active.
+	if ext.Status == "" {
+		ext.Status = StatusActive
+		ext.LastError = ""
+	}
 	if _, err := m.store.Upsert(ctx, ext); err != nil {
 		return err
 	}
@@ -112,6 +131,9 @@ func (m *Manager) activate(ctx context.Context, ext *Extension) error {
 			AuthTokenEnv:   cfg.AuthTokenEnv,
 			AuthHeaderName: cfg.AuthHeaderName,
 		}, m.registry)
+
+	case KindCLI:
+		return m.activateCLI(ctx, ext, true)
 
 	default:
 		return fmt.Errorf("extensions: unknown kind %q", ext.Kind)

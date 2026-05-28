@@ -25,7 +25,8 @@ func NewStore(pool *pgxpool.Pool, logger *slog.Logger) *Store {
 }
 
 const extCols = `id::text, name, kind, description, config, enabled, source,
-	status, last_error, created_at, updated_at`
+	status, last_error, auth_url, auth_instructions, resume_intent,
+	last_checked_at, created_at, updated_at`
 
 // Upsert saves (or replaces) an extension by name.
 func (s *Store) Upsert(ctx context.Context, ext *Extension) (string, error) {
@@ -47,20 +48,25 @@ func (s *Store) Upsert(ctx context.Context, ext *Extension) (string, error) {
 	var id string
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO mem_extensions
-		  (name, kind, description, config, enabled, source, status, last_error)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+		  (name, kind, description, config, enabled, source, status, last_error,
+		   auth_url, auth_instructions, resume_intent)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (name) DO UPDATE SET
-		  kind        = EXCLUDED.kind,
-		  description = EXCLUDED.description,
-		  config      = EXCLUDED.config,
-		  enabled     = EXCLUDED.enabled,
-		  source      = EXCLUDED.source,
-		  status      = EXCLUDED.status,
-		  last_error  = EXCLUDED.last_error,
-		  updated_at  = NOW()
+		  kind              = EXCLUDED.kind,
+		  description       = EXCLUDED.description,
+		  config            = EXCLUDED.config,
+		  enabled           = EXCLUDED.enabled,
+		  source            = EXCLUDED.source,
+		  status            = EXCLUDED.status,
+		  last_error        = EXCLUDED.last_error,
+		  auth_url          = EXCLUDED.auth_url,
+		  auth_instructions = EXCLUDED.auth_instructions,
+		  resume_intent     = EXCLUDED.resume_intent,
+		  updated_at        = NOW()
 		RETURNING id::text
 	`, ext.Name, string(ext.Kind), ext.Description, string(cfgJSON),
-		ext.Enabled, source, string(status), ext.LastError).Scan(&id)
+		ext.Enabled, source, string(status), ext.LastError,
+		ext.AuthURL, ext.AuthInstructions, ext.ResumeIntent).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("extensions: upsert: %w", err)
 	}
@@ -121,6 +127,39 @@ func (s *Store) SetStatus(ctx context.Context, name string, status Status, lastE
 	return err
 }
 
+// ListByStatus returns enabled extensions in a given status - used by the
+// heartbeat to find pending_auth cli extensions to re-probe, and by the
+// CLIProvider to find active ones to surface.
+func (s *Store) ListByStatus(ctx context.Context, status Status) ([]*Extension, error) {
+	if s == nil || s.pool == nil {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+extCols+` FROM mem_extensions
+		  WHERE enabled = TRUE AND status = $1 ORDER BY created_at ASC`, string(status))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectExtensions(rows)
+}
+
+// SetAuthState records the human-in-the-loop auth fields plus status for a
+// cli extension and stamps last_checked_at. Pass empty url/instructions when
+// clearing (e.g. on transition to active).
+func (s *Store) SetAuthState(ctx context.Context, name string, status Status, authURL, authInstructions, lastErr string) error {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE mem_extensions
+		   SET status = $2, auth_url = $3, auth_instructions = $4,
+		       last_error = $5, last_checked_at = NOW(), updated_at = NOW()
+		 WHERE name = $1
+	`, name, string(status), authURL, authInstructions, lastErr)
+	return err
+}
+
 // Disable turns an extension off so it won't load on the next boot.
 func (s *Store) Disable(ctx context.Context, name string) error {
 	if s == nil || s.pool == nil {
@@ -154,14 +193,16 @@ func collectExtensions(rows pgx.Rows) ([]*Extension, error) {
 
 func scanExtension(row pgx.Row) (*Extension, error) {
 	var (
-		ext     Extension
-		kind    string
-		status  string
-		cfgRaw  []byte
+		ext    Extension
+		kind   string
+		status string
+		cfgRaw []byte
 	)
 	if err := row.Scan(
 		&ext.ID, &ext.Name, &kind, &ext.Description, &cfgRaw, &ext.Enabled,
-		&ext.Source, &status, &ext.LastError, &ext.CreatedAt, &ext.UpdatedAt,
+		&ext.Source, &status, &ext.LastError,
+		&ext.AuthURL, &ext.AuthInstructions, &ext.ResumeIntent, &ext.LastCheckedAt,
+		&ext.CreatedAt, &ext.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}

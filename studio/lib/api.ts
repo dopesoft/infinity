@@ -1797,3 +1797,89 @@ export const fetchTraces = (
 
 export const fetchTraceDetail = (turnId: string, signal?: AbortSignal) =>
   getJSON<TraceDetailDTO>(`/api/traces/${encodeURIComponent(turnId)}`, signal);
+
+// ── Custom extensions (runtime self-register: mcp · http_tool · cli) ────────
+// The manual half of "bring your own tool" - the agent's autonomous half goes
+// through the extension_* tools. Both land in mem_extensions.
+
+export type ExtensionKind = "mcp" | "http_tool" | "cli";
+
+export interface Extension {
+  id: string;
+  name: string;
+  kind: ExtensionKind;
+  description: string;
+  config?: Record<string, unknown>;
+  enabled: boolean;
+  source: string;
+  status: string; // active | pending_auth | error | disabled | installing
+  last_error?: string;
+  auth_url?: string;
+  auth_instructions?: string;
+  resume_intent?: string;
+  tool_name?: string;
+  last_checked_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchExtensions(
+  signal?: AbortSignal,
+): Promise<Extension[] | { error: string }> {
+  try {
+    const res = await authedFetch("/api/extensions", { signal });
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    const body = (await res.json()) as { extensions?: Extension[] };
+    return body.extensions ?? [];
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+export async function registerExtension(body: {
+  name: string;
+  kind: ExtensionKind;
+  description?: string;
+  config: Record<string, unknown>;
+  resume_intent?: string;
+}): Promise<{ ok: boolean; async?: boolean; error?: string; extension?: Extension }> {
+  try {
+    const res = await authedFetch("/api/extensions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok && res.status !== 202) {
+      const txt = await res.text();
+      return { ok: false, error: txt || `HTTP ${res.status}` };
+    }
+    return (await res.json()) as { ok: boolean; async?: boolean; error?: string; extension?: Extension };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+export async function removeExtension(name: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/extensions/${encodeURIComponent(name)}/remove`, {
+      method: "POST",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function checkExtension(
+  name: string,
+): Promise<{ ok: boolean; ready?: boolean; error?: string; extension?: Extension }> {
+  try {
+    const res = await authedFetch(`/api/extensions/${encodeURIComponent(name)}/check`, {
+      method: "POST",
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return (await res.json()) as { ok: boolean; ready?: boolean; extension?: Extension };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "network error" };
+  }
+}

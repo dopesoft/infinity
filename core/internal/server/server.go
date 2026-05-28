@@ -13,6 +13,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
+	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
@@ -48,9 +49,10 @@ type Config struct {
 	Pool         *pgxpool.Pool
 	Store        *memory.Store
 	Searcher     *memory.Searcher
-	SkillsAPI    *skills.API
-	ProactiveAPI *proactive.API
-	CronAPI      *cron.API
+	SkillsAPI     *skills.API
+	ExtensionsAPI *extensions.API
+	ProactiveAPI  *proactive.API
+	CronAPI       *cron.API
 	SentinelAPI  *sentinel.API
 	VoyagerAPI   *voyager.API
 	Auth         *auth.Verifier
@@ -229,6 +231,9 @@ func New(cfg Config) *Server {
 	s.routes(mux)
 	if s.skillsAPI != nil {
 		s.skillsAPI.Routes(mux)
+	}
+	if cfg.ExtensionsAPI != nil {
+		cfg.ExtensionsAPI.Routes(mux)
 	}
 	if cfg.ProactiveAPI != nil {
 		cfg.ProactiveAPI.Routes(mux)

@@ -526,9 +526,10 @@ func serveCmd() *cobra.Command {
 			// extension_* tools; LoadAll re-activates everything a prior
 			// session registered. Runs AFTER the embedded mcp.yaml connect
 			// so a runtime extension layers cleanly on top.
+			var extManager *extensions.Manager
 			if pool != nil {
-				extManager := extensions.NewManager(
-					extensions.NewStore(pool, slog.Default()), registry, mcp, slog.Default(),
+				extManager = extensions.NewManager(
+					extensions.NewStore(pool, slog.Default()), registry, mcp, activeBridgeRouter, slog.Default(),
 				)
 				if n, err := extManager.LoadAll(cmd.Context()); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: extensions load: %v\n", err)
@@ -725,6 +726,13 @@ func serveCmd() *cobra.Command {
 						Router: activeBridgeRouter,
 						Prefs:  bridge.PrefFetcher(activeBridgePrefs),
 					})
+				}
+				// Installed CLI tools catalog - tells Jarvis which command-line
+				// tools he's installed in the cloud workspace + how to run
+				// them, and re-surfaces any awaiting the boss's sign-in.
+				// Silent when nothing is installed.
+				if extManager != nil {
+					memProviders = append(memProviders, extensions.NewCLIProvider(extManager))
 				}
 				if len(memProviders) > 0 {
 					cfg.Memory = agent.NewCompositeMemory(memProviders...)
@@ -953,6 +961,12 @@ func serveCmd() *cobra.Command {
 						// the AGI loop: notice -> propose -> approve -> install
 						// without leaving chat.
 						proactive.SkillAuthoringChecklist(pool),
+						// Extension auth loop: re-probe any cli tool parked in
+						// pending_auth; the moment the boss finishes signing in,
+						// flip it to active and fire a Finding that tells Jarvis
+						// it's ready (+ resume_intent) - the "...then continues"
+						// half of the human-in-the-loop self-provision flow.
+						proactive.ExtensionAuthChecklist(extManager),
 					))
 				heartbeat.Start(cmd.Context())
 				if a, ok := provider.(*llm.Anthropic); ok {
@@ -1320,6 +1334,7 @@ func serveCmd() *cobra.Command {
 				Store:            store,
 				Searcher:         searcher,
 				SkillsAPI:        skillsAPI,
+				ExtensionsAPI:    extensions.NewAPI(extManager),
 				ProactiveAPI:     proactiveAPI,
 				CronAPI:          cronAPI,
 				SentinelAPI:      sentinelAPI,

@@ -43,6 +43,7 @@ const (
 	KindGymExtract      Kind = "gym.extract"
 	KindSentinel        Kind = "sentinel"
 	KindBrowserSession  Kind = "browser.session"
+	KindExtension       Kind = "extension.register"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

@@ -24,9 +24,10 @@ type Kind string
 const (
 	KindMCP      Kind = "mcp"       // a remote MCP server
 	KindHTTPTool Kind = "http_tool" // a single REST endpoint as a named tool
+	KindCLI      Kind = "cli"       // a binary installed into the cloud workspace, run via bash_run
 )
 
-func (k Kind) Valid() bool { return k == KindMCP || k == KindHTTPTool }
+func (k Kind) Valid() bool { return k == KindMCP || k == KindHTTPTool || k == KindCLI }
 
 // Status is the activation state of an extension.
 type Status string
@@ -35,6 +36,10 @@ const (
 	StatusActive   Status = "active"
 	StatusError    Status = "error"
 	StatusDisabled Status = "disabled"
+	// StatusPendingAuth - a cli extension is installed but its check command
+	// reports it isn't authenticated yet. AuthURL/AuthInstructions hold what
+	// the boss must do; the ExtensionAuthChecklist re-probes until it passes.
+	StatusPendingAuth Status = "pending_auth"
 )
 
 // Extension is one runtime-registered capability provider.
@@ -48,8 +53,16 @@ type Extension struct {
 	Source      string         `json:"source"`
 	Status      Status         `json:"status"`
 	LastError   string         `json:"lastError,omitempty"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	UpdatedAt   time.Time      `json:"updatedAt"`
+	// Human-in-the-loop auth state (cli kind). AuthURL is the device-login
+	// URL Jarvis hands the boss; AuthInstructions is the human-readable ask;
+	// ResumeIntent is what Jarvis should do once auth completes (surfaced in
+	// the Finding the heartbeat fires when the check finally passes).
+	AuthURL          string     `json:"authUrl,omitempty"`
+	AuthInstructions string     `json:"authInstructions,omitempty"`
+	ResumeIntent     string     `json:"resumeIntent,omitempty"`
+	LastCheckedAt    *time.Time `json:"lastCheckedAt,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // MCPConfig is the `config` shape for kind=mcp. Auth fields reference env
@@ -103,6 +116,32 @@ func parseHTTPToolConfig(raw map[string]any) (HTTPToolConfig, error) {
 	}
 	if strings.TrimSpace(cfg.URL) == "" {
 		return cfg, fmt.Errorf("extensions: http_tool config requires `url`")
+	}
+	return cfg, nil
+}
+
+// CLIConfig is the `config` shape for kind=cli. A CLI extension is a binary
+// Jarvis installs into the persistent cloud workspace and then runs via
+// bash_run. Auth env-var NAMES (never values) are listed in AuthEnvs - the
+// secret stays in Railway, same rule as mcp.
+type CLIConfig struct {
+	Install  string   `json:"install,omitempty"`   // bash to install the binary (e.g. "curl -fsSL …/install.sh | sh")
+	Binary   string   `json:"binary"`              // command name used for `command -v` (e.g. "higgsfield")
+	CheckCmd string   `json:"check_cmd,omitempty"` // exit 0 ⇒ installed AND ready (authed). e.g. "higgsfield account status"
+	AuthCmd  string   `json:"auth_cmd,omitempty"`  // run when CheckCmd fails to start auth; its stdout should contain a device-login URL
+	AuthEnvs []string `json:"auth_envs,omitempty"` // env var NAMES the CLI needs (informational; set on Railway)
+	Usage    string   `json:"usage,omitempty"`     // how Jarvis should invoke it - injected into the system prompt
+	Cwd      string   `json:"cwd,omitempty"`       // optional working dir for the commands
+}
+
+// parseCLIConfig decodes the generic config map into a typed CLIConfig.
+func parseCLIConfig(raw map[string]any) (CLIConfig, error) {
+	var cfg CLIConfig
+	if err := remarshal(raw, &cfg); err != nil {
+		return cfg, fmt.Errorf("extensions: invalid cli config: %w", err)
+	}
+	if strings.TrimSpace(cfg.Binary) == "" {
+		return cfg, fmt.Errorf("extensions: cli config requires `binary`")
 	}
 	return cfg, nil
 }

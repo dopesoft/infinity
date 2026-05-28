@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { CustomExtensions } from "@/components/settings/CustomExtensions";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useTabParam } from "@/lib/useTabParam";
 import { cn } from "@/lib/utils";
@@ -351,7 +352,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
           connecting={connecting}
         />
       )}
-      {tab === "custom" && <CustomComingSoon />}
+      {tab === "custom" && <CustomExtensions />}
 
       {pendingConnect && (
         <NameAccountPrompt
@@ -904,32 +905,6 @@ function BrowseList({
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function CustomComingSoon() {
-  return (
-    <div className="space-y-3 rounded-xl border bg-muted/30 p-4">
-      <div className="flex items-center gap-2">
-        <Plus className="size-4 text-muted-foreground" aria-hidden />
-        <h3 className="text-sm font-semibold">Bring your own MCP</h3>
-        <Badge variant="secondary" className="font-mono text-[9px] uppercase">
-          soon
-        </Badge>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        For now, MCPs that aren&apos;t on Composio go through{" "}
-        <code className="font-mono">core/config/mcp.yaml</code> - add a server entry, set any
-        required env vars on Railway, redeploy. See the existing{" "}
-        <code className="font-mono">claude_code</code> and <code className="font-mono">composio</code>{" "}
-        entries as a reference.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        The in-app &ldquo;add custom MCP&rdquo; form will land when we add a{" "}
-        <code className="font-mono">user_mcp_servers</code> table - it needs persistence so
-        servers survive deploys without a rebuild.
-      </p>
     </div>
   );
 }
