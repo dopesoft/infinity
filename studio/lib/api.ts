@@ -1715,6 +1715,34 @@ export async function runVoiceTool(args: {
   }
 }
 
+// reportVoiceError tells Core that a realtime voice session failed to
+// connect. The WebRTC SDP exchange happens browser→OpenAI directly, so
+// Core never sees these failures (no Railway log, no server signal) -
+// this endpoint is the only way a quota/billing/network failure becomes
+// observable server-side. Core logs it at error severity AND raises a
+// Finding so the boss learns about it even when he's away from devtools.
+// Best-effort: never block the UI on it.
+export async function reportVoiceError(args: {
+  sessionId: string;
+  kind: string; // "sdp" | "ice-failed" | "mic-permission" | ...
+  message: string;
+}): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/voice/error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: args.sessionId,
+        kind: args.kind,
+        message: args.message,
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function recordVoiceTurn(args: {
   sessionId: string;
   role: "user" | "assistant";

@@ -355,6 +355,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/voice/session", s.handleVoiceSession)
 	mux.HandleFunc("/api/voice/tool", s.handleVoiceTool)
 	mux.HandleFunc("/api/voice/turn", s.handleVoiceTurn)
+	mux.HandleFunc("/api/voice/error", s.handleVoiceError)
 
 	// "Is the running binary behind main?" detection. Compares the
 	// RAILWAY_GIT_COMMIT_SHA env (set per deploy) to GitHub's main HEAD.

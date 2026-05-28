@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/hooks"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/voice"
 )
@@ -395,6 +398,82 @@ func (s *Server) handleVoiceTurn(w http.ResponseWriter, r *http.Request) {
 		sess.Append(llm.Message{Role: llm.RoleUser, Content: text})
 	case "assistant":
 		sess.Append(llm.Message{Role: llm.RoleAssistant, Content: text})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// voiceErrorReq carries a browser-side voice connection failure. The WebRTC
+// SDP exchange runs browser→OpenAI directly, so quota / billing / network /
+// permission failures never touch Core - this endpoint is the only way they
+// become observable server-side. Studio's useVoice posts here once per failed
+// attempt.
+type voiceErrorReq struct {
+	SessionID string `json:"session_id"`
+	Kind      string `json:"kind"`    // "sdp" | "ice-failed" | "mic-permission" | ...
+	Message   string `json:"message"` // already-classified human message from the client
+}
+
+func (s *Server) handleVoiceError(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body voiceErrorReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	kind := strings.TrimSpace(body.Kind)
+	if kind == "" {
+		kind = "unknown"
+	}
+	msg := strings.TrimSpace(body.Message)
+	if msg == "" {
+		msg = "voice connection failed"
+	}
+	sessionID := strings.TrimSpace(body.SessionID)
+
+	// Failure → stderr so Railway tags it severity:error (this is exactly
+	// the kind of thing the boss needs paged about, not buried in info).
+	// log.Printf writes to stderr by default; correct usage for a failure.
+	log.Printf("voice connect failure: kind=%s session=%s msg=%q", kind, sessionID, msg)
+
+	// Raise a Finding so the failure surfaces in the Heartbeat tab AND -
+	// because kind=security always passes shouldSurfaceFinding - gets
+	// spoken into chat live. This is what makes a credit/quota wall visible
+	// when the boss is on his phone with no devtools open. source_tag is
+	// stable so repeated failures merge into one open row (occurrences++)
+	// instead of piling up.
+	if s.pool != nil {
+		isQuota := strings.Contains(strings.ToLower(msg), "quota") ||
+			strings.Contains(strings.ToLower(msg), "billing") ||
+			strings.Contains(strings.ToLower(msg), "credit")
+		title := "Voice failed to connect"
+		if isQuota {
+			title = "Voice is down: OpenAI quota / billing"
+		}
+		_, _, _, _ = proactive.UpsertFinding(r.Context(), s.pool, slog.Default(), proactive.FindingDraft{
+			Kind:        "security",
+			Source:      "voice_connect",
+			SourceTag:   "voice_connect_failure",
+			Title:       title,
+			Detail:      msg,
+			Sample:      fmt.Sprintf("kind=%s session=%s", kind, sessionID),
+			Importance:  8,
+			PreApproved: true,
+		})
+		if s.heartbeat != nil {
+			s.onHeartbeatFinding(r.Context(), proactive.Finding{
+				Kind:        "security",
+				Source:      "voice_connect",
+				SourceTag:   "voice_connect_failure",
+				Title:       title,
+				Detail:      msg,
+				PreApproved: true,
+			})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

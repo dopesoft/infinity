@@ -175,7 +175,7 @@ export class VoiceClient {
       });
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
-        throw new Error(`SDP exchange ${resp.status}: ${body.slice(0, 300)}`);
+        throw new Error(classifyExchangeError(resp.status, body));
       }
       // GA Realtime `/v1/realtime/calls` returns the answer SDP as
       // plain text per OpenAI's official browser sample. No JSON
@@ -184,9 +184,15 @@ export class VoiceClient {
       // directly. Ephemeral flow stays text-in / text-out.
       answerSDP = await resp.text();
     } catch (err) {
+      // Tear down the peer connection + mic WITHOUT emitting "closed".
+      // stop() ends on cb.onStatus("closed"), which would immediately
+      // clobber the "error" status we set below - that's exactly why the
+      // SDP-failure case (e.g. OpenAI insufficient_quota) silently bounced
+      // the boss back to the text box with no banner. Order matters:
+      // teardown first, error status last so it sticks.
+      this.teardown();
       cb.onError?.(err instanceof Error ? err.message : "SDP exchange failed");
       cb.onStatus?.("error", "sdp");
-      this.stop();
       throw err;
     }
 
@@ -234,9 +240,20 @@ export class VoiceClient {
     );
   }
 
-  /** Tear everything down. Safe to call multiple times. */
+  /** Tear everything down and report the session as "closed". Safe to
+   * call multiple times. Use this for a normal end-of-session stop. For
+   * an error path, call teardown() directly and emit "error" yourself so
+   * the "closed" status doesn't clobber the error. */
   stop(): void {
-    const cb = this.args.callbacks ?? {};
+    this.teardown();
+    this.args.callbacks?.onStatus?.("closed");
+  }
+
+  /** Release all resources without emitting any status. Internal use:
+   * stop() wraps this with a "closed" emit; the error paths wrap it with
+   * an "error" emit. Keeping teardown status-free is what lets the error
+   * state survive (the bug that hid OpenAI quota failures). */
+  private teardown(): void {
     try {
       this.dc?.close();
     } catch {
@@ -278,7 +295,6 @@ export class VoiceClient {
     this.micAnalyser = null;
     this.assistantBuf.clear();
     this.interruptedResponses.clear();
-    cb.onStatus?.("closed");
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -486,4 +502,25 @@ export class VoiceClient {
 
   // (Output level meter removed - see ontrack comment for the reason. The
   // orb pulses on mic level + status transitions, which is enough signal.)
+}
+
+// classifyExchangeError turns OpenAI's SDP-exchange error response into a
+// message the boss can act on. The single most common real-world failure
+// is a billing/quota wall - OpenAI returns 429 with
+// code:"insufficient_quota". Raw JSON in a banner reads like noise; a
+// plain "your OpenAI credits are exhausted" is actionable, especially
+// when the boss is on his phone and can't open devtools. We still keep a
+// short tail of the raw body for anything we don't recognise.
+export function classifyExchangeError(status: number, body: string): string {
+  const lower = body.toLowerCase();
+  if (lower.includes("insufficient_quota") || lower.includes("exceeded your current quota")) {
+    return "OpenAI quota exhausted - your API credits are used up or billing isn't set up. Add credit at platform.openai.com → Billing, then retry.";
+  }
+  if (status === 401 || lower.includes("invalid_api_key") || lower.includes("incorrect api key")) {
+    return "OpenAI rejected the key (401) - the OPENAI_API_KEY on the server is invalid or revoked.";
+  }
+  if (status === 429) {
+    return "OpenAI rate limit / quota hit (429). If this persists, check usage + billing at platform.openai.com.";
+  }
+  return `Voice connection rejected (HTTP ${status}): ${body.slice(0, 200)}`;
 }

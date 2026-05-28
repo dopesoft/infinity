@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   recordVoiceTurn,
+  reportVoiceError,
   runVoiceTool,
   startVoiceSession,
 } from "@/lib/api";
@@ -136,6 +137,13 @@ export function useVoice(
   // play the connect tone every time we cycle back through "listening"
   // (e.g. after each tool call completes).
   const chimedRef = useRef(false);
+  // Last error message seen this attempt (set by onError, read by the
+  // onStatus("error") handler so the server report carries both the
+  // human message AND the kind). Guard so we report a given failed
+  // attempt to Core exactly once - onStatus("error") can fire more than
+  // once (e.g. ICE failed then disconnected).
+  const lastVoiceErrorRef = useRef<string>("");
+  const reportedErrorRef = useRef(false);
 
   const clearAssistantFinalizeTimer = useCallback(() => {
     if (assistantFinalizeTimerRef.current) {
@@ -211,6 +219,8 @@ export function useVoice(
     if (clientRef.current) return;
 
     setState((s) => ({ ...s, status: "connecting", error: null }));
+    lastVoiceErrorRef.current = "";
+    reportedErrorRef.current = false;
 
     const minted = await startVoiceSession(sessionId);
     if ("error" in minted) {
@@ -228,6 +238,19 @@ export function useVoice(
             status,
             toolName: status === "tool-running" ? detail ?? null : null,
           }));
+          // A terminal "error" status means the realtime connection died
+          // in the browser (SDP/quota/ICE/permission) - a path Core never
+          // sees because WebRTC goes browser→OpenAI directly. Report it so
+          // it lands in Railway logs AND raises a Finding the boss gets
+          // even when he's away from devtools. Once per attempt.
+          if (status === "error" && !reportedErrorRef.current) {
+            reportedErrorRef.current = true;
+            void reportVoiceError({
+              sessionId,
+              kind: detail ?? "unknown",
+              message: lastVoiceErrorRef.current || detail || "voice connection failed",
+            });
+          }
           if (status === "user-speaking") {
             waitingForUserTranscriptRef.current = true;
             clearUserTranscriptOrderTimer();
@@ -245,6 +268,7 @@ export function useVoice(
           }
         },
         onError: (msg) => {
+          lastVoiceErrorRef.current = msg;
           setState((s) => ({ ...s, error: msg }));
         },
         onLevel: (kind, level01) => {
