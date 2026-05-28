@@ -61,12 +61,38 @@ type RawResponse = {
   surfaceItems?: Record<string, SurfaceItem[]> | null;
 };
 
+// Stale-while-revalidate cache. The dashboard renders instantly from the
+// last-known payload (localStorage) on mount, then fetchDashboard refreshes
+// in the background. Modern-app feel: no blank-cards-for-5-seconds cold
+// start. Bump the version suffix if DashboardResponse's shape changes.
+const DASHBOARD_CACHE_KEY = "infinity:dashboard:v1";
+
+export function readDashboardCache(): DashboardResponse | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as DashboardResponse;
+  } catch {
+    return null;
+  }
+}
+
+function writeDashboardCache(data: DashboardResponse): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    /* quota / private mode - cache is best-effort */
+  }
+}
+
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardResponse | null> {
   try {
     const res = await authedFetch("/api/dashboard", { signal });
     if (!res.ok) return null;
     const raw = (await res.json()) as RawResponse;
-    return {
+    const data: DashboardResponse = {
       pursuits: raw.pursuits ? raw.pursuits.map(mapPursuit) : null,
       todos: raw.todos ?? null,
       calendarEvents: raw.calendarEvents ?? null,
@@ -79,6 +105,8 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
       memoryStats: raw.memoryStats ?? null,
       surfaceItems: raw.surfaceItems ?? null,
     };
+    writeDashboardCache(data);
+    return data;
   } catch {
     return null;
   }

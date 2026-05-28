@@ -106,7 +106,22 @@ func serveCmd() *cobra.Command {
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 				pctx, pcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
-				p, err := pgxpool.New(pctx, dsn)
+				// Default pgxpool MaxConns is max(4, NumCPU), which forces
+				// fan-out workloads (the dashboard aggregator fires ~11
+				// section reads at once) to queue into waves. Bump the ceiling
+				// so concurrent reads actually run in parallel. The Supabase
+				// session pooler handles this comfortably for a single user.
+				// A DSN that pins pool_max_conns higher wins.
+				var p *pgxpool.Pool
+				var err error
+				if cfg, cfgErr := pgxpool.ParseConfig(dsn); cfgErr == nil {
+					if cfg.MaxConns < 15 {
+						cfg.MaxConns = 15
+					}
+					p, err = pgxpool.NewWithConfig(pctx, cfg)
+				} else {
+					p, err = pgxpool.New(pctx, dsn)
+				}
 				pcancel()
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "warning: db pool: %v\n", err)

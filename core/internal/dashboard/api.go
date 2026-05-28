@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/connectors"
@@ -340,64 +341,139 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	resp := Response{}
 
-	// Each section is independent - if one query fails we log and
-	// return the rest. Studio falls back to mock for missing pieces.
-	if p, err := a.loadPursuits(ctx); err != nil {
-		a.Logger.Warn("dashboard: pursuits", "err", err)
-	} else {
-		resp.Pursuits = p
-	}
-	if t, err := a.loadTodos(ctx); err != nil {
-		a.Logger.Warn("dashboard: todos", "err", err)
-	} else {
-		resp.Todos = t
-	}
-	if e, err := a.loadCalendar(ctx); err != nil {
-		a.Logger.Warn("dashboard: calendar", "err", err)
-	} else {
-		resp.CalendarEvents = e
-	}
-	if f, err := a.loadFollowUps(ctx); err != nil {
-		a.Logger.Warn("dashboard: followups", "err", err)
-	} else {
-		resp.FollowUps = f
-	}
-	if s, err := a.loadSaved(ctx); err != nil {
-		a.Logger.Warn("dashboard: saved", "err", err)
-	} else {
-		resp.Saved = s
-	}
-	if m, err := a.loadMemoryStats(ctx); err != nil {
-		a.Logger.Warn("dashboard: memory stats", "err", err)
-	} else {
-		resp.MemoryStats = m
-	}
-	if r, err := a.loadReflection(ctx); err != nil {
-		a.Logger.Warn("dashboard: reflection", "err", err)
-	} else {
-		resp.Reflection = r
-	}
-	if a2, err := a.loadApprovals(ctx); err != nil {
-		a.Logger.Warn("dashboard: approvals", "err", err)
-	} else {
-		resp.Approvals = a2
-	}
-	if e, err := a.loadActivity(ctx); err != nil {
-		a.Logger.Warn("dashboard: activity", "err", err)
-	} else {
-		resp.Activity = e
-	}
-	if wi, err := a.loadWork(ctx); err != nil {
-		a.Logger.Warn("dashboard: work", "err", err)
-	} else {
-		resp.Work = wi
-	}
-	if si, err := a.loadSurface(ctx); err != nil {
-		a.Logger.Warn("dashboard: surface", "err", err)
-	} else {
-		resp.SurfaceItems = si
+	// Each section is an independent DB read. Running them sequentially meant
+	// 11 round-trips to the Supabase pooler back-to-back = 5-7s of stacked
+	// network latency for a dashboard that should paint instantly. Fan them
+	// out: every loader runs concurrently, writes its own field under a mutex,
+	// and total time collapses to the slowest single query. One slow/failed
+	// section never blocks the rest (Studio falls back to mock for missing
+	// pieces).
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	run := func(name string, fn func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fn(); err != nil {
+				a.Logger.Warn("dashboard: "+name, "err", err)
+			}
+		}()
 	}
 
+	run("pursuits", func() error {
+		v, err := a.loadPursuits(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Pursuits = v
+		mu.Unlock()
+		return nil
+	})
+	run("todos", func() error {
+		v, err := a.loadTodos(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Todos = v
+		mu.Unlock()
+		return nil
+	})
+	run("calendar", func() error {
+		v, err := a.loadCalendar(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.CalendarEvents = v
+		mu.Unlock()
+		return nil
+	})
+	run("followups", func() error {
+		v, err := a.loadFollowUps(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.FollowUps = v
+		mu.Unlock()
+		return nil
+	})
+	run("saved", func() error {
+		v, err := a.loadSaved(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Saved = v
+		mu.Unlock()
+		return nil
+	})
+	run("memory_stats", func() error {
+		v, err := a.loadMemoryStats(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.MemoryStats = v
+		mu.Unlock()
+		return nil
+	})
+	run("reflection", func() error {
+		v, err := a.loadReflection(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Reflection = v
+		mu.Unlock()
+		return nil
+	})
+	run("approvals", func() error {
+		v, err := a.loadApprovals(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Approvals = v
+		mu.Unlock()
+		return nil
+	})
+	run("activity", func() error {
+		v, err := a.loadActivity(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Activity = v
+		mu.Unlock()
+		return nil
+	})
+	run("work", func() error {
+		v, err := a.loadWork(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Work = v
+		mu.Unlock()
+		return nil
+	})
+	run("surface", func() error {
+		v, err := a.loadSurface(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.SurfaceItems = v
+		mu.Unlock()
+		return nil
+	})
+
+	wg.Wait()
 	writeJSON(w, http.StatusOK, resp)
 }
 

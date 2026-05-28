@@ -15,7 +15,8 @@ import { ActivityCard } from "./ActivityCard";
 import { MemoryFooter } from "./MemoryFooter";
 import { ObjectViewer } from "./ObjectViewer";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
-import { fetchDashboard } from "@/lib/dashboard/fetcher";
+import { fetchDashboard, readDashboardCache } from "@/lib/dashboard/fetcher";
+import type { DashboardResponse } from "@/lib/dashboard/fetcher";
 import { useRealtime } from "@/lib/realtime/provider";
 import type {
   ActivityEvent,
@@ -100,32 +101,50 @@ export function DashboardClient() {
   // hasn't resolved yet.
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    try {
-      const data = await fetchDashboard(signal);
-      if (!data) return;
-      setPursuits(data.pursuits ?? []);
-      setTodos(data.todos ?? []);
-      setEvents(data.calendarEvents ?? []);
-      setFollowUps(data.followUps ?? []);
-      setSaved(data.saved ?? []);
-      setApprovals(data.approvals ?? []);
-      setActivity(data.activity ?? []);
-      setWork(data.work ?? []);
-      setReflection(data.reflection ?? null);
-      setSurfaceItems(data.surfaceItems ?? {});
-      if (data.memoryStats) setMemoryStats(data.memoryStats);
-    } finally {
-      setLoading(false);
-    }
+  // Distribute a payload into the section slices. Shared by the cache-first
+  // hydrate and every fetch/realtime refresh so they can't drift.
+  const applyData = useCallback((data: DashboardResponse) => {
+    setPursuits(data.pursuits ?? []);
+    setTodos(data.todos ?? []);
+    setEvents(data.calendarEvents ?? []);
+    setFollowUps(data.followUps ?? []);
+    setSaved(data.saved ?? []);
+    setApprovals(data.approvals ?? []);
+    setActivity(data.activity ?? []);
+    setWork(data.work ?? []);
+    setReflection(data.reflection ?? null);
+    setSurfaceItems(data.surfaceItems ?? {});
+    if (data.memoryStats) setMemoryStats(data.memoryStats);
   }, []);
+
+  // background=true means a silent refresh (cache already on screen, or a
+  // realtime-driven refetch) - don't flash the full-page loading state.
+  const load = useCallback(
+    async (opts?: { signal?: AbortSignal; background?: boolean }) => {
+      if (!opts?.background) setLoading(true);
+      try {
+        const data = await fetchDashboard(opts?.signal);
+        if (!data) return;
+        applyData(data);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyData],
+  );
 
   useEffect(() => {
     const ctl = new AbortController();
-    void load(ctl.signal);
+    // Cache-first: paint last-known data instantly, then revalidate in the
+    // background. No more staring at empty cards for 5-7s on every visit.
+    const cached = readDashboardCache();
+    if (cached) {
+      applyData(cached);
+      setLoading(false);
+    }
+    void load({ signal: ctl.signal, background: !!cached });
     return () => ctl.abort();
-  }, [load]);
+  }, [load, applyData]);
 
   // Realtime subscriptions - when the agent dismisses a follow-up,
   // checks in on a pursuit, completes a task, or surfaces a new item,
@@ -145,7 +164,7 @@ export function DashboardClient() {
       "mem_heartbeat_findings",
       "mem_curiosity_questions",
     ],
-    () => void load(),
+    () => void load({ background: true }),
   );
 
   const [search, setSearch] = useState("");
