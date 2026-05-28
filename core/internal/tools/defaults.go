@@ -38,8 +38,16 @@ func CorePinnedTools() []string {
 		// voice session, where the realtime model must be able to hand off
 		// a build without a tool_search round-trip.
 		"background_build",
-		"memory_search",
-		"memory_recall",
+		// Memory tools - Jarvis's whole edge ("recall before you answer,
+		// remember what matters"). These MUST be in hand every turn, never
+		// dormant. The registered names are recall / remember / forget (see
+		// memory_tools.go); earlier this list pinned memory_search /
+		// memory_recall, which no tool answers to, so the pins were no-ops
+		// and the memory tools silently fell to the dormant catalog -
+		// contradicting the soul's "memory is your edge" principle.
+		"recall",
+		"remember",
+		"forget",
 		// system_map is the agent's introspection of "which UI surface is
 		// backed by which table is operated on by which tool". Pinned so
 		// the agent can resolve any "do X on my dashboard / queue / list"
