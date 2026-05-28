@@ -3,7 +3,7 @@
 import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ArrowUp, Paperclip, Square, X, Mic, MicOff } from "lucide-react";
+import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
@@ -491,6 +491,41 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Voice error banner. The voice state machine drops out of
+           * `active` the instant it hits "error", so without this the
+           * whole voice slot below unmounts and the boss bounces back to
+           * the text box with zero explanation. Render the failure
+           * persistently here (independent of voiceActive) with the real
+           * cause + a one-tap retry, so "mic granted then nothing"
+           * becomes a legible "ICE failed / SDP 4xx / permission denied"
+           * the boss can act on. */}
+          {voice.status === "error" && voice.error && (
+            <div className="mb-1.5 flex min-w-0 max-w-full items-start gap-2 rounded-2xl border border-danger/40 bg-danger/10 px-3 py-2">
+              <AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-danger">Voice failed to connect</p>
+                <p className="mt-0.5 break-words text-xs text-muted-foreground">{voice.error}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void voice.start()}
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15"
+                aria-label="Retry voice connection"
+              >
+                <RotateCcw className="size-3.5" />
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={() => voice.stop()}
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Dismiss voice error"
+              >
+                <X className="size-3.5" />
+              </button>
             </div>
           )}
 
