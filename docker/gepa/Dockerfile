@@ -32,6 +32,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY server.py /app/
+# Honest log routing: route INFO/WARNING -> stdout, ERROR+ -> stderr so
+# Railway's stream-based severity tagging stops painting uvicorn/app INFO
+# lines as fake red errors. Wired into uvicorn via --log-config below.
+COPY log_filters.py log_config.json /app/
 
 RUN useradd --no-create-home --shell /usr/sbin/nologin --uid 10001 gepa \
  && chown -R gepa:gepa /app
@@ -43,4 +47,4 @@ EXPOSE 8090
 
 # Use shell-form so $PORT expands. Railway expects the service to bind to
 # the port it injects via $PORT.
-CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8090} --workers 1
+CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8090} --workers 1 --log-config /app/log_config.json

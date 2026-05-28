@@ -21,6 +21,11 @@ import (
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// mcpInfoLog writes to stdout so Railway tags MCP recovery/success lines
+// severity=info instead of the severity=error it stamps on stderr (stdlib
+// log's default). Reserve the default log.Printf for genuine failures.
+var mcpInfoLog = log.New(os.Stdout, "", log.LstdFlags)
+
 type MCPServerConfig struct {
 	Name      string   `yaml:"name"`
 	Transport string   `yaml:"transport"`
@@ -509,7 +514,7 @@ func (m *MCPManager) Reconnect(ctx context.Context, server string) error {
 	prev := m.statuses[server]
 	m.mu.Unlock()
 	m.recordStatus(MCPStatus{Name: server, Connected: true, Tools: prev.Tools, Tested: time.Now().UTC()})
-	log.Printf("mcp: %s reconnected", server)
+	mcpInfoLog.Printf("mcp: %s reconnected", server)
 	return nil
 }
 

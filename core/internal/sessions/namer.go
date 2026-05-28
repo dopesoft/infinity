@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,11 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// infoLog writes to stdout so Railway tags these lines severity=info
+// instead of the severity=error it stamps on stderr (stdlib log's
+// default). Reserve the default log.Printf for genuine failures.
+var infoLog = log.New(os.Stdout, "", log.LstdFlags)
 
 // Namer renames sessions whose `name` column is NULL by asking a small model
 // to summarize the first user→assistant exchange in 3-5 words. Best-effort,
@@ -137,7 +143,7 @@ func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
 			log.Printf("sessions.namer: update err session=%s: %v", sessionID, err)
 			return
 		}
-		log.Printf("sessions.namer: session=%s named %q", sessionID, name)
+		infoLog.Printf("sessions.namer: session=%s named %q", sessionID, name)
 	}()
 }
 

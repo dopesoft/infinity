@@ -13,6 +13,13 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 )
 
+// infoLog writes to stdout so Railway tags these lines severity=info
+// instead of the severity=error it stamps on stderr (where stdlib log
+// writes by default). Used across the proactive gates + trust queue for
+// success/progress lines (allowed, queued, approved); genuine failures
+// stay on the default log.Printf (stderr).
+var infoLog = log.New(os.Stdout, "", log.LstdFlags)
+
 // defaultApprovalTTL bounds how long an idle session approval lasts.
 // We use a sliding window - every gate fire renews the expiry - so as
 // long as the boss is actively working the approval never lapses. The
@@ -317,7 +324,7 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 			// when the approval was first acted on. Idempotent: if the
 			// row is already 'consumed' this no-ops.
 			_, _ = g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
-			log.Printf("ClaudeCodeGate: %s allowed via prior approval (durable, %s window)",
+			infoLog.Printf("ClaudeCodeGate: %s allowed via prior approval (durable, %s window)",
 				toolName, g.ttl)
 			return agent.GateDecision{Allow: true}
 		}
@@ -383,7 +390,7 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 			Reason: "trust store unavailable; row was NOT persisted - do not tell the boss it was queued",
 		}
 	}
-	log.Printf("ClaudeCodeGate: %s queued as contract=%s (loop will wait)", toolName, id)
+	infoLog.Printf("ClaudeCodeGate: %s queued as contract=%s (loop will wait)", toolName, id)
 	return agent.GateDecision{
 		Allow:           false,
 		Reason:          "awaiting boss approval",
@@ -426,7 +433,7 @@ func (g *ClaudeCodeGate) WaitForDecision(ctx context.Context, contractID string,
 			}
 			switch status {
 			case "approved":
-				log.Printf("ClaudeCodeGate: contract %s approved", contractID)
+				infoLog.Printf("ClaudeCodeGate: contract %s approved", contractID)
 				// Flip the row to 'consumed' for audit. The gate's
 				// HasRecentApprovalForTool will continue to see this
 				// row as evidence of approval for the whole TTL

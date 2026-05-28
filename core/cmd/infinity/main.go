@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -14,6 +15,14 @@ var (
 )
 
 func main() {
+	// Honest severity on Railway. The log shipper tags lines by stream
+	// (stdout -> info, stderr -> error); slog's default text handler writes
+	// to stderr, so every Info/Warn line shows up as a fake red error.
+	// Emit JSON to stdout instead so Railway reads the explicit "level"
+	// field and surfaces each line in its true state (info / warn / error).
+	// See CLAUDE.md "Logging — severity must match reality."
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	root := &cobra.Command{
 		Use:           "infinity",
 		Short:         "Infinity - single-user AI agent with persistent memory",

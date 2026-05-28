@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "filters": {
+    "max_info": {
+      "()": "honcho_log.MaxLevelFilter",
+      "level": "WARNING"
+    }
+  },
+  "formatters": {
+    "standard": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    }
+  },
+  "handlers": {
+    "stdout": {
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stdout",
+      "formatter": "standard",
+      "filters": ["max_info"]
+    },
+    "stderr": {
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stderr",
+      "formatter": "standard",
+      "level": "ERROR"
+    }
+  },
+  "root": {
+    "level": "INFO",
+    "handlers": ["stdout", "stderr"]
+  }
+}

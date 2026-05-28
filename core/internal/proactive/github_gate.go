@@ -89,7 +89,7 @@ func (g *GitHubGate) Authorize(ctx context.Context, sessionID, project, toolName
 			log.Printf("GitHubGate: approval lookup error: %v", err)
 		} else if hasApproval {
 			_, _ = g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
-			log.Printf("GitHubGate: %s allowed via prior approval (durable, %s window)",
+			infoLog.Printf("GitHubGate: %s allowed via prior approval (durable, %s window)",
 				toolName, g.ttl)
 			return agent.GateDecision{Allow: true}
 		}
@@ -132,7 +132,7 @@ func (g *GitHubGate) Authorize(ctx context.Context, sessionID, project, toolName
 			Reason: "trust store unavailable; row was NOT persisted - do not tell the boss it was queued",
 		}
 	}
-	log.Printf("GitHubGate: %s queued as contract=%s (loop will wait)", toolName, id)
+	infoLog.Printf("GitHubGate: %s queued as contract=%s (loop will wait)", toolName, id)
 	return agent.GateDecision{
 		Allow:           false,
 		Reason:          "awaiting boss approval",
@@ -172,7 +172,7 @@ func (g *GitHubGate) WaitForDecision(ctx context.Context, contractID string, tim
 			}
 			switch status {
 			case "approved":
-				log.Printf("GitHubGate: contract %s approved", contractID)
+				infoLog.Printf("GitHubGate: contract %s approved", contractID)
 				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
 				return true, ""
 			case "denied":

@@ -110,7 +110,7 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 	if err != nil {
 		log.Printf("trust.queue: INSERT failed id=%s source=%s user_id=%v err=%v", c.ID, c.Source, userIDArg, err)
 	} else {
-		log.Printf("trust.queue: INSERT ok id=%s source=%s status=%s user_id=%v rows=%d",
+		infoLog.Printf("trust.queue: INSERT ok id=%s source=%s status=%s user_id=%v rows=%d",
 			c.ID, c.Source, c.Status, userIDArg, tag.RowsAffected())
 		// Async notifier - runs in a goroutine with a detached context so
 		// it never blocks the gate's wait loop. We deliberately drop the
@@ -332,7 +332,7 @@ func (s *TrustStore) ConsumeApprovedForTool(ctx context.Context, sessionID, tool
 		}
 		return false, err
 	}
-	log.Printf("trust.consume: tool=%s session=%s contract=%s", toolName, sessionID, id)
+	infoLog.Printf("trust.consume: tool=%s session=%s contract=%s", toolName, sessionID, id)
 	return true, nil
 }
 

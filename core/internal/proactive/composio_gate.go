@@ -128,7 +128,7 @@ func (g *ComposioGate) Authorize(ctx context.Context, sessionID, project, toolNa
 			log.Printf("ComposioGate: approval lookup error: %v", err)
 		} else if hasApproval {
 			_, _ = g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
-			log.Printf("ComposioGate: %s allowed via prior approval (durable, %s window)",
+			infoLog.Printf("ComposioGate: %s allowed via prior approval (durable, %s window)",
 				toolName, g.ttl)
 			return agent.GateDecision{Allow: true}
 		}
@@ -174,7 +174,7 @@ func (g *ComposioGate) Authorize(ctx context.Context, sessionID, project, toolNa
 			Reason: "trust store unavailable; row was NOT persisted - do not tell the boss it was queued",
 		}
 	}
-	log.Printf("ComposioGate: %s queued as contract=%s (loop will wait)", toolName, id)
+	infoLog.Printf("ComposioGate: %s queued as contract=%s (loop will wait)", toolName, id)
 	return agent.GateDecision{
 		Allow:           false,
 		Reason:          "awaiting boss approval",
@@ -213,7 +213,7 @@ func (g *ComposioGate) WaitForDecision(ctx context.Context, contractID string, t
 			}
 			switch status {
 			case "approved":
-				log.Printf("ComposioGate: contract %s approved", contractID)
+				infoLog.Printf("ComposioGate: contract %s approved", contractID)
 				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
 				return true, ""
 			case "denied":

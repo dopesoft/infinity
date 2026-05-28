@@ -23,6 +23,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// infoLog writes to stdout so Railway tags these lines severity=info
+// instead of the severity=error it stamps on stderr (stdlib log's default).
+// Reserve the default log.Printf for genuine failures.
+var infoLog = log.New(os.Stdout, "", log.LstdFlags)
+
 // SkillMatcher is implemented by skills.Registry. Decoupled to keep the agent
 // package free of skill-package dependencies.
 type SkillMatcher interface {
@@ -413,7 +418,7 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 			return
 		}
 		s.ReplaceMessages(newMsgs)
-		log.Printf("auto-compact: session=%s compacted %d turns, kept %d, %d observations promoted",
+		infoLog.Printf("auto-compact: session=%s compacted %d turns, kept %d, %d observations promoted",
 			s.ID, res.CompactedTurns, res.KeptTurns, len(res.ObservationIDs))
 	}()
 }

@@ -144,7 +144,7 @@ func (g *BrowserGate) Authorize(ctx context.Context, sessionID, project, toolNam
 	if id == "" {
 		return agent.GateDecision{Allow: false, Reason: "browser gate: queue unavailable"}
 	}
-	log.Printf("BrowserGate: browser_act queued as contract=%s (loop will wait)", id)
+	infoLog.Printf("BrowserGate: browser_act queued as contract=%s (loop will wait)", id)
 	return agent.GateDecision{
 		Allow:           false,
 		WaitForApproval: true,

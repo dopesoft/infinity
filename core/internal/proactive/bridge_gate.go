@@ -113,7 +113,7 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 			log.Printf("BridgeGate: approval lookup error: %v", err)
 		} else if hasApproval {
 			_, _ = g.trust.ConsumeApprovedForTool(ctx, sessionID, toolName)
-			log.Printf("BridgeGate: %s allowed via prior approval (%s window)", toolName, g.ttl)
+			infoLog.Printf("BridgeGate: %s allowed via prior approval (%s window)", toolName, g.ttl)
 			return agent.GateDecision{Allow: true}
 		}
 	}
@@ -167,7 +167,7 @@ func (g *BridgeGate) Authorize(ctx context.Context, sessionID, project, toolName
 			Reason: "bridge gate: queue unavailable",
 		}
 	}
-	log.Printf("BridgeGate: %s queued as contract=%s (loop will wait)", toolName, id)
+	infoLog.Printf("BridgeGate: %s queued as contract=%s (loop will wait)", toolName, id)
 	return agent.GateDecision{
 		Allow:           false,
 		WaitForApproval: true,
@@ -204,7 +204,7 @@ func (g *BridgeGate) WaitForDecision(ctx context.Context, contractID string, tim
 			}
 			switch status {
 			case "approved":
-				log.Printf("BridgeGate: contract %s approved", contractID)
+				infoLog.Printf("BridgeGate: contract %s approved", contractID)
 				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
 				return true, ""
 			case "denied":

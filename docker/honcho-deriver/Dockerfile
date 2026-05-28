@@ -32,6 +32,13 @@ RUN git clone --depth 1 --branch "$HONCHO_REF" https://github.com/plastic-labs/h
 RUN uv sync --frozen --no-group dev
 RUN chmod -R a+rX /app /app/.venv && find /app/.venv/bin -type f -exec chmod a+x {} \;
 
+# Honest log routing (see docker/honcho/Dockerfile). The deriver is a
+# worker (no uvicorn), so run_deriver.py installs log_config.json via
+# dictConfig BEFORE src.deriver imports — honcho's basicConfig() then
+# no-ops and src.deriver / src.reconciler INFO stops being mistagged as
+# errors by Railway's stream-based severity tagging.
+COPY honcho_log.py log_config.json run_deriver.py /app/
+
 # No exposed port — the deriver is a worker, not a server.
 
 # Same DB URL rewrite as the API service so Railway reference variables work
@@ -78,7 +85,7 @@ except Exception:
 PY
 
 echo "deriver-boot: launching deriver"
-exec python -m src.deriver
+exec python /app/run_deriver.py
 EOF
 
 CMD ["/app/entrypoint.sh"]
