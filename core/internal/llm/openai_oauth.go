@@ -577,20 +577,35 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 	}
 	// Reasoning-capable models compute thinking tokens internally regardless
 	// of this flag, but the SUMMARY text only streams when we explicitly
-	// request it. "auto" returns a terse summary - the boss wants to actually
-	// watch the model reason ("the user wants a dashboard called pulse, so…"),
-	// so we ask for "detailed", which streams a much fuller reasoning narrative
-	// (still a summary - OpenAI never exposes raw chain-of-thought). Override
-	// with INFINITY_OPENAI_REASONING_SUMMARY (auto|concise|detailed) if needed.
-	// Skipped for non-reasoning models (gpt-4o, gpt-4.1) where it would error.
+	// request it. Per OpenAI's reasoning guide
+	// (developers.openai.com/api/docs/guides/reasoning):
+	//
+	//	"To access the most detailed summarizer available for a model, set
+	//	 the value of this parameter to `auto`. `auto` will be equivalent to
+	//	 `detailed` for most reasoning models today."
+	//
+	// We previously sent "detailed" explicitly - which on gpt-5.x returns an
+	// EMPTY summary the large majority of the time, so the boss saw NO
+	// streamed reasoning at all. "auto" is the documented way to get the
+	// fullest available summary and is what actually streams. Override with
+	// INFINITY_OPENAI_REASONING_SUMMARY (auto|concise|detailed) if needed.
+	// effort is sent only when explicitly configured
+	// (INFINITY_OPENAI_REASONING_EFFORT: minimal|low|medium|high|xhigh) so we
+	// don't silently change reasoning depth/cost; note that very low effort
+	// can suppress summaries. Skipped entirely for non-reasoning models
+	// (gpt-4o, gpt-4.1) where `reasoning` would error.
 	if modelSupportsReasoning(model) {
 		summary := strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_SUMMARY"))
 		if summary == "" {
-			summary = "detailed"
+			summary = "auto"
 		}
-		body["reasoning"] = map[string]any{
+		reasoning := map[string]any{
 			"summary": summary,
 		}
+		if effort := strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_EFFORT")); effort != "" {
+			reasoning["effort"] = effort
+		}
+		body["reasoning"] = reasoning
 	}
 	if len(tools) > 0 {
 		apiTools := make([]map[string]any, 0, len(tools))

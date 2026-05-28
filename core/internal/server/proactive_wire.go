@@ -173,6 +173,48 @@ func (s *Server) BroadcastSkillPromoted(name, description string) {
 	})
 }
 
+// BroadcastBackgroundDone surfaces the completion of a background_build
+// run as a chat bubble in every active session. Wired from serve.go as
+// the BackgroundAgent.OnDone callback (alongside a push notification, so
+// the boss learns even with no tab open). Renders through the same
+// proactive_message path as heartbeat findings / skill-promoted; the
+// finding_kind drives the icon + label Studio shows.
+func (s *Server) BroadcastBackgroundDone(task, summary, errMsg string) {
+	if s == nil {
+		return
+	}
+	task = strings.TrimSpace(task)
+	summary = strings.TrimSpace(summary)
+	errMsg = strings.TrimSpace(errMsg)
+
+	var text string
+	if errMsg != "" {
+		text = "**Background build failed**"
+		if task != "" {
+			text += "\n\n_" + task + "_"
+		}
+		text += "\n\n" + errMsg
+		if summary != "" {
+			text += "\n\n" + summary
+		}
+	} else {
+		header := "**Background build complete**"
+		if task != "" {
+			header += "\n\n_" + task + "_"
+		}
+		text = header
+		if summary != "" {
+			text += "\n\n" + summary
+		}
+	}
+
+	s.broadcastProactive(wsServerEvent{
+		Type:        "proactive_message",
+		Text:        text,
+		FindingKind: "background_build",
+	})
+}
+
 // onHeartbeatFinding is wired in New() as the heartbeat's per-finding
 // callback. We filter aggressively because most findings are diagnostic
 // (logged but not noteworthy enough to interrupt). Only kinds the user

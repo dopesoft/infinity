@@ -48,6 +48,15 @@ const (
 	// voice renderer has explicit delivery guidance, not just persona.
 	britishAccentLine = "Voice delivery: use a clearly British Received Pronunciation accent. Prefer non-rhotic British vowels, crisp consonants, measured pacing, and warm Jarvis-style restraint. Do not use American pronunciation. Do not use em dash or en dash characters in spoken transcripts."
 
+	// voiceDispatchLine keeps the EXPENSIVE realtime model out of heavy
+	// engineering work. Voice (this realtime session) is metered per audio
+	// token; the boss's settings model runs on a flat subscription. So any
+	// real build should be handed to `background_build`, which runs the
+	// full coding agent on the settings model in the background and pings
+	// the boss when done - rather than the realtime model orchestrating a
+	// build turn-by-turn (every tool result re-billed through realtime).
+	voiceDispatchLine = "VOICE MODE - cost discipline: you are the realtime voice model and you are metered. Voice is for light, conversational work: questions, calendar, email, quick lookups, status, and KICKING THINGS OFF. For any heavy or multi-step engineering work - writing or editing code, building a feature, refactoring, a build/test cycle, or anything that would take many tool steps - DO NOT do it yourself turn-by-turn. Call the `background_build` tool once with a complete, self-contained task description. It runs the full coding agent on the boss's main (subscription) model in the background, returns immediately, and notifies the boss when it's done so he can hang up. After calling it, briefly confirm out loud that you've kicked it off and will report back. Only perform small, quick tool actions inline."
+
 	// realtimeClientSecretsURL is the OpenAI endpoint that mints the
 	// browser's short-lived authentication key. The full API key never
 	// leaves the server; the ephemeral key carries the session config
@@ -144,7 +153,7 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	if instructions != "" {
 		instructions += "\n\n"
 	}
-	instructions += britishAccentLine
+	instructions += britishAccentLine + "\n\n" + voiceDispatchLine
 
 	// Newer Realtime API (gpt-realtime family) nests audio config under
 	// `audio.input` and `audio.output`. The old flat keys

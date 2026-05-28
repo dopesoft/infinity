@@ -255,7 +255,10 @@ func (s *Server) handleVoiceTool(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// Wrap with the session's ActiveSet so load_tools / unload_tools /
 	// tool_search mutate the same per-session whitelist text mode uses.
-	toolCtx := tools.WithActiveSet(ctx, sess.Active)
+	// Also thread the session id (text mode does this in loop.go) so tools
+	// that post back to the boss's chat - notably background_build's
+	// completion notifier - know which session triggered them.
+	toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, sess.Active), sessionID)
 	output, err := registry.Execute(toolCtx, llm.ToolCall{ID: callID, Name: name, Input: body.Input})
 	isErr := false
 	if err != nil {

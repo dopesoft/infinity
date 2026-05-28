@@ -50,7 +50,7 @@ export function CanvasComposer({ chat }: { chat: ChatHook }) {
           </Button>
         </span>
       </div>
-      <ConversationStream messages={chat.messages} />
+      <ConversationStream messages={chat.messages} working={chat.isStreaming} />
       <Composer
         onSend={chat.send}
         onSlash={(cmd) => (cmd === "new" ? chat.newSession() : chat.clear())}

@@ -653,6 +653,10 @@ func serveCmd() *cobra.Command {
 			}
 
 			var loop *agent.Loop
+			// Held across to the post-server wiring so its OnDone callback
+			// can broadcast a chat bubble + push when a background build
+			// finishes. Registered into the tool registry below.
+			var bgAgent *agent.BackgroundAgent
 			if provider != nil {
 				cfg := agent.Config{LLM: provider, Tools: registry, Skills: skillRegistry, SystemPrompt: soulPrompt, Namer: sessionNamer}
 				if connectorsCache != nil {
@@ -783,6 +787,12 @@ func serveCmd() *cobra.Command {
 				// model sees them like any other tool.
 				registry.Register(&agent.Delegate{Loop: loop})
 				registry.Register(&agent.DelegateParallel{Loop: loop})
+				// background_build: fire-and-forget heavy work on the
+				// settings model so metered surfaces (realtime voice) don't
+				// orchestrate builds. OnDone is wired after the server
+				// exists (it needs broadcast + push).
+				bgAgent = &agent.BackgroundAgent{Loop: loop}
+				registry.Register(bgAgent)
 				if pool != nil {
 					registry.Register(&agent.AgentTeam{Loop: loop, Pool: pool, Settings: settings.New(pool)})
 				}
@@ -1368,6 +1378,40 @@ func serveCmd() *cobra.Command {
 			// instance to exist.
 			notifySkillPromoted = srv.BroadcastSkillPromoted
 
+				// Late-bind background_build's completion notifier now that the
+				// server (chat broadcast) + push sender both exist. A finished
+				// background build pops a chat bubble in any open tab AND pushes
+				// the boss's phone, so he can fire a build by voice, hang up, and
+				// still get told when it's done.
+				if bgAgent != nil {
+					localPush := pushSender
+					bgAgent.OnDone = func(ctx context.Context, r agent.BackgroundResult) {
+						srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
+						if localPush != nil {
+							title := "Build complete"
+							body := r.Task
+							if r.Err != "" {
+								title = "Build failed"
+								if body != "" {
+									body += " — "
+								}
+								body += r.Err
+							} else if r.Summary != "" {
+								body = r.Summary
+							}
+							localPush.Notify(ctx, push.Notification{
+								Title:    title,
+								Body:     clipPush(body, 160),
+								Tag:      "background-build",
+								URL:      "/logs",
+								Kind:     "background_build",
+								ID:       r.RunID,
+								Renotify: true,
+							})
+						}
+					}
+				}
+
 			// Late-bind the browser frame sink now that the server (which
 			// owns the per-session WS broadcaster) exists. Frames stream to
 			// the chat session's Studio tab for the whole browser session.
@@ -1722,6 +1766,18 @@ func runMaintenanceTicker(ctx context.Context, pool *pgxpool.Pool) {
 			runOnce()
 		}
 	}
+}
+
+// clipPush trims a push-notification body to a sane length so phone
+// banners don't get truncated mid-word by the OS. Operates on runes so a
+// multibyte char never gets sliced in half.
+func clipPush(s string, max int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return strings.TrimSpace(string(r[:max])) + "…"
 }
 
 // heartbeatInterval reads $INFINITY_HEARTBEAT_INTERVAL (Go duration form,

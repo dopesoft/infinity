@@ -44,6 +44,7 @@ const (
 	KindSentinel        Kind = "sentinel"
 	KindBrowserSession  Kind = "browser.session"
 	KindExtension       Kind = "extension.register"
+	KindBackgroundBuild Kind = "background.build"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

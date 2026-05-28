@@ -9,9 +9,37 @@ import { AgentTeamCard } from "@/components/AgentTeamCard";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { SkillProposalCard } from "@/components/SkillProposalCard";
 import { DashboardContextCard } from "@/components/DashboardContextCard";
+import { WorkingIndicator } from "@/components/WorkingIndicator";
 import type { ChatMessage } from "@/hooks/useChat";
 
 const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
+
+// workingState decides whether to show the persistent "working" row and what
+// it should say. The row is the consistent activity cue for the gaps the
+// per-message affordances don't cover (after a tool result, while the model
+// reasons before the next step). It is suppressed when a live affordance is
+// already on screen: a pending thinking block (owns its own shimmer) or a
+// tool call parked awaiting the boss's approval (the agent is blocked, not
+// working). Otherwise the label reflects the current step.
+function workingState(
+  messages: ChatMessage[],
+  working: boolean,
+): { show: boolean; label: string } {
+  if (!working) return { show: false, label: "" };
+  const last = messages[messages.length - 1];
+  if (last) {
+    if (last.role === "thinking" && last.pending) return { show: false, label: "" };
+    if (last.role === "tool" && last.pending) {
+      if (last.toolCall?.awaiting_approval) return { show: false, label: "" };
+      const name = last.toolCall?.name?.trim();
+      return { show: true, label: name ? `Running ${name}…` : "Running tool…" };
+    }
+    if (last.role === "assistant" && last.pending) {
+      return { show: true, label: "Responding…" };
+    }
+  }
+  return { show: true, label: "Working…" };
+}
 
 export function ConversationStream({
   messages,
@@ -19,13 +47,18 @@ export function ConversationStream({
   // the "Approve & fix" action on heartbeat finding cards - it routes
   // through chat.send so the agent acts in this same conversation.
   onQuickReply,
+  // working is the turn-in-flight flag (chat.isStreaming). Drives the
+  // persistent WorkingIndicator so the boss always has a "still going" cue.
+  working = false,
 }: {
   messages: ChatMessage[];
   onQuickReply?: (text: string) => void;
+  working?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showJump, setShowJump] = useState(false);
   const stickToBottomRef = useRef(true);
+  const work = workingState(messages, working);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -33,7 +66,9 @@ export function ConversationStream({
     if (stickToBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages]);
+    // Re-pin when the working row toggles/changes too, so the indicator
+    // doesn't appear just below the fold.
+  }, [messages, work.show, work.label]);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -140,6 +175,13 @@ export function ConversationStream({
             )}
           </div>
         ))}
+        {work.show && (
+          <div className="min-w-0 max-w-full" data-message>
+            <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+              <WorkingIndicator label={work.label} />
+            </div>
+          </div>
+        )}
       </div>
       {showJump && (
         <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">

@@ -33,6 +33,11 @@ func CorePinnedTools() []string {
 		"unload_tools",
 		"compact_context",
 		"delegate",
+		// background_build - fire-and-forget heavy work on the settings
+		// model. Pinned so it's ALWAYS available, especially in the metered
+		// voice session, where the realtime model must be able to hand off
+		// a build without a tool_search round-trip.
+		"background_build",
 		"memory_search",
 		"memory_recall",
 		// system_map is the agent's introspection of "which UI surface is
