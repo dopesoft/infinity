@@ -200,7 +200,12 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 		// single line, the chat formatter splits on "\n" to label parts.
 		rationale := fmt.Sprintf("expected: %s\nactual: %s",
 			clipShort(oneLine(expected), 240), clipShort(oneLine(actual), 240))
-		if c.insertQuestion(ctx, question, rationale, "high_surprise", []string{id}, 7) {
+		// Dedup by TOOL, not by prediction id: the question text is keyed on
+		// the tool name, so a per-prediction tag would let a second surprise
+		// for the same tool collide on the question-text index instead of
+		// merging. The prediction id stays in SourceIDs for provenance.
+		tag := "high_surprise:tool:" + tool
+		if c.insertQuestionTagged(ctx, question, rationale, "high_surprise", tag, []string{id}, 7) {
 			n++
 		}
 	}
@@ -276,6 +281,15 @@ func (c *CuriosityScan) insertQuestion(ctx context.Context, question, rationale,
 	if len(sourceIDs) > 0 {
 		tag = kind + ":" + sourceIDs[0]
 	}
+	return c.insertQuestionTagged(ctx, question, rationale, kind, tag, sourceIDs, importance)
+}
+
+// insertQuestionTagged is insertQuestion with an explicit dedup tag, for
+// detectors whose question text is coarser than their source ids (e.g.
+// high-surprise, where the text is per-tool but the prediction id is per-call).
+// The caller controls the merge granularity via tag while SourceIDs still
+// carries the precise provenance.
+func (c *CuriosityScan) insertQuestionTagged(ctx context.Context, question, rationale, kind, tag string, sourceIDs []string, importance int) bool {
 	_, isNew, _, _ := UpsertQuestion(ctx, c.pool, slog.Default(), QuestionDraft{
 		Question:   question,
 		Rationale:  rationale,

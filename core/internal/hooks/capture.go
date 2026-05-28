@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -91,7 +90,12 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 
 	sessionID := ev.SessionID
 	if sessionID == "" {
-		return errors.New("capture: session id required")
+		// Sessionless background work (calendar sync, connector poller)
+		// fires PostToolUse hooks with no chat session - there's nothing
+		// to capture against a session, so skip silently rather than
+		// logging an error every tick. Mirrors PredictionStore's no-session
+		// behaviour.
+		return nil
 	}
 	if _, err := c.store.EnsureSession(ctx, sessionID, ev.Project); err != nil {
 		return err

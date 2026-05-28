@@ -469,6 +469,7 @@ func (s *Store) ListVersions(ctx context.Context, name string) ([]VersionEntry, 
 		       COALESCE(source, ''), COALESCE(confidence, 0.5)
 		  FROM mem_skill_versions
 		 WHERE skill_name = $1
+		   AND archived_at IS NULL
 		 ORDER BY created_at DESC
 	`, name)
 	if err != nil {
@@ -505,6 +506,14 @@ func (s *Store) PromoteVersion(ctx context.Context, name, version string) error 
 	if !exists {
 		return fmt.Errorf("version %q not found for skill %q", version, name)
 	}
+	// An active version must never be archived (archived_at hides it from the
+	// version history; the active row is the one thing that should always show).
+	// Clearing it here keeps the invariant true even when promoting a version
+	// that was previously soft-retired.
+	_, _ = s.pool.Exec(ctx,
+		`UPDATE mem_skill_versions SET archived_at = NULL WHERE skill_name = $1 AND version = $2`,
+		name, version,
+	)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_skill_active (skill_name, active_version)
 		VALUES ($1, $2)

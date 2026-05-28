@@ -263,15 +263,24 @@ func FormatLLMPrompt(skill *Skill, args map[string]any) string {
 	b.WriteString(" (v")
 	b.WriteString(skill.Version)
 	b.WriteString(")\n\n")
+	// Imperative framing is load-bearing. `skills_invoke` on a recipe (LLM-only)
+	// skill does NOT run anything by itself — it hands the recipe back and YOU
+	// are the execution engine. Without this header the model intermittently
+	// reads the body as documentation, reports "the skill only returned its
+	// recipe / did not execute," and aborts — which is itself the failure.
+	// Crons (isolated_agent_turn) hit this hardest: ~half of inbox-triage runs
+	// aborted here before this framing existed.
+	b.WriteString("> EXECUTE THIS NOW. This is your recipe to carry out in THIS turn — not documentation, not a status report. `skills_invoke` ran nothing on its own; YOU are the execution engine. Perform every step in Instructions below using your tools, then report the REAL outcome. Returning, quoting, or summarizing this text WITHOUT performing the steps is a FAILED turn. Never say \"the skill only returned its recipe\" or \"the skill did not execute\" — that means YOU stopped early. Do not stop here.\n\n")
 	if skill.Description != "" {
 		b.WriteString(skill.Description)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("## Instructions\n")
+	b.WriteString("## Instructions — execute these now\n")
 	b.WriteString(strings.TrimSpace(skill.Body))
 	b.WriteString("\n\n## Inputs\n")
 	for k, v := range args {
 		fmt.Fprintf(&b, "- %s: %v\n", k, v)
 	}
+	b.WriteString("\n## Now do it\nCarry out the Instructions above step by step with your available tools, then report the actual result. Do not return this text as your answer.\n")
 	return b.String()
 }

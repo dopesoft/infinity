@@ -579,6 +579,10 @@ export type SkillProposalDTO = {
   status: "candidate" | "promoted" | "rejected";
   parent_skill?: string;
   parent_version?: string;
+  /** The version this revision would REPLACE (the parent's current active
+   *  version), and that version's body — so the UI can show a real diff. */
+  parent_active_version?: string;
+  parent_body?: string;
   proposal_kind?: "draft" | "standalone" | string;
   revision?: number;
   changes_log?: Array<Record<string, unknown>>;

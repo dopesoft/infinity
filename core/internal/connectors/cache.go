@@ -265,6 +265,21 @@ func (c *Cache) AccountsByToolkit() map[string][]*Account {
 	return out
 }
 
+// ActiveAccountsByToolkit returns only ACTIVE accounts for a toolkit, so
+// callers skip REVOKED/duplicate connections left behind by a Composio
+// revoke+reconnect (which mints a fresh account id and leaves the old one
+// REVOKED). Reuses the same accountActive predicate the Gmail path uses.
+func (c *Cache) ActiveAccountsByToolkit(slug string) []*Account {
+	all := c.AccountsByToolkit()[slug]
+	out := make([]*Account, 0, len(all))
+	for _, a := range all {
+		if accountActive(a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // Status reports refresh health for diagnostics.
 type Status struct {
 	LastRefresh time.Time `json:"last_refresh"`

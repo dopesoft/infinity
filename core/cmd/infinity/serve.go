@@ -1042,10 +1042,9 @@ func serveCmd() *cobra.Command {
 				// cache so a new Google grant lights up sync within one
 				// cache refresh cycle (~60s) - no restart needed.
 				listAccounts := func() []string {
-					by := connectorsCache.AccountsByToolkit()
 					ids := []string{}
-					for _, a := range by["googlecalendar"] {
-						if a != nil && a.Status != "" && a.Status != "disabled" {
+					for _, a := range connectorsCache.ActiveAccountsByToolkit("googlecalendar") {
+						if a != nil {
 							ids = append(ids, a.ID)
 						}
 					}
@@ -1057,7 +1056,7 @@ func serveCmd() *cobra.Command {
 				// sync-state row (last_tick_at + last_error) so the UI can
 				// surface "last synced 30s ago" / "auth expired."
 				listAccountDTOs := func() []calendar.AccountDTO {
-					accounts := connectorsCache.AccountsByToolkit()["googlecalendar"]
+					accounts := connectorsCache.ActiveAccountsByToolkit("googlecalendar")
 					out := make([]calendar.AccountDTO, 0, len(accounts))
 					idents := connectorsCache.Identities()
 					for _, a := range accounts {

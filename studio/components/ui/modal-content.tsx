@@ -161,6 +161,178 @@ export function ModalCode({
   );
 }
 
+/** Before→after line diff. Mobile-first: lines WRAP (no horizontal scroll),
+ *  a +/- gutter carries the meaning, and long runs of unchanged lines collapse
+ *  to "… N unchanged …" so the boss sees WHAT CHANGED, not the whole file.
+ *  Self-contained LCS — no dependency. When `before` is empty it renders as an
+ *  all-added block (a brand-new skill). */
+export function ModalDiff({
+  before,
+  after,
+  className,
+  context = 2,
+}: {
+  before: string;
+  after: string;
+  className?: string;
+  /** unchanged lines kept around each change for orientation */
+  context?: number;
+}) {
+  const { rows, added, removed } = React.useMemo(
+    () => diffLines(before ?? "", after ?? "", context),
+    [before, after, context],
+  );
+  return (
+    <div className={cn("min-w-0 max-w-full", className)}>
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px]">
+        <span className="text-success">+{added} added</span>
+        <span className="text-danger">−{removed} removed</span>
+        {added === 0 && removed === 0 && (
+          <span className="text-muted-foreground">no text change</span>
+        )}
+      </div>
+      <div className="overflow-hidden rounded-md border font-mono text-[11px] leading-relaxed">
+        {rows.map((r, i) =>
+          r.kind === "gap" ? (
+            <div
+              key={i}
+              className="select-none bg-muted/30 px-2 py-0.5 text-center text-[10px] text-muted-foreground"
+            >
+              ··· {r.count} unchanged ···
+            </div>
+          ) : (
+            <div
+              key={i}
+              className={cn(
+                "flex min-w-0 gap-1.5 px-2 py-0.5",
+                r.kind === "add" && "bg-success/10",
+                r.kind === "del" && "bg-danger/10",
+              )}
+            >
+              <span
+                className={cn(
+                  "shrink-0 select-none",
+                  r.kind === "add"
+                    ? "text-success"
+                    : r.kind === "del"
+                      ? "text-danger"
+                      : "text-muted-foreground/40",
+                )}
+                aria-hidden
+              >
+                {r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "}
+              </span>
+              <span
+                className={cn(
+                  "min-w-0 whitespace-pre-wrap break-words",
+                  r.kind === "add"
+                    ? "text-success"
+                    : r.kind === "del"
+                      ? "text-danger"
+                      : "text-foreground/70",
+                )}
+              >
+                {r.text || " "}
+              </span>
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+type DiffRow =
+  | { kind: "add" | "del" | "ctx"; text: string }
+  | { kind: "gap"; count: number };
+
+/** Minimal LCS line diff → rows, collapsing unchanged runs longer than
+ *  2*context+1 into a single "gap" marker. Bounded for safety on huge inputs. */
+function diffLines(
+  before: string,
+  after: string,
+  context: number,
+): { rows: DiffRow[]; added: number; removed: number } {
+  const a = before.length ? before.split("\n") : [];
+  const b = after.split("\n");
+  // Guardrail: LCS is O(n*m); cap to keep the modal snappy. Beyond the cap we
+  // fall back to "all removed then all added" which is still readable.
+  const CAP = 600;
+  if (a.length > CAP || b.length > CAP) {
+    const rows: DiffRow[] = [
+      ...a.map((t): DiffRow => ({ kind: "del", text: t })),
+      ...b.map((t): DiffRow => ({ kind: "add", text: t })),
+    ];
+    return { rows, added: b.length, removed: a.length };
+  }
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array(n + 1).fill(0),
+  );
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const raw: DiffRow[] = [];
+  let added = 0;
+  let removed = 0;
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      raw.push({ kind: "ctx", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      raw.push({ kind: "del", text: a[i] });
+      removed++;
+      i++;
+    } else {
+      raw.push({ kind: "add", text: b[j] });
+      added++;
+      j++;
+    }
+  }
+  while (i < m) {
+    raw.push({ kind: "del", text: a[i++] });
+    removed++;
+  }
+  while (j < n) {
+    raw.push({ kind: "add", text: b[j++] });
+    added++;
+  }
+  // Collapse long unchanged runs: keep `context` lines either side of a change,
+  // replace the hidden middle with a single "gap" marker.
+  const rows: DiffRow[] = [];
+  const ctxBuf: DiffRow[] = [];
+  const emitCtx = (nextIsChange: boolean) => {
+    if (ctxBuf.length === 0) return;
+    const head = rows.length > 0 ? ctxBuf.slice(0, context) : [];
+    const tail = nextIsChange
+      ? ctxBuf.slice(Math.max(head.length, ctxBuf.length - context))
+      : [];
+    const hidden = ctxBuf.length - head.length - tail.length;
+    if (hidden > 1) {
+      rows.push(...head, { kind: "gap", count: hidden }, ...tail);
+    } else {
+      rows.push(...ctxBuf);
+    }
+    ctxBuf.length = 0;
+  };
+  for (const r of raw) {
+    if (r.kind === "ctx") {
+      ctxBuf.push(r);
+    } else {
+      emitCtx(true);
+      rows.push(r);
+    }
+  }
+  emitCtx(false);
+  return { rows, added, removed };
+}
+
 /** Rendered HTML email body.
  *
  *  Renders untrusted email HTML the way a real mail client does: on a clean

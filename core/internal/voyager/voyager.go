@@ -156,6 +156,13 @@ type ProposalDTO struct {
 	Status           string           `json:"status"` // candidate | promoted | rejected
 	ParentSkill      string           `json:"parent_skill,omitempty"`
 	ParentVersion    string           `json:"parent_version,omitempty"`
+	// ParentActiveVersion + ParentBody describe what a revision REPLACES: the
+	// version string currently live for the parent skill, and its full body so
+	// the UI can render a real before→after diff (not just dump the new body).
+	// Empty for brand-new skills (no parent) — the UI keys "new vs revision" off
+	// ParentSkill being set.
+	ParentActiveVersion string        `json:"parent_active_version,omitempty"`
+	ParentBody          string        `json:"parent_body,omitempty"`
 	ProposalKind     string           `json:"proposal_kind,omitempty"`
 	Revision         int              `json:"revision,omitempty"`
 	ChangesLog       []map[string]any `json:"changes_log,omitempty"`
@@ -189,44 +196,51 @@ func (m *Manager) ListProposalsFiltered(ctx context.Context, filters ProposalFil
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	// LEFT JOIN the parent skill's CURRENT active version (the thing a revision
+	// replaces) so the UI can show "Replaces <skill> <version>" + a real diff.
+	// pv = the active version row for p.parent_skill; null for new skills.
 	q := `
-		SELECT id::text, name, description, reasoning, skill_md, risk_level,
-		       COALESCE(importance, 50), COALESCE(importance_reason, ''),
-		       test_pass_rate, status,
-		       COALESCE(parent_skill, ''), COALESCE(parent_version, ''),
-		       COALESCE(proposal_kind, ''), COALESCE(revision, 1),
-		       COALESCE(changes_log, '[]'::jsonb),
-		       COALESCE(conflicts, '[]'::jsonb),
-		       COALESCE(frontier_run_id::text, ''),
-		       COALESCE(score, 0),
-		       COALESCE(pareto_rank, 0),
-		       COALESCE(gepa_metadata, '{}'::jsonb),
-		       COALESCE(parent_proposal_id::text, ''),
-		       created_at, decided_at, last_merged_at
-		FROM mem_skill_proposals
+		SELECT p.id::text, p.name, p.description, p.reasoning, p.skill_md, p.risk_level,
+		       COALESCE(p.importance, 50), COALESCE(p.importance_reason, ''),
+		       p.test_pass_rate, p.status,
+		       COALESCE(p.parent_skill, ''), COALESCE(p.parent_version, ''),
+		       COALESCE(pa.active_version, ''), COALESCE(pv.skill_md, ''),
+		       COALESCE(p.proposal_kind, ''), COALESCE(p.revision, 1),
+		       COALESCE(p.changes_log, '[]'::jsonb),
+		       COALESCE(p.conflicts, '[]'::jsonb),
+		       COALESCE(p.frontier_run_id::text, ''),
+		       COALESCE(p.score, 0),
+		       COALESCE(p.pareto_rank, 0),
+		       COALESCE(p.gepa_metadata, '{}'::jsonb),
+		       COALESCE(p.parent_proposal_id::text, ''),
+		       p.created_at, p.decided_at, p.last_merged_at
+		FROM mem_skill_proposals p
+		LEFT JOIN mem_skill_active pa ON pa.skill_name = p.parent_skill
+		LEFT JOIN mem_skill_versions pv
+		       ON pv.skill_name = p.parent_skill AND pv.version = pa.active_version
 	`
 	args := []any{}
 	var where []string
 	if filters.Status != "" {
 		args = append(args, filters.Status)
-		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+		where = append(where, fmt.Sprintf("p.status = $%d", len(args)))
 	}
 	if filters.Frontier != "" {
 		args = append(args, filters.Frontier)
-		where = append(where, fmt.Sprintf("frontier_run_id = $%d::uuid", len(args)))
+		where = append(where, fmt.Sprintf("p.frontier_run_id = $%d::uuid", len(args)))
 	}
 	if filters.ParentSkill != "" {
 		args = append(args, filters.ParentSkill)
-		where = append(where, fmt.Sprintf("parent_skill = $%d", len(args)))
+		where = append(where, fmt.Sprintf("p.parent_skill = $%d", len(args)))
 	}
 	if filters.ProposalKind != "" {
 		args = append(args, filters.ProposalKind)
-		where = append(where, fmt.Sprintf("proposal_kind = $%d", len(args)))
+		where = append(where, fmt.Sprintf("p.proposal_kind = $%d", len(args)))
 	}
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
-	q += ` ORDER BY COALESCE(importance, 50) DESC, created_at DESC LIMIT $` + itoa(len(args)+1)
+	q += ` ORDER BY COALESCE(p.importance, 50) DESC, p.created_at DESC LIMIT $` + itoa(len(args)+1)
 	args = append(args, limit)
 
 	rows, err := m.pool.Query(ctx, q, args...)
@@ -242,6 +256,7 @@ func (m *Manager) ListProposalsFiltered(ctx context.Context, filters ProposalFil
 		var changesRaw, conflictsRaw, metaRaw []byte
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Reasoning, &p.SkillMD, &p.RiskLevel,
 			&p.Importance, &p.ImportanceReason, &p.TestPassRate, &p.Status, &p.ParentSkill, &p.ParentVersion,
+			&p.ParentActiveVersion, &p.ParentBody,
 			&p.ProposalKind, &p.Revision, &changesRaw, &conflictsRaw,
 			&p.FrontierRunID, &p.Score, &p.ParetoRank, &metaRaw,
 			&p.ParentProposalID, &p.CreatedAt, &decided, &lastMerged); err != nil {
