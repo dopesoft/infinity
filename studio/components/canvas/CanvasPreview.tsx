@@ -107,9 +107,14 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     if (isCloudPreview) return `${coreBaseURL()}/api/canvas/preview/`;
     const explicit = store.previewUrl?.trim();
     if (explicit) return explicit;
-    if (store.envPreviewUrl?.trim()) return store.envPreviewUrl.trim();
+    // Only fall back to the env / Mac-tunnel dev-server URL when this session
+    // actually HAS a project to preview. A chat-only session has nothing to
+    // show, so embedding the tunnel just hammers preview.dopesoft.io - which
+    // 502s and X-Frame-Options-blocks whenever the Mac dev server is asleep,
+    // spamming the console on every chat refresh. No project => no iframe.
+    if (hasProject && store.envPreviewUrl?.trim()) return store.envPreviewUrl.trim();
     return "";
-  }, [store.previewUrl, store.envPreviewUrl, isCloudPreview]);
+  }, [store.previewUrl, store.envPreviewUrl, isCloudPreview, hasProject]);
 
   // First-mount cache key - a single timestamp captured once per page load.
   // Together with previewRefreshKey, this guarantees the iframe URL is
