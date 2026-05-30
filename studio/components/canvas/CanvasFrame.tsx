@@ -13,6 +13,7 @@ import { CanvasMobileShell } from "@/components/canvas/CanvasMobileShell";
 import { CanvasComposer } from "@/components/canvas/CanvasComposer";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { useCurrentProject, CurrentProjectProvider } from "@/lib/canvas/useCurrentProject";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { isCodeChangeTool, extractToolFilePaths } from "@/lib/canvas/detection";
 import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
 import { useWebSocket } from "@/lib/ws/provider";
@@ -44,6 +45,14 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
   const ws = useWebSocket();
   const current = useCurrentProject();
   const [mobileTab, setMobileTab] = useState<"files" | "git" | "editor">("files");
+  // Real pending count from git, polled regardless of which mobile tab is
+  // active. Same pattern as CanvasLeftPane (desktop): badge must stay
+  // truthful when the boss is on Files or Editor, otherwise the count
+  // only appears AFTER you've already opened Git — defeats the purpose.
+  // Falls back to in-session dirtyPaths while git status is still
+  // resolving so the badge appears the instant Jarvis writes a file.
+  const gitPending = useGitPendingCount(store.root, chat.sessionId);
+  const gitBadge = gitPending > 0 ? gitPending : store.dirtyPaths.size;
 
   // Server-configured fallback path (INFINITY_DEFAULT_PROJECT_PATH on
   // core). Sessions without their own project_path land here instead
@@ -165,7 +174,7 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
                     onClick={() => setMobileTab("git")}
                     icon={<GitBranch className="size-4" />}
                     label="Git"
-                    badge={store.dirtyPaths.size > 0 ? store.dirtyPaths.size : undefined}
+                    badge={gitBadge > 0 ? gitBadge : undefined}
                   />
                   <MobileTabButton
                     active={mobileTab === "editor"}

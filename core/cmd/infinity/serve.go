@@ -1276,8 +1276,10 @@ func serveCmd() *cobra.Command {
 			// VAPID key being provisioned.
 			var pushAPI *push.API
 			var pushSender *push.Sender
+			var pushPrefs *push.PrefsStore
 			if pool != nil {
 				pushStore := push.NewStore(pool)
+				pushPrefs = push.NewPrefsStore(pool)
 				s, perr := push.NewSenderFromEnv(pushStore, nil)
 				if perr != nil {
 					fmt.Printf("  push: store ready; sender disabled (%v)\n", perr)
@@ -1285,7 +1287,11 @@ func serveCmd() *cobra.Command {
 				} else {
 					fmt.Println("  push: VAPID configured, ready to deliver")
 					pushSender = s
+					pushSender.SetPrefs(pushPrefs)
 					pushAPI = push.NewAPI(pushStore, s, nil)
+				}
+				if pushAPI != nil {
+					pushAPI.SetPrefs(pushPrefs)
 				}
 			}
 
@@ -1295,6 +1301,26 @@ func serveCmd() *cobra.Command {
 			if trustStore != nil && pushSender != nil {
 				trustStore.SetNotifier(push.NewTrustAdapter(pushSender))
 				fmt.Println("  push: trust → notification wired")
+			}
+
+			// Wire connectors poller → push so a freshly-polled email
+			// can banner the boss (pref-gated, default off — flip in
+			// Settings → Notifications). Calendar upcoming ticker
+			// watches mem_calendar_events on a 60s cadence and fires
+			// when an event starts within 15 min. Runs notifier hooks
+			// runs.Track Begin/Finish so cron / skill / voyager work
+			// can buzz the phone when it starts or wraps.
+			if pushSender != nil {
+				if connectorPoller != nil {
+					connectorPoller.SetNotifier(&push.FollowupNotifier{Sender: pushSender})
+					fmt.Println("  push: followup_new → notification wired")
+				}
+				calNotifier := &push.CalendarUpcomingNotifier{Sender: pushSender}
+				calTicker := push.NewCalendarTicker(pool, calNotifier, slog.Default())
+				go calTicker.Start(cmd.Context())
+				fmt.Println("  push: calendar_upcoming ticker started (15m window)")
+				runs.SetNotifier(&push.RunsNotifier{Sender: pushSender})
+				fmt.Println("  push: run_started / run_finished wired")
 			}
 
 			// Initiative + economics substrate (Phase 6, final). The agent

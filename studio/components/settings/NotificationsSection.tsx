@@ -14,18 +14,23 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
 import {
   fetchDevices,
+  fetchPushPrefs,
   fetchVapidPublicKey,
   getStatus,
   isIos,
   isIosStandalone,
   isPushSupported,
   requestPermission,
+  savePushPrefs,
   sendTestPush,
   subscribe,
   unsubscribe,
   type Device,
+  type PushKindMeta,
+  type PushPrefs,
   type PushStatus,
 } from "@/lib/push";
 
@@ -188,7 +193,88 @@ export function NotificationsSection() {
 
       <DeviceList devices={devices} onRemove={refresh} />
 
+      <PrefsBlock subscribed={Boolean(status?.subscribed)} />
+
       <WhyBlock />
+    </div>
+  );
+}
+
+function PrefsBlock({ subscribed }: { subscribed: boolean }) {
+  const [prefs, setPrefs] = useState<PushPrefs | null>(null);
+  const [kinds, setKinds] = useState<PushKindMeta[]>([]);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const res = await fetchPushPrefs();
+      if (res) {
+        setPrefs(res.prefs);
+        setKinds(res.kinds);
+      }
+    })();
+  }, []);
+
+  async function onToggle(kind: string, next: boolean) {
+    setSaving(kind);
+    setErr(null);
+    // Optimistic — the server merges so a quick double-tap stays sane.
+    setPrefs((p) => ({ ...(p ?? {}), [kind]: next }));
+    const res = await savePushPrefs({ [kind]: next });
+    if (!res) {
+      setErr("Couldn't save preference. Try again.");
+      setPrefs((p) => ({ ...(p ?? {}), [kind]: !next }));
+    } else {
+      setPrefs(res.prefs);
+    }
+    setSaving(null);
+  }
+
+  if (kinds.length === 0 && !prefs) return null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between">
+        <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          notify me about
+        </h3>
+        {!subscribed && (
+          <span className="text-[10px] text-muted-foreground">
+            subscribe this device first to receive any of these
+          </span>
+        )}
+      </div>
+      <ul className="overflow-hidden rounded-md border bg-background">
+        {kinds.map((k, i) => {
+          const on = prefs?.[k.kind] ?? false;
+          return (
+            <li
+              key={k.kind}
+              className={cn(
+                "flex items-center gap-3 px-3 py-3",
+                i > 0 && "border-t border-border",
+              )}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium text-foreground">{k.label}</div>
+                <div className="text-[11px] leading-snug text-muted-foreground">
+                  {k.description}
+                </div>
+              </div>
+              <Switch
+                checked={on}
+                disabled={saving === k.kind}
+                onCheckedChange={(v) => void onToggle(k.kind, v)}
+                aria-label={k.label}
+              />
+            </li>
+          );
+        })}
+      </ul>
+      {err && (
+        <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
+      )}
     </div>
   );
 }
@@ -418,26 +504,29 @@ function WhyBlock() {
       </summary>
       <ul className="mt-2 space-y-1.5 text-foreground/80">
         <Bullet>
-          <span className="font-semibold">Trust requests</span> - Jarvis wants
-          to run a bash command, edit, or write that needs your approval.
+          <span className="font-semibold">Approvals</span> - Jarvis wants
+          to run a bash command, edit, or write that needs your call.
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Curiosity questions</span> - Jarvis
-          can&apos;t make a call without clarification.
+          <span className="font-semibold">Agent initiative</span> - Jarvis
+          surfaces something urgent on his own (the notify tool fires).
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Code proposals</span> - Voyager
-          drafted a refactor based on file-fight detection.
+          <span className="font-semibold">New emails</span> - a fresh
+          follow-up landed in the inbox (every connector-polled message).
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Sentinel fires</span> - a watcher
-          tripped (GitHub Actions red, log error spike, etc).
+          <span className="font-semibold">Upcoming events</span> - a
+          calendar event is starting within 15 minutes.
         </Bullet>
         <Bullet>
-          <span className="font-semibold">Cron output worth seeing</span> -
-          morning brief delivered, GH digest ready.
+          <span className="font-semibold">Run started / finished</span> -
+          a long server action (cron, skill, voyager, gym…) begins or wraps.
         </Bullet>
       </ul>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Each kind has its own toggle above — defaults are quiet (every-email + run-started are off until you flip them).
+      </p>
       <p className="mt-2 text-[11px] italic text-muted-foreground">
         Tap a notification to deep-link to the matching record in Studio.
       </p>

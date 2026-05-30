@@ -12,6 +12,7 @@ import (
 type API struct {
 	Store  *Store
 	Sender *Sender
+	Prefs  *PrefsStore
 	Logger *slog.Logger
 }
 
@@ -20,6 +21,16 @@ func NewAPI(store *Store, sender *Sender, logger *slog.Logger) *API {
 		logger = slog.Default()
 	}
 	return &API{Store: store, Sender: sender, Logger: logger}
+}
+
+// SetPrefs wires the prefs store so /api/push/prefs returns and writes
+// live data. nil-safe — if prefs is nil the GET returns defaults and the
+// POST 503's.
+func (a *API) SetPrefs(p *PrefsStore) {
+	if a == nil {
+		return
+	}
+	a.Prefs = p
 }
 
 // Routes registers /api/push/* on the provided mux.
@@ -38,6 +49,103 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/push/unsubscribe", a.handleUnsubscribe)
 	mux.HandleFunc("/api/push/devices", a.handleDevices)
 	mux.HandleFunc("/api/push/test", a.handleTest)
+	mux.HandleFunc("/api/push/prefs", a.handlePrefs)
+}
+
+// ── GET/POST /api/push/prefs ──────────────────────────────────────────────
+//
+// GET returns the merged prefs (defaults overlaid with whatever's saved).
+// POST accepts a partial { "<kind>": true|false, ... } body and merges it
+// over the current values; unknown kinds are ignored.
+//
+// Response shape (both verbs):
+//
+//	{
+//	  "prefs": { "trust": true, "followup_new": false, ... },
+//	  "kinds": [
+//	    { "kind": "trust", "label": "Trust requests", "description": "..." },
+//	    ...
+//	  ]
+//	}
+//
+// `kinds` carries the canonical render order + copy so Studio doesn't have
+// to mirror the taxonomy in the FE.
+func (a *API) handlePrefs(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		a.getPrefs(w, r)
+	case http.MethodPost, http.MethodPut:
+		a.savePrefs(w, r)
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (a *API) getPrefs(w http.ResponseWriter, r *http.Request) {
+	prefs := DefaultPrefs()
+	if a.Prefs != nil {
+		p, err := a.Prefs.Load(r.Context())
+		if err != nil {
+			a.Logger.Warn("push: prefs load", "err", err)
+		} else {
+			prefs = p
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"prefs": prefs,
+		"kinds": kindCatalog(),
+	})
+}
+
+func (a *API) savePrefs(w http.ResponseWriter, r *http.Request) {
+	if a.Prefs == nil {
+		writeErr(w, http.StatusServiceUnavailable, "prefs not configured")
+		return
+	}
+	var body map[string]bool
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	incoming := Prefs{}
+	for k, v := range body {
+		incoming[PrefKind(k)] = v
+	}
+	merged, err := a.Prefs.Save(r.Context(), incoming)
+	if err != nil {
+		a.Logger.Error("push: prefs save", "err", err)
+		writeErr(w, http.StatusInternalServerError, "save failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"prefs": merged,
+		"kinds": kindCatalog(),
+	})
+}
+
+// kindCatalog is the canonical taxonomy + copy Studio renders. Lives next
+// to the kinds themselves so adding a new push source is one file edit:
+// declare the PrefKind constant, add it to AllKinds(), append an entry
+// here.
+func kindCatalog() []map[string]string {
+	descriptions := map[PrefKind][2]string{
+		PrefTrust:            {"Approvals", "Jarvis needs a yes/no before running something destructive."},
+		PrefAgentInitiative:  {"Agent initiative", "Jarvis surfaces something urgent on his own (notify tool fires)."},
+		PrefFollowupNew:      {"New emails", "A new follow-up landed in the inbox (every connector-polled message)."},
+		PrefCalendarUpcoming: {"Upcoming events", "A calendar event is starting within 15 minutes."},
+		PrefRunStarted:       {"Run started", "A long server action (cron, skill, voyager…) began. Noisier — leave off if you only care about finishes."},
+		PrefRunFinished:      {"Run finished", "A long server action wrapped up (ok or error)."},
+	}
+	out := make([]map[string]string, 0, len(AllKinds()))
+	for _, k := range AllKinds() {
+		copy := descriptions[k]
+		out = append(out, map[string]string{
+			"kind":        string(k),
+			"label":       copy[0],
+			"description": copy[1],
+		})
+	}
+	return out
 }
 
 // ── GET /api/push/vapid ───────────────────────────────────────────────────

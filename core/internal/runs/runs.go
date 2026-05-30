@@ -68,6 +68,24 @@ type Tracker struct {
 
 var global *Tracker
 
+// Notifier is the optional sink runs.Track fans out to when a run begins
+// or finishes. Wired from serve.go via SetNotifier so the runs package
+// stays push-agnostic (push depends on runs for kinds, not the other
+// way). Both methods are best-effort fire-and-forget — slow or failing
+// notifications must NEVER block the work fn.
+type Notifier interface {
+	NotifyRunStarted(ctx context.Context, runID, kind, label string)
+	NotifyRunFinished(ctx context.Context, runID, kind, label, status, errMsg string, duration time.Duration)
+}
+
+var notifier Notifier
+
+// SetNotifier wires the package-level notifier. Idempotent: last writer
+// wins, nil clears.
+func SetNotifier(n Notifier) {
+	notifier = n
+}
+
 // SetGlobal wires the package-level tracker. Call once from serve.go after
 // the pool is open. Idempotent: last writer wins.
 func SetGlobal(pool *pgxpool.Pool) {
@@ -88,6 +106,8 @@ type Handle struct {
 	id      string
 	tracker *Tracker
 	start   time.Time
+	kind    string
+	label   string
 }
 
 // ID returns the mem_runs row id, mostly for logging.
@@ -126,7 +146,7 @@ func TrackWith(ctx context.Context, t *Tracker, kind Kind, targetID, label strin
 // Begin inserts a row with status='running' and returns a Handle. Always
 // pair with Handle.Finish (use defer or a normal call). nil-safe.
 func (t *Tracker) Begin(ctx context.Context, kind Kind, targetID, label string, source Source) *Handle {
-	h := &Handle{tracker: t, start: time.Now().UTC()}
+	h := &Handle{tracker: t, start: time.Now().UTC(), kind: string(kind), label: label}
 	if t == nil || t.pool == nil {
 		return h
 	}
@@ -139,6 +159,9 @@ func (t *Tracker) Begin(ctx context.Context, kind Kind, targetID, label string, 
 	`, h.id, string(kind), targetID, label, string(source), h.start)
 	if err != nil {
 		h.id = "" // mark as un-persisted so Finish can short-circuit
+	}
+	if notifier != nil && h.id != "" {
+		go notifier.NotifyRunStarted(context.Background(), h.id, h.kind, h.label)
 	}
 	return h
 }
@@ -167,6 +190,9 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 		       result_summary = $6
 		 WHERE id = $1::uuid
 	`, h.id, status, end, end.Sub(h.start).Milliseconds(), errStr, summary)
+	if notifier != nil {
+		go notifier.NotifyRunFinished(context.Background(), h.id, h.kind, h.label, status, errStr, end.Sub(h.start))
+	}
 	// Clear id so a second Finish call no-ops.
 	h.id = ""
 }

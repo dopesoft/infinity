@@ -54,6 +54,18 @@ type Sender struct {
 	ttlSeconds  int
 	httpClient  *http.Client
 	logger      *slog.Logger
+	prefs       *PrefsStore
+}
+
+// SetPrefs wires the per-kind toggle store. Notify() consults it before
+// delivering so a Notification{Kind: "followup_new"} won't fire if the
+// boss has that switch off in Settings → Notifications. Nil is fine — a
+// sender without a PrefsStore behaves as if every kind is allowed.
+func (s *Sender) SetPrefs(p *PrefsStore) {
+	if s == nil {
+		return
+	}
+	s.prefs = p
 }
 
 // SenderConfig captures every knob - most users want NewSenderFromEnv.
@@ -136,9 +148,14 @@ type DeliveryResult struct {
 }
 
 // Notify delivers `n` to every active subscription. Returns one result
-// per device.
+// per device. Pref-gated: if `n.Kind` is set and the boss has toggled
+// that kind off, Notify silently no-ops (returns nil) — the call site
+// stays simple, the toggle decision lives in one place.
 func (s *Sender) Notify(ctx context.Context, n Notification) []DeliveryResult {
 	if !s.Configured() || s.store == nil {
+		return nil
+	}
+	if s.prefs != nil && n.Kind != "" && !s.prefs.Allowed(ctx, n.Kind) {
 		return nil
 	}
 	subs, err := s.store.Active(ctx)

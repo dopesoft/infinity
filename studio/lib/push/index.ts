@@ -110,6 +110,47 @@ export async function fetchDevices(): Promise<Device[]> {
   }
 }
 
+/* Per-kind toggles for what Jarvis notifies you about.
+ *
+ * `PushPrefs` is the map of kind → enabled. `PushKindMeta` is the canonical
+ * render order + copy the server returns, so Studio doesn't have to mirror
+ * the taxonomy — adding a new push source means one entry in
+ * core/internal/push/prefs.go + adapters.go and it shows up here
+ * automatically. */
+export type PushPrefs = Record<string, boolean>;
+
+export type PushKindMeta = {
+  kind: string;
+  label: string;
+  description: string;
+};
+
+export type PushPrefsResponse = { prefs: PushPrefs; kinds: PushKindMeta[] };
+
+export async function fetchPushPrefs(): Promise<PushPrefsResponse | null> {
+  try {
+    const res = await authedFetch("/api/push/prefs");
+    if (!res.ok) return null;
+    return (await res.json()) as PushPrefsResponse;
+  } catch {
+    return null;
+  }
+}
+
+export async function savePushPrefs(patch: PushPrefs): Promise<PushPrefsResponse | null> {
+  try {
+    const res = await authedFetch("/api/push/prefs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as PushPrefsResponse;
+  } catch {
+    return null;
+  }
+}
+
 export async function sendTestPush(opts?: {
   title?: string;
   body?: string;

@@ -73,12 +73,22 @@ func (p PollConfig) Validate() error {
 
 // Poller runs the connector → dashboard pipeline. Cheap to construct;
 // callers usually keep one process-wide instance.
+// FollowupNotifier is the optional sink for new-email banners. The poller
+// fires it (when set) right after a new mem_followups row commits, with
+// the same fields the row carries. Decoupled via an interface so the push
+// package can implement it without the connectors package depending on
+// push (which would loop back through proactive).
+type FollowupNotifier interface {
+	NotifyFollowupNew(ctx context.Context, source, remoteID, from, subject, preview string)
+}
+
 type Poller struct {
-	pool     *pgxpool.Pool
-	exec     *ExecuteClient
-	pipeline *hooks.Pipeline
-	triager  *triage.Triager
-	logger   *slog.Logger
+	pool         *pgxpool.Pool
+	exec         *ExecuteClient
+	pipeline     *hooks.Pipeline
+	triager      *triage.Triager
+	notifier     FollowupNotifier
+	logger       *slog.Logger
 }
 
 func NewPoller(pool *pgxpool.Pool, exec *ExecuteClient, pipeline *hooks.Pipeline) *Poller {
@@ -101,6 +111,16 @@ func (p *Poller) SetTriager(t *triage.Triager) {
 		return
 	}
 	p.triager = t
+}
+
+// SetNotifier wires the optional push notifier. Safe to call after
+// NewPoller; the poller stores the pointer and invokes it from the
+// goroutine that triggers triage so the poll itself stays fast.
+func (p *Poller) SetNotifier(n FollowupNotifier) {
+	if p == nil {
+		return
+	}
+	p.notifier = n
 }
 
 // PollResult is what a Poll call returns. Counts are populated even on
@@ -255,6 +275,13 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 			// stay absent rather than wrong.
 			if p.triager != nil && strings.TrimSpace(body)+strings.TrimSpace(preview)+strings.TrimSpace(subject) != "" {
 				go p.triageOne(source, remoteID, subject, fromName, firstNonEmpty(body, preview))
+			}
+			// Push banner for net-new follow-ups. Pref-gated by the
+			// notifier itself (PrefFollowupNew default off, so this
+			// is silent until the boss opts in). Fired async so a
+			// slow VAPID endpoint doesn't stall the poll batch.
+			if p.notifier != nil {
+				go p.notifier.NotifyFollowupNew(context.Background(), source, remoteID, fromName, subject, preview)
 			}
 		} else {
 			skipped++

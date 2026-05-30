@@ -12,6 +12,7 @@ import { CanvasFileTree } from "@/components/canvas/CanvasFileTree";
 import { CanvasGitPanel } from "@/components/canvas/CanvasGitPanel";
 import { CanvasComposer } from "@/components/canvas/CanvasComposer";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
@@ -29,6 +30,14 @@ type ChatHook = ReturnType<typeof useChat>;
 export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const [tab, setTab] = useState<"files" | "git">("files");
+  // Real pending count from git, polled regardless of which tab is active
+  // so the Changes-tab badge stays truthful even when the boss is browsing
+  // the file tree. Falls back to the session's in-memory dirty marks while
+  // git status is still loading (count=0 + dirtyPaths>0 means "the agent
+  // touched files this turn, git hasn't caught up yet"), so the badge
+  // appears instantly when Jarvis writes a file.
+  const gitPending = useGitPendingCount(store.root, chat.sessionId);
+  const badgeCount = gitPending > 0 ? gitPending : store.dirtyPaths.size;
 
   return (
     <div className="flex h-full min-h-0 flex-col border-r bg-muted/30 dark:bg-zinc-900/40">
@@ -51,9 +60,9 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
                   >
                     <GitBranch className="size-3.5" />
                     Changes
-                    {store.dirtyPaths.size > 0 && (
+                    {badgeCount > 0 && (
                       <span className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning/20 px-1 font-mono text-[10px] font-semibold leading-none text-warning">
-                        {store.dirtyPaths.size > 99 ? "99+" : store.dirtyPaths.size}
+                        {badgeCount > 99 ? "99+" : badgeCount}
                       </span>
                     )}
                   </TabsTrigger>
