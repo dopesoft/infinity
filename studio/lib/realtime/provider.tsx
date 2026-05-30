@@ -143,6 +143,12 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 // useRealtime subscribes the calling component to changes on the given
 // table(s) and runs `handler` for every event. Re-registers when handler
 // or events change. Pass a single string or an array.
+//
+// In addition to Postgres pub/sub, the handler ALSO fires on the global
+// "infinity:pull-to-refresh" custom event (dispatched by PullToRefresh
+// when the user pulls down at scrollY=0). That makes pull-to-refresh
+// universal: every page using useRealtime — which is every page with
+// live data — re-runs its load function when the gesture fires.
 export function useRealtime(
   table: string | string[],
   handler: () => void,
@@ -168,4 +174,12 @@ export function useRealtime(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx, Array.isArray(table) ? table.join(",") : table, events.join(",")]);
+
+  // Pull-to-refresh: re-run the page's load handler when the gesture
+  // fires, regardless of whether realtime is connected.
+  useEffect(() => {
+    const onPull = () => handlerRef.current();
+    window.addEventListener("infinity:pull-to-refresh", onPull);
+    return () => window.removeEventListener("infinity:pull-to-refresh", onPull);
+  }, []);
 }

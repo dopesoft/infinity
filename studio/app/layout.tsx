@@ -9,6 +9,7 @@ import { TrustToast } from "@/components/TrustToast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { PWARegister } from "@/components/PWARegister";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import "./globals.css";
 
 // Bust edge HTML cache on every request. Without this, Railway/Next caches the
@@ -77,7 +78,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <TooltipProvider delayDuration={250}>
                   <PWARegister />
                   <TrustToast />
-                  <OnboardingGate>{children}</OnboardingGate>
+                  <PullToRefresh>
+                    <OnboardingGate>{children}</OnboardingGate>
+                  </PullToRefresh>
                   <Toaster />
 
                 </TooltipProvider>
