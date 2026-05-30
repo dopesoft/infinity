@@ -371,14 +371,14 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
 
     const isImage = (f: File) => f.type.startsWith("image/");
 
-    const processFile = (file: File) => {
+    const processFile = React.useCallback((file: File) => {
       if (!isImage(file)) return;
       if (file.size > 10 * 1024 * 1024) return;
       setFiles([file]);
       const reader = new FileReader();
       reader.onload = (e) => setFilePreviews({ [file.name]: e.target?.result as string });
       reader.readAsDataURL(file);
-    };
+    }, []);
 
     const handlePaste = React.useCallback((e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -393,7 +393,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           }
         }
       }
-    }, []);
+    }, [processFile]);
 
     React.useEffect(() => {
       document.addEventListener("paste", handlePaste);
@@ -435,7 +435,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       e.stopPropagation();
       const dropped = Array.from(e.dataTransfer.files).filter(isImage);
       if (dropped.length > 0) processFile(dropped[0]);
-    }, []);
+    }, [processFile]);
 
     const hasContent = value.trim() !== "" || files.length > 0;
 

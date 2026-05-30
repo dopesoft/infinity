@@ -96,7 +96,10 @@ export default function SettingsPage() {
   const [status, setStatus] = useState<CoreStatus | null>(null);
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [mcp, setMCP] = useState<MCPStatus[]>([]);
-  const [loading, setLoading] = useState(true);
+  // setLoading is retained so refresh() can still toggle it for any
+  // sub-section that may want it later; the value itself isn't read at
+  // this level now that the header refresh button is gone.
+  const [, setLoading] = useState(true);
   // Active section lives in ?section=<id> so a refresh, back/forward, and
   // deep-links (the TrustToast's router.push("/settings?section=trust"),
   // dashboard, notifications) all land on the right section instead of

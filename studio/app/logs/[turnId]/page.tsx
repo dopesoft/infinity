@@ -142,6 +142,9 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
       };
     }
     return { label: formatElapsed(s), title: "Latency", tone: "default" };
+    // STALL_SECONDS is a module-level const, not a closure value — adding
+    // it to deps would just churn the array; lint is being over-cautious.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turn]);
 
   return (

@@ -163,7 +163,7 @@ export function CanvasFileTab({
       cancelled = true;
     };
     // Reload on path change or explicit reload trigger.
-  }, [path, reloadKey, isActive, diskBaseline, isDirty, hasLive]);
+  }, [path, reloadKey, isActive, diskBaseline, isDirty, hasLive, sessionId]);
 
   // "Modified" means the Monaco buffer diverges from what's on disk
   // (i.e. the boss made unsaved edits). It is NOT the same as
@@ -326,7 +326,7 @@ export function CanvasFileTab({
       editor.onDidUpdateDiff(() => focusEdited());
     }
     focusEdited(); // in case the diff is already computed
-  }, []);
+  }, [path]);
   useEffect(() => {
     return () => {
       const ed = editorRef.current;

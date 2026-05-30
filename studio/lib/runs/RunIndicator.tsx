@@ -83,6 +83,10 @@ export function RunIndicator({
     // Either branch clears the optimistic flag - the server has spoken,
     // so optimistic state must yield. Kept as one assignment for clarity.
     if (latest) setOptimisticRunning(false);
+    // Intentionally depending on id/status only - the full `latest` object
+    // identity churns every realtime tick; we only need to react when the
+    // run actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latest?.id, latest?.status]);
 
   const serverRunning = latest?.status === "running";
