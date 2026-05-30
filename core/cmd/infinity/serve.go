@@ -689,6 +689,12 @@ func serveCmd() *cobra.Command {
 				// profile primer + relevant memory; Honcho's reasoning sits
 				// below it in the system prompt for clear separation.
 				memProviders := []agent.MemoryProvider{}
+				// Local time: emits <current_time> with the boss's local
+				// time + timezone every turn so Jarvis stops answering in
+				// UTC/ISO and uses short human times ("9:30pm", "Thu 8am CT").
+				// Configured via INFINITY_USER_TIMEZONE (default
+				// America/Chicago).
+				memProviders = append(memProviders, initiative.NewLocalTimeProvider())
 				if searcher != nil {
 					memProviders = append(memProviders, searcher)
 				}
