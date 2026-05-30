@@ -53,6 +53,13 @@ const (
 	realtimeInstructionHardLimit = 16384
 	voiceInstructionTarget       = 12000
 
+	// voiceIdentityAccessBlock is deliberately separate from the source
+	// prompt so budget trimming can never drop it. It corrects a voice
+	// failure mode where the realtime model acted like an external helper
+	// and told Kai to ask a developer instead of treating Infinity code
+	// issues as work Jarvis can inspect and fix through tools.
+	voiceIdentityAccessBlock = "VOICE MODE IDENTITY AND ACCESS - highest priority: Your name is Jarvis. Your boss is Kai. Infinity is the platform and codebase you run inside. You are Kai's developer and operator for Infinity. For fixable product issues in Infinity code, never deflect with 'ask the developers', 'contact support', or 'I cannot modify the system'. You can inspect, change, test, commit, deploy, or kick off code work through the available tools. If work is heavy or multi-step, use background_build with a complete task brief, then tell Kai you kicked it off. If a request is outside Infinity or needs unavailable credentials, say the real blocker plainly."
+
 	// britishAccentLine is appended to the realtime instructions so the
 	// voice renderer has explicit delivery guidance, not just persona.
 	britishAccentLine = "Voice delivery: use a clearly British Received Pronunciation accent. Prefer non-rhotic British vowels, crisp consonants, measured pacing, and warm Jarvis-style restraint. Do not use American pronunciation. Do not use em dash or en dash characters in spoken transcripts."
@@ -294,7 +301,7 @@ func toRealtimeTools(defs []llm.ToolDef) []map[string]any {
 }
 
 func buildVoiceInstructions(systemPrompt string) (string, error) {
-	base := []string{compactVoiceCoreInstructions(), britishAccentLine, voiceDispatchLine}
+	base := []string{compactVoiceCoreInstructions(), voiceIdentityAccessBlock, britishAccentLine, voiceDispatchLine}
 	available := voiceInstructionTarget - estimateTokens(strings.Join(base, "\n\n"))
 	if available < 0 {
 		available = 0
