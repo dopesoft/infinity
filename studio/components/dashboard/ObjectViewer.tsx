@@ -1364,8 +1364,10 @@ function FollowUpBody({ f }: { f: FollowUp }) {
       </ModalChips>
 
       {/* From / Subject - each a flex row with symmetric padding +
-          items-center so the label and value sit dead-center in their row. */}
-      <div className="mt-3 overflow-hidden rounded-lg border border-border bg-muted/20">
+          items-center so the label and value sit dead-center in their row.
+          mt-6 leaves an airy gap below the chips row above so the meta chips
+          (source / account / classification) don't crowd the FROM line. */}
+      <div className="mt-6 overflow-hidden rounded-lg border border-border bg-muted/20">
         <div className="flex items-center gap-4 px-3 py-3">
           <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             From

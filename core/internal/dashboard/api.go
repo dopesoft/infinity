@@ -685,6 +685,11 @@ func isFollowupSurface(key string) bool {
 }
 
 func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
+	// Resolve connector account IDs (ca_xxx) to friendly labels (alias > oauth
+	// email) so the Follow-ups chip reads "mr khaya" / "dopesoft" the same way
+	// the calendar does, instead of leaking the opaque connected_account_id.
+	labels := loadAccountLabels(ctx, a.Pool)
+
 	// (1) Connector-fed rows from mem_followups (Gmail poller, etc).
 	rows, err := a.Pool.Query(ctx, `
 		SELECT id, source, account, from_name, subject, preview, body, thread_url,
@@ -716,6 +721,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		if len(metaRaw) > 0 {
 			_ = json.Unmarshal(metaRaw, &f.Metadata)
 		}
+		f.Account = displayAccount(f.Account, labels)
 		out = append(out, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -775,7 +781,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		if from == "" {
 			from = title
 		}
-		account := strFromMeta(meta, "account", "mailbox")
+		account := displayAccount(strFromMeta(meta, "account", "mailbox"), labels)
 		f := FollowUp{
 			ID:      id,
 			Source:  sourceFromMeta(source, kind, meta),
@@ -808,6 +814,31 @@ func sortFollowUpsNewest(items []FollowUp) {
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].ReceivedAt.After(items[j].ReceivedAt)
 	})
+}
+
+// displayAccount turns a raw account hint (connected_account_id like
+// "ca_xxx", or a bare email) into the friendly label the boss configured —
+// alias first, oauth email second, falling back to the original value when
+// it's already human-readable (e.g. an email). For unresolved ca_xxx ids
+// we drop the chip entirely rather than leak the opaque id into the UI;
+// this mirrors what the Calendar surface does via accountLabel.
+func displayAccount(raw string, labels map[string]string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if v, ok := labels[raw]; ok && v != "" {
+		return v
+	}
+	// Already an email or other human-readable handle - keep it.
+	if strings.Contains(raw, "@") {
+		return raw
+	}
+	// Opaque connected_account_id with no label - hide it.
+	if strings.HasPrefix(raw, "ca_") {
+		return ""
+	}
+	return raw
 }
 
 // strFromMeta returns the first string-valued key from a metadata map.
