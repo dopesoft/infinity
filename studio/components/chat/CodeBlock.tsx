@@ -32,7 +32,7 @@ export function CodeBlock({
   }
 
   return (
-    <div className="my-2 overflow-hidden rounded-lg border bg-background/70">
+    <div className="my-2 min-w-0 max-w-full overflow-hidden rounded-lg border bg-background/70">
       <div className="flex items-center justify-between border-b bg-muted/40 px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
         <span className="font-mono">{language || "text"}</span>
         <button
@@ -47,7 +47,7 @@ export function CodeBlock({
       </div>
       <pre
         className={cn(
-          "overflow-x-auto px-3 py-2 text-[12.5px] leading-relaxed",
+          "max-w-full overflow-x-auto px-3 py-2 text-[12.5px] leading-relaxed",
           "scroll-touch font-mono",
         )}
       >

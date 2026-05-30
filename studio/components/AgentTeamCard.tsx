@@ -120,7 +120,7 @@ export function AgentTeamCard({ message }: { message: ChatMessage }) {
       {open && (
         <div className="space-y-3 border-t px-3 py-2">
           {input.reason || parsed?.reason ? (
-            <p className="text-xs leading-relaxed text-muted-foreground">
+            <p className="break-words text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
               {input.reason || parsed?.reason}
             </p>
           ) : null}
@@ -144,9 +144,9 @@ export function AgentTeamCard({ message }: { message: ChatMessage }) {
                         </span>
                       )}
                     </div>
-                    {m.task && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{m.task}</p>}
+                    {m.task && <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{m.task}</p>}
                     {settings?.show_team_activity !== "compact" && settings?.show_worker_summaries !== false && m.summary && (
-                      <pre className="mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded bg-background p-2 text-[11px] leading-relaxed">
+                      <pre className="mt-2 max-h-36 max-w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded bg-background p-2 text-[11px] leading-relaxed [overflow-wrap:anywhere]">
                         {m.summary}
                       </pre>
                     )}

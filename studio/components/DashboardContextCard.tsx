@@ -53,20 +53,20 @@ export function DashboardContextCard({
   const kindLabel = message.seedKind || "item";
 
   return (
-    <div className="min-w-0 rounded-2xl rounded-tl-sm border border-info/40 bg-info/5 px-3 py-2">
+    <div className="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tl-sm border border-info/40 bg-info/5 px-3 py-2">
       <div className="mb-1.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-info">
         <LayoutDashboard className="size-3" />
         <span>From dashboard · {kindLabel}</span>
       </div>
 
       {summary && (
-        <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+        <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
           {summary}
         </div>
       )}
 
       {artifact && (
-        <pre className="scroll-touch mt-2 max-h-72 overflow-auto rounded-md border border-border bg-muted/60 px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
+        <pre className="scroll-touch mt-2 max-h-72 max-w-full overflow-auto rounded-md border border-border bg-muted/60 px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
           <code className="break-words [overflow-wrap:anywhere]">{artifact}</code>
         </pre>
       )}

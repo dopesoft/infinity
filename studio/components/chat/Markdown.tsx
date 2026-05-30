@@ -31,7 +31,7 @@ export const Markdown = memo(function Markdown({
   return (
     <div
       className={cn(
-        "min-w-0 max-w-full text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "min-w-0 max-w-full break-words text-sm leading-relaxed [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className,
       )}
     >
@@ -50,24 +50,24 @@ export const Markdown = memo(function Markdown({
           // typography; these are content dividers, not section titles
           // on a marketing page.
           h1: ({ children }) => (
-            <h1 className="mb-1 mt-3 text-base font-semibold tracking-tight">{children}</h1>
+            <h1 className="mb-1 mt-3 min-w-0 max-w-full break-words text-base font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h1>
           ),
           h2: ({ children }) => (
-            <h2 className="mb-1 mt-3 text-[15px] font-semibold tracking-tight">{children}</h2>
+            <h2 className="mb-1 mt-3 min-w-0 max-w-full break-words text-[15px] font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h2>
           ),
           h3: ({ children }) => (
-            <h3 className="mb-1 mt-2 text-sm font-semibold tracking-tight">{children}</h3>
+            <h3 className="mb-1 mt-2 min-w-0 max-w-full break-words text-sm font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h3>
           ),
           h4: ({ children }) => (
-            <h4 className="mb-1 mt-2 text-sm font-medium">{children}</h4>
+            <h4 className="mb-1 mt-2 min-w-0 max-w-full break-words text-sm font-medium [overflow-wrap:anywhere]">{children}</h4>
           ),
           h5: ({ children }) => (
-            <h5 className="mb-0.5 mt-2 text-[13px] font-medium uppercase tracking-wide text-muted-foreground">
+            <h5 className="mb-0.5 mt-2 min-w-0 max-w-full break-words text-[13px] font-medium uppercase tracking-wide text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </h5>
           ),
           h6: ({ children }) => (
-            <h6 className="mb-0.5 mt-2 text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
+            <h6 className="mb-0.5 mt-2 min-w-0 max-w-full break-words text-[12px] font-medium uppercase tracking-wide text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </h6>
           ),
@@ -75,12 +75,12 @@ export const Markdown = memo(function Markdown({
           // Lists. GFM task lists get the native checkbox renderer; we
           // just strip the marker so the box itself does the indicating.
           ul: ({ children }) => (
-            <ul className="my-2 list-disc space-y-1 pl-5 marker:text-muted-foreground">
+            <ul className="my-2 min-w-0 max-w-full list-disc space-y-1 break-words pl-5 [overflow-wrap:anywhere] marker:text-muted-foreground">
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-2 list-decimal space-y-1 pl-5 marker:text-muted-foreground">
+            <ol className="my-2 min-w-0 max-w-full list-decimal space-y-1 break-words pl-5 [overflow-wrap:anywhere] marker:text-muted-foreground">
               {children}
             </ol>
           ),
@@ -91,7 +91,7 @@ export const Markdown = memo(function Markdown({
               typeof (props as { className?: string }).className === "string" &&
               (props as { className?: string }).className!.includes("task-list-item");
             return (
-              <li className={cn(isTask && "list-none -ml-5 flex items-start gap-2")}>
+              <li className={cn("min-w-0 break-words [overflow-wrap:anywhere]", isTask && "list-none -ml-5 flex items-start gap-2")}>
                 {children}
               </li>
             );
@@ -107,7 +107,7 @@ export const Markdown = memo(function Markdown({
           // Block quote - left rule + muted text. Inherits inner spacing
           // from the elements it contains.
           blockquote: ({ children }) => (
-            <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">
+            <blockquote className="my-2 min-w-0 max-w-full break-words border-l-2 border-border pl-3 text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </blockquote>
           ),
@@ -122,7 +122,7 @@ export const Markdown = memo(function Markdown({
               href={href}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-info underline decoration-info/40 decoration-1 underline-offset-2 transition-colors hover:decoration-info"
+              className="break-words text-info underline decoration-info/40 decoration-1 underline-offset-2 transition-colors [overflow-wrap:anywhere] hover:decoration-info"
             >
               {children}
             </a>
@@ -131,7 +131,7 @@ export const Markdown = memo(function Markdown({
           // Tables. Wrap in a scroller so narrow phones don't break
           // layout when a wide table arrives.
           table: ({ children }) => (
-            <div className="scroll-touch my-2 overflow-x-auto rounded-lg border">
+            <div className="scroll-touch my-2 min-w-0 max-w-full overflow-x-auto rounded-lg border">
               <table className="w-full text-left text-[12.5px]">{children}</table>
             </div>
           ),
@@ -143,12 +143,12 @@ export const Markdown = memo(function Markdown({
             <tr className="border-b last:border-b-0">{children}</tr>
           ),
           th: ({ children }) => (
-            <th className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide">
+            <th className="max-w-64 break-words px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide [overflow-wrap:anywhere]">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="px-2.5 py-1.5 align-top">{children}</td>
+            <td className="max-w-64 break-words px-2.5 py-1.5 align-top [overflow-wrap:anywhere]">{children}</td>
           ),
 
           // Code. The `pre` renderer is a transparent passthrough so the
@@ -168,7 +168,7 @@ export const Markdown = memo(function Markdown({
             }
             return (
               <code
-                className="rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.88em]"
+                className="break-words rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.88em] [overflow-wrap:anywhere]"
                 {...props}
               >
                 {children}
