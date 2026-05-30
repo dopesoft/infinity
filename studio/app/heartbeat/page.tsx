@@ -314,11 +314,22 @@ export default function HeartbeatPage() {
           )}
         </div>
 
-        {/* Body: two-column on desktop, stacked on mobile. Left is the live
-            pulse stream; right is a compact runs ledger + kind distribution. */}
-        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {/* Body: two-column on desktop, single scroll on mobile.
+            Desktop (lg+): flex-row with the stream and sidebar each owning
+            their own independent vertical scroll - the sidebar pins beside
+            the stream.
+            Mobile (<lg): the body itself is the ONE scroll container and
+            both children flow at natural height. This is the fix for "recent
+            ticks chop the page in half": previously the sidebar was a
+            shrink-0 sibling competing with a flex-1 stream for the same
+            bounded height, so the sidebar's intrinsic height ate ~half the
+            viewport and squeezed the stream into a cramped internal scroller.
+            Now the stream takes its full height as the primary content and
+            the sidebar flows below it - reachable by scrolling, never
+            covering the pulses. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-touch lg:flex-row lg:overflow-visible">
           {/* Stream */}
-          <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 scroll-touch sm:px-4 lg:px-6">
+          <main className="flex min-h-0 flex-col px-3 py-4 sm:px-4 lg:flex-1 lg:overflow-y-auto lg:scroll-touch lg:px-6">
             <div className="mx-auto w-full max-w-3xl">
               {/* Filter pills. Mobile gets a horizontal snap-scroll row at
                   44px tap height; sm+ collapses to a tighter desktop bar. */}
@@ -379,8 +390,13 @@ export default function HeartbeatPage() {
             </div>
           </main>
 
-          {/* Sidebar */}
-          <aside className="shrink-0 border-t bg-muted/20 px-3 py-4 sm:px-4 lg:w-80 lg:border-l lg:border-t-0 lg:py-6">
+          {/* Sidebar - DESKTOP ONLY. On mobile it's removed from the layout
+              entirely (`hidden`) so the pulse stream and its tabs own the
+              full screen with nothing cutting across the middle of the page.
+              The same data is still reachable on a phone: recent ticks via
+              the "Runs" filter tab, finding counts via the header stat
+              strip. It returns as a real second column only at lg+. */}
+          <aside className="hidden shrink-0 border-t bg-muted/20 px-3 py-4 sm:px-4 lg:block lg:w-80 lg:border-l lg:border-t-0 lg:py-6">
             <div className="space-y-5">
               <section>
                 <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
