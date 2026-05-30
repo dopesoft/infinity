@@ -31,10 +31,18 @@ export type VoiceToolCall = {
   arguments: string; // raw JSON-as-string from OpenAI
 };
 
+export type AssistantTranscriptEvent = {
+  text: string;
+  isFinal: boolean;
+  responseId: string;
+  sequence: number;
+  source: "output_audio_transcript";
+};
+
 export type VoiceCallbacks = {
   onStatus?: (s: VoiceStatus, detail?: string) => void;
   onUserTranscript?: (text: string, isFinal: boolean) => void;
-  onAssistantTranscript?: (delta: string, isFinal: boolean) => void;
+  onAssistantTranscript?: (event: AssistantTranscriptEvent) => void;
   onToolCall?: (call: VoiceToolCall) => void;
   onLevel?: (kind: "mic" | "out", level01: number) => void;
   onError?: (msg: string) => void;
@@ -54,10 +62,12 @@ export class VoiceClient {
   private micLevelTimer: number | null = null;
   private micAnalyser: AnalyserNode | null = null;
   private audioCtx: AudioContext | null = null;
-  // Buffer assistant transcript deltas per response so we can fire
-  // onAssistantTranscript({ isFinal: true }) with the full text on
-  // response.done. Keyed by response_id.
+  // Buffer assistant transcript deltas per response so final
+  // response.output_audio_transcript.done can replace the live bubble
+  // with the provider-authoritative transcript for the audio that was
+  // actually played. Keyed by response_id.
   private assistantBuf: Map<string, string> = new Map();
+  private assistantSeq: Map<string, number> = new Map();
   private interruptedResponses: Set<string> = new Set();
 
   constructor(private args: VoiceClientArgs) {}
@@ -294,6 +304,7 @@ export class VoiceClient {
     this.audioEl = null;
     this.micAnalyser = null;
     this.assistantBuf.clear();
+    this.assistantSeq.clear();
     this.interruptedResponses.clear();
   }
 
@@ -308,6 +319,23 @@ export class VoiceClient {
   // Track which calls we've already dispatched so a redundant signal
   // from either path doesn't fire the tool twice.
   private dispatchedCalls: Set<string> = new Set();
+
+  private emitAssistantTranscript(
+    responseId: string,
+    text: string,
+    isFinal: boolean,
+  ): void {
+    if (!responseId) responseId = "unknown";
+    const sequence = (this.assistantSeq.get(responseId) ?? 0) + 1;
+    this.assistantSeq.set(responseId, sequence);
+    this.args.callbacks?.onAssistantTranscript?.({
+      text,
+      isFinal,
+      responseId,
+      sequence,
+      source: "output_audio_transcript",
+    });
+  }
 
   private handleEvent(raw: unknown): void {
     if (typeof raw !== "string") return;
@@ -327,7 +355,7 @@ export class VoiceClient {
       case "input_audio_buffer.speech_started": {
         for (const [respId, text] of this.assistantBuf) {
           const final = text.trim();
-          if (final) cb.onAssistantTranscript?.(final, true);
+          if (final) this.emitAssistantTranscript(respId, final, true);
           if (respId) this.interruptedResponses.add(respId);
         }
         this.assistantBuf.clear();
@@ -359,7 +387,7 @@ export class VoiceClient {
         if (respId) {
           this.assistantBuf.set(respId, (this.assistantBuf.get(respId) ?? "") + delta);
         }
-        cb.onAssistantTranscript?.(delta, false);
+        this.emitAssistantTranscript(respId, delta, false);
         cb.onStatus?.("assistant-speaking");
         break;
       }
@@ -374,14 +402,18 @@ export class VoiceClient {
         if (respId && this.interruptedResponses.has(respId)) {
           this.interruptedResponses.delete(respId);
           this.assistantBuf.delete(respId);
+          this.assistantSeq.delete(respId);
           break;
         }
         const text = (evt as { transcript?: string }).transcript
           ?? (respId ? this.assistantBuf.get(respId) : undefined)
           ?? "";
         const final = String(text).trim();
-        if (final) cb.onAssistantTranscript?.(final, true);
-        if (respId) this.assistantBuf.delete(respId);
+        if (final) this.emitAssistantTranscript(respId, final, true);
+        if (respId) {
+          this.assistantBuf.delete(respId);
+          this.assistantSeq.delete(respId);
+        }
         break;
       }
 

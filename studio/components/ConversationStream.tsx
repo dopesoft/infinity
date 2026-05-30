@@ -122,7 +122,21 @@ export function ConversationStream({
         // pb-8 gives the last message (often an error or thinking bubble) clear
         // breathing room before the composer - otherwise auto-scroll
         // pins it flush against the prompt input with zero padding.
-        className="flex-1 min-w-0 space-y-3 overflow-y-auto px-3 pt-3 pb-8 scroll-touch sm:px-4"
+        //
+        // overflow-x-hidden is load-bearing, not cosmetic: a scroll region
+        // declared `overflow-y-auto` with no explicit overflow-x computes
+        // overflow-x to `auto` (CSS spec: a non-visible value on one axis
+        // promotes `visible` on the other to `auto`). That silently makes
+        // THIS element the chat's one horizontally-scrollable surface, so a
+        // long URL/path/token whose min-content width briefly exceeds the
+        // column - common mid-stream before a break opportunity lands -
+        // scrolls the whole conversation sideways no matter how hardened the
+        // message renderers are. Pinning overflow-x to hidden stops the
+        // promotion: y scrolls, x clips. Inner scrollers that legitimately
+        // need to pan (code blocks, wide tables) own their own
+        // overflow-x-auto inside their own clipped wrappers, so this never
+        // steals their internal scroll.
+        className="flex-1 min-w-0 space-y-3 overflow-y-auto overflow-x-hidden px-3 pt-3 pb-8 scroll-touch sm:px-4"
       >
         {messages.map((m) => (
           <div key={m.id} className="min-w-0 max-w-full" data-message>

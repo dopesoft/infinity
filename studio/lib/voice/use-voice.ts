@@ -7,7 +7,7 @@ import {
   runVoiceTool,
   startVoiceSession,
 } from "@/lib/api";
-import { VoiceClient, type VoiceStatus } from "./client";
+import { VoiceClient, type AssistantTranscriptEvent, type VoiceStatus } from "./client";
 
 /**
  * useVoice owns one realtime voice session at a time. It wires:
@@ -44,19 +44,20 @@ const INITIAL: UseVoiceState = {
  *  + End controls. */
 export type UseVoiceCallbacks = {
   onUserMessage?: (text: string) => void;
-  onAssistantDelta?: (delta: string, isFinal: boolean) => void;
+  onAssistantDelta?: (event: AssistantTranscriptEvent) => void;
 };
 
-type AssistantUiEvent = { delta: string; isFinal: boolean };
+type AssistantUiEvent = AssistantTranscriptEvent;
 
 const ASSISTANT_FINALIZE_DELAY_MS = 900;
 const USER_TRANSCRIPT_ORDER_TIMEOUT_MS = 6000;
 
-function normalizeVoiceTranscript(text: string): string {
-  return text
-    .replace(/\s*[\u2013\u2014]\s*/g, ", ")
-    .replace(/\s+/g, " ")
-    .trim();
+// Realtime transcript events describe the audio OpenAI is actually sending
+// to the browser. Do not rewrite punctuation, dashes, or spacing inside the
+// utterance here: captions and memory should preserve the spoken transcript
+// exactly, except for trimming transport-edge whitespace.
+function preserveVoiceTranscript(text: string): string {
+  return text.trim();
 }
 
 // playConnectChime plays a short two-note ascending tone via the Web
@@ -159,12 +160,12 @@ export function useVoice(
     }
   }, []);
 
-  const emitAssistantUi = useCallback((delta: string, isFinal: boolean) => {
+  const emitAssistantUi = useCallback((event: AssistantTranscriptEvent) => {
     if (waitingForUserTranscriptRef.current) {
-      assistantUiQueueRef.current.push({ delta, isFinal });
+      assistantUiQueueRef.current.push(event);
       return;
     }
-    cbRef.current.onAssistantDelta?.(delta, isFinal);
+    cbRef.current.onAssistantDelta?.(event);
   }, []);
 
   const flushAssistantUiQueue = useCallback(() => {
@@ -172,7 +173,7 @@ export function useVoice(
     const queued = assistantUiQueueRef.current;
     assistantUiQueueRef.current = [];
     for (const ev of queued) {
-      cbRef.current.onAssistantDelta?.(ev.delta, ev.isFinal);
+      cbRef.current.onAssistantDelta?.(ev);
     }
   }, []);
 
@@ -277,7 +278,7 @@ export function useVoice(
         },
         onUserTranscript: (text, isFinal) => {
           if (!isFinal) return;
-          const cleanText = normalizeVoiceTranscript(text);
+          const cleanText = preserveVoiceTranscript(text);
           if (!cleanText) return;
           clearUserTranscriptOrderTimer();
           // Push the finalised user utterance into the conversation
@@ -290,20 +291,20 @@ export function useVoice(
           flushAssistantUiQueue();
           void recordVoiceTurn({ sessionId, role: "user", text: cleanText });
         },
-        onAssistantTranscript: (delta, isFinal) => {
-          const cleanDelta = normalizeVoiceTranscript(delta);
-          if (!isFinal) {
+        onAssistantTranscript: (event) => {
+          const cleanText = preserveVoiceTranscript(event.text);
+          if (!event.isFinal) {
             clearAssistantFinalizeTimer();
-            assistantTextRef.current += cleanDelta;
-            // Stream the delta into the assistant message bubble.
-            // useChat creates / extends a pending bubble exactly like
-            // text-mode deltas do - the conversation stream is the
-            // single source of truth for "what did the agent say".
-            if (cleanDelta) emitAssistantUi(cleanDelta, false);
+            assistantTextRef.current += cleanText;
+            // Stream provider-authoritative audio transcript deltas into
+            // the assistant message bubble. We preserve response_id and
+            // sequence so the chat layer can ignore duplicate/out-of-order
+            // realtime events and never mix captions across audio responses.
+            if (cleanText) emitAssistantUi({ ...event, text: cleanText });
             return;
           }
-          const finalText = cleanDelta && cleanDelta.length > assistantTextRef.current.length
-            ? cleanDelta
+          const finalText = cleanText && cleanText.length > assistantTextRef.current.length
+            ? cleanText
             : assistantTextRef.current;
           assistantTextRef.current = finalText;
           clearAssistantFinalizeTimer();
@@ -312,7 +313,7 @@ export function useVoice(
             const text = assistantTextRef.current.trim();
             assistantTextRef.current = "";
             if (!text) return;
-            emitAssistantUi(text, true);
+            emitAssistantUi({ ...event, text, isFinal: true });
             void recordVoiceTurn({ sessionId, role: "assistant", text });
           }, ASSISTANT_FINALIZE_DELAY_MS);
         },

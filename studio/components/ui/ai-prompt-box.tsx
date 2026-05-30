@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
 import { VoiceOrb } from "@/components/VoiceOrb";
+import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { useVoice } from "@/lib/voice/use-voice";
 
 /**
@@ -281,7 +282,7 @@ export interface PromptInputBoxProps {
    *  conversation as a pending bubble until the response finalises.
    *  See useChat.addVoiceUserMessage / streamVoiceAssistantDelta. */
   onVoiceUserMessage?: (text: string) => void;
-  onVoiceAssistantDelta?: (delta: string, isFinal: boolean) => void;
+  onVoiceAssistantDelta?: (event: AssistantTranscriptEvent) => void;
 }
 
 export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxProps>(

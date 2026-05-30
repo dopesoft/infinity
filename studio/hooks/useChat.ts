@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchSessionMessages } from "@/lib/api";
+import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
@@ -44,6 +45,9 @@ export type ChatMessage = {
   // dashboard item kind (e.g. "activity") used as the card header.
   seeded?: boolean;
   seedKind?: string;
+  voiceResponseId?: string;
+  voiceLastSequence?: number;
+  voiceTranscriptSource?: AssistantTranscriptEvent["source"];
   // curiosityId links a heartbeat/seeded finding to an open curiosity
   // question. When set, the card renders an "Approve & fix" action that
   // marks the question approved and tells the agent to apply the fix.
@@ -1021,44 +1025,51 @@ export function useChat() {
    *  text wholesale instead of concatenating - otherwise the final
    *  transcript gets appended to the already-accumulated streamed
    *  text, producing duplicated "X X" bubbles. */
-  const streamVoiceAssistantDelta = useCallback((delta: string, isFinal: boolean) => {
+  const streamVoiceAssistantDelta = useCallback((event: AssistantTranscriptEvent) => {
+    const text = event.text;
+    const finalText = text.trim();
+    if (!text && !event.isFinal) return;
     setMessages((prev) => {
       const next = [...prev];
-      const last = next[next.length - 1];
-      if (last && last.role === "assistant" && last.pending) {
-        next[next.length - 1] = {
-          ...last,
-          text: isFinal ? (delta.trim() || last.text) : last.text + delta,
-          pending: !isFinal,
-        };
-        return next;
-      }
       const pendingAssistantIdx = findLatestPendingAssistant(next);
       if (pendingAssistantIdx >= 0) {
         const pending = next[pendingAssistantIdx];
-        next[pendingAssistantIdx] = {
-          ...pending,
-          text: isFinal ? (delta.trim() || pending.text) : pending.text + delta,
-          pending: !isFinal,
-        };
-        return next;
+        if (pending.voiceResponseId && pending.voiceResponseId !== event.responseId) {
+          next[pendingAssistantIdx] = { ...pending, pending: false };
+        } else if ((pending.voiceLastSequence ?? 0) >= event.sequence) {
+          return next;
+        } else {
+          next[pendingAssistantIdx] = {
+            ...pending,
+            text: event.isFinal ? (finalText || pending.text) : pending.text + text,
+            pending: !event.isFinal,
+            voiceResponseId: event.responseId,
+            voiceLastSequence: event.sequence,
+            voiceTranscriptSource: event.source,
+          };
+          return next;
+        }
       }
-      if (isFinal) {
+      if (event.isFinal) {
         for (let i = next.length - 1, seen = 0; i >= 0 && seen < 8; i--) {
           if (next[i].role !== "assistant") continue;
           seen++;
-          if (isDuplicateVoiceAssistantText(next[i].text, delta)) return next;
+          if (next[i].voiceResponseId === event.responseId) return next;
+          if (isDuplicateVoiceAssistantText(next[i].text, finalText)) return next;
         }
       }
-      // No in-flight assistant bubble - start one. For the final-only
-      // case (no preceding deltas) this captures the full transcript
-      // in a single, immediately-committed message.
+      // No matching in-flight assistant bubble - start one. For the
+      // final-only case (no preceding deltas) this captures the full
+      // provider audio transcript in a single committed message.
       next.push({
         id: makeId(),
         role: "assistant",
-        text: delta,
-        pending: !isFinal,
+        text: event.isFinal ? finalText : text,
+        pending: !event.isFinal,
         createdAt: Date.now(),
+        voiceResponseId: event.responseId,
+        voiceLastSequence: event.sequence,
+        voiceTranscriptSource: event.source,
       });
       return next;
     });
