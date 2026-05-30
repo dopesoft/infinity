@@ -53,6 +53,22 @@ type Report struct {
 	Options                Options                  `json:"options"`
 }
 
+func (r Report) HasCoreChanges() bool {
+	return r.ReflectedSessions > 0 ||
+		r.ReflectionChains > 0 ||
+		r.CompressedObservations > 0 ||
+		r.Consolidate.ClustersFound > 0 ||
+		r.Consolidate.ContradictionsFound > 0 ||
+		r.Consolidate.AssociativePruned > 0 ||
+		r.Consolidate.WeakAssocPurged > 0 ||
+		r.Consolidate.ProceduralReweighted > 0 ||
+		r.Consolidate.Forget.TTLExpired > 0 ||
+		r.Consolidate.Forget.LowValue > 0 ||
+		r.Consolidate.Forget.OverProjectCap > 0 ||
+		r.Consolidate.Forget.ObsTraceTrimmed > 0 ||
+		r.Consolidate.Forget.ObsConversationTrimmed > 0
+}
+
 func DefaultOptions() Options {
 	return Options{
 		ReflectWindow: 24 * time.Hour,
@@ -166,7 +182,11 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 		}
 		world, err := worldmodel.NewStore(deps.Pool, deps.Logger).ExtractFromRecentObservations(ctx, 100)
 		if err != nil {
-			addErr("worldmodel_extract", err)
+			if report.HasCoreChanges() {
+				addErr("worldmodel_extract", err)
+			} else {
+				deps.Logger.Warn("nightly cognition skipped world-model extract after no-op run", "err", err)
+			}
 		} else {
 			report.WorldModel = world
 		}
@@ -223,19 +243,7 @@ func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report
 }
 
 func changed(r Report) bool {
-	return r.ReflectedSessions > 0 ||
-		r.ReflectionChains > 0 ||
-		r.CompressedObservations > 0 ||
+	return r.HasCoreChanges() ||
 		r.TrainingExamples.Inserted > 0 ||
-		r.WorldModel.Upserted > 0 ||
-		r.Consolidate.ClustersFound > 0 ||
-		r.Consolidate.ContradictionsFound > 0 ||
-		r.Consolidate.AssociativePruned > 0 ||
-		r.Consolidate.WeakAssocPurged > 0 ||
-		r.Consolidate.ProceduralReweighted > 0 ||
-		r.Consolidate.Forget.TTLExpired > 0 ||
-		r.Consolidate.Forget.LowValue > 0 ||
-		r.Consolidate.Forget.OverProjectCap > 0 ||
-		r.Consolidate.Forget.ObsTraceTrimmed > 0 ||
-		r.Consolidate.Forget.ObsConversationTrimmed > 0
+		r.WorldModel.Upserted > 0
 }
