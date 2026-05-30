@@ -9,7 +9,6 @@ import {
   Eye,
   Lightbulb,
   Play,
-  RefreshCw,
   Shield,
   Sparkles,
   Wrench,
@@ -300,16 +299,6 @@ export default function HeartbeatPage() {
             <Button onClick={fireNow} disabled={running} size="sm" className="gap-1.5">
               <Play className="size-3.5" aria-hidden />
               {running ? "Pulsing…" : "Pulse now"}
-            </Button>
-            <Button
-              onClick={loadAll}
-              disabled={loading}
-              size="icon"
-              variant="ghost"
-              aria-label="Refresh"
-              title="Refresh"
-            >
-              <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
             </Button>
           </div>
         </div>

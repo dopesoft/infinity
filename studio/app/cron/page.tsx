@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Clock, Plus, Trash2, Zap } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -102,12 +102,6 @@ function CronSection() {
           label={showCreate ? "Cancel" : "New cron"}
           primary
           onClick={() => setShowCreate((s) => !s)}
-        />
-        <HeaderAction
-          icon={<RefreshCw className="size-4" />}
-          label="Refresh"
-          onClick={load}
-          disabled={loading}
         />
       </PageSectionHeader>
 
@@ -309,12 +303,6 @@ function SentinelSection() {
           label={showCreate ? "Cancel" : "New sentinel"}
           primary
           onClick={() => setShowCreate((s) => !s)}
-        />
-        <HeaderAction
-          icon={<RefreshCw className="size-4" />}
-          label="Refresh"
-          onClick={load}
-          disabled={loading}
         />
       </PageSectionHeader>
       {showCreate && (

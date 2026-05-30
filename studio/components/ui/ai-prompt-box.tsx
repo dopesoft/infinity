@@ -544,11 +544,17 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
               value={value}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={placeholder}
-              // Allow typing while a turn is in flight so the user can
-              // queue a steer mid-stream. Recording still locks the
-              // textarea since the input is audio at that point.
-              disabled={disabled || voiceActive}
+              placeholder={disabled ? "reconnecting…" : placeholder}
+              // The textarea is NEVER disabled by the WS connection state.
+              // Hot-reloads, deploys, brief proxy blips, even iOS Safari
+              // killing the socket on backgrounding — all of those flip
+              // `disabled` true for a few seconds, and freezing the input
+              // out from under the boss mid-thought is the wrong call.
+              // Only voice mode locks it (mic IS the input). The Send
+              // button below still respects `disabled` so we won't
+              // optimistically fire on a dead socket — useChat surfaces
+              // a clear error if you do hit Send during a blip.
+              disabled={voiceActive}
               autoCapitalize="sentences"
               autoCorrect="on"
               spellCheck

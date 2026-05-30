@@ -14,7 +14,6 @@ import {
   MessageSquare,
   Plug,
   PlugZap,
-  RefreshCw,
   Search,
   Server,
   ShieldCheck,
@@ -134,16 +133,6 @@ export default function SettingsPage() {
           <h1 className="text-base font-semibold tracking-tight text-foreground">
             Settings
           </h1>
-          <Button
-            onClick={refresh}
-            disabled={loading}
-            size="icon"
-            variant="ghost"
-            aria-label="Refresh"
-            title="Refresh"
-          >
-            <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
-          </Button>
         </div>
 
         {/* Mobile: section rail across the top, content below. */}

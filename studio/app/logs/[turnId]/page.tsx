@@ -12,7 +12,6 @@ import {
   Copy,
   Cpu,
   type LucideIcon,
-  RefreshCw,
   Square,
   Wrench,
 } from "lucide-react";
@@ -187,18 +186,6 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                 ) : (
                   <Copy className="size-4" aria-hidden />
                 )}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => void load()}
-                disabled={loading}
-                aria-label="Refresh"
-                title="Refresh"
-                className="h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
-              >
-                <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
               </Button>
             </div>
           </div>

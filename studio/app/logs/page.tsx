@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
-import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
 import {
   PageTabs,
@@ -105,9 +103,9 @@ export default function LogsPage() {
 
           {/* Search row centered on desktop with a sane max width - mirrors
               Memory + Skills so the three tabs read as the same family.
-              Mobile stays full-width. Reload sits to the right as an
-              icon-only ghost button on mobile and a labeled primary
-              button on desktop. */}
+              Mobile stays full-width. Pull-to-refresh (mobile) and the
+              browser refresh (desktop) handle re-fetch, so no inline
+              reload button. */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -122,18 +120,6 @@ export default function LogsPage() {
                 placeholder="Search prompts, replies, sessions…"
               />
             </div>
-            <Button
-              type="button"
-              onClick={() => void load()}
-              disabled={loading}
-              aria-label="Reload"
-              title="Reload"
-              className="h-9 w-9 shrink-0 bg-transparent px-0 text-foreground hover:bg-accent hover:text-foreground sm:w-auto sm:gap-1.5 sm:bg-primary sm:px-4 sm:text-primary-foreground sm:hover:bg-primary/90"
-            >
-              <RefreshCw className={cn("size-4 sm:hidden", loading && "animate-spin")} aria-hidden />
-              <RefreshCw className={cn("hidden size-4 sm:inline-block", loading && "animate-spin")} aria-hidden />
-              <span className="hidden sm:inline">{loading ? "…" : "Reload"}</span>
-            </Button>
           </form>
 
           <div className="space-y-3">

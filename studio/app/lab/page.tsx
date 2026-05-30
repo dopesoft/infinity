@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   History,
   Loader2,
-  RefreshCw,
   Sparkles,
   Wrench,
   X,
@@ -227,16 +226,6 @@ export default function LabPage() {
           <h1 className="text-base font-semibold tracking-tight text-foreground">
             Lab
           </h1>
-          <Button
-            onClick={() => void load()}
-            disabled={loading}
-            size="icon"
-            variant="ghost"
-            aria-label="Refresh"
-            title="Refresh"
-          >
-            <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
-          </Button>
         </div>
 
         <PageTabs value={tab} onValueChange={(v) => setTab(v as LabTab)} className="flex min-h-0 flex-1 flex-col">
