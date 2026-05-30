@@ -14,6 +14,8 @@ const CODE_CHANGE_TOOLS = new Set([
   "claude_code__write",
   "claude_code__multiedit",
   "claude_code__notebookedit",
+  "fs_edit",
+  "fs_save",
 ]);
 
 export function isCodeChangeTool(name: string | undefined | null): boolean {

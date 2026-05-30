@@ -64,9 +64,11 @@ const STATUS_POLL_MS = 4_000;
 export function CanvasGitPanel({
   sessionId,
   onFileOpen,
+  onChangeCount,
 }: {
   sessionId: string | null;
   onFileOpen?: (path: string) => void;
+  onChangeCount?: (count: number) => void;
 }) {
   const store = useCanvasStore();
   const openFile = (p: string) => (onFileOpen ? onFileOpen(p) : store.openFile(p));
@@ -96,6 +98,10 @@ export function CanvasGitPanel({
     const id = setInterval(() => void refresh(), STATUS_POLL_MS);
     return () => clearInterval(id);
   }, [refresh, store.root]);
+
+  useEffect(() => {
+    onChangeCount?.(status?.entries.length ?? 0);
+  }, [onChangeCount, status]);
 
   const onStageAll = async () => {
     setBusy("stage");

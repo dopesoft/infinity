@@ -62,17 +62,27 @@ func CorePinnedTools() []string {
 // box" and "context budget".
 func DefaultLoadedTools() []string {
 	return []string{
-		// Web reach — cheap and universally useful.
+		// Web reach, cheap and universally useful.
 		"web_search",
 		"http_fetch",
-		// Claude Code bridge — most boss sessions touch the home Mac.
-		"claude_code__Read",
-		"claude_code__Write",
-		"claude_code__Edit",
-		"claude_code__Bash",
-		"claude_code__Grep",
-		"claude_code__Glob",
-		"claude_code__LS",
+		// Bridge primitives stay loaded on every session because they route
+		// through the active bridge (Mac or Cloud). Loading claude_code__*
+		// by default is stale when the session is pinned to Cloud: the schemas
+		// advertise Mac-only tools, encourage the model to pick the wrong
+		// surface, and can produce confusing "not found on Mac" failures for
+		// Cloud work. Claude Code remains available through tool_search when
+		// the Mac bridge is actually the right target.
+		"fs_read",
+		"fs_ls",
+		"fs_save",
+		"fs_edit",
+		"bash_run",
+		"git_status",
+		"git_diff",
+		"git_stage",
+		"git_commit",
+		"git_push",
+		"git_pull",
 	}
 }
 

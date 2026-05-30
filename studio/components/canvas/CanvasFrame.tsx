@@ -113,7 +113,10 @@ export function CanvasFrame({ chat }: { chat: ChatHook }) {
       const name = ev.tool_call.name;
       if (!isCodeChangeTool(name)) return;
       const path = extractToolFilePath(ev.tool_call.input);
-      if (path) store.markDirty(path);
+      if (path) {
+        store.markDirty(path);
+        store.setGitChangeCount(Math.max(store.gitChangeCount, store.dirtyPaths.size + 1));
+      }
     });
   }, [ws, chat.sessionId, store]);
 

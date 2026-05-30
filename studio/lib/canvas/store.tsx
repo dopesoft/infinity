@@ -108,8 +108,10 @@ type CanvasStoreValue = {
 
   // Dirty tracking
   dirtyPaths: Set<string>;
+  gitChangeCount: number;
   markDirty: (path: string) => void;
   clearDirty: () => void;
+  setGitChangeCount: (count: number) => void;
 };
 
 const CanvasStoreContext = createContext<CanvasStoreValue | null>(null);
@@ -134,6 +136,7 @@ export function CanvasStoreProvider({
   const [previewRefreshKey, setRefreshKey] = useState(0);
   const [bridgeOk, setBridgeOk] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
+  const [gitChangeCount, setGitChangeCountInternal] = useState(0);
   const [rightMode, setRightModeInternal] = useState<"preview" | "file">("preview");
 
   // openPaths is the source of truth for non-preview tabs.
@@ -328,7 +331,14 @@ export function CanvasStoreProvider({
     });
   }, []);
 
-  const clearDirty = useCallback(() => setDirtyPaths(new Set()), []);
+  const clearDirty = useCallback(() => {
+    setDirtyPaths(new Set());
+    setGitChangeCountInternal(0);
+  }, []);
+
+  const setGitChangeCount = useCallback((count: number) => {
+    setGitChangeCountInternal(Math.max(0, count));
+  }, []);
 
   const tabs = useMemo<CanvasTab[]>(() => {
     return [
@@ -360,8 +370,10 @@ export function CanvasStoreProvider({
       rightMode,
       setRightMode,
       dirtyPaths,
+      gitChangeCount,
       markDirty,
       clearDirty,
+      setGitChangeCount,
     }),
     [
       root,
@@ -384,8 +396,10 @@ export function CanvasStoreProvider({
       rightMode,
       setRightMode,
       dirtyPaths,
+      gitChangeCount,
       markDirty,
       clearDirty,
+      setGitChangeCount,
     ],
   );
 

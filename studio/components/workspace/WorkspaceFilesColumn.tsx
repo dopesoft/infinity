@@ -24,6 +24,7 @@ export function WorkspaceFilesColumn({
 }) {
   const store = useCanvasStore();
   const [tab, setTab] = useState<"files" | "git">("files");
+  const changeCount = Math.max(store.dirtyPaths.size, store.gitChangeCount);
 
   // Wrap store.openFile to surface the path up to the parent so mobile can
   // auto-jump to the Canvas mode. Desktop ignores this — both columns are
@@ -58,9 +59,9 @@ export function WorkspaceFilesColumn({
             >
               <GitBranch className="size-3.5" />
               Changes
-              {store.dirtyPaths.size > 0 && (
+              {changeCount > 0 && (
                 <span className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning/20 px-1 font-mono text-[10px] font-semibold leading-none text-warning">
-                  {store.dirtyPaths.size > 99 ? "99+" : store.dirtyPaths.size}
+                  {changeCount > 99 ? "99+" : changeCount}
                 </span>
               )}
             </TabsTrigger>
@@ -70,7 +71,11 @@ export function WorkspaceFilesColumn({
           <CanvasFileTree onFileOpen={wrappedOpen} />
         </TabsContent>
         <TabsContent value="git" className="mt-0 min-h-0 flex-1 overflow-hidden">
-          <CanvasGitPanel sessionId={sessionId ?? null} onFileOpen={wrappedOpen} />
+          <CanvasGitPanel
+            sessionId={sessionId ?? null}
+            onFileOpen={wrappedOpen}
+            onChangeCount={store.setGitChangeCount}
+          />
         </TabsContent>
       </Tabs>
     </div>

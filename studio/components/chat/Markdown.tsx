@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./CodeBlock";
 import { cn } from "@/lib/utils";
 
-/* Markdown — chat-tuned markdown renderer for assistant messages.
+/* Markdown - chat-tuned markdown renderer for assistant messages.
  *
  * Uses react-markdown + remark-gfm so GitHub-Flavored markdown lands
  * with tables, task lists, strikethrough, and autolinks. Element
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  * giant H1s) and themed via Tailwind utilities so the renderer stays
  * consistent with the rest of Studio. No inline styles, no @apply.
  *
- * Streaming is fine — react-markdown reparses the input on each chunk
+ * Streaming is fine - react-markdown reparses the input on each chunk
  * and renders whatever's there. Partial fences stay visually inert
  * until the closer arrives.
  *
@@ -31,7 +31,7 @@ export const Markdown = memo(function Markdown({
   return (
     <div
       className={cn(
-        "min-w-0 max-w-full text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "min-w-0 max-w-full text-sm leading-relaxed [overflow-wrap:anywhere] [word-break:normal] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className,
       )}
     >
@@ -41,33 +41,33 @@ export const Markdown = memo(function Markdown({
           // Paragraphs: tight top margin so consecutive paragraphs read
           // as a flowing reply, not a stack of cards.
           p: ({ children }) => (
-            <p className="my-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            <p className="my-2 min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
               {children}
             </p>
           ),
 
-          // Headings — sized down. A chat bubble shouldn't host display
+          // Headings - sized down. A chat bubble shouldn't host display
           // typography; these are content dividers, not section titles
           // on a marketing page.
           h1: ({ children }) => (
-            <h1 className="mb-1 mt-3 text-base font-semibold tracking-tight">{children}</h1>
+            <h1 className="mb-1 mt-3 min-w-0 max-w-full break-words text-base font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h1>
           ),
           h2: ({ children }) => (
-            <h2 className="mb-1 mt-3 text-[15px] font-semibold tracking-tight">{children}</h2>
+            <h2 className="mb-1 mt-3 min-w-0 max-w-full break-words text-[15px] font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h2>
           ),
           h3: ({ children }) => (
-            <h3 className="mb-1 mt-2 text-sm font-semibold tracking-tight">{children}</h3>
+            <h3 className="mb-1 mt-2 min-w-0 max-w-full break-words text-sm font-semibold tracking-tight [overflow-wrap:anywhere]">{children}</h3>
           ),
           h4: ({ children }) => (
-            <h4 className="mb-1 mt-2 text-sm font-medium">{children}</h4>
+            <h4 className="mb-1 mt-2 min-w-0 max-w-full break-words text-sm font-medium [overflow-wrap:anywhere]">{children}</h4>
           ),
           h5: ({ children }) => (
-            <h5 className="mb-0.5 mt-2 text-[13px] font-medium uppercase tracking-wide text-muted-foreground">
+            <h5 className="mb-0.5 mt-2 min-w-0 max-w-full break-words text-[13px] font-medium uppercase tracking-wide text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </h5>
           ),
           h6: ({ children }) => (
-            <h6 className="mb-0.5 mt-2 text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
+            <h6 className="mb-0.5 mt-2 min-w-0 max-w-full break-words text-[12px] font-medium uppercase tracking-wide text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </h6>
           ),
@@ -75,23 +75,28 @@ export const Markdown = memo(function Markdown({
           // Lists. GFM task lists get the native checkbox renderer; we
           // just strip the marker so the box itself does the indicating.
           ul: ({ children }) => (
-            <ul className="my-2 list-disc space-y-1 pl-5 marker:text-muted-foreground">
+            <ul className="my-2 min-w-0 max-w-full list-disc space-y-1 pl-5 marker:text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-2 list-decimal space-y-1 pl-5 marker:text-muted-foreground">
+            <ol className="my-2 min-w-0 max-w-full list-decimal space-y-1 pl-5 marker:text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </ol>
           ),
           li: ({ children, ...props }) => {
             // remark-gfm sets className="task-list-item" on task list <li>.
-            // Drop the disc for those so the checkbox stands alone.
+            // Drop the disc for those so the box itself does the indicating.
             const isTask =
               typeof (props as { className?: string }).className === "string" &&
               (props as { className?: string }).className!.includes("task-list-item");
             return (
-              <li className={cn(isTask && "list-none -ml-5 flex items-start gap-2")}>
+              <li
+                className={cn(
+                  "min-w-0 max-w-full break-words [overflow-wrap:anywhere]",
+                  isTask && "list-none -ml-5 flex items-start gap-2",
+                )}
+              >
                 {children}
               </li>
             );
@@ -104,10 +109,10 @@ export const Markdown = memo(function Markdown({
             <del className="text-muted-foreground line-through">{children}</del>
           ),
 
-          // Block quote — left rule + muted text. Inherits inner spacing
+          // Block quote: left rule plus muted text. Inherits inner spacing
           // from the elements it contains.
           blockquote: ({ children }) => (
-            <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">
+            <blockquote className="my-2 min-w-0 max-w-full border-l-2 border-border pl-3 text-muted-foreground [overflow-wrap:anywhere]">
               {children}
             </blockquote>
           ),
@@ -115,24 +120,26 @@ export const Markdown = memo(function Markdown({
           // Horizontal rule.
           hr: () => <hr className="my-3 border-border" />,
 
-          // Links — always external in chat. Underline-on-hover keeps
-          // the body legible while still signaling interactivity.
+          // Links: keep long URLs inside the chat bubble instead of
+          // letting a single unbroken href widen the whole conversation.
           a: ({ href, children }) => (
             <a
               href={href}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-info underline decoration-info/40 decoration-1 underline-offset-2 transition-colors hover:decoration-info"
+              className="break-words text-info underline decoration-info/40 decoration-1 underline-offset-2 transition-colors [overflow-wrap:anywhere] hover:decoration-info"
             >
               {children}
             </a>
           ),
 
           // Tables. Wrap in a scroller so narrow phones don't break
-          // layout when a wide table arrives.
+          // layout when a wide table arrives. min-w-0 is the important
+          // flex/grid escape hatch: without it, the table wrapper can
+          // still force its parent bubble wider than the viewport.
           table: ({ children }) => (
-            <div className="scroll-touch my-2 overflow-x-auto rounded-lg border">
-              <table className="w-full text-left text-[12.5px]">{children}</table>
+            <div className="scroll-touch my-2 min-w-0 max-w-full overflow-x-auto rounded-lg border">
+              <table className="w-full min-w-max text-left text-[12.5px]">{children}</table>
             </div>
           ),
           thead: ({ children }) => (
@@ -168,7 +175,7 @@ export const Markdown = memo(function Markdown({
             }
             return (
               <code
-                className="rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.88em]"
+                className="max-w-full break-words rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.88em] [overflow-wrap:anywhere]"
                 {...props}
               >
                 {children}

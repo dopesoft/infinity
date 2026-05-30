@@ -29,6 +29,7 @@ type ChatHook = ReturnType<typeof useChat>;
 export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const [tab, setTab] = useState<"files" | "git">("files");
+  const changeCount = Math.max(store.dirtyPaths.size, store.gitChangeCount);
 
   return (
     <div className="flex h-full min-h-0 flex-col border-r bg-muted/30 dark:bg-zinc-900/40">
@@ -51,9 +52,9 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
                   >
                     <GitBranch className="size-3.5" />
                     Changes
-                    {store.dirtyPaths.size > 0 && (
+                    {changeCount > 0 && (
                       <span className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning/20 px-1 font-mono text-[10px] font-semibold leading-none text-warning">
-                        {store.dirtyPaths.size > 99 ? "99+" : store.dirtyPaths.size}
+                        {changeCount > 99 ? "99+" : changeCount}
                       </span>
                     )}
                   </TabsTrigger>
@@ -63,7 +64,7 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
                 <CanvasFileTree />
               </TabsContent>
               <TabsContent value="git" className="mt-0 flex-1 overflow-hidden">
-                <CanvasGitPanel sessionId={chat.sessionId} />
+                <CanvasGitPanel sessionId={chat.sessionId} onChangeCount={store.setGitChangeCount} />
               </TabsContent>
             </Tabs>
           </div>
