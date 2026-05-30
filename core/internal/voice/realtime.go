@@ -7,19 +7,19 @@
 //
 // Sequence:
 //
-//	1. Browser taps mic → POST /api/voice/session { session_id }.
-//	2. Core builds Session config (voice, instructions = soul + memory + skills
-//	   + British-RP accent line, tools = full registry schemas) and POSTs it
-//	   to /v1/realtime/client_secrets with OPENAI_API_KEY.
-//	3. Core returns the ephemeral key to the browser.
-//	4. Browser does the WebRTC SDP exchange directly with api.openai.com
-//	   using that ephemeral key. From then on, audio flows P2P-style.
-//	5. Tool calls fire on the data channel; the browser forwards them to
-//	   POST /api/voice/tool which runs the same gate + registry as the text
-//	   loop, then submits the result back as a function_call_output item.
-//	6. Each finalized user/assistant utterance posts to /api/voice/turn
-//	   which fires UserPromptSubmit + TaskCompleted hooks. Memory capture
-//	   + Sessions tab work identically to text mode.
+//  1. Browser taps mic → POST /api/voice/session { session_id }.
+//  2. Core builds Session config (voice, instructions = soul + memory + skills
+//     + British-RP accent line, tools = full registry schemas) and POSTs it
+//     to /v1/realtime/client_secrets with OPENAI_API_KEY.
+//  3. Core returns the ephemeral key to the browser.
+//  4. Browser does the WebRTC SDP exchange directly with api.openai.com
+//     using that ephemeral key. From then on, audio flows P2P-style.
+//  5. Tool calls fire on the data channel; the browser forwards them to
+//     POST /api/voice/tool which runs the same gate + registry as the text
+//     loop, then submits the result back as a function_call_output item.
+//  6. Each finalized user/assistant utterance posts to /api/voice/turn
+//     which fires UserPromptSubmit + TaskCompleted hooks. Memory capture
+//     + Sessions tab work identically to text mode.
 package voice
 
 import (
@@ -30,6 +30,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +44,14 @@ const (
 	// downgrade them.
 	defaultRealtimeModel = "gpt-realtime-1.5"
 	defaultVoice         = "ash"
+
+	// The provider rejects oversized instructions. Voice must stay far
+	// below that hard ceiling because the browser's realtime session is
+	// rebuilt from a huge text-mode prompt (memory + skills + dormant tool
+	// catalog + connected-account overlay). Keep a conservative headroom so
+	// small prompt growth doesn't push us over again.
+	realtimeInstructionHardLimit = 16384
+	voiceInstructionTarget       = 12000
 
 	// britishAccentLine is appended to the realtime instructions so the
 	// voice renderer has explicit delivery guidance, not just persona.
@@ -149,11 +158,10 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 		return nil, fmt.Errorf("voice: minter not configured (OPENAI_API_KEY unset)")
 	}
 
-	instructions := strings.TrimSpace(req.SystemPrompt)
-	if instructions != "" {
-		instructions += "\n\n"
+	instructions, err := buildVoiceInstructions(req.SystemPrompt)
+	if err != nil {
+		return nil, err
 	}
-	instructions += britishAccentLine + "\n\n" + voiceDispatchLine
 
 	// Newer Realtime API (gpt-realtime family) nests audio config under
 	// `audio.input` and `audio.output`. The old flat keys
@@ -283,6 +291,165 @@ func toRealtimeTools(defs []llm.ToolDef) []map[string]any {
 		})
 	}
 	return out
+}
+
+func buildVoiceInstructions(systemPrompt string) (string, error) {
+	base := []string{compactVoiceCoreInstructions(), britishAccentLine, voiceDispatchLine}
+	available := voiceInstructionTarget - estimateTokens(strings.Join(base, "\n\n"))
+	if available < 0 {
+		available = 0
+	}
+
+	sections := splitPromptSections(systemPrompt)
+	prefix := compactVoiceRelevantSections(sections, available)
+
+	parts := make([]string, 0, 1+len(base))
+	if prefix != "" {
+		parts = append(parts, prefix)
+	}
+	parts = append(parts, base...)
+	instructions := strings.TrimSpace(strings.Join(parts, "\n\n"))
+	if estimateTokens(instructions) > realtimeInstructionHardLimit {
+		return "", fmt.Errorf("voice instructions still exceed provider limit after compaction: est=%d limit=%d", estimateTokens(instructions), realtimeInstructionHardLimit)
+	}
+	return instructions, nil
+}
+
+func compactVoiceCoreInstructions() string {
+	return strings.TrimSpace(`You are Jarvis in Infinity voice mode.
+
+Address the boss as "boss". Be concise, useful, and conversational. Prefer short spoken sentences and natural punctuation. Do not use em dash or en dash characters.
+
+Use tools when they move the work forward. Do not claim you did something you did not actually do. If a tool result matters, state the outcome plainly.`)
+}
+
+func compactVoiceRelevantSections(sections []string, budget int) string {
+	if budget <= 0 || len(sections) == 0 {
+		return ""
+	}
+	type scoredSection struct {
+		text     string
+		estimate int
+		score    int
+		idx      int
+	}
+	picked := make([]scoredSection, 0, len(sections))
+	for i, section := range sections {
+		trimmed := strings.TrimSpace(section)
+		if trimmed == "" {
+			continue
+		}
+		est := estimateTokens(trimmed)
+		if est == 0 {
+			continue
+		}
+		picked = append(picked, scoredSection{text: trimmed, estimate: est, score: scoreVoiceSection(trimmed), idx: i})
+	}
+	if len(picked) == 0 {
+		return ""
+	}
+	sort.SliceStable(picked, func(i, j int) bool {
+		if picked[i].score == picked[j].score {
+			return picked[i].idx < picked[j].idx
+		}
+		return picked[i].score > picked[j].score
+	})
+
+	chosen := make([]scoredSection, 0, len(picked))
+	used := 0
+	for _, section := range picked {
+		if used >= budget {
+			break
+		}
+		if used > 0 && used+section.estimate > budget {
+			continue
+		}
+		if used == 0 && section.estimate > budget {
+			section.text = truncateToTokenBudget(section.text, budget)
+			section.estimate = estimateTokens(section.text)
+			if section.text == "" {
+				continue
+			}
+		}
+		chosen = append(chosen, section)
+		used += section.estimate
+	}
+	if len(chosen) == 0 {
+		return ""
+	}
+	sort.SliceStable(chosen, func(i, j int) bool { return chosen[i].idx < chosen[j].idx })
+	parts := make([]string, 0, len(chosen))
+	for _, section := range chosen {
+		parts = append(parts, section.text)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func splitPromptSections(prompt string) []string {
+	normalized := strings.ReplaceAll(prompt, "\r\n", "\n")
+	return strings.Split(normalized, "\n\n")
+}
+
+func scoreVoiceSection(section string) int {
+	lower := strings.ToLower(section)
+	score := 1
+	switch {
+	case strings.Contains(lower, "you are jarvis"):
+		score += 120
+	case strings.Contains(lower, "about the boss") || strings.Contains(lower, "boss"):
+		score += 70
+	case strings.Contains(lower, "procedural skills") || strings.Contains(lower, "approved finding fallback"):
+		score += 55
+	case strings.Contains(lower, "relevant memory") || strings.Contains(lower, "memory"):
+		score += 45
+	case strings.Contains(lower, "current_time") || strings.Contains(lower, "timezone"):
+		score += 35
+	case strings.Contains(lower, "active_project") || strings.Contains(lower, "bridge"):
+		score += 25
+	case strings.Contains(lower, "tool_catalog") || strings.Contains(lower, "connected_accounts"):
+		score += 5
+	}
+	if strings.Contains(lower, "voice") {
+		score += 15
+	}
+	if strings.Contains(lower, "important") || strings.Contains(lower, "must") {
+		score += 8
+	}
+	return score
+}
+
+func truncateToTokenBudget(text string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if estimateTokens(trimmed) <= budget {
+		return trimmed
+	}
+	maxChars := budget * 4
+	if maxChars <= 1 {
+		return ""
+	}
+	if maxChars > len(trimmed) {
+		maxChars = len(trimmed)
+	}
+	candidate := strings.TrimSpace(trimmed[:maxChars])
+	if lastBreak := strings.LastIndexAny(candidate, " \n\t.,;:)"); lastBreak > maxChars/2 {
+		candidate = strings.TrimSpace(candidate[:lastBreak])
+	}
+	if candidate == "" {
+		return ""
+	}
+	if estimateTokens(candidate) > budget {
+		for estimateTokens(candidate) > budget && len(candidate) > 1 {
+			candidate = strings.TrimSpace(candidate[:len(candidate)-1])
+		}
+	}
+	return candidate
+}
+
+func estimateTokens(s string) int {
+	return (len(s) + 3) / 4
 }
 
 // truncateForErr keeps error messages under control - OpenAI sometimes
