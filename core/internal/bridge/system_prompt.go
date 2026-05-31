@@ -56,7 +56,7 @@ func (m *MemoryProvider) BuildSystemPrefix(ctx context.Context, sessionID, query
 		b.WriteString("Active: unknown\n")
 	case active.Name() == KindMac:
 		b.WriteString(fmt.Sprintf("Active: Mac (%s)\n", why))
-		b.WriteString("Coding muscle: prefer `claude_code__Edit`, `claude_code__Bash`, `claude_code__Write` etc. for heavy edits - those bill against the boss's Anthropic Max subscription via Claude Code on his Mac. Use `fs_edit`, `fs_save`, `bash_run`, `git_*` when a sub-agent loop would be wasted (deterministic / single-shot).\n")
+		b.WriteString("Coding muscle: for any non-trivial coding task, DELEGATE it with `code_agent` - that runs `claude -p` (the real Claude Code agent) on the Mac under the boss's Anthropic Max subscription, so the *coding cognition* is Max-billed and does NOT spend your own (chat-model) quota. You write the brief, Claude Code writes the code. Do NOT hand-author code with `claude_code__Edit`/`claude_code__Write`/`fs_edit` for real work - those are dumb file-writers, so YOU end up authoring every byte against your own quota (this is the bug that was burning the boss's ChatGPT plan on the Mac bridge). Reserve direct `fs_edit`/`claude_code__Edit` for tiny one-line or deterministic single-shot changes. `code_agent` runs freely; only filesystem deletes are blocked and surfaced for the boss to approve.\n")
 		b.WriteString("Filesystem: the boss's local Mac checkout. Commits authored as the boss's git identity.\n")
 	case active.Name() == KindCloud:
 		b.WriteString(fmt.Sprintf("Active: Cloud (%s)\n", why))

@@ -350,6 +350,17 @@ func serveCmd() *cobra.Command {
 					activeBridgeRouter = bridge.NewRouter(macBridge, cloudBridge)
 					activeBridgePrefs = tools.NewDBPreferenceFetcher(p)
 					tools.RegisterBridgeTools(registry, activeBridgeRouter, activeBridgePrefs)
+					// code_agent: the Mac-bridge coding muscle. Delegates a
+					// real coding task to `claude -p` on the boss's Mac, which
+					// runs under his Anthropic Max subscription - so the chat
+					// model ORCHESTRATES instead of authoring every byte against
+					// its own (ChatGPT OAuth) quota. Mac bridge only; books a
+					// mem_runs row so Studio shows a navigation-proof spinner;
+					// the nested run is free EXCEPT filesystem deletes, which a
+					// PreToolUse hook blocks for the boss to approve. This is the
+					// fix for "I was on the Mac bridge but it was still burning
+					// my ChatGPT plan." See CLAUDE.md "Coding via Claude Code".
+					tools.RegisterCodeAgentTool(registry, activeBridgeRouter, activeBridgePrefs, runs.New(p))
 					// Generic artifact CRUD + high-level project_create.
 					// project_create is the boss-asked-for end-to-end
 					// app-bootstrap tool; it routes through the bridge
