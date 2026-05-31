@@ -45,6 +45,7 @@ const (
 	KindBrowserSession  Kind = "browser.session"
 	KindExtension       Kind = "extension.register"
 	KindBackgroundBuild Kind = "background.build"
+	KindSurfaceAction   Kind = "surface.action"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

@@ -303,6 +303,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
 	mux.HandleFunc("/api/memory/profile", s.handleProfile)
 	mux.HandleFunc("/api/gym", s.handleGym)
+	mux.HandleFunc("/api/surface/action", s.handleSurfaceAction)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
 	mux.HandleFunc("/api/browser/session/", s.handleBrowserClose)
 	mux.HandleFunc("/api/workspace/download", s.handleWorkspaceDownload)

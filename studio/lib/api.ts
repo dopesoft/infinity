@@ -68,6 +68,27 @@ export async function renameSession(id: string, name: string): Promise<boolean> 
   }
 }
 
+// postSurfaceAction fires a surfaced-item action button (the surface
+// return-path). The server looks up the item + action, then seeds an
+// autonomous agent turn tracked in mem_runs (kind="surface.action",
+// targetId=item id) - watch it with useRuns/RunIndicator. Returns true on
+// 202 Accepted.
+export async function postSurfaceAction(
+  id: string,
+  actionId: string,
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/surface/action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action_id: actionId }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function setSessionProject(
   id: string,
   body: { project_path?: string; project_template?: string; dev_port?: number; mark_run?: boolean },

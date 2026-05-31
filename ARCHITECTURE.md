@@ -1103,3 +1103,61 @@ after the embedded `mcp.yaml` connect; the `initiative` tools register
 after the push `Sender` is built. The heartbeat composes
 `DefaultChecklist + CuriosityChecklist + AgentGoalChecklist +
 SubstrateSurfaceChecklist`.
+
+---
+
+## Surface return-path, GEPA promotion gates, persistent peers (2026-05-30)
+
+Three additions adopted from a nanobot / Hermes / openclaw review. Plain-English
+summaries + history live in [`docs/CHANGELOG.md`](docs/CHANGELOG.md); the
+surface return-path has a dedicated doc at
+[`docs/surface-return-path/README.md`](docs/surface-return-path/README.md).
+
+### Surface return-path (building block)
+
+The generic surface contract (`mem_surface_items`, § "assembly substrate") gains
+a **return path**: items can carry boss-tappable `actions`, and tapping one runs
+the agent against that item.
+
+- **Schema:** `084_surface_item_actions.sql` adds `actions jsonb NOT NULL
+  DEFAULT '[]'` (applied to prod). `mem_surface_items` was already in
+  `supabase_realtime`, so the column replicates with the row.
+- **Contract:** `surface.Action{ID,Label,Intent,Style}` on `surface.Item`
+  (`core/internal/surface/types.go`); persisted/read in
+  `core/internal/surface/store.go` (a body-only re-run never wipes a non-empty
+  action set). Written through the `surface_item` tool.
+- **Endpoint:** `POST /api/surface/action {id, action_id}`
+  (`core/internal/server/surface_action_api.go`) → looks up the item + action →
+  `runs.Track(KindSurfaceAction, item.id, …)` → seeds an autonomous
+  (`tools.WithAutonomous`) agent turn via `s.loop.Run`, prompted with the
+  action's `intent` + the item's context. Returns 202; the work runs in the
+  background and the UI watches the `mem_runs` row.
+- **Read path:** `dashboard/api.go` projects a **client-safe** `SurfaceAction`
+  (id/label/style only — `intent` never leaves the server).
+- **UI:** `SurfaceCard.tsx` renders the buttons + `<RunIndicator mode="inline">`
+  (server-tracked progress; survives nav/refresh/device). Client call:
+  `postSurfaceAction` in `studio/lib/api.ts`.
+- **Invariant preserved:** the seeded turn is autonomous, so it still cannot
+  auto-resolve a follow-up email (boss-owned inbox guarantee).
+
+### GEPA promotion gates (Voyager self-evolution)
+
+`core/internal/voyager/optimizer.go` (+ embedder threaded through
+`voyager.Config`/`Manager` in `serve.go`). Before a GEPA candidate `SKILL.md`
+can become a `mem_skill_proposals` row, two gates run in addition to the
+existing structural ones (≤15KB, valid frontmatter, non-empty, non-identical):
+
+- **Contract-preservation** (`preservesContract`): name unchanged, declared
+  env-var/toolset keys retained, every `##` section retained, length ≥ 50% of
+  original.
+- **Semantic-drift** (`Manager.filterByDrift`): cosine(original, candidate)
+  ≥ `INFINITY_GEPA_MIN_SIMILARITY` (default 0.82); logged no-op on the stub
+  embedder.
+
+### Persistent named peers (delegation)
+
+`core/internal/agent/delegate.go`. `delegate` gains `agent_name` + `persist`.
+With both set, the child runs in a stable `peer:<name>` session that is **not**
+cleared on return, so repeated consults resume context. Ephemeral one-shot
+delegation is unchanged (fresh `delegate:<uuid>`, cleared on return). Live peers
+are LRU-capped at `maxLivePeers` (6); eviction clears the oldest peer's session.

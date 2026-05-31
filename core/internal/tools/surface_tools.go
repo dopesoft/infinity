@@ -95,6 +95,20 @@ func (t *surfaceItemTool) Schema() map[string]any {
 			"importance_reason": map[string]any{"type": "string", "description": "One line explaining the importance score."},
 			"metadata":          map[string]any{"type": "object", "description": "Arbitrary structured payload (from, attachments, draft, …). Rendered in the ObjectViewer and readable by downstream skills."},
 			"expires_in_hours":  map[string]any{"type": "number", "description": "Optional TTL - the item auto-dismisses after this many hours. Use for ephemera like a daily digest entry."},
+			"actions": map[string]any{
+				"type":        "array",
+				"description": "Optional boss-tappable buttons on the card (the SURFACE RETURN-PATH). When you surface something the boss will likely want to ACT on, attach 1-3 actions so a single tap closes the loop instead of forcing him to type a request. Tapping a button runs its `intent` as an autonomous turn against this exact item (you'll get the item's id, body, url, metadata as context, and can surface_update it after). Examples: an article → [{id:'summarize',label:'Summarize',intent:'Summarize this article in 3 bullets and reply.'}]; an alert → [{id:'investigate',label:'Investigate',intent:'Dig into this alert and report what happened.'}]. Keep labels short (≤2 words).",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":     map[string]any{"type": "string", "description": "Stable id, unique within this item (e.g. 'draft_reply')."},
+						"label":  map[string]any{"type": "string", "description": "Short button text the boss sees (e.g. 'Summarize')."},
+						"intent": map[string]any{"type": "string", "description": "The natural-language instruction you will carry out when the boss taps this. Be specific and self-contained."},
+						"style":  map[string]any{"type": "string", "enum": []string{"primary", "default", "danger"}, "description": "Optional UI hint. Default 'default'."},
+					},
+					"required": []string{"id", "label", "intent"},
+				},
+			},
 		},
 		"required": []string{"surface", "title"},
 	}
@@ -123,6 +137,29 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 	if v, ok := in["expires_in_hours"].(float64); ok && v > 0 {
 		exp := time.Now().UTC().Add(time.Duration(v * float64(time.Hour)))
 		it.ExpiresAt = &exp
+	}
+	if raw, ok := in["actions"].([]any); ok {
+		for _, a := range raw {
+			m, ok := a.(map[string]any)
+			if !ok {
+				continue
+			}
+			act := surface.Action{
+				ID:     strString(m, "id"),
+				Label:  strString(m, "label"),
+				Intent: strString(m, "intent"),
+				Style:  strString(m, "style"),
+			}
+			// label + intent are what make an action actionable; without
+			// both there's nothing to render or run, so skip it.
+			if act.Label == "" || act.Intent == "" {
+				continue
+			}
+			if act.ID == "" {
+				act.ID = surfaceActionSlug(act.Label)
+			}
+			it.Actions = append(it.Actions, act)
+		}
 	}
 
 	// Durable email body: for a follow-up email surfaced with a stable id and
@@ -179,6 +216,31 @@ func metaAccountHint(m map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// surfaceActionSlug derives a stable action id from a label when the agent
+// omits one (lowercase alphanumerics, other runs collapsed to '_').
+func surfaceActionSlug(label string) string {
+	label = strings.ToLower(strings.TrimSpace(label))
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevUnderscore = false
+		default:
+			if !prevUnderscore {
+				b.WriteByte('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	s := strings.Trim(b.String(), "_")
+	if s == "" {
+		s = "action"
+	}
+	return s
 }
 
 // ── surface_update ──────────────────────────────────────────────────────────

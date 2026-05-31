@@ -328,6 +328,16 @@ Full env-var reference, service-by-service deploy notes, Supabase pooler details
 
 ---
 
+## Recent changes
+
+See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the running record. Most recent (2026-05-30), adopted after reviewing the latest from nanobot, Hermes, and openclaw:
+
+- **GEPA promotion gates** — self-improvement can no longer make a skill dumber. The optimizer now rejects a rewritten `SKILL.md` that drops the skill's name, declared env vars / toolsets, `##` sections, or that drifts too far in meaning (embedding cosine `< 0.82`). `core/internal/voyager/optimizer.go`.
+- **Surface return-path** — the dashboard now *acts*, not just shows. Surfaced items can carry boss-tappable actions (`Summarize` · `Draft reply` · `Investigate`); a tap seeds an autonomous agent turn with a live, navigation-proof spinner. Generic + schema-driven. Full doc: [`docs/surface-return-path/README.md`](docs/surface-return-path/README.md). Migration `084`.
+- **Persistent named peers** — `delegate` gained `agent_name` + `persist` so a named specialist (`researcher`, `coder`) keeps its session and accumulated context across calls instead of starting from zero each time. `core/internal/agent/delegate.go`.
+
+---
+
 ## License
 
 Private. Lifts and ports from `rohitg00/agentmemory` (Apache-2.0) per the build plan. Peer modelling consumes [plastic-labs/honcho](https://github.com/plastic-labs/honcho) (AGPL-3.0) as a separate service over HTTP — no source copied into this repo.

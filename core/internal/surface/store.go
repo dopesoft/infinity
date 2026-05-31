@@ -30,7 +30,8 @@ func NewStore(pool *pgxpool.Pool, logger *slog.Logger) *Store {
 
 const itemCols = `id::text, surface, kind, source, COALESCE(external_id,''),
 	title, subtitle, body, COALESCE(url,''), importance, importance_reason,
-	metadata, status, snoozed_until, expires_at, created_at, updated_at, scored_at`
+	metadata, status, snoozed_until, expires_at, created_at, updated_at, scored_at,
+	COALESCE(actions, '[]'::jsonb)`
 
 // Upsert writes an Item. When ExternalID is set it upserts on
 // (source, external_id) so a producer re-running its recipe refreshes the
@@ -79,6 +80,14 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("surface: marshal metadata: %w", err)
 	}
+	actions := it.Actions
+	if actions == nil {
+		actions = []Action{}
+	}
+	actionsJSON, err := json.Marshal(actions)
+	if err != nil {
+		return "", fmt.Errorf("surface: marshal actions: %w", err)
+	}
 	var scored *time.Time
 	if it.Importance != nil {
 		now := time.Now().UTC()
@@ -92,8 +101,8 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 			INSERT INTO mem_surface_items
 			  (surface, kind, source, external_id, title, subtitle, body, url,
 			   importance, importance_reason, metadata, status, snoozed_until,
-			   expires_at, scored_at, cached_html, cached_text)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17)
+			   expires_at, scored_at, cached_html, cached_text, actions)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18::jsonb)
 			ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL
 			DO UPDATE SET
 			  surface           = EXCLUDED.surface,
@@ -114,12 +123,17 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 			  -- wipes a durable email we already stored.
 			  cached_html       = COALESCE(NULLIF(EXCLUDED.cached_html, ''), mem_surface_items.cached_html),
 			  cached_text       = COALESCE(NULLIF(EXCLUDED.cached_text, ''), mem_surface_items.cached_text),
+			  -- Refresh actions on re-run only when the producer supplied a
+			  -- non-empty set, so a later body-only refresh never wipes them.
+			  actions           = CASE WHEN EXCLUDED.actions = '[]'::jsonb
+			                           THEN mem_surface_items.actions
+			                           ELSE EXCLUDED.actions END,
 			  updated_at        = NOW()
 			RETURNING id::text
 		`, it.Surface, it.Kind, it.Source, it.ExternalID, it.Title, it.Subtitle,
 			it.Body, nullStr(it.URL), it.Importance, it.ImportanceReason,
 			string(metaJSON), string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored,
-			it.CachedHTML, it.CachedText).Scan(&id)
+			it.CachedHTML, it.CachedText, string(actionsJSON)).Scan(&id)
 		if err != nil {
 			return "", fmt.Errorf("surface: upsert: %w", err)
 		}
@@ -132,13 +146,13 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 		INSERT INTO mem_surface_items
 		  (surface, kind, source, title, subtitle, body, url, importance,
 		   importance_reason, metadata, status, snoozed_until, expires_at, scored_at,
-		   cached_html, cached_text)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)
+		   cached_html, cached_text, actions)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17::jsonb)
 		RETURNING id::text
 	`, it.Surface, it.Kind, it.Source, it.Title, it.Subtitle, it.Body,
 		nullStr(it.URL), it.Importance, it.ImportanceReason, string(metaJSON),
 		string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored,
-		it.CachedHTML, it.CachedText).Scan(&id)
+		it.CachedHTML, it.CachedText, string(actionsJSON)).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("surface: insert: %w", err)
 	}
@@ -289,16 +303,17 @@ func collectItems(rows pgx.Rows) ([]*Item, error) {
 
 func scanItem(row pgx.Row) (*Item, error) {
 	var (
-		it      Item
-		imp     *int16
-		metaRaw []byte
-		statusS string
+		it         Item
+		imp        *int16
+		metaRaw    []byte
+		statusS    string
+		actionsRaw []byte
 	)
 	if err := row.Scan(
 		&it.ID, &it.Surface, &it.Kind, &it.Source, &it.ExternalID, &it.Title,
 		&it.Subtitle, &it.Body, &it.URL, &imp, &it.ImportanceReason, &metaRaw,
 		&statusS, &it.SnoozedUntil, &it.ExpiresAt, &it.CreatedAt, &it.UpdatedAt,
-		&it.ScoredAt,
+		&it.ScoredAt, &actionsRaw,
 	); err != nil {
 		return nil, err
 	}
@@ -312,6 +327,9 @@ func scanItem(row pgx.Row) (*Item, error) {
 	}
 	if it.Metadata == nil {
 		it.Metadata = map[string]any{}
+	}
+	if len(actionsRaw) > 0 {
+		_ = json.Unmarshal(actionsRaw, &it.Actions)
 	}
 	return &it, nil
 }

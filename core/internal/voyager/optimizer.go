@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,6 +176,10 @@ func (m *Manager) RunOptimizer(ctx context.Context, opt *Optimizer, skillName st
 	}
 
 	frontier := paretoFrontier(out.Candidates, skillMD)
+	// Semantic-drift gate: reject any survivor whose embedding has wandered
+	// too far from the original skill's meaning. No-op (keeps all) when no
+	// real embedder is wired - see filterByDrift.
+	frontier = m.filterByDrift(ctx, skillMD, frontier)
 	if len(frontier) == 0 {
 		return nil, errors.New("no candidate passed the hard gates")
 	}
@@ -228,6 +234,16 @@ func paretoFrontier(cands []candidate, original string) []candidate {
 		if md == orig {
 			continue
 		}
+		// Contract-preservation gate: GEPA may reword the body but must not
+		// amputate the skill's identity (name), its declared wiring
+		// (required env vars / toolsets), its structure (## sections), or
+		// shrink it below half the original (a truncated procedure). A
+		// candidate that drops any of these "optimized away" the skill's
+		// guarantees - reject it, log why, keep going.
+		if ok, reason := preservesContract(md, orig); !ok {
+			fmt.Printf("[voyager] gepa: dropped candidate (contract): %s\n", reason)
+			continue
+		}
 		c.SkillMD = md
 		c.SizeChars = len(md)
 		kept = append(kept, c)
@@ -236,6 +252,195 @@ func paretoFrontier(cands []candidate, original string) []candidate {
 		return kept[i].Score > kept[j].Score
 	})
 	return kept
+}
+
+const (
+	// defaultMinSemanticSimilarity is the floor on cosine(original, candidate)
+	// for the semantic-drift gate. Below this the candidate has wandered too
+	// far from the skill's original meaning. Override via
+	// INFINITY_GEPA_MIN_SIMILARITY (a 0..1 float).
+	defaultMinSemanticSimilarity = 0.82
+	// minContractLengthRatio rejects a candidate shorter than this fraction of
+	// the original SKILL.md - a guard against the optimizer truncating the
+	// procedure to chase a higher score.
+	minContractLengthRatio = 0.50
+)
+
+// contractKeys are the frontmatter keys that wire a skill into the runtime
+// (which env vars it needs, which toolsets it requires or backs up). If the
+// original declares one, the candidate MUST still declare it - dropping it
+// silently breaks the skill even though the prose may read better.
+var contractKeys = []string{
+	"required_environment_variables",
+	"requires_toolsets",
+	"fallback_for_toolsets",
+}
+
+// preservesContract reports whether a candidate SKILL.md keeps the original's
+// load-bearing guarantees. Returns (false, reason) on the first violation so
+// the caller can log exactly what was dropped. Pure string-level checks - no
+// YAML dependency, robust to reformatting.
+func preservesContract(candidate, original string) (bool, string) {
+	if float64(len(candidate)) < float64(len(original))*minContractLengthRatio {
+		return false, fmt.Sprintf("candidate %d bytes < %.0f%% of original %d bytes",
+			len(candidate), minContractLengthRatio*100, len(original))
+	}
+
+	origFM := frontmatterBlock(original)
+	candFM := frontmatterBlock(candidate)
+
+	// Identity: the skill's name must not change.
+	if on := frontmatterValue(origFM, "name"); on != "" {
+		if cn := frontmatterValue(candFM, "name"); cn != on {
+			return false, fmt.Sprintf("name changed %q -> %q", on, cn)
+		}
+	}
+	// description must survive (non-empty).
+	if frontmatterValue(origFM, "description") != "" && frontmatterValue(candFM, "description") == "" {
+		return false, "description removed"
+	}
+	// Wiring keys present in the original must still be present.
+	for _, k := range contractKeys {
+		if frontmatterHasKey(origFM, k) && !frontmatterHasKey(candFM, k) {
+			return false, "dropped frontmatter key " + k
+		}
+	}
+	// Every ## section heading in the original must survive (don't delete
+	// "## Procedure" / "## Verification" etc.).
+	for _, h := range sectionHeadings(original) {
+		if !containsHeading(candidate, h) {
+			return false, "dropped section " + h
+		}
+	}
+	return true, ""
+}
+
+// frontmatterBlock returns the text between the opening "---" and the next
+// "---" line. Empty when there's no well-formed frontmatter.
+func frontmatterBlock(md string) string {
+	md = strings.TrimSpace(md)
+	if !strings.HasPrefix(md, "---") {
+		return ""
+	}
+	rest := strings.TrimPrefix(md, "---")
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+// frontmatterValue returns the trimmed value of a top-level `key:` line in a
+// frontmatter block (first match), or "".
+func frontmatterValue(fm, key string) string {
+	for _, line := range strings.Split(fm, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, key+":") {
+			return strings.TrimSpace(strings.TrimPrefix(t, key+":"))
+		}
+	}
+	return ""
+}
+
+// frontmatterHasKey reports whether `key` appears as a key anywhere in the
+// frontmatter block (top-level or nested under metadata).
+func frontmatterHasKey(fm, key string) bool {
+	for _, line := range strings.Split(fm, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), key+":") {
+			return true
+		}
+	}
+	return false
+}
+
+// sectionHeadings returns every "## ..." heading line (trimmed) in the doc.
+func sectionHeadings(md string) []string {
+	var out []string
+	for _, line := range strings.Split(md, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "## ") {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func containsHeading(md, heading string) bool {
+	for _, line := range strings.Split(md, "\n") {
+		if strings.TrimSpace(line) == heading {
+			return true
+		}
+	}
+	return false
+}
+
+// filterByDrift drops candidates whose embedding cosine-similarity to the
+// original SKILL.md falls below the drift floor. When no real embedder is
+// wired (nil or the deterministic dev stub) the gate is a logged no-op so
+// optimization still works without a model - the structural contract gate in
+// paretoFrontier still applies in that case.
+func (m *Manager) filterByDrift(ctx context.Context, original string, cands []candidate) []candidate {
+	if len(cands) == 0 {
+		return cands
+	}
+	if m == nil || m.embedder == nil || strings.EqualFold(m.embedder.Name(), "stub") {
+		fmt.Printf("[voyager] gepa: drift gate skipped (no semantic embedder)\n")
+		return cands
+	}
+	floor := minSemanticSimilarity()
+	origVec, err := m.embedder.Embed(ctx, original)
+	if err != nil {
+		fmt.Printf("[voyager] gepa: drift gate skipped (embed original: %v)\n", err)
+		return cands
+	}
+	kept := make([]candidate, 0, len(cands))
+	for _, c := range cands {
+		vec, err := m.embedder.Embed(ctx, c.SkillMD)
+		if err != nil {
+			// Can't judge drift - keep it (structural gate already passed).
+			kept = append(kept, c)
+			continue
+		}
+		sim := cosine(origVec, vec)
+		if sim < floor {
+			fmt.Printf("[voyager] gepa: dropped candidate (drift): similarity %.3f < %.2f\n", sim, floor)
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept
+}
+
+// minSemanticSimilarity reads the drift floor from env, falling back to the
+// default. Clamped to [0,1].
+func minSemanticSimilarity() float64 {
+	v := strings.TrimSpace(os.Getenv("INFINITY_GEPA_MIN_SIMILARITY"))
+	if v == "" {
+		return defaultMinSemanticSimilarity
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f < 0 || f > 1 {
+		return defaultMinSemanticSimilarity
+	}
+	return f
+}
+
+// cosine returns the cosine similarity of two equal-length vectors, in
+// [-1,1]. Returns 0 when either is empty or lengths differ.
+func cosine(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 // recentSkillTraces pulls recent runs for a skill out of mem_skill_runs.

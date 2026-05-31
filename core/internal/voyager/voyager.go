@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,6 +52,13 @@ type Manager struct {
 	skillsReg  *skills.Registry
 	skillsRoot string
 	enabled    bool
+
+	// embedder powers the semantic-drift gate in the GEPA optimizer: a
+	// candidate SKILL.md whose embedding has wandered too far from the
+	// original's is rejected before it can be persisted as a proposal.
+	// Nil/stub embedders degrade the gate to a no-op (it logs + keeps the
+	// candidate) so optimization still works on dev boxes without a model.
+	embedder embed.Embedder
 
 	// onPromoted is fired after a skill proposal is successfully promoted.
 	// serve.go wires this to memory.ProceduralStore.UpsertFromSkill so every

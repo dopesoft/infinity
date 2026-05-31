@@ -209,8 +209,19 @@ export type SurfaceItem = {
   importance?: number; // 0-100, undefined = unranked
   importanceReason?: string;
   metadata: Record<string, unknown>;
+  // Boss-tappable buttons (the surface return-path). Tapping one POSTs
+  // {id, action_id} to /api/surface/action, which runs the action's
+  // server-side `intent` as an autonomous agent turn against this item. The
+  // `intent` never reaches the client - only id/label/style do.
+  actions?: SurfaceAction[];
   status: "open" | "snoozed" | "done" | "dismissed";
   createdAt: string;
+};
+
+export type SurfaceAction = {
+  id: string;
+  label: string;
+  style?: "primary" | "default" | "danger";
 };
 
 // ── Agent Work Board (Kanban) ────────────────────────────────────────────────

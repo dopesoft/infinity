@@ -1,11 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { AlertTriangle, Bell } from "lucide-react";
 import { TileCard } from "./Section";
+import { Button } from "@/components/ui/button";
+import { RunIndicator } from "@/lib/runs/RunIndicator";
+import { postSurfaceAction } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import { parseLabeledBody } from "@/lib/dashboard/parseBody";
-import type { SurfaceItem } from "@/lib/dashboard/types";
+import type { SurfaceItem, SurfaceAction } from "@/lib/dashboard/types";
 
 /* SurfaceRow - a single row of the generic surface contract
  * (mem_surface_items). Every item the agent surfaces via the `surface_item`
@@ -52,37 +56,89 @@ export function SurfaceRow({
     parsed[0]?.value ||
     "";
 
+  const actions = item.actions ?? [];
+
   return (
-    <TileCard onClick={onClick} className="gap-3 p-3">
-      <span
-        className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-md border",
-          tile,
-        )}
-      >
-        <Bell className="size-4" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {item.title}
-          </span>
-          <span
-            className="shrink-0 font-mono text-[10px] text-muted-foreground"
-            suppressHydrationWarning
-          >
-            {relTime(item.createdAt)}
-          </span>
+    <div className="flex min-w-0 flex-col">
+      <TileCard onClick={onClick} className="gap-3 p-3">
+        <span
+          className={cn(
+            "flex size-9 shrink-0 items-center justify-center rounded-md border",
+            tile,
+          )}
+        >
+          <Bell className="size-4" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+              {item.title}
+            </span>
+            <span
+              className="shrink-0 font-mono text-[10px] text-muted-foreground"
+              suppressHydrationWarning
+            >
+              {relTime(item.createdAt)}
+            </span>
+          </div>
+          {why ? (
+            <p className="mt-0.5 line-clamp-1 break-words text-[12px] text-muted-foreground">
+              {why}
+            </p>
+          ) : null}
         </div>
-        {why ? (
-          <p className="mt-0.5 line-clamp-1 break-words text-[12px] text-muted-foreground">
-            {why}
-          </p>
+        {high ? (
+          <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden />
         ) : null}
-      </div>
-      {high ? (
-        <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden />
+      </TileCard>
+      {actions.length > 0 ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 pl-12">
+          {actions.map((a) => (
+            <SurfaceActionButton key={a.id} itemId={item.id} action={a} />
+          ))}
+          {/* Server-tracked progress: survives navigation/refresh/device. */}
+          <RunIndicator kind="surface.action" targetId={item.id} mode="inline" />
+        </div>
       ) : null}
-    </TileCard>
+    </div>
+  );
+}
+
+/* SurfaceActionButton fires a single surfaced-item action (the return-path).
+ * Tapping POSTs to /api/surface/action, which seeds an autonomous agent turn;
+ * the durable "Working…/Done" state comes from <RunIndicator> reading mem_runs,
+ * NOT from local state - local `firing` is only a momentary double-tap guard.
+ */
+function SurfaceActionButton({
+  itemId,
+  action,
+}: {
+  itemId: string;
+  action: SurfaceAction;
+}) {
+  const [firing, setFiring] = useState(false);
+  const variant =
+    action.style === "primary"
+      ? "default"
+      : action.style === "danger"
+        ? "destructive"
+        : "outline";
+  return (
+    <Button
+      size="sm"
+      variant={variant}
+      disabled={firing}
+      onClick={async (e) => {
+        e.stopPropagation();
+        setFiring(true);
+        try {
+          await postSurfaceAction(itemId, action.id);
+        } finally {
+          setFiring(false);
+        }
+      }}
+    >
+      {action.label}
+    </Button>
   );
 }

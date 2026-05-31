@@ -54,7 +54,9 @@ func (d *Delegate) Description() string {
 	return "Spawn a focused sub-agent to handle tool-heavy work (codebase research, multi-step API exploration, " +
 		"complex tool sequences) without polluting this conversation's context. Returns a single summary; " +
 		"intermediate tool calls and reasoning stay in the sub-agent's ephemeral context. Use whenever a task " +
-		"would otherwise burn many tool turns or read large outputs you don't need to remember verbatim."
+		"would otherwise burn many tool turns or read large outputs you don't need to remember verbatim. " +
+		"For a specialist you'll consult repeatedly, set agent_name + persist=true to keep a PERSISTENT peer " +
+		"that remembers its prior context across calls (e.g. a long-running 'researcher' or 'coder')."
 }
 func (d *Delegate) Schema() map[string]any {
 	return map[string]any{
@@ -95,6 +97,15 @@ func (d *Delegate) Schema() map[string]any {
 				"type":        "string",
 				"description": "Optional model override. Leave empty for the loop's default. Use a cheaper model (haiku) for exploratory work, the primary for synthesis-heavy tasks.",
 			},
+			"agent_name": map[string]any{
+				"type":        "string",
+				"description": "Name of a PERSISTENT specialist peer (e.g. 'researcher', 'coder', 'inbox-triager'). With persist=true the sub-agent keeps its session + accumulated context across calls, so you can consult the same named specialist repeatedly and it remembers the prior exchanges. Omit for a one-shot ephemeral sub-agent.",
+			},
+			"persist": map[string]any{
+				"type":        "boolean",
+				"description": "Keep this sub-agent's session alive after it returns so a later call with the same agent_name resumes its context instead of starting fresh. Requires agent_name. Default false (ephemeral - the session is torn down on return).",
+				"default":     false,
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -110,6 +121,16 @@ const (
 	delegateDefaultTimeout  = 300 * time.Second
 	delegateTimeoutCeiling  = 900 * time.Second
 	delegateSessionIDPrefix = "delegate:"
+	// peerSessionPrefix marks a PERSISTENT named-peer session. Unlike an
+	// ephemeral delegate (torn down on return), a peer session survives so a
+	// later consult with the same agent_name resumes its context.
+	peerSessionPrefix = "peer:"
+	// maxLivePeers caps how many persistent peer sessions stay resident at
+	// once. Beyond this the least-recently-used peer is evicted (its session
+	// cleared) so a long-running process can't accumulate unbounded peer
+	// contexts. The cap is generous - a handful of specialists is the design,
+	// not dozens.
+	maxLivePeers = 6
 )
 
 // defaultDelegateAllowed is the research-friendly tool subset used when
@@ -154,6 +175,8 @@ func (d *Delegate) Execute(ctx context.Context, input map[string]any) (string, e
 
 	brief, _ := input["context_brief"].(string)
 	persona, _ := input["persona"].(string)
+	agentName, _ := input["agent_name"].(string)
+	persist, _ := input["persist"].(bool)
 	// Any model string (full id, tier nickname like "haiku"/"sonnet", or
 	// the wrong provider's name) is normalized inside the LLM provider's
 	// Stream() - see normalize{Anthropic,OpenAI}Model and the OAuth
@@ -201,6 +224,8 @@ func (d *Delegate) Execute(ctx context.Context, input map[string]any) (string, e
 		maxIter:      maxIter,
 		timeout:      timeout,
 		outputSchema: outputSchema,
+		agentName:    agentName,
+		persist:      persist,
 	})
 	if err != nil {
 		return "", fmt.Errorf("delegate failed: %w", err)
@@ -217,12 +242,27 @@ type runArgs struct {
 	maxIter      int
 	timeout      time.Duration
 	outputSchema map[string]any
+	agentName    string
+	persist      bool
 }
 
 func (d *Delegate) run(ctx context.Context, args runArgs) (string, error) {
-	childID := delegateSessionIDPrefix + uuid.NewString()
+	// Persistent named peer vs. one-shot ephemeral delegate. A peer keeps a
+	// stable session id keyed by name so a later consult resumes its
+	// accumulated context; an ephemeral delegate gets a fresh uuid and is
+	// torn down on return.
+	persistent := args.persist && strings.TrimSpace(args.agentName) != ""
+	var childID string
+	if persistent {
+		childID = peerSessionID(args.agentName)
+		touchPeer(d.Loop, childID) // LRU-evicts the oldest peer past the cap
+	} else {
+		childID = delegateSessionIDPrefix + uuid.NewString()
+	}
 	child := d.Loop.GetOrCreateSession(childID)
-	defer d.Loop.ClearSession(childID) // ephemeral - tear down on return
+	if !persistent {
+		defer d.Loop.ClearSession(childID) // ephemeral - tear down on return
+	}
 
 	// Scope the child's tool surface to the requested subset (pinned
 	// discipline tools always stay).
@@ -319,6 +359,75 @@ func (d *Delegate) run(ctx context.Context, args runArgs) (string, error) {
 		return string(b), nil
 	}
 	return summary, nil
+}
+
+// ── persistent named-peer registry ────────────────────────────────────────
+//
+// A persistent peer is a delegate whose session is NOT torn down on return,
+// keyed by a stable id derived from agent_name. Repeated consults with the
+// same name resume the same session (and its accumulated context). To keep a
+// long-running process from leaking unbounded peer contexts, we LRU-evict the
+// oldest peer once the live set exceeds maxLivePeers.
+
+var (
+	peerMu       sync.Mutex
+	peerLastUsed = map[string]time.Time{}
+)
+
+// peerSessionID returns the stable session id for a named persistent peer.
+func peerSessionID(name string) string {
+	return peerSessionPrefix + slugPeer(name)
+}
+
+// touchPeer records that a peer was just used and evicts the
+// least-recently-used peer (clearing its session) when the live set exceeds
+// maxLivePeers. The just-touched peer always carries the newest timestamp so
+// it is never the eviction target.
+func touchPeer(loop *Loop, id string) {
+	peerMu.Lock()
+	defer peerMu.Unlock()
+	peerLastUsed[id] = time.Now()
+	if len(peerLastUsed) <= maxLivePeers {
+		return
+	}
+	var oldestID string
+	var oldest time.Time
+	for pid, t := range peerLastUsed {
+		if oldestID == "" || t.Before(oldest) {
+			oldestID, oldest = pid, t
+		}
+	}
+	if oldestID != "" && oldestID != id {
+		delete(peerLastUsed, oldestID)
+		if loop != nil {
+			loop.ClearSession(oldestID)
+		}
+	}
+}
+
+// slugPeer normalises a peer name into a stable, session-id-safe slug
+// (lowercase alphanumerics, runs of other chars collapsed to a single dash).
+func slugPeer(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if s == "" {
+		s = "peer"
+	}
+	return s
 }
 
 // DelegateParallel runs N delegate calls concurrently and returns their

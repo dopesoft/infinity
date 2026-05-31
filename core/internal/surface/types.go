@@ -54,12 +54,30 @@ type Item struct {
 	Importance       *int           `json:"importance,omitempty"`
 	ImportanceReason string         `json:"importanceReason,omitempty"`
 	Metadata         map[string]any `json:"metadata"`
+	// Actions are boss-tappable controls rendered on the dashboard card.
+	// Tapping one fires POST /api/surface/action which seeds an autonomous
+	// agent turn prompted with the action's Intent + this item's context -
+	// the "surface return-path". Empty for a render-only item.
+	Actions          []Action       `json:"actions,omitempty"`
 	Status           Status         `json:"status"`
 	SnoozedUntil     *time.Time     `json:"snoozedUntil,omitempty"`
 	ExpiresAt        *time.Time     `json:"expiresAt,omitempty"`
 	CreatedAt        time.Time      `json:"createdAt"`
 	UpdatedAt        time.Time      `json:"updatedAt"`
 	ScoredAt         *time.Time     `json:"scoredAt,omitempty"`
+}
+
+// Action is a boss-tappable control on a surfaced item - the return half of
+// the surface contract. The agent attaches actions when it surfaces something
+// actionable ("Draft reply", "Snooze 1d", "Open thread"); the dashboard
+// renders them; tapping one POSTs {id, action_id} to /api/surface/action,
+// which runs Intent as an autonomous agent turn against this item. Generic:
+// any producer invents actions, no per-action Go anywhere.
+type Action struct {
+	ID     string `json:"id"`              // stable id, unique within the item
+	Label  string `json:"label"`           // button text shown to the boss
+	Intent string `json:"intent"`          // natural-language instruction the agent runs
+	Style  string `json:"style,omitempty"` // UI hint: "primary" | "default" | "danger"
 }
 
 // Patch is the set of fields a surface_update call may change. Nil fields
