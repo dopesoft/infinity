@@ -53,6 +53,14 @@ type wsServerEvent struct {
 	ToolResult *wsToolEvent   `json:"tool_result,omitempty"`
 	RunID      string         `json:"run_id,omitempty"`
 	Progress   *float32       `json:"progress,omitempty"`
+	// ProgressStep/Action/Detail/Task enrich background_build_progress
+	// frames so Studio can render a tool-call-sized card with the live
+	// step number, the verb (edit/write/bash…), the current file or
+	// command, and the originating task — instead of a bare "step N" line.
+	ProgressStep   int    `json:"progress_step,omitempty"`
+	ProgressAction string `json:"progress_action,omitempty"`
+	ProgressDetail string `json:"progress_detail,omitempty"`
+	ProgressTask   string `json:"progress_task,omitempty"`
 	// Steered marks a delta/complete that resulted from a mid-turn steer
 	// (used by the studio transcript to render the "↳ steered" badge on
 	// reconstructed bubbles). Empty by default.

@@ -190,11 +190,15 @@ func (s *Server) BroadcastBackgroundProgress(p agent.BackgroundProgress) {
 		text = "working"
 	}
 	ev := wsServerEvent{
-		Type:       "proactive_message",
-		SessionID:  p.ParentSession,
-		Text:       text,
-		FindingKind:"background_build_progress",
-		RunID:      p.RunID,
+		Type:           "proactive_message",
+		SessionID:      p.ParentSession,
+		Text:           text,
+		FindingKind:    "background_build_progress",
+		RunID:          p.RunID,
+		ProgressStep:   p.Step,
+		ProgressAction: strings.TrimSpace(p.Action),
+		ProgressDetail: strings.TrimSpace(p.Detail),
+		ProgressTask:   strings.TrimSpace(p.Task),
 	}
 	if p.Progress != nil {
 		v := *p.Progress

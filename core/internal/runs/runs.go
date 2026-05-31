@@ -132,6 +132,15 @@ func Track(ctx context.Context, kind Kind, targetID, label string, source Source
 	return TrackWith(ctx, global, kind, targetID, label, source, fn)
 }
 
+// BeginGlobal books a run on the package-global tracker and returns its
+// Handle so a long detached job can push mid-flight Handle.Progress updates
+// (the common case: a background_build whose mem_runs.progress must stay live
+// for the dock to read). Pair with Handle.Finish. nil-safe when the global
+// tracker is unset (returns a no-op Handle).
+func BeginGlobal(ctx context.Context, kind Kind, targetID, label string, source Source) *Handle {
+	return global.Begin(ctx, kind, targetID, label, source)
+}
+
 // TrackWith is the dependency-injected form for tests and callers that
 // hold a specific *Tracker. Production code uses Track.
 func TrackWith(ctx context.Context, t *Tracker, kind Kind, targetID, label string, source Source, fn func(context.Context) error) error {

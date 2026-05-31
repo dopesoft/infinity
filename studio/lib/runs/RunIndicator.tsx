@@ -154,7 +154,7 @@ export function RunIndicator({
         {running ? (latest?.progress_label || "running…") : label}
       </Button>
       {!running && latest?.status === "error" && (
-        <p className="break-words rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
+        <p className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
           {latest.error || "error"}
         </p>
       )}

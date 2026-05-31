@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bot, Check, CornerDownRight, Copy, FileText, Paperclip, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
+import { Bot, Check, CornerDownRight, Copy, FileText, Paperclip, Sparkles, ThumbsDown, ThumbsUp, TriangleAlert, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -125,11 +124,6 @@ export function ChatBubble({
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | undefined>(undefined);
   const [now, setNow] = useState(0);
-  const progressValue =
-    typeof message.progress === "number"
-      ? Math.max(0, Math.min(100, Math.round(message.progress * 100)))
-      : null;
-  const isBackgroundProgress = message.proactiveKind === "background_build_progress";
 
   // Hydrate vote from localStorage after mount (SSR-safe).
   useEffect(() => {
@@ -149,8 +143,32 @@ export function ChatBubble({
 
   if (message.error) {
     return (
-      <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-        {message.error}
+      <div className="flex w-full min-w-0 max-w-full justify-start">
+        <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 sm:max-w-[80%]">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-danger">
+              <TriangleAlert className="size-3.5 shrink-0" />
+              <span>Error</span>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                void navigator.clipboard.writeText(message.error ?? "").catch(() => undefined)
+              }
+              aria-label="Copy error"
+              title="Copy error"
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
+            >
+              <Copy className="size-3" />
+            </button>
+          </div>
+          {/* break-words + [overflow-wrap:anywhere] are load-bearing: provider
+              errors routinely embed a long unbroken request URL / token / path
+              that otherwise blows past the right border. */}
+          <p className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed text-danger">
+            {message.error}
+          </p>
+        </div>
       </div>
     );
   }
@@ -263,16 +281,7 @@ export function ChatBubble({
                 <span>skill learned</span>
               </div>
             )}
-            {isBackgroundProgress && (
-              <div className="mb-2 space-y-2 rounded-xl border border-info/30 bg-info/5 p-2">
-                <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-info">
-                  <span>background build</span>
-                  <span>{progressValue != null ? `${progressValue}%` : "running"}</span>
-                </div>
-                <Progress value={progressValue ?? 15} className="h-1.5 bg-info/15" />
-              </div>
-            )}
-            {message.proactive && message.proactiveKind !== "skill_promoted" && !isBackgroundProgress && (
+            {message.proactive && message.proactiveKind !== "skill_promoted" && (
               <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-info">
                 <Sparkles className="size-3" />
                 <span>

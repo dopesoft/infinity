@@ -117,14 +117,36 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// We reconstruct the transcript from two durable sources, UNIONed so a
+	// single ORDER BY interleaves them by time:
+	//   1. mem_observations — the user/assistant turns + tool cards.
+	//   2. mem_turns rows with status='errored' — surfaced as synthetic
+	//      'TaskErrored' rows so a provider/API error (OpenAI, rate limit,
+	//      etc.) the boss saw live still shows on reload/another device.
+	//      Without this the error only lived in transient WS state and
+	//      vanished on refresh, so he couldn't ask Jarvis to fix it later.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hook_name, COALESCE(raw_text, ''), COALESCE(payload::text, ''), created_at
-		FROM mem_observations
-		WHERE session_id = $1
-		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure')
-		  AND EXISTS (
+		SELECT hook_name, raw_text, payload, created_at FROM (
+			SELECT hook_name,
+			       COALESCE(raw_text, '')     AS raw_text,
+			       COALESCE(payload::text, '') AS payload,
+			       created_at
+			FROM mem_observations
+			WHERE session_id = $1
+			  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure')
+			UNION ALL
+			SELECT 'TaskErrored'                       AS hook_name,
+			       COALESCE(error, '')                 AS raw_text,
+			       ''                                  AS payload,
+			       COALESCE(ended_at, started_at)      AS created_at
+			FROM mem_turns
+			WHERE session_id = $1::uuid
+			  AND status = 'errored'
+			  AND COALESCE(error, '') <> ''
+		) combined
+		WHERE EXISTS (
 		    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
-		  )
+		)
 		ORDER BY created_at ASC
 		LIMIT 500
 	`, id)
@@ -172,6 +194,17 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 
 		text = strings.TrimSpace(text)
 		if text == "" {
+			continue
+		}
+		// TaskErrored is the durable turn-level error (provider/API failure).
+		// Studio renders it as the red error card via Kind="error".
+		if hook == "TaskErrored" {
+			out = append(out, sessionMessageDTO{
+				Role:      "assistant",
+				Kind:      "error",
+				Text:      text,
+				CreatedAt: createdAt.UTC().Format(time.RFC3339),
+			})
 			continue
 		}
 		// DashboardSeed is the Discuss-with-Jarvis context block. It reads

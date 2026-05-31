@@ -58,6 +58,12 @@ export type WSEvent =
       curiosity_id?: string;
       run_id?: string;
       progress?: number;
+      // Enriched background_build_progress fields — step number, the verb
+      // (edit/write/bash…), the current file/command, and the originating task.
+      progress_step?: number;
+      progress_action?: string;
+      progress_detail?: string;
+      progress_task?: string;
     }
   // browser_frame is one live CDP screencast frame from the cloud browser,
   // routed to this session's tab so the boss watches Jarvis drive in real

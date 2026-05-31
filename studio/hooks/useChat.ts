@@ -34,6 +34,11 @@ export type ChatMessage = {
   createdAt: number;
   runId?: string;
   progress?: number;
+  // Enriched background_build_progress fields, consumed by BackgroundProgressCard.
+  progressStep?: number;
+  progressAction?: string;
+  progressDetail?: string;
+  progressTask?: string;
   // Only set on `thinking` messages once the agent moves on to text/tool/complete.
   endedAt?: number;
   // steered=true on a user message means it was typed and sent mid-turn -
@@ -185,6 +190,18 @@ function rowToMessage(r: ServerRow): ChatMessage {
       };
     }
     return msg;
+  }
+  // Durable turn-level error (provider/API failure) replayed from mem_turns.
+  // Rebuilt into the same red error card the live WS path renders, so it
+  // survives reload / a second device instead of vanishing.
+  if (r.kind === "error") {
+    return {
+      id: makeId(),
+      role: "assistant",
+      text: "",
+      error: r.text,
+      createdAt: new Date(r.created_at).getTime() || Date.now(),
+    };
   }
   return {
     id: makeId(),
@@ -1035,7 +1052,12 @@ export function useChat() {
                 ) {
                   next[i] = {
                     ...msg,
+                    text: ev.text || msg.text,
                     progress: ev.progress ?? msg.progress,
+                    progressStep: ev.progress_step ?? msg.progressStep,
+                    progressAction: ev.progress_action ?? msg.progressAction,
+                    progressDetail: ev.progress_detail ?? msg.progressDetail,
+                    progressTask: ev.progress_task ?? msg.progressTask,
                     pending: false,
                     createdAt: Date.now(),
                   };
@@ -1052,6 +1074,10 @@ export function useChat() {
                   proactiveKind: ev.finding_kind,
                   runId: ev.run_id,
                   progress: ev.progress,
+                  progressStep: ev.progress_step,
+                  progressAction: ev.progress_action,
+                  progressDetail: ev.progress_detail,
+                  progressTask: ev.progress_task,
                   pending: false,
                   createdAt: Date.now(),
                 },

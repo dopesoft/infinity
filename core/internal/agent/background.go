@@ -74,6 +74,15 @@ type BackgroundProgress struct {
 	Label         string
 	Status        string
 	Progress      *float32
+	// Step is the running tool-call count (1-based) for the current stage,
+	// 0 for setup/wrap-up phases that aren't tied to a tool call.
+	Step int
+	// Action is the cleaned verb for the active tool (edit / write / bash /
+	// read / thinking …) so Studio can render a chip without re-parsing Label.
+	Action string
+	// Detail is the most informative target of the active step — the file
+	// being written/edited/read, or a clipped command for shell calls.
+	Detail string
 }
 
 const (
@@ -179,28 +188,39 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 	defer cancel()
 
 	start := time.Now()
-	var summary string
 
 	// mem_runs row: status=running now, ok/error + summary on finish.
 	// Studio's useRuns() shows this live and it survives refresh / device
-	// switch. The summary is stored on the row so the result is durable
-	// even if the boss never sees the live chat bubble.
-	runErr := runs.Track(ctx, runs.KindBackgroundBuild, runID, label, runs.SourceAgent, func(ctx context.Context) error {
-		if b.OnProgress != nil {
-			phase := float32(0.05)
-			b.OnProgress(context.Background(), BackgroundProgress{
-				RunID:         runID,
-				ParentSession: parentSession,
-				Task:          task,
-				Label:         "queued background worker",
-				Status:        "running",
-				Progress:      &phase,
-			})
-		}
-		s, e := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed)
-		summary = s
-		return e
-	})
+	// switch. We use Begin/Finish (not Track) so we can push live
+	// Handle.Progress updates mid-flight — that's what keeps the pinned
+	// BackgroundJobDock's progress bar + current-step durable across
+	// navigation, refresh, and a second device (it reads mem_runs, not the
+	// transient WS stream).
+	handle := runs.BeginGlobal(ctx, runs.KindBackgroundBuild, runID, label, runs.SourceAgent)
+	if b.OnProgress != nil {
+		phase := float32(0.05)
+		b.OnProgress(context.Background(), BackgroundProgress{
+			RunID:         runID,
+			ParentSession: parentSession,
+			Task:          task,
+			Label:         "queued background worker",
+			Status:        "running",
+			Progress:      &phase,
+			Action:        "queued",
+		})
+	}
+	handle.Progress(ctx, 0.05, "queued")
+
+	// persist mirrors every live progress beat onto the mem_runs row so the
+	// dock (which reads useRuns, not the WS) stays current.
+	persist := func(fraction float32, progressLabel string) {
+		handle.Progress(ctx, fraction, progressLabel)
+	}
+	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed, persist)
+	// Close on a detached context: a timed-out run's ctx is already
+	// cancelled by the defer above, but the row must still flip to ok/error
+	// (otherwise it spins until the next boot's RecoverStranded sweep).
+	handle.Finish(context.Background(), runErr, "")
 
 	res := BackgroundResult{
 		RunID:         runID,
@@ -222,7 +242,7 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 // runToCompletion spins an ephemeral session, runs the agent loop on the
 // DEFAULT (settings) model to completion, and returns the final text.
 // Mirrors delegate.run, minus the synchronous-return contract.
-func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string) (string, error) {
+func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string, persist func(fraction float32, progressLabel string)) (string, error) {
 	childID := backgroundSessionIDPrefix + uuid.NewString()
 	child := b.Loop.GetOrCreateSession(childID)
 	defer b.Loop.ClearSession(childID)
@@ -259,7 +279,7 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 		}
 		return progress
 	}
-	publishProgress := func(label string, progress *float32) {
+	publishProgress := func(label, action, detail string, step int, progress *float32) {
 		trimmed := strings.TrimSpace(label)
 		if trimmed == "" || b.OnProgress == nil {
 			return
@@ -275,9 +295,17 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 			Label:         trimmed,
 			Status:        "running",
 			Progress:      progress,
+			Step:          step,
+			Action:        strings.TrimSpace(action),
+			Detail:        strings.TrimSpace(detail),
 		})
+		// Mirror onto the mem_runs row so the pinned dock (useRuns) shows the
+		// same live progress + step the inline card does, durably.
+		if progress != nil && persist != nil {
+			persist(*progress, backgroundDurableLabel(step, strings.TrimSpace(action), strings.TrimSpace(detail), trimmed))
+		}
 	}
-	publishProgress("starting background build", func() *float32 { v := float32(0.1); return &v }())
+	publishProgress("starting background build", "setup", "", 0, func() *float32 { v := float32(0.1); return &v }())
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -287,18 +315,20 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 				finalText.WriteString(ev.TextDelta)
 				if strings.TrimSpace(ev.TextDelta) != "" {
 					phase := float32(0.95)
-					publishProgress("writing final summary", &phase)
+					publishProgress("writing final summary", "summary", "", toolCallCount, &phase)
 				}
 			case EventToolCall:
 				if ev.ToolCall != nil {
 					toolCallCount++
 					phase := progressForToolCalls(toolCallCount)
-					publishProgress(backgroundProgressLabel(ev.ToolCall.Name, toolCallCount), &phase)
+					action := backgroundActionName(ev.ToolCall.Name)
+					detail := backgroundProgressDetail(ev.ToolCall.Input)
+					publishProgress(backgroundProgressLabel(ev.ToolCall.Name, toolCallCount), action, detail, toolCallCount, &phase)
 				}
 			case EventThinking:
 				if text := strings.TrimSpace(ev.ThinkingDelta); text != "" {
 					phase := progressForToolCalls(toolCallCount)
-					publishProgress(text, &phase)
+					publishProgress(text, "thinking", "", toolCallCount, &phase)
 				}
 			case EventError:
 				runErr = errors.New(ev.Error)
@@ -342,18 +372,7 @@ func backgroundLabel(task string) string {
 }
 
 func backgroundProgressLabel(toolName string, toolCallCount int) string {
-	name := strings.TrimSpace(toolName)
-	if name == "" {
-		if toolCallCount <= 0 {
-			return "working"
-		}
-		return fmt.Sprintf("running step %d", toolCallCount)
-	}
-	name = strings.TrimPrefix(name, "functions.")
-	name = strings.TrimPrefix(name, "claude_code__")
-	name = strings.TrimPrefix(name, "composio__")
-	name = strings.ReplaceAll(name, "_", " ")
-	name = strings.TrimSpace(strings.ToLower(name))
+	name := backgroundActionName(toolName)
 	if name == "" {
 		if toolCallCount <= 0 {
 			return "working"
@@ -364,6 +383,77 @@ func backgroundProgressLabel(toolName string, toolCallCount int) string {
 		return name
 	}
 	return fmt.Sprintf("step %d: %s", toolCallCount, name)
+}
+
+// backgroundActionName reduces a fully-qualified tool name to the short verb
+// Studio shows as a chip — "claude_code__edit" → "edit", "composio__gmail_send"
+// → "gmail send". Returns "" when the name is empty.
+func backgroundActionName(toolName string) string {
+	name := strings.TrimSpace(toolName)
+	if name == "" {
+		return ""
+	}
+	name = strings.TrimPrefix(name, "functions.")
+	name = strings.TrimPrefix(name, "claude_code__")
+	name = strings.TrimPrefix(name, "composio__")
+	name = strings.ReplaceAll(name, "_", " ")
+	return strings.TrimSpace(strings.ToLower(name))
+}
+
+// backgroundProgressDetail pulls the most informative target out of a tool
+// call's input so the progress card can show WHAT the agent is touching — the
+// file being written/edited/read, or a clipped command/query for shell and
+// search calls. Returns "" when nothing useful is present.
+func backgroundProgressDetail(input map[string]any) string {
+	if input == nil {
+		return ""
+	}
+	// File-shaped tools: surface the path verbatim (it's already concise and
+	// the most useful "current file being written" signal).
+	for _, k := range []string{"file_path", "path", "filename", "file", "notebook_path"} {
+		if v, ok := input[k].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	// Shell / search / fetch: clip the command or query to a single line.
+	for _, k := range []string{"command", "cmd", "script", "pattern", "query", "url"} {
+		if v, ok := input[k].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return clipBackgroundDetail(s)
+			}
+		}
+	}
+	return ""
+}
+
+// backgroundDurableLabel builds the compact one-line string persisted to
+// mem_runs.progress_label, read by the pinned dock: "step 3 · edit: path.ts".
+// Falls back to the raw label when there's no action/detail (setup phases).
+func backgroundDurableLabel(step int, action, detail, fallback string) string {
+	body := fallback
+	switch {
+	case detail != "" && action != "":
+		body = action + ": " + detail
+	case detail != "":
+		body = detail
+	case action != "":
+		body = action
+	}
+	if step > 0 {
+		return fmt.Sprintf("step %d · %s", step, body)
+	}
+	return body
+}
+
+func clipBackgroundDetail(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	const max = 120
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 const backgroundBasePrompt = `You are the full autonomous coding agent, running in the BACKGROUND on a detached session. The boss kicked off this task by voice or chat and has moved on - he is NOT watching. You have the complete tool loadout (read, write, edit, exec, memory, bridges).

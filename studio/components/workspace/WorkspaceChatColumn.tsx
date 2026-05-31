@@ -2,6 +2,7 @@
 
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
+import { BackgroundJobDock } from "@/components/BackgroundJobDock";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
 import { useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
@@ -47,6 +48,11 @@ export function WorkspaceChatColumn({
             finding in this same session. */}
         <ConversationStream messages={chat.messages} onQuickReply={chat.send} working={chat.isStreaming} />
       </div>
+      {/* Pinned background-job status — sits above the composer, always
+          visible while a background_build runs so the boss can keep chatting
+          and still watch its progress without scrolling up. Renders nothing
+          when no background job is in flight. */}
+      <BackgroundJobDock />
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <PromptInputBox
           onSend={(text, files) => {

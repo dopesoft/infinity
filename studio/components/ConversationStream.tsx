@@ -5,6 +5,7 @@ import { ArrowDown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ToolCallCard } from "@/components/ToolCallCard";
+import { BackgroundProgressCard } from "@/components/BackgroundProgressCard";
 import { AgentTeamCard } from "@/components/AgentTeamCard";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { SkillProposalCard } from "@/components/SkillProposalCard";
@@ -173,6 +174,15 @@ export function ConversationStream({
               <div className="flex justify-start">
                 <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                   <ThinkingBlock message={m} />
+                </div>
+              </div>
+            ) : m.proactiveKind === "background_build_progress" ? (
+              // Live background_build run - a full-width card on the same
+              // left rail as tool calls, so the boss can watch the run's
+              // current step / file instead of squinting at a tiny bar.
+              <div className="flex justify-start">
+                <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+                  <BackgroundProgressCard message={m} />
                 </div>
               </div>
             ) : m.seeded ? (
