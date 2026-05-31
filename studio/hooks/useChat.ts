@@ -21,6 +21,8 @@ export type ChatMessage = {
   latencyMs?: number;
   error?: string;
   createdAt: number;
+  runId?: string;
+  progress?: number;
   // Only set on `thinking` messages once the agent moves on to text/tool/complete.
   endedAt?: number;
   // steered=true on a user message means it was typed and sent mid-turn -
@@ -829,6 +831,43 @@ export function useChat() {
           if (ev.finding_kind === "surprise" && !ev.curiosity_id) {
             break;
           }
+          if (ev.finding_kind === "background_build_progress" && ev.run_id) {
+            setMessages((prev) => {
+              const next = closePendingThinking(prev);
+              for (let i = next.length - 1; i >= 0; i--) {
+                const msg = next[i];
+                if (
+                  msg.role === "assistant" &&
+                  msg.proactive &&
+                  msg.proactiveKind === "background_build_progress" &&
+                  msg.runId === ev.run_id
+                ) {
+                  next[i] = {
+                    ...msg,
+                    text: ev.text,
+                    progress: ev.progress ?? msg.progress,
+                    createdAt: Date.now(),
+                  };
+                  return [...next];
+                }
+              }
+              return [
+                ...next,
+                {
+                  id: makeId(),
+                  role: "assistant",
+                  text: ev.text,
+                  proactive: true,
+                  proactiveKind: ev.finding_kind,
+                  runId: ev.run_id,
+                  progress: ev.progress,
+                  pending: true,
+                  createdAt: Date.now(),
+                },
+              ];
+            });
+            break;
+          }
           clearWatchdog();
           setMessages((prev) => [
             ...closePendingThinking(prev),
@@ -839,6 +878,8 @@ export function useChat() {
               proactive: true,
               proactiveKind: ev.finding_kind,
               curiosityId: ev.curiosity_id,
+              runId: ev.run_id,
+              progress: ev.progress,
               createdAt: Date.now(),
             },
           ]);

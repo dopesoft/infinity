@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 )
@@ -171,6 +172,35 @@ func (s *Server) BroadcastSkillPromoted(name, description string) {
 		Text:        text,
 		FindingKind: "skill_promoted",
 	})
+}
+
+// BroadcastBackgroundProgress surfaces a live progress update for a
+// background_build run into the parent chat session. The payload carries
+// the run id so Studio can bind it to mem_runs and render a real progress
+// card instead of appending a fresh bubble on every update.
+func (s *Server) BroadcastBackgroundProgress(p agent.BackgroundProgress) {
+	if s == nil {
+		return
+	}
+	if strings.TrimSpace(p.ParentSession) == "" {
+		return
+	}
+	text := strings.TrimSpace(p.Label)
+	if text == "" {
+		text = "working"
+	}
+	ev := wsServerEvent{
+		Type:       "proactive_message",
+		SessionID:  p.ParentSession,
+		Text:       text,
+		FindingKind:"background_build_progress",
+		RunID:      p.RunID,
+	}
+	if p.Progress != nil {
+		v := *p.Progress
+		ev.Progress = &v
+	}
+	s.sessionSender(p.ParentSession)(ev)
 }
 
 // BroadcastBackgroundDone surfaces the completion of a background_build

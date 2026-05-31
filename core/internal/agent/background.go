@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ type BackgroundAgent struct {
 	// push. nil-safe: when unset, the run still completes + persists to
 	// mem_runs, it just doesn't actively notify.
 	OnDone func(ctx context.Context, r BackgroundResult)
+	// OnProgress receives best-effort stage updates for the live parent
+	// chat session while the detached run is still executing. Wired in
+	// serve.go to broadcast proactive chat bubbles that share the run id,
+	// so Studio can render an updating progress card tied to mem_runs.
+	OnProgress func(ctx context.Context, p BackgroundProgress)
 }
 
 // BackgroundResult is the completion payload handed to OnDone.
@@ -55,6 +61,19 @@ type BackgroundResult struct {
 	Summary       string
 	Err           string
 	DurationMS    int64
+}
+
+// BackgroundProgress is a best-effort live status update emitted while a
+// background build is still running. Stage progress is coarse by design:
+// the loop does not expose an exact task DAG, so we surface the current
+// tool/stage label plus optional 0..1 progress when available.
+type BackgroundProgress struct {
+	RunID         string
+	ParentSession string
+	Task          string
+	Label         string
+	Status        string
+	Progress      *float32
 }
 
 const (
@@ -167,7 +186,18 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 	// switch. The summary is stored on the row so the result is durable
 	// even if the boss never sees the live chat bubble.
 	runErr := runs.Track(ctx, runs.KindBackgroundBuild, runID, label, runs.SourceAgent, func(ctx context.Context) error {
-		s, e := b.runToCompletion(ctx, task, brief, allowed)
+		if b.OnProgress != nil {
+			phase := float32(0.05)
+			b.OnProgress(context.Background(), BackgroundProgress{
+				RunID:         runID,
+				ParentSession: parentSession,
+				Task:          task,
+				Label:         "queued background worker",
+				Status:        "running",
+				Progress:      &phase,
+			})
+		}
+		s, e := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed)
 		summary = s
 		return e
 	})
@@ -192,7 +222,7 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 // runToCompletion spins an ephemeral session, runs the agent loop on the
 // DEFAULT (settings) model to completion, and returns the final text.
 // Mirrors delegate.run, minus the synchronous-return contract.
-func (b *BackgroundAgent) runToCompletion(ctx context.Context, task, brief string, allowed []string) (string, error) {
+func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string) (string, error) {
 	childID := backgroundSessionIDPrefix + uuid.NewString()
 	child := b.Loop.GetOrCreateSession(childID)
 	defer b.Loop.ClearSession(childID)
@@ -211,10 +241,43 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, task, brief strin
 
 	events := make(chan RunEvent, 256)
 	var (
-		finalText strings.Builder
-		runErr    error
-		wg        sync.WaitGroup
+		finalText     strings.Builder
+		runErr        error
+		wg            sync.WaitGroup
+		toolCallCount int
+		lastProgress  string
 	)
+	progressForToolCalls := func(count int) float32 {
+		if count <= 0 {
+			return 0.15
+		}
+		// Stage-based, asymptotic progress: initial setup = 0.05, each tool
+		// call advances the bar, but leave room for wrap-up and final summary.
+		progress := float32(0.15 + 0.1*float32(count))
+		if progress > 0.9 {
+			progress = 0.9
+		}
+		return progress
+	}
+	publishProgress := func(label string, progress *float32) {
+		trimmed := strings.TrimSpace(label)
+		if trimmed == "" || b.OnProgress == nil {
+			return
+		}
+		if trimmed == lastProgress {
+			return
+		}
+		lastProgress = trimmed
+		b.OnProgress(context.Background(), BackgroundProgress{
+			RunID:         runID,
+			ParentSession: parentSession,
+			Task:          task,
+			Label:         trimmed,
+			Status:        "running",
+			Progress:      progress,
+		})
+	}
+	publishProgress("starting background build", func() *float32 { v := float32(0.1); return &v }())
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -222,6 +285,21 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, task, brief strin
 			switch ev.Kind {
 			case EventDelta:
 				finalText.WriteString(ev.TextDelta)
+				if strings.TrimSpace(ev.TextDelta) != "" {
+					phase := float32(0.95)
+					publishProgress("writing final summary", &phase)
+				}
+			case EventToolCall:
+				if ev.ToolCall != nil {
+					toolCallCount++
+					phase := progressForToolCalls(toolCallCount)
+					publishProgress(backgroundProgressLabel(ev.ToolCall.Name, toolCallCount), &phase)
+				}
+			case EventThinking:
+				if text := strings.TrimSpace(ev.ThinkingDelta); text != "" {
+					phase := progressForToolCalls(toolCallCount)
+					publishProgress(text, &phase)
+				}
 			case EventError:
 				runErr = errors.New(ev.Error)
 			}
@@ -261,6 +339,31 @@ func backgroundLabel(task string) string {
 		return "background build"
 	}
 	return line
+}
+
+func backgroundProgressLabel(toolName string, toolCallCount int) string {
+	name := strings.TrimSpace(toolName)
+	if name == "" {
+		if toolCallCount <= 0 {
+			return "working"
+		}
+		return fmt.Sprintf("running step %d", toolCallCount)
+	}
+	name = strings.TrimPrefix(name, "functions.")
+	name = strings.TrimPrefix(name, "claude_code__")
+	name = strings.TrimPrefix(name, "composio__")
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		if toolCallCount <= 0 {
+			return "working"
+		}
+		return fmt.Sprintf("running step %d", toolCallCount)
+	}
+	if toolCallCount <= 0 {
+		return name
+	}
+	return fmt.Sprintf("step %d: %s", toolCallCount, name)
 }
 
 const backgroundBasePrompt = `You are the full autonomous coding agent, running in the BACKGROUND on a detached session. The boss kicked off this task by voice or chat and has moved on - he is NOT watching. You have the complete tool loadout (read, write, edit, exec, memory, bridges).

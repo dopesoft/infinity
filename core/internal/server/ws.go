@@ -40,6 +40,8 @@ type wsServerEvent struct {
 	Message    string         `json:"message,omitempty"`
 	ToolCall   *wsToolEvent   `json:"tool_call,omitempty"`
 	ToolResult *wsToolEvent   `json:"tool_result,omitempty"`
+	RunID      string         `json:"run_id,omitempty"`
+	Progress   *float32       `json:"progress,omitempty"`
 	// Steered marks a delta/complete that resulted from a mid-turn steer
 	// (used by the studio transcript to render the "↳ steered" badge on
 	// reconstructed bubbles). Empty by default.

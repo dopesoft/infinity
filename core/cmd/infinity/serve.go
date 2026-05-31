@@ -1432,6 +1432,9 @@ func serveCmd() *cobra.Command {
 				// still get told when it's done.
 				if bgAgent != nil {
 					localPush := pushSender
+					bgAgent.OnProgress = func(ctx context.Context, p agent.BackgroundProgress) {
+						srv.BroadcastBackgroundProgress(p)
+					}
 					bgAgent.OnDone = func(ctx context.Context, r agent.BackgroundResult) {
 						srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
 						if localPush != nil {

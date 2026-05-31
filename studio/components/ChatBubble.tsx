@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Bot, Check, CornerDownRight, Copy, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -66,6 +67,11 @@ export function ChatBubble({
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | undefined>(undefined);
   const [now, setNow] = useState(0);
+  const progressValue =
+    typeof message.progress === "number"
+      ? Math.max(0, Math.min(100, Math.round(message.progress * 100)))
+      : null;
+  const isBackgroundProgress = message.proactiveKind === "background_build_progress";
 
   // Hydrate vote from localStorage after mount (SSR-safe).
   useEffect(() => {
@@ -198,7 +204,16 @@ export function ChatBubble({
                 <span>skill learned</span>
               </div>
             )}
-            {message.proactive && message.proactiveKind !== "skill_promoted" && (
+            {isBackgroundProgress && (
+              <div className="mb-2 space-y-2 rounded-xl border border-info/30 bg-info/5 p-2">
+                <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-info">
+                  <span>background build</span>
+                  <span>{progressValue != null ? `${progressValue}%` : "running"}</span>
+                </div>
+                <Progress value={progressValue ?? 15} className="h-1.5 bg-info/15" />
+              </div>
+            )}
+            {message.proactive && message.proactiveKind !== "skill_promoted" && !isBackgroundProgress && (
               <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-info">
                 <Sparkles className="size-3" />
                 <span>

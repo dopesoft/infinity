@@ -56,6 +56,8 @@ export type WSEvent =
       text: string;
       finding_kind?: string;
       curiosity_id?: string;
+      run_id?: string;
+      progress?: number;
     }
   // browser_frame is one live CDP screencast frame from the cloud browser,
   // routed to this session's tab so the boss watches Jarvis drive in real
