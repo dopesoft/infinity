@@ -57,7 +57,8 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, COALESCE(lessons::text, '[]'), created_at
 		  FROM mem_reflections
-		 WHERE jsonb_array_length(COALESCE(lessons, '[]'::jsonb)) > 0
+		 WHERE jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array'
+		   AND jsonb_array_length(COALESCE(lessons, '[]'::jsonb)) > 0
 		 ORDER BY created_at DESC
 		 LIMIT $1
 	`, limit)

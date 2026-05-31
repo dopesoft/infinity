@@ -206,7 +206,7 @@ func (s *Store) ExtractExamples(ctx context.Context, limit int) (ExtractResult, 
 			       critique AS input_text,
 			       COALESCE((
 			         SELECT string_agg(elem->>'text', E'\n')
-			           FROM jsonb_array_elements(lessons) elem
+			           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array' THEN COALESCE(lessons, '[]'::jsonb) ELSE '[]'::jsonb END) elem
 			       ), '') AS output_text,
 			       quality_score::float8 AS score,
 			       jsonb_build_object(
@@ -216,7 +216,8 @@ func (s *Store) ExtractExamples(ctx context.Context, limit int) (ExtractResult, 
 			       ) AS metadata,
 			       created_at
 			  FROM mem_reflections
-			 WHERE lessons <> '[]'::jsonb OR critique <> ''
+			 WHERE (jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array' AND COALESCE(lessons, '[]'::jsonb) <> '[]'::jsonb)
+			    OR critique <> ''
 			 ORDER BY created_at DESC
 			 LIMIT $1
 		), ins AS (

@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,5 +29,26 @@ func TestParseOptionsKeepsDefaultsOnBadInput(t *testing.T) {
 	def := DefaultOptions()
 	if opts.ReflectWindow != def.ReflectWindow || opts.ReflectLimit != def.ReflectLimit {
 		t.Fatalf("expected defaults, got %+v", opts)
+	}
+}
+
+func TestStageErrorFormatting(t *testing.T) {
+	err := StageError{Stage: "gym_extract", Message: "cannot extract elements from a scalar"}
+	if got := err.Error(); got != "gym_extract: cannot extract elements from a scalar" {
+		t.Fatalf("unexpected error string %q", got)
+	}
+}
+
+func TestReportErrorSummary(t *testing.T) {
+	report := Report{Errors: []StageError{
+		{Stage: "reflection_chains", Message: "cannot get array length of a scalar"},
+		{Stage: "gym_extract", Message: "cannot extract elements from a scalar"},
+	}}
+	got := report.ErrorSummary()
+	if !strings.Contains(got, "reflection_chains: cannot get array length of a scalar") {
+		t.Fatalf("missing first stage in summary: %q", got)
+	}
+	if !strings.Contains(got, "gym_extract: cannot extract elements from a scalar") {
+		t.Fatalf("missing second stage in summary: %q", got)
 	}
 }

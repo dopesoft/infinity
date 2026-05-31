@@ -39,6 +39,25 @@ type Options struct {
 	GymLimit      int           `json:"gym_limit"`
 }
 
+type StageError struct {
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
+}
+
+func (e StageError) Error() string {
+	if strings.TrimSpace(e.Stage) == "" {
+		return strings.TrimSpace(e.Message)
+	}
+	if strings.TrimSpace(e.Message) == "" {
+		return strings.TrimSpace(e.Stage)
+	}
+	return strings.TrimSpace(e.Stage) + ": " + strings.TrimSpace(e.Message)
+}
+
+func (e StageError) SummaryLine() string {
+	return e.Error()
+}
+
 type Report struct {
 	StartedAt              time.Time                `json:"started_at"`
 	EndedAt                time.Time                `json:"ended_at"`
@@ -49,7 +68,7 @@ type Report struct {
 	TrainingExamples       plasticity.ExtractResult `json:"training_examples"`
 	TrainingEmbedded       int                      `json:"training_embedded"`
 	WorldModel             worldmodel.ExtractReport `json:"world_model"`
-	Errors                 []string                 `json:"errors,omitempty"`
+	Errors                 []StageError             `json:"errors,omitempty"`
 	Options                Options                  `json:"options"`
 }
 
@@ -67,6 +86,21 @@ func (r Report) HasCoreChanges() bool {
 		r.Consolidate.Forget.OverProjectCap > 0 ||
 		r.Consolidate.Forget.ObsTraceTrimmed > 0 ||
 		r.Consolidate.Forget.ObsConversationTrimmed > 0
+}
+
+func (r Report) ErrorSummary() string {
+	if len(r.Errors) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(r.Errors))
+	for _, stageErr := range r.Errors {
+		line := strings.TrimSpace(stageErr.SummaryLine())
+		if line == "" {
+			continue
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func DefaultOptions() Options {
@@ -127,9 +161,9 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 		if err == nil {
 			return
 		}
-		msg := stage + ": " + err.Error()
-		report.Errors = append(report.Errors, msg)
-		deps.Logger.Warn("nightly cognition stage failed", "stage", stage, "err", err)
+		entry := StageError{Stage: strings.TrimSpace(stage), Message: strings.TrimSpace(err.Error())}
+		report.Errors = append(report.Errors, entry)
+		deps.Logger.Warn("nightly cognition stage failed", "stage", entry.Stage, "err", entry.Message)
 	}
 
 	if deps.Reflector != nil {
@@ -197,7 +231,7 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 		addErr("surface_report", err)
 	}
 	if len(report.Errors) > 0 {
-		return report, fmt.Errorf("nightly cognition completed with %d error(s)", len(report.Errors))
+		return report, fmt.Errorf("nightly cognition failed stages: %s", report.ErrorSummary())
 	}
 	return report, nil
 }
@@ -224,6 +258,9 @@ func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report
 		report.TrainingExamples.Inserted,
 		report.WorldModel.Upserted,
 	)
+	if errSummary := report.ErrorSummary(); errSummary != "" {
+		body += " Failed stages: " + errSummary + "."
+	}
 	_, err := store.Upsert(ctx, &surface.Item{
 		Surface:          "system",
 		Kind:             "insight",
