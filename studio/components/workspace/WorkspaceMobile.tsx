@@ -9,6 +9,7 @@ import { WorkspaceFilesColumn } from "@/components/workspace/WorkspaceFilesColum
 import { CanvasRightPane } from "@/components/canvas/CanvasRightPane";
 import type { useChat } from "@/hooks/useChat";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 
 type ChatHook = ReturnType<typeof useChat>;
 
@@ -39,6 +40,8 @@ export function WorkspaceMobile({
   onModeChange: (m: WorkspaceMode) => void;
 }) {
   const store = useCanvasStore();
+  const gitPending = useGitPendingCount(store.root, chat.sessionId);
+  const filesBadge = gitPending;
 
   function handleFileOpen() {
     onModeChange("canvas");
@@ -60,7 +63,7 @@ export function WorkspaceMobile({
           icon={<Files className="size-4" />}
           label="Files"
           onClick={() => onModeChange("files")}
-          badge={store.dirtyPaths.size}
+          badge={filesBadge}
         />
         <ModePill
           active={mode === "canvas"}

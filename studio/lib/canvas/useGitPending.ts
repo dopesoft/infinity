@@ -5,13 +5,12 @@ import { fetchCanvasGitStatus } from "@/lib/canvas/api";
 
 /**
  * useGitPendingCount — polls `git status` for the current canvas repo and
- * returns the count of "pending" changes the boss should see before the
- * next deploy.
+ * returns the count of changed FILES in git for the current canvas repo.
  *
- * "Pending" here means anything that is NOT yet on the remote:
+ * Badge semantics are intentionally file-based, not deploy-state based:
  *
  *   - entries (staged + unstaged + untracked = files differing from HEAD)
- *   - ahead   (commits on the local branch that haven't been pushed yet)
+ *   - ahead commits DO NOT increment the badge
  *
  * Why this hook exists separately from CanvasGitPanel's own poll: the
  * panel only polls when it's the active tab. The Changes-tab badge has
@@ -39,12 +38,11 @@ export function useGitPendingCount(root: string | null, sessionId: string | null
       try {
         const res = await fetchCanvasGitStatus(root, sessionId ?? "");
         if (cancelled || !res) return;
-        // Pending = uncommitted files + commits ahead of remote. We don't
-        // subtract `behind` — that's "remote has stuff we don't have," not
-        // "we have stuff to deploy."
+        // Badge = raw changed-file count in git. Opening/viewing files must
+        // never decrement it, and pushed-vs-unpushed commit state is shown
+        // elsewhere in the git panel/status bar.
         const entries = res.entries?.length ?? 0;
-        const ahead = res.ahead ?? 0;
-        setCount(entries + ahead);
+        setCount(entries);
       } catch {
         // Network blip — keep last known count rather than zeroing out;
         // a missing badge is more confusing than a stale one.

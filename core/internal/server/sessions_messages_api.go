@@ -10,14 +10,24 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
+type sessionAttachmentDTO struct {
+	Name        string `json:"name"`
+	MimeType    string `json:"mime_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PreviewURL  string `json:"preview_url,omitempty"`
+	StoragePath string `json:"storage_path,omitempty"`
+}
+
 // sessionMessageDTO is the on-the-wire shape returned by
 // GET /api/sessions/{id}/messages. We reconstruct the visible conversation
 // from mem_observations (the canonical capture log) so a browser refresh
 // never loses what the user can see - even across core restarts.
 type sessionMessageDTO struct {
-	Role      string `json:"role"`
-	Text      string `json:"text"`
-	CreatedAt string `json:"created_at"`
+	Role        string                 `json:"role"`
+	Text        string                 `json:"text"`
+	CreatedAt   string                 `json:"created_at"`
+	Attachments []sessionAttachmentDTO `json:"attachments,omitempty"`
 	// Kind discriminates non-plain messages so Studio can render them
 	// with distinct chrome. Empty for ordinary user/assistant turns;
 	// "dashboard_seed" for the context block injected by Discuss-with-Jarvis.
@@ -37,6 +47,29 @@ type sessionMessageDTO struct {
 	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
 	ToolOutput  string          `json:"tool_output,omitempty"`
 	ToolIsError bool            `json:"tool_is_error,omitempty"`
+}
+
+func attachmentsFromPayload(payload string) []sessionAttachmentDTO {
+	if strings.TrimSpace(payload) == "" {
+		return nil
+	}
+	var p struct {
+		Attachments []sessionAttachmentDTO `json:"attachments"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil || len(p.Attachments) == 0 {
+		return nil
+	}
+	out := make([]sessionAttachmentDTO, 0, len(p.Attachments))
+	for _, att := range p.Attachments {
+		if strings.TrimSpace(att.Name) == "" && strings.TrimSpace(att.Text) == "" && strings.TrimSpace(att.PreviewURL) == "" {
+			continue
+		}
+		out = append(out, att)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // handleSessionMessages serves /api/sessions/{id}/messages by reading the
@@ -146,9 +179,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		// distinct "from dashboard" card - so it carries a Kind + the
 		// originating dashboard item kind parsed out of the seed payload.
 		msg := sessionMessageDTO{
-			Role:      "assistant",
-			Text:      text,
-			CreatedAt: createdAt.UTC().Format(time.RFC3339),
+			Role:        "assistant",
+			Text:        text,
+			CreatedAt:   createdAt.UTC().Format(time.RFC3339),
+			Attachments: attachmentsFromPayload(payload),
 		}
 		switch hook {
 		case "UserPromptSubmit":

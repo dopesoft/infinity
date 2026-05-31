@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CanvasFileTree } from "@/components/canvas/CanvasFileTree";
 import { CanvasGitPanel } from "@/components/canvas/CanvasGitPanel";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 
 /**
  * WorkspaceFilesColumn - second column in the unified workspace.
@@ -24,6 +25,8 @@ export function WorkspaceFilesColumn({
 }) {
   const store = useCanvasStore();
   const [tab, setTab] = useState<"files" | "git">("files");
+  const gitPending = useGitPendingCount(store.root, sessionId ?? null);
+  const badgeCount = gitPending;
 
   // The status bar's "N to commit / N to push" jumps here - one channel so the
   // bar (deep in the Files tree) can flip this column to the Changes tab where
@@ -67,9 +70,9 @@ export function WorkspaceFilesColumn({
             >
               <GitBranch className="size-3.5" />
               Changes
-              {store.dirtyPaths.size > 0 && (
+              {badgeCount > 0 && (
                 <span className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning/20 px-1 font-mono text-[10px] font-semibold leading-none text-warning">
-                  {store.dirtyPaths.size > 99 ? "99+" : store.dirtyPaths.size}
+                  {badgeCount > 99 ? "99+" : badgeCount}
                 </span>
               )}
             </TabsTrigger>

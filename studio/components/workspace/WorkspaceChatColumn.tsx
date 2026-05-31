@@ -49,15 +49,15 @@ export function WorkspaceChatColumn({
       </div>
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <PromptInputBox
-          onSend={(text) => {
+          onSend={(text, files) => {
             const t = text.trim();
-            if (!t) return;
+            if (!t && (!files || files.length === 0)) return;
             // `send` itself decides whether to start a new turn or
             // queue a steer based on chat.isStreaming. The model the
             // turn runs against is resolved server-side from the
             // settings store (driven by this chip + the Settings page),
             // so the WS frame stays a plain {type, session, content}.
-            chat.send(t);
+            void chat.send(t, files);
           }}
           onSlash={(cmd) => {
             const c = cmd.toLowerCase();

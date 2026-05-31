@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -25,10 +26,20 @@ func splitProto(h string) []string {
 
 func hasBearerPrefix(p string) bool { return strings.HasPrefix(p, "bearer.") }
 
+type wsClientAttachment struct {
+	Name        string `json:"name"`
+	MimeType    string `json:"mime_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PreviewURL  string `json:"preview_url,omitempty"`
+	StoragePath string `json:"storage_path,omitempty"`
+}
+
 type wsClientMessage struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id"`
-	Content   string `json:"content"`
+	Type        string               `json:"type"`
+	SessionID   string               `json:"session_id"`
+	Content     string               `json:"content"`
+	Attachments []wsClientAttachment `json:"attachments,omitempty"`
 }
 
 type wsServerEvent struct {
@@ -104,7 +115,7 @@ type wsToolInputDelta struct {
 type wsDocumentCreated struct {
 	Format   string `json:"format"`
 	Filename string `json:"filename"`
-	Path     string `json:"path"`               // cloud workspace path (for download)
+	Path     string `json:"path"` // cloud workspace path (for download)
 	Bytes    int64  `json:"bytes,omitempty"`
 	Markdown string `json:"markdown,omitempty"` // rendered inline for md/report formats
 	PDFPath  string `json:"pdf_path,omitempty"` // sibling PDF for preview, when also_pdf
@@ -144,6 +155,99 @@ var upgrader = websocket.Upgrader{
 	// don't fail the handshake (browsers reject upgrades whose response
 	// drops the requested subprotocol entirely).
 	Subprotocols: []string{},
+}
+
+func formatAttachmentsForPrompt(atts []wsClientAttachment) string {
+	if len(atts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nAttached files:\n")
+	for i, att := range atts {
+		name := strings.TrimSpace(att.Name)
+		if name == "" {
+			name = "attachment"
+		}
+		fmt.Fprintf(&b, "%d. %s", i+1, name)
+		meta := make([]string, 0, 2)
+		if mt := strings.TrimSpace(att.MimeType); mt != "" {
+			meta = append(meta, mt)
+		}
+		if att.SizeBytes > 0 {
+			meta = append(meta, fmt.Sprintf("%d bytes", att.SizeBytes))
+		}
+		if len(meta) > 0 {
+			fmt.Fprintf(&b, " (%s)", strings.Join(meta, ", "))
+		}
+		b.WriteString("\n")
+		if text := strings.TrimSpace(att.Text); text != "" {
+			b.WriteString("Contents:\n")
+			b.WriteString(text)
+			if !strings.HasSuffix(text, "\n") {
+				b.WriteString("\n")
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func withAttachmentContext(content string, atts []wsClientAttachment) string {
+	formatted := formatAttachmentsForPrompt(atts)
+	if formatted == "" {
+		return content
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return formatted
+	}
+	return trimmed + formatted
+}
+
+func attachmentPayload(atts []wsClientAttachment) []map[string]any {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(atts))
+	for _, att := range atts {
+		row := map[string]any{}
+		if v := strings.TrimSpace(att.Name); v != "" {
+			row["name"] = v
+		}
+		if v := strings.TrimSpace(att.MimeType); v != "" {
+			row["mime_type"] = v
+		}
+		if att.SizeBytes > 0 {
+			row["size_bytes"] = att.SizeBytes
+		}
+		if v := strings.TrimSpace(att.Text); v != "" {
+			row["text"] = v
+		}
+		if v := strings.TrimSpace(att.PreviewURL); v != "" {
+			row["preview_url"] = v
+		}
+		if v := strings.TrimSpace(att.StoragePath); v != "" {
+			row["storage_path"] = v
+		}
+		if len(row) > 0 {
+			out = append(out, row)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func payloadWithAttachments(payload map[string]any, atts []wsClientAttachment) map[string]any {
+	rows := attachmentPayload(atts)
+	if len(rows) == 0 {
+		return payload
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["attachments"] = rows
+	return payload
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +362,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// iterations and appends the message as a fresh user turn.
 			// If no turn is in flight, fall through to start a normal
 			// turn so the client doesn't have to distinguish.
-			if s.steerTurn(msg.SessionID, msg.Content, send) {
+			if s.steerTurn(msg.SessionID, withAttachmentContext(msg.Content, msg.Attachments), send) {
 				/* WAL the steer too - corrections often arrive as
 				 * mid-turn nudges and we need them on the durable
 				 * SESSION-STATE log just like a first message. */
@@ -279,7 +383,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.appendWAL(connCtx, sessionID, msg.Content)
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
+			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), send)
 			continue
 		case "message":
 			sessionID := msg.SessionID
@@ -309,7 +413,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types - the
 			// server figures it out.
-			if s.steerTurn(sessionID, msg.Content, send) {
+			if s.steerTurn(sessionID, withAttachmentContext(msg.Content, msg.Attachments), send) {
 				continue
 			}
 			// First message for this session since startup (or after
@@ -317,7 +421,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, msg.Content, send)
+			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), send)
 		case "resume":
 			// Run one agent turn against a session's existing history
 			// without a fresh user message. Discuss-with-Jarvis uses this:

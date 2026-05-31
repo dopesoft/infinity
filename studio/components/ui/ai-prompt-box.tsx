@@ -3,7 +3,7 @@
 import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw } from "lucide-react";
+import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw, FileText } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
@@ -245,6 +245,31 @@ function voiceCaptionLabel(v: {
   }
 }
 
+type ComposerFile = {
+  file: File;
+  previewUrl?: string;
+};
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/");
+}
+
+function fileKey(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function trimFiles(files: File[]): File[] {
+  const seen = new Set<string>();
+  const out: File[] = [];
+  for (const file of files) {
+    const key = fileKey(file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(file);
+  }
+  return out.slice(0, 8);
+}
+
 // ── PromptInputBox ────────────────────────────────────────────────────────
 export interface PromptInputBoxProps {
   onSend: (message: string, files?: File[]) => void;
@@ -344,8 +369,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       else setInternalModelId(nextId);
     };
 
-    const [files, setFiles] = React.useState<File[]>([]);
-    const [filePreviews, setFilePreviews] = React.useState<Record<string, string>>({});
+    const [composerFiles, setComposerFiles] = React.useState<ComposerFile[]>([]);
     const [selectedImage, setSelectedImage] = React.useState<string | null>(null);
 
     // Voice mode (OpenAI Realtime over WebRTC). Owns its own state
@@ -370,48 +394,67 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
     }, [value]);
 
-    const isImage = (f: File) => f.type.startsWith("image/");
+    React.useEffect(() => {
+      return () => {
+        for (const item of composerFiles) {
+          if (item.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
+        }
+      };
+    }, [composerFiles]);
 
-    const processFile = React.useCallback((file: File) => {
-      if (!isImage(file)) return;
-      if (file.size > 10 * 1024 * 1024) return;
-      setFiles([file]);
-      const reader = new FileReader();
-      reader.onload = (e) => setFilePreviews({ [file.name]: e.target?.result as string });
-      reader.readAsDataURL(file);
-    }, []);
-
-    const handlePaste = React.useCallback((e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith("image/")) {
-          const f = items[i].getAsFile();
-          if (f) {
-            e.preventDefault();
-            processFile(f);
-            return;
+    const addFiles = React.useCallback((incoming: File[]) => {
+      const nextFiles = trimFiles([...composerFiles.map((item) => item.file), ...incoming]);
+      setComposerFiles((prev) => {
+        const nextKeys = new Set(nextFiles.map(fileKey));
+        for (const item of prev) {
+          if (!nextKeys.has(fileKey(item.file)) && item.previewUrl?.startsWith("blob:")) {
+            URL.revokeObjectURL(item.previewUrl);
           }
         }
-      }
-    }, [processFile]);
+        return nextFiles.map((file) => {
+          const existing = prev.find((item) => fileKey(item.file) === fileKey(file));
+          if (existing) return existing;
+          return {
+            file,
+            previewUrl: isImageFile(file) ? URL.createObjectURL(file) : undefined,
+          };
+        });
+      });
+    }, [composerFiles]);
+
+    const handlePaste = React.useCallback((e: ClipboardEvent) => {
+      const list = Array.from(e.clipboardData?.files ?? []);
+      if (list.length === 0) return;
+      e.preventDefault();
+      addFiles(list);
+    }, [addFiles]);
 
     React.useEffect(() => {
       document.addEventListener("paste", handlePaste);
       return () => document.removeEventListener("paste", handlePaste);
     }, [handlePaste]);
 
+    const clearFiles = React.useCallback(() => {
+      setComposerFiles((prev) => {
+        for (const item of prev) {
+          if (item.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
+        }
+        return [];
+      });
+    }, []);
+
     const handleSubmit = () => {
       const trimmed = value.trim();
+      const files = composerFiles.map((item) => item.file);
       if (!trimmed && files.length === 0) return;
       if (onSlash && trimmed.startsWith("/") && onSlash(trimmed)) {
         setValue("");
+        clearFiles();
         return;
       }
       onSend(trimmed, files);
       setValue("");
-      setFiles([]);
-      setFilePreviews({});
+      clearFiles();
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -421,10 +464,18 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       }
     };
 
-    const handleRemoveFile = () => {
-      setFiles([]);
-      setFilePreviews({});
-    };
+    const handleRemoveFile = React.useCallback((target: File) => {
+      setComposerFiles((prev) => {
+        const removedKey = fileKey(target);
+        return prev.filter((item) => {
+          const shouldKeep = fileKey(item.file) !== removedKey;
+          if (!shouldKeep && item.previewUrl?.startsWith("blob:")) {
+            URL.revokeObjectURL(item.previewUrl);
+          }
+          return shouldKeep;
+        });
+      });
+    }, []);
 
     const handleDragOver = React.useCallback((e: React.DragEvent) => {
       e.preventDefault();
@@ -434,11 +485,11 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
     const handleDrop = React.useCallback((e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const dropped = Array.from(e.dataTransfer.files).filter(isImage);
-      if (dropped.length > 0) processFile(dropped[0]);
-    }, [processFile]);
+      const dropped = Array.from(e.dataTransfer.files ?? []);
+      if (dropped.length > 0) addFiles(dropped);
+    }, [addFiles]);
 
-    const hasContent = value.trim() !== "" || files.length > 0;
+    const hasContent = value.trim() !== "" || composerFiles.length > 0;
 
     return (
       <TooltipProvider delayDuration={300}>
@@ -460,38 +511,61 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
           )}
         >
           {/* File previews */}
-          {files.length > 0 && !voiceActive && (
+          {composerFiles.length > 0 && !voiceActive && (
             <div className="flex flex-wrap gap-2 p-0 pb-1.5">
-              {files.map((file, i) => (
-                <div key={i} className="relative">
-                  {filePreviews[file.name] && (
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedImage(filePreviews[file.name])}
-                      className="h-14 w-14 cursor-pointer overflow-hidden rounded-xl border"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={filePreviews[file.name]}
-                        alt={file.name}
-                        className="h-full w-full object-cover"
-                      />
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveFile();
-                        }}
-                        className="absolute right-0.5 top-0.5 rounded-full bg-black/70 p-0.5"
-                        aria-label="Remove attachment"
+              {composerFiles.map(({ file, previewUrl }) => {
+                const image = !!previewUrl;
+                return (
+                  <div key={fileKey(file)} className="relative">
+                    {image ? (
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedImage(previewUrl)}
+                        className="h-14 w-14 cursor-pointer overflow-hidden rounded-xl border"
                       >
-                        <X className="h-3 w-3 text-white" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={previewUrl}
+                          alt={file.name}
+                          className="h-full w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveFile(file);
+                          }}
+                          className="absolute right-0.5 top-0.5 rounded-full bg-black/70 p-0.5"
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X className="h-3 w-3 text-white" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex min-w-[180px] max-w-[240px] items-center gap-2 rounded-xl border bg-background/70 px-3 py-2 text-xs text-foreground">
+                        <FileText className="size-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium">{file.name}</div>
+                          <div className="truncate text-[10px] text-muted-foreground">
+                            {[file.type || undefined, file.size > 0 ? `${Math.round(file.size / 1024) || 1} KB` : undefined]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFile(file)}
+                          className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -639,23 +713,24 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                             "transition-colors hover:bg-muted hover:text-foreground",
                             "disabled:cursor-not-allowed disabled:opacity-50",
                           )}
-                          aria-label="Attach image"
+                          aria-label="Attach files"
                         >
                           <Paperclip className="h-4 w-4" />
                           <input
                             ref={uploadRef}
                             type="file"
-                            accept="image/*"
+                            accept="image/*,.pdf,.txt,.md,.markdown,.json,.csv,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.c,.cc,.cpp,.h,.hpp,.css,.html,.xml,.yaml,.yml,.toml,.ini,.sql"
+                            multiple
                             className="hidden"
                             onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              if (f) processFile(f);
+                              const incoming = Array.from(e.target.files ?? []);
+                              if (incoming.length > 0) addFiles(incoming);
                               if (e.target) e.target.value = "";
                             }}
                           />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Attach image</TooltipContent>
+                      <TooltipContent side="top">Attach files</TooltipContent>
                     </Tooltip>
                   )}
                 </>

@@ -9,10 +9,21 @@ import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
+export type ChatAttachment = {
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  text?: string;
+  previewUrl?: string;
+  storagePath?: string;
+  file?: File;
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
   text: string;
+  attachments?: ChatAttachment[];
   toolCall?: WSToolEvent;
   toolResult?: WSToolEvent;
   pending?: boolean;
@@ -86,6 +97,14 @@ type ServerRow = {
   kind?: string;
   seed_kind?: string;
   curiosity_id?: string;
+  attachments?: {
+    name?: string;
+    mime_type?: string;
+    size_bytes?: number;
+    text?: string;
+    preview_url?: string;
+    storage_path?: string;
+  }[];
   // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
   // survives navigation/reload. tool_output present = completed.
   tool_call_id?: string;
@@ -94,6 +113,47 @@ type ServerRow = {
   tool_output?: string;
   tool_is_error?: boolean;
 };
+
+function rowAttachmentsToChat(atts?: ServerRow["attachments"]): ChatAttachment[] | undefined {
+  if (!Array.isArray(atts) || atts.length === 0) return undefined;
+  const out = atts
+    .map((att) => ({
+      name: att.name?.trim() || "attachment",
+      mimeType: att.mime_type?.trim() || undefined,
+      sizeBytes: typeof att.size_bytes === "number" ? att.size_bytes : undefined,
+      text: att.text?.trim() || undefined,
+      previewUrl: att.preview_url?.trim() || undefined,
+      storagePath: att.storage_path?.trim() || undefined,
+    }))
+    .filter((att) => att.name || att.previewUrl || att.text);
+  return out.length > 0 ? out : undefined;
+}
+
+function dedupeAttachments(atts: ChatAttachment[]): ChatAttachment[] {
+  const seen = new Set<string>();
+  const out: ChatAttachment[] = [];
+  for (const att of atts) {
+    const key = [
+      att.name,
+      att.sizeBytes ?? "",
+      att.mimeType ?? "",
+      att.storagePath ?? "",
+      att.previewUrl ?? "",
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(att);
+  }
+  return out;
+}
+
+function mergeAttachmentLists(
+  local?: ChatAttachment[],
+  remote?: ChatAttachment[],
+): ChatAttachment[] | undefined {
+  const merged = dedupeAttachments([...(local ?? []), ...(remote ?? [])]);
+  return merged.length > 0 ? merged : undefined;
+}
 
 // rowToMessage converts a canonical server transcript row into the local
 // ChatMessage shape. Single source of truth for the mapping so the
@@ -130,6 +190,7 @@ function rowToMessage(r: ServerRow): ChatMessage {
     id: makeId(),
     role: r.role,
     text: r.text,
+    attachments: rowAttachmentsToChat(r.attachments),
     createdAt: new Date(r.created_at).getTime() || Date.now(),
     seeded: r.kind === "dashboard_seed" || undefined,
     seedKind: r.seed_kind || undefined,
@@ -317,6 +378,119 @@ function findLatestPendingAssistant(messages: ChatMessage[]): number {
   return -1;
 }
 
+type SendAttachment = {
+  name: string;
+  mime_type?: string;
+  size_bytes?: number;
+  text?: string;
+  preview_url?: string;
+  storage_path?: string;
+};
+
+function toSendAttachment(att: ChatAttachment): SendAttachment {
+  return {
+    name: att.name,
+    mime_type: att.mimeType,
+    size_bytes: att.sizeBytes,
+    text: att.text,
+    preview_url: att.previewUrl,
+    storage_path: att.storagePath,
+  };
+}
+
+function isUsableAttachment(att: ChatAttachment): boolean {
+  return Boolean(att.name || att.previewUrl || att.text || att.mimeType || att.storagePath);
+}
+
+function isBlobAttachmentPreview(att: ChatAttachment): boolean {
+  return Boolean(att.file && att.previewUrl?.startsWith("blob:"));
+}
+
+function attachmentsEqual(a?: ChatAttachment[], b?: ChatAttachment[]): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (
+      left[i].name !== right[i].name ||
+      left[i].mimeType !== right[i].mimeType ||
+      left[i].sizeBytes !== right[i].sizeBytes ||
+      left[i].text !== right[i].text ||
+      left[i].previewUrl !== right[i].previewUrl ||
+      left[i].storagePath !== right[i].storagePath
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergePendingAttachments(
+  messages: ChatMessage[],
+  role: ChatRole,
+  text: string,
+  attachments?: ChatAttachment[],
+): ChatMessage[] {
+  if (!attachments || attachments.length === 0) return messages;
+  return messages.map((message) => {
+    if (message.role !== role) return message;
+    if (message.text !== text) return message;
+    if (!attachmentsEqual(message.attachments, attachments)) return message;
+    const merged = attachments.map((att, idx) => {
+      const current = message.attachments?.[idx];
+      if (!current) return att;
+      return {
+        ...att,
+        previewUrl: att.previewUrl || current.previewUrl,
+        file: current.file || att.file,
+      };
+    });
+    return { ...message, attachments: merged };
+  });
+}
+
+function fileToAttachmentPayload(file: File): Promise<ChatAttachment> {
+  return new Promise((resolve) => {
+    const base: ChatAttachment = {
+      name: file.name || "attachment",
+      mimeType: file.type || undefined,
+      sizeBytes: typeof file.size === "number" ? file.size : undefined,
+      file,
+    };
+    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+    if (previewUrl) base.previewUrl = previewUrl;
+    const canReadText =
+      file.type.startsWith("text/") ||
+      /\.(txt|md|json|csv|ts|tsx|js|jsx|py|go|rs|java|c|cc|cpp|h|hpp|css|html|xml|yaml|yml|toml|ini|sql)$/i.test(file.name);
+    if (!canReadText) {
+      resolve(base);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const raw = typeof reader.result === "string" ? reader.result : "";
+      const text = raw.trim();
+      resolve({
+        ...base,
+        text: text ? text.slice(0, 20_000) : undefined,
+      });
+    };
+    reader.onerror = () => resolve(base);
+    reader.readAsText(file);
+  });
+}
+
+function revokeMessageAttachmentUrls(messages: ChatMessage[]) {
+  for (const message of messages) {
+    if (!Array.isArray(message.attachments)) continue;
+    for (const att of message.attachments) {
+      if (isBlobAttachmentPreview(att)) {
+        URL.revokeObjectURL(att.previewUrl!);
+      }
+    }
+  }
+}
+
 export function useChat() {
   const ws = useWebSocket();
   const searchParams = useSearchParams();
@@ -353,6 +527,19 @@ export function useChat() {
       const serverFinishedTurn = rows[rows.length - 1]?.role === "assistant";
       setMessages((prev) => {
         const next = mergeServerRows(prev, rows);
+        if (rows.length > 0) {
+          const remoteTail = rowToMessage(rows[rows.length - 1]);
+          for (let i = next.length - 1; i >= 0; i--) {
+            const local = next[i];
+            if (local.role !== remoteTail.role) continue;
+            if (local.text !== remoteTail.text) continue;
+            const mergedAttachments = mergeAttachmentLists(local.attachments, remoteTail.attachments);
+            if (mergedAttachments !== local.attachments) {
+              next[i] = { ...local, attachments: mergedAttachments };
+            }
+            break;
+          }
+        }
         if (!serverFinishedTurn) return next;
         // Server already has a completed assistant turn at the tail.
         // Drop trailing live-only bubbles whose final frames landed on a
@@ -518,6 +705,10 @@ export function useChat() {
   }, [sessionId, messages]);
 
   useEffect(() => () => clearWatchdog(), [clearWatchdog]);
+
+  useEffect(() => {
+    return () => revokeMessageAttachmentUrls(messages);
+  }, [messages]);
 
   // Browser lifecycle rehydration. Some mobile/PWA resumes keep the
   // WebSocket object in OPEN state even though the stream died while the
@@ -844,8 +1035,8 @@ export function useChat() {
                 ) {
                   next[i] = {
                     ...msg,
-                    text: ev.text,
                     progress: ev.progress ?? msg.progress,
+                    pending: false,
                     createdAt: Date.now(),
                   };
                   return [...next];
@@ -861,7 +1052,7 @@ export function useChat() {
                   proactiveKind: ev.finding_kind,
                   runId: ev.run_id,
                   progress: ev.progress,
-                  pending: true,
+                  pending: false,
                   createdAt: Date.now(),
                 },
               ];
@@ -890,9 +1081,11 @@ export function useChat() {
   }, [ws, sessionId, armWatchdog, clearWatchdog]);
 
   const send = useCallback(
-    (content: string) => {
+    async (content: string, files?: File[]) => {
       const trimmed = content.trim();
-      if (!trimmed || !sessionId) return false;
+      const attachments = await Promise.all((files ?? []).map(fileToAttachmentPayload));
+      const usableAttachments = attachments.filter(isUsableAttachment);
+      if ((!trimmed && usableAttachments.length === 0) || !sessionId) return false;
 
       // Mid-turn steering. When a turn is already in flight, send the
       // input as `steer` instead of `message` - the server drops it into
@@ -902,17 +1095,30 @@ export function useChat() {
       // model in use is resolved server-side from the settings store
       // (not from the WS frame) so there's a single source of truth.
       if (isStreaming) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: makeId(),
-            role: "user",
-            text: trimmed,
-            steered: true,
-            createdAt: Date.now(),
-          },
-        ]);
-        const ok = ws.send({ type: "steer", session_id: sessionId, content: trimmed });
+        setMessages((prev) =>
+          mergePendingAttachments(
+            [
+              ...prev,
+              {
+                id: makeId(),
+                role: "user",
+                text: trimmed,
+                attachments: usableAttachments.length > 0 ? usableAttachments : undefined,
+                steered: true,
+                createdAt: Date.now(),
+              },
+            ],
+            "user",
+            trimmed,
+            usableAttachments,
+          ),
+        );
+        const ok = ws.send({
+          type: "steer",
+          session_id: sessionId,
+          content: trimmed,
+          attachments: usableAttachments.map(toSendAttachment),
+        });
         if (!ok) {
           setMessages((prev) => [
             ...prev,
@@ -928,17 +1134,35 @@ export function useChat() {
         return ok;
       }
 
-      setMessages((prev) => [
-        ...prev,
-        { id: makeId(), role: "user", text: trimmed, createdAt: Date.now() },
-        // Optimistic "Jarvis is thinking" indicator. Closes on first delta /
-        // tool_call / complete. Hidden in the renderer if it ends up empty.
-        { id: makeId(), role: "thinking", text: "", pending: true, createdAt: Date.now() },
-      ]);
+      setMessages((prev) =>
+        mergePendingAttachments(
+          [
+            ...prev,
+            {
+              id: makeId(),
+              role: "user",
+              text: trimmed,
+              attachments: usableAttachments.length > 0 ? usableAttachments : undefined,
+              createdAt: Date.now(),
+            },
+            // Optimistic "Jarvis is thinking" indicator. Closes on first delta /
+            // tool_call / complete. Hidden in the renderer if it ends up empty.
+            { id: makeId(), role: "thinking", text: "", pending: true, createdAt: Date.now() },
+          ],
+          "user",
+          trimmed,
+          usableAttachments,
+        ),
+      );
       turnStartRef.current = Date.now();
       setIsStreaming(true);
       armWatchdog();
-      const ok = ws.send({ type: "message", session_id: sessionId, content: trimmed });
+      const ok = ws.send({
+        type: "message",
+        session_id: sessionId,
+        content: trimmed,
+        attachments: usableAttachments.map(toSendAttachment),
+      });
       if (!ok) {
         clearWatchdog();
         setIsStreaming(false);

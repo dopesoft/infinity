@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bot, Check, CornerDownRight, Copy, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
+import { Bot, Check, CornerDownRight, Copy, FileText, Paperclip, Sparkles, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { submitMessageFeedback } from "@/lib/api";
@@ -50,6 +50,64 @@ function writeFeedback(map: FeedbackMap) {
   } catch {
     /* ignore */
   }
+}
+
+function formatAttachmentSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentStrip({ message, isUser }: { message: ChatMessage; isUser: boolean }) {
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) return null;
+  return (
+    <div
+      className={cn(
+        "mt-2 flex flex-wrap gap-2",
+        isUser ? "justify-end" : "justify-start",
+      )}
+    >
+      {attachments.map((att, idx) => {
+        const size = formatAttachmentSize(att.sizeBytes);
+        const isImage = !!att.previewUrl && (att.mimeType?.startsWith("image/") ?? true);
+        return isImage ? (
+          <div
+            key={`${att.name}-${idx}`}
+            className="overflow-hidden rounded-xl border border-border/60 bg-background/70"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={att.previewUrl}
+              alt={att.name}
+              className="h-24 w-24 object-cover"
+            />
+            <div className="flex items-center gap-1 border-t border-border/60 px-2 py-1 text-[11px] text-muted-foreground">
+              <Paperclip className="size-3 shrink-0" />
+              <span className="max-w-[6rem] truncate">{att.name}</span>
+            </div>
+          </div>
+        ) : (
+          <div
+            key={`${att.name}-${idx}`}
+            className="inline-flex max-w-full items-center gap-2 rounded-xl border border-border/60 bg-background/70 px-2.5 py-2 text-xs text-foreground"
+            title={att.name}
+          >
+            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <div className="truncate">{att.name}</div>
+              {(att.mimeType || size) && (
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {[att.mimeType, size].filter(Boolean).join(" · ")}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function ChatBubble({
@@ -167,6 +225,7 @@ export function ChatBubble({
               <span className="ml-0.5 inline-block size-2 animate-pulse rounded-full bg-current align-middle opacity-60" />
             )}
           </div>
+          <AttachmentStrip message={message} isUser />
         </div>
       ) : (
         // Agent row - pulsing dot OUTSIDE the bubble (left edge), bubble
@@ -226,6 +285,7 @@ export function ChatBubble({
             <div className="min-w-0 max-w-full">
               {message.text ? <Markdown text={message.text} /> : null}
             </div>
+            <AttachmentStrip message={message} isUser={false} />
             {message.interrupted && (
               <div className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-danger/80">
                 <Undo2 className="size-3" />
