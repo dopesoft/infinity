@@ -23,7 +23,7 @@ func GoalEntityUrgencyChecklist(pool *pgxpool.Pool) Checklist {
 			return nil, nil
 		}
 		rows, err := pool.Query(ctx, `
-			SELECT g.title, e.kind, e.name,
+			SELECT g.id::text, e.id::text, g.title, e.kind, e.name,
 			       COALESCE(o.raw_text, ''), o.created_at
 			  FROM mem_agent_goals g
 			  JOIN mem_entities    e ON e.id = g.entity_id
@@ -49,10 +49,10 @@ func GoalEntityUrgencyChecklist(pool *pgxpool.Pool) Checklist {
 		var out []Finding
 		for rows.Next() {
 			var (
-				goalTitle, entKind, entName, raw string
+				goalID, entID, goalTitle, entKind, entName, raw string
 			)
 			var ignoredCreated interface{}
-			if err := rows.Scan(&goalTitle, &entKind, &entName, &raw, &ignoredCreated); err != nil {
+			if err := rows.Scan(&goalID, &entID, &goalTitle, &entKind, &entName, &raw, &ignoredCreated); err != nil {
 				continue
 			}
 			snippet := raw
@@ -60,9 +60,10 @@ func GoalEntityUrgencyChecklist(pool *pgxpool.Pool) Checklist {
 				snippet = snippet[:220] + "…"
 			}
 			out = append(out, Finding{
-				Kind:   "pattern",
-				Title:  fmt.Sprintf("Goal %q has new activity on %s %q", goalTitle, entKind, entName),
-				Detail: snippet,
+				Kind:      "pattern",
+				Title:     fmt.Sprintf("Goal %q has new activity on %s %q", goalTitle, entKind, entName),
+				Detail:    snippet,
+				SourceTag: "goal_entity:" + goalID + ":" + entID,
 			})
 		}
 		return out, nil

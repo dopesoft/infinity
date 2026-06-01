@@ -22,7 +22,7 @@ func AgentGoalChecklist(pool *pgxpool.Pool) Checklist {
 			return nil, nil
 		}
 		rows, err := pool.Query(ctx, `
-			SELECT title, status, blocker, due_at
+			SELECT id::text, title, status, blocker, due_at
 			  FROM mem_agent_goals
 			 WHERE status IN ('active', 'blocked')
 			   AND (
@@ -45,10 +45,10 @@ func AgentGoalChecklist(pool *pgxpool.Pool) Checklist {
 		var out []Finding
 		for rows.Next() {
 			var (
-				title, status, blocker string
-				dueAt                  *time.Time
+				id, title, status, blocker string
+				dueAt                      *time.Time
 			)
-			if err := rows.Scan(&title, &status, &blocker, &dueAt); err != nil {
+			if err := rows.Scan(&id, &title, &status, &blocker, &dueAt); err != nil {
 				continue
 			}
 			detail := "No progress recorded in a while - revisit or close it."
@@ -59,9 +59,10 @@ func AgentGoalChecklist(pool *pgxpool.Pool) Checklist {
 				detail = fmt.Sprintf("Due %s - pick this back up.", dueAt.Format("Mon Jan 2"))
 			}
 			out = append(out, Finding{
-				Kind:   "pattern",
-				Title:  "Goal needs attention: " + title,
-				Detail: detail,
+				Kind:      "pattern",
+				Title:     "Goal needs attention: " + title,
+				Detail:    detail,
+				SourceTag: "agent_goal:" + id,
 			})
 		}
 		return out, nil

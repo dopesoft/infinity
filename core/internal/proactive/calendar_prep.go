@@ -69,9 +69,10 @@ func CalendarPrepChecklist(pool *pgxpool.Pool) Checklist {
 				detail += fmt.Sprintf("\n%d prep item(s) still open", openPrep)
 			}
 			out = append(out, Finding{
-				Kind:   "outcome",
-				Title:  fmt.Sprintf("Meeting %q in %d min", title, minutes),
-				Detail: detail,
+				Kind:      "outcome",
+				Title:     fmt.Sprintf("Meeting %q in %d min", title, minutes),
+				Detail:    detail,
+				SourceTag: "calendar:" + id,
 			})
 		}
 		return out, nil

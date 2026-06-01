@@ -2,6 +2,8 @@ package surface
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,6 +82,17 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 		if _, exists := it.Metadata["account"]; !exists && acct != "" {
 			it.Metadata["account"] = acct
 		}
+	}
+
+	// Operational notes on the 'system' surface have no natural external_id, so
+	// without help every run INSERTs a fresh row — identical "status: ok" cards
+	// stack up and become noise. Synthesize a stable id from the title so
+	// repeats UPSERT in place instead. Only 'system' is affected; user-facing
+	// surfaces (followups/inbox/…) keep their own keys, and any producer that
+	// already passes an external_id is untouched.
+	if it.ExternalID == "" && it.Surface == "system" {
+		sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(it.Title))))
+		it.ExternalID = "sys:" + hex.EncodeToString(sum[:8])
 	}
 
 	if it.Importance != nil {

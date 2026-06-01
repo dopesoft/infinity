@@ -39,9 +39,10 @@ func DefaultChecklist(pool *pgxpool.Pool) Checklist {
 				var due time.Time
 				if err := rows.Scan(&id, &txt, &due); err == nil {
 					findings = append(findings, Finding{
-						Kind:   "outcome",
-						Title:  "Decision follow-up overdue",
-						Detail: fmt.Sprintf("%s - %s", txt, due.Format(time.RFC3339)),
+						Kind:      "outcome",
+						Title:     "Decision follow-up overdue",
+						Detail:    fmt.Sprintf("%s - %s", txt, due.Format(time.RFC3339)),
+						SourceTag: "outcome:" + id,
 					})
 				}
 			}
@@ -62,9 +63,10 @@ func DefaultChecklist(pool *pgxpool.Pool) Checklist {
 				var n int
 				if err := rows.Scan(&id, &desc, &n); err == nil {
 					findings = append(findings, Finding{
-						Kind:   "pattern",
-						Title:  fmt.Sprintf("Repeated request seen %d×", n),
-						Detail: desc,
+						Kind:      "pattern",
+						Title:     fmt.Sprintf("Repeated request seen %d×", n),
+						Detail:    desc,
+						SourceTag: "pattern:" + id,
 					})
 				}
 			}
@@ -88,9 +90,10 @@ func DefaultChecklist(pool *pgxpool.Pool) Checklist {
 				var fails, total int
 				if err := rows.Scan(&name, &fails, &total); err == nil {
 					findings = append(findings, Finding{
-						Kind:   "self_heal",
-						Title:  fmt.Sprintf("Skill %s failing", name),
-						Detail: fmt.Sprintf("%d failures of %d runs in last 24h", fails, total),
+						Kind:      "self_heal",
+						Title:     fmt.Sprintf("Skill %s failing", name),
+						Detail:    fmt.Sprintf("%d failures of %d runs in last 24h", fails, total),
+						SourceTag: "skill_failrate:" + name,
 					})
 				}
 			}

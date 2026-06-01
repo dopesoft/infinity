@@ -39,7 +39,7 @@ const cronErrorPrefix = "error"
 
 // Repeated-tool-error threshold. A tool has to fail at least this many
 // times in the look-back window before it earns a Fix-this proposal.
-const repeatedErrorThreshold = 3
+const repeatedErrorThreshold = 5
 const repeatedErrorWindow = "24 hours"
 
 // MacBridgeProbe is the optional callback the healer uses to find out

@@ -217,6 +217,12 @@ func (s *Server) recordComposioWebhookFailure(
 	}
 
 	imp := 100
+	// Auto-expire so a connector alert doesn't live forever. While the account
+	// stays broken the webhook keeps firing and each upsert refreshes this
+	// window (card persists); once reconnected the events stop and the nightly
+	// SweepExpired clears the stale card within ~2 days instead of needing a
+	// manual dismiss.
+	expiresAt := time.Now().Add(48 * time.Hour)
 	store := surface.NewStore(s.pool, slog.Default())
 	item := &surface.Item{
 		Surface:          "alerts",
@@ -227,6 +233,7 @@ func (s *Server) recordComposioWebhookFailure(
 		Subtitle:         "Connector automation needs attention",
 		Body:             composioWebhookBody(sum),
 		Importance:       &imp,
+		ExpiresAt:        &expiresAt,
 		ImportanceReason: "Composio reported an account or trigger failure; connected workflows may be stale until it is reconnected.",
 		Metadata: map[string]any{
 			"event":      sum.Event,

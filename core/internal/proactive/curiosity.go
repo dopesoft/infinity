@@ -21,7 +21,7 @@ import (
 //     are still active.
 //  3. uncovered_mention - graph nodes referenced repeatedly with no memory
 //     providing context.
-//  4. high_surprise   - predictions where surprise_score >= 0.8.
+//  4. high_surprise   - predictions where surprise_score >= 0.85.
 //
 // Each gap writes a row to mem_curiosity_questions (unique on the open
 // question text). The heartbeat surfaces them as findings, and Studio can
@@ -145,7 +145,7 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 			  LEFT JOIN mem_memory_sources ms ON ms.observation_id = no.observation_id
 			 WHERE n.stale_flag = FALSE
 			 GROUP BY n.id, n.type, n.name
-			HAVING COUNT(no.observation_id) >= 3
+			HAVING COUNT(no.observation_id) >= 5
 			   AND COUNT(ms.memory_id) = 0
 		)
 		SELECT id::text, type, name FROM counts
@@ -175,7 +175,7 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 	rows, err := c.pool.Query(ctx, `
 		SELECT id::text, tool_name, expected, COALESCE(actual, '')
 		  FROM mem_predictions
-		 WHERE surprise_score >= 0.8
+		 WHERE surprise_score >= 0.85
 		   AND resolved_at > NOW() - INTERVAL '48 hours'
 		 ORDER BY surprise_score DESC, resolved_at DESC
 		 LIMIT 3

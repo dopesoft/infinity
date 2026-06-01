@@ -10,9 +10,20 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+)
+
+// Throttle bounds: a push with the same Tag isn't re-sent within
+// pushTagCooldown (unless Renotify is set), and no more than pushMaxPerHour
+// broadcast pushes go out in any rolling hour — a backstop against a runaway
+// detector flooding the boss's phone. In-memory, best-effort; fine for the
+// single-instance push path.
+const (
+	pushTagCooldown = 10 * time.Minute
+	pushMaxPerHour  = 20
 )
 
 // Notification is the payload encrypted + delivered to one or more
@@ -55,6 +66,47 @@ type Sender struct {
 	httpClient  *http.Client
 	logger      *slog.Logger
 	prefs       *PrefsStore
+
+	// throttle state (see allowPush)
+	throttleMu  sync.Mutex
+	lastByTag   map[string]time.Time
+	recentSends []time.Time
+}
+
+// allowPush enforces per-tag coalescing + a rolling-hour flood cap on the
+// broadcast Notify path. Returns false when the push should be dropped.
+// NotifyOne (explicit single-device sends) bypasses this on purpose.
+func (s *Sender) allowPush(n Notification) bool {
+	if s == nil {
+		return false
+	}
+	s.throttleMu.Lock()
+	defer s.throttleMu.Unlock()
+	now := time.Now()
+	if s.lastByTag == nil {
+		s.lastByTag = map[string]time.Time{}
+	}
+	if n.Tag != "" && !n.Renotify {
+		if last, ok := s.lastByTag[n.Tag]; ok && now.Sub(last) < pushTagCooldown {
+			return false
+		}
+	}
+	cutoff := now.Add(-time.Hour)
+	kept := s.recentSends[:0]
+	for _, t := range s.recentSends {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	s.recentSends = kept
+	if len(s.recentSends) >= pushMaxPerHour {
+		return false
+	}
+	if n.Tag != "" {
+		s.lastByTag[n.Tag] = now
+	}
+	s.recentSends = append(s.recentSends, now)
+	return true
 }
 
 // SetPrefs wires the per-kind toggle store. Notify() consults it before
@@ -156,6 +208,11 @@ func (s *Sender) Notify(ctx context.Context, n Notification) []DeliveryResult {
 		return nil
 	}
 	if s.prefs != nil && n.Kind != "" && !s.prefs.Allowed(ctx, n.Kind) {
+		return nil
+	}
+	// Throttle: coalesce same-tag repeats + cap broadcast volume per hour so a
+	// runaway detector can't spam the boss's devices.
+	if !s.allowPush(n) {
 		return nil
 	}
 	subs, err := s.store.Active(ctx)

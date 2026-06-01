@@ -223,7 +223,11 @@ func serveCmd() *cobra.Command {
 					// with the email-triage collapse — keeps "one skill per
 					// capability" true over time instead of needing a manual
 					// sweep every few weeks (migrations 075/076/080).
-					memory.RegisterConsolidateHook(proposals.DetectSkillFragmentation)
+					memory.RegisterConsolidateHook(proactive.RaiseSkillFragmentation)
+
+					// Auto-expire undecided skill/code proposals past their TTL
+					// (default 30d) so the review queue can't grow into noise.
+					memory.RegisterConsolidateHook(proposals.ExpireStaleProposals)
 
 					// Opt 7: every UpsertCandidate writes a mem_memories
 					// twin (tier='working') for the draft body. Embedded,

@@ -175,8 +175,38 @@ func (a *AutoTrigger) tick(ctx context.Context) {
 		if !a.shouldFire(name) {
 			continue
 		}
+		// Don't pile up frontiers: if a GEPA batch for this skill is already
+		// awaiting the boss's decision, spawning six more candidates every
+		// cycle just floods the review queue. Wait until the open batch is
+		// decided. This also survives restarts (the in-memory cooldown doesn't).
+		if a.hasOpenFrontier(ctx, name) {
+			continue
+		}
 		a.fire(ctx, name)
 	}
+}
+
+// hasOpenFrontier reports whether an undecided GEPA proposal already exists for
+// this skill, so the autotrigger doesn't generate a duplicate frontier batch.
+func (a *AutoTrigger) hasOpenFrontier(ctx context.Context, skillName string) bool {
+	if a == nil || a.m == nil || a.m.pool == nil {
+		return false
+	}
+	var exists bool
+	err := a.m.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1 FROM mem_skill_proposals
+		   WHERE parent_skill = $1
+		     AND frontier_run_id IS NOT NULL
+		     AND status IN ('candidate','pending','draft')
+		)
+	`, skillName).Scan(&exists)
+	if err != nil {
+		// On error, be conservative and assume no open frontier so a real
+		// regression still gets optimized rather than silently skipped.
+		return false
+	}
+	return exists
 }
 
 func (a *AutoTrigger) shouldFire(skillName string) bool {

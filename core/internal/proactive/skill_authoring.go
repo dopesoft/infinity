@@ -41,9 +41,9 @@ import (
 
 const (
 	skillPatternWindow    = "7 days"
-	skillPatternMinHits   = 3
+	skillPatternMinHits   = 5
 	skillDriftWindow      = "7 days"
-	skillDriftMinHits     = 2
+	skillDriftMinHits     = 3
 	skillScanObservations = 500
 )
 
@@ -153,7 +153,7 @@ func scanSkillOpportunities(ctx context.Context, pool *pgxpool.Pool) []Finding {
 		)
 		tag := "skill_pattern:" + sigHash
 		inserted := insertHealingQuestionWithTag(ctx, pool,
-			question, rationale, "skill_opportunity", tag, nil, 7)
+			question, rationale, "skill_opportunity", tag, nil, 5)
 		if !inserted {
 			continue
 		}
