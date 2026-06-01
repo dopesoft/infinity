@@ -15,11 +15,11 @@ import (
 // only.
 //
 // Tunables (env):
-//   • INFINITY_VOYAGER_AUTOTRIGGER       - off | on (default on when GEPA_URL set)
-//   • INFINITY_VOYAGER_AUTOTRIGGER_EVERY - Go duration, default 30m
-//   • INFINITY_VOYAGER_FAILURE_RATE      - float 0..1, default 0.3 (30%)
-//   • INFINITY_VOYAGER_MIN_RUNS          - int, default 5 (window size)
-//   • INFINITY_VOYAGER_COOLDOWN          - Go duration, default 6h per skill
+//   - INFINITY_VOYAGER_AUTOTRIGGER       - off | on (default on when GEPA_URL set)
+//   - INFINITY_VOYAGER_AUTOTRIGGER_EVERY - Go duration, default 30m
+//   - INFINITY_VOYAGER_FAILURE_RATE      - float 0..1, default 0.3 (30%)
+//   - INFINITY_VOYAGER_MIN_RUNS          - int, default 5 (window size)
+//   - INFINITY_VOYAGER_COOLDOWN          - Go duration, default 6h per skill
 //
 // The ticker runs in a goroutine. Stop() cleans up. Concurrent fires for the
 // same skill are guarded by the per-skill cooldown map.
@@ -50,8 +50,8 @@ type AutoTrigger struct {
 
 func NewAutoTrigger(m *Manager, opt *Optimizer) *AutoTrigger {
 	return &AutoTrigger{
-		m:           m,
-		optimizer:   opt,
+		m:               m,
+		optimizer:       opt,
 		every:           envDuration("INFINITY_VOYAGER_AUTOTRIGGER_EVERY", 30*time.Minute),
 		failureRate:     envFloat("INFINITY_VOYAGER_FAILURE_RATE", 0.30),
 		minRuns:         envInt("INFINITY_VOYAGER_MIN_RUNS", 5),

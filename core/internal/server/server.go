@@ -268,7 +268,7 @@ func New(cfg Config) *Server {
 	// upgrade response, which middleware-401s break).
 	var handler http.Handler = mux
 	if cfg.Auth != nil {
-		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/auth/", "/webhooks/", "/ws", "/api/canvas/preview/"})(handler)
+		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/readyz", "/auth/", "/webhooks/", "/ws", "/api/canvas/preview/"})(handler)
 	}
 
 	s.http = &http.Server{
@@ -282,6 +282,7 @@ func New(cfg Config) *Server {
 
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/sessions", s.handleSessions)

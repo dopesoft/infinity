@@ -180,3 +180,42 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 healthcheckPath = "/health"
 healthcheckTimeout = 30
+
+# sentry — Infinity's EXTERNAL deploy watchdog. The safety net the in-core
+# post-deploy-verify cron CAN'T be: when a self-improve push bricks core, the
+# in-core watcher dies with it. sentry is a separate service with ZERO
+# dependency on core's code; it polls core's /readyz from outside and, on a
+# sustained OUTAGE (default 5 min), self-heals — Railway rollback to the last
+# good deployment (instant) + git-revert the bad commit(s) on main
+# (authoritative) + alert. It does NOT revert on a DB-degraded signal (that's
+# infra, not a code regression).
+#
+# Required env on the sentry service (Railway dashboard):
+#   GITHUB_TOKEN            PAT (repo:write) so the git-revert push lands on main
+# Strongly recommended (instant Railway rollback; without it recovery is
+# git-revert only, i.e. a full rebuild ~3-5 min):
+#   RAILWAY_API_TOKEN       account/workspace token (Authorization: Bearer)
+#   RAILWAY_PROJECT_ID      the Infinity project id
+#   RAILWAY_CORE_SERVICE_ID the core service id
+#   RAILWAY_ENVIRONMENT_ID  the production environment id
+# Optional:
+#   SENTRY_ALERT_WEBHOOK    URL to POST incidents to (Slack/Discord/ntfy/…)
+#   SENTRY_CORE_READY_URL   default http://core.railway.internal:8080/readyz
+#   SENTRY_TRIP_AFTER       default 5m   · SENTRY_POLL_INTERVAL default 60s
+#   INFINITY_REPO_OWNER/NAME/BRANCH  default DopeSoft / infinity / main
+#
+# DO NOT enable App Sleeping — the watchdog must run continuously.
+[[services]]
+name = "sentry"
+
+[services.source]
+rootDirectory = "docker/sentry"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+
+[services.deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/health"
+healthcheckTimeout = 30
