@@ -298,9 +298,19 @@ function mergeServerRows(
   // when I click away or widen the column" because a navigation /
   // reconcile reloads from server. We keep every local tool message;
   // they sort back into place by created_at below.
-  const localToolMessages: ChatMessage[] = local.filter(
-    (m) => m.role === "tool" && !!m.toolCall,
-  );
+  // De-dupe local tool cards by tool_call.id while preserving them. Without
+  // this, a single in-flight tool call that got appended more than once (the
+  // phantom-duplicate path) would survive every reconcile as N copies. Keep
+  // the first occurrence (it carries the live streaming/awaiting state).
+  const seenLocalToolIds = new Set<string>();
+  const localToolMessages: ChatMessage[] = local.filter((m) => {
+    if (m.role !== "tool" || !m.toolCall) return false;
+    const id = m.toolCall.id;
+    if (!id) return true;
+    if (seenLocalToolIds.has(id)) return false;
+    seenLocalToolIds.add(id);
+    return true;
+  });
   // Detect pending tail items to preserve (in-flight stream, watchdog
   // error bubble we don't want to silently erase).
   const pendingTail: ChatMessage[] = [];
@@ -836,17 +846,42 @@ export function useChat() {
           } else {
             armWatchdog();
           }
-          setMessages((prev) => [
-            ...closePendingThinking(prev),
-            {
-              id: makeId(),
-              role: "tool",
-              text: "",
-              toolCall: ev.tool_call,
-              pending: true,
-              createdAt: Date.now(),
-            },
-          ]);
+          setMessages((prev) => {
+            // Upsert by tool_call.id - NEVER blind-append. The same tool_call
+            // frame can reach this handler more than once during a long
+            // blocking call (iOS Safari focus/visibility churn -> reconnect ->
+            // reconcile interleave). A makeId() push rendered the SAME in-flight
+            // call as dozens of identical spinning cards - the "cron_run_now
+            // storm" that was actually ONE call (verified: mem_predictions
+            // recorded cron_run_now exactly once). Keyed upsert makes phantom
+            // duplicates structurally impossible.
+            const id = ev.tool_call.id;
+            const existing = id
+              ? prev.findIndex((m) => m.role === "tool" && m.toolCall?.id === id)
+              : -1;
+            if (existing !== -1) {
+              const next = [...prev];
+              next[existing] = {
+                ...next[existing],
+                toolCall: ev.tool_call,
+                // Keep a resolved card resolved if its result already landed
+                // (out-of-order frames); otherwise it's still in flight.
+                pending: !next[existing].toolResult,
+              };
+              return next;
+            }
+            return [
+              ...closePendingThinking(prev),
+              {
+                id: makeId(),
+                role: "tool",
+                text: "",
+                toolCall: ev.tool_call,
+                pending: true,
+                createdAt: Date.now(),
+              },
+            ];
+          });
           break;
         }
         case "tool_result": {
