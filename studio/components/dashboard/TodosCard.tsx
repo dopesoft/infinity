@@ -18,10 +18,12 @@ export function TodosCard({
   todos,
   onOpen,
   onToggle,
+  onAdd,
 }: {
   todos: Todo[];
   onOpen: (item: DashboardItem) => void;
   onToggle: (id: string) => void;
+  onAdd: () => void;
 }) {
   const open = todos.filter((t) => !t.done);
   const doneCount = todos.length - open.length;
@@ -51,6 +53,7 @@ export function TodosCard({
 
         <button
           type="button"
+          onClick={onAdd}
           className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
         >
           <Plus className="size-3.5" aria-hidden />

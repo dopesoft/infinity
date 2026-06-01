@@ -89,6 +89,58 @@ export async function postSurfaceAction(
   }
 }
 
+// ── Todos (mem_tasks) ────────────────────────────────────────────────────────
+// Manual todo writes from the dashboard. Both endpoints land in the SAME
+// mem_tasks table Jarvis reads/writes via his task_* tools, so a todo the
+// boss types is immediately visible to the agent. The dashboard's realtime
+// subscription on mem_tasks repaints the card once the row lands - no manual
+// refetch needed on the happy path.
+
+export type CreateTodoInput = {
+  title: string;
+  body?: string;
+  priority?: "low" | "med" | "high";
+  /** RFC3339 timestamp or YYYY-MM-DD. Omit for no due date. */
+  due_at?: string;
+};
+
+export async function createTodo(input: CreateTodoInput): Promise<{ id: string } | null> {
+  try {
+    const res = await authedFetch(`/api/tasks/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; id?: string };
+    return data.id ? { id: data.id } : null;
+  } catch {
+    return null;
+  }
+}
+
+export type UpdateTodoInput = {
+  id: string;
+  title?: string;
+  body?: string;
+  priority?: "low" | "med" | "high";
+  due_at?: string;
+  status?: "open" | "done" | "dropped";
+};
+
+export async function updateTodo(input: UpdateTodoInput): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/tasks/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function setSessionProject(
   id: string,
   body: { project_path?: string; project_template?: string; dev_port?: number; mark_run?: boolean },

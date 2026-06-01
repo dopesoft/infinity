@@ -14,6 +14,8 @@ import { SavedCard } from "./SavedCard";
 import { ActivityCard } from "./ActivityCard";
 import { MemoryFooter } from "./MemoryFooter";
 import { ObjectViewer } from "./ObjectViewer";
+import { AddTodoModal } from "./AddTodoModal";
+import { updateTodo } from "@/lib/api";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
 import { fetchDashboard, readDashboardCache } from "@/lib/dashboard/fetcher";
 import type { DashboardResponse } from "@/lib/dashboard/fetcher";
@@ -168,6 +170,7 @@ export function DashboardClient() {
   );
 
   const [search, setSearch] = useState("");
+  const [addingTodo, setAddingTodo] = useState(false);
   const [viewing, setViewing] = useState<DashboardItem | null>(null);
   const { prefs } = useDashboardPrefs();
   const s = prefs.sections;
@@ -229,8 +232,26 @@ export function DashboardClient() {
     );
   }, []);
 
+  // Toggle optimistically for instant feedback, then persist to mem_tasks so
+  // the change survives refresh AND is visible to Jarvis (his task_list reads
+  // the same row). On failure we roll the optimistic flip back. The realtime
+  // mem_tasks subscription reconciles to server truth either way.
   const toggleTodo = useCallback((id: string) => {
-    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+    let nextDone = false;
+    setTodos((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        nextDone = !t.done;
+        return { ...t, done: nextDone };
+      }),
+    );
+    void updateTodo({ id, status: nextDone ? "done" : "open" }).then((ok) => {
+      if (!ok) {
+        setTodos((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, done: !nextDone } : t)),
+        );
+      }
+    });
   }, []);
 
   // Lightweight client-side search. Each section gets a pre-filtered
@@ -341,7 +362,12 @@ export function DashboardClient() {
                 />
               )}
               {s.todos && (
-                <TodosCard todos={filtered.todos} onOpen={openViewer} onToggle={toggleTodo} />
+                <TodosCard
+                  todos={filtered.todos}
+                  onOpen={openViewer}
+                  onToggle={toggleTodo}
+                  onAdd={() => setAddingTodo(true)}
+                />
               )}
               {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
             </div>
@@ -375,6 +401,12 @@ export function DashboardClient() {
       </div>
 
       <ObjectViewer item={viewing} onClose={closeViewer} onResolved={resolveViewerItem} />
+
+      <AddTodoModal
+        open={addingTodo}
+        onOpenChange={setAddingTodo}
+        onCreated={() => void load({ background: true })}
+      />
     </TabFrame>
   );
 }

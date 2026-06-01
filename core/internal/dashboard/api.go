@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/connectors"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -60,6 +61,12 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dashboard", a.handleDashboard)
 	mux.HandleFunc("/api/followups/dismiss", a.handleFollowupDismiss)
 	mux.HandleFunc("/api/followups/message", a.handleFollowupMessage)
+	// Boss-facing todo writes. The UI lands rows in the SAME mem_tasks
+	// contract Jarvis reads/writes through his task_* tools - a manual
+	// todo is therefore visible to the agent the moment it's created, no
+	// separate store, no client-only state.
+	mux.HandleFunc("/api/tasks/create", a.handleTaskCreate)
+	mux.HandleFunc("/api/tasks/update", a.handleTaskUpdate)
 }
 
 // Response is the single payload returned to Studio. Each section is a
@@ -1898,6 +1905,175 @@ func (a *API) handleFollowupDismiss(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		writeErr(w, http.StatusBadRequest, "unknown origin")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// parseDueAt accepts an RFC3339 timestamp or a bare YYYY-MM-DD date (the
+// shape an <input type="date"> produces) and returns a *time.Time, or nil
+// when the field is empty/unparseable. Mirrors the tools-package parser so
+// the UI and the agent's task_* tools accept the same date shapes.
+func parseDueAt(s string) *time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return &t
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return &t
+	}
+	return nil
+}
+
+// normalizePriority clamps the priority field to the mem_tasks enum
+// (low|med|high), defaulting to "med" for anything else.
+func normalizePriority(p string) string {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case "low":
+		return "low"
+	case "high":
+		return "high"
+	default:
+		return "med"
+	}
+}
+
+// handleTaskCreate is the Studio-facing "Add todo" endpoint. Body shape:
+//
+//	{ "title": "...", "body": "...", "priority": "low|med|high", "due_at": "ISO|YYYY-MM-DD" }
+//
+// The row lands in mem_tasks with source='manual' so the dashboard's
+// "agent" badge stays truthful (only Jarvis-filed rows are badged) while
+// the agent still sees it via task_list. Returns {ok, id}.
+func (a *API) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no pool")
+		return
+	}
+	var body struct {
+		Title    string `json:"title"`
+		Body     string `json:"body"`
+		Priority string `json:"priority"`
+		DueAt    string `json:"due_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad body")
+		return
+	}
+	body.Title = strings.TrimSpace(body.Title)
+	if body.Title == "" {
+		writeErr(w, http.StatusBadRequest, "title required")
+		return
+	}
+	id := uuid.New()
+	if _, err := a.Pool.Exec(r.Context(), `
+		INSERT INTO mem_tasks (id, title, body, source, priority, status, due_at, created_at, updated_at)
+		VALUES ($1, $2, $3, 'manual', $4, 'open', $5, NOW(), NOW())
+	`, id, body.Title, strings.TrimSpace(body.Body), normalizePriority(body.Priority), parseDueAt(body.DueAt)); err != nil {
+		a.Logger.Warn("task create", "err", err)
+		writeErr(w, http.StatusInternalServerError, "create failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id.String()})
+}
+
+// handleTaskUpdate is the Studio-facing todo mutation endpoint - it backs
+// both the inline check-to-complete toggle and any future edit affordance.
+// Body shape (all fields except id optional; only non-empty fields apply):
+//
+//	{ "id": "...", "title": "...", "body": "...", "priority": "...",
+//	  "due_at": "ISO|YYYY-MM-DD", "status": "open|done|dropped" }
+//
+// Partial update via COALESCE so a status-only toggle leaves the other
+// columns untouched. done_at is stamped the first time status flips to
+// 'done' and cleared when it reopens. Returns {ok}.
+func (a *API) handleTaskUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no pool")
+		return
+	}
+	var body struct {
+		ID       string  `json:"id"`
+		Title    *string `json:"title"`
+		Body     *string `json:"body"`
+		Priority *string `json:"priority"`
+		DueAt    *string `json:"due_at"`
+		Status   *string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad body")
+		return
+	}
+	body.ID = strings.TrimSpace(body.ID)
+	if body.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+
+	var (
+		title, bodyText, priority, status *string
+		dueAt                             *time.Time
+	)
+	if body.Title != nil && strings.TrimSpace(*body.Title) != "" {
+		v := strings.TrimSpace(*body.Title)
+		title = &v
+	}
+	if body.Body != nil {
+		v := strings.TrimSpace(*body.Body)
+		bodyText = &v
+	}
+	if body.Priority != nil && strings.TrimSpace(*body.Priority) != "" {
+		v := normalizePriority(*body.Priority)
+		priority = &v
+	}
+	if body.Status != nil {
+		switch strings.ToLower(strings.TrimSpace(*body.Status)) {
+		case "open", "done", "dropped":
+			v := strings.ToLower(strings.TrimSpace(*body.Status))
+			status = &v
+		default:
+			writeErr(w, http.StatusBadRequest, "bad status")
+			return
+		}
+	}
+	if body.DueAt != nil {
+		dueAt = parseDueAt(*body.DueAt)
+	}
+
+	// done_at follows status: stamp on the first transition to done, clear
+	// on reopen, leave alone when status isn't being changed.
+	doneAtClause := "done_at"
+	if status != nil {
+		if *status == "done" {
+			doneAtClause = "COALESCE(done_at, NOW())"
+		} else {
+			doneAtClause = "NULL"
+		}
+	}
+	if _, err := a.Pool.Exec(r.Context(), `
+		UPDATE mem_tasks
+		   SET title    = COALESCE($2, title),
+		       body     = COALESCE($3, body),
+		       priority = COALESCE($4, priority),
+		       status   = COALESCE($5, status),
+		       due_at   = COALESCE($6, due_at),
+		       done_at  = `+doneAtClause+`,
+		       updated_at = NOW()
+		 WHERE id::text = $1
+	`, body.ID, title, bodyText, priority, status, dueAt); err != nil {
+		a.Logger.Warn("task update", "id", body.ID, "err", err)
+		writeErr(w, http.StatusInternalServerError, "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
