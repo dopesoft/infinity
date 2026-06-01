@@ -1258,7 +1258,7 @@ func serveCmd() *cobra.Command {
 				// running binary behind main?). Cognition lives in the seeded
 				// `nightly-self-improve` / `post-deploy-verify` skills; these
 				// are the generic building blocks they call.
-				tools.RegisterSelfImproveTools(registry, voyagerMgr, server.DeployStatusSnapshot)
+				tools.RegisterSelfImproveTools(registry, voyagerMgr, server.DeployStatusSnapshot, pool, cronSchedulerAdapter{s: cronScheduler})
 				if selfImproveAutonomyOn() {
 					fmt.Printf("  self-improve autonomy: ON (nightly loop may push + deploy unattended)\n")
 				} else {

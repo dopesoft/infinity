@@ -25,12 +25,13 @@
 -- boss's "like 3-4am", drifting ±1h across DST. Tighten later only if a
 -- CRON_TZ feature lands.
 --
--- Activation is a deliberate two-step the boss controls (default-safe — both
--- crons seed DISABLED so nothing edits the repo until he opts in):
---   1) set INFINITY_SELF_IMPROVE_AUTONOMY=true   (lets the loop push unattended)
---   2) enable the two crons (Cron tab toggle, or UPDATE mem_crons SET enabled=true)
--- With the crons enabled but the env off, the loop degrades to prepare-only
--- (edits + local commits, push queued for morning) — useful as a dry run.
+-- Crons seed ENABLED (boss's call). Push autonomy is still gated by
+-- INFINITY_SELF_IMPROVE_AUTONOMY: with the env off the loop degrades to
+-- prepare-only (edits + local commits, push queued for morning). The
+-- conversational kill switch is the `self_improve_control` tool ('pause').
+-- NOTE: the runtime code that powers the loop (pre-approval seam, deploy_status
+-- / code_proposal_decide tools, per-job cron timeout) ships on the next CORE
+-- deploy — these crons only behave correctly once that binary is live.
 --
 -- Idempotent: ON CONFLICT on crons (by name) and all three skill tables.
 
@@ -49,7 +50,7 @@ VALUES
       'isolated_agent_turn',
       'Run your `nightly-self-improve` skill now. Work the code-proposal + curiosity backlog: for each item, make the fix, build and test until green, commit, and — only if self-improve autonomy is enabled — push to main. Do NOT inline-verify the deploy; the post-deploy-verify run handles that. Keep the diff small and the tree buildable.',
       '{}'::jsonb,
-      FALSE,
+      TRUE,
       0,
       0
     ),
@@ -60,7 +61,7 @@ VALUES
       'isolated_agent_turn',
       'Run your `post-deploy-verify` skill now. Check deploy_status: confirm the latest self-improve push actually deployed and the logs are clean. If the deploy is stuck or core is erroring, git-revert the offending commit(s), push the revert, and reopen the affected code proposals as rejected with a postmortem note.',
       '{}'::jsonb,
-      FALSE,
+      TRUE,
       0,
       0
     )
