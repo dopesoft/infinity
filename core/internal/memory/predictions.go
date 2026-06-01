@@ -247,6 +247,92 @@ var emptySignals = []string{
 	`"data":[]`, "no results", "not found", "0 results",
 }
 
+// RescoreReport summarises a RescorePredictions sweep.
+type RescoreReport struct {
+	Scanned int `json:"scanned"`  // resolved predictions inspected
+	Changed int `json:"changed"`  // rows whose surprise/matched were updated
+	WasHigh int `json:"was_high"` // scored >= curriculumSurprise BEFORE
+	NowHigh int `json:"now_high"` // score >= curriculumSurprise AFTER
+	Dropped int `json:"dropped"`  // fell from high to low (the false-positives)
+}
+
+// curriculumSurprise is the threshold at/above which a prediction is treated
+// as a curriculum/training signal (Gym mines >= 0.7; curiosity uses >= 0.8).
+const curriculumSurprise = 0.7
+
+// RescorePredictions recomputes surprise_score + matched for every RESOLVED
+// prediction (actual IS NOT NULL) using the current SurpriseFor/ClassifyActual
+// logic, and writes back any row that changed. It exists because the outcome
+// classifier was hardened (envelope-anchored signal scanning) AFTER thousands
+// of predictions were already scored - a fetched email or compacted summary
+// whose body merely contained "error"/"unauthorized" had been misclassified
+// as a failed call (surprise 0.9), poisoning Gym training examples and the
+// self-model surprise metric. Re-scoring corrects the history accurately
+// (genuine failures keep their high score; content false-positives drop).
+//
+// Idempotent: re-running it after the classifier is stable is a no-op
+// (Changed=0). Safe to wire into nightly cognition if desired.
+func RescorePredictions(ctx context.Context, pool *pgxpool.Pool) (RescoreReport, error) {
+	var rep RescoreReport
+	if pool == nil {
+		return rep, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT id::text, COALESCE(expected,''), COALESCE(actual,''), COALESCE(surprise_score, 0)
+		  FROM mem_predictions
+		 WHERE actual IS NOT NULL
+	`)
+	if err != nil {
+		return rep, fmt.Errorf("rescore query: %w", err)
+	}
+	type change struct {
+		id       string
+		matched  bool
+		surprise float64
+	}
+	var changes []change
+	for rows.Next() {
+		var id, expected, actual string
+		var old float64
+		if err := rows.Scan(&id, &expected, &actual, &old); err != nil {
+			rows.Close()
+			return rep, err
+		}
+		rep.Scanned++
+		if old >= curriculumSurprise {
+			rep.WasHigh++
+		}
+		matched, surprise := SurpriseFor(expected, actual)
+		if surprise >= curriculumSurprise {
+			rep.NowHigh++
+		}
+		// Only queue a write when the score actually moved (1e-9 tolerance).
+		if diff := surprise - old; diff > 1e-9 || diff < -1e-9 {
+			if old >= curriculumSurprise && surprise < curriculumSurprise {
+				rep.Dropped++
+			}
+			changes = append(changes, change{id: id, matched: matched, surprise: surprise})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return rep, err
+	}
+	rows.Close()
+
+	for _, c := range changes {
+		if _, err := pool.Exec(ctx, `
+			UPDATE mem_predictions
+			   SET surprise_score = $2, matched = $3
+			 WHERE id = $1::uuid
+		`, c.id, c.surprise, c.matched); err != nil {
+			return rep, fmt.Errorf("rescore update %s: %w", c.id, err)
+		}
+		rep.Changed++
+	}
+	return rep, nil
+}
+
 // ClassifyActual buckets a tool's actual output into ok / empty / error.
 func ClassifyActual(actual string) OutcomeClass {
 	a := strings.ToLower(strings.TrimSpace(actual))

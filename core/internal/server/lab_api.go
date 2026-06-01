@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,6 +76,7 @@ type labResolved struct {
 	Source         string    `json:"source,omitempty"`
 	Outcome        string    `json:"outcome"`  // resolved | dismissed | approved | applied
 	OutcomeReason  string    `json:"outcome_reason,omitempty"`
+	AppliedBy      string    `json:"applied_by,omitempty"` // auto | manual (code_proposal only)
 	ResolvedAt     time.Time `json:"resolved_at"`
 }
 
@@ -279,7 +281,7 @@ func loadLabResolved(ctx context.Context, pool *pgxpool.Pool) []labResolved {
 		rows.Close()
 	}
 	if rows, err := pool.Query(ctx, `
-		SELECT id::text, title, status, decided_at
+		SELECT id::text, title, status, COALESCE(decision_note,''), decided_at
 		  FROM mem_code_proposals
 		 WHERE status IN ('approved','applied','rejected')
 		   AND COALESCE(decided_at, created_at) > NOW() - INTERVAL '30 days'
@@ -288,8 +290,18 @@ func loadLabResolved(ctx context.Context, pool *pgxpool.Pool) []labResolved {
 	`); err == nil {
 		for rows.Next() {
 			var r labResolved
-			if err := rows.Scan(&r.ID, &r.Title, &r.Outcome, &r.ResolvedAt); err == nil {
+			var note string
+			if err := rows.Scan(&r.ID, &r.Title, &r.Outcome, &note, &r.ResolvedAt); err == nil {
 				r.Kind = "code_proposal"
+				r.OutcomeReason = note
+				// The autonomous self-improve loop prefixes its notes with
+				// [auto] (see nightly-self-improve skill) so the Lab can show
+				// the boss it landed without him.
+				if strings.HasPrefix(strings.TrimSpace(note), "[auto]") {
+					r.AppliedBy = "auto"
+				} else {
+					r.AppliedBy = "manual"
+				}
 				out = append(out, r)
 			}
 		}

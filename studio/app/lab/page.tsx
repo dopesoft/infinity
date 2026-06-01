@@ -115,6 +115,7 @@ type LabResolved = {
   source?: string;
   outcome: string;
   outcome_reason?: string;
+  applied_by?: "auto" | "manual";
   resolved_at: string;
 };
 
@@ -609,6 +610,14 @@ function ResolvedPane({
               <Badge variant="outline" className="font-mono uppercase">
                 {LAB_KIND_LABEL[r.kind] ?? r.kind}
               </Badge>
+              {r.applied_by === "auto" ? (
+                <Badge
+                  variant="outline"
+                  className="border-info/40 bg-info/5 font-mono uppercase text-info"
+                >
+                  Auto
+                </Badge>
+              ) : null}
               {sourceMeta ? (
                 <span
                   className={cn(

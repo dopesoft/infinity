@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,10 +113,31 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 	return nil
 }
 
+// jobTimeout bounds a single scheduled fire. Deterministic kinds
+// (system_task, connector_poll) finish fast and keep the original 5-min cap.
+// Agent-driven kinds (isolated_agent_turn, system_event) can legitimately run
+// long — the nightly self-improve session edits, builds, tests, commits, and
+// pushes — so they get a much larger budget (override via
+// INFINITY_CRON_AGENT_TIMEOUT). Without this, the old hardcoded 5-min ctx
+// cancelled real agent work mid-build.
+func jobTimeout(j Job) time.Duration {
+	switch j.JobKind {
+	case JobIsolatedAgentTurn, JobSystemEvent:
+		if v := strings.TrimSpace(os.Getenv("INFINITY_CRON_AGENT_TIMEOUT")); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				return d
+			}
+		}
+		return 30 * time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
 func (s *Scheduler) makeFireFn(j Job) func() {
 	return func() {
 		start := time.Now().UTC()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), jobTimeout(j))
 		defer cancel()
 
 		// runs.Track books a mem_runs row so the Studio shows a live

@@ -32,6 +32,16 @@ type AutoTrigger struct {
 	minRuns     int
 	cooldown    time.Duration
 
+	// Auto-promote: when a GEPA run produces a clear winner, install it as a
+	// live skill version without waiting for a human. Promotion is reversible
+	// (mem_skill_versions keeps every prior version) and the candidate already
+	// cleared the hard gates (size, frontmatter, semantic-drift) before it was
+	// persisted, so the only added risk is shipping a marginal improvement —
+	// which the score floor + runner-up margin guard against.
+	autopromote     bool
+	promoteMinScore float64
+	promoteMargin   float64
+
 	mu       sync.Mutex
 	stopCh   chan struct{}
 	running  bool
@@ -42,12 +52,15 @@ func NewAutoTrigger(m *Manager, opt *Optimizer) *AutoTrigger {
 	return &AutoTrigger{
 		m:           m,
 		optimizer:   opt,
-		every:       envDuration("INFINITY_VOYAGER_AUTOTRIGGER_EVERY", 30*time.Minute),
-		failureRate: envFloat("INFINITY_VOYAGER_FAILURE_RATE", 0.30),
-		minRuns:     envInt("INFINITY_VOYAGER_MIN_RUNS", 5),
-		cooldown:    envDuration("INFINITY_VOYAGER_COOLDOWN", 6*time.Hour),
-		stopCh:      make(chan struct{}),
-		lastFire:    map[string]time.Time{},
+		every:           envDuration("INFINITY_VOYAGER_AUTOTRIGGER_EVERY", 30*time.Minute),
+		failureRate:     envFloat("INFINITY_VOYAGER_FAILURE_RATE", 0.30),
+		minRuns:         envInt("INFINITY_VOYAGER_MIN_RUNS", 5),
+		cooldown:        envDuration("INFINITY_VOYAGER_COOLDOWN", 6*time.Hour),
+		autopromote:     envBool("INFINITY_VOYAGER_AUTOPROMOTE", false),
+		promoteMinScore: envFloat("INFINITY_VOYAGER_AUTOPROMOTE_MIN_SCORE", 0.85),
+		promoteMargin:   envFloat("INFINITY_VOYAGER_AUTOPROMOTE_MARGIN", 0.05),
+		stopCh:          make(chan struct{}),
+		lastFire:        map[string]time.Time{},
 	}
 }
 
@@ -187,4 +200,41 @@ func (a *AutoTrigger) fire(ctx context.Context, skillName string) {
 	}
 	fmt.Printf("[voyager.autotrigger] fired %s - frontier_run=%s candidates=%d calls=%d\n",
 		skillName, result.FrontierRunID, len(result.Candidates), result.Calls)
+	a.maybeAutoPromote(fctx, skillName, result)
+}
+
+// maybeAutoPromote installs the top frontier candidate as a live skill version
+// when (a) auto-promote is enabled, (b) its score clears the floor, and (c) it
+// beats the runner-up by at least the margin (so a near-tie still goes to the
+// boss). Manager.Decide does the safe, versioned, reversible promotion. A
+// no-op when disabled or when the win isn't clear.
+func (a *AutoTrigger) maybeAutoPromote(ctx context.Context, skillName string, result *OptimizeResult) {
+	if !a.autopromote || result == nil || len(result.Candidates) == 0 {
+		return
+	}
+	top := result.Candidates[0] // frontier is ranked: pareto_rank 0 = best score
+	if top.Score < a.promoteMinScore {
+		return
+	}
+	if len(result.Candidates) > 1 && (top.Score-result.Candidates[1].Score) < a.promoteMargin {
+		fmt.Printf("[voyager.autotrigger] %s top=%.3f within margin of runner-up=%.3f - left for review\n",
+			skillName, top.Score, result.Candidates[1].Score)
+		return
+	}
+	if err := a.m.Decide(ctx, top.ProposalID, "promoted"); err != nil {
+		fmt.Printf("[voyager.autotrigger] auto-promote %s proposal=%s: %v\n", skillName, top.ProposalID, err)
+		return
+	}
+	fmt.Printf("[voyager.autotrigger] auto-promoted %s proposal=%s score=%.3f\n", skillName, top.ProposalID, top.Score)
+}
+
+// envBool reads a boolean-ish env var with a default.
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(envValue(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return def
 }

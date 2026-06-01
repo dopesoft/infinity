@@ -178,6 +178,16 @@ func startDeployPoller(ctx context.Context) {
 	}()
 }
 
+// DeployStatusSnapshot returns the current "is the running binary behind
+// main?" snapshot (running SHA vs main HEAD, commits-behind, repo, branch).
+// Exported so non-server packages — notably the `deploy_status` self-improve
+// tool — read the single cached source of truth instead of re-polling GitHub.
+// Returns the value as `any` to avoid leaking the unexported deployStatus type
+// across the package boundary; the caller marshals it to JSON.
+func DeployStatusSnapshot() any {
+	return globalDeployTracker.snapshot()
+}
+
 func (s *Server) handleDeployStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)

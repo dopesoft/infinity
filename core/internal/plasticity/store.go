@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/embed"
+	"github.com/dopesoft/infinity/core/internal/toolclass"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
@@ -240,47 +241,145 @@ func (s *Store) ExtractExamples(ctx context.Context, limit int) (ExtractResult, 
 		return out, err
 	}
 
-	if err := tx.QueryRow(ctx, `
-		WITH src AS (
-			SELECT id::text AS source_id,
-			       tool_name,
-			       expected AS input_text,
-			       COALESCE(actual, '') AS output_text,
-			       COALESCE(surprise_score, 0)::float8 AS score,
-			       jsonb_build_object(
-			         'session_id', COALESCE(session_id::text, ''),
-			         'tool_call_id', tool_call_id,
-			         'tool_name', tool_name,
-			         'matched', COALESCE(matched, false)
-			       ) AS metadata,
-			       created_at
-			  FROM mem_predictions
-			 WHERE COALESCE(surprise_score, 0) >= 0.7
-			   AND actual IS NOT NULL
-			 ORDER BY surprise_score DESC, created_at DESC
-			 LIMIT $1
-		), ins AS (
+	// Surprise predictions -> training examples. Filtered by tool class in Go
+	// so the shared toolclass policy stays the single source of truth: only
+	// ACTIONABLE tools yield a curriculum signal. Operational failures from
+	// data-fetch / internal / coding-bridge tools (a composio fetch with a bad
+	// id, a loop-blocked compact_context, a claude_code__Bash exit-1) are
+	// genuine errors but NOT behavioural lessons - distilling them poisons the
+	// corpus the Gym provider injects into the agent's prompt every turn with
+	// "your own tools are unreliable." This was ~half the corpus before the fix.
+	type predCand struct {
+		id, tool, expected, actual, session, callID string
+		score                                        float64
+		matched                                      bool
+		created                                      time.Time
+	}
+	predRows, err := tx.Query(ctx, `
+		SELECT id::text, COALESCE(tool_name,''), COALESCE(expected,''), COALESCE(actual,''),
+		       COALESCE(surprise_score,0)::float8, COALESCE(session_id::text,''),
+		       COALESCE(tool_call_id,''), COALESCE(matched,false), created_at
+		  FROM mem_predictions p
+		 WHERE COALESCE(surprise_score,0) >= 0.7
+		   AND actual IS NOT NULL
+		   AND NOT EXISTS (
+		       SELECT 1 FROM mem_training_examples e
+		        WHERE e.source_kind = 'prediction'
+		          AND e.source_id = p.id::text
+		          AND e.task_kind = 'tool_prediction'
+		   )
+		 ORDER BY surprise_score DESC, created_at DESC
+		 LIMIT $1
+	`, limit)
+	if err != nil {
+		return out, err
+	}
+	var cands []predCand
+	for predRows.Next() {
+		var c predCand
+		if err := predRows.Scan(&c.id, &c.tool, &c.expected, &c.actual, &c.score,
+			&c.session, &c.callID, &c.matched, &c.created); err != nil {
+			predRows.Close()
+			return out, err
+		}
+		cands = append(cands, c)
+	}
+	predRows.Close()
+	if err := predRows.Err(); err != nil {
+		return out, err
+	}
+	for _, c := range cands {
+		if !toolclass.EligibleForHighSurprise(c.tool) {
+			continue
+		}
+		meta, _ := json.Marshal(map[string]any{
+			"session_id":   c.session,
+			"tool_call_id": c.callID,
+			"tool_name":    c.tool,
+			"matched":      c.matched,
+		})
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO mem_training_examples
 				(source_kind, source_id, task_kind, input_text, output_text,
 				 label, score, privacy_class, metadata, created_at)
-			SELECT 'prediction', source_id, 'tool_prediction', input_text, output_text,
-			       'corrected', score, 'private', metadata, created_at
-			  FROM src
-			 WHERE NOT EXISTS (
-			       SELECT 1 FROM mem_training_examples e
-			        WHERE e.source_kind = 'prediction'
-			          AND e.source_id = src.source_id
-			          AND e.task_kind = 'tool_prediction'
-			 )
-			RETURNING 1
-		)
-		SELECT COUNT(*)::int FROM ins
-	`, limit).Scan(&out.Surprise); err != nil {
-		return out, err
+			VALUES ('prediction', $1, 'tool_prediction', $2, $3,
+			        'corrected', $4, 'private', $5::jsonb, $6)
+		`, c.id, c.expected, c.actual, c.score, string(meta), c.created); err != nil {
+			return out, err
+		}
+		out.Surprise++
 	}
 
 	out.Inserted = out.Evals + out.Lessons + out.Surprise
 	return out, tx.Commit(ctx)
+}
+
+// PurgeStalePredictionExamples removes prediction-sourced training examples
+// that should never have been mined: (1) whose source prediction no longer
+// qualifies as a curriculum signal (surprise_score now below 0.7, or the
+// prediction is gone — the content false-positives corrected by
+// memory.RescorePredictions), and (2) whose source tool is non-actionable per
+// the shared toolclass policy (operational failures from data-fetch / internal
+// / coding-bridge tools — genuine errors, but not behavioural lessons). The
+// next ExtractExamples re-mines only actionable, genuinely-high rows. Returns
+// the total number of examples deleted.
+func (s *Store) PurgeStalePredictionExamples(ctx context.Context) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, nil
+	}
+	// (1) Below-threshold / orphaned — pure SQL.
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM mem_training_examples e
+		 WHERE e.source_kind = 'prediction'
+		   AND e.task_kind   = 'tool_prediction'
+		   AND NOT EXISTS (
+		       SELECT 1 FROM mem_predictions p
+		        WHERE p.id::text = e.source_id
+		          AND COALESCE(p.surprise_score, 0) >= 0.7
+		   )
+	`)
+	if err != nil {
+		return 0, err
+	}
+	deleted := int(tag.RowsAffected())
+
+	// (2) Non-actionable tool class — filtered in Go so toolclass stays the
+	// single source of truth (no duplicated tool list in SQL).
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id::text, COALESCE(p.tool_name, '')
+		  FROM mem_training_examples e
+		  JOIN mem_predictions p ON p.id::text = e.source_id
+		 WHERE e.source_kind = 'prediction'
+		   AND e.task_kind   = 'tool_prediction'
+	`)
+	if err != nil {
+		return deleted, err
+	}
+	var staleIDs []string
+	for rows.Next() {
+		var id, tool string
+		if err := rows.Scan(&id, &tool); err != nil {
+			rows.Close()
+			return deleted, err
+		}
+		if !toolclass.EligibleForHighSurprise(tool) {
+			staleIDs = append(staleIDs, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return deleted, err
+	}
+	if len(staleIDs) > 0 {
+		tag2, err := s.pool.Exec(ctx, `
+			DELETE FROM mem_training_examples WHERE id = ANY($1::uuid[])
+		`, staleIDs)
+		if err != nil {
+			return deleted, err
+		}
+		deleted += int(tag2.RowsAffected())
+	}
+	return deleted, nil
 }
 
 // EmbedPending walks up to `limit` mem_training_examples rows that have no

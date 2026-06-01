@@ -1253,6 +1253,18 @@ func serveCmd() *cobra.Command {
 				voyagerAPI = voyager.NewAPI(voyagerMgr)
 				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
 
+				// Self-improve verbs for the nightly loop: code_proposal_decide
+				// (mark a proposal applied/rejected) + deploy_status (is the
+				// running binary behind main?). Cognition lives in the seeded
+				// `nightly-self-improve` / `post-deploy-verify` skills; these
+				// are the generic building blocks they call.
+				tools.RegisterSelfImproveTools(registry, voyagerMgr, server.DeployStatusSnapshot)
+				if selfImproveAutonomyOn() {
+					fmt.Printf("  self-improve autonomy: ON (nightly loop may push + deploy unattended)\n")
+				} else {
+					fmt.Printf("  self-improve autonomy: off (set INFINITY_SELF_IMPROVE_AUTONOMY=true to let the nightly loop push)\n")
+				}
+
 				// Auto-trigger: when GEPA_URL is configured, run a background
 				// ticker that watches mem_skill_runs and fires the optimizer
 				// for any skill whose recent failure rate crosses the
@@ -1738,6 +1750,17 @@ func (a turnRecorderAdapter) Close(ctx context.Context, turnID string, f agent.T
 }
 func (a turnRecorderAdapter) IncrementToolCalls(ctx context.Context, turnID string) error {
 	return a.store.IncrementToolCalls(ctx, turnID)
+}
+
+// selfImproveAutonomyOn reports the boot-time posture of the nightly
+// self-improve loop's master switch. Mirror of the cron package's gate (kept
+// unexported there); used only for the boot log line.
+func selfImproveAutonomyOn() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("INFINITY_SELF_IMPROVE_AUTONOMY"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // cronSchedulerAdapter bridges *cron.Scheduler → tools.CronScheduler.
