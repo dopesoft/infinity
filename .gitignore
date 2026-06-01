@@ -31,3 +31,6 @@ studio/next-env.d.ts
 
 # Docker
 .docker/
+docker/sentry/sentry
+docker/browser/browser
+docker/workspace/workspace
