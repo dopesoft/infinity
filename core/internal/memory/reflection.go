@@ -281,7 +281,7 @@ func (r *Reflector) Reflections(ctx context.Context, limit int) ([]Reflection, e
 			&lessonsJSON, &rf.QualityScore, &rf.Importance, &rf.CreatedAt); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(lessonsJSON), &rf.Lessons)
+		rf.Lessons = normalizeLessonsJSON(lessonsJSON)
 		out = append(out, rf)
 	}
 	return out, rows.Err()

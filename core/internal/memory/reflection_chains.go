@@ -55,10 +55,17 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 		limit = 200
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, COALESCE(lessons::text, '[]'), created_at
+		SELECT id::text,
+		       CASE
+		         WHEN jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array' THEN COALESCE(lessons::text, '[]')
+		         ELSE '[]'
+		       END,
+		       created_at
 		  FROM mem_reflections
-		 WHERE jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array'
-		   AND jsonb_array_length(COALESCE(lessons, '[]'::jsonb)) > 0
+		 WHERE CASE
+		         WHEN jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array' THEN jsonb_array_length(COALESCE(lessons, '[]'::jsonb))
+		         ELSE 0
+		       END > 0
 		 ORDER BY created_at DESC
 		 LIMIT $1
 	`, limit)
@@ -73,8 +80,7 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 		if err := rows.Scan(&id, &raw, &at); err != nil {
 			return 0, err
 		}
-		var lessons []Lesson
-		_ = json.Unmarshal([]byte(raw), &lessons)
+		lessons := normalizeLessonsJSON(raw)
 		for _, lesson := range lessons {
 			text := strings.TrimSpace(lesson.Text)
 			if text == "" {
@@ -280,6 +286,26 @@ func clusterTopic(texts []string) string {
 	}
 	sort.Strings(keep)
 	return strings.Join(keep, ":")
+}
+
+func normalizeLessonsJSON(raw string) []Lesson {
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil
+	}
+	arr, ok := decoded.([]any)
+	if !ok {
+		return nil
+	}
+	buf, err := json.Marshal(arr)
+	if err != nil {
+		return nil
+	}
+	var lessons []Lesson
+	if err := json.Unmarshal(buf, &lessons); err != nil {
+		return nil
+	}
+	return lessons
 }
 
 func (r *Reflector) ReflectionChains(ctx context.Context, limit int) ([]ReflectionChain, error) {
