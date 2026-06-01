@@ -28,10 +28,14 @@ const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 // when the user / table set changes; individual listeners just attach +
 // detach handlers without churning the websocket.
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, accessToken } = useAuth();
   const userId = user?.id ?? null;
   const listenersRef = useRef<Set<Listener>>(new Set());
   const channelRef = useRef<RealtimeChannel | null>(null);
+  // Latest JWT in a ref so the channel-build effect (keyed on userId) can
+  // authenticate the socket without re-subscribing on every token refresh.
+  const tokenRef = useRef<string | null>(accessToken);
+  tokenRef.current = accessToken;
 
   // Stable register function - listeners de-register via the returned
   // teardown. The handler is dispatched inside the channel subscription.
@@ -57,6 +61,15 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     }
 
     const supabase = getSupabaseBrowserClient();
+
+    // Authenticate the realtime SOCKET with the user's JWT before subscribing.
+    // Every mem_* table's realtime read policy is `TO authenticated` (migration
+    // 083), so an anon socket — which is what @supabase/ssr's cookie-recovered
+    // client connects as on first load — has every change event silently
+    // filtered out by RLS. Without this, nothing updates live without a manual
+    // refresh (session name, background dock, dashboard, runs, …). The separate
+    // effect below keeps the token fresh across refreshes.
+    if (tokenRef.current) supabase.realtime.setAuth(tokenRef.current);
 
     // Tables to subscribe to. Adding a table here without also bumping a
     // realtime publication migration silently no-ops on the wire.
@@ -134,6 +147,15 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       channelRef.current = null;
     };
   }, [userId]);
+
+  // Keep the socket token fresh across refreshes without tearing down the
+  // channel. setAuth pushes the new JWT to every joined channel, so an
+  // hourly token refresh doesn't drop us back to anon (which would silently
+  // re-break realtime until the next full reload).
+  useEffect(() => {
+    if (typeof window === "undefined" || !accessToken) return;
+    getSupabaseBrowserClient().realtime.setAuth(accessToken);
+  }, [accessToken]);
 
   return (
     <RealtimeContext.Provider value={{ register }}>{children}</RealtimeContext.Provider>
