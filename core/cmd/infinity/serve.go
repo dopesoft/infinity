@@ -35,6 +35,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/projects"
 	"github.com/dopesoft/infinity/core/internal/proposals"
 	"github.com/dopesoft/infinity/core/internal/push"
+	"github.com/dopesoft/infinity/core/internal/reauth"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
@@ -1529,6 +1530,22 @@ func serveCmd() *cobra.Command {
 				if poller := watch.NewPoller(pool, watchNotify); poller != nil {
 					go poller.Start(cmd.Context())
 					fmt.Println("  watch: watch_until poller started")
+				}
+			}
+
+			// Model re-auth park-and-resume: when the active brain hits a
+			// credential failure (revoked ChatGPT token, invalid API key) the
+			// loop parks the turn and tells the boss in chat; this poller probes
+			// the brain and replays the parked turn the moment it's healthy again
+			// (he re-authed OR switched models), delivering the answer into the
+			// same session. Provider-agnostic.
+			if pool != nil && loop != nil {
+				reauthStore := reauth.NewStore(pool)
+				reauthNotify := &watchNotifier{srv: srv, push: pushSender}
+				loop.SetReauthParker(&reauthParker{store: reauthStore, notifier: reauthNotify})
+				if rp := reauth.NewPoller(reauthStore, &reauthProber{loop: loop}, &reauthReplayer{loop: loop}, reauthNotify); rp != nil {
+					go rp.Start(cmd.Context())
+					fmt.Println("  reauth: model re-auth poller started")
 				}
 			}
 

@@ -219,6 +219,16 @@ type CostRecorder interface {
 	RecordCost(ctx context.Context, category, subject string, costUSD float64, units string, quantity float64, note string) error
 }
 
+// ReauthParker parks a turn that failed because the active model's credential
+// needs re-authentication (revoked OAuth token, invalid API key), so a
+// background poller can replay it once the brain is healthy again — and
+// surfaces a reconnect message into the chat. Implemented in the serve command
+// (persist to mem_reauth_waits + notify the session). Nil-safe: when unset the
+// loop falls back to the normal error path.
+type ReauthParker interface {
+	Park(ctx context.Context, sessionID, provider, model, userText, reason string) error
+}
+
 // SessionNamer is the optional Haiku-driven auto-namer. The loop notifies it
 // after the first complete assistant turn in a session; the namer decides
 // (cheap DB check) whether the row needs a name and fires Haiku async.
@@ -257,6 +267,13 @@ type Loop struct {
 	// order at boot doesn't matter; the loop just no-ops on nil.
 	turnsMu sync.RWMutex
 	turns   TurnRecorder
+
+	// reauthMu guards reauth. When the active brain hits a credential failure
+	// the loop parks the turn via this hook (instead of dumping a raw 401) and
+	// the reauth poller replays it once the credential is healthy. Nil-safe +
+	// hot-swap via SetReauthParker.
+	reauthMu sync.RWMutex
+	reauth   ReauthParker
 
 	// usageStore persists session token counters so the context meter
 	// survives restarts. Nil-safe: when unset the loop simply doesn't
@@ -584,6 +601,26 @@ func (l *Loop) SetCostRecorder(r CostRecorder) {
 	l.costMu.Lock()
 	l.costs = r
 	l.costMu.Unlock()
+}
+
+// SetReauthParker installs (or replaces) the model-credential park-and-resume
+// hook. Safe to call after agent.New(); the loop snapshots it under an RWMutex.
+func (l *Loop) SetReauthParker(p ReauthParker) {
+	if l == nil {
+		return
+	}
+	l.reauthMu.Lock()
+	l.reauth = p
+	l.reauthMu.Unlock()
+}
+
+func (l *Loop) reauthParker() ReauthParker {
+	if l == nil {
+		return nil
+	}
+	l.reauthMu.RLock()
+	defer l.reauthMu.RUnlock()
+	return l.reauth
 }
 
 func (l *Loop) costRecorder() CostRecorder {
@@ -1072,6 +1109,32 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					Summary:       summarizeReply(partial, toolCallCount),
 				})
 				return nil
+			}
+			// Credential failure (revoked OAuth token, invalid API key)? Don't
+			// dump a raw 401 into chat and abandon the request. PARK the turn,
+			// tell the boss in-conversation how to reconnect, and let the reauth
+			// poller replay it the moment the brain is healthy again (he re-auths
+			// OR switches models). Provider-agnostic. Falls through to the normal
+			// error path if there's nothing to replay or no parker wired.
+			if parker := l.reauthParker(); parker != nil &&
+				strings.TrimSpace(turnText) != "" &&
+				llm.IsAuthFailure(streamErr.Error()) {
+				provName := provider.Name()
+				reason := streamErr.Error()
+				if perr := parker.Park(context.Background(), s.ID, provName, model, turnText, reason); perr == nil {
+					emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "awaiting_reauth"})
+					l.closeTurn(context.Background(), turnID, TurnCloseFields{
+						StopReason:    "awaiting_reauth",
+						Status:        "awaiting_reauth",
+						InputTokens:   resp.Usage.Input,
+						OutputTokens:  resp.Usage.Output,
+						ToolCallCount: toolCallCount,
+						Error:         reason,
+						Summary:       "paused — model needs re-auth; will auto-resume",
+					})
+					return nil
+				}
+				// Park failed → fall through to the normal error path below.
 			}
 			emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: streamErr.Error()})
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{
