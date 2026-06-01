@@ -56,12 +56,23 @@ type config struct {
 	gitUser     string
 	gitEmail    string
 
-	// Railway API (optional — instant rollback). Without these, recovery is
-	// git-revert only (which is slower but authoritative).
-	railwayToken   string
-	railwayProject string
-	railwaySvc     string
-	railwayEnv     string
+	// Railway API (optional — instant rollback). Without a token, recovery is
+	// git-revert only (slower but authoritative). Two token types are supported:
+	//   • RAILWAY_PROJECT_TOKEN  — scoped to this project+env (RECOMMENDED, least
+	//     privilege). Sent as the `Project-Access-Token` header.
+	//   • RAILWAY_API_TOKEN      — account/workspace token. Sent as `Authorization: Bearer`.
+	railwayToken     string
+	railwayProjToken string
+	railwayProject   string
+	railwaySvc       string
+	railwayEnv       string
+}
+
+// railwayConfigured reports whether instant Railway rollback can run: a token
+// (either type) plus the three IDs the deployments query needs.
+func (c config) railwayConfigured() bool {
+	return (c.railwayToken != "" || c.railwayProjToken != "") &&
+		c.railwayProject != "" && c.railwaySvc != "" && c.railwayEnv != ""
 }
 
 func loadConfig() config {
@@ -79,10 +90,11 @@ func loadConfig() config {
 		gitUser:     envDefault("GIT_USER_NAME", "Jarvis Sentry"),
 		gitEmail:    envDefault("GIT_USER_EMAIL", "jarvis@dopesoft.io"),
 
-		railwayToken:   strings.TrimSpace(os.Getenv("RAILWAY_API_TOKEN")),
-		railwayProject: strings.TrimSpace(os.Getenv("RAILWAY_PROJECT_ID")),
-		railwaySvc:     strings.TrimSpace(os.Getenv("RAILWAY_CORE_SERVICE_ID")),
-		railwayEnv:     strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_ID")),
+		railwayToken:     strings.TrimSpace(os.Getenv("RAILWAY_API_TOKEN")),
+		railwayProjToken: strings.TrimSpace(os.Getenv("RAILWAY_PROJECT_TOKEN")),
+		railwayProject:   strings.TrimSpace(os.Getenv("RAILWAY_PROJECT_ID")),
+		railwaySvc:       strings.TrimSpace(os.Getenv("RAILWAY_CORE_SERVICE_ID")),
+		railwayEnv:       strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_ID")),
 	}
 }
 
@@ -95,7 +107,7 @@ func main() {
 	go serveHealth(cfg.port)
 
 	infoLog.Printf("sentry: watching %s every %s, trip after %s (rollback=%v, git-revert=%v)",
-		cfg.readyURL, cfg.poll, cfg.tripAfter, cfg.railwayToken != "", cfg.githubToken != "")
+		cfg.readyURL, cfg.poll, cfg.tripAfter, cfg.railwayConfigured(), cfg.githubToken != "")
 
 	w := &watchdog{cfg: cfg, bootAt: time.Now()}
 	w.run(context.Background())
@@ -305,7 +317,7 @@ func (w *watchdog) git(dir string, args ...string) (string, error) {
 // authoritative recovery; this just shortens downtime. Verified API shape:
 // backboard.railway.com/graphql/v2 · deployments(input,first) · deploymentRollback(id).
 func (w *watchdog) railwayRollback() string {
-	if w.cfg.railwayToken == "" || w.cfg.railwayProject == "" || w.cfg.railwaySvc == "" || w.cfg.railwayEnv == "" {
+	if !w.cfg.railwayConfigured() {
 		return "skipped (Railway API not configured)"
 	}
 	id, err := w.railwayPreviousGoodDeployment()
@@ -332,13 +344,16 @@ func (w *watchdog) railwayPreviousGoodDeployment() (string, error) {
 				edges { node { id status canRollback createdAt } }
 			}
 		}`,
+		// No status filter: DeploymentStatusInput is {in,notIn} of status enums,
+		// and older good deployments show as REMOVED (superseded) — filtering to
+		// SUCCESS-only would hide every valid rollback target. We fetch recent and
+		// pick by canRollback in Go instead.
 		"variables": map[string]any{
 			"first": 10,
 			"input": map[string]any{
 				"projectId":     w.cfg.railwayProject,
 				"serviceId":     w.cfg.railwaySvc,
 				"environmentId": w.cfg.railwayEnv,
-				"status":        map[string]any{"successfulOnly": true},
 			},
 		},
 	}
@@ -386,7 +401,13 @@ func (w *watchdog) railwayGQL(payload map[string]any) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+w.cfg.railwayToken)
+	// Project tokens (scoped, recommended) use a dedicated header; account/
+	// workspace tokens use Bearer. Prefer the project token when both are set.
+	if w.cfg.railwayProjToken != "" {
+		req.Header.Set("Project-Access-Token", w.cfg.railwayProjToken)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+w.cfg.railwayToken)
+	}
 	resp, err := (&http.Client{Timeout: 18 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
