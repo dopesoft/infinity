@@ -211,12 +211,7 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 	}
 	handle.Progress(ctx, 0.05, "queued")
 
-	// persist mirrors every live progress beat onto the mem_runs row so the
-	// dock (which reads useRuns, not the WS) stays current.
-	persist := func(fraction float32, progressLabel string) {
-		handle.Progress(ctx, fraction, progressLabel)
-	}
-	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed, persist)
+	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed, handle)
 	// Close on a detached context: a timed-out run's ctx is already
 	// cancelled by the defer above, but the row must still flip to ok/error
 	// (otherwise it spins until the next boot's RecoverStranded sweep).
@@ -242,15 +237,36 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 // runToCompletion spins an ephemeral session, runs the agent loop on the
 // DEFAULT (settings) model to completion, and returns the final text.
 // Mirrors delegate.run, minus the synchronous-return contract.
-func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string, persist func(fraction float32, progressLabel string)) (string, error) {
+func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string, handle *runs.Handle) (string, error) {
 	childID := backgroundSessionIDPrefix + uuid.NewString()
 	child := b.Loop.GetOrCreateSession(childID)
 	defer b.Loop.ClearSession(childID)
+
+	// Bind this child session to its mem_runs row so the native todo_write
+	// tool (executing inside this loop) can find the row to write its checklist
+	// onto. Bridge-agnostic: keyed by session id, independent of Mac/Cloud.
+	tools.RegisterRunForSession(childID, runID)
+	defer tools.UnregisterRunForSession(childID)
 
 	// Full default loadout unless the caller narrowed it - a build needs
 	// write/exec, so we do NOT fall back to the read-only delegate set.
 	if len(allowed) > 0 {
 		child.Active.Replace(allowed)
+	}
+	// Always keep todo_write loaded so the live checklist works in both the
+	// default loadout and a narrowed allowed_tools (permanent: ttl=0).
+	child.Active.Load([]string{"todo_write"}, 0)
+
+	// persist mirrors a live progress beat onto the mem_runs row so the dock
+	// (which reads useRuns, not the WS) stays current — but ONLY while the
+	// agent hasn't taken over with its own todo_write checklist. Once todos
+	// exist, todo_write owns progress + progress_label (real X/Y), and the
+	// tool-call heuristic must not clobber it.
+	persist := func(fraction float32, progressLabel string) {
+		if tools.SessionHasTodos(childID) {
+			return
+		}
+		handle.Progress(ctx, fraction, progressLabel)
 	}
 
 	base := backgroundBasePrompt
@@ -323,6 +339,13 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 					phase := progressForToolCalls(toolCallCount)
 					action := backgroundActionName(ev.ToolCall.Name)
 					detail := backgroundProgressDetail(ev.ToolCall.Input)
+					// Record the live current target (file/command) on the run
+					// row so the expanded dock shows it under the checklist,
+					// independent of whether a todo is in_progress. Works for
+					// both bridges (claude_code__* file_path + fs_*/bash_run path/cmd).
+					if detail != "" {
+						handle.SetMetaString(ctx, "currentFile", detail)
+					}
 					publishProgress(backgroundProgressLabel(ev.ToolCall.Name, toolCallCount), action, detail, toolCallCount, &phase)
 				}
 			case EventThinking:
@@ -462,5 +485,8 @@ Your job:
 1. Complete the task end to end. Actually write the code / make the changes / run the builds - do not just plan.
 2. Use the same care and conventions you would in a live session. Read before you write; verify your work.
 3. When finished, your FINAL message must be a concise plain-language summary of what you did: what you built or changed, which files, and anything the boss must know (decisions, follow-ups, anything that needs his approval). This summary is what gets sent to his phone - make it scannable, not a wall of text.
+
+## Track your work with a checklist
+At the very START of the task, call todo_write ONCE with your full ordered plan — every step as a short item with status "pending" — and pass the repo/project you're working in. As you work, call todo_write again to mark the step you're starting "in_progress" and finished steps "completed" (exactly one item in_progress at a time). Each call replaces the whole list, so always send the complete checklist. This is the ONLY way the boss sees your progress live while you run detached, so keep it current. Skip the checklist only for a genuinely trivial one-step task.
 
 There is no one to ask mid-task, so make sensible decisions and note them in the summary rather than stopping. If a step genuinely cannot proceed (it needs a Trust-gated approval, a missing credential, or a decision only the boss can make), do as much as you safely can, then clearly state what is blocked and why in the summary.`

@@ -1039,50 +1039,13 @@ export function useChat() {
           if (ev.finding_kind === "surprise" && !ev.curiosity_id) {
             break;
           }
-          if (ev.finding_kind === "background_build_progress" && ev.run_id) {
-            setMessages((prev) => {
-              const next = closePendingThinking(prev);
-              for (let i = next.length - 1; i >= 0; i--) {
-                const msg = next[i];
-                if (
-                  msg.role === "assistant" &&
-                  msg.proactive &&
-                  msg.proactiveKind === "background_build_progress" &&
-                  msg.runId === ev.run_id
-                ) {
-                  next[i] = {
-                    ...msg,
-                    text: ev.text || msg.text,
-                    progress: ev.progress ?? msg.progress,
-                    progressStep: ev.progress_step ?? msg.progressStep,
-                    progressAction: ev.progress_action ?? msg.progressAction,
-                    progressDetail: ev.progress_detail ?? msg.progressDetail,
-                    progressTask: ev.progress_task ?? msg.progressTask,
-                    pending: false,
-                    createdAt: Date.now(),
-                  };
-                  return [...next];
-                }
-              }
-              return [
-                ...next,
-                {
-                  id: makeId(),
-                  role: "assistant",
-                  text: ev.text,
-                  proactive: true,
-                  proactiveKind: ev.finding_kind,
-                  runId: ev.run_id,
-                  progress: ev.progress,
-                  progressStep: ev.progress_step,
-                  progressAction: ev.progress_action,
-                  progressDetail: ev.progress_detail,
-                  progressTask: ev.progress_task,
-                  pending: false,
-                  createdAt: Date.now(),
-                },
-              ];
-            });
+          if (ev.finding_kind === "background_build_progress") {
+            // Background progress lives ONLY in the pinned dock
+            // (BackgroundJobDock, mem_runs-backed). We deliberately do NOT
+            // inject it into the chat transcript — the dock is the single live
+            // surface so the boss never has to scroll up through the chat to
+            // find a job's status. The "kicking off" message the boss DOES see
+            // is the tool's normal return text, not this event.
             break;
           }
           clearWatchdog();

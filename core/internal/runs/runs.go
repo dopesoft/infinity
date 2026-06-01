@@ -249,3 +249,19 @@ func (h *Handle) Progress(ctx context.Context, fraction float32, label string) {
 		 WHERE id = $1::uuid
 	`, h.id, fraction, label)
 }
+
+// SetMetaString sets meta.<key> = <value> (a string) on the run row,
+// preserving every other key in the JSONB blob. Used by the background agent
+// to record the current file being touched (meta.currentFile) alongside the
+// agent-authored meta.todos / meta.repo. Best-effort + nil-safe; an empty
+// value is a no-op so we don't blank a useful field with noise.
+func (h *Handle) SetMetaString(ctx context.Context, key, value string) {
+	if h == nil || h.tracker == nil || h.tracker.pool == nil || h.id == "" || key == "" || value == "" {
+		return
+	}
+	_, _ = h.tracker.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET meta = jsonb_set(COALESCE(meta,'{}'::jsonb), ARRAY[$2], to_jsonb($3::text), true)
+		 WHERE id = $1::uuid
+	`, h.id, key, value)
+}

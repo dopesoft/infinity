@@ -306,6 +306,10 @@ func serveCmd() *cobra.Command {
 					}
 					tools.RegisterSkillTools(registry, p, skillDrafter)
 					tools.RegisterDashboardTools(registry, p)
+					// todo_write - the background agent's live checklist. Writes
+					// meta.todos onto the current background run's mem_runs row so
+					// the pinned dock renders a Claude-Code-style todo list.
+					tools.RegisterTodoTools(registry, p)
 					// Curiosity questions tools (question_list / question_decide).
 					// The "Questions" card on the dashboard is backed by
 					// mem_curiosity_questions, NOT mem_surface_items - without

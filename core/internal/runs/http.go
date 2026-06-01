@@ -38,6 +38,11 @@ type runDTO struct {
 	DurationMS    *int    `json:"duration_ms,omitempty"`
 	Error         string  `json:"error,omitempty"`
 	ResultSummary string  `json:"result_summary,omitempty"`
+	// Meta is the generic JSONB blob. For background.build runs it carries
+	// {todos, repo, currentFile} so the dock renders the live checklist. Passed
+	// through verbatim as raw JSON; omitted when empty so non-background rows
+	// stay lean.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 // handleList: GET /api/runs[?kind=X&target_id=Y&status=Z&limit=N]
@@ -89,7 +94,8 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 		SELECT id::text, kind, target_id, label, source, status,
 		       progress, progress_label,
 		       started_at, ended_at, duration_ms,
-		       error, result_summary
+		       error, result_summary,
+		       NULLIF(meta, '{}'::jsonb)
 		  FROM mem_runs
 		  ` + where + `
 		 ORDER BY started_at DESC
@@ -110,17 +116,22 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 		var startedAt time.Time
 		var endedAt *time.Time
 		var dur *int
+		var meta []byte
 		if err := rows.Scan(
 			&d.ID, &d.Kind, &d.TargetID, &d.Label, &d.Source, &d.Status,
 			&progress, &progressLabel,
 			&startedAt, &endedAt, &dur,
 			&d.Error, &d.ResultSummary,
+			&meta,
 		); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		d.Progress = progress
 		d.ProgressLabel = progressLabel
+		if len(meta) > 0 {
+			d.Meta = json.RawMessage(meta)
+		}
 		d.StartedAt = startedAt.UTC().Format(time.RFC3339Nano)
 		if endedAt != nil {
 			s := endedAt.UTC().Format(time.RFC3339Nano)

@@ -378,6 +378,20 @@ export type RunDTO = {
   duration_ms?: number;
   error?: string;
   result_summary?: string;
+  // Generic JSONB blob. For background.build runs it carries the agent's live
+  // checklist: { todos, repo, currentFile }. Absent on other run kinds.
+  meta?: RunMeta;
+};
+
+// RunMeta is the typed view of mem_runs.meta the dock relies on. The agent
+// authors todos + repo via the todo_write tool; the background loop writes
+// currentFile per tool call. All optional — a run with no checklist has none.
+export type TodoStatus = "pending" | "in_progress" | "completed";
+export type RunTodo = { text: string; status: TodoStatus };
+export type RunMeta = {
+  todos?: RunTodo[];
+  repo?: string;
+  currentFile?: string;
 };
 
 export type FetchRunsOpts = {
