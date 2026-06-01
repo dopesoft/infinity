@@ -1,6 +1,42 @@
 package memory
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// TestClassifyActual_EnvelopeAnchoring encodes WHY signal scanning is anchored
+// to the result envelope: a SUCCESSFUL data fetch whose body merely CONTAINS
+// words like "error", "unauthorized", or "not found" must classify OutcomeOK,
+// not OutcomeError. The deep-content substring scan misclassified compact_context
+// summaries and composio Gmail fetches as failures (surprise 0.9), producing the
+// un-dismissable high-surprise curiosity spam. A genuine error wrapper at the
+// envelope must still classify OutcomeError.
+func TestClassifyActual_EnvelopeAnchoring(t *testing.T) {
+	bigBody := func(mid string) string {
+		// 1KB of benign content with the signal buried in the middle, well
+		// past the 200-char envelope on both ends.
+		pad := strings.Repeat("the quarterly report looks fine and on track. ", 12)
+		return `{"id":"abc","subject":"weekly digest","body":"` + pad + mid + pad + `"}`
+	}
+	cases := []struct {
+		name   string
+		actual string
+		want   OutcomeClass
+	}{
+		{"email body containing 'error' is OK", bigBody("we hit an error last week but resolved it"), OutcomeOK},
+		{"summary containing 'unauthorized' is OK", bigBody("the unauthorized access attempt was blocked"), OutcomeOK},
+		{"recall result containing 'not found' is OK", bigBody("the file was not found earlier"), OutcomeOK},
+		{"genuine error prefix is Error", "Error: tool failed to connect", OutcomeError},
+		{"json error envelope is Error", `{"error":"unauthorized","status":401}`, OutcomeError},
+		{"empty json is Empty", "{}", OutcomeEmpty},
+	}
+	for _, c := range cases {
+		if got := ClassifyActual(c.actual); got != c.want {
+			t.Errorf("%s: ClassifyActual = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
 
 // TestSurpriseFor_OutcomeClass encodes WHY surprise exists: it must score a
 // successful tool call as low-surprise and a genuine failure as high-surprise.

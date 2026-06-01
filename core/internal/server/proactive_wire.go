@@ -116,6 +116,24 @@ func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
 	}
 }
 
+// NotifySession delivers a single proactive message into ONE session's live
+// WS, scoped by session id. This is the delivery path the watch poller uses to
+// keep an "I'll report back" promise: when a watched run settles, the follow-up
+// lands in the originating chat. Drops silently if that session has no live
+// socket (the boss navigated away) - the paired push notification covers the
+// away case, mirroring how background_build done is delivered.
+func (s *Server) NotifySession(sessionID, text string) {
+	if s == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	s.sessionSender(sessionID)(wsServerEvent{
+		Type:        "proactive_message",
+		SessionID:   sessionID,
+		Text:        text,
+		FindingKind: "watch_settled",
+	})
+}
+
 // broadcastProactive pushes the same event to every active WS session.
 // Heartbeat findings broadcast to all open sessions - there's only one
 // boss, so multi-tab fanout is the desired behaviour (whichever tab is

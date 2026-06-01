@@ -231,6 +231,17 @@ func shouldSuppressHighSurpriseQuestion(tool, expected, actual string) bool {
 	if strings.EqualFold(strings.TrimSpace(tool), "notify") {
 		return true
 	}
+	// Tool-class gate: "should I rework the prompt around it?" is only a real
+	// signal for tools whose behaviour the agent's prompt actually controls
+	// (skills, workflows, reasoning). Data-fetch / internal / coding-bridge
+	// tools have no prompt to rework, and their content routinely trips the
+	// outcome classifier into a false "error" (an email body or a compacted
+	// summary containing the word "error"). This is what produced the
+	// compact_context (564×), composio fetch (599×/499×), recall, skills_history
+	// and claude_code__Bash high-surprise spam. See tool_policy.go.
+	if !EligibleForHighSurprise(tool) {
+		return true
+	}
 	a := strings.TrimSpace(actual)
 	if a == "" || a == "{}" || a == "[]" || a == "null" {
 		return true

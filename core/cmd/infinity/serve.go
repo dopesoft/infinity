@@ -47,6 +47,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/triage"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
+	"github.com/dopesoft/infinity/core/internal/watch"
 	"github.com/dopesoft/infinity/core/internal/workflow"
 	"github.com/dopesoft/infinity/core/internal/worldmodel"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1189,6 +1190,14 @@ func serveCmd() *cobra.Command {
 				}
 				cronAPI = cron.NewAPI(cronScheduler)
 				tools.RegisterCronTools(registry, cronSchedulerAdapter{s: cronScheduler}, pool)
+				// watch_until: deterministic "watch a run/cron until it settles,
+				// then report back into this chat" primitive. The store creates
+				// rows; the poller (started below, once the server + push exist)
+				// delivers the follow-up. Generic over mem_runs - no per-target
+				// Go branches.
+				if watchStore := watch.NewStore(pool); watchStore != nil {
+					tools.RegisterWatchTools(registry, watchStore, pool)
+				}
 
 				dispatcher := sentinel.SkillDispatcher{
 					Inner:   sentinel.LogDispatcher{},
@@ -1440,42 +1449,55 @@ func serveCmd() *cobra.Command {
 			// instance to exist.
 			notifySkillPromoted = srv.BroadcastSkillPromoted
 
-				// Late-bind background_build's completion notifier now that the
-				// server (chat broadcast) + push sender both exist. A finished
-				// background build pops a chat bubble in any open tab AND pushes
-				// the boss's phone, so he can fire a build by voice, hang up, and
-				// still get told when it's done.
-				if bgAgent != nil {
-					localPush := pushSender
-					bgAgent.OnProgress = func(ctx context.Context, p agent.BackgroundProgress) {
-						srv.BroadcastBackgroundProgress(p)
-					}
-					bgAgent.OnDone = func(ctx context.Context, r agent.BackgroundResult) {
-						srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
-						if localPush != nil {
-							title := "Build complete"
-							body := r.Task
-							if r.Err != "" {
-								title = "Build failed"
-								if body != "" {
-									body += " — "
-								}
-								body += r.Err
-							} else if r.Summary != "" {
-								body = r.Summary
+			// Late-bind background_build's completion notifier now that the
+			// server (chat broadcast) + push sender both exist. A finished
+			// background build pops a chat bubble in any open tab AND pushes
+			// the boss's phone, so he can fire a build by voice, hang up, and
+			// still get told when it's done.
+			if bgAgent != nil {
+				localPush := pushSender
+				bgAgent.OnProgress = func(ctx context.Context, p agent.BackgroundProgress) {
+					srv.BroadcastBackgroundProgress(p)
+				}
+				bgAgent.OnDone = func(ctx context.Context, r agent.BackgroundResult) {
+					srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
+					if localPush != nil {
+						title := "Build complete"
+						body := r.Task
+						if r.Err != "" {
+							title = "Build failed"
+							if body != "" {
+								body += " — "
 							}
-							localPush.Notify(ctx, push.Notification{
-								Title:    title,
-								Body:     clipPush(body, 160),
-								Tag:      "background-build",
-								URL:      "/logs",
-								Kind:     "background_build",
-								ID:       r.RunID,
-								Renotify: true,
-							})
+							body += r.Err
+						} else if r.Summary != "" {
+							body = r.Summary
 						}
+						localPush.Notify(ctx, push.Notification{
+							Title:    title,
+							Body:     clipPush(body, 160),
+							Tag:      "background-build",
+							URL:      "/logs",
+							Kind:     "background_build",
+							ID:       r.RunID,
+							Renotify: true,
+						})
 					}
 				}
+			}
+
+			// Start the watch_until poller now that the server (chat delivery)
+			// and push sender both exist. It settles durable mem_watches rows
+			// deterministically and fires the follow-up into the originating
+			// session - the supported replacement for the fire-and-forget bash
+			// "watcher" that could never call back.
+			if pool != nil {
+				watchNotify := &watchNotifier{srv: srv, push: pushSender}
+				if poller := watch.NewPoller(pool, watchNotify); poller != nil {
+					go poller.Start(cmd.Context())
+					fmt.Println("  watch: watch_until poller started")
+				}
+			}
 
 			// Late-bind the browser frame sink now that the server (which
 			// owns the per-session WS broadcaster) exists. Frames stream to

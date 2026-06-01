@@ -340,6 +340,15 @@ func lowValueToolSignature(signature string) bool {
 		if _, meta := metaTools[tool]; meta {
 			continue
 		}
+		// Coding-bridge (claude_code__*) and internal substrate tools are not
+		// reusable domain steps: a chain of interactive coding or plumbing is
+		// not a skill to crystallise. This collapses all-claude_code chains
+		// (e.g. claude_code__Read -> Bash -> Read) to zero substantive tools
+		// so they're filtered, instead of surfacing as skill_pattern noise.
+		// See tool_policy.go.
+		if !SubstantiveForSkillPattern(tool) {
+			continue
+		}
 		substantive[tool] = struct{}{}
 	}
 	// A repeated single tool is not a reusable multi-step recipe. It is

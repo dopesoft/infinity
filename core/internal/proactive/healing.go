@@ -161,16 +161,28 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 	// filter those failures out of the freshness query below so no
 	// new rows are inserted for them.
 	macUp := macBridgeHealthy == nil || macBridgeHealthy()
-	if pool != nil && !macUp {
+	// claude_code__* command-level failures are NEVER a self-heal signal:
+	// a grep that exits 1, a Read on a missing path, or a failing build is
+	// normal agent work, not a broken tool. We retire any open
+	// repeated_tool_error:claude_code__* rows unconditionally (the reason
+	// distinguishes "Mac asleep" from "just normal coding noise") and the
+	// freshness query below excludes the class via EligibleForRepeatedError,
+	// so they never regenerate. This killed the 45×/45× claude_code__Bash /
+	// __Read spam. See tool_policy.go.
+	if pool != nil {
+		reason := "coding_bridge_noise"
+		if !macUp {
+			reason = "bridge_offline"
+		}
 		_, _ = pool.Exec(ctx, `
 			UPDATE mem_curiosity_questions
 			   SET status = 'dismissed',
 			       resolved_at = NOW(),
-			       resolved_reason = 'bridge_offline',
+			       resolved_reason = $1,
 			       auto_dismissed_at = NOW()
 			 WHERE status = 'open'
 			   AND source_tag LIKE 'repeated_tool_error:claude_code__%'
-		`)
+		`, reason)
 	}
 
 	// First sweep: any tool whose old 'repeated_tool_error:<tool>' open
@@ -193,12 +205,13 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 		`)
 	}
 
-	// Build the freshness query. When the bridge is offline, exclude
-	// claude_code__* tools - those failures are expected noise.
-	toolExclusion := ""
-	if !macUp {
-		toolExclusion = "AND COALESCE(payload->>'name','') NOT LIKE 'claude_code__%'"
-	}
+	// Build the freshness query. claude_code__* (coding-bridge class) is
+	// excluded unconditionally - command-level non-zero exits are normal
+	// coding work, never a tool malfunction. Excluding at the query level
+	// also stops claude_code failures from consuming the LIMIT 10 and
+	// crowding out genuinely-broken tools. The Go-side EligibleForRepeatedError
+	// guard below keeps tool_policy.go the single source of truth.
+	toolExclusion := "AND COALESCE(payload->>'name','') NOT LIKE 'claude_code__%'"
 	// Group PostToolUseFailure observations by tool name (extracted from
 	// the JSON payload). A tool that fails THRESHOLD+ times in WINDOW
 	// gets one curiosity question; the sample error is the most recent
@@ -244,6 +257,12 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 			lastSeen     time.Time
 		)
 		if err := rows.Scan(&tool, &hits, &lastSeen, &sample); err != nil {
+			continue
+		}
+		// Policy guard (single source of truth): coding-bridge tools never
+		// surface a "fix this tool" self-heal question. Redundant with the SQL
+		// exclusion above, but keeps the decision in tool_policy.go.
+		if !EligibleForRepeatedError(tool) {
 			continue
 		}
 		// Canonical question phrasing - stays constant across merges.

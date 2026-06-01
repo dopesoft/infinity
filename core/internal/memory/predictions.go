@@ -257,8 +257,18 @@ func ClassifyActual(actual string) OutcomeClass {
 		strings.HasPrefix(a, "failed") {
 		return OutcomeError
 	}
+	// Scan signals only in the result ENVELOPE (head+tail), not the body.
+	// A tool's status/error wrapper lives at the edges (the agent loop
+	// prefixes errors); the multi-KB body is CONTENT. A fetched email or a
+	// compacted summary that merely contains "unauthorized" / "not found" /
+	// "error" as content must NOT be misread as a failed call - that
+	// misclassification produced surprise 0.9 and the un-dismissable
+	// high-surprise curiosity spam (compact_context 564x, composio fetch
+	// 599x/499x). Anchoring to the envelope errs toward OutcomeOK, the safe
+	// direction for these data/internal tools.
+	env := outcomeEnvelope(a)
 	for _, sig := range errorSignals {
-		if strings.Contains(a, sig) {
+		if strings.Contains(env, sig) {
 			return OutcomeError
 		}
 	}
@@ -266,11 +276,26 @@ func ClassifyActual(actual string) OutcomeClass {
 		return OutcomeEmpty
 	}
 	for _, sig := range emptySignals {
-		if strings.Contains(a, sig) {
+		if strings.Contains(env, sig) {
 			return OutcomeEmpty
 		}
 	}
 	return OutcomeOK
+}
+
+// outcomeEnvelopeChars is how many leading/trailing chars of a tool result we
+// scan for status/error signals. Wrappers live at the edges; bodies don't.
+const outcomeEnvelopeChars = 200
+
+// outcomeEnvelope returns the head + tail of an (already-lowered) result so
+// signal scanning ignores arbitrary body content. Short results are returned
+// whole. A signal split across the head/tail join simply won't match, which
+// is the conservative (treat-as-OK) direction.
+func outcomeEnvelope(a string) string {
+	if len(a) <= 2*outcomeEnvelopeChars {
+		return a
+	}
+	return a[:outcomeEnvelopeChars] + "\n" + a[len(a)-outcomeEnvelopeChars:]
 }
 
 // expectedClass reads the prediction sentence and decides whether it

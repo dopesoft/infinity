@@ -45,6 +45,24 @@ const evidenceCap = 20
 // here so the dismiss endpoints + cooldown precheck agree.
 const cooldownAfterDismiss = 24 * time.Hour
 
+// noiseCooldown is the extended silence for pure-noise detector classes
+// (high_surprise / skill_pattern). Those tools fire constantly, so a 24h
+// cooldown just relapses and the boss has to dismiss the same card daily -
+// the "repeats no matter what I do" complaint. A 30d window means a single
+// dismissal effectively sticks (and the source-side tool_policy.go fix stops
+// them regenerating at all, so this is belt-and-suspenders).
+const noiseCooldown = 30 * 24 * time.Hour
+
+// cooldownForTag picks the silence window for a dismissed source_tag.
+// Actionable classes (repeated_tool_error, contradiction, low_confidence)
+// re-surface after 24h if still unresolved; noise classes get 30d.
+func cooldownForTag(tag string) time.Duration {
+	if strings.HasPrefix(tag, "high_surprise:") || strings.HasPrefix(tag, "skill_pattern:") {
+		return noiseCooldown
+	}
+	return cooldownAfterDismiss
+}
+
 // mergeOpenQuestionByTag merges a new sample into the existing OPEN row
 // for a source_tag: bumps occurrences_count, appends to (and trims)
 // evidence_log, refreshes the rationale, escalates importance. Returns
@@ -305,8 +323,9 @@ func UpsertFinding(
 }
 
 // CoolSourceTag marks every row sharing the given source_tag (on the
-// given table) with cooldown_until = NOW() + 24h. Called by the
-// dismiss endpoints when the boss explicitly drops a question/finding
+// given table) with cooldown_until = NOW() + cooldownForTag(tag) - 24h for
+// actionable classes, 30d for pure-noise classes (high_surprise/skill_pattern).
+// Called by the dismiss endpoints when the boss explicitly drops a question/finding
 // - every detector that tries to re-emit the same topic within 24h is
 // blocked by the cooldown precheck in UpsertQuestion / UpsertFinding.
 //
@@ -323,7 +342,7 @@ func CoolSourceTag(ctx context.Context, pool *pgxpool.Pool, table, tag string) {
 	default:
 		return
 	}
-	until := time.Now().Add(cooldownAfterDismiss)
+	until := time.Now().Add(cooldownForTag(tag))
 	_, _ = pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s
 		   SET cooldown_until = $2

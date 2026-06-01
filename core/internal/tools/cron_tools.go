@@ -377,7 +377,30 @@ func (t *cronRunNow) Execute(ctx context.Context, in map[string]any) (string, er
 	if err := t.sched.RunOnce(ctx, *match); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`{"ok":true,"id":"%s","name":"%s","fired":true}`, match.ID, match.Name), nil
+	// RunOnce is SYNCHRONOUS - by the time it returns, the run has already
+	// reached a terminal status and RunOnce has written it to mem_crons. Surface
+	// that verdict here so the agent can report the actual outcome immediately
+	// instead of guessing or wiring a watcher for a job that's already done.
+	// (For genuinely async work, that's what watch_until + run_id is for.)
+	status, durMs, runID := t.lastRun(ctx, match.ID)
+	return fmt.Sprintf(`{"ok":true,"id":"%s","name":"%s","fired":true,"last_run_status":%q,"duration_ms":%d,"run_id":%q}`,
+		match.ID, match.Name, status, durMs, runID), nil
+}
+
+// lastRun reads the terminal status RunOnce just wrote, plus the mem_runs id of
+// the run it booked (so the agent can hand it to watch_until if it wants). Best
+// effort: empty strings when the pool/rows aren't available.
+func (t *cronRunNow) lastRun(ctx context.Context, cronID string) (status string, durMs int64, runID string) {
+	if t.pool == nil {
+		return "", 0, ""
+	}
+	_ = t.pool.QueryRow(ctx,
+		`SELECT COALESCE(last_run_status,''), COALESCE(last_run_duration_ms,0) FROM mem_crons WHERE id = $1::uuid`,
+		cronID).Scan(&status, &durMs)
+	_ = t.pool.QueryRow(ctx,
+		`SELECT id::text FROM mem_runs WHERE kind='cron' AND target_id=$1 ORDER BY started_at DESC LIMIT 1`,
+		cronID).Scan(&runID)
+	return status, durMs, runID
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
