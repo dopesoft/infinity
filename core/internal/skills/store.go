@@ -22,6 +22,16 @@ type Store struct {
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
+// Pool exposes the underlying connection pool for callers that need to run a
+// cross-package query (e.g. the skill_create dedup gate consulting
+// proposals.FindDuplicateSkill). Nil-safe on a nil Store.
+func (s *Store) Pool() *pgxpool.Pool {
+	if s == nil {
+		return nil
+	}
+	return s.pool
+}
+
 // UpsertSkill writes the skill row + appends a version record if this version
 // is new. Active-version pointer is set when no row exists yet.
 func (s *Store) UpsertSkill(ctx context.Context, sk *Skill) error {

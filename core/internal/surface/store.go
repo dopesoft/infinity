@@ -64,6 +64,24 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 	if !it.Status.Valid() {
 		return "", fmt.Errorf("surface: invalid status %q", it.Status)
 	}
+
+	// Reconnect-proof dedup: a Gmail message's stable identity is its message
+	// id, NOT the Composio connected_account it was fetched through. A revoke+
+	// reconnect mints a fresh account id, so keying the row on
+	// gmail:<account>:<msgid> would resurface the SAME email as a duplicate
+	// (and a quiet inbox would look un-scanned). Canonicalize any 3-part gmail
+	// external_id to gmail:<msgid> and keep the account id in metadata for
+	// provenance. Done in the store so it holds no matter which recipe wrote it.
+	if acct, msgID, ok := splitGmailExternalID(it.ExternalID); ok {
+		it.ExternalID = "gmail:" + msgID
+		if it.Metadata == nil {
+			it.Metadata = map[string]any{}
+		}
+		if _, exists := it.Metadata["account"]; !exists && acct != "" {
+			it.Metadata["account"] = acct
+		}
+	}
+
 	if it.Importance != nil {
 		if *it.Importance < 0 {
 			*it.Importance = 0
@@ -339,4 +357,20 @@ func nullStr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// splitGmailExternalID parses a legacy gmail:<account>:<messageId> external id
+// into (account, messageId, true). It returns ok=false for an already-canonical
+// gmail:<messageId> (2 parts), for non-gmail ids, or when the message id is
+// empty. This is what makes surface dedup survive a mailbox revoke+reconnect:
+// the account id (middle segment) changes, the message id does not.
+func splitGmailExternalID(ext string) (account, msgID string, ok bool) {
+	if !strings.HasPrefix(ext, "gmail:") {
+		return "", "", false
+	}
+	parts := strings.Split(ext, ":")
+	if len(parts) != 3 {
+		return "", "", false
+	}
+	return parts[1], parts[2], strings.TrimSpace(parts[2]) != ""
 }

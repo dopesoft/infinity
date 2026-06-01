@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/proposals"
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
@@ -388,6 +389,43 @@ func (t *skillCreateTool) Execute(ctx context.Context, in map[string]any) (strin
 			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 				triggers = append(triggers, strings.TrimSpace(s))
 			}
+		}
+	}
+
+	// Anti-fragmentation gate: ONE flexible skill per capability, not many
+	// narrow ones. Before minting a NEW skill, consult the same dedup gate the
+	// Voyager extractor uses. If a different existing skill already covers this
+	// capability (deterministic name-normalization + canonical-intent match;
+	// LLM tier skipped here with a nil drafter), do NOT create a standalone
+	// duplicate — route the proposed body into that skill's update-candidate so
+	// the capability stays ONE skill that gets improved. This is what stopped
+	// email triage from re-fragmenting into 10 competing skills.
+	if t.r.store != nil {
+		if canonical := proposals.FindDuplicateSkill(ctx, t.r.store.Pool(), nil, name, desc); canonical != "" && canonical != name {
+			res, err := proposals.UpsertCandidate(ctx, t.r.store.Pool(), nil, nil, proposals.CandidateDraft{
+				Name:             canonical + "-update",
+				ParentSkill:      canonical,
+				Description:      desc,
+				Reasoning:        "Routed from skill_create: \"" + name + "\" overlaps the existing \"" + canonical + "\" capability. Extend the one skill instead of forking a duplicate.",
+				SkillMD:          strings.TrimSpace(body),
+				RiskLevel:        string(risk),
+				Importance:       importance,
+				ImportanceReason: importanceReason,
+				Source:           "agent",
+			})
+			if err == nil {
+				out, _ := json.Marshal(map[string]any{
+					"status":      "redirected",
+					"active":      false,
+					"canonical":   canonical,
+					"proposal_id": res.ID,
+					"message": fmt.Sprintf("A skill for this capability already exists: %q. To avoid duplicates, your recipe was filed as an improvement to %q (proposal %s) instead of creating a new skill. Use skills_invoke(%q) to run it, and refine THAT skill rather than authoring a sibling.",
+						canonical, canonical, res.ID, canonical),
+				})
+				return string(out), nil
+			}
+			// On routing failure, fall through to normal creation rather than
+			// dropping the agent's intent entirely.
 		}
 	}
 

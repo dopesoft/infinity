@@ -66,6 +66,16 @@ func (m *Manager) OnPostToolUse(ctx context.Context, ev hooks.Event) error {
 		return nil
 	}
 	last3 := w[len(w)-3:]
+	// Don't even track degenerate triplets. A reusable workflow is a sequence
+	// of DISTINCT, meaningful tools — not the agent doing ordinary mechanics
+	// (read a file, run bash, edit a file). Same-tool-thrice (bash→bash→bash)
+	// and all-primitive combos (claude_code__*/fs_* file & shell ops) are
+	// normal work, not a named capability. Minting "triplet_*" proposals for
+	// them just floods the candidate queue with noise the boss has to reject
+	// (46 such junk candidates accumulated by 2026-06-01). Skip them entirely.
+	if !tripletWorthTracking(last3[0].name, last3[1].name, last3[2].name) {
+		return nil
+	}
 	key := tripletKey(last3[0].name, last3[1].name, last3[2].name)
 
 	tc, ok := m.tripletCounters[key]
@@ -102,6 +112,32 @@ func (m *Manager) OnPostToolUse(ctx context.Context, ev hooks.Event) error {
 
 func tripletKey(a, b, c string) string {
 	return strings.ToLower(a) + "|" + strings.ToLower(b) + "|" + strings.ToLower(c)
+}
+
+// primitiveTripletTools are the raw file/shell/read mechanics the agent runs
+// constantly as part of ordinary work. A triplet made up only of these is not
+// a reusable named workflow, so it must never become a skill proposal.
+var primitiveTripletTools = map[string]bool{
+	"claude_code__bash": true, "claude_code__read": true, "claude_code__edit": true,
+	"claude_code__write": true, "claude_code__ls": true, "claude_code__glob": true,
+	"claude_code__grep": true,
+	"fs_read": true, "fs_ls": true, "fs_write": true, "fs_edit": true,
+	"fs_glob": true, "fs_grep": true,
+	"bash_run": true, "read": true, "edit": true, "write": true, "bash": true,
+}
+
+// tripletWorthTracking rejects degenerate triplets: all-identical (e.g.
+// bash→bash→bash) or all-primitive (only file/shell/read ops). Anything with a
+// meaningful, distinct tool in it still flows through to discovery.
+func tripletWorthTracking(a, b, c string) bool {
+	la, lb, lc := strings.ToLower(a), strings.ToLower(b), strings.ToLower(c)
+	if la == lb && lb == lc {
+		return false
+	}
+	if primitiveTripletTools[la] && primitiveTripletTools[lb] && primitiveTripletTools[lc] {
+		return false
+	}
+	return true
 }
 
 func (m *Manager) recordTripletProposal(tools [3]string) {

@@ -213,6 +213,17 @@ func serveCmd() *cobra.Command {
 					// notices itself, but only when it should.
 					memory.RegisterConsolidateHook(memory.RollupAgentMetrics)
 
+					// Anti-fragmentation backstop: nightly, detect active
+					// skills that share a capability domain (canonical-intent
+					// or revision-normalized name) and raise ONE "Fix this"
+					// question to collapse each cluster into a single flexible
+					// skill. The creation-time gates prevent new duplicates;
+					// this catches anything that slipped in before them. Pairs
+					// with the email-triage collapse — keeps "one skill per
+					// capability" true over time instead of needing a manual
+					// sweep every few weeks (migrations 075/076/080).
+					memory.RegisterConsolidateHook(proposals.DetectSkillFragmentation)
+
 					// Opt 7: every UpsertCandidate writes a mem_memories
 					// twin (tier='working') for the draft body. Embedded,
 					// auto-linked via A-MEM associative edges. Agent
@@ -669,7 +680,7 @@ func serveCmd() *cobra.Command {
 				// identity (Gmail's emailAddress, Slack's handle, etc.).
 				// Zero toolkit knowledge in Go; the system prompt nudges
 				// the agent to discover the right verb on its own.
-				tools.RegisterConnectorTools(registry, connectorsCache)
+				tools.RegisterConnectorTools(registry, connectorsCache, pool)
 			}
 
 			// Persisted token usage. Migration 013 added the columns;
@@ -976,6 +987,16 @@ func serveCmd() *cobra.Command {
 						// → next heartbeat tick notices → skill fires → identity
 						// shows in every later turn. Zero per-toolkit Go code.
 						proactive.ConnectorIdentityChecklist(connectorsCache),
+						// Connector coverage: for every ACTIVE Gmail account in the
+						// live cache, check mem_connector_coverage (written per
+						// mailbox by connector_coverage_mark each triage pass) and
+						// surface a finding when any mailbox has gone >12h without a
+						// successful pass. This is the safety net for the 2026-05-28
+						// incident: a reconnected mailbox dropped out of coverage for
+						// ~9 days while the cron reported "ok" (it was scanning a
+						// different inbox). Per-cron status can't see that; per-account
+						// coverage can. The finding points at the inbox-triage skill.
+						proactive.ConnectorCoverageChecklist(connectorsCache, pool),
 						// Healing: scan mem_crons for error-tagged last_run_status
 						// and mem_observations for tools that have failed 3+ times
 						// in the last 24h. Each detection writes a row into

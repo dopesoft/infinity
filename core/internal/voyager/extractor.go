@@ -164,6 +164,8 @@ const draftSystem = `You convert a successful agent session into a reusable skil
 
 You'll get a session transcript with the user's prompts, the assistant's replies, and the tools the assistant called. Decide whether the session captured a generalizable procedure (not a one-off question), and if so produce a SKILL.md.
 
+ONE FLEXIBLE SKILL PER CAPABILITY, NOT MANY NARROW ONES. Before drafting, assume a skill for this capability domain probably already exists. The default outcome is to EXTEND that skill with a parameter or branch, not to mint a new one. Only propose a brand-new skill when no existing skill plausibly covers the capability at all. Build variation INTO a skill — handle N accounts, sources, or query windows with parameters and conditional steps — rather than spawning a sibling skill per variation. A capability that fragmented into many tight skills (e.g. "gmail-triage", "load-then-sweep-gmail", "scheduled-gmail-followup-triage" for one inbox-triage job) is a bug, not coverage. Name the skill for the broad capability, never for the specific run. (A deterministic gate may still re-route your draft into the canonical skill; design for that — write the body as a general recipe.)
+
 Return ONLY a JSON object in this exact shape - no commentary, no code fences:
 
 {

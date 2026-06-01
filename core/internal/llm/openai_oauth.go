@@ -417,21 +417,36 @@ func (o *OpenAIOAuth) Stream(
 
 	httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
 
-	// Self-heal: if Codex rejected the per-call model override (typical
-	// reasons: it's an Anthropic nickname like "haiku", a deprecated id,
-	// or a model the boss's plan doesn't expose), retry ONCE with the
-	// provider's configured default so an upstream bad guess never tanks
-	// the whole turn. Anything else surfaces as before.
-	if attemptErr == nil && httpResp.StatusCode == 400 && effectiveModel != o.model && o.model != "" {
+	// Self-heal: if Codex rejected the model, retry ONCE with a known-served
+	// fallback so an upstream bad guess never tanks the whole turn. Two cases:
+	//   1. A per-call override was rejected (nickname like "haiku", deprecated
+	//      id, or a model the plan doesn't expose) → retry with the configured
+	//      default o.model.
+	//   2. The configured DEFAULT ITSELF was rejected (e.g. gpt-5-codex isn't
+	//      exposed on the boss's account/plan) → the old code couldn't recover
+	//      because the override==default guard was false. This is exactly the
+	//      delegate failure on 2026-06-01 ("'gpt-5-codex' model is not
+	//      supported"): a sub-agent inherited the default, the account rejected
+	//      it, and there was no fallback. Now we retry with oauthFallbackModel()
+	//      (codex-mini-latest by default; override via LLM_OPENAI_OAUTH_FALLBACK_MODEL).
+	if attemptErr == nil && httpResp.StatusCode == 400 {
 		raw, _ := io.ReadAll(httpResp.Body)
 		httpResp.Body.Close()
 		bodyStr := string(raw)
 		if looksLikeModelRejection(bodyStr) {
-			unknownOAIEventLog.Printf(
-				"openai_oauth: model %q rejected, retrying with default %q (reason: %s)",
-				effectiveModel, o.model, truncateOAuth(bodyStr, 200),
-			)
-			httpResp, attemptErr = o.attemptStream(ctx, tok, o.model, system, messages, tools)
+			fallback := o.model
+			if fallback == "" || fallback == effectiveModel {
+				fallback = oauthFallbackModel()
+			}
+			if fallback != "" && fallback != effectiveModel {
+				unknownOAIEventLog.Printf(
+					"openai_oauth: model %q rejected, retrying with %q (reason: %s)",
+					effectiveModel, fallback, truncateOAuth(bodyStr, 200),
+				)
+				httpResp, attemptErr = o.attemptStream(ctx, tok, fallback, system, messages, tools)
+			} else {
+				httpResp.Body = io.NopCloser(bytes.NewReader(raw))
+			}
 		} else {
 			// Re-emit the original body for the non-retry path below.
 			httpResp.Body = io.NopCloser(bytes.NewReader(raw))
@@ -975,6 +990,19 @@ func truncateOAuth(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// oauthFallbackModel is the last-resort Codex model used when even the
+// configured default is rejected by the account/plan. codex-mini-latest is the
+// smallest, most broadly-served Codex model (the same id tier nicknames like
+// "haiku"/"mini" already map to), so it's the safest thing to fall back to.
+// Override with LLM_OPENAI_OAUTH_FALLBACK_MODEL if a given account exposes a
+// different floor model.
+func oauthFallbackModel() string {
+	if m := strings.TrimSpace(os.Getenv("LLM_OPENAI_OAUTH_FALLBACK_MODEL")); m != "" {
+		return m
+	}
+	return "codex-mini-latest"
 }
 
 // tierNicknameToCodex maps cross-provider tier nicknames ONLY.
