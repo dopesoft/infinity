@@ -186,10 +186,7 @@ func (c *Client) PostMessage(ctx context.Context, m Message) error {
 	if peerID == "" {
 		peerID = c.peer
 	}
-	sessionID := strings.TrimSpace(m.SessionID)
-	if sessionID == "" {
-		sessionID = "default"
-	}
+	sessionID := sanitizeSessionID(m.SessionID)
 	url := fmt.Sprintf("%s/v3/workspaces/%s/sessions/%s/messages",
 		c.base, c.workspace, sessionID)
 	body, err := json.Marshal(honchoMessageBatch{Messages: []honchoMessage{{
@@ -329,4 +326,33 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte, decode
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(decodeInto)
+}
+
+// sanitizeSessionID coerces an Infinity session id into a Honcho-legal
+// session name. Honcho validates the name path segment against
+// `^[a-zA-Z0-9_-]+$` and 500s on anything else, so internal session ids
+// that carry a scheme prefix (`background:<uuid>`, `peer:coder`, `voice:…`)
+// must be flattened before they hit the wire. Any disallowed rune becomes
+// '_'; an empty/blank id falls back to the per-peer default bucket so the
+// deriver still has somewhere to index the message.
+func sanitizeSessionID(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "default"
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "default"
+	}
+	return out
 }

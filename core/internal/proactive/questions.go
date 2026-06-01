@@ -23,11 +23,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -42,6 +44,34 @@ const evidenceCap = 20
 // boss dismisses a question/finding. The plan calls for 24h; centralized
 // here so the dismiss endpoints + cooldown precheck agree.
 const cooldownAfterDismiss = 24 * time.Hour
+
+// mergeOpenQuestionByTag merges a new sample into the existing OPEN row
+// for a source_tag: bumps occurrences_count, appends to (and trims)
+// evidence_log, refreshes the rationale, escalates importance. Returns
+// pgx.ErrNoRows when no open row carries the tag. Pulled out as a const
+// so UpsertQuestion can run it twice - once as the fast path, and again
+// to recover when a concurrent insert wins the partial-unique arbiter
+// (the loser's ON CONFLICT ... RETURNING can come back empty, at which
+// point the winner's open row already exists and this re-merges into it).
+// Params: $1 source_tag · $2 evidence entry · $3 evidence cap · $4
+// rationale · $5 importance.
+const mergeOpenQuestionByTag = `
+	UPDATE mem_curiosity_questions
+	   SET occurrences_count = occurrences_count + 1,
+	       evidence_log      = (
+	           SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+	             FROM (
+	                 SELECT e FROM jsonb_array_elements(evidence_log || $2::jsonb) AS elem(e)
+	                 ORDER BY (e->>'at')::timestamptz DESC NULLS LAST
+	                 LIMIT $3
+	             ) trimmed
+	       ),
+	       last_seen_at = NOW(),
+	       rationale    = COALESCE(NULLIF($4, ''), rationale),
+	       importance   = GREATEST(importance, $5)
+	 WHERE source_tag = $1 AND status = 'open'
+	 RETURNING id::text, occurrences_count
+`
 
 // QuestionDraft is the input to UpsertQuestion. Mirrors the columns of
 // mem_curiosity_questions that a detector controls. evidence_log is
@@ -140,23 +170,8 @@ func UpsertQuestion(
 
 	// Try a merge into the open row first. Most production calls hit
 	// this path because the detectors run on a heartbeat schedule.
-	row := pool.QueryRow(ctx, `
-		UPDATE mem_curiosity_questions
-		   SET occurrences_count = occurrences_count + 1,
-		       evidence_log      = (
-		           SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
-		             FROM (
-		                 SELECT e FROM jsonb_array_elements(evidence_log || $2::jsonb) AS elem(e)
-		                 ORDER BY (e->>'at')::timestamptz DESC NULLS LAST
-		                 LIMIT $3
-		             ) trimmed
-		       ),
-		       last_seen_at = NOW(),
-		       rationale    = COALESCE(NULLIF($4, ''), rationale),
-		       importance   = GREATEST(importance, $5)
-		 WHERE source_tag = $1 AND status = 'open'
-		 RETURNING id::text, occurrences_count
-	`, d.SourceTag, evidenceEntry, evidenceCap, d.Rationale, d.Importance)
+	row := pool.QueryRow(ctx, mergeOpenQuestionByTag,
+		d.SourceTag, evidenceEntry, evidenceCap, d.Rationale, d.Importance)
 	if scanErr := row.Scan(&id, &count); scanErr == nil {
 		return id, false, count, nil
 	}
@@ -180,6 +195,27 @@ func UpsertQuestion(
 	`, d.Question, d.Rationale, d.SourceKind, uuidArray(d.SourceIDs),
 		d.Importance, d.SourceTag, evidenceEntry)
 	if scanErr := row.Scan(&id, &count, &isNew); scanErr != nil {
+		// A concurrent insert for the same brand-new source_tag can win
+		// the partial-unique arbiter, leaving this statement's
+		// ON CONFLICT ... RETURNING empty (the winning tuple was moved out
+		// of the arbiter's status='open' predicate during the conflicting
+		// txn's recheck). The winner's open row now exists, so re-run the
+		// tag merge to fold this sample into it instead of dropping it.
+		if errors.Is(scanErr, pgx.ErrNoRows) && d.SourceTag != "" {
+			retry := pool.QueryRow(ctx, mergeOpenQuestionByTag,
+				d.SourceTag, evidenceEntry, evidenceCap, d.Rationale, d.Importance)
+			if retryErr := retry.Scan(&id, &count); retryErr == nil {
+				return id, false, count, nil
+			}
+			// Still nothing - a genuine transient (the winner's row left
+			// 'open' between our two statements). Not actionable; the next
+			// heartbeat tick re-emits. Debug, not warn, so it stops
+			// polluting the error stream.
+			if logger != nil {
+				logger.Debug("UpsertQuestion insert race - no open row to merge", "tag", d.SourceTag)
+			}
+			return "", false, 0, nil
+		}
 		if logger != nil {
 			logger.Warn("UpsertQuestion insert", "tag", d.SourceTag, "err", scanErr)
 		}

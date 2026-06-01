@@ -229,22 +229,66 @@ func (h *LearningHub) IsPatternSuppressed(ctx context.Context, sourceTag string)
 // This is the part that lets the agent traverse from a dashboard
 // question back to the underlying observations - the "show me the 14
 // failures behind this" affordance.
-func (h *LearningHub) LinkQuestionProvenance(ctx context.Context, memoryID string, observationIDs []string) {
-	if h == nil || h.pool == nil || memoryID == "" || len(observationIDs) == 0 {
+//
+// NOTE: `sourceIDs` are heterogeneous - detectors pass observation,
+// memory, graph-node, prediction, or cron ids depending on the scan.
+// The query below resolves each to its underlying observation(s)
+// rather than assuming it is one; see the inline comment.
+func (h *LearningHub) LinkQuestionProvenance(ctx context.Context, memoryID string, sourceIDs []string) {
+	if h == nil || h.pool == nil || memoryID == "" || len(sourceIDs) == 0 {
 		return
 	}
-	for _, obsID := range observationIDs {
-		obsID = strings.TrimSpace(obsID)
-		if obsID == "" {
+	for _, srcID := range sourceIDs {
+		srcID = strings.TrimSpace(srcID)
+		if srcID == "" {
 			continue
 		}
+		// `srcID` is whatever the detector put in SourceIDs, and that is
+		// NOT always an observation: contradiction/low-confidence scans
+		// pass mem_memories ids, uncovered-mention passes mem_graph_nodes
+		// ids, high-surprise passes mem_predictions ids, the self-healer
+		// passes mem_crons ids. mem_memory_sources.observation_id has a FK
+		// to mem_observations, so inserting any of those raw (the old
+		// behaviour) violated the FK on every fresh question.
+		//
+		// Resolve instead of trust. Three valid shapes, in one statement:
+		//   1. srcID IS an observation  -> write the direct edge.
+		//   2. srcID is a memory        -> inherit that memory's own
+		//      observation provenance, so the question twin still traces
+		//      back to the underlying observations (the whole point of
+		//      this link).
+		//   3. srcID is a graph node    -> resolve to the observations the
+		//      node was mentioned in (mem_graph_node_observations). This is
+		//      exactly the uncovered-mention detector's case: the node has
+		//      >=3 observations and no derived memory yet.
+		//   4. srcID is a prediction   -> resolve to the tool-call
+		//      observation(s) that share its tool_call_id. This is the
+		//      high-surprise detector's case: the evidence behind "tool X
+		//      surprised me" IS that PostToolUse observation.
+		// Anything else (e.g. a cron id) matches no branch, so nothing is
+		// inserted and no FK can fire.
 		_, err := h.pool.Exec(ctx, `
 			INSERT INTO mem_memory_sources (memory_id, observation_id, confidence)
-			VALUES ($1::uuid, $2::uuid, 1.0)
+			SELECT $1::uuid, o.id, 1.0
+			  FROM mem_observations o
+			 WHERE o.id = $2::uuid
+			UNION
+			SELECT $1::uuid, ms.observation_id, ms.confidence
+			  FROM mem_memory_sources ms
+			 WHERE ms.memory_id = $2::uuid
+			UNION
+			SELECT $1::uuid, gno.observation_id, 1.0
+			  FROM mem_graph_node_observations gno
+			 WHERE gno.node_id = $2::uuid
+			UNION
+			SELECT $1::uuid, o.id, 1.0
+			  FROM mem_predictions p
+			  JOIN mem_observations o ON o.payload->>'tool_call_id' = p.tool_call_id
+			 WHERE p.id = $2::uuid AND COALESCE(p.tool_call_id, '') <> ''
 			ON CONFLICT (memory_id, observation_id) DO NOTHING
-		`, memoryID, obsID)
+		`, memoryID, srcID)
 		if err != nil {
-			h.logger.Warn("link question provenance", "memory_id", memoryID, "obs_id", obsID, "err", err)
+			h.logger.Warn("link question provenance", "memory_id", memoryID, "src_id", srcID, "err", err)
 		}
 	}
 }

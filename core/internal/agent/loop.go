@@ -742,7 +742,7 @@ func (l *Loop) GetOrCreateSession(id string) *Session {
 		// run this outside l.mu so a slow DB doesn't stall every other
 		// session lookup. The lookup is keyed by PK - sub-ms on a healthy
 		// pool - but the timeout caps the worst case.
-		if store := l.UsageStore(); store != nil && !IsEphemeralSessionID(id) {
+		if store := l.UsageStore(); store != nil && !IsSyntheticSessionID(id) {
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			snap, err := store.Hydrate(ctx, id)
 			cancel()
@@ -893,7 +893,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			}
 		}
 	}
-	if rec := l.turnRecorder(); rec != nil && !IsEphemeralSessionID(s.ID) {
+	if rec := l.turnRecorder(); rec != nil && !IsSyntheticSessionID(s.ID) {
 		if id, err := rec.Open(ctx, s.ID, turnText, model); err == nil {
 			turnID = id
 		} else {
@@ -1039,7 +1039,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// Persist counters so a process restart doesn't reset the meter
 		// to 0% on a session with real history. Best-effort + detached
 		// context so the user-visible turn isn't gated on the DB write.
-		if store := l.UsageStore(); store != nil && !IsEphemeralSessionID(s.ID) && (resp.Usage.Input > 0 || resp.Usage.Output > 0) {
+		if store := l.UsageStore(); store != nil && !IsSyntheticSessionID(s.ID) && (resp.Usage.Input > 0 || resp.Usage.Output > 0) {
 			snap := s.UsageSnapshot()
 			sessionID := s.ID
 			go func() {
@@ -1333,19 +1333,27 @@ func (l *Loop) drainSteer(ch <-chan string, s *Session) {
 	}
 }
 
-// IsEphemeralSessionID reports whether a session is an ephemeral delegate
-// sub-agent (id like "delegate:<uuid>"). These children are NOT persisted:
-// their session ids are not valid UUIDs (so every mem_* / honcho write would
-// throw SQLSTATE 22P02), and conceptually they're throwaway — only the summary
-// they return to the parent matters, and the PARENT session captures that.
-// Skipping persistence here is what stops the "invalid input syntax for type
-// uuid" storm and keeps delegate chatter out of memory.
-func IsEphemeralSessionID(id string) bool {
-	return strings.HasPrefix(id, delegateSessionIDPrefix)
+// IsSyntheticSessionID reports whether a session id is a synthetic sub-agent
+// bucket rather than a real UUID-keyed conversation. Three flavours exist, all
+// minted with a scheme prefix: ephemeral delegates ("delegate:<uuid>"),
+// persistent named peers ("peer:<slug>"), and detached background builds
+// ("background:<uuid>"). NONE of these are valid UUIDs, so every mem_* /
+// honcho write keyed on session id would throw SQLSTATE 22P02 ("invalid input
+// syntax for type uuid"). Persistence is skipped for all of them: a delegate's
+// only output is the summary it hands back (captured by the PARENT session),
+// a peer's accumulated context lives in its in-memory session, and a
+// background run reports progress through the mem_runs substrate (keyed by
+// run id, not session id) — never through the UUID-typed capture path. This
+// guard is what stops the "invalid input syntax for type uuid" storm and keeps
+// sub-agent chatter out of memory and Honcho.
+func IsSyntheticSessionID(id string) bool {
+	return strings.HasPrefix(id, delegateSessionIDPrefix) ||
+		strings.HasPrefix(id, peerSessionPrefix) ||
+		strings.HasPrefix(id, backgroundSessionIDPrefix)
 }
 
 func (l *Loop) fireHook(name, sessionID, project, text string, payload map[string]any) {
-	if l.hooks == nil || IsEphemeralSessionID(sessionID) {
+	if l.hooks == nil || IsSyntheticSessionID(sessionID) {
 		return
 	}
 	l.hooks.Emit(name, sessionID, project, text, payload)
@@ -1356,7 +1364,7 @@ func (l *Loop) fireHook(name, sessionID, project, text string, payload map[strin
 // mem_predictions row. When turnID is empty (no recorder wired) the
 // payload is left untouched.
 func (l *Loop) fireHookT(turnID, name, sessionID, project, text string, payload map[string]any) {
-	if l.hooks == nil || IsEphemeralSessionID(sessionID) {
+	if l.hooks == nil || IsSyntheticSessionID(sessionID) {
 		return
 	}
 	if turnID != "" {
