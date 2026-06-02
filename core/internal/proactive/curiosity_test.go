@@ -28,3 +28,36 @@ func TestLowConfidenceQuestionSubjectKeepsSpecificTitle(t *testing.T) {
 		t.Fatalf("specific title should be preserved, got %q", subject)
 	}
 }
+
+// The graph cleanup left self/internal entity nodes with no backing memory, so
+// the uncovered_mention detector asked "what's important about the boss / about
+// the mem_curiosity_questions table / about the inbox-triage skill?" — pure
+// noise. These must be suppressed; a genuine external entity must not be.
+func TestShouldSuppressUncoveredMention(t *testing.T) {
+	suppress := []struct{ kind, name string }{
+		{"concept", "mem_curiosity_questions"}, // table name leaked into graph
+		{"person", "boss"},                     // the boss himself
+		{"person", "user"},                     // generic placeholder
+		{"person", "kai@dopesoft.io"},          // his own email
+		{"skill", "inbox-triage"},              // a skill name
+		{"skill", "self-improve-from-finding"}, // a skill name
+		{"concept", "malabie industries account"}, // his own account
+		{"concept", "mr khaya account"},           // his own account
+	}
+	for _, c := range suppress {
+		if !shouldSuppressUncoveredMention(c.kind, c.name) {
+			t.Errorf("expected %s %q to be suppressed (noise), but it was kept", c.kind, c.name)
+		}
+	}
+	// Genuine external entities the boss references SHOULD still be askable.
+	keep := []struct{ kind, name string }{
+		{"person", "Sarah Chen"},
+		{"organization", "Acme Robotics"},
+		{"concept", "Series A term sheet"},
+	}
+	for _, c := range keep {
+		if shouldSuppressUncoveredMention(c.kind, c.name) {
+			t.Errorf("expected genuine external %s %q to be kept, but it was suppressed", c.kind, c.name)
+		}
+	}
+}

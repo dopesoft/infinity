@@ -150,7 +150,7 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 		)
 		SELECT id::text, type, name FROM counts
 		 ORDER BY mentions DESC
-		 LIMIT 3
+		 LIMIT 15
 	`)
 	if err != nil {
 		return 0, err
@@ -162,13 +162,80 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 		if err := rows.Scan(&id, &kind, &name); err != nil {
 			continue
 		}
+		// Skip self/internal entities. After a graph/memory cleanup prunes the
+		// derived memories, the boss himself, his own accounts, table names, and
+		// skill names all show up as "mentioned a lot, no backing memory" — but
+		// none is a real curiosity gap. Only EXTERNAL entities are worth asking
+		// about. (Boss, 2026-06-02: "youve mentioned boss before, whats so
+		// important about that... get rid of those.")
+		if shouldSuppressUncoveredMention(kind, name) {
+			continue
+		}
 		question := fmt.Sprintf("The boss has mentioned %s %q multiple times - what's important about it?", kind, name)
 		rationale := "Repeated graph mentions with no derived memory - gap worth filling."
 		if c.insertQuestion(ctx, question, rationale, "uncovered_mention", []string{id}, 5) {
 			n++
 		}
+		if n >= 3 {
+			break // gentle: at most 3 genuine gaps per scan
+		}
 	}
 	return n, rows.Err()
+}
+
+// shouldSuppressUncoveredMention drops graph-node "knowledge gap" questions that
+// are noise rather than genuine curiosity. The uncovered_mention detector fires
+// on any node with many mentions and no backing memory; after a graph/memory
+// cleanup that's the boss's OWN identity, his connected accounts, and Infinity's
+// internal vocabulary (table names, skill names) — the agent already knows what
+// a skill or the boss is. Only an EXTERNAL entity the boss references (a client,
+// company, project, real third party) is a real gap worth asking about.
+func shouldSuppressUncoveredMention(kind, name string) bool {
+	k := strings.ToLower(strings.TrimSpace(kind))
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return true
+	}
+	// Internal entity TYPES are never a curiosity gap — the agent owns its own
+	// skills, tools, workflows, crons, and self-references.
+	switch k {
+	case "skill", "tool", "workflow", "cron", "agent", "self", "table":
+		return true
+	}
+	// Self-referential / placeholder names: the boss, the agent, generic actors.
+	switch n {
+	case "boss", "the boss", "user", "the user", "me", "jarvis", "infinity",
+		"assistant", "agent", "system", "kai", "khaya":
+		return true
+	}
+	// The boss's own identity and connected accounts are not external mysteries:
+	// any email address (his mailboxes), or a "<x> account" / mailbox concept.
+	if strings.Contains(n, "@") {
+		return true
+	}
+	if strings.HasSuffix(n, " account") || strings.Contains(n, "mailbox") || strings.Contains(n, "inbox") {
+		return true
+	}
+	// Infinity-internal vocabulary that leaked into the graph as a "concept":
+	// table names (mem_*, infinity_*) and code-shaped identifiers.
+	if strings.HasPrefix(n, "mem_") || strings.HasPrefix(n, "infinity_") {
+		return true
+	}
+	if isLikelyCodeToken(n) {
+		return true
+	}
+	return false
+}
+
+// isLikelyCodeToken reports whether a name reads like a code/table identifier
+// (snake_case or multi-hyphen, no spaces) rather than a human concept — e.g.
+// "mem_curiosity_questions", "self-improve-from-finding". A name with spaces
+// reads like a real phrase and is left alone.
+func isLikelyCodeToken(n string) bool {
+	if strings.Contains(n, " ") {
+		return false
+	}
+	return strings.Contains(n, "_") || strings.Count(n, "-") >= 2
 }
 
 func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
