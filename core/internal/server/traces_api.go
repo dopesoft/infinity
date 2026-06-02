@@ -28,6 +28,11 @@ type turnRowDTO struct {
 	OutputTokens  int    `json:"output_tokens"`
 	ToolCallCount int    `json:"tool_call_count"`
 	LatencyMS     int64  `json:"latency_ms"`
+	// SessionKind marks the origin: 'chat' (default), 'cron', 'heartbeat', …
+	// so /logs can badge a cron run instead of rendering it chat-style.
+	// OriginLabel is the human name for non-chat origins (e.g. the cron name).
+	SessionKind string `json:"session_kind,omitempty"`
+	OriginLabel string `json:"origin_label,omitempty"`
 }
 
 type traceDetailDTO struct {
@@ -53,6 +58,8 @@ func toRowDTO(r memory.TurnRow) turnRowDTO {
 		OutputTokens:  r.OutputTokens,
 		ToolCallCount: r.ToolCallCount,
 		LatencyMS:     r.LatencyMS,
+		SessionKind:   r.SessionKind,
+		OriginLabel:   r.OriginLabel,
 	}
 }
 

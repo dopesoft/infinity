@@ -46,9 +46,35 @@ function formatLatency(ms: number): string {
   return `${Math.round(s / 60)}m ${Math.round(s % 60)}s`;
 }
 
+// OriginBadge marks WHERE a turn came from — a scheduled cron, the heartbeat,
+// etc. — so a cron run is unmistakable in /logs instead of reading like a chat
+// message. Chat turns render no badge (the default), keeping the list clean.
+function OriginBadge({ kind, label }: { kind?: string; label?: string }) {
+  const k = (kind || "chat").toLowerCase();
+  if (k === "chat" || k === "") return null;
+  const style: Record<string, string> = {
+    cron: "border-info/40 bg-info/10 text-info",
+    heartbeat: "border-warning/40 bg-warning/10 text-warning",
+    sentinel: "border-warning/40 bg-warning/10 text-warning",
+  };
+  const cls = style[k] ?? "border-border bg-muted text-muted-foreground";
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider",
+        cls,
+      )}
+    >
+      {k}
+      {label ? <span className="font-normal normal-case opacity-80">· {label}</span> : null}
+    </span>
+  );
+}
+
 export function TurnRow({ turn }: { turn: TurnRowDTO }) {
   const router = useRouter();
   const hasTokens = !!(turn.input_tokens || turn.output_tokens);
+  const isChat = !turn.session_kind || turn.session_kind.toLowerCase() === "chat";
   return (
     <button
       type="button"
@@ -56,11 +82,15 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
       className={cn(
         "group block w-full min-w-0 rounded-xl border bg-card px-3 py-2.5 text-left transition-colors",
         "hover:bg-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-info",
+        // Non-chat origins (cron/heartbeat) get a tinted left edge so they're
+        // scannable at a glance, not just on the badge.
+        !isChat && "border-l-2 border-l-info/50",
       )}
     >
       {/* meta row - same shape as /trust card top line */}
       <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground">
         <span className="flex min-w-0 items-center gap-1.5">
+          <OriginBadge kind={turn.session_kind} label={turn.origin_label} />
           <Clock className="size-3 shrink-0" aria-hidden />
           <time className="shrink-0" suppressHydrationWarning>
             {formatTime(turn.started_at)}
@@ -77,9 +107,13 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
         </span>
       </div>
 
-      {/* prompt */}
+      {/* prompt (for a cron, this is the cron's instruction) */}
       <p className="mt-1.5 line-clamp-2 break-words text-sm font-semibold text-foreground">
-        {turn.user_text || <span className="text-muted-foreground">(resumed turn)</span>}
+        {turn.user_text || (
+          <span className="text-muted-foreground">
+            {isChat ? "(resumed turn)" : `(${turn.session_kind} run)`}
+          </span>
+        )}
       </p>
 
       {/* summary */}

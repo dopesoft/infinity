@@ -1890,6 +1890,11 @@ export type TurnRowDTO = {
   output_tokens: number;
   tool_call_count: number;
   latency_ms: number;
+  // origin of the session this turn belongs to: "chat" (default), "cron",
+  // "heartbeat", … so /logs can badge a cron run instead of rendering it
+  // chat-style. origin_label is the human name (e.g. the cron "inbox-triage").
+  session_kind?: string;
+  origin_label?: string;
 };
 
 export type TraceEventDTO = {

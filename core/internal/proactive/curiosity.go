@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -69,9 +70,18 @@ func (c *CuriosityScan) Run(ctx context.Context) (int, error) {
 	return total, nil
 }
 
+// projectOrGeneral labels a memory's scope for the curiosity card.
+func projectOrGeneral(project string) string {
+	if p := strings.TrimSpace(project); p != "" {
+		return p
+	}
+	return "general"
+}
+
 func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 	rows, err := c.pool.Query(ctx, `
-		SELECT id::text, COALESCE(title, ''), COALESCE(content, ''), COALESCE(project, '')
+		SELECT id::text, COALESCE(title, ''), COALESCE(content, ''), COALESCE(project, ''),
+		       strength, updated_at
 		  FROM mem_memories
 		 WHERE tier = 'semantic'
 		   AND status = 'active'
@@ -88,7 +98,9 @@ func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 	n := 0
 	for rows.Next() {
 		var id, title, content, project string
-		if err := rows.Scan(&id, &title, &content, &project); err != nil {
+		var strength float64
+		var updated time.Time
+		if err := rows.Scan(&id, &title, &content, &project, &strength, &updated); err != nil {
 			continue
 		}
 		subject, ok := lowConfidenceQuestionSubject(title, content, project)
@@ -96,7 +108,18 @@ func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 			continue
 		}
 		question := fmt.Sprintf("Is this still true: %s?", subject)
-		rationale := "Semantic memory has decayed below confidence threshold - ask the boss to confirm or retire it."
+		// Show the boss the ACTUAL memory + why I'm unsure, not a generic label.
+		body := oneLineCtx(content)
+		if body == "" {
+			body = oneLineCtx(title)
+		}
+		rationale := fmt.Sprintf(
+			"What I remember: %q\nProject: %s · confidence ~%d%% · last touched %s\nIt's faded below my confidence threshold and I haven't reconfirmed it — tell me if it's still true, needs correcting, or should be dropped.",
+			truncate(body, 400),
+			projectOrGeneral(project),
+			int(strength*100),
+			updated.UTC().Format("Jan 2"),
+		)
 		if c.insertQuestion(ctx, question, rationale, "low_confidence", []string{id}, 6) {
 			n++
 		}
@@ -107,7 +130,9 @@ func (c *CuriosityScan) scanLowConfidence(ctx context.Context) (int, error) {
 func (c *CuriosityScan) scanContradictions(ctx context.Context) (int, error) {
 	rows, err := c.pool.Query(ctx, `
 		SELECT r.source_id::text, r.target_id::text,
-		       COALESCE(s.title, ''), COALESCE(t.title, '')
+		       COALESCE(s.title, ''), COALESCE(t.title, ''),
+		       COALESCE(NULLIF(s.content,''), s.title, ''),
+		       COALESCE(NULLIF(t.content,''), t.title, '')
 		  FROM mem_relations r
 		  JOIN mem_memories s ON s.id = r.source_id
 		  JOIN mem_memories t ON t.id = r.target_id
@@ -122,13 +147,18 @@ func (c *CuriosityScan) scanContradictions(ctx context.Context) (int, error) {
 	defer rows.Close()
 	n := 0
 	for rows.Next() {
-		var srcID, tgtID, srcTitle, tgtTitle string
-		if err := rows.Scan(&srcID, &tgtID, &srcTitle, &tgtTitle); err != nil {
+		var srcID, tgtID, srcTitle, tgtTitle, srcBody, tgtBody string
+		if err := rows.Scan(&srcID, &tgtID, &srcTitle, &tgtTitle, &srcBody, &tgtBody); err != nil {
 			continue
 		}
 		question := fmt.Sprintf("Two memories disagree - which is right: %q or %q?",
 			clipShort(srcTitle, 80), clipShort(tgtTitle, 80))
-		rationale := "Both memories are active but a 'contradicts' edge links them - need the boss to resolve."
+		// Show BOTH memories' content so the boss can actually adjudicate.
+		rationale := fmt.Sprintf(
+			"I'm holding two beliefs that conflict:\n• %q\n• %q\nBoth are active and linked by a 'contradicts' edge. Which one is right (or is it something else)?",
+			truncate(oneLineCtx(srcBody), 280),
+			truncate(oneLineCtx(tgtBody), 280),
+		)
 		if c.insertQuestion(ctx, question, rationale, "contradiction", []string{srcID, tgtID}, 8) {
 			n++
 		}
@@ -148,8 +178,16 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 			HAVING COUNT(no.observation_id) >= 5
 			   AND COUNT(ms.memory_id) = 0
 		)
-		SELECT id::text, type, name FROM counts
-		 ORDER BY mentions DESC
+		SELECT c2.id::text, c2.type, c2.name, c2.mentions,
+		       COALESCE((
+		           SELECT o.raw_text
+		             FROM mem_graph_node_observations no2
+		             JOIN mem_observations o ON o.id = no2.observation_id
+		            WHERE no2.node_id = c2.id AND COALESCE(o.raw_text,'') <> ''
+		            ORDER BY o.created_at DESC
+		            LIMIT 1), '') AS sample
+		  FROM counts c2
+		 ORDER BY c2.mentions DESC
 		 LIMIT 15
 	`)
 	if err != nil {
@@ -158,8 +196,9 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 	defer rows.Close()
 	n := 0
 	for rows.Next() {
-		var id, kind, name string
-		if err := rows.Scan(&id, &kind, &name); err != nil {
+		var id, kind, name, sample string
+		var mentions int
+		if err := rows.Scan(&id, &kind, &name, &mentions, &sample); err != nil {
 			continue
 		}
 		// Skip self/internal entities. After a graph/memory cleanup prunes the
@@ -172,7 +211,13 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 			continue
 		}
 		question := fmt.Sprintf("The boss has mentioned %s %q multiple times - what's important about it?", kind, name)
-		rationale := "Repeated graph mentions with no derived memory - gap worth filling."
+		rationale := fmt.Sprintf(
+			"You've referenced this %s %d times across sessions, but I never distilled a memory about it.",
+			kind, mentions)
+		if s := oneLineCtx(sample); s != "" {
+			rationale += fmt.Sprintf("\nMost recent mention: %q", truncate(s, 300))
+		}
+		rationale += "\nWhat should I know or remember about it?"
 		if c.insertQuestion(ctx, question, rationale, "uncovered_mention", []string{id}, 5) {
 			n++
 		}

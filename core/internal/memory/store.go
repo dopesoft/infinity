@@ -78,10 +78,18 @@ func (s *Store) InsertObservation(ctx context.Context, in ObservationInput) (str
 	if t := strings.TrimSpace(in.TurnID); t != "" {
 		turnArg = t
 	}
+	// Index only the first 200K chars in the FTS column: Postgres rejects a
+	// to_tsvector input over ~1MB ("string is too long for tsvector"), which a
+	// large tool dump (e.g. a 1.4MB file read) blows past — and that error
+	// previously FAILED the whole observation insert, so the run's trace was
+	// lost (the exact "I have no idea why the cron broke" hole). The full text
+	// still lands in raw_text; only the searchable slice is bounded. 200K chars
+	// is < the 1MB byte ceiling even for 4-byte UTF-8 and is far more than any
+	// real search needs.
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_observations (id, session_id, hook_name, payload, raw_text, embedding, fts_doc, importance, turn_id)
 		VALUES ($1, $2, $3, $4::jsonb, $5, $6,
-		        to_tsvector(COALESCE(current_setting('infinity.search_config', true), 'english')::regconfig, COALESCE($5, '')),
+		        to_tsvector(COALESCE(current_setting('infinity.search_config', true), 'english')::regconfig, left(COALESCE($5, ''), 200000)),
 		        $7, NULLIF($8::text, '')::uuid)
 	`, id, in.SessionID, in.HookName, string(payloadJSON), nullable(in.RawText), emb, importance, turnArg)
 	if err != nil {

@@ -227,7 +227,7 @@ func (s *TurnStore) RecoverStranded(ctx context.Context) (int, error) {
 			    $1::uuid, $2::uuid, 'TaskCompleted',
 			    jsonb_build_object('recovered', true, 'reason', $3::text),
 			    $4::text,
-			    to_tsvector(COALESCE(current_setting('infinity.search_config', true), 'english')::regconfig, $4::text),
+			    to_tsvector(COALESCE(current_setting('infinity.search_config', true), 'english')::regconfig, left($4::text, 200000)),
 			    1, $5::uuid, NULLIF($6::text, '')::uuid
 			)
 		`, obsID, st.sessionID, recoveryError, recoveryText, st.id, st.userID); err != nil {
@@ -247,6 +247,12 @@ type TurnRow struct {
 	ID            string
 	SessionID     string
 	SessionName   string
+	// SessionKind is the origin of the session this turn belongs to:
+	// 'chat' (default), 'cron', 'heartbeat', etc. Lets /logs mark a cron run
+	// as a cron instead of rendering it chat-style. OriginLabel is the
+	// human label for non-chat origins (e.g. the cron name "inbox-triage").
+	SessionKind   string
+	OriginLabel   string
 	UserText      string
 	AssistantText string
 	Model         string
@@ -286,7 +292,9 @@ func (s *TurnStore) List(ctx context.Context, sessionID, status string, limit in
 		       t.model, t.status, t.stop_reason, t.summary, COALESCE(t.error, ''),
 		       t.started_at, COALESCE(t.ended_at, t.started_at),
 		       t.input_tokens, t.output_tokens, t.tool_call_count,
-		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000
+		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000,
+		       COALESCE(s.kind, 'chat'),
+		       COALESCE(s.origin_ref->>'cron_name', s.origin_ref->>'sentinel_name', '')
 		FROM mem_turns t
 		LEFT JOIN mem_sessions s ON s.id = t.session_id
 		WHERE ` + strings.Join(where, " AND ") + `
@@ -311,6 +319,7 @@ func (s *TurnStore) List(ctx context.Context, sessionID, status string, limit in
 			&sa.t, &ea.t,
 			&r.InputTokens, &r.OutputTokens, &r.ToolCallCount,
 			&latency,
+			&r.SessionKind, &r.OriginLabel,
 		); err != nil {
 			return nil, err
 		}
@@ -335,7 +344,9 @@ func (s *TurnStore) Get(ctx context.Context, turnID string) (TurnRow, error) {
 		       t.model, t.status, t.stop_reason, t.summary, COALESCE(t.error, ''),
 		       t.started_at, COALESCE(t.ended_at, t.started_at),
 		       t.input_tokens, t.output_tokens, t.tool_call_count,
-		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000
+		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000,
+		       COALESCE(s.kind, 'chat'),
+		       COALESCE(s.origin_ref->>'cron_name', s.origin_ref->>'sentinel_name', '')
 		FROM mem_turns t
 		LEFT JOIN mem_sessions s ON s.id = t.session_id
 		WHERE t.id = $1::uuid
@@ -345,6 +356,7 @@ func (s *TurnStore) Get(ctx context.Context, turnID string) (TurnRow, error) {
 		&sa.t, &ea.t,
 		&r.InputTokens, &r.OutputTokens, &r.ToolCallCount,
 		&latency,
+		&r.SessionKind, &r.OriginLabel,
 	)
 	if err != nil {
 		return r, err

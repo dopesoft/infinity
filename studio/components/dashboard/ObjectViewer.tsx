@@ -1307,7 +1307,12 @@ function ApprovalBody({ a }: { a: Approval }) {
         <ModalSection meta="Jarvis asks">
           <p className="text-[13px] leading-relaxed text-foreground/90">{a.question}</p>
           {a.context ? (
-            <p className="mt-2 text-[11px] italic text-muted-foreground">{a.context}</p>
+            // whitespace-pre-line so the multi-line diagnosis (what it does /
+            // what it was doing / the real error / suggested fix) keeps its
+            // line breaks instead of collapsing into a run-on.
+            <p className="mt-2 whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground">
+              {a.context}
+            </p>
           ) : null}
         </ModalSection>
       ) : null}

@@ -93,15 +93,34 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			   )
 		`)
 	}
+	// Pull the REAL failure detail from the cron's most recent failed run, not
+	// just the one-line humanized title on mem_crons.last_run_status (which is
+	// often the generic "Something went wrong and I stopped" fallback). The
+	// mem_runs row carries: what the run was doing (result_summary), the raw
+	// error, and the structured human_error {summary, action, raw}. We also pull
+	// the cron's target prompt so the question explains what the job even does.
 	rows, err := pool.Query(ctx, `
-		SELECT id::text,
-		       name,
-		       COALESCE(last_run_status,''),
-		       last_run_at
-		  FROM mem_crons
-		 WHERE last_run_status LIKE $1
-		   AND COALESCE(enabled, TRUE) = TRUE
-		 ORDER BY last_run_at DESC NULLS LAST
+		SELECT c.id::text,
+		       c.name,
+		       COALESCE(c.last_run_status,''),
+		       c.last_run_at,
+		       COALESCE(c.target,''),
+		       COALESCE(r.result_summary,''),
+		       COALESCE(r.error,''),
+		       COALESCE(r.human_error->>'summary',''),
+		       COALESCE(r.human_error->>'action',''),
+		       COALESCE(r.human_error->>'raw','')
+		  FROM mem_crons c
+		  LEFT JOIN LATERAL (
+		      SELECT result_summary, error, human_error
+		        FROM mem_runs
+		       WHERE kind = 'cron' AND target_id = c.id::text AND status = 'error'
+		       ORDER BY started_at DESC
+		       LIMIT 1
+		  ) r ON TRUE
+		 WHERE c.last_run_status LIKE $1
+		   AND COALESCE(c.enabled, TRUE) = TRUE
+		 ORDER BY c.last_run_at DESC NULLS LAST
 		 LIMIT 20
 	`, cronErrorPrefix+"%")
 	if err != nil {
@@ -111,18 +130,19 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 	var out []Finding
 	for rows.Next() {
 		var (
-			id, name, status string
-			lastRun          *time.Time
+			id, name, status              string
+			lastRun                       *time.Time
+			target, summary               string
+			rawErr, humanSummary          string
+			humanAction, humanRaw         string
 		)
-		if err := rows.Scan(&id, &name, &status, &lastRun); err != nil {
+		if err := rows.Scan(&id, &name, &status, &lastRun, &target,
+			&summary, &rawErr, &humanSummary, &humanAction, &humanRaw); err != nil {
 			continue
 		}
 		question := fmt.Sprintf("Cron job %q is failing. Fix it?", name)
-		rationale := truncate(status, 600)
-		if lastRun != nil {
-			rationale = fmt.Sprintf("Last fired %s. %s",
-				lastRun.UTC().Format(time.RFC3339), rationale)
-		}
+		rationale := buildCronFailureContext(name, status, lastRun, target,
+			summary, rawErr, humanSummary, humanAction, humanRaw)
 		tag := "cron_failure:" + id
 		// Compound merge via UpsertQuestion: same source_tag updates the
 		// existing open row in place (occurrences_count++, evidence_log
@@ -148,6 +168,58 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 		})
 	}
 	return out
+}
+
+// buildCronFailureContext composes the boss-facing "what actually broke" for a
+// failing cron. It layers everything we know — when it ran, what the job does,
+// what the run was doing before it died, the real error (not the generic
+// humanized title), and the suggested fix — so the curiosity card reads as a
+// diagnosis, not a shrug. Lines with no content are skipped so it never pads.
+func buildCronFailureContext(name, status string, lastRun *time.Time, target, summary, rawErr, humanSummary, humanAction, humanRaw string) string {
+	var b strings.Builder
+	if lastRun != nil {
+		fmt.Fprintf(&b, "Last fired %s.\n", lastRun.UTC().Format(time.RFC3339))
+	}
+	if t := oneLineCtx(target); t != "" {
+		fmt.Fprintf(&b, "What this job does: %s\n", truncate(t, 240))
+	}
+	if s := oneLineCtx(summary); s != "" {
+		fmt.Fprintf(&b, "What it was doing: %s\n", truncate(s, 400))
+	}
+	// The real failure. Prefer the structured human summary, fall back to the
+	// humanized status title; then ALWAYS attach the raw error detail so the
+	// boss sees the literal failure, not just a friendly paraphrase.
+	why := strings.TrimSpace(humanSummary)
+	if why == "" {
+		why = strings.TrimSpace(strings.TrimPrefix(status, "error: "))
+		why = strings.TrimSpace(strings.TrimPrefix(why, "error (manual): "))
+	}
+	if why != "" {
+		fmt.Fprintf(&b, "Why it failed: %s\n", truncate(why, 300))
+	}
+	detail := strings.TrimSpace(humanRaw)
+	if detail == "" {
+		detail = strings.TrimSpace(rawErr)
+	}
+	if detail != "" && detail != why {
+		fmt.Fprintf(&b, "Error detail: %s\n", truncate(oneLineCtx(detail), 500))
+	}
+	if a := strings.TrimSpace(humanAction); a != "" {
+		fmt.Fprintf(&b, "Suggested fix: %s\n", truncate(a, 240))
+	}
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		// Nothing landed (no run row yet) — degrade to the old one-liner so the
+		// card still says something.
+		out = truncate(status, 600)
+	}
+	return out
+}
+
+// oneLineCtx collapses whitespace/newlines so a multi-line error or prompt reads
+// as a single line in the curiosity card.
+func oneLineCtx(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHealthy MacBridgeProbe) []Finding {
