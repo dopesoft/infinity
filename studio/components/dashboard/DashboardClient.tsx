@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TabFrame } from "@/components/TabFrame";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
@@ -148,26 +148,28 @@ export function DashboardClient() {
     return () => ctl.abort();
   }, [load, applyData]);
 
-  // Realtime subscriptions - when the agent dismisses a follow-up,
-  // checks in on a pursuit, completes a task, or surfaces a new item,
-  // the dashboard re-fetches in the background. Without this the page
-  // was a snapshot from page load that only updated on hard refresh,
-  // which is why dismissals felt like they "didn't take" - the row was
-  // already flipped in Postgres, the UI just never heard about it.
-  useRealtime(
-    [
-      "mem_surface_items",
-      "mem_tasks",
-      "mem_pursuits",
-      "mem_pursuit_checkins",
-      "mem_followups",
-      "mem_saved",
-      "mem_trust_contracts",
-      "mem_heartbeat_findings",
-      "mem_curiosity_questions",
-    ],
-    () => void load({ background: true }),
+  // Realtime: re-fetch on ANY table change ("*"), so the dashboard is never
+  // stale no matter which subsystem changed — crons, runs, sentinels, skill
+  // proposals, calendar, follow-ups, surfaced items, anything the agent
+  // touches. The previous hand-maintained 9-table list is exactly what kept
+  // drifting: the Agent Work board reads mem_crons/mem_runs/mem_skill_proposals
+  // /mem_sentinels/mem_code_proposals/mem_skill_runs, NONE of which were in the
+  // list, so those columns only updated on a hard refresh. "*" + the provider's
+  // schema-wide subscription means new tables are covered forever with zero
+  // edits. Debounced so a burst (a cron firing, dozens of observations) folds
+  // into ONE background refetch instead of hammering /api/dashboard.
+  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedRefetch = useCallback(() => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current);
+    refetchTimer.current = setTimeout(() => void load({ background: true }), 500);
+  }, [load]);
+  useEffect(
+    () => () => {
+      if (refetchTimer.current) clearTimeout(refetchTimer.current);
+    },
+    [],
   );
+  useRealtime("*", debouncedRefetch);
 
   const [search, setSearch] = useState("");
   const [addingTodo, setAddingTodo] = useState(false);

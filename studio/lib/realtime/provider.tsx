@@ -71,64 +71,31 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     // effect below keeps the token fresh across refreshes.
     if (tokenRef.current) supabase.realtime.setAuth(tokenRef.current);
 
-    // Tables to subscribe to. Adding a table here without also bumping a
-    // realtime publication migration silently no-ops on the wire.
-    const TABLES = [
-      "mem_sessions",
-      "mem_observations",
-      "mem_memories",
-      "mem_summaries",
-      "mem_audit",
-      "mem_heartbeats",
-      "mem_heartbeat_findings",
-      "mem_intent_decisions",
-      "mem_outcomes",
-      "mem_trust_contracts",
-      "mem_patterns",
-      "mem_crons",
-      "mem_sentinels",
-      "mem_skills",
-      "mem_skill_runs",
-      "mem_skill_proposals",
-      "mem_profiles",
-      "mem_lessons",
-      "mem_session_state",
-      "mem_working_buffer",
-      "mem_curiosity_questions",
-      "mem_reflections",
-      "mem_predictions",
-      "mem_code_proposals",
-      "mem_surface_items",
-      "mem_tasks",
-      "mem_pursuits",
-      "mem_pursuit_checkins",
-      "mem_followups",
-      "mem_saved",
-      "mem_training_examples",
-      "mem_distillation_datasets",
-      "mem_distillation_runs",
-      "mem_model_adapters",
-      "mem_adapter_evals",
-      "mem_policy_routes",
-      "mem_turns",
-      "mem_runs",
-    ] as const;
-
-    let channel = supabase.channel("infinity-realtime");
-    for (const table of TABLES) {
-      channel = channel.on(
+    // ONE schema-wide subscription instead of a hand-maintained per-table
+    // list. The old approach required a table to appear in BOTH a hardcoded
+    // TABLES array here AND in each consumer's useRealtime() list before a
+    // change would push — so any new table (or any table someone forgot to
+    // add, e.g. mem_calendar_events) silently never went live, and the boss
+    // had to refresh. Subscribing to the whole `public` schema means the
+    // channel hears EVERY published table automatically, forever — add a
+    // table to the realtime publication and it's covered with zero frontend
+    // edits. Per-table RLS (`TO authenticated`, migration 083) still scopes
+    // what the socket receives, and consumers still filter by their own table
+    // list (or "*" to react to anything — see useRealtime).
+    const channel = supabase
+      .channel("infinity-realtime")
+      .on(
         "postgres_changes",
-        { event: "*", schema: "public", table },
+        { event: "*", schema: "public" },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (payload: RealtimePostgresChangesPayload<any>) => {
+          // payload.table is the changed table. Dispatch to every listener
+          // that targets it — or that subscribed with "*" (react to anything).
+          const tbl = (payload as { table?: string }).table ?? "";
+          const evt = payload.eventType as Event;
           for (const l of listenersRef.current) {
-            if (l.table !== table) continue;
-            if (
-              !l.events.includes("*") &&
-              !l.events.includes(payload.eventType as Event)
-            ) {
-              continue;
-            }
+            if (l.table !== "*" && l.table !== tbl) continue;
+            if (!l.events.includes("*") && !l.events.includes(evt)) continue;
             try {
               l.handler(payload);
             } catch (err) {
@@ -137,7 +104,6 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
           }
         },
       );
-    }
 
     channel.subscribe();
     channelRef.current = channel;

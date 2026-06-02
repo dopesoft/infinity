@@ -189,13 +189,19 @@ func (e *AgentExecutor) summarizeRun(sessionID string) RunSummary {
 		return RunSummary{}
 	}
 
-	// The agent's own words carry "what it did / how it felt about it"; prefer
-	// the explicit turn summary, fall back to the final assistant message.
-	narrative := lastSummary
+	// Prefer the agent's FULL closing message (its actual report of what it
+	// did) so the OPENED detail shows everything — fall back to the short turn
+	// summary only when there's no assistant text. This fixes the boss seeing a
+	// clipped "summary of a summary": result_summary used to be the ~140-char
+	// turn summary, so the Agent Work modal cut off mid-sentence. The kanban
+	// CARD still CSS-clamps this to 2 lines for a clean preview; the detail
+	// renders it in full. Cap generously so a real report isn't choked, while
+	// still bounding a runaway closing message.
+	narrative := lastText
 	if narrative == "" {
-		narrative = lastText
+		narrative = lastSummary
 	}
-	narrative = clampNarrative(narrative, 600)
+	narrative = clampNarrative(narrative, 4000)
 
 	header := fmt.Sprintf("%d turn%s · %d tool call%s",
 		turns, plural(turns), toolCalls, plural(toolCalls))

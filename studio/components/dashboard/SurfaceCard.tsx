@@ -1,15 +1,13 @@
 "use client";
 
-import { useState } from "react";
 import { AlertTriangle, Bell } from "lucide-react";
 import { TileCard } from "./Section";
-import { Button } from "@/components/ui/button";
 import { RunIndicator } from "@/lib/runs/RunIndicator";
-import { postSurfaceAction } from "@/lib/api";
+import { SurfaceActionButton } from "./SurfaceActions";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import { parseLabeledBody } from "@/lib/dashboard/parseBody";
-import type { SurfaceItem, SurfaceAction } from "@/lib/dashboard/types";
+import type { SurfaceItem } from "@/lib/dashboard/types";
 
 /* SurfaceRow - a single row of the generic surface contract
  * (mem_surface_items). Every item the agent surfaces via the `surface_item`
@@ -101,44 +99,5 @@ export function SurfaceRow({
         </div>
       ) : null}
     </div>
-  );
-}
-
-/* SurfaceActionButton fires a single surfaced-item action (the return-path).
- * Tapping POSTs to /api/surface/action, which seeds an autonomous agent turn;
- * the durable "Working…/Done" state comes from <RunIndicator> reading mem_runs,
- * NOT from local state - local `firing` is only a momentary double-tap guard.
- */
-function SurfaceActionButton({
-  itemId,
-  action,
-}: {
-  itemId: string;
-  action: SurfaceAction;
-}) {
-  const [firing, setFiring] = useState(false);
-  const variant =
-    action.style === "primary"
-      ? "default"
-      : action.style === "danger"
-        ? "destructive"
-        : "outline";
-  return (
-    <Button
-      size="sm"
-      variant={variant}
-      disabled={firing}
-      onClick={async (e) => {
-        e.stopPropagation();
-        setFiring(true);
-        try {
-          await postSurfaceAction(itemId, action.id);
-        } finally {
-          setFiring(false);
-        }
-      }}
-    >
-      {action.label}
-    </Button>
   );
 }

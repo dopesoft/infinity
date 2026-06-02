@@ -162,6 +162,17 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 		}
 	}
 
+	// Baseline affordances for follow-up emails. If an email is surfaced with
+	// NO actions of its own, attach a default set so the boss always gets
+	// one-tap controls on every email — reliably, without depending on the
+	// model remembering to emit them. The agent can still override by passing
+	// its own `actions`. Tapping runs the intent as an agent turn via
+	// /api/surface/action; "Draft reply" DRAFTS only and never sends, per the
+	// boss's rule (drafts are his to review/edit/use).
+	if len(it.Actions) == 0 && isFollowupEmailItem(it.Surface, it.Kind) {
+		it.Actions = defaultEmailActions()
+	}
+
 	// Durable email body: for a follow-up email surfaced with a stable id and
 	// no body already supplied, fetch + store the full rendered body NOW, while
 	// the connector is healthy. The boss can then read the whole email from the
@@ -189,6 +200,34 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 		"message": fmt.Sprintf("Surfaced %q on the %q dashboard region.", it.Title, it.Surface),
 	})
 	return string(out), nil
+}
+
+// defaultEmailActions is the baseline action set attached to a follow-up email
+// surfaced without its own actions. Generic infra (not per-email judgment): the
+// boss gets the same three one-tap controls on every email, and tapping seeds
+// an agent turn from the intent. "Draft reply" creates a draft only — never
+// sends — which is exactly the behaviour the boss asked for.
+func defaultEmailActions() []surface.Action {
+	return []surface.Action{
+		{
+			ID:     "draft_reply",
+			Label:  "Draft reply",
+			Style:  "primary",
+			Intent: "Draft a reply to this email for the boss to review and edit. Create it ONLY as a Gmail draft on the same thread — do NOT send it. When the draft is saved, surface_update this item so the boss can see a reply is ready to review.",
+		},
+		{
+			ID:     "archive",
+			Label:  "Archive",
+			Style:  "default",
+			Intent: "Archive this email in Gmail (remove it from the inbox, keep it in All Mail), then mark this follow-up done via surface_update.",
+		},
+		{
+			ID:     "snooze",
+			Label:  "Snooze 1d",
+			Style:  "default",
+			Intent: "Snooze this follow-up for one day: surface_update its snoozed_until to ~24h from now so it drops off the dashboard and resurfaces tomorrow.",
+		},
+	}
 }
 
 // isFollowupEmailItem reports whether a surface item is a follow-up email -

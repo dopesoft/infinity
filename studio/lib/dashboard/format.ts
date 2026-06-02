@@ -21,6 +21,27 @@ export function relTime(iso: string | null | undefined): string {
   return future ? `in ${out}` : `${out} ago`;
 }
 
+// fullDateTime renders an absolute, human full date + time
+// ("Thu, 28 May 2026, 6:46pm") in the viewer's local zone. Use where a surface
+// wants the OFFICIAL date spelled out — e.g. the opened email modal — rather
+// than the listing's terse relative "found N ago" (relTime).
+export function fullDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const date = d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const time = d
+    .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    .toLowerCase()
+    .replace(/\s/g, "");
+  return `${date}, ${time}`;
+}
+
 export function clockTime(iso: string | null | undefined, opts: { seconds?: boolean } = {}): string {
   if (!iso) return "-";
   const d = new Date(iso);

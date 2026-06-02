@@ -188,6 +188,12 @@ export type FollowUp = {
   // unknown keys just don't render as chips but stay visible in the
   // ObjectViewer.
   metadata?: Record<string, unknown>;
+  // Boss-tappable actions on this email (Draft reply / Archive / Snooze, …).
+  // Surface-origin rows carry the surface item's actions; tapping POSTs to
+  // /api/surface/action keyed by `id` (which is the surface item id), running
+  // the action's server-side intent as an agent turn. intent never reaches
+  // the client — only id/label/style do.
+  actions?: SurfaceAction[];
 };
 
 // ── Surface items (the generic dashboard surface contract) ───────────────────

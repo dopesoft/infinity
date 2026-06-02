@@ -98,6 +98,26 @@ func (g *ComposioGate) shouldGate(suffix string) (gate bool, toolkit string) {
 		return false, ""
 	}
 	toolkit = parts[0]
+	// Drafts are non-destructive. A draft is SAVED, never sent — it sits in the
+	// boss's drafts folder for him to review, edit, and send himself. So any
+	// tool that composes/edits/deletes a DRAFT but does NOT send is allowed
+	// through WITHOUT a Trust request. This is the boss's explicit rule: "I
+	// don't need to approve an email draft, just write it." Only SENDING leaves
+	// the system, and that stays gated (a SEND token below trips the block
+	// list). Checked before the verb loop so the CREATE/UPDATE/DELETE verb in a
+	// draft tool (e.g. GMAIL_CREATE_EMAIL_DRAFT) can't gate it.
+	hasDraft, hasSend := false, false
+	for _, tok := range parts[1:] {
+		switch tok {
+		case "DRAFT", "DRAFTS":
+			hasDraft = true
+		case "SEND":
+			hasSend = true
+		}
+	}
+	if hasDraft && !hasSend {
+		return false, toolkit
+	}
 	// Walk tokens after the toolkit slug looking for write verbs. Allow
 	// list wins over block list so the boss can punch a hole for a
 	// specific flow (e.g. AUTOAPPROVE_VERBS=SEND for a CI bot).

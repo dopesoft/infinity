@@ -50,9 +50,10 @@ import {
   ModalSection,
   ModalUrl,
 } from "@/components/ui/modal-content";
-import { Chip, classificationTone, intentTone, modeTone } from "./Chip";
+import { Chip, classificationTone, intentTone, modeTone, type ChipTone } from "./Chip";
+import { SurfaceActionRow } from "./SurfaceActions";
 import { cn } from "@/lib/utils";
-import { clockTime, dayLabel, formatDuration, relTime } from "@/lib/dashboard/format";
+import { clockTime, dayLabel, formatDuration, fullDateTime, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
 import { parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type {
@@ -1331,11 +1332,21 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           ? MessageCircle
           : Inbox;
 
-  // Triage chips - same shared Chip primitive + tone mapping the Follow-ups
-  // card uses, so the viewer and the card never drift.
-  const classification = metaStr(f.metadata, "classification", "category");
-  const intent = metaStr(f.metadata, "intent");
-  const mode = metaStr(f.metadata, "mode", "action");
+  // Triage chips. classification / intent / mode are separate metadata axes
+  // that often overlap — intent "needs reply" + mode "reply" are the SAME
+  // thing shown twice. dedupeChips collapses them: it drops any value
+  // contained in a longer sibling (so "reply" disappears next to "needs
+  // reply") and any exact duplicate.
+  const triageChips = dedupeChips([
+    { v: metaStr(f.metadata, "classification", "category"), tone: classificationTone },
+    { v: metaStr(f.metadata, "intent"), tone: intentTone },
+    { v: metaStr(f.metadata, "mode", "action"), tone: modeTone },
+  ]);
+
+  // The OFFICIAL time the email landed in the real inbox (the triage skill
+  // captures the message's own date into metadata.received_at) — NOT when we
+  // found/surfaced it. Fall back to the found-time only when it's missing.
+  const receivedReal = metaStr(f.metadata, "received_at", "date", "received");
 
   // The full email is fetched lazily on open (nothing is loaded at poll
   // time). Connector-poll rows already carry plain text in f.body; surface
@@ -1358,21 +1369,24 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           {f.source}
         </Chip>
         {f.account ? <Chip tone="muted">{f.account}</Chip> : null}
-        {classification ? (
-          <Chip tone={classificationTone(classification)}>{classification}</Chip>
-        ) : null}
-        {intent ? <Chip tone={intentTone(intent)}>{intent}</Chip> : null}
-        {mode ? <Chip tone={modeTone(mode)}>{mode}</Chip> : null}
+        {triageChips.map((c) => (
+          <Chip key={c.v} tone={c.tone}>
+            {c.v}
+          </Chip>
+        ))}
         <span className="ml-auto font-mono text-[11px] text-muted-foreground" suppressHydrationWarning>
-          {relTime(f.receivedAt)}
+          {/* Modal shows the OFFICIAL received date in full (received_at from
+              the real inbox), falling back to the full found-date — never the
+              listing's relative "Nd ago". */}
+          {receivedReal || fullDateTime(f.receivedAt)}
         </span>
       </ModalChips>
 
       {/* From / Subject - each a flex row with symmetric padding +
           items-center so the label and value sit dead-center in their row.
-          mt-6 leaves an airy gap below the chips row above so the meta chips
-          (source / account / classification) don't crowd the FROM line. */}
-      <div className="mt-6 overflow-hidden rounded-lg border border-border bg-muted/20">
+          mt-8 (was mt-6) gives ~8px more breathing room below the chip row so
+          the meta chips don't crowd the FROM line. */}
+      <div className="mt-8 overflow-hidden rounded-lg border border-border bg-muted/20">
         <div className="flex items-center gap-4 px-3 py-3">
           <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             From
@@ -1392,6 +1406,12 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           </div>
         ) : null}
       </div>
+
+      {/* One-tap actions (Draft reply / Archive / Snooze …). Tapping seeds an
+          agent turn from the action's intent — "Draft reply" drafts only, never
+          sends. Renders nothing when the item carries no actions. */}
+      <SurfaceActionRow itemId={f.id} actions={f.actions} className="flex flex-wrap gap-2 pt-1" />
+
 
       {/* Context (summary) - ABOVE the email, under From/Subject. Stays
           silent when there's no triage summary (raw poll rows). */}
@@ -1472,6 +1492,26 @@ function FollowUpBody({ f }: { f: FollowUp }) {
       ) : null}
     </div>
   );
+}
+
+// dedupeChips collapses the overlapping triage chips. A value is dropped when
+// a longer sibling already contains it (so "reply" vanishes next to "needs
+// reply") or when it's an exact duplicate; each surviving chip keeps its tone.
+function dedupeChips(
+  defs: { v: string; tone: (v: string) => ChipTone }[],
+): { v: string; tone: ChipTone }[] {
+  const present = defs.filter((d) => d.v.trim() !== "");
+  const out: { v: string; tone: ChipTone }[] = [];
+  for (const d of present) {
+    const lv = d.v.toLowerCase();
+    const dominated = present.some(
+      (o) => o.v !== d.v && o.v.toLowerCase().includes(lv) && o.v.length > d.v.length,
+    );
+    if (dominated) continue;
+    if (out.some((s) => s.v.toLowerCase() === lv)) continue;
+    out.push({ v: d.v, tone: d.tone(d.v) });
+  }
+  return out;
 }
 
 // Pull a string-valued field from a follow-up's metadata bag.

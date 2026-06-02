@@ -33,7 +33,7 @@ type TrustContract struct {
 	// drafts, calendar prep replies, etc.). Studio renders these as a
 	// single "Approve all N" group. NULL/empty rows keep the original
 	// single-item UX.
-	BatchID        string         `json:"batch_id,omitempty"`
+	BatchID string `json:"batch_id,omitempty"`
 }
 
 type TrustStore struct {
@@ -254,13 +254,18 @@ func (s *TrustStore) HasRecentApprovalForTool(ctx context.Context, sessionID, to
 	if window <= 0 {
 		window = 8 * time.Hour
 	}
+	// Match on (tool, session) within the window regardless of which gate
+	// queued it. The hardcoded source='claude_code_gate' here is what broke
+	// "approve once" for Gmail drafts: ComposioGate queues source='composio_gate',
+	// so this never matched and EVERY draft re-queued a fresh approval. tool +
+	// session is specific enough to scope the approval; the source is irrelevant
+	// to "did the boss already say yes to this tool in this session".
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS (
 		    SELECT 1
 		      FROM mem_trust_contracts
-		     WHERE source = 'claude_code_gate'
-		       AND action_spec->>'tool' = $1
+		     WHERE action_spec->>'tool' = $1
 		       AND action_spec->>'session_id' = $2
 		       AND status IN ('approved', 'consumed')
 		       AND COALESCE(decided_at, created_at) > NOW() - $3::interval
@@ -314,10 +319,9 @@ func (s *TrustStore) ConsumeApprovedForTool(ctx context.Context, sessionID, tool
 		     SELECT id
 		       FROM mem_trust_contracts
 		      WHERE status = 'approved'
-		        AND source = 'claude_code_gate'
 		        AND action_spec->>'tool' = $1
 		        AND action_spec->>'session_id' = $2
-		        AND decided_at > NOW() - INTERVAL '30 minutes'
+		        AND decided_at > NOW() - INTERVAL '8 hours'
 		      ORDER BY decided_at DESC
 		      LIMIT 1
 		      FOR UPDATE SKIP LOCKED

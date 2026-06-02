@@ -208,6 +208,21 @@ type FollowUp struct {
 	// chips for known keys when present; unknown keys are ignored at the
 	// chip layer but still visible in the ObjectViewer.
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// Actions are the boss-tappable controls for this email (surface-origin
+	// rows only — they carry the surface item's `actions`). Tapping POSTs to
+	// /api/surface/action keyed by this row's ID (which IS the surface item id
+	// for origin="surface"), which runs the action's intent as an agent turn.
+	// Intent stays server-side; the client only needs id/label/style to render.
+	Actions []FollowUpAction `json:"actions,omitempty"`
+}
+
+// FollowUpAction is the client-facing shape of a surface Action on a follow-up
+// (id + label + style; the intent lives server-side and is resolved by
+// /api/surface/action from the stored item, so it's never shipped to the UI).
+type FollowUpAction struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Style string `json:"style,omitempty"`
 }
 
 // SurfaceItem mirrors core/internal/surface.Item - one row of the generic
@@ -761,7 +776,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 	srows, err := a.Pool.Query(ctx, `
 		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''),
-		       COALESCE(metadata, '{}'::jsonb), created_at
+		       COALESCE(metadata, '{}'::jsonb), COALESCE(actions, '[]'::jsonb), created_at
 		FROM mem_surface_items
 		WHERE surface = ANY($1::text[])
 		  AND kind = 'email'
@@ -780,11 +795,11 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		var (
 			id, surface, kind, source, extID string
 			title, subtitle, body, url       string
-			metaRaw                          []byte
+			metaRaw, actionsRaw              []byte
 			createdAt                        time.Time
 		)
 		if err := srows.Scan(&id, &surface, &kind, &source, &extID,
-			&title, &subtitle, &body, &url, &metaRaw, &createdAt); err != nil {
+			&title, &subtitle, &body, &url, &metaRaw, &actionsRaw, &createdAt); err != nil {
 			return out, err
 		}
 		var meta map[string]any
@@ -819,6 +834,15 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 			ReceivedAt: createdAt,
 			Origin:     "surface",
 			Metadata:   meta,
+		}
+		// Surface the item's tappable actions (Draft reply / Archive / Snooze,
+		// etc.) so the boss can act on an email in one tap. Intent stays
+		// server-side; only id/label/style reach the client.
+		if len(actionsRaw) > 0 {
+			var acts []FollowUpAction
+			if err := json.Unmarshal(actionsRaw, &acts); err == nil {
+				f.Actions = acts
+			}
 		}
 		out = append(out, f)
 	}
