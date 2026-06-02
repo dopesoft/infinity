@@ -85,8 +85,22 @@ Relation guidelines:
 - Use lowercase verb-like types: works_on, uses, depends_on, owns, mentions, causes, prefers, supersedes, contradicts, related.
 - Only emit relations you can defend from the observation text. Skip the field if uncertain.
 
-If the observation is empty, boilerplate, or low-value, return:
-{"type":"event","title":"","summary":""}
+ONLY record DURABLE KNOWLEDGE: a fact about the boss or his world, a decision, a
+stated preference, a genuine lesson, or a real-world event that matters later
+(a meeting, a deadline, a launch). Be RUTHLESS about skipping everything else.
+
+Return {"type":"event","title":"","summary":""} (an empty skip) for ALL routine
+agent mechanics and process chatter, which is NOT knowledge:
+- routine tool actions and their results: "fetched inbox with 6 unread", "listed
+  the directory", "ran the triage skill", "sent a notification", "read the file"
+- task/step narration: "X task completed", "skill execution parameters defined",
+  "workflow initiated", "approved finding <id> requires diagnosis"
+- introspection / counts: "52 tables lack tool mappings", "system map defines..."
+- anything that is the agent describing its own plumbing rather than a fact worth
+  remembering tomorrow.
+If you would not want to re-read this in a month as a useful fact about the boss
+or his work, SKIP IT. When in doubt, skip. A clean brain of 50 real facts beats
+1000 action logs.
 
 Never invent facts. If unsure, leave fields empty.`
 

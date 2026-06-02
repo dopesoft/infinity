@@ -367,17 +367,58 @@ func (c *Compressor) autoLinkNeighbours(ctx context.Context, memID string, emb [
 }
 
 // lowValueObsPrefixes are raw_text prefixes for the agent's own introspection
-// / plumbing tool results. Their memory ("loaded 29 tools", "searched for
-// tools") is mechanics, not knowledge, and was polluting episodic retrieval.
+// / plumbing / routine tool results. Their memory ("loaded 29 tools", "fetched
+// inbox", "listed directory") is mechanics, not durable knowledge, and was the
+// bulk of the episodic noise (908 routine-action logs) the boss had to purge.
+// Blocking them at the source is what keeps the brain clean going forward.
 var lowValueObsPrefixes = []string{
+	// introspection / loaders
 	"load_tools:", "tool_search:", "system_map:", "skill_proposal_get:",
 	"surface_list:", "surface_update:", "mem_list:", "mem_get:",
 	"question_list:", "extension_list:", "followup_list:", "recall:",
+	"skills_list:", "skills_invoke:", "action_list:", "deploy_status:",
+	"connector_accounts_list:", "connector_coverage_mark:", "connector_coverage:",
+	// routine reads — the RESULT is transient working data, not a fact to keep
+	"fs_read:", "fs_ls:", "fs_save:", "fs_edit:", "read_email:",
+	"git_status:", "git_diff:", "ls:", "read:",
+	// routine connector reads that became "inbox fetched with N unread" noise
+	"composio__gmail_fetch", "composio__gmail_list", "composio__gmail_get_profile",
+	"composio__gmail_fetch_message", "composio__googlecalendar_events_list",
+	// routine outbound that became "notification sent" noise
+	"notification:", "push_notification:", "notify:", "surface_item:",
+}
+
+// routineActionMarkers catch the agent's own routine action-narration that the
+// summarizer turned into dup memories ("...task completed", "approved finding
+// <uuid> requires diagnosis", "skill execution parameters defined", "...fetched
+// with N unread messages"). Process chatter, not knowledge.
+var routineActionMarkers = []string{
+	"inbox fetched with", "fetched with", "unread messages",
+	"task completed", "skill execution parameters", "execution parameters defined",
+	"requires diagnosis", "requires systematic fix", "requires structured remediation",
+	"notification sent", "notification batched", "directory listing retrieved",
+	"tables lack agent tool", "table gaps detected", "email classification task",
+}
+
+// operationalNoiseMarkers are substrings that mark an observation as a runtime
+// tool-block, loop-guard trip, or no-op result: operational plumbing, never
+// durable knowledge. These were being promoted into importance-7 episodic
+// memories ("Compact context tool blocked - loop detected") that polluted
+// retrieval, seeded the knowledge graph with junk, and regenerated after every
+// cleanup. A tool getting gated or a no-op compaction is not a fact to remember.
+var operationalNoiseMarkers = []string{
+	"requires the boss's approval before running", // loop-gate / trust block reason
+	"loop detected",                                // loop-gate block reason
+	"hard-blocked at",                              // loop-awareness counter
+	"below minimum turn threshold",                 // compact_context no-op
+	"nothing older than keep window",               // compact_context no-op
+	"do not call compact_context again",            // compact_context no-op hint
 }
 
 // isLowValueObservation reports whether an observation is agent plumbing not
 // worth compressing into a memory. PreToolUse rows are pre-execution markers
-// with no outcome; the listed prefixes are introspection/loader tool results.
+// with no outcome; the listed prefixes are introspection/loader tool results;
+// the operational-noise markers are runtime tool-blocks / loop trips / no-ops.
 func isLowValueObservation(hookName, rawText string) bool {
 	if hookName == "PreToolUse" {
 		return true
@@ -385,6 +426,16 @@ func isLowValueObservation(hookName, rawText string) bool {
 	t := strings.TrimSpace(strings.ToLower(rawText))
 	for _, p := range lowValueObsPrefixes {
 		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	for _, m := range operationalNoiseMarkers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	for _, m := range routineActionMarkers {
+		if strings.Contains(t, m) {
 			return true
 		}
 	}
