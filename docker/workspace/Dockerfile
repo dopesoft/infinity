@@ -76,6 +76,24 @@ RUN cd /opt/docgen \
     && ./venv/bin/pip install --no-cache-dir -r requirements.txt
 ENV DOCGEN_DIR=/opt/docgen
 
+# Pre-bake the Go toolchain (pinned to infinity core's go.mod — 1.26.x) so the
+# cloud workspace can `go build ./... && go vet ./... && go test ./...` its own
+# fix during nightly self-heal WITHOUT a run-time download. This is the
+# reliability the boss asked for: when the Mac is offline, self-heal runs here,
+# and it must never stall waiting on a network fetch of the compiler.
+# GOTOOLCHAIN=local pins the installed version so `go` never auto-downloads a
+# different one mid-run. GOPATH/GOCACHE live under the persistent /workspace
+# volume so the module cache survives across runs.
+ENV GO_VERSION=1.26.3
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
+    && tar -C /usr/local -xzf /tmp/go.tgz \
+    && rm /tmp/go.tgz \
+    && /usr/local/go/bin/go version
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH=/workspace/.go
+ENV GOCACHE=/workspace/.gocache
+ENV GOTOOLCHAIN=local
+
 WORKDIR /workspace
 ENV WORKSPACE_ROOT=/workspace
 ENV PORT=8080

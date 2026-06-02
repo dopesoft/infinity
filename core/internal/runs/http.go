@@ -38,6 +38,10 @@ type runDTO struct {
 	DurationMS    *int    `json:"duration_ms,omitempty"`
 	Error         string  `json:"error,omitempty"`
 	ResultSummary string  `json:"result_summary,omitempty"`
+	// HumanError is the boss-facing translation of Error (errs.Humanize):
+	// {category,title,summary,impact,action,raw}. Omitted when empty so ok
+	// rows stay lean; the UI prefers .title/.summary, raw on expand.
+	HumanError json.RawMessage `json:"human_error,omitempty"`
 	// Meta is the generic JSONB blob. For background.build runs it carries
 	// {todos, repo, currentFile} so the dock renders the live checklist. Passed
 	// through verbatim as raw JSON; omitted when empty so non-background rows
@@ -95,6 +99,7 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 		       progress, progress_label,
 		       started_at, ended_at, duration_ms,
 		       error, result_summary,
+		       NULLIF(human_error, '{}'::jsonb),
 		       NULLIF(meta, '{}'::jsonb)
 		  FROM mem_runs
 		  ` + where + `
@@ -116,12 +121,14 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 		var startedAt time.Time
 		var endedAt *time.Time
 		var dur *int
+		var humanErr []byte
 		var meta []byte
 		if err := rows.Scan(
 			&d.ID, &d.Kind, &d.TargetID, &d.Label, &d.Source, &d.Status,
 			&progress, &progressLabel,
 			&startedAt, &endedAt, &dur,
 			&d.Error, &d.ResultSummary,
+			&humanErr,
 			&meta,
 		); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -129,6 +136,9 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Progress = progress
 		d.ProgressLabel = progressLabel
+		if len(humanErr) > 0 {
+			d.HumanError = json.RawMessage(humanErr)
+		}
 		if len(meta) > 0 {
 			d.Meta = json.RawMessage(meta)
 		}

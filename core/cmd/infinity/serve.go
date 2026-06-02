@@ -185,6 +185,16 @@ func serveCmd() *cobra.Command {
 					}
 					prcancel()
 
+					// Deploy marker: record the running commit so memories /
+					// observations auto-stamp their code version (migration 096
+					// column default). When the commit changed since last boot,
+					// everything observed under the old code is now visibly
+					// "pre-deploy" in the Memory tab — the boss's "signals fire
+					// without knowing about my updates" fix.
+					dmctx, dmcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+					memory.RecordDeploymentOnBoot(dmctx, p)
+					dmcancel()
+
 					// Learning hub - turns dashboard interactions into
 					// procedural memories. When the boss bulk-dismisses
 					// N+ questions in the same pattern_key, a row in
@@ -1186,6 +1196,7 @@ func serveCmd() *cobra.Command {
 			// half is optional; missing handlers surface as last_run_status.
 			var (
 				cronScheduler *cron.Scheduler
+				cronAgentExec *cron.AgentExecutor
 				sentinelMgr   *sentinel.Manager
 				cronAPI       *cron.API
 				sentinelAPI   *sentinel.API
@@ -1196,7 +1207,8 @@ func serveCmd() *cobra.Command {
 					// Active-model selection is the loop's job (see
 					// SetActiveModelFn above) - cron just hands the
 					// loop a session and prompt, no settings plumbing.
-					agentExec = cron.NewAgentExecutor(loop, pool)
+					cronAgentExec = cron.NewAgentExecutor(loop, pool)
+					agentExec = cronAgentExec
 				}
 				var connectorExec cron.Executor
 				if connectorPoller != nil {
@@ -1277,6 +1289,15 @@ func serveCmd() *cobra.Command {
 					}
 				})
 				voyagerAPI = voyager.NewAPI(voyagerMgr)
+				// Skill-verification gate: a skill must RUN and return real data
+				// (read-only, ephemeral session, self-cleaning) to be promoted —
+				// no more "the SKILL.md text looks safe, ship it." The runner
+				// adapts loop.Run; the eval store records every pass/fail.
+				if loop != nil && pool != nil {
+					voyagerMgr.SetVerifyHarness(func(vctx context.Context, sessionID, prompt string) (string, error) {
+						return runVerifyTurn(vctx, loop, sessionID, prompt)
+					}, eval.NewStore(pool, slog.Default()))
+				}
 				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
 
 				// Self-improve verbs for the nightly loop: code_proposal_decide
@@ -1547,6 +1568,12 @@ func serveCmd() *cobra.Command {
 				reauthStore := reauth.NewStore(pool)
 				reauthNotify := &watchNotifier{srv: srv, push: pushSender}
 				loop.SetReauthParker(&reauthParker{store: reauthStore, notifier: reauthNotify})
+				// Same park-and-resume for SCHEDULED runs: a cron that hits a
+				// revoked token parks + notifies the boss instead of failing
+				// silently, and the poller below resumes it on reconnect.
+				if cronAgentExec != nil {
+					cronAgentExec.SetReauthHandler(reauthStore, reauthNotify)
+				}
 				if rp := reauth.NewPoller(reauthStore, &reauthProber{loop: loop}, &reauthReplayer{loop: loop}, reauthNotify); rp != nil {
 					go rp.Start(cmd.Context())
 					fmt.Println("  reauth: model re-auth poller started")

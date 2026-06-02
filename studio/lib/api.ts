@@ -264,6 +264,10 @@ export type MemoryDTO = {
   created_at: string;
   updated_at: string;
   last_accessed_at: string;
+  // True when this memory was observed under an older commit than what's
+  // running now — the Memory tab badges it "pre-deploy" so stale failure
+  // narratives stop reading as current.
+  predates_deploy?: boolean;
 };
 
 export type ProvenanceSource = {
@@ -430,9 +434,23 @@ export type RunDTO = {
   duration_ms?: number;
   error?: string;
   result_summary?: string;
+  // Boss-facing translation of `error` (errs.Humanize). Present only on failed
+  // runs. The UI prefers human_error.title/.summary, raw `error` on expand.
+  human_error?: HumanError;
   // Generic JSONB blob. For background.build runs it carries the agent's live
   // checklist: { todos, repo, currentFile }. Absent on other run kinds.
   meta?: RunMeta;
+};
+
+// HumanError mirrors core/internal/errs.Human — a plain-language failure
+// explanation so the boss never has to read raw provider JSON.
+export type HumanError = {
+  category?: string;
+  title?: string;
+  summary?: string;
+  impact?: string;
+  action?: string;
+  raw?: string;
 };
 
 // RunMeta is the typed view of mem_runs.meta the dock relies on. The agent

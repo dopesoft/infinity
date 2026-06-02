@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/runs"
 )
 
@@ -154,6 +155,18 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	summary, runErr := t.run(ctx, b, jobID, task, repo, model, heartbeat)
 	handle.Finish(ctx, runErr, summary)
 	if runErr != nil {
+		// A bridge/launch failure (the Mac is unreachable — the 404 that used to
+		// stall nightly-self-improve silently) is NOT a dead end. Return it as
+		// legible GUIDANCE (string, nil) so the agent falls back to writing the
+		// change itself with fs_edit/bash_run on the reachable bridge, instead
+		// of surfacing a raw "launch via mac failed (status=404)". The mem_runs
+		// row already carries the humanized error via runs.Finish.
+		if h := errs.Humanize(runErr); h.Category == errs.CatBridge {
+			return fmt.Sprintf("code_agent couldn't run: %s — the Mac bridge is unreachable. "+
+				"Don't stop: write the change yourself with fs_edit/fs_save in /workspace, then "+
+				"`bash_run` go build ./... && go vet ./... && go test ./..., then git_commit (and git_push if autonomy is on). "+
+				"The cloud workspace has the Go toolchain pre-installed.", h.Summary), nil
+		}
 		return "", runErr
 	}
 	return summary, nil

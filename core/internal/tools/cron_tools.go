@@ -106,6 +106,13 @@ func (t *cronCreateAgent) Execute(ctx context.Context, in map[string]any) (strin
 	if name == "" || sched == "" || prompt == "" {
 		return "", errors.New("name, schedule, and prompt are required")
 	}
+	// Anti-fragmentation: if this name is a revision/variant of an existing
+	// cron ("inbox-triage-hardened" → "inbox-triage"), update that cron in
+	// place instead of forking a second conceptual job. Upsert is ON
+	// CONFLICT(name), so without this a "-hardened"/"-update"/"-v2" name
+	// silently creates a twin — the exact bug that left the boss with two
+	// triage crons after a self-improve session "hardened" the existing one.
+	name = t.resolveCanonicalCronName(ctx, name)
 	id, err := t.sched.Upsert(ctx, CronJob{
 		Name:            name,
 		Schedule:        sched,
@@ -120,6 +127,58 @@ func (t *cronCreateAgent) Execute(ctx context.Context, in map[string]any) (strin
 		return "", err
 	}
 	return fmt.Sprintf(`{"ok":true,"id":"%s","name":"%s","kind":"agent"}`, id, name), nil
+}
+
+// resolveCanonicalCronName collapses a revision/variant cron name onto an
+// existing canonical cron when one exists. "inbox-triage-hardened" normalizes
+// to "inbox-triage"; if a cron literally named "inbox-triage" already exists,
+// that name is returned so Upsert updates it in place. When no canonical match
+// exists the original name is returned untouched (a genuinely new cron). Fails
+// open: any List error just keeps the requested name.
+func (t *cronCreateAgent) resolveCanonicalCronName(ctx context.Context, name string) string {
+	norm := normalizeCronName(name)
+	if norm == "" || norm == strings.ToLower(strings.TrimSpace(name)) {
+		return name // no suffix was stripped — nothing to collapse onto
+	}
+	jobs, err := t.sched.List(ctx)
+	if err != nil {
+		return name
+	}
+	for _, j := range jobs {
+		if strings.ToLower(strings.TrimSpace(j.Name)) == norm {
+			return j.Name // an existing canonical cron — update it in place
+		}
+	}
+	return name
+}
+
+// cronRevisionSuffixes are the trailing tokens that mark a cron name as a
+// variant of a canonical job rather than a distinct one.
+var cronRevisionSuffixes = []string{
+	"-hardened", "-harden", "-hard", "-improved", "-improve", "-revised",
+	"-update", "-updated", "-new", "-fix", "-fixed", "-final", "-copy",
+	"-v2", "-v3", "-v4", "-2", "-3",
+}
+
+// normalizeCronName lowercases, unifies separators, and strips trailing
+// revision suffixes so variants collapse to the canonical key. Mirrors
+// proposals.NormalizeSkillName but kept local (tools must not import proposals)
+// and extended with the cron-specific "-hardened" family that caused the
+// inbox-triage / inbox-triage-hardened split.
+func normalizeCronName(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	n = strings.ReplaceAll(n, "_", "-")
+	for {
+		trimmed := n
+		for _, suf := range cronRevisionSuffixes {
+			trimmed = strings.TrimSuffix(trimmed, suf)
+		}
+		if trimmed == n {
+			break
+		}
+		n = trimmed
+	}
+	return n
 }
 
 // ── cron_create_poll ──────────────────────────────────────────────────────

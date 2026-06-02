@@ -70,6 +70,12 @@ Return ONLY valid JSON in this exact shape (no commentary, no code fences):
   "files": ["path/one.go", "path/two.tsx"]
 }
 
+For type "error": the boss reads these, not the logs. Write the title and
+summary in plain language describing WHAT failed and HOW it affects the app
+(e.g. "Gmail triage couldn't fetch — pulled too much data at once"). Do NOT
+copy raw provider JSON, status codes, or stack traces into the title/summary;
+state the root cause and impact a non-engineer can act on.
+
 Relation guidelines:
 - Both endpoints MUST appear in the entities array.
 - Use lowercase verb-like types: works_on, uses, depends_on, owns, mentions, causes, prefers, supersedes, contradicts, related.

@@ -154,9 +154,7 @@ export function RunIndicator({
         {running ? (latest?.progress_label || "running…") : label}
       </Button>
       {!running && latest?.status === "error" && (
-        <p className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
-          {latest.error || "error"}
-        </p>
+        <RunErrorChip run={latest} />
       )}
       {!running && latest?.status === "ok" && (
         <p className="rounded-md border border-success/40 bg-success/5 px-2 py-1 text-[11px] text-success">
@@ -164,6 +162,50 @@ export function RunIndicator({
         </p>
       )}
       {running && renderRunning && latest ? renderRunning(latest) : null}
+    </div>
+  );
+}
+
+// RunErrorChip renders the boss-facing failure explanation. It prefers the
+// humanized fields (title / summary / impact / action) and tucks the raw
+// provider string behind a "details" expander, so the boss reads "Your model
+// token needs reconnecting" instead of `openai_oauth: status=401 body={...}`.
+// Falls back to the raw error when no humanization is present (old rows).
+function RunErrorChip({ run }: { run: RunDTO }) {
+  const h = run.human_error;
+  const title = h?.title?.trim();
+  const raw = (h?.raw || run.error || "error").trim();
+
+  if (!title) {
+    return (
+      <p className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
+        {raw}
+      </p>
+    );
+  }
+
+  return (
+    <div className="min-w-0 max-w-full rounded-md border border-danger/40 bg-danger/5 px-2 py-1.5 text-[11px] text-danger">
+      <p className="font-medium [overflow-wrap:anywhere]">{title}</p>
+      {h?.summary ? (
+        <p className="mt-0.5 text-danger/80 [overflow-wrap:anywhere]">{h.summary}</p>
+      ) : null}
+      {h?.impact ? (
+        <p className="mt-0.5 text-danger/70 [overflow-wrap:anywhere]">{h.impact}</p>
+      ) : null}
+      {h?.action ? (
+        <p className="mt-1 font-medium text-danger/90 [overflow-wrap:anywhere]">
+          → {h.action}
+        </p>
+      ) : null}
+      <details className="mt-1 group">
+        <summary className="cursor-pointer select-none text-[10px] text-danger/60 hover:text-danger/80">
+          details
+        </summary>
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded bg-danger/10 px-1.5 py-1 text-[10px] text-danger/80">
+          {raw}
+        </pre>
+      </details>
     </div>
   );
 }

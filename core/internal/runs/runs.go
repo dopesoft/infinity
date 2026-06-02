@@ -14,10 +14,12 @@ package runs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -187,9 +189,17 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 	end := time.Now().UTC()
 	status := "ok"
 	errStr := ""
+	humanJSON := "{}"
 	if err != nil {
 		status = "error"
 		errStr = err.Error()
+		// Translate the raw error into a boss-facing explanation alongside the
+		// raw string, so the UI can show "your model token was revoked" instead
+		// of the provider's JSON. Best-effort: a marshal failure just leaves
+		// human_error empty, never blocks the row close.
+		if b, mErr := json.Marshal(errs.HumanizeString(errStr)); mErr == nil {
+			humanJSON = string(b)
+		}
 	}
 	_, _ = h.tracker.pool.Exec(ctx, `
 		UPDATE mem_runs
@@ -197,9 +207,10 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 		       ended_at = $3,
 		       duration_ms = $4,
 		       error = $5,
-		       result_summary = $6
+		       result_summary = $6,
+		       human_error = $7::jsonb
 		 WHERE id = $1::uuid
-	`, h.id, status, end, end.Sub(h.start).Milliseconds(), errStr, summary)
+	`, h.id, status, end, end.Sub(h.start).Milliseconds(), errStr, summary, humanJSON)
 	if notifier != nil {
 		go notifier.NotifyRunFinished(context.Background(), h.id, h.kind, h.label, status, errStr, end.Sub(h.start))
 	}

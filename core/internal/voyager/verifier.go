@@ -66,12 +66,26 @@ func (m *Manager) verifyProposal(ctx context.Context, proposalID, name string) e
 		_ = m.generateSyntheticTests(ctx, name, skillMD)
 	}
 
-	// Auto-promote eligibility check.
+	// Auto-promote eligibility check — now HARD-GATED on a live verification run.
+	// A skill is no longer trusted because its SKILL.md text looks safe; it must
+	// actually RUN (read-only, ephemeral session) and return real data. If it
+	// can't, it stays a candidate for human review and the test cleans itself up.
 	if isAutoPromotable(skillMD, riskLevel) {
+		if m.runTurn != nil {
+			passed, notes, _ := m.VerifySkillMD(ctx, name, skillMD, verifyContract{})
+			if !passed {
+				// Quarantine: leave it a candidate. The mem_evals row records WHY.
+				infoLog.Printf("[voyager] skill %q FAILED verification — not promoting (stays candidate): %s", name, notes)
+				return nil
+			}
+			infoLog.Printf("[voyager] skill %q passed verification: %s", name, notes)
+		}
+		// runTurn nil ⇒ no harness wired (loop-less deploy); fall back to the
+		// legacy text gate rather than freezing all learning.
 		if err := m.Decide(ctx, proposalID, "promoted"); err != nil {
 			return fmt.Errorf("auto-promote: %w", err)
 		}
-		fmt.Printf("[voyager] auto-promoted candidate skill: %s\n", name)
+		infoLog.Printf("[voyager] auto-promoted candidate skill: %s\n", name)
 	}
 	return nil
 }

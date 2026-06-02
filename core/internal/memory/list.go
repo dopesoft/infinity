@@ -28,7 +28,8 @@ func ListMemories(ctx context.Context, pool *pgxpool.Pool, opts ListOpts) ([]Mem
 	rows, err := pool.Query(ctx, `
 		SELECT id, COALESCE(title, ''), COALESCE(content, ''), tier, version,
 		       superseded_by, status, strength, importance, COALESCE(project, ''),
-		       forget_after, created_at, updated_at, last_accessed_at
+		       forget_after, created_at, updated_at, last_accessed_at,
+		       (commit_sha IS NOT NULL AND commit_sha IS DISTINCT FROM current_deploy_sha()) AS predates_deploy
 		FROM mem_memories
 		WHERE status = $1
 		  AND ($2 = '' OR tier = $2)
@@ -47,7 +48,8 @@ func ListMemories(ctx context.Context, pool *pgxpool.Pool, opts ListOpts) ([]Mem
 		var sb pgxNullableString
 		if err := rows.Scan(&m.ID, &m.Title, &m.Content, &m.Tier, &m.Version,
 			&sb, &m.Status, &m.Strength, &m.Importance, &m.Project,
-			&m.ForgetAfter, &m.CreatedAt, &m.UpdatedAt, &m.LastAccessedAt); err != nil {
+			&m.ForgetAfter, &m.CreatedAt, &m.UpdatedAt, &m.LastAccessedAt,
+			&m.PredatesDeploy); err != nil {
 			return nil, err
 		}
 		if sb.Valid {

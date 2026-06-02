@@ -52,6 +52,11 @@ type Memory struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	LastAccessedAt time.Time `json:"last_accessed_at"`
+	// PredatesDeploy is true when this memory was observed under an older code
+	// version than what's currently running (commit_sha != current_deploy_sha).
+	// The Memory tab shows a subtle "from before your latest deploy" badge so
+	// stale failure narratives stop reading as current.
+	PredatesDeploy bool `json:"predates_deploy"`
 }
 
 type Relation struct {

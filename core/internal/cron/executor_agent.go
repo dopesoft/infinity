@@ -10,9 +10,23 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// CronReauthParker parks a credential-failed cron turn so the existing reauth
+// poller can resume it once the boss reconnects the model. Satisfied by
+// *reauth.Store; kept as a local interface so cron doesn't import reauth.
+type CronReauthParker interface {
+	Park(ctx context.Context, sessionID, provider, model, userText, reason string) error
+}
+
+// CronBossNotifier surfaces a message to the boss (push + any live chat).
+// Satisfied by the same *watchNotifier the reauth poller uses.
+type CronBossNotifier interface {
+	Notify(sessionID, text string)
+}
 
 // AgentExecutor wraps *agent.Loop to satisfy the cron.Executor interface.
 //
@@ -33,8 +47,10 @@ import (
 // loop so cron, workflow executor, delegate, and ws all honor the
 // active model with one wire.
 type AgentExecutor struct {
-	Loop *agent.Loop
-	Pool *pgxpool.Pool
+	Loop   *agent.Loop
+	Pool   *pgxpool.Pool
+	reauth CronReauthParker
+	notify CronBossNotifier
 }
 
 func NewAgentExecutor(l *agent.Loop, pool ...*pgxpool.Pool) *AgentExecutor {
@@ -43,6 +59,17 @@ func NewAgentExecutor(l *agent.Loop, pool ...*pgxpool.Pool) *AgentExecutor {
 		p = pool[0]
 	}
 	return &AgentExecutor{Loop: l, Pool: p}
+}
+
+// SetReauthHandler wires park-and-resume for credential failures hit inside a
+// scheduled run. Called from serve.go after the push sender + reauth store
+// exist (AgentExecutor is constructed earlier, before either is ready).
+func (e *AgentExecutor) SetReauthHandler(p CronReauthParker, n CronBossNotifier) {
+	if e == nil {
+		return
+	}
+	e.reauth = p
+	e.notify = n
 }
 
 func (e *AgentExecutor) ExecuteJob(j Job) error {
@@ -74,6 +101,26 @@ func (e *AgentExecutor) ExecuteJob(j Job) error {
 	// selection via its activeModelFn, falling through to the provider
 	// boot default only when nothing is set.
 	if err := e.Loop.Run(ctx, sessionID, j.Target, "", nil, out); err != nil {
+		// Credential failure (revoked/expired model token) is NOT a job
+		// failure — it's a "the boss needs to reconnect" event. Park the turn
+		// so the reauth poller resumes it the moment the model is healthy
+		// again, and notify the boss instead of screaming a raw 401 into the
+		// run log every fire. This is the safety net at the cron boundary: it
+		// catches auth errors no matter where in the loop they surfaced
+		// (token mint, stream, or tool), which the loop's own stream-scoped
+		// parker can miss.
+		if e.reauth != nil && llm.IsAuthFailure(err.Error()) {
+			if perr := e.reauth.Park(context.Background(), sessionID, "", "", j.Target, err.Error()); perr == nil {
+				if e.notify != nil {
+					e.notify.Notify(sessionID, fmt.Sprintf(
+						"⚠️ Your model needs reconnecting — the scheduled \"%s\" run is paused. Reconnect it in Settings and it'll finish automatically.",
+						j.Name))
+				}
+				e.markCronSession(sessionID, j)
+				return nil
+			}
+			// Park failed (no DB / store nil) — fall through to hard error.
+		}
 		return fmt.Errorf("cron run failed: %w", err)
 	}
 	e.markCronSession(sessionID, j)

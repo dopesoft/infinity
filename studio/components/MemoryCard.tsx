@@ -17,6 +17,7 @@ type CardItem = {
   streams?: string[];
   tier?: string;
   status?: string;
+  predatesDeploy?: boolean;
 };
 
 function fromAny(s: SearchResult | ObservationDTO | MemoryDTO): CardItem {
@@ -50,6 +51,7 @@ function fromAny(s: SearchResult | ObservationDTO | MemoryDTO): CardItem {
     createdAt: s.created_at,
     tier: s.tier,
     status: s.status,
+    predatesDeploy: s.predates_deploy,
   };
 }
 
@@ -77,6 +79,15 @@ export function MemoryCard({
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1.5">
           {item.tier && <TierBadge tier={item.tier} stale={item.status === "superseded"} />}
+          {item.predatesDeploy && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground"
+              title="Observed under older code than what's running now — may be outdated by your latest deploy."
+            >
+              <Clock className="size-2.5" aria-hidden />
+              pre-deploy
+            </span>
+          )}
           {item.hookName && <code className="truncate font-mono">{item.hookName}</code>}
         </div>
         <div className="flex items-center gap-1">

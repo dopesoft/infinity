@@ -3,6 +3,7 @@ package voyager
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -31,9 +32,54 @@ func (api *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/voyager/proposals", api.handleProposals)
 	mux.HandleFunc("/api/voyager/proposals/", api.handleProposalDecide)
 	mux.HandleFunc("/api/voyager/optimize", api.handleOptimize)
+	mux.HandleFunc("/api/voyager/verify", api.handleVerify)
 	mux.HandleFunc("/api/voyager/code-proposals", api.handleCodeProposals)
 	mux.HandleFunc("/api/voyager/code-proposals/", api.handleCodeProposalDecide)
 	mux.HandleFunc("/api/voyager/calendar/prep", api.handleCalendarPrep)
+}
+
+// handleVerify runs the skill-verification harness on-demand for one active
+// skill: { "skill": "<name>" }. It executes the skill read-only in an ephemeral
+// session, asserts it returned real data, records the eval, and cleans up the
+// test footprint. Returns { passed, notes }. This is how the boss (or the Lab
+// UI) proves a skill like inbox-triage actually brings back data.
+func (api *API) handleVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if api.m == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "voyager disabled"})
+		return
+	}
+	var body struct {
+		Skill string `json:"skill"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	skillName := strings.TrimSpace(body.Skill)
+	if skillName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "skill is required"})
+		return
+	}
+	var (
+		passed bool
+		notes  string
+		runErr error
+	)
+	// runs.Track so the verification spinner survives navigation like every
+	// other long action (CLAUDE.md → "Server-tracked progress").
+	_ = runs.Track(r.Context(), runs.KindSkill, skillName, "verify "+skillName, runs.SourceManual, func(ctx context.Context) error {
+		passed, notes, runErr = api.m.VerifySkill(ctx, skillName)
+		if runErr == nil && !passed {
+			return fmt.Errorf("verification failed: %s", notes)
+		}
+		return runErr
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"skill": skillName, "passed": passed, "notes": notes})
 }
 
 // handleCalendarPrep triggers prep-checklist generation for one calendar

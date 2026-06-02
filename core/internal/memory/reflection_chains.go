@@ -54,18 +54,27 @@ func (r *Reflector) BuildReflectionChains(ctx context.Context, limit int) (int, 
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
+	// A MATERIALIZED CTE coerces `lessons` to a guaranteed-array column FIRST,
+	// so jsonb_array_length() in the outer WHERE can never touch a scalar.
+	// The earlier inline `CASE ... THEN jsonb_array_length(...) END > 0` guard
+	// was insufficient: Postgres may still evaluate the length call on a scalar
+	// row when the planner reorders the CASE branches, which is exactly how
+	// nightly-cognition kept dying with `cannot get array length of a scalar`
+	// (SQLSTATE 22023) even after the typeof guard shipped. Materializing the
+	// normalization is the only form the planner can't flatten around.
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text,
-		       CASE
-		         WHEN jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array' THEN COALESCE(lessons::text, '[]')
-		         ELSE '[]'
-		       END,
-		       created_at
-		  FROM mem_reflections
-		 WHERE CASE
-		         WHEN jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array' THEN jsonb_array_length(COALESCE(lessons, '[]'::jsonb))
-		         ELSE 0
-		       END > 0
+		WITH normalized AS MATERIALIZED (
+			SELECT id::text AS id,
+			       CASE WHEN jsonb_typeof(COALESCE(lessons, '[]'::jsonb)) = 'array'
+			            THEN COALESCE(lessons, '[]'::jsonb)
+			            ELSE '[]'::jsonb
+			       END AS arr,
+			       created_at
+			  FROM mem_reflections
+		)
+		SELECT id, arr::text, created_at
+		  FROM normalized
+		 WHERE jsonb_array_length(arr) > 0
 		 ORDER BY created_at DESC
 		 LIMIT $1
 	`, limit)

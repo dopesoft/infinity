@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/embed"
+	"github.com/dopesoft/infinity/core/internal/eval"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -66,6 +67,15 @@ type Manager struct {
 	// retrieve via the same RRF/search machinery as semantic facts.
 	onPromoted func(ctx context.Context, name, description, skillMD string)
 
+	// runTurn executes an ephemeral skill-VERIFICATION turn and returns the
+	// assistant's final text. Wired from serve.go over agent.Loop.Run (kept as a
+	// plain func so voyager doesn't import agent). evals records the verification
+	// outcome to mem_evals. When runTurn is nil the verification gate degrades to
+	// the legacy text-only promote (so a deploy without the loop doesn't freeze
+	// learning). See harness.go + SetVerifyHarness.
+	runTurn func(ctx context.Context, sessionID, prompt string) (string, error)
+	evals   *eval.Store
+
 	// Discovery state - per-session sliding windows of recent tool names plus
 	// a global counter of repeated triplets across sessions.
 	mu              sync.Mutex
@@ -80,6 +90,18 @@ func (m *Manager) OnSkillPromoted(fn func(ctx context.Context, name, description
 		return
 	}
 	m.onPromoted = fn
+}
+
+// SetVerifyHarness wires the skill-verification gate: a runner that executes an
+// ephemeral skill-test turn (over agent.Loop.Run) and the eval store that
+// records outcomes. With it set, a skill must RUN and return real data to be
+// promoted; without it, promotion falls back to the legacy text gate.
+func (m *Manager) SetVerifyHarness(runTurn func(ctx context.Context, sessionID, prompt string) (string, error), evals *eval.Store) {
+	if m == nil {
+		return
+	}
+	m.runTurn = runTurn
+	m.evals = evals
 }
 
 type toolEvent struct {

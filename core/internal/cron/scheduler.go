@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -157,7 +158,11 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		end := time.Now().UTC()
 		status := "ok"
 		if execErr != nil {
-			status = "error: " + execErr.Error()
+			// Store the plain-language title, not the raw provider string, so
+			// the cron list reads "Your model token needs reconnecting" instead
+			// of "error: openai_oauth: status=401 body={...}". The full run
+			// detail (raw + human) still lives on the mem_runs row.
+			status = "error: " + errs.Humanize(execErr).Title
 		}
 		_, _ = s.pool.Exec(ctx, `
 			UPDATE mem_crons SET
