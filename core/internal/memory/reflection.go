@@ -41,15 +41,26 @@ type Critic interface {
 // must hit this contract or we drop the row. quality_score is 0..1; lessons
 // are short imperative sentences with self-assessed confidence.
 type ReflectionResult struct {
-	Critique     string    `json:"critique"`
-	QualityScore float64   `json:"quality_score"`
-	Lessons      []Lesson  `json:"lessons"`
-	Kind         string    `json:"kind"` // session_critique | error_postmortem | self_consistency
+	Critique     string   `json:"critique"`
+	QualityScore float64  `json:"quality_score"`
+	Lessons      []Lesson `json:"lessons"`
+	Kind         string   `json:"kind"` // session_critique | error_postmortem | self_consistency
+	// Fix, when present on a low-quality reflection, is queued as a
+	// mem_code_proposals candidate for the self-improve loop (see persist).
+	Fix *CriticFix `json:"fix,omitempty"`
 }
 
 type Lesson struct {
 	Text       string  `json:"text"`
 	Confidence float64 `json:"confidence"`
+}
+
+// CriticFix mirrors llm.CriticFix — the queued repair a reflection identified.
+type CriticFix struct {
+	TargetHint string `json:"target_hint"`
+	Title      string `json:"title"`
+	Change     string `json:"change"`
+	Risk       string `json:"risk"`
 }
 
 func NewReflector(pool *pgxpool.Pool, embedder embed.Embedder, critic Critic) *Reflector {
@@ -249,7 +260,63 @@ func (r *Reflector) persist(ctx context.Context, sessionID string, res Reflectio
 		}
 	}
 
+	// Noticing → fixing bridge. When the critic identified a concrete,
+	// code-fixable blocker AND the session went badly, queue a mem_code_proposals
+	// candidate so the nightly self-improve loop actually REPAIRS it — instead of
+	// the lesson dead-ending as prose. This is the answer to "why isn't a fix
+	// queued?": failure reflections now become work items. Same contract the
+	// Voyager source-extractor + self-improve loop already consume. Deduped on
+	// (source_session) so re-reflecting one session doesn't stack proposals.
+	if res.Fix != nil && quality < 0.5 {
+		fix := res.Fix
+		title := strings.TrimSpace(fix.Title)
+		change := strings.TrimSpace(fix.Change)
+		if title != "" && change != "" {
+			risk := strings.ToLower(strings.TrimSpace(fix.Risk))
+			switch risk {
+			case "low", "medium", "high":
+			default:
+				risk = "medium"
+			}
+			ev, _ := json.Marshal(map[string]any{
+				"origin":        "reflection_fix",
+				"reflection_id": id,
+				"critique":      truncateReflection(res.Critique, 500),
+				"quality_score": quality,
+			})
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO mem_code_proposals
+				  (target_path, title, rationale, proposed_change, evidence, risk_level, status, source_session)
+				SELECT $1, $2, $3, $4, $5::jsonb, $6, 'candidate', NULLIF($7,'')::uuid
+				WHERE NOT EXISTS (
+				  SELECT 1 FROM mem_code_proposals
+				   WHERE source_session = NULLIF($7,'')::uuid AND status IN ('candidate','approved')
+				)
+			`,
+				strings.TrimSpace(fix.TargetHint),
+				truncateReflection(title, 200),
+				truncateReflection("Queued from a failed-session reflection: "+res.Critique, 1000),
+				truncateReflection(change, 2000),
+				string(ev),
+				risk,
+				sessionID,
+			); err != nil {
+				// Don't fail the reflection over a proposal insert — log + move on.
+				fmt.Printf("[reflector] queue fix proposal: %v\n", err)
+			}
+		}
+	}
+
 	return id, tx.Commit(ctx)
+}
+
+// truncateReflection trims a string to n runes for the proposal columns.
+func truncateReflection(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // Reflections returns the most recent reflections, newest first. Useful for

@@ -35,5 +35,13 @@ func (a *llmCriticAdapter) CritiqueSession(ctx context.Context, transcript strin
 	for _, l := range res.Lessons {
 		out.Lessons = append(out.Lessons, Lesson{Text: l.Text, Confidence: l.Confidence})
 	}
+	if res.Fix != nil {
+		out.Fix = &CriticFix{
+			TargetHint: res.Fix.TargetHint,
+			Title:      res.Fix.Title,
+			Change:     res.Fix.Change,
+			Risk:       res.Fix.Risk,
+		}
+	}
 	return out, nil
 }

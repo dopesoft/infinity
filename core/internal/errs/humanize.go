@@ -60,83 +60,89 @@ func HumanizeString(raw string) Human {
 	s := strings.ToLower(raw)
 	h := Human{Raw: raw}
 
+	// All copy is FIRST PERSON, the way Jarvis would explain it to the boss,
+	// not a status-code dump. The deterministic template gives every surface
+	// (dashboard chip, cron status, push) a human, companion read for free; the
+	// agent's own in-chat explanation (driven by soul.md) goes deeper. No
+	// em-dashes in user-facing strings (the boss hates them).
 	switch {
-	// Auth/credential — most specific; reuse the loop's own detector.
+	// Auth/credential. Most specific; reuse the loop's own detector.
 	case llm.IsAuthFailure(raw):
 		h.Category = CatAuth
-		h.Title = "Your model token needs reconnecting"
-		h.Summary = "The active model's credential was rejected (revoked or expired token / invalid key)."
-		h.Impact = "This run — and any scheduled runs on this model — can't proceed until you reconnect it."
+		h.Title = "I couldn't reach your model"
+		h.Summary = "Its login got turned away (the token looks revoked or expired), so the provider stopped letting me in."
+		h.Impact = "I paused what you asked so nothing's lost, but I can't think with that model until it's reconnected."
 		h.Action = llm.ReconnectHint(detectProvider(s))
 
-	// Payload-too-large (413) — checked before rate-limit; it's a fetch-shape
+	// Payload-too-large (413). Checked before rate-limit; it's a fetch-shape
 	// problem, not a transient one (this is the Gmail 413 the boss hit).
 	case contains(s, "413", "payloadtoolarge", "payload too large", "request entity too large", "entity too large"):
 		h.Category = CatPayloadLarge
-		h.Title = "Too much data requested at once"
-		h.Summary = "A fetch pulled more than the provider allows in one request and was rejected."
-		h.Impact = "The step that needed that data couldn't complete (e.g. Gmail returned too many / too-large messages)."
-		h.Action = "The skill needs to paginate and fetch leaner batches — no full payloads on the first pass."
+		h.Title = "I tried to grab too much at once"
+		h.Summary = "I asked for more data than the provider allows in a single request, so it bounced me back."
+		h.Impact = "That step couldn't finish. Usually it's email: too many or too-large messages pulled in one grab."
+		h.Action = "I need to page through it in smaller batches instead of all at once. The triage recipe now does that."
 
-	// Rate-limit / overload / transient upstream — not the boss's fault, self-heals.
+	// Rate-limit / overload / transient upstream. Not the boss's fault, self-heals.
 	case contains(s, "429", "rate limit", "rate_limit", "too many requests", "quota", "overloaded", "server_is_overloaded", "503", "upstream connect error", "connection termination", "temporarily unavailable"):
 		h.Category = CatRateLimit
-		h.Title = "Model provider was overloaded"
-		h.Summary = "The provider was rate-limited or temporarily unavailable — a transient outage, not a config problem."
-		h.Impact = "This run failed but nothing is broken on your side; it usually clears on its own."
-		h.Action = "Retry shortly, or switch the active model in Studio → Settings if it persists."
+		h.Title = "The model provider was swamped"
+		h.Summary = "It rate-limited me or had a brief hiccup on their end. Nothing wrong with your setup."
+		h.Impact = "This run didn't go through, but it usually clears on its own in a few minutes."
+		h.Action = "Give it a minute and I'll retry, or switch me to another model in Settings if it keeps happening."
 
-	// Database / schema — surface the migrations hint for the classic 42P01.
+	// Database / schema. Surface the migrations hint for the classic 42P01.
 	case contains(s, "sqlstate", "pq:", "pgx", "connection refused", "relation", "does not exist", "violates", "deadlock"):
 		h.Category = CatDatabase
-		h.Title = "Database error"
+		h.Impact = "I couldn't read or write what that step needed, so it stopped."
 		if contains(s, "42p01", "does not exist", "relation") {
-			h.Summary = "A database table or column the code expects is missing."
-			h.Action = "Run the migrator (`infinity migrate`) — schema is behind the code."
+			h.Title = "I hit a missing database table"
+			h.Summary = "A table I expected wasn't there, so the query had nowhere to land."
+			h.Action = "Looks like a migration needs to run to catch the schema up to the code."
 		} else {
-			h.Summary = "A database query failed (constraint, connection, or data-shape issue)."
-			h.Action = "Check the DB / the failing query; see raw error for the SQLSTATE."
+			h.Title = "I hit a database problem"
+			h.Summary = "A query failed down at the data layer (a constraint, connection, or data-shape issue)."
+			h.Action = "I'll need to look at the failing query. The raw error has the exact code."
 		}
-		h.Impact = "The action couldn't read or write its data, so it stopped."
 
-	// Coding bridge unreachable (Mac/cloud) — the self-heal 404 the boss hit.
+	// Coding bridge unreachable (Mac/cloud). The self-heal 404 the boss hit.
 	case contains(s, "launch via mac failed", "mac bridge", "bridge offline", "no bridge", "cloudflare access") || (contains(s, "404") && contains(s, "bridge", "mac", "workspace")):
 		h.Category = CatBridge
-		h.Title = "Coding workspace was unreachable"
-		h.Summary = "The Mac bridge (or cloud workspace) couldn't be reached, so a code action couldn't run."
-		h.Impact = "Self-heal / coding work was skipped this run."
-		h.Action = "Check the Mac bridge is up; otherwise the cloud workspace should take over automatically."
+		h.Title = "I couldn't reach the coding workspace"
+		h.Summary = "Your Mac didn't answer, so I couldn't run the code step there."
+		h.Impact = "Any self-heal or coding work got skipped this run."
+		h.Action = "Check the Mac's awake. Otherwise I'll lean on the cloud workspace and keep going."
 
-	// Trust gate — a guarded action is parked for approval.
+	// Trust gate. A guarded action is parked for approval.
 	case contains(s, "requires trust", "trust approval", "awaiting approval", "blocked by gate", "trust queue"):
 		h.Category = CatTrust
-		h.Title = "Waiting on your approval"
-		h.Summary = "A guarded action was held back pending sign-off."
-		h.Impact = "The run paused on a step that needs you."
-		h.Action = "Approve or reject it in the Trust tab."
+		h.Title = "I'm waiting on your okay"
+		h.Summary = "A guarded step needs your sign-off before I run it, so I held back rather than push past you."
+		h.Impact = "I paused right there; everything before it is done."
+		h.Action = "Approve or wave it off in the Trust tab and I'll carry on."
 
 	// Tool/skill missing or not registered.
 	case contains(s, "tool not found", "unknown tool", "no such tool", "not registered", "tool unavailable"):
 		h.Category = CatToolNotFound
-		h.Title = "A required tool wasn't available"
-		h.Summary = "The agent tried to use a capability that isn't wired up or loaded."
-		h.Impact = "The step needing that tool couldn't run."
-		h.Action = "Check the tool/connector is registered and enabled."
+		h.Title = "A tool I needed wasn't loaded"
+		h.Summary = "I reached for a capability that isn't wired up in this run."
+		h.Impact = "The step that depended on it couldn't run."
+		h.Action = "Worth checking that tool or connector is registered and enabled."
 
 	// Iteration cap / timeout / deadline.
 	case contains(s, "iteration cap", "max iterations", "context deadline", "deadline exceeded", "timeout", "timed out", "loop limit"):
 		h.Category = CatIterationCap
-		h.Title = "Run hit a time or step limit"
-		h.Summary = "The work ran into a safety limit (too many steps or too long) and stopped."
-		h.Impact = "It may have done partial work before stopping."
-		h.Action = "Narrow the task, or raise the limit if this is legitimately heavy work."
+		h.Title = "I hit a safety limit and pulled up"
+		h.Summary = "The task ran long enough to trip a step or time guard, so I stopped rather than spin."
+		h.Impact = "I may have gotten partway before stopping."
+		h.Action = "Narrow it down, or bump the limit if it's genuinely this heavy."
 
 	default:
 		h.Category = CatUnknown
-		h.Title = "Run failed"
+		h.Title = "Something went wrong and I stopped"
 		h.Summary = firstLine(raw)
 		h.Impact = ""
-		h.Action = "Open the details for the raw error."
+		h.Action = "Open the details for the raw error and I'll dig in."
 	}
 	return h
 }

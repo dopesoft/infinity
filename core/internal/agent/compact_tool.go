@@ -95,7 +95,8 @@ func (c *CompactContext) Execute(ctx context.Context, input map[string]any) (str
 	if res.CompactedTurns == 0 {
 		body := map[string]any{
 			"compacted":      false,
-			"reason":         "below minimum turn threshold or nothing older than keep window",
+			"reason":         "Nothing to compact yet: the conversation is below the minimum turn threshold (or nothing is older than the keep window). This is normal, not an error.",
+			"do_not_retry":   "Do NOT call compact_context again this turn. There is nothing to compact and retrying will trip the loop guard and waste a call. Just continue with the task.",
 			"original_turns": res.OriginalTurns,
 		}
 		b, _ := json.Marshal(body)

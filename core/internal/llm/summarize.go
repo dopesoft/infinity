@@ -70,11 +70,15 @@ Return ONLY valid JSON in this exact shape (no commentary, no code fences):
   "files": ["path/one.go", "path/two.tsx"]
 }
 
-For type "error": the boss reads these, not the logs. Write the title and
-summary in plain language describing WHAT failed and HOW it affects the app
-(e.g. "Gmail triage couldn't fetch — pulled too much data at once"). Do NOT
-copy raw provider JSON, status codes, or stack traces into the title/summary;
-state the root cause and impact a non-engineer can act on.
+Anything that failed, got blocked, or couldn't complete (a tool block, a
+failed cron, a "could not do X", a 4xx/5xx) is type "error". The boss reads
+these in his Memory tab, not the logs, so write the title and summary in
+plain, FIRST-PERSON, human language: what you were trying to do and what
+actually got in the way ("I couldn't finish your inbox triage, the fetch
+pulled too much at once"). NEVER a robotic "X tool blocked, loop detected" or
+"cron failed with SQL error" header, and NEVER raw provider JSON, status
+codes, or stack traces in the title/summary. Say it like a person explaining
+what happened, not a logger printing a code.
 
 Relation guidelines:
 - Both endpoints MUST appear in the entities array.
