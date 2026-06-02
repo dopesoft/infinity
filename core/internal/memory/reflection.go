@@ -244,16 +244,23 @@ func (r *Reflector) persist(ctx context.Context, sessionID string, res Reflectio
 		return "", fmt.Errorf("insert reflection: %w", err)
 	}
 
-	// Promote high-confidence lessons into mem_lessons so the existing
-	// search / heartbeat reinforcement loops pick them up.
+	// Promote only STRONG lessons, and never a duplicate. mem_lessons had no
+	// dedup and a low (0.6) bar, so it bloated to 294 redundant rows ("mint the
+	// batch_id" said six ways). Raise the bar to 0.75 and skip a lesson whose
+	// text already exists (case-insensitive). Paraphrase-dups still slip, but the
+	// forget loop's lesson pruning (low-confidence + never-reinforced + stale)
+	// sweeps those over time, so the archive can't grow without bound again.
 	for _, l := range res.Lessons {
 		text := strings.TrimSpace(l.Text)
-		if text == "" || l.Confidence < 0.6 {
+		if text == "" || l.Confidence < 0.75 {
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO mem_lessons (lesson_text, confidence)
-			VALUES ($1, $2)
+			SELECT $1, $2
+			 WHERE NOT EXISTS (
+			   SELECT 1 FROM mem_lessons WHERE lower(lesson_text) = lower($1)
+			 )
 		`, text, l.Confidence); err != nil {
 			// Don't fail the whole reflection over a lesson - log and move on.
 			fmt.Printf("[reflector] persist lesson: %v\n", err)

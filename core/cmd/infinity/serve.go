@@ -765,6 +765,11 @@ func serveCmd() *cobra.Command {
 				// turn.
 				if pool != nil {
 					memProviders = append(memProviders, memory.NewReflectionChainsProvider(pool))
+					// Proven lessons: mem_lessons was write-only until now. This
+					// injects the highest-conviction individual behavioral rules
+					// (round-robined) so the agent's hard-won lessons actually
+					// shape its behavior, not just sit in an archive.
+					memProviders = append(memProviders, memory.NewLessonsProvider(pool))
 				}
 				// Self-model: mem_agent_metrics is rolled up nightly with
 				// today's behaviour vs. the 14-day baseline. The provider
@@ -1228,6 +1233,7 @@ func serveCmd() *cobra.Command {
 				}
 				cronAPI = cron.NewAPI(cronScheduler)
 				tools.RegisterCronTools(registry, cronSchedulerAdapter{s: cronScheduler}, pool)
+				tools.RegisterOutcomeTools(registry, pool)
 				// watch_until: deterministic "watch a run/cron until it settles,
 				// then report back into this chat" primitive. The store creates
 				// rows; the poller (started below, once the server + push exist)

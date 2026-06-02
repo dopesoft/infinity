@@ -159,4 +159,18 @@ func (m *Manager) recordTripletProposal(tools [3]string) {
 		VALUES ($1, $2, $3, '', 'low', 70, 'Repeated tool triplet; review for reusable workflow automation value.', 'candidate')
 		ON CONFLICT DO NOTHING
 	`, name, desc, reasoning)
+
+	// Activate mem_patterns: the heartbeat's "open patterns" check reads this
+	// table but nothing wrote it. Record the detected recurrence (bumping
+	// occurrences on repeat) with the skill we'd suggest, so the agent's
+	// pattern-noticing becomes visible and actionable instead of a dead query.
+	_, _ = m.pool.Exec(ctx, `
+		INSERT INTO mem_patterns (description, occurrences, suggested_skill, last_seen_at, status)
+		VALUES ($1, $2, $3, NOW(), 'open')
+		ON CONFLICT (description) DO UPDATE SET
+		  occurrences   = mem_patterns.occurrences + 1,
+		  suggested_skill = EXCLUDED.suggested_skill,
+		  last_seen_at  = NOW(),
+		  status        = 'open'
+	`, desc, tripletMinHits, name)
 }
