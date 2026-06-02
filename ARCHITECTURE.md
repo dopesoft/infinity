@@ -61,16 +61,18 @@ Each service has its own Dockerfile at the service root. `railway.toml` sets `ro
                               injects top-K procedural memories per turn
                               (CoALA's procedural tier, populated by
                               voyager.Manager.OnSkillPromoted callback)
-   memory.NewCompressor        (only when LLM_PROVIDER=anthropic) →
-                              now auto-links new memories to top-4
-                              cosine-nearest neighbours via 'associative'
-                              edges (A-MEM, arXiv 2502.12110)
+   memory.NewCompressor        (runs on the active model via activeModel —
+                              see §2.1; no longer Anthropic-only) → also
+                              auto-links new memories to top-4 cosine-nearest
+                              neighbours via 'associative' edges
+                              (A-MEM, arXiv 2502.12110)
    hooks.NewPipeline()
    hooks.RegisterDefaults      → wires capture into all 12 event hooks
    memory.NewPredictionStore   → recorded by hooks.PredictionRecorder
                                  (PreToolUse writes expected, with optional
-                                 Haiku drafting for expensive/high-risk tools;
-                                 PostToolUse resolves with Jaccard surprise)
+                                 active-model drafting for expensive/high-risk
+                                 tools — see §2.1; PostToolUse resolves with
+                                 Jaccard surprise)
    tools.RegisterMemoryTools   → remember, recall, forget
 4. honcho.FromEnv()            → optional dialectic peer client (HONCHO_BASE_URL)
    if enabled, register two hooks (UserPromptSubmit, TaskCompleted) that
@@ -106,7 +108,15 @@ Each service has its own Dockerfile at the service root. `railway.toml` sets `ro
     signal.NotifyContext(SIGINT, SIGTERM)
 ```
 
-Every component degrades gracefully if its dependency is missing: no `DATABASE_URL` → memory/proactive/cron skip; no LLM provider → loop disabled, server still serves health + memory APIs; no Anthropic provider → compressor disabled, capture pipeline still runs; no `HONCHO_BASE_URL` → Honcho hooks no-op; no `GEPA_URL` → `/api/voyager/optimize` returns 503.
+Every component degrades gracefully if its dependency is missing: no `DATABASE_URL` → memory/proactive/cron skip; no LLM provider → loop disabled, server still serves health + memory APIs; no `HONCHO_BASE_URL` → Honcho hooks no-op; no `GEPA_URL` → `/api/voyager/optimize` returns 503.
+
+### 2.1 Model routing — the active brain, not a pinned vendor
+
+The chat loop uses the boss's **currently selected** model — resolved every turn from Studio Settings (`infinity_meta` rows `setting.provider` / `setting.model`) via `loop.SetActiveModelFn`, NOT the `LLM_PROVIDER` env (which is only the boot default / fallback). The Settings PUT hot-swaps the loop's provider through `llmRegistry`.
+
+**Every auxiliary LLM task routes through the same active model**, via one adapter — `activeModelProvider` ([`core/cmd/infinity/active_drafter.go`](core/cmd/infinity/active_drafter.go)) — built once after `llmRegistry`. It resolves the active provider+model per call and implements BOTH `llm.Provider` (`Stream`, for streamers) and the `Draft` one-shot (via [`llm.Complete`](core/internal/llm/complete.go), the cross-vendor completion helper). Subsystems wired through it: memory **compression** + **reflection critic** (drafter-backed summarizer/critic in `llm/summarize.go` + `llm/critic.go`), **predict-then-act** drafting, **IntentFlow** detection, **email/follow-up triage**, **skill merge / `skill_optimize`**, and **Voyager** skill drafting + verification.
+
+**Invariant — do not regress:** a subsystem that needs an LLM takes an interface (`llm.Provider` or `llm.Drafter`) and is handed `activeModel`; it must NEVER type-assert `provider.(*llm.Anthropic)` or hardcode a model id for cognition. That anti-pattern silently no-op'd compression/reflection/intent/triage whenever the brain wasn't Anthropic (the "why is my memory dead on ChatGPT" class of bug, fixed 2026-06-02). Provider-*internal* default-model literals (`anthropic.go`, `openai.go`) and context-window model-family detection are fine — they only apply when that vendor is already active.
 
 ## 3. Package layout
 

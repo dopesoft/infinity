@@ -89,7 +89,8 @@ func FindDuplicateSkill(ctx context.Context, pool *pgxpool.Pool, drafter Drafter
 		fmt.Fprintf(&b, "- %s: %s\n", s.name, d)
 	}
 	fmt.Fprintf(&b, "\nPROPOSED:\n%s: %s\n\nWhich catalog skill (if any) does PROPOSED duplicate? Reply with the exact name or NONE.", name, desc)
-	ans, err := drafter.Draft(ctx, "claude-haiku-4-5-20251001", dedupSystem, b.String(), 20)
+	// Empty model → the drafter uses the boss's active model.
+	ans, err := drafter.Draft(ctx, "", dedupSystem, b.String(), 20)
 	if err != nil {
 		return ""
 	}

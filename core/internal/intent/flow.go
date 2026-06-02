@@ -123,9 +123,6 @@ func New(cfg Config) *Detector {
 	if cfg.ThresholdFull <= 0 {
 		cfg.ThresholdFull = 0.85
 	}
-	if cfg.Model == "" {
-		cfg.Model = "claude-haiku-4-5-20251001"
-	}
 	return &Detector{
 		provider:      cfg.Provider,
 		model:         cfg.Model,
@@ -156,9 +153,8 @@ func (d *Detector) Classify(ctx context.Context, observation, recentContext stri
 	respCh := make(chan llm.Response, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		// IntentFlow uses the provider's default model - the boss's per-turn
-		// override only applies to the main agent loop, not internal Haiku-style
-		// classifiers.
+		// Empty model → the active-model provider resolves the boss's set model
+		// (same brain as chat); classification is no longer pinned to a vendor.
 		resp, err := d.provider.Stream(ctx, "", systemPrompt,
 			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
 			nil, out)

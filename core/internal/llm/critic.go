@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // ReflectionResult mirrors memory.ReflectionResult - kept in the llm package
@@ -38,23 +36,10 @@ type CriticLesson struct {
 	Confidence float64 `json:"confidence"`
 }
 
-// AnthropicCritic implements the metacognition step: it reads a session
-// transcript and emits a structured critique + lessons. Pattern: Multi-Agent
-// Reflexion (MAR, arXiv 2512.20845) - separate persona, fresh model call so
-// the actor doesn't get to grade its own homework. We use Haiku to keep this
-// cheap; quality is high enough for the extraction shape.
-type AnthropicCritic struct {
-	a     *Anthropic
-	model string
-}
-
-func NewAnthropicCritic(a *Anthropic, model string) *AnthropicCritic {
-	if model == "" {
-		model = "claude-haiku-4-5-20251001"
-	}
-	return &AnthropicCritic{a: a, model: model}
-}
-
+// The metacognition step reads a session transcript and emits a structured
+// critique + lessons. Pattern: Multi-Agent Reflexion (MAR, arXiv 2512.20845) -
+// separate persona, fresh model call so the actor doesn't get to grade its own
+// homework. Runs through the boss's active model via drafterCritic below.
 const critiqueSystem = `You are an honest, terse critic reviewing one of your own past agent sessions.
 
 You will receive a transcript of a session - user prompts, your replies, the tools you called, errors, etc. Your job: judge how well the session went and extract durable lessons.
@@ -87,10 +72,9 @@ Rules:
 - "fix": include this object ONLY when the session hit a CONCRETE, CODE-FIXABLE blocker — a tool/recipe/config/routing bug that a code change would prevent (e.g. a tool returning 413 because it doesn't paginate, the agent invoking a skill through the wrong tool, a sub-agent using a model the account rejects). Name the real artifact in "title"/"change". OMIT "fix" entirely (or null) for user-side issues, transient outages (429/503), or sessions that went fine. This is how a noticed failure becomes a queued repair — only emit it when a code change is the actual remedy.
 - If the transcript is too short or boilerplate to judge, return critique="" and lessons=[] and no fix. Don't fabricate.`
 
-// drafterCritic is the provider-agnostic critic: identical prompt + parser as
-// AnthropicCritic, but it runs through any Drafter (→ the boss's ACTIVE model)
-// instead of the Anthropic SDK directly, so the reflection loop works when the
-// brain isn't Anthropic.
+// drafterCritic is the provider-agnostic critic: it runs the critiqueSystem
+// prompt through any Drafter (→ the boss's ACTIVE model) rather than a vendor
+// SDK directly, so the reflection loop works when the brain isn't Anthropic.
 type drafterCritic struct {
 	d     Drafter
 	model string
@@ -118,43 +102,6 @@ func (c *drafterCritic) CritiqueSession(ctx context.Context, transcript string) 
 	if raw == "" {
 		return ReflectionResult{}, nil
 	}
-	var out ReflectionResult
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return ReflectionResult{}, fmt.Errorf("parse critique: %w", err)
-	}
-	if out.Kind == "" {
-		out.Kind = "session_critique"
-	}
-	return out, nil
-}
-
-func (c *AnthropicCritic) CritiqueSession(ctx context.Context, transcript string) (ReflectionResult, error) {
-	if c == nil || c.a == nil {
-		return ReflectionResult{}, errors.New("critic not configured")
-	}
-	prompt := fmt.Sprintf("Session transcript:\n\n%s", truncate(transcript, 12000))
-
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.model),
-		MaxTokens: 1200,
-		System:    []anthropic.TextBlockParam{{Text: critiqueSystem}},
-		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
-	}
-
-	msg, err := c.a.client.Messages.New(ctx, params)
-	if err != nil {
-		return ReflectionResult{}, err
-	}
-
-	raw := strings.TrimSpace(collectText(msg))
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ReflectionResult{}, nil
-	}
-
 	var out ReflectionResult
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return ReflectionResult{}, fmt.Errorf("parse critique: %w", err)

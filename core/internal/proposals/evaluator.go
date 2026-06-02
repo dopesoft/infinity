@@ -3,11 +3,11 @@
 //
 // The shape of this loop matches GEPA's Pareto principle but at one
 // scale smaller: when UpsertCandidate detects len(conflicts) > 0,
-// instead of trusting Haiku's blended body we present THREE candidates
+// instead of trusting the blended body we present THREE candidates
 // (existing draft, new proposal, merged blend) to a critic-style LLM
-// pass and pick the winner. Costs ~$0.001 per conflict, runs in
-// seconds, and the rest of the time the merge is clean and this
-// never fires.
+// pass and pick the winner. Runs on the active model (the drafter passed
+// in), cheap, in seconds, and the rest of the time the merge is clean and
+// this never fires.
 //
 // Full GEPA Pareto evaluation (with synthetic test runs against each
 // candidate) is what the voyager/optimizer.go path does for newly
@@ -25,8 +25,6 @@ import (
 	"strings"
 )
 
-const evaluatorModel = "claude-haiku-4-5-20251001"
-
 const evaluatorSystem = `You are a senior staff engineer reviewing three candidate skill bodies for the same parent skill. Pick the one that best balances clarity, correctness, and operational completeness.
 
 Output ONLY the label of the winning candidate on a single line:
@@ -36,26 +34,26 @@ Output ONLY the label of the winning candidate on a single line:
 
 If none is clearly best, output the label whose body is most internally consistent (fewest contradicting steps).`
 
-// HaikuMergeEvaluator implements MergeEvaluator. Constructed with a
+// ActiveMergeEvaluator implements MergeEvaluator. Constructed with a
 // Drafter (same interface UpsertCandidate uses for the merge call) so
-// boot wiring stays simple.
-type HaikuMergeEvaluator struct {
+// boot wiring stays simple. The drafter runs on the boss's active model.
+type ActiveMergeEvaluator struct {
 	drafter Drafter
 	logger  *slog.Logger
 }
 
-func NewHaikuMergeEvaluator(drafter Drafter, logger *slog.Logger) *HaikuMergeEvaluator {
+func NewActiveMergeEvaluator(drafter Drafter, logger *slog.Logger) *ActiveMergeEvaluator {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &HaikuMergeEvaluator{drafter: drafter, logger: logger}
+	return &ActiveMergeEvaluator{drafter: drafter, logger: logger}
 }
 
-// EvaluateSkillMerge asks Haiku to pick the strongest of the three
-// candidates. Returns the body of the winner. On any failure, returns
-// "" so UpsertCandidate falls back to Haiku's blended merged body
-// (the prior behavior before Opt 3).
-func (e *HaikuMergeEvaluator) EvaluateSkillMerge(ctx context.Context, parentSkill string, candidates []SkillCandidate) (string, error) {
+// EvaluateSkillMerge asks the active model to pick the strongest of the
+// three candidates. Returns the body of the winner. On any failure, returns
+// "" so UpsertCandidate falls back to the blended merged body (the prior
+// behavior before Opt 3).
+func (e *ActiveMergeEvaluator) EvaluateSkillMerge(ctx context.Context, parentSkill string, candidates []SkillCandidate) (string, error) {
 	if e == nil || e.drafter == nil {
 		return "", nil
 	}
@@ -79,7 +77,8 @@ func (e *HaikuMergeEvaluator) EvaluateSkillMerge(ctx context.Context, parentSkil
 	}
 	b.WriteString("Pick the winner. Output ONLY the label.")
 
-	raw, err := e.drafter.Draft(ctx, evaluatorModel, evaluatorSystem, b.String(), 50)
+	// Empty model → the drafter uses the boss's active model.
+	raw, err := e.drafter.Draft(ctx, "", evaluatorSystem, b.String(), 50)
 	if err != nil {
 		return "", err
 	}

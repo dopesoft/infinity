@@ -91,7 +91,7 @@ func (m *Manager) verifyProposal(ctx context.Context, proposalID, name string) e
 }
 
 func (m *Manager) generateSyntheticTests(ctx context.Context, skillName, skillMD string) error {
-	model := envOr("LLM_SUMMARIZE_MODEL", "claude-haiku-4-5-20251001")
+	model := envOr("LLM_SUMMARIZE_MODEL", "")
 	raw, err := m.llm.Draft(ctx, model, synthSystem, skillMD, 1000)
 	if err != nil {
 		return err

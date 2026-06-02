@@ -209,7 +209,7 @@ func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stat
 		return nil
 	}
 
-	model := envOr("LLM_SUMMARIZE_MODEL", "claude-haiku-4-5-20251001")
+	model := envOr("LLM_SUMMARIZE_MODEL", "")
 	raw, err := m.llm.Draft(ctx, model, draftSystem, transcript, 1500)
 	if err != nil {
 		return err

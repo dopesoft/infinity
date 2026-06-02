@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // CompressedFacts mirrors memory.CompressedFacts but lives here so the llm
@@ -37,21 +35,6 @@ type FactRelation struct {
 	ToType   string `json:"to_type"`
 	ToName   string `json:"to_name"`
 	Type     string `json:"type"` // uses | depends_on | works_on | mentions | causes | etc
-}
-
-// AnthropicSummarizer uses Claude Haiku for cheap, fast structured extraction.
-// One Haiku turn per observation. Schema-validated; one retry with stricter
-// prompt on validation failure.
-type AnthropicSummarizer struct {
-	a     *Anthropic
-	model string
-}
-
-func NewAnthropicSummarizer(a *Anthropic, model string) *AnthropicSummarizer {
-	if model == "" {
-		model = "claude-haiku-4-5-20251001"
-	}
-	return &AnthropicSummarizer{a: a, model: model}
 }
 
 const summarizeSystem = `You are an extractor that converts agent observations into structured memory facts and a knowledge graph.
@@ -104,44 +87,10 @@ or his work, SKIP IT. When in doubt, skip. A clean brain of 50 real facts beats
 
 Never invent facts. If unsure, leave fields empty.`
 
-func (s *AnthropicSummarizer) Summarize(ctx context.Context, hookName, rawText string) (CompressedFacts, error) {
-	prompt := fmt.Sprintf("Hook: %s\n\nObservation:\n%s", hookName, truncate(rawText, 4000))
-
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(s.model),
-		MaxTokens: 1024,
-		System:    []anthropic.TextBlockParam{{Text: summarizeSystem}},
-		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
-	}
-
-	msg, err := s.a.client.Messages.New(ctx, params)
-	if err != nil {
-		return CompressedFacts{}, err
-	}
-
-	raw := collectText(msg)
-	facts, err := parseFacts(raw)
-	if err == nil {
-		return facts, nil
-	}
-
-	// Retry once with a stricter prompt
-	retry := params
-	retry.Messages = append(retry.Messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(raw)))
-	retry.Messages = append(retry.Messages, anthropic.NewUserMessage(
-		anthropic.NewTextBlock("That response was not valid JSON. Return ONLY the JSON object, nothing else."),
-	))
-	msg2, err := s.a.client.Messages.New(ctx, retry)
-	if err != nil {
-		return CompressedFacts{}, err
-	}
-	return parseFacts(collectText(msg2))
-}
-
-// drafterSummarizer is the provider-agnostic summarizer: identical prompt +
-// parser as AnthropicSummarizer, but it runs through any Drafter (→ the boss's
-// ACTIVE model) instead of the Anthropic SDK directly. This is what keeps
-// memory compression alive when the brain isn't Anthropic.
+// drafterSummarizer is the provider-agnostic summarizer: it runs the
+// summarizeSystem prompt + parseFacts through any Drafter (→ the boss's ACTIVE
+// model) rather than a vendor SDK directly. This is what keeps memory
+// compression alive when the brain isn't Anthropic.
 type drafterSummarizer struct {
 	d     Drafter
 	model string
@@ -166,7 +115,7 @@ func (s *drafterSummarizer) Summarize(ctx context.Context, hookName, rawText str
 	if facts, err := parseFacts(raw); err == nil {
 		return facts, nil
 	}
-	// One stricter retry, mirroring AnthropicSummarizer's retry.
+	// One stricter retry when the first parse fails.
 	raw2, err := s.d.Draft(ctx, s.model, summarizeSystem,
 		prompt+"\n\nReturn ONLY the JSON object, nothing else.", 1024)
 	if err != nil {
@@ -189,16 +138,6 @@ func parseFacts(raw string) (CompressedFacts, error) {
 		return CompressedFacts{}, err
 	}
 	return out, nil
-}
-
-func collectText(msg *anthropic.Message) string {
-	var b strings.Builder
-	for _, c := range msg.Content {
-		if t, ok := c.AsAny().(anthropic.TextBlock); ok {
-			b.WriteString(t.Text)
-		}
-	}
-	return b.String()
 }
 
 func truncate(s string, n int) string {

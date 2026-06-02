@@ -191,9 +191,10 @@ func (m *Manager) draftPrep(ctx context.Context, req prepDraftRequest) (prepDraf
 	}
 
 	prompt := buildPrepPrompt(req)
-	raw, err := m.llm.Draft(ctx, "claude-haiku-4-5-20251001", calendarPrepSystem, prompt, 1200)
+	// Empty model → the active-model drafter uses the boss's set model.
+	raw, err := m.llm.Draft(ctx, "", calendarPrepSystem, prompt, 1200)
 	if err != nil {
-		return prepDraftResult{}, fmt.Errorf("haiku prep draft: %w", err)
+		return prepDraftResult{}, fmt.Errorf("calendar prep draft: %w", err)
 	}
 	// Haiku occasionally wraps JSON in ```json fences - strip them.
 	raw = stripJSONFence(raw)

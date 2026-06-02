@@ -6,16 +6,19 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
-// llmCriticAdapter bridges llm.AnthropicCritic to memory.Critic so the memory
-// package doesn't import llm types directly. Mirrors llmSummarizerAdapter.
+// llmCriticAdapter bridges an llm critic (anything with a CritiqueSession
+// method — in prod the active-model critic from llm.NewCriticFromDrafter) to
+// memory.Critic so the memory package doesn't import llm types directly.
+// Mirrors llmSummarizerAdapter.
 type llmCriticAdapter struct {
 	inner interface {
 		CritiqueSession(ctx context.Context, transcript string) (llm.ReflectionResult, error)
 	}
 }
 
-// NewCritic wraps an llm.AnthropicCritic (or anything with the same shape) so
-// the Reflector can call it.
+// NewCritic wraps any critic with the standard CritiqueSession signature
+// (prod: llm.NewCriticFromDrafter over the active model) so the Reflector can
+// call it.
 func NewCritic(c interface {
 	CritiqueSession(ctx context.Context, transcript string) (llm.ReflectionResult, error)
 }) Critic {

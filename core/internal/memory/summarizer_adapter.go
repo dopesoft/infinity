@@ -6,16 +6,19 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
-// llmSummarizerAdapter bridges llm.AnthropicSummarizer to the memory.Summarizer
-// interface so the memory package doesn't import llm types directly.
+// llmSummarizerAdapter bridges an llm summarizer (anything with a Summarize
+// method — in prod the active-model summarizer from llm.NewSummarizerFromDrafter)
+// to the memory.Summarizer interface so the memory package doesn't import llm
+// types directly.
 type llmSummarizerAdapter struct {
 	inner interface {
 		Summarize(ctx context.Context, hookName, rawText string) (llm.CompressedFacts, error)
 	}
 }
 
-// NewSummarizer wraps an llm.AnthropicSummarizer (or anything with the same
-// Summarize signature) so the compressor can call it.
+// NewSummarizer wraps any summarizer with the standard Summarize signature
+// (prod: llm.NewSummarizerFromDrafter over the active model) so the compressor
+// can call it.
 func NewSummarizer(s interface {
 	Summarize(ctx context.Context, hookName, rawText string) (llm.CompressedFacts, error)
 }) Summarizer {

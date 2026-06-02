@@ -102,10 +102,6 @@ var mergeEvaluator MergeEvaluator
 // SetMergeEvaluator wires the GEPA bridge. Called from serve.go boot.
 func SetMergeEvaluator(e MergeEvaluator) { mergeEvaluator = e }
 
-// mergeModel defaults to Haiku - cheap, deterministic, fast. Override
-// with INFINITY_SKILL_MERGE_MODEL when iterating.
-const mergeModel = "claude-haiku-4-5-20251001"
-
 // UpsertCandidate writes (or merges into) a skill proposal. Behavior:
 //
 //   - ParentSkill == "" -> always INSERT a fresh row (brand-new skill).
@@ -396,7 +392,8 @@ Return the unified body as raw markdown - no fences, no commentary.
 %s
 </new_proposed_change>`, existing, proposed)
 
-	raw, err := drafter.Draft(cctx, mergeModel, mergeSystem, prompt, 4000)
+	// Empty model → the drafter uses the boss's active model.
+	raw, err := drafter.Draft(cctx, "", mergeSystem, prompt, 4000)
 	if err != nil {
 		if logger != nil {
 			logger.Warn("skill merge draft failed; falling back to proposed body",

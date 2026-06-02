@@ -23,10 +23,6 @@ type PredictionRecorder struct {
 	model   string
 }
 
-func NewPredictionRecorder(store *memory.PredictionStore) *PredictionRecorder {
-	return &PredictionRecorder{store: store}
-}
-
 type PredictionDrafter interface {
 	Draft(ctx context.Context, model, system, userPrompt string, maxTokens int64) (string, error)
 }
@@ -177,12 +173,10 @@ Return one short sentence only. State the concrete expected success condition.
 Do not include markdown or caveats.`
 
 func (p *PredictionRecorder) draftPrediction(ctx context.Context, toolName string, input map[string]any) (string, error) {
-	model := p.model
-	if model == "" {
-		model = "claude-haiku-4-5-20251001"
-	}
+	// p.model is usually "" → the active-model drafter resolves the boss's
+	// set model. An explicit INFINITY_PREDICTION_MODEL still passes through.
 	prompt := fmt.Sprintf("Tool: %s\nInput: %s\nExpected result:", toolName, jsonShort(input))
-	return p.drafter.Draft(ctx, model, predictionSystem, prompt, 120)
+	return p.drafter.Draft(ctx, p.model, predictionSystem, prompt, 120)
 }
 
 func jsonShort(v any) string {

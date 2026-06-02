@@ -296,7 +296,7 @@ func serveCmd() *cobra.Command {
 					// conflicts, hand (existing | proposed | merged) to the active
 					// model for an empirical pick instead of blindly trusting the
 					// merge.
-					proposals.SetMergeEvaluator(proposals.NewHaikuMergeEvaluator(activeModel, slog.Default()))
+					proposals.SetMergeEvaluator(proposals.NewActiveMergeEvaluator(activeModel, slog.Default()))
 
 					// Memory compression + reflection run on the boss's active
 					// model (no longer Anthropic-only). Without this they silently
