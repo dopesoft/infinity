@@ -27,24 +27,24 @@ func NewCompositeExecutor(agent, connector Executor, system ...Executor) *Compos
 	return &CompositeExecutor{Agent: agent, Connector: connector, System: sys}
 }
 
-func (c *CompositeExecutor) ExecuteJob(j Job) error {
+func (c *CompositeExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	switch j.JobKind {
 	case JobConnectorPoll:
 		if c.Connector == nil {
-			return fmt.Errorf("composite: no connector executor configured for kind=%s", j.JobKind)
+			return RunSummary{}, fmt.Errorf("composite: no connector executor configured for kind=%s", j.JobKind)
 		}
 		return c.Connector.ExecuteJob(j)
 	case JobSystemTask:
 		if c.System == nil {
-			return fmt.Errorf("composite: no system executor configured for kind=%s", j.JobKind)
+			return RunSummary{}, fmt.Errorf("composite: no system executor configured for kind=%s", j.JobKind)
 		}
 		return c.System.ExecuteJob(j)
 	case JobSystemEvent, JobIsolatedAgentTurn:
 		if c.Agent == nil {
-			return fmt.Errorf("composite: no agent executor configured for kind=%s", j.JobKind)
+			return RunSummary{}, fmt.Errorf("composite: no agent executor configured for kind=%s", j.JobKind)
 		}
 		return c.Agent.ExecuteJob(j)
 	default:
-		return fmt.Errorf("composite: unknown job_kind %q", j.JobKind)
+		return RunSummary{}, fmt.Errorf("composite: unknown job_kind %q", j.JobKind)
 	}
 }

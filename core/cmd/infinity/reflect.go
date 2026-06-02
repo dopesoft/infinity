@@ -10,6 +10,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/settings"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
@@ -49,11 +50,14 @@ have a reflection. Pass --session <id> to target a single session, or
 			if err != nil {
 				return fmt.Errorf("reflection needs an LLM provider: %w", err)
 			}
-			a, ok := provider.(*llm.Anthropic)
-			if !ok {
-				return errors.New("reflection currently requires LLM_PROVIDER=anthropic")
+			// Route reflection through the boss's active model (Settings),
+			// same as the server — no longer Anthropic-only.
+			am := &activeModelProvider{
+				registry: llm.BuildRegistry(llm.NewOAuthStore(pool)),
+				settings: settings.New(pool),
+				fallback: provider,
 			}
-			critic := llm.NewAnthropicCritic(a, os.Getenv("LLM_SUMMARIZE_MODEL"))
+			critic := llm.NewCriticFromDrafter(am, os.Getenv("LLM_SUMMARIZE_MODEL"))
 			reflector := memory.NewReflector(pool, embed.FromEnv(), memory.NewCritic(critic))
 
 			if session != "" {

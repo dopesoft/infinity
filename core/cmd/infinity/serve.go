@@ -95,6 +95,7 @@ func serveCmd() *cobra.Command {
 				pipeline            *hooks.Pipeline
 				embedder            embed.Embedder
 				llmRegistry         *llm.Registry
+				activeModel         *activeModelProvider
 				activeBridgeRouter  *bridge.Router
 				activeBridgePrefs   tools.PreferenceFetcher
 				browserReg          *browser.Registry
@@ -247,14 +248,6 @@ func serveCmd() *cobra.Command {
 					// of forgetting drafts exist between sessions.
 					proposals.SetDraftMemoryWriter(memory.NewSkillDraftMemoryWriter(p, embedder, slog.Default()))
 
-					// Opt 3: when skill_optimize produces a merge with
-					// flagged conflicts, hand (existing | proposed |
-					// merged) to a Haiku critic for an empirical pick
-					// instead of blindly trusting the merge. Same
-					// Anthropic provider the merge itself uses.
-					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
-						proposals.SetMergeEvaluator(proposals.NewHaikuMergeEvaluator(a, slog.Default()))
-					}
 					// runs.SetGlobal arms the server-tracked progress
 					// substrate (mem_runs). Every long action across the
 					// codebase resolves runs.Track via this global; if
@@ -286,19 +279,33 @@ func serveCmd() *cobra.Command {
 					llmRegistry = llm.BuildRegistry(oauthStoreShared)
 					fmt.Printf("  llm: registered %v\n", llmRegistry.Available())
 
-					// Compressor needs an Anthropic client; wire only if the
-					// active provider is Anthropic so we don't pin a 2nd key.
-					// llm.Unwrap walks through the no-dashes sanitizer
-					// wrapper so the type assertion finds the underlying
-					// *llm.Anthropic regardless of how many wrappers are in
-					// the stack.
-					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
-						summarizerModel := os.Getenv("LLM_SUMMARIZE_MODEL")
-						summarizer := llm.NewAnthropicSummarizer(a, summarizerModel)
-						compressor = memory.NewCompressor(p, embedder, memory.NewSummarizer(summarizer))
-						critic := llm.NewAnthropicCritic(a, os.Getenv("INFINITY_REFLECT_MODEL"))
-						reflector = memory.NewReflector(p, embedder, memory.NewCritic(critic))
+					// activeModel is the ONE adapter every auxiliary LLM task
+					// runs through (compression, reflection, prediction, intent,
+					// triage, skill merge/optimize, voyager drafting). It resolves
+					// the boss's CURRENTLY SET provider+model per call, so these
+					// run on the same brain as chat. This replaces the old
+					// per-feature `provider.(*llm.Anthropic)` gates that silently
+					// no-op'd whenever the brain wasn't Anthropic.
+					activeModel = &activeModelProvider{
+						registry: llmRegistry,
+						settings: settings.New(p),
+						fallback: provider,
 					}
+
+					// Opt 3: when skill_optimize produces a merge with flagged
+					// conflicts, hand (existing | proposed | merged) to the active
+					// model for an empirical pick instead of blindly trusting the
+					// merge.
+					proposals.SetMergeEvaluator(proposals.NewHaikuMergeEvaluator(activeModel, slog.Default()))
+
+					// Memory compression + reflection run on the boss's active
+					// model (no longer Anthropic-only). Without this they silently
+					// no-op under a non-Anthropic brain and observations never
+					// promote to memories — the core substrate going dark.
+					summarizer := llm.NewSummarizerFromDrafter(activeModel, os.Getenv("LLM_SUMMARIZE_MODEL"))
+					compressor = memory.NewCompressor(p, embedder, memory.NewSummarizer(summarizer))
+					critic := llm.NewCriticFromDrafter(activeModel, os.Getenv("INFINITY_REFLECT_MODEL"))
+					reflector = memory.NewReflector(p, embedder, memory.NewCritic(critic))
 
 					pipeline = hooks.NewPipeline()
 					hooks.RegisterDefaults(pipeline, p, store, embedder, compressor)
@@ -309,11 +316,10 @@ func serveCmd() *cobra.Command {
 					// curriculum. JEPA discipline without a generative world
 					// model - see core/internal/memory/predictions.go.
 					predictions := memory.NewPredictionStore(p)
-					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
-						hooks.NewPredictionRecorderWithDrafter(predictions, a, os.Getenv("INFINITY_PREDICTION_MODEL")).Register(pipeline)
-					} else {
-						hooks.NewPredictionRecorder(predictions).Register(pipeline)
-					}
+					// Predict-then-act drafts run on the boss's active model too,
+					// not Anthropic-only — so surprise scoring keeps feeding
+					// curiosity + Voyager curriculum under any brain.
+					hooks.NewPredictionRecorderWithDrafter(predictions, activeModel, os.Getenv("INFINITY_PREDICTION_MODEL")).Register(pipeline)
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					// LangSmith-style trace tools - read mem_turns +
@@ -321,17 +327,11 @@ func serveCmd() *cobra.Command {
 					// self-improve-from-finding skill can diagnose from
 					// real evidence, not summaries.
 					tools.RegisterTraceTools(registry, p)
-					// Pass the Haiku drafter so skill_optimize can MERGE
-					// the new body into any existing open candidate for
-					// the same parent_skill (one active draft per skill,
-					// per migration 039). nil-safe: without an Anthropic
-					// provider, skill_optimize still upserts but the
-					// merge degrades to "latest body wins."
-					var skillDrafter tools.SkillToolsDrafter
-					if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
-						skillDrafter = a
-					}
-					tools.RegisterSkillTools(registry, p, skillDrafter)
+					// skill_optimize MERGEs a new body into any existing open
+					// candidate for the same parent_skill (one active draft per
+					// skill, migration 039) using the boss's active model — no
+					// longer Anthropic-gated, so merging works under any brain.
+					tools.RegisterSkillTools(registry, p, activeModel)
 					tools.RegisterDashboardTools(registry, p)
 					// todo_write - the background agent's live checklist. Writes
 					// meta.todos onto the current background run's mem_runs row so
@@ -1057,9 +1057,12 @@ func serveCmd() *cobra.Command {
 						proactive.ExtensionAuthChecklist(extManager),
 					))
 				heartbeat.Start(cmd.Context())
-				if a, ok := provider.(*llm.Anthropic); ok {
+				// IntentFlow classification runs on the boss's active model
+				// (via activeModel) instead of being Anthropic-gated — so it
+				// actually fires under a ChatGPT/Gemini brain.
+				if activeModel != nil {
 					intentDetector = intent.New(intent.Config{
-						Provider: a,
+						Provider: activeModel,
 						Model:    os.Getenv("INFINITY_INTENT_MODEL"),
 					})
 				}
@@ -1088,14 +1091,14 @@ func serveCmd() *cobra.Command {
 				connectorPoller = connectors.NewPoller(pool, composioExec, pipeline)
 				// Wire the followup triager so newly-polled emails get
 				// metadata.intent / mode / classification chips populated
-				// asynchronously - same Gmail cron, one extra classify call
-				// per inbound message on the boss's SELECTED model (no
-				// hardcoded Haiku; INFINITY_TRIAGE_MODEL overrides). Anthropic
-				// provider required to construct (the unwrap below); other
-				// providers degrade to no-classification, row still lands.
-				if a, ok := llm.Unwrap(provider).(*llm.Anthropic); ok {
+				// asynchronously - same Gmail cron, one extra classify call per
+				// inbound message on the boss's ACTIVE model (via activeModel),
+				// finally honoring the "no hardcoded Haiku" intent regardless of
+				// brain. INFINITY_TRIAGE_MODEL is moot now (activeModel forces the
+				// set model), kept harmless.
+				if activeModel != nil {
 					connectorPoller.SetTriager(triage.New(triage.Config{
-						Provider: a,
+						Provider: activeModel,
 						Model:    os.Getenv("INFINITY_TRIAGE_MODEL"),
 					}))
 					fmt.Println("  connector poller: ready (composio tools.execute, +triage)")
@@ -1260,10 +1263,13 @@ func serveCmd() *cobra.Command {
 			// INFINITY_VOYAGER=true on the core service to enable.
 			var voyagerAPI *voyager.API
 			if pool != nil {
-				vAnthropic, _ := provider.(*llm.Anthropic)
+				// Voyager drafting routes through the shared activeModel, so skill
+				// extraction + verification run on the boss's currently set model
+				// like every other auxiliary task — never a pinned Haiku, never
+				// the content-less stub path under a non-Anthropic brain.
 				voyagerMgr := voyager.New(voyager.Config{
 					Pool:       pool,
-					LLM:        vAnthropic,
+					LLM:        activeModel,
 					Skills:     skillRegistry,
 					SkillsRoot: skillsRoot,
 				})

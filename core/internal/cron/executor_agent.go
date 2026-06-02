@@ -72,12 +72,12 @@ func (e *AgentExecutor) SetReauthHandler(p CronReauthParker, n CronBossNotifier)
 	e.notify = n
 }
 
-func (e *AgentExecutor) ExecuteJob(j Job) error {
+func (e *AgentExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	if e == nil || e.Loop == nil {
-		return errors.New("no agent loop wired into cron executor")
+		return RunSummary{}, errors.New("no agent loop wired into cron executor")
 	}
 	if j.Target == "" {
-		return errors.New("cron target prompt empty")
+		return RunSummary{}, errors.New("cron target prompt empty")
 	}
 
 	sessionID := j.Name + "-system"
@@ -117,14 +117,126 @@ func (e *AgentExecutor) ExecuteJob(j Job) error {
 						j.Name))
 				}
 				e.markCronSession(sessionID, j)
-				return nil
+				return RunSummary{Summary: "Paused — your model needs reconnecting. This run will finish automatically once it's healthy again."}, nil
 			}
 			// Park failed (no DB / store nil) — fall through to hard error.
 		}
-		return fmt.Errorf("cron run failed: %w", err)
+		// Even on a hard failure, salvage what the agent did before it broke so
+		// the run detail explains the failure in context, not just the raw error.
+		return e.summarizeRun(sessionID), fmt.Errorf("cron run failed: %w", err)
 	}
 	e.markCronSession(sessionID, j)
-	return nil
+	return e.summarizeRun(sessionID), nil
+}
+
+// summarizeRun reads the turns the agent just wrote for this cron session and
+// distills them into a boss-facing "what I did / how it went / outcome"
+// narrative for the mem_runs row. The richest source is the agent's own final
+// turn (its closing summary / assistant text) — that's the agent narrating the
+// run in its own words; we prepend a one-line stat header (turns · tool calls ·
+// any failures) so the card reads at a glance. Best-effort and nil-safe: if the
+// session isn't a UUID (legacy system_event sessions) or has no turns yet, we
+// return the zero RunSummary and the run still closes as it did before.
+func (e *AgentExecutor) summarizeRun(sessionID string) RunSummary {
+	if e == nil || e.Pool == nil || sessionID == "" {
+		return RunSummary{}
+	}
+	if _, err := uuid.Parse(sessionID); err != nil {
+		// system_event sessions use a non-UUID id ("<name>-system") and don't
+		// write UUID-keyed turns; nothing to read.
+		return RunSummary{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	rows, err := e.Pool.Query(ctx, `
+		SELECT COALESCE(assistant_text,''), COALESCE(summary,''),
+		       COALESCE(tool_call_count,0), COALESCE(status,''), COALESCE(error,'')
+		  FROM mem_turns
+		 WHERE session_id = $1::uuid
+		 ORDER BY started_at ASC
+	`, sessionID)
+	if err != nil {
+		return RunSummary{}
+	}
+	defer rows.Close()
+
+	var (
+		turns       int
+		toolCalls   int
+		failures    int
+		lastSummary string
+		lastText    string
+	)
+	for rows.Next() {
+		var assistant, summary, status, turnErr string
+		var tc int
+		if err := rows.Scan(&assistant, &summary, &tc, &status, &turnErr); err != nil {
+			return RunSummary{}
+		}
+		turns++
+		toolCalls += tc
+		if status == "errored" || strings.TrimSpace(turnErr) != "" {
+			failures++
+		}
+		if s := strings.TrimSpace(summary); s != "" {
+			lastSummary = s
+		}
+		if t := strings.TrimSpace(assistant); t != "" {
+			lastText = t
+		}
+	}
+	if turns == 0 {
+		return RunSummary{}
+	}
+
+	// The agent's own words carry "what it did / how it felt about it"; prefer
+	// the explicit turn summary, fall back to the final assistant message.
+	narrative := lastSummary
+	if narrative == "" {
+		narrative = lastText
+	}
+	narrative = clampNarrative(narrative, 600)
+
+	header := fmt.Sprintf("%d turn%s · %d tool call%s",
+		turns, plural(turns), toolCalls, plural(toolCalls))
+	if failures > 0 {
+		header += fmt.Sprintf(" · %d failed", failures)
+	}
+	summary := header
+	if narrative != "" {
+		summary += "\n" + narrative
+	}
+	return RunSummary{
+		Summary: summary,
+		Meta: map[string]any{
+			"session_id": sessionID,
+			"turns":      turns,
+			"tool_calls": toolCalls,
+			"failures":   failures,
+		},
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// clampNarrative trims an agent narrative to max runes on a word boundary so a
+// runaway closing message can't bloat the run row or the kanban card.
+func clampNarrative(s string, max int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	cut := string(r[:max])
+	if i := strings.LastIndexAny(cut, " \n"); i > max/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimSpace(cut) + "…"
 }
 
 // selfImproveJobNames are the cron jobs whose autonomous sessions are allowed

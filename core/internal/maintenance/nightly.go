@@ -236,6 +236,51 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 	return report, nil
 }
 
+// Summary renders the nightly-cognition Report as a boss-facing narrative for
+// the mem_runs row + the system surface — "what it did, op by op" instead of a
+// bare "ok". The first line is the headline (reflections / compression /
+// training / world-model); a second line itemises the sleep-time consolidation
+// ops that actually changed something, so the kanban card and /logs run detail
+// answer "what the fuck did it do" without digging into surface metadata. Any
+// failed stages are named last.
+func (r Report) Summary() string {
+	body := fmt.Sprintf(
+		"Reflected %d session(s), updated %d reflection chain(s), compressed %d observation(s), inserted %d training example(s), upserted %d world-model entit(ies).",
+		r.ReflectedSessions,
+		r.ReflectionChains,
+		r.CompressedObservations,
+		r.TrainingExamples.Inserted,
+		r.WorldModel.Upserted,
+	)
+	// Itemise the consolidation ops that did real work; stay silent on the ones
+	// that touched nothing so the line reads clean on quiet nights.
+	c := r.Consolidate
+	var ops []string
+	addOp := func(n int, label string) {
+		if n > 0 {
+			ops = append(ops, fmt.Sprintf("%d %s", n, label))
+		}
+	}
+	addOp(c.Decayed, "decayed")
+	addOp(c.HotReset, "hot-reset")
+	addOp(c.ClustersFound, "clusters")
+	addOp(c.ContradictionsFound, "contradictions resolved")
+	addOp(c.AssociativePruned, "edges pruned")
+	addOp(c.WeakAssocPurged, "weak edges purged")
+	addOp(c.ProceduralReweighted, "skills reweighted")
+	f := c.Forget
+	addOp(f.TTLExpired+f.LowValue+f.OverProjectCap+f.ObsTraceTrimmed+
+		f.ObsConversationTrimmed+f.LessonsTrimmed+f.OperationalTrimmed+f.GraphTrimmed,
+		"forgotten")
+	if len(ops) > 0 {
+		body += " Consolidation: " + strings.Join(ops, ", ") + "."
+	}
+	if errSummary := r.ErrorSummary(); errSummary != "" {
+		body += " Failed stages: " + errSummary + "."
+	}
+	return body
+}
+
 func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report) error {
 	if store == nil {
 		return nil
@@ -250,17 +295,7 @@ func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report
 		importance = 9
 		reason = "one or more nightly cognition stages failed"
 	}
-	body := fmt.Sprintf(
-		"Reflected %d session(s), updated %d reflection chain(s), compressed %d observation(s), inserted %d training example(s), upserted %d world-model entit(ies).",
-		report.ReflectedSessions,
-		report.ReflectionChains,
-		report.CompressedObservations,
-		report.TrainingExamples.Inserted,
-		report.WorldModel.Upserted,
-	)
-	if errSummary := report.ErrorSummary(); errSummary != "" {
-		body += " Failed stages: " + errSummary + "."
-	}
+	body := report.Summary()
 	_, err := store.Upsert(ctx, &surface.Item{
 		Surface:          "system",
 		Kind:             "insight",

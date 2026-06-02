@@ -261,6 +261,26 @@ func (h *Handle) Progress(ctx context.Context, fraction float32, label string) {
 	`, h.id, fraction, label)
 }
 
+// SetMeta shallow-merges the given key/values into mem_runs.meta, preserving
+// any keys already there (jsonb `||`). Used by the cron scheduler to stash an
+// executor's structured RunSummary.Meta (turn/tool counts, session id, the
+// nightly cognition report) so the run detail can render it. Best-effort +
+// nil-safe; an empty/nil map is a no-op.
+func (h *Handle) SetMeta(ctx context.Context, meta map[string]any) {
+	if h == nil || h.tracker == nil || h.tracker.pool == nil || h.id == "" || len(meta) == 0 {
+		return
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		return
+	}
+	_, _ = h.tracker.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET meta = COALESCE(meta,'{}'::jsonb) || $2::jsonb
+		 WHERE id = $1::uuid
+	`, h.id, string(b))
+}
+
 // SetMetaString sets meta.<key> = <value> (a string) on the run row,
 // preserving every other key in the JSONB blob. Used by the background agent
 // to record the current file being touched (meta.currentFile) alongside the

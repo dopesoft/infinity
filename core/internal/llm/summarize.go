@@ -138,6 +138,43 @@ func (s *AnthropicSummarizer) Summarize(ctx context.Context, hookName, rawText s
 	return parseFacts(collectText(msg2))
 }
 
+// drafterSummarizer is the provider-agnostic summarizer: identical prompt +
+// parser as AnthropicSummarizer, but it runs through any Drafter (→ the boss's
+// ACTIVE model) instead of the Anthropic SDK directly. This is what keeps
+// memory compression alive when the brain isn't Anthropic.
+type drafterSummarizer struct {
+	d     Drafter
+	model string
+}
+
+// NewSummarizerFromDrafter builds an active-model summarizer. model "" lets the
+// drafter pick (the active-model adapter ignores it and uses the boss's set
+// model anyway).
+func NewSummarizerFromDrafter(d Drafter, model string) *drafterSummarizer {
+	return &drafterSummarizer{d: d, model: model}
+}
+
+func (s *drafterSummarizer) Summarize(ctx context.Context, hookName, rawText string) (CompressedFacts, error) {
+	if s == nil || s.d == nil {
+		return CompressedFacts{}, errors.New("summarizer not configured")
+	}
+	prompt := fmt.Sprintf("Hook: %s\n\nObservation:\n%s", hookName, truncate(rawText, 4000))
+	raw, err := s.d.Draft(ctx, s.model, summarizeSystem, prompt, 1024)
+	if err != nil {
+		return CompressedFacts{}, err
+	}
+	if facts, err := parseFacts(raw); err == nil {
+		return facts, nil
+	}
+	// One stricter retry, mirroring AnthropicSummarizer's retry.
+	raw2, err := s.d.Draft(ctx, s.model, summarizeSystem,
+		prompt+"\n\nReturn ONLY the JSON object, nothing else.", 1024)
+	if err != nil {
+		return CompressedFacts{}, err
+	}
+	return parseFacts(raw2)
+}
+
 func parseFacts(raw string) (CompressedFacts, error) {
 	cleaned := strings.TrimSpace(raw)
 	cleaned = strings.TrimPrefix(cleaned, "```json")

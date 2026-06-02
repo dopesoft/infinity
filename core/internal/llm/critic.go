@@ -87,6 +87,47 @@ Rules:
 - "fix": include this object ONLY when the session hit a CONCRETE, CODE-FIXABLE blocker — a tool/recipe/config/routing bug that a code change would prevent (e.g. a tool returning 413 because it doesn't paginate, the agent invoking a skill through the wrong tool, a sub-agent using a model the account rejects). Name the real artifact in "title"/"change". OMIT "fix" entirely (or null) for user-side issues, transient outages (429/503), or sessions that went fine. This is how a noticed failure becomes a queued repair — only emit it when a code change is the actual remedy.
 - If the transcript is too short or boilerplate to judge, return critique="" and lessons=[] and no fix. Don't fabricate.`
 
+// drafterCritic is the provider-agnostic critic: identical prompt + parser as
+// AnthropicCritic, but it runs through any Drafter (→ the boss's ACTIVE model)
+// instead of the Anthropic SDK directly, so the reflection loop works when the
+// brain isn't Anthropic.
+type drafterCritic struct {
+	d     Drafter
+	model string
+}
+
+// NewCriticFromDrafter builds an active-model reflection critic.
+func NewCriticFromDrafter(d Drafter, model string) *drafterCritic {
+	return &drafterCritic{d: d, model: model}
+}
+
+func (c *drafterCritic) CritiqueSession(ctx context.Context, transcript string) (ReflectionResult, error) {
+	if c == nil || c.d == nil {
+		return ReflectionResult{}, errors.New("critic not configured")
+	}
+	prompt := fmt.Sprintf("Session transcript:\n\n%s", truncate(transcript, 12000))
+	raw, err := c.d.Draft(ctx, c.model, critiqueSystem, prompt, 1200)
+	if err != nil {
+		return ReflectionResult{}, err
+	}
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ReflectionResult{}, nil
+	}
+	var out ReflectionResult
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return ReflectionResult{}, fmt.Errorf("parse critique: %w", err)
+	}
+	if out.Kind == "" {
+		out.Kind = "session_critique"
+	}
+	return out, nil
+}
+
 func (c *AnthropicCritic) CritiqueSession(ctx context.Context, transcript string) (ReflectionResult, error) {
 	if c == nil || c.a == nil {
 		return ReflectionResult{}, errors.New("critic not configured")

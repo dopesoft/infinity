@@ -1690,28 +1690,49 @@ function WorkBody({ w }: { w: WorkItem }) {
   if (w.startedAt) scheduleEntries.push({ k: "started", v: clockTime(w.startedAt) });
   if (w.finishedAt) scheduleEntries.push({ k: "finished", v: clockTime(w.finishedAt) });
 
+  // Details grid carries what's deliberately kept OFF the readable card title:
+  // which subsystem is behind this (Voyager / GEPA / Schedule / …) and the raw
+  // technical handle (auto-generated skill name, cron schedule, watch type).
+  const detailEntries: { k: string; v: React.ReactNode }[] = [];
+  if (w.engine) detailEntries.push({ k: "engine", v: w.engine });
+  if (w.ref) detailEntries.push({ k: "reference", v: <span className="break-all font-mono">{w.ref}</span> });
+
   return (
     <div className="space-y-3 pt-3">
       <ModalChips>
         <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
           {w.column}
         </span>
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-          {w.kind.replace("_", " ")}
-        </span>
+        {w.engine ? (
+          <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
+            {w.engine}
+          </span>
+        ) : null}
         {w.durationMs ? (
           <span className="font-mono">· {formatDuration(w.durationMs)}</span>
         ) : null}
       </ModalChips>
 
-      {/* Subtitle either renders as the danger-toned Error card (cron
-          failure / workflow step error) or as a neutral Output card.
-          Either way it goes inside a ModalSection so the padding,
-          overflow, and break-word discipline come from the primitive
-          rather than a hand-rolled <p>. */}
-      {w.subtitle ? (
-        <ModalSection label={isError ? "Error" : "Output"} tone={isError ? "error" : "default"}>
+      {/* The narrative the run wrote ("what it did / how it went / outcome").
+          ModalPre preserves the header + body line break the executor built. */}
+      {w.summary ? (
+        <ModalSection label="Report">
+          <ModalPre>{w.summary}</ModalPre>
+        </ModalSection>
+      ) : null}
+
+      {/* Subtitle is the short status line. When it leads with "error" it's a
+          failure message and gets the danger-toned card; otherwise it's neutral
+          context. Suppressed when it would just echo the summary's header. */}
+      {w.subtitle && !(w.summary && !isError) ? (
+        <ModalSection label={isError ? "Error" : "Status"} tone={isError ? "error" : "default"}>
           <ModalPre mono={isError}>{w.subtitle}</ModalPre>
+        </ModalSection>
+      ) : null}
+
+      {detailEntries.length > 0 ? (
+        <ModalSection label="Details">
+          <ModalDl entries={detailEntries} />
         </ModalSection>
       ) : null}
 

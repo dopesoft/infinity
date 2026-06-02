@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -286,18 +287,84 @@ func (m *Manager) draftAndStoreSkill(ctx context.Context, sessionID string, stat
 	return nil
 }
 
+// insertProposalStub is the no-LLM fallback: we can't draft a real SKILL.md
+// without the model, but we MUST NOT surface a content-less "used N tools"
+// mystery. A tool count is not a reason — the boss's actual request is. So the
+// stub leads with what the session was trying to do (the first user prompt) and
+// names the tools it used, and says plainly that drafting is pending the model.
+// That makes the card answer "what pattern?" instead of demanding the boss go
+// spelunking. The real reasoning still arrives when the LLM drafts; this is the
+// honest placeholder, not a fake conclusion.
 func (m *Manager) insertProposalStub(ctx context.Context, sessionID string, stats sessionStats) error {
+	ask := firstUserPrompt(stats)
+	tools := sortedToolNames(stats.DistinctTools, 8)
+
+	desc := "Repeatable task — pending skill drafting"
+	if ask != "" {
+		desc = truncate("Repeatable task: "+oneLine(ask), 120)
+	}
+
+	var reason strings.Builder
+	if ask != "" {
+		fmt.Fprintf(&reason, "What you were doing: %s\n", truncate(oneLine(ask), 300))
+	}
+	if len(tools) > 0 {
+		fmt.Fprintf(&reason, "Tools used: %s\n", strings.Join(tools, ", "))
+	}
+	fmt.Fprintf(&reason, "(%d tools · %.0fs · %d failures.) The model was offline, so Jarvis flagged the session but couldn't draft the skill yet — review to capture it or dismiss.",
+		len(stats.DistinctTools), stats.DurationSec, stats.ToolFailures)
+
 	_, err := m.pool.Exec(ctx, `
 		INSERT INTO mem_skill_proposals
 		  (name, description, reasoning, skill_md, risk_level, importance, importance_reason, status)
-		VALUES ($1, $2, $3, $4, 'low', 70, 'Repeated tool/session pattern detected; review for reusable automation value.', 'candidate')
+		VALUES ($1, $2, $3, $4, 'low', 70, 'Repeatable task flagged from a session; review for reusable automation value.', 'candidate')
 	`,
 		fmt.Sprintf("session_pattern_%d", time.Now().Unix()),
-		"Skill-worthy session detected (LLM unavailable for drafting)",
-		fmt.Sprintf("Session %s used %d distinct tools across %.0fs with %d failures.",
-			sessionID, len(stats.DistinctTools), stats.DurationSec, stats.ToolFailures),
+		desc,
+		truncate(reason.String(), 500),
 		"")
 	return err
+}
+
+// firstUserPrompt returns the session's opening ask — the intent that makes a
+// session interesting, vs the tool count that doesn't.
+func firstUserPrompt(stats sessionStats) string {
+	for _, p := range stats.UserPrompts {
+		if s := strings.TrimSpace(p); s != "" {
+			return s
+		}
+	}
+	// Fall back to the first UserPromptSubmit observation if UserPrompts wasn't
+	// populated for some reason.
+	for _, o := range stats.Observations {
+		if o.Hook == "UserPromptSubmit" {
+			if s := strings.TrimSpace(o.RawText); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// sortedToolNames returns the distinct tool names (stable order), capped, with a
+// "+N more" tail so the card names what was actually used instead of a number.
+func sortedToolNames(m map[string]int, cap int) []string {
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	if cap > 0 && len(names) > cap {
+		extra := len(names) - cap
+		names = append(names[:cap], fmt.Sprintf("+%d more", extra))
+	}
+	return names
+}
+
+// oneLine collapses whitespace/newlines so a multi-line prompt reads as one line
+// on a card.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func buildTranscript(stats sessionStats) string {

@@ -11,6 +11,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/settings"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
@@ -53,11 +54,14 @@ func consolidateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("compression needs an LLM provider: %w", err)
 				}
-				a, ok := provider.(*llm.Anthropic)
-				if !ok {
-					return errors.New("compression currently requires LLM_PROVIDER=anthropic")
+				// Route compression through the boss's active model (Settings),
+				// same as the server — no longer Anthropic-only.
+				am := &activeModelProvider{
+					registry: llm.BuildRegistry(llm.NewOAuthStore(pool)),
+					settings: settings.New(pool),
+					fallback: provider,
 				}
-				summarizer := llm.NewAnthropicSummarizer(a, os.Getenv("LLM_SUMMARIZE_MODEL"))
+				summarizer := llm.NewSummarizerFromDrafter(am, os.Getenv("LLM_SUMMARIZE_MODEL"))
 				comp := memory.NewCompressor(pool, embed.FromEnv(), memory.NewSummarizer(summarizer))
 
 				processed, err := comp.CompressNewObservations(ctx, batch)

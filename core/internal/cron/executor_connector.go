@@ -25,20 +25,22 @@ func NewConnectorExecutor(p *connectors.Poller) *ConnectorExecutor {
 	return &ConnectorExecutor{Poller: p}
 }
 
-func (e *ConnectorExecutor) ExecuteJob(j Job) error {
+func (e *ConnectorExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	if e == nil || e.Poller == nil {
-		return errors.New("no connector poller wired into connector executor")
+		return RunSummary{}, errors.New("no connector poller wired into connector executor")
 	}
 	if len(j.TargetConfig) == 0 || string(j.TargetConfig) == "{}" {
-		return errors.New("connector_poll job missing target_config")
+		return RunSummary{}, errors.New("connector_poll job missing target_config")
 	}
 	var cfg connectors.PollConfig
 	if err := json.Unmarshal(j.TargetConfig, &cfg); err != nil {
-		return fmt.Errorf("decode target_config: %w", err)
+		return RunSummary{}, fmt.Errorf("decode target_config: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	// Connector polls are pure plumbing with no narrative to add beyond the
+	// ok/error the scheduler already records.
 	_, err := e.Poller.Poll(ctx, j.Name, cfg)
-	return err
+	return RunSummary{}, err
 }

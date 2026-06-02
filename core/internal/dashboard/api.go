@@ -312,6 +312,18 @@ type WorkItem struct {
 	Title        string     `json:"title"`
 	Subtitle     string     `json:"subtitle,omitempty"`
 	Column       string     `json:"column"` // queued|running|awaiting|done
+	// Summary is the run's narrative ("what it did / how it went / outcome"),
+	// sourced from mem_runs.result_summary. Populated for finished cron runs so
+	// the Done card and the ObjectViewer show a report instead of a bare "ok".
+	Summary string `json:"summary,omitempty"`
+	// Engine names the subsystem behind the item ("Voyager", "GEPA", "Schedule",
+	// "Sentinel", "Skill", "Approval", "Code") so the card title can stay plain
+	// and readable while the detail view shows what's actually driving it.
+	Engine string `json:"engine,omitempty"`
+	// Ref is the raw technical identifier (auto-generated skill name, cron
+	// schedule, watch type) kept off the card title but shown in the detail for
+	// anyone who needs the exact handle.
+	Ref          string     `json:"ref,omitempty"`
 	ScheduledFor *time.Time `json:"scheduledFor,omitempty"`
 	StartedAt    *time.Time `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
@@ -1407,8 +1419,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			out = append(out, WorkItem{
 				ID:           "cron-q-" + id,
 				Kind:         "cron_run",
-				Title:        name,
+				Title:        humanizeName(name),
 				Subtitle:     sub,
+				Engine:       "Schedule",
+				Ref:          name,
 				Column:       "queued",
 				ScheduledFor: &nra,
 				DetailHref:   "/cron",
@@ -1417,9 +1431,13 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		cronQRows.Close()
 	}
 
-	// Voyager skill proposals waiting for verifier / decision.
+	// Voyager skill proposals waiting for verifier / decision. We pull the
+	// candidate's own description + reasoning so the card actually explains what
+	// it IS ("Skill-worthy session detected — used 5 tools across 81s") instead
+	// of the meaningless "verify session_pattern_1780423167 / verifier queued".
 	propRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, name, COALESCE(parent_skill, '')
+		SELECT id::text, name, COALESCE(parent_skill, ''),
+		       COALESCE(description, ''), COALESCE(reasoning, '')
 		FROM mem_skill_proposals
 		WHERE status = 'candidate'
 		ORDER BY created_at DESC
@@ -1427,22 +1445,32 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	`, perCol)
 	if err == nil {
 		for propRows.Next() {
-			var id, name, parent string
-			if err := propRows.Scan(&id, &name, &parent); err != nil {
+			var id, name, parent, description, reasoning string
+			if err := propRows.Scan(&id, &name, &parent, &description, &reasoning); err != nil {
 				propRows.Close()
 				return nil, err
 			}
-			title := "Voyager: verify " + name
-			sub := "verifier queued"
+			// Title = the human-authored description when there is one (that's
+			// what the candidate is); fall back to a plain label. The engine
+			// (Voyager vs GEPA) and the raw auto-generated name live in
+			// Engine/Ref for the detail, never the title.
+			engine := "Voyager"
+			title := "New skill to review"
 			if parent != "" {
-				title = "Voyager: patch " + parent
-				sub = "GEPA proposal · " + name
+				title = "Improve skill: " + humanizeName(parent)
+				engine = "GEPA"
+			}
+			if description != "" {
+				title = description
 			}
 			out = append(out, WorkItem{
 				ID:         "vop-" + id,
 				Kind:       "voyager_opt",
 				Title:      title,
-				Subtitle:   sub,
+				Subtitle:   "awaiting review",
+				Summary:    reasoning, // the specifics: which session, tools, failures
+				Engine:     engine,
+				Ref:        name,
 				Column:     "queued",
 				DetailHref: "/skills",
 			})
@@ -1471,8 +1499,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			out = append(out, WorkItem{
 				ID:         "sent-" + id,
 				Kind:       "sentinel",
-				Title:      "Sentinel: " + name,
-				Subtitle:   watch + " · cooldown " + humanSeconds(cooldown),
+				Title:      humanizeName(name),
+				Subtitle:   "watching · cooldown " + humanSeconds(cooldown),
+				Engine:     "Sentinel",
+				Ref:        watch,
 				Column:     "running",
 				DetailHref: "/cron",
 			})
@@ -1502,8 +1532,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			out = append(out, WorkItem{
 				ID:         "srun-" + id,
 				Kind:       "skill_run",
-				Title:      "Skill: " + name,
-				Subtitle:   "via " + trigger,
+				Title:      humanizeName(name),
+				Subtitle:   "running · via " + trigger,
+				Engine:     "Skill",
+				Ref:        name,
 				Column:     "running",
 				StartedAt:  &s,
 				DetailHref: "/skills",
@@ -1546,6 +1578,8 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				Kind:       "trust",
 				Title:      title,
 				Subtitle:   sub,
+				Engine:     "Approval",
+				Ref:        tool,
 				Column:     "awaiting",
 				StartedAt:  &c,
 				DetailHref: "/trust",
@@ -1586,6 +1620,8 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				Kind:       "code_proposal",
 				Title:      title,
 				Subtitle:   sub,
+				Engine:     "Code",
+				Ref:        path,
 				Column:     "awaiting",
 				StartedAt:  &c,
 				DetailHref: "/code-proposals",
@@ -1595,12 +1631,24 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	}
 
 	// ── done: today's completed cron + skill runs ────────────────────
+	// LEFT JOIN LATERAL the cron's most recent finished mem_runs row to pull the
+	// narrative the executor wrote (result_summary). That's what turns the Done
+	// card from "ok" into "Reflected 3 sessions, compressed 41 observations…" /
+	// the agent's own closing words.
 	cronDoneRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, name, last_run_at, last_run_status, last_run_duration_ms
-		FROM mem_crons
-		WHERE last_run_at IS NOT NULL
-		  AND last_run_at >= date_trunc('day', NOW())
-		ORDER BY last_run_at DESC
+		SELECT c.id::text, c.name, c.last_run_at, c.last_run_status, c.last_run_duration_ms,
+		       COALESCE(r.result_summary, '')
+		FROM mem_crons c
+		LEFT JOIN LATERAL (
+			SELECT result_summary
+			FROM mem_runs
+			WHERE kind = 'cron' AND target_id = c.id::text AND ended_at IS NOT NULL
+			ORDER BY started_at DESC
+			LIMIT 1
+		) r ON TRUE
+		WHERE c.last_run_at IS NOT NULL
+		  AND c.last_run_at >= date_trunc('day', NOW())
+		ORDER BY c.last_run_at DESC
 		LIMIT $1
 	`, perCol)
 	if err == nil {
@@ -1610,8 +1658,9 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				lastRunAt  time.Time
 				status     *string
 				durationMs *int
+				summary    string
 			)
-			if err := cronDoneRows.Scan(&id, &name, &lastRunAt, &status, &durationMs); err != nil {
+			if err := cronDoneRows.Scan(&id, &name, &lastRunAt, &status, &durationMs, &summary); err != nil {
 				cronDoneRows.Close()
 				return nil, err
 			}
@@ -1623,8 +1672,11 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			item := WorkItem{
 				ID:         "cron-d-" + id,
 				Kind:       "cron_run",
-				Title:      name,
+				Title:      humanizeName(name),
 				Subtitle:   sub,
+				Summary:    summary,
+				Engine:     "Schedule",
+				Ref:        name,
 				Column:     "done",
 				FinishedAt: &fa,
 				DetailHref: "/cron",
@@ -1667,8 +1719,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			out = append(out, WorkItem{
 				ID:         "srun-d-" + id,
 				Kind:       "skill_run",
-				Title:      "Skill: " + name,
+				Title:      humanizeName(name),
 				Subtitle:   sub,
+				Engine:     "Skill",
+				Ref:        name,
 				Column:     "done",
 				FinishedAt: &fa,
 				DurationMs: &d,
@@ -1729,8 +1783,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			item := &WorkItem{
 				ID:            "wf-" + id,
 				Kind:          "workflow",
-				Title:         "Workflow: " + name,
+				Title:         humanizeName(name),
 				Subtitle:      sub,
+				Engine:        "Workflow",
+				Ref:           name,
 				Column:        column,
 				StartedAt:     startedAt,
 				FinishedAt:    finishedAt,
@@ -1788,6 +1844,45 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	}
 
 	return out, nil
+}
+
+// humanizeName turns a machine identifier (kebab/snake case like
+// "nightly-cognition" or "inbox_triage_hardened") into a readable card title
+// ("Nightly cognition", "Inbox triage hardened"). A trailing all-digit token —
+// the unix-stamp suffix on auto-generated voyager names like
+// "session_pattern_1780423167" — is dropped because it reads like a science
+// experiment and adds nothing on the card; the exact id is preserved on
+// WorkItem.Ref for the detail view. Returns "" for empty input.
+func humanizeName(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	s = strings.NewReplacer("-", " ", "_", " ", ".", " ").Replace(s)
+	fields := strings.Fields(s)
+	// Drop a trailing pure-number token (timestamp/id noise).
+	if n := len(fields); n > 1 && isAllDigits(fields[n-1]) {
+		fields = fields[:n-1]
+	}
+	s = strings.Join(fields, " ")
+	if s == "" {
+		return ""
+	}
+	// Sentence case: capitalize the first letter, leave the rest as the author
+	// wrote it (so "self improve" stays lowercase, acronyms keep their case).
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // humanSeconds renders a small seconds value as "Ns" / "Nm" / "Nh".

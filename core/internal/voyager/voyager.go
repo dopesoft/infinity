@@ -35,7 +35,6 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/eval"
-	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -47,9 +46,20 @@ var infoLog = log.New(os.Stdout, "", log.LstdFlags)
 
 // Manager is the single entry point for the auto-skill loop. Construct one in
 // serve.go, register hooks against it, and mount its HTTP routes.
+// Drafter is the one-shot completion capability Voyager needs for extraction +
+// verification. *llm.Anthropic satisfies it directly, but the production wiring
+// passes an adapter that routes every draft through the boss's CURRENTLY SET
+// model (Studio Settings → provider+model) — Anthropic, OpenAI, or Google — so
+// skill drafting uses the same brain as chat instead of a pinned vendor/Haiku.
+// Keeping it an interface (not *llm.Anthropic) is what unblocks that; see the
+// activeModelDrafter wiring in cmd/infinity/serve.go.
+type Drafter interface {
+	Draft(ctx context.Context, model, system, userPrompt string, maxTokens int64) (string, error)
+}
+
 type Manager struct {
 	pool       *pgxpool.Pool
-	llm        *llm.Anthropic
+	llm        Drafter
 	skillsReg  *skills.Registry
 	skillsRoot string
 	enabled    bool
@@ -123,7 +133,7 @@ type tripletCounter struct {
 // without it the manager falls back to discovery-only and skips Haiku passes.
 type Config struct {
 	Pool       *pgxpool.Pool
-	LLM        *llm.Anthropic
+	LLM        Drafter
 	Skills     *skills.Registry
 	SkillsRoot string
 }

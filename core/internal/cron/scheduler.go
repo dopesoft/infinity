@@ -141,19 +141,23 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		ctx, cancel := context.WithTimeout(context.Background(), jobTimeout(j))
 		defer cancel()
 
-		// runs.Track books a mem_runs row so the Studio shows a live
-		// spinner that persists across navigation / focus / refresh.
-		// Errors from fn propagate to the post-run mem_crons UPDATE
-		// below unchanged - runs is purely observability.
+		// Begin/Finish (not Track) so the executor's RunSummary lands on the
+		// mem_runs row: result_summary gets the "what I did / how it went"
+		// narrative and meta gets the structured detail. That's what turns the
+		// kanban "Done" card and the /logs run detail from a bare "ok" into an
+		// actual report. The row also drives the live spinner that persists
+		// across navigation / focus / refresh. Errors still propagate to the
+		// post-run mem_crons UPDATE below unchanged.
 		var execErr error
-		_ = runs.Track(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled, func(ctx context.Context) error {
-			if s.executor != nil {
-				execErr = s.executor.ExecuteJob(j)
-			} else {
-				execErr = errors.New("no executor configured")
-			}
-			return execErr
-		})
+		var summary RunSummary
+		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
+		if s.executor != nil {
+			summary, execErr = s.executor.ExecuteJob(j)
+		} else {
+			execErr = errors.New("no executor configured")
+		}
+		handle.SetMeta(ctx, summary.Meta)
+		handle.Finish(ctx, execErr, summary.Summary)
 
 		end := time.Now().UTC()
 		status := "ok"
@@ -272,18 +276,20 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	}
 	start := time.Now().UTC()
 	var execErr error
-	// runs.Track exposes "this cron is running" to every device on the
-	// network via mem_runs + realtime. Survives the user navigating away
-	// from /cron or closing the tab entirely. See CLAUDE.md →
+	var summary RunSummary
+	// Begin/Finish exposes "this cron is running" to every device on the
+	// network via mem_runs + realtime (survives navigating away from /cron or
+	// closing the tab) AND persists the executor's narrative + meta onto the
+	// row so the manual run reads as a report, not a bare ok. See CLAUDE.md →
 	// "Server-tracked progress".
-	_ = runs.Track(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual, func(ctx context.Context) error {
-		if s.executor != nil {
-			execErr = s.executor.ExecuteJob(j)
-		} else {
-			execErr = errors.New("no executor configured")
-		}
-		return execErr
-	})
+	handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual)
+	if s.executor != nil {
+		summary, execErr = s.executor.ExecuteJob(j)
+	} else {
+		execErr = errors.New("no executor configured")
+	}
+	handle.SetMeta(ctx, summary.Meta)
+	handle.Finish(ctx, execErr, summary.Summary)
 	end := time.Now().UTC()
 	status := "ok (manual)"
 	if execErr != nil {

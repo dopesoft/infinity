@@ -257,6 +257,15 @@ export type WorkItem = {
   title: string;
   subtitle?: string;
   column: WorkColumn;
+  // the run's narrative ("what it did / how it went / outcome") from
+  // mem_runs.result_summary - populated for finished cron runs so the Done
+  // card and ObjectViewer read as a report, not a bare "ok".
+  summary?: string;
+  // engine = the subsystem behind the item ("Voyager", "GEPA", "Schedule",
+  // "Sentinel", "Skill", …) and ref = the raw technical id. Both stay OFF the
+  // card title (readable plain English) and show in the detail view.
+  engine?: string;
+  ref?: string;
   scheduledFor?: string;
   startedAt?: string;
   finishedAt?: string;
