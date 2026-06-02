@@ -176,19 +176,19 @@ type CalendarEvent struct {
 	// (alias if set, else discovered identity email, else empty). Lets
 	// the Upcoming card render an "kai@dopesoft.io" chip without the
 	// client having to load /api/calendar/accounts separately.
-	AccountLabel   string          `json:"accountLabel,omitempty"`
-	Classification string          `json:"classification"`
-	Prep           []PrepItem      `json:"prep"`
+	AccountLabel   string     `json:"accountLabel,omitempty"`
+	Classification string     `json:"classification"`
+	Prep           []PrepItem `json:"prep"`
 }
 
 type FollowUp struct {
-	ID         string    `json:"id"`
-	Source     string    `json:"source"`
-	Account    string    `json:"account,omitempty"`
-	From       string    `json:"from"`
-	Subject    string    `json:"subject,omitempty"`
-	Preview    string    `json:"preview"`
-	Body       string    `json:"body,omitempty"`
+	ID      string `json:"id"`
+	Source  string `json:"source"`
+	Account string `json:"account,omitempty"`
+	From    string `json:"from"`
+	Subject string `json:"subject,omitempty"`
+	Preview string `json:"preview"`
+	Body    string `json:"body,omitempty"`
 	// Summary is the agent's triage summary (urgency + what it's about),
 	// rendered in the ObjectViewer's "Context" pane ABOVE the email. For
 	// surface-origin rows this is the agent-authored body; connector-poll
@@ -307,11 +307,11 @@ type ActivityDismiss struct {
 // running (in-flight), awaiting (needs boss decision), done (finished
 // today).
 type WorkItem struct {
-	ID           string     `json:"id"`
-	Kind         string     `json:"kind"` // cron_run|voyager_opt|sentinel|skill_run|trust|code_proposal|curiosity|memory_op|reflection
-	Title        string     `json:"title"`
-	Subtitle     string     `json:"subtitle,omitempty"`
-	Column       string     `json:"column"` // queued|running|awaiting|done
+	ID       string `json:"id"`
+	Kind     string `json:"kind"` // cron_run|voyager_opt|sentinel|skill_run|trust|code_proposal|curiosity|memory_op|reflection
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Column   string `json:"column"` // queued|running|awaiting|done
 	// Summary is the run's narrative ("what it did / how it went / outcome"),
 	// sourced from mem_runs.result_summary. Populated for finished cron runs so
 	// the Done card and the ObjectViewer show a report instead of a bare "ok".
@@ -1376,13 +1376,34 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 // Column policy:
 //   - queued    → enabled crons with next_run_at > now, plus voyager
 //     skill proposals still awaiting verifier decision.
-//   - running   → enabled sentinels (always watching), plus skill runs
-//     in-flight (started but not ended).
+//   - running   → enabled sentinels (always watching), plus any mem_runs row
+//     still in-flight (cron agent turns, skill invokes, heartbeat, voyager).
 //   - awaiting  → pending trust contracts + candidate code proposals.
 //     These also appear in Approvals - that's intentional;
 //     the Kanban is a *status board*, the Approvals card is
 //     the decision surface.
 //   - done      → today's completed cron runs + completed skill runs.
+//
+// runWorkKind maps a mem_runs.kind to the Kanban WorkItem kind, its detail
+// link, and a human engine label. Keeps the generic "running" query (which
+// reads mem_runs of any kind) rendering correct icons + deep links per source.
+func runWorkKind(kind string) (workKind, href, engine string) {
+	switch kind {
+	case "cron":
+		return "cron_run", "/cron", "Schedule"
+	case "skill":
+		return "skill_run", "/skills", "Skill"
+	case "sentinel":
+		return "sentinel", "/cron", "Sentinel"
+	case "voyager":
+		return "voyager_opt", "/skills", "Voyager"
+	case "heartbeat":
+		return "memory_op", "/heartbeat", "Heartbeat"
+	default:
+		return "skill_run", "/logs", "Agent"
+	}
+}
+
 func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	if a.Pool == nil {
 		return nil, errors.New("no pool")
@@ -1510,38 +1531,44 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		sentRows.Close()
 	}
 
-	// Skill runs that started but haven't ended yet (in-flight). Cap at
-	// last hour so a crashed never-ended row doesn't leak into the UI
-	// forever.
-	skillRunningRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, skill_name, trigger_source, started_at
-		FROM mem_skill_runs
-		WHERE ended_at IS NULL AND started_at >= NOW() - INTERVAL '1 hour'
+	// In-flight work of EVERY kind — cron agent turns, skill invokes, heartbeat
+	// scans, voyager runs. mem_runs is the generic run tracker (a row sits at
+	// status='running' from Begin until Finish), so it catches everything, not
+	// just skills. The old query read mem_skill_runs ONLY, which missed cron /
+	// agent runs entirely (they book mem_runs, never mem_skill_runs) — that's
+	// why the Running column always looked empty even while a cron was firing.
+	// 1h cap so a row orphaned by a crash (swept to 'error' at boot anyway)
+	// can't linger.
+	runningRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, kind, COALESCE(NULLIF(label,''), kind) AS label, source, started_at
+		FROM mem_runs
+		WHERE status = 'running' AND started_at >= NOW() - INTERVAL '1 hour'
 		ORDER BY started_at DESC
 		LIMIT $1
 	`, perCol)
 	if err == nil {
-		for skillRunningRows.Next() {
-			var id, name, trigger string
+		for runningRows.Next() {
+			var id, kind, label, source string
 			var startedAt time.Time
-			if err := skillRunningRows.Scan(&id, &name, &trigger, &startedAt); err != nil {
-				skillRunningRows.Close()
+			if err := runningRows.Scan(&id, &kind, &label, &source, &startedAt); err != nil {
+				runningRows.Close()
 				return nil, err
 			}
+			wkind, href, engine := runWorkKind(kind)
 			s := startedAt
 			out = append(out, WorkItem{
-				ID:         "srun-" + id,
-				Kind:       "skill_run",
-				Title:      humanizeName(name),
-				Subtitle:   "running · via " + trigger,
-				Engine:     "Skill",
-				Ref:        name,
+				ID:         "run-" + id,
+				Kind:       wkind,
+				Title:      humanizeName(label),
+				Subtitle:   "running · via " + source,
+				Engine:     engine,
+				Ref:        label,
 				Column:     "running",
 				StartedAt:  &s,
-				DetailHref: "/skills",
+				DetailHref: href,
 			})
 		}
-		skillRunningRows.Close()
+		runningRows.Close()
 	}
 
 	// ── awaiting: trust contracts + code proposals ────────────────────

@@ -148,6 +148,12 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 			continue
 		}
 		s.entries[id] = entryID
+		// Persist the next fire so the dashboard "Queued" column (which filters
+		// enabled crons on next_run_at > now) actually shows upcoming runs.
+		// Without this, next_run_at stays NULL forever and nothing is queued.
+		if next, nerr := s.nextFire(j.Schedule); nerr == nil {
+			_, _ = s.pool.Exec(ctx, `UPDATE mem_crons SET next_run_at = $2 WHERE id = $1::uuid`, id, next)
+		}
 	}
 	return nil
 }
@@ -206,14 +212,21 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 			// detail (raw + human) still lives on the mem_runs row.
 			status = "error: " + errs.Humanize(execErr).Title
 		}
+		// Advance next_run_at to the upcoming fire so the dashboard "Queued"
+		// column rolls forward instead of showing a stale/elapsed time.
+		var nextPtr *time.Time
+		if next, nerr := s.nextFire(j.Schedule); nerr == nil {
+			nextPtr = &next
+		}
 		_, _ = s.pool.Exec(ctx, `
 			UPDATE mem_crons SET
 			  last_run_at = $2,
 			  last_run_status = $3,
 			  last_run_duration_ms = $4,
-			  failure_count = CASE WHEN $5 THEN failure_count + 1 ELSE 0 END
+			  failure_count = CASE WHEN $5 THEN failure_count + 1 ELSE 0 END,
+			  next_run_at = COALESCE($6, next_run_at)
 			 WHERE id = $1::uuid
-		`, j.ID, end, status, end.Sub(start).Milliseconds(), execErr != nil)
+		`, j.ID, end, status, end.Sub(start).Milliseconds(), execErr != nil, nextPtr)
 	}
 }
 
@@ -371,6 +384,18 @@ func (s *Scheduler) SimulateNext(schedule string, count int) ([]time.Time, error
 		now = next
 	}
 	return out, nil
+}
+
+// nextFire computes the next time a schedule fires, in the scheduler's
+// configured location. Persisted to mem_crons.next_run_at so the dashboard
+// "Queued" column (which filters enabled crons on next_run_at > now) can show
+// upcoming runs. Returns an error only for an unparseable schedule.
+func (s *Scheduler) nextFire(schedule string) (time.Time, error) {
+	sched, err := s.parser.Parse(schedule)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return sched.Next(time.Now().In(s.Location())), nil
 }
 
 // jsonOrEmpty marshals v or returns "[]" / "{}" depending on the kind.
