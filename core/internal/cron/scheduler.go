@@ -23,23 +23,61 @@ type Scheduler struct {
 	executor Executor
 	cron     *robfig.Cron
 	parser   robfig.Parser
+	loc      *time.Location
 
 	mu      sync.Mutex
 	entries map[string]robfig.EntryID // job ID → robfig entry
+}
+
+// resolveLocation picks the timezone the scheduler interprets cron
+// expressions in. ONE convention across the whole product: the boss's local
+// frame, NOT UTC. We read the SAME env the LocalTimeProvider uses
+// (INFINITY_USER_TIMEZONE, default America/Chicago) so "9am" in a cron means
+// 9am on the boss's wall clock — and it stays 9am across DST because the
+// location, not a fixed offset, drives the schedule. A bad IANA name falls
+// back to UTC rather than crashing boot.
+//
+// Before this, robfig was hardcoded to time.UTC, so "0 8 * * *" fired at 8am
+// UTC (≈2-3am Central, drifting with DST) while Studio rendered every
+// timestamp in browser-local time — the exact "some say UTC, some say
+// Central" inconsistency the boss called out. Anchoring the engine to the
+// boss's zone is what makes a single displayed convention honest.
+func resolveLocation() *time.Location {
+	tz := strings.TrimSpace(os.Getenv("INFINITY_USER_TIMEZONE"))
+	if tz == "" {
+		tz = "America/Chicago"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 func New(pool *pgxpool.Pool, exec Executor) *Scheduler {
 	parser := robfig.NewParser(
 		robfig.Minute | robfig.Hour | robfig.Dom | robfig.Month | robfig.Dow | robfig.Descriptor,
 	)
-	c := robfig.New(robfig.WithParser(parser), robfig.WithLocation(time.UTC))
+	loc := resolveLocation()
+	c := robfig.New(robfig.WithParser(parser), robfig.WithLocation(loc))
 	return &Scheduler{
 		pool:     pool,
 		executor: exec,
 		cron:     c,
 		parser:   parser,
+		loc:      loc,
 		entries:  make(map[string]robfig.EntryID),
 	}
+}
+
+// Location returns the timezone the scheduler interprets schedules in, so
+// callers (and the HTTP layer) can label times for the boss in the same
+// frame the engine fires them.
+func (s *Scheduler) Location() *time.Location {
+	if s == nil || s.loc == nil {
+		return time.UTC
+	}
+	return s.loc
 }
 
 // Start kicks off the underlying cron and loads every enabled row.
@@ -317,7 +355,11 @@ func (s *Scheduler) SimulateNext(schedule string, count int) ([]time.Time, error
 	if count <= 0 {
 		count = 3
 	}
-	now := time.Now().UTC()
+	// Iterate in the scheduler's location so the previewed fire times land on
+	// the boss's wall clock (robfig advances the schedule relative to the
+	// passed time's location). The returned times carry that zone; the API
+	// serialises them RFC3339 with the correct offset.
+	now := time.Now().In(s.Location())
 	out := make([]time.Time, 0, count)
 	for i := 0; i < count; i++ {
 		next := sched.Next(now)

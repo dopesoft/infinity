@@ -28,6 +28,9 @@ import {
 import { useRealtime } from "@/lib/realtime/provider";
 import { useTabParam } from "@/lib/useTabParam";
 import { RunIndicator } from "@/lib/runs";
+import { CronDetailModal } from "@/components/cron/CronDetailModal";
+import { SentinelDetailModal } from "@/components/cron/SentinelDetailModal";
+import { cronKindMeta, watchTypeMeta, casualTime, localTzAbbrev, CRON_KIND_META } from "@/components/cron/cronMeta";
 
 const CRON_TABS = ["cron", "sentinel"] as const;
 type CronTab = (typeof CRON_TABS)[number];
@@ -70,6 +73,8 @@ function CronSection() {
   const [items, setItems] = useState<CronJobDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  // Tapping a row opens the full cron (Dialog on desktop, Drawer on mobile).
+  const [selected, setSelected] = useState<CronJobDTO | null>(null);
 
   // Run state is server-tracked via mem_runs (see CLAUDE.md →
   // "Server-tracked progress"). RunIndicator subscribes to the row's
@@ -121,10 +126,22 @@ function CronSection() {
           </p>
         ) : (
           items.map((j) => (
-            <li key={j.id} className="rounded-xl border bg-card px-3 py-2">
+            <li
+              key={j.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => setSelected(j)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setSelected(j);
+                }
+              }}
+              className="cursor-pointer rounded-xl border bg-card px-3 py-2 transition-colors hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <code className="truncate font-mono text-foreground">{j.name}</code>
-                <span className="flex items-center gap-1 font-mono">
+                <span className="flex shrink-0 items-center gap-1 font-mono">
                   <Clock className="size-3" aria-hidden />
                   {j.schedule}
                 </span>
@@ -134,18 +151,18 @@ function CronSection() {
               )}
               <p className="mt-1 line-clamp-2 break-words text-sm">{j.target}</p>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                <Badge variant="outline" className="font-mono uppercase">{j.job_kind}</Badge>
+                <Badge variant="outline">{cronKindMeta(j.job_kind).label}</Badge>
                 {j.enabled ? (
                   <Badge variant="success">enabled</Badge>
                 ) : (
                   <Badge variant="secondary">disabled</Badge>
                 )}
                 {j.last_run_at && (
-                  <span className="font-mono text-muted-foreground" suppressHydrationWarning>
-                    last {new Date(j.last_run_at).toLocaleString()}
+                  <span className="text-muted-foreground" suppressHydrationWarning>
+                    last {casualTime(j.last_run_at)}
                   </span>
                 )}
-                <div className="ml-auto flex items-center gap-1">
+                <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   <RunIndicator
                     kind="cron"
                     targetId={j.id}
@@ -156,7 +173,8 @@ function CronSection() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    onClick={async () => {
+                    onClick={async (e) => {
+                      e.stopPropagation();
                       if (confirm(`Delete cron "${j.name}"?`)) {
                         await deleteCron(j.id);
                         void load();
@@ -172,6 +190,14 @@ function CronSection() {
           ))
         )}
       </ul>
+
+      <CronDetailModal
+        cron={selected}
+        open={selected !== null}
+        onOpenChange={(v) => {
+          if (!v) setSelected(null);
+        }}
+      />
     </div>
   );
 }
@@ -185,6 +211,9 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
   const [previewNext, setPreviewNext] = useState<string[] | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Card mounts only on the client (gated by showCreate), so reading the
+  // browser tz here is hydration-safe — there is no SSR pass for this subtree.
+  const localTz = localTzAbbrev();
 
   async function preview() {
     setPreviewError(null);
@@ -228,6 +257,9 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
           onChange={(e) => setScheduleNatural(e.target.value)}
           className="sm:col-span-2"
         />
+        <p className="text-[11px] text-muted-foreground sm:col-span-2">
+          Schedules run on your local time ({localTz}). e.g. <code className="font-mono">0 9 * * 1-5</code> = 9am every weekday.
+        </p>
         <textarea
           placeholder="prompt or instructions for the agent"
           value={target}
@@ -235,25 +267,25 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
           rows={3}
           className="rounded-md border bg-muted/40 p-2 text-sm sm:col-span-2"
         />
-        <div className="flex items-center gap-2 sm:col-span-2">
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="radio"
-              name="kind"
-              checked={kind === "isolated_agent_turn"}
-              onChange={() => setKind("isolated_agent_turn")}
-            />
-            isolated_agent_turn
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="radio"
-              name="kind"
-              checked={kind === "system_event"}
-              onChange={() => setKind("system_event")}
-            />
-            system_event
-          </label>
+        <div className="flex flex-col gap-2 sm:col-span-2">
+          {(["isolated_agent_turn", "system_event"] as const).map((k) => (
+            <label
+              key={k}
+              className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs has-[:checked]:border-foreground/40 has-[:checked]:bg-muted/40"
+            >
+              <input
+                type="radio"
+                name="kind"
+                className="mt-0.5"
+                checked={kind === k}
+                onChange={() => setKind(k)}
+              />
+              <span className="min-w-0">
+                <span className="font-medium text-foreground">{CRON_KIND_META[k].label}</span>
+                <span className="mt-0.5 block text-muted-foreground">{CRON_KIND_META[k].blurb}</span>
+              </span>
+            </label>
+          ))}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -267,13 +299,18 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
       </div>
       {previewError && <p className="text-xs text-danger">{previewError}</p>}
       {previewNext && (
-        <ul className="ml-4 list-disc space-y-0.5 text-xs">
-          {previewNext.map((t, i) => (
-            <li key={i} className="font-mono" suppressHydrationWarning>
-              {new Date(t).toLocaleString()}
-            </li>
-          ))}
-        </ul>
+        <div className="text-xs">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            Next fires · {localTz}
+          </p>
+          <ul className="ml-4 mt-1 list-disc space-y-0.5">
+            {previewNext.map((t, i) => (
+              <li key={i} suppressHydrationWarning>
+                {casualTime(t)}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -283,6 +320,7 @@ function SentinelSection() {
   const [items, setItems] = useState<SentinelDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [selected, setSelected] = useState<SentinelDTO | null>(null);
 
   async function load() {
     setLoading(true);
@@ -315,22 +353,34 @@ function SentinelSection() {
       )}
       <ul className="flex flex-col gap-2">
         {items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {loading ? "Loading…" : "No sentinels yet."}
-          </p>
+          loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            <SentinelEmptyState />
+          )
         ) : (
           items.map((s) => (
-            <li key={s.id} className="rounded-xl border bg-card px-3 py-2">
+            <li
+              key={s.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => setSelected(s)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setSelected(s);
+                }
+              }}
+              className="cursor-pointer rounded-xl border bg-card px-3 py-2 transition-colors hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <code className="truncate font-mono text-foreground">{s.name}</code>
-                <Badge variant="outline" className="font-mono uppercase">{s.watch_type}</Badge>
+                <Badge variant="outline" className="shrink-0">{watchTypeMeta(s.watch_type).label}</Badge>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 cooldown {s.cooldown_seconds}s · fired {s.fire_count}×{" "}
                 {s.last_triggered_at && (
-                  <span suppressHydrationWarning>
-                    · last {new Date(s.last_triggered_at).toLocaleString()}
-                  </span>
+                  <span suppressHydrationWarning>· last {casualTime(s.last_triggered_at)}</span>
                 )}
               </p>
               <div className="mt-1 flex items-center gap-1.5">
@@ -343,7 +393,8 @@ function SentinelSection() {
                   size="icon"
                   variant="ghost"
                   className="ml-auto"
-                  onClick={async () => {
+                  onClick={async (e) => {
+                    e.stopPropagation();
                     if (confirm(`Delete sentinel "${s.name}"?`)) {
                       await deleteSentinel(s.id);
                       void load();
@@ -358,6 +409,56 @@ function SentinelSection() {
           ))
         )}
       </ul>
+
+      <SentinelDetailModal
+        sentinel={selected}
+        open={selected !== null}
+        onOpenChange={(v) => {
+          if (!v) setSelected(null);
+        }}
+      />
+    </div>
+  );
+}
+
+/* What the boss sees on an empty Sentinels tab. Answers "how do I even use
+ * this?" in-product: explains the cron-vs-sentinel distinction and points at
+ * the easy path — just ask Jarvis, who now has sentinel_create (the manual
+ * JSON form below is the power-user escape hatch). */
+function SentinelEmptyState() {
+  const examples = [
+    "Ping me when my unread email tops 20.",
+    "Watch dopesoft.io and tell me if it goes down.",
+    "When a memory mentions “invoice”, run my invoice-filer skill.",
+  ];
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="flex items-center gap-2">
+        <Zap className="size-4 text-muted-foreground" aria-hidden />
+        <h3 className="text-sm font-medium text-foreground">No sentinels yet</h3>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        A sentinel watches for an <span className="text-foreground">event</span> and acts when it
+        happens — the event-driven sibling of a cron, which fires at a fixed{" "}
+        <span className="text-foreground">time</span>. When it trips, it runs a skill.
+      </p>
+      <p className="mt-3 text-xs font-medium text-foreground">
+        Easiest way: just ask Jarvis in chat —
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1.5">
+        {examples.map((e) => (
+          <li
+            key={e}
+            className="rounded-md border bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground"
+          >
+            “{e}”
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-[11px] text-muted-foreground">
+        He picks the right watch type and wires it up. Or use{" "}
+        <span className="text-foreground">New sentinel</span> above to set one up by hand.
+      </p>
     </div>
   );
 }
@@ -398,6 +499,10 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
 
   return (
     <div className="space-y-2 rounded-xl border bg-card p-3">
+      <p className="text-[11px] text-muted-foreground">
+        Tip: you can skip this form — ask Jarvis “ping me when …” in chat and he&apos;ll set it up.
+        This manual form is for wiring the watch config + action chain by hand.
+      </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <Input placeholder="name (kebab-case)" value={name} onChange={(e) => setName(e.target.value)} />
         <select

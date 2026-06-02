@@ -1277,7 +1277,14 @@ export type CronJobDTO = {
   name: string;
   schedule: string;
   schedule_natural?: string;
-  job_kind: "system_event" | "isolated_agent_turn";
+  // All four kinds the Go scheduler accepts (core/internal/cron/types.go).
+  // system_task / connector_poll are system-managed; the create form only
+  // offers the two agent kinds, but the list/detail must render any of them.
+  job_kind:
+    | "system_event"
+    | "isolated_agent_turn"
+    | "connector_poll"
+    | "system_task";
   target: string;
   enabled: boolean;
   max_retries: number;

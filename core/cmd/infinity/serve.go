@@ -1249,11 +1249,21 @@ func serveCmd() *cobra.Command {
 				dispatcher := sentinel.SkillDispatcher{
 					Inner:   sentinel.LogDispatcher{},
 					Invoker: skillInvoker{runner: skillRunner},
+					// agent_turn actions run through the same loop crons use, so
+					// a sentinel can do ANYTHING in natural language (notify the
+					// boss, run a recipe skill, draft + save). This is what makes
+					// "ping me when X" work end-to-end.
+					Agent: sentinelAgentRunner{loop: loop},
 				}
 				sentinelMgr = sentinel.NewManager(pool, dispatcher)
 				_ = sentinelMgr.Reload(cmd.Context())
 				sentinelMgr.Start(cmd.Context())
 				sentinelAPI = sentinel.NewAPI(sentinelMgr)
+				// Give Jarvis the chat path to stand up watchers ("ping me when
+				// X") - the event-driven sibling of cron_create_*. Without this
+				// the only way to make a sentinel was hand-writing JSON in the
+				// Studio form (Rule #1: the agent ASSEMBLES the capability).
+				tools.RegisterSentinelTools(registry, sentinelManagerAdapter{m: sentinelMgr})
 				fmt.Printf("  cron+sentinel: ready (cron=%v, sentinels=%d)\n",
 					cronScheduler != nil, len(sentinelMgr.List()))
 			}
@@ -1940,6 +1950,62 @@ func (a cronSchedulerAdapter) RunOnce(ctx context.Context, j tools.CronJob) erro
 }
 func (a cronSchedulerAdapter) Reload(ctx context.Context) error {
 	return a.s.Reload(ctx)
+}
+
+// sentinelManagerAdapter bridges *sentinel.Manager → tools.SentinelManager,
+// translating between sentinel.Sentinel and tools.SentinelRow so the tools
+// package doesn't import the sentinel package (mirrors cronSchedulerAdapter).
+type sentinelManagerAdapter struct{ m *sentinel.Manager }
+
+func (a sentinelManagerAdapter) toRow(s sentinel.Sentinel) tools.SentinelRow {
+	return tools.SentinelRow{
+		ID: s.ID, Name: s.Name, WatchType: string(s.WatchType),
+		WatchConfig: s.WatchConfig, ActionChain: s.ActionChain,
+		CooldownSeconds: s.CooldownSeconds, Enabled: s.Enabled,
+		FireCount: s.FireCount, LastTriggeredAt: s.LastTriggeredAt,
+	}
+}
+
+func (a sentinelManagerAdapter) Upsert(ctx context.Context, r tools.SentinelRow) (string, error) {
+	return a.m.Upsert(ctx, sentinel.Sentinel{
+		ID: r.ID, Name: r.Name, WatchType: sentinel.WatchType(r.WatchType),
+		WatchConfig: r.WatchConfig, ActionChain: r.ActionChain,
+		CooldownSeconds: r.CooldownSeconds, Enabled: r.Enabled,
+	})
+}
+func (a sentinelManagerAdapter) Delete(ctx context.Context, id string) error {
+	return a.m.Delete(ctx, id)
+}
+func (a sentinelManagerAdapter) List() []tools.SentinelRow {
+	in := a.m.List()
+	out := make([]tools.SentinelRow, len(in))
+	for i, s := range in {
+		out[i] = a.toRow(s)
+	}
+	return out
+}
+func (a sentinelManagerAdapter) Trigger(ctx context.Context, id string, payload map[string]any) error {
+	return a.m.Trigger(ctx, id, payload)
+}
+
+// sentinelAgentRunner lets a sentinel's "agent_turn" action run a prompt
+// through the shared agent loop - the same path cron's isolated_agent_turn
+// uses. Empty model string → Loop.Run resolves the boss's active model. The
+// RunEvent channel is drained (the turn's effects land via tools + memory
+// hooks, not a UI stream), mirroring cron/executor_agent.go.
+type sentinelAgentRunner struct{ loop *agent.Loop }
+
+func (a sentinelAgentRunner) RunAgentTurn(ctx context.Context, sessionID, prompt string) error {
+	if a.loop == nil {
+		return fmt.Errorf("no agent loop configured for sentinel agent_turn")
+	}
+	out := make(chan agent.RunEvent, 64)
+	go func() {
+		for range out {
+			// drain
+		}
+	}()
+	return a.loop.Run(ctx, sessionID, prompt, "", nil, out)
 }
 
 // skillInvoker bridges sentinel.SkillInvoker → skills.Runner. Tiny shim so
