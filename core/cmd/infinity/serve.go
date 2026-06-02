@@ -1741,29 +1741,75 @@ func makeBridgeToolVisibility(router *bridge.Router, prefs tools.PreferenceFetch
 		return nil
 	}
 	return func(ctx context.Context, sessionID string) map[string]struct{} {
+		// ALWAYS-hidden floor (Mac AND Cloud): the claude_code__* verbs that
+		// duplicate a native Infinity capability or are Claude-Code harness
+		// internals. These must never be offered to Infinity's brain — the Mac
+		// CLI's `Skill` tool can't run an Infinity skill, its `WebSearch`/`Cron*`/
+		// `TodoWrite` don't touch Infinity's memory or surfaces, etc. Exposing
+		// them just lets the model grab the wrong tool (e.g. claude_code__Skill
+		// for inbox-triage, which dead-ends on the Mac). A prompt saying "don't"
+		// is not enough — gpt-5.4 ignored exactly that instruction in the triage
+		// cron — so we make them physically invisible. Real coding verbs
+		// (Bash/Read/Edit/Write/Grep/Glob/LS/MultiEdit/NotebookEdit) stay.
+		hidden := map[string]struct{}{}
+		for n := range claudeCodeMetaTools {
+			hidden[n] = struct{}{}
+		}
+
 		pref := bridge.PrefAuto
 		if prefs != nil {
 			pref = prefs(ctx, sessionID)
 		}
 		active, _, err := router.For(ctx, pref)
 		if err != nil || active == nil {
-			return nil
+			return hidden // bridge indeterminate → still hide the meta footguns
 		}
 		if active.Name() != bridge.KindCloud {
-			return nil
+			return hidden // Mac session → hide only the meta footguns; coding verbs stay
 		}
-		// Hide the entire claude_code__* family. Names match the
-		// MCP-registered tool ids in tools/defaults.go DefaultLoadedTools
-		// plus the dormant catalog (Agent/Grep/Glob/LS/NotebookEdit/etc).
-		// We use a name-prefix match via the registry's catalog rather
-		// than a hardcoded list - that way any new claude_code__X tool
-		// added later inherits the filter automatically.
-		hidden := map[string]struct{}{}
+		// Cloud-routed session: hide the ENTIRE claude_code__* family so the
+		// model can't accidentally edit the Mac filesystem while looking at the
+		// Cloud workspace volume.
 		for _, n := range allClaudeCodeToolNames {
 			hidden[n] = struct{}{}
 		}
 		return hidden
 	}
+}
+
+// claudeCodeMetaTools are claude_code__* verbs that DUPLICATE a native Infinity
+// capability (skills, web, cron, todos, planning, scheduling, delegation,
+// notifications) or are pure Claude-Code harness internals. They are hidden in
+// EVERY session — Mac included — because the Mac CLI's versions don't integrate
+// with Infinity's memory / skills / surfaces and only cause the model to grab
+// the wrong tool. The canonical bug: the model called claude_code__Skill to run
+// the inbox-triage skill (the Mac can't see Infinity skills) and shelled out via
+// claude_code's harness instead of using skills_invoke + composio. Infinity's
+// natives are the only correct path: skills_invoke, web_search, http_fetch,
+// the cron_* tools, watch_until, delegate. Real file/coding verbs are NOT here —
+// they stay available for actual coding work.
+var claudeCodeMetaTools = map[string]struct{}{
+	"claude_code__Skill":                {}, // → skills_invoke
+	"claude_code__WebSearch":            {}, // → web_search
+	"claude_code__WebFetch":             {}, // → http_fetch
+	"claude_code__ToolSearch":           {}, // → load_tools / tool_search
+	"claude_code__TodoWrite":            {}, // → native task/surface tools
+	"claude_code__AskUserQuestion":      {}, // → just ask in chat
+	"claude_code__Agent":                {}, // → delegate
+	"claude_code__CronCreate":           {}, // → native cron_* tools
+	"claude_code__CronDelete":           {},
+	"claude_code__CronList":             {},
+	"claude_code__ScheduleWakeup":       {}, // → watch_until
+	"claude_code__RemoteTrigger":        {},
+	"claude_code__Monitor":              {},
+	"claude_code__TaskOutput":           {},
+	"claude_code__TaskStop":             {},
+	"claude_code__PushNotification":     {}, // → native notify
+	"claude_code__ShareOnboardingGuide": {},
+	"claude_code__EnterPlanMode":        {},
+	"claude_code__ExitPlanMode":         {},
+	"claude_code__EnterWorktree":        {},
+	"claude_code__ExitWorktree":         {},
 }
 
 // allClaudeCodeToolNames enumerates the claude_code__* tool ids the MCP
