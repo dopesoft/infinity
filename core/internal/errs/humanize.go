@@ -83,13 +83,15 @@ func HumanizeString(raw string) Human {
 		h.Impact = "That step couldn't finish. Usually it's email: too many or too-large messages pulled in one grab."
 		h.Action = "I need to page through it in smaller batches instead of all at once. The triage recipe now does that."
 
-	// Rate-limit / overload / transient upstream. Not the boss's fault, self-heals.
-	case contains(s, "429", "rate limit", "rate_limit", "too many requests", "quota", "overloaded", "server_is_overloaded", "503", "upstream connect error", "connection termination", "temporarily unavailable"):
+	// Rate-limit / overload / transient upstream (incl. provider-side 5xx
+	// server_error). Not the boss's fault, self-heals — and the openai_oauth
+	// path now retries these automatically before they ever surface here.
+	case contains(s, "429", "rate limit", "rate_limit", "too many requests", "quota", "overloaded", "server_is_overloaded", "server_error", "server had an error", "internal server error", "internal_error", "500", "502", "503", "504", "upstream connect error", "connection termination", "temporarily unavailable", "try again"):
 		h.Category = CatRateLimit
-		h.Title = "The model provider was swamped"
-		h.Summary = "It rate-limited me or had a brief hiccup on their end. Nothing wrong with your setup."
-		h.Impact = "This run didn't go through, but it usually clears on its own in a few minutes."
-		h.Action = "Give it a minute and I'll retry, or switch me to another model in Settings if it keeps happening."
+		h.Title = "The model provider hit a snag"
+		h.Summary = "Your model's provider rate-limited me or had a brief server hiccup on their end. Nothing wrong with your setup or your settings."
+		h.Impact = "This run didn't go through, but it clears on its own — and I now retry these automatically a few times before giving up."
+		h.Action = "If it keeps happening, it's on the provider's side; switch me to another model in Settings to route around it."
 
 	// Database / schema. Surface the migrations hint for the classic 42P01.
 	case contains(s, "sqlstate", "pq:", "pgx", "connection refused", "relation", "does not exist", "violates", "deadlock"):

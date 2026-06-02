@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -92,15 +93,15 @@ func debugLogSeenEvent(t string) {
 //     SSE with `event: <name>` + `data: <json>` pairs; we parse the small
 //     subset we care about and discard the rest.
 type OpenAIOAuth struct {
-	store          *OAuthStore
-	model          string
-	httpClient     *http.Client
-	apiBase        string
-	authBase       string
-	clientID       string
-	scopes         string
-	redirectURI    string
-	refreshLead    time.Duration
+	store       *OAuthStore
+	model       string
+	httpClient  *http.Client
+	apiBase     string
+	authBase    string
+	clientID    string
+	scopes      string
+	redirectURI string
+	refreshLead time.Duration
 
 	// refreshMu serializes refresh attempts so a burst of concurrent turns
 	// doesn't trigger N parallel /oauth/token calls that all rotate the
@@ -111,13 +112,13 @@ type OpenAIOAuth struct {
 const (
 	// Codex CLI's public OAuth client. Override via OPENAI_OAUTH_CLIENT_ID
 	// when OpenAI rotates this identifier (rare but it has happened).
-	defaultOpenAIClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
-	defaultOpenAIAuthBase    = "https://auth.openai.com"
-	defaultOpenAIAPIBase     = "https://chatgpt.com/backend-api/codex"
+	defaultOpenAIClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+	defaultOpenAIAuthBase = "https://auth.openai.com"
+	defaultOpenAIAPIBase  = "https://chatgpt.com/backend-api/codex"
 	// Scopes must include the connectors scopes Codex CLI requests -
 	// without them the issuer routes you to the platform project picker
 	// instead of the subscription-org consent screen.
-	defaultOpenAIScopes = "openid profile email offline_access api.connectors.read api.connectors.invoke"
+	defaultOpenAIScopes      = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 	defaultOpenAIRedirectURI = "http://localhost:1455/auth/callback"
 	defaultOpenAIRefreshLead = 2 * time.Minute
 )
@@ -368,9 +369,9 @@ func decodeIDTokenClaims(idToken string) (sub, email string) {
 		}
 	}
 	var claims struct {
-		Sub               string `json:"sub"`
-		Email             string `json:"email"`
-		ChatGPTAccountID  string `json:"https://api.openai.com/auth/chatgpt_account_id"`
+		Sub              string `json:"sub"`
+		Email            string `json:"email"`
+		ChatGPTAccountID string `json:"https://api.openai.com/auth/chatgpt_account_id"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return "", ""
@@ -399,13 +400,11 @@ func (o *OpenAIOAuth) Stream(
 		return resp, err
 	}
 
-	// Respect the configured model. The boss's Settings choice (or
-	// the per-call override from a sub-agent) is the truth. We only
-	// translate tier *nicknames* like "haiku" / "sonnet" that come
-	// from cross-provider routing - real model ids pass through to
-	// OpenAI untouched, even if the OAuth path doesn't serve them.
-	// The retry-on-400 below catches genuine "model not supported"
-	// errors and falls back to o.model; we do not second-guess.
+	// Respect the configured model. The boss's Settings choice (or the
+	// per-call override from a sub-agent) is the truth. We only translate tier
+	// *nicknames* like "haiku" / "sonnet"; real model ids pass through to
+	// OpenAI untouched. The retry-on-400 below catches genuine "model not
+	// supported" errors and falls back once.
 	effectiveModel := o.model
 	if model != "" {
 		if nickname := tierNicknameToCodex(model); nickname != "" {
@@ -415,58 +414,218 @@ func (o *OpenAIOAuth) Stream(
 		}
 	}
 
-	httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
+	// Reliability: a single transient provider hiccup — HTTP 5xx/429/529, a
+	// dropped connection, or an in-stream `server_error` event — must NOT tank
+	// the whole turn (the bug that failed the boss's inbox-triage cron on a
+	// `server_error` at sequence_number:1). We re-issue with exponential
+	// backoff as long as NOTHING has streamed to the caller yet, so a retry can
+	// never duplicate output. Deterministic code, never model-driven. Tunables:
+	// LLM_OPENAI_OAUTH_RETRIES (default 3 retries → 4 attempts) and
+	// LLM_OPENAI_OAUTH_RETRY_BACKOFF (default 600ms, doubling, capped 8s).
+	maxAttempts := transientMaxAttempts()
+	backoff := transientBackoffBase()
+	triedModelFallback := false
+	var lastErr error
 
-	// Self-heal: if Codex rejected the model, retry ONCE with a known-served
-	// fallback so an upstream bad guess never tanks the whole turn. Two cases:
-	//   1. A per-call override was rejected (nickname like "haiku", deprecated
-	//      id, or a model the plan doesn't expose) → retry with the configured
-	//      default o.model.
-	//   2. The configured DEFAULT ITSELF was rejected (e.g. gpt-5-codex isn't
-	//      exposed on the boss's account/plan) → the old code couldn't recover
-	//      because the override==default guard was false. This is exactly the
-	//      delegate failure on 2026-06-01 ("'gpt-5-codex' model is not
-	//      supported"): a sub-agent inherited the default, the account rejected
-	//      it, and there was no fallback. Now we retry with oauthFallbackModel()
-	//      (codex-mini-latest by default; override via LLM_OPENAI_OAUTH_FALLBACK_MODEL).
-	if attemptErr == nil && httpResp.StatusCode == 400 {
-		raw, _ := io.ReadAll(httpResp.Body)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
+
+		// Network-level failure (no usable response).
+		if attemptErr != nil {
+			lastErr = attemptErr
+			if attempt < maxAttempts && isTransientNetErr(attemptErr) && ctx.Err() == nil {
+				unknownOAIEventLog.Printf("openai_oauth: transient network error, retry %d/%d after %s: %v",
+					attempt, maxAttempts-1, backoff, attemptErr)
+				if !sleepBackoff(ctx, &backoff) {
+					break
+				}
+				continue
+			}
+			emit(out, StreamEvent{Kind: StreamError, Err: attemptErr.Error()})
+			return resp, attemptErr
+		}
+
+		// Self-heal: Codex rejected the model id (400). Retry ONCE with a
+		// known-served fallback — orthogonal to transient retry (a different
+		// model, not the same request again). Covers a per-call override the
+		// plan doesn't expose AND the configured default itself being rejected
+		// (oauthFallbackModel(), override via LLM_OPENAI_OAUTH_FALLBACK_MODEL).
+		if httpResp.StatusCode == 400 && !triedModelFallback {
+			raw, _ := io.ReadAll(httpResp.Body)
+			httpResp.Body.Close()
+			bodyStr := string(raw)
+			if looksLikeModelRejection(bodyStr) {
+				fallback := o.model
+				if fallback == "" || fallback == effectiveModel {
+					fallback = oauthFallbackModel()
+				}
+				if fallback != "" && fallback != effectiveModel {
+					unknownOAIEventLog.Printf("openai_oauth: model %q rejected, retrying with %q (reason: %s)",
+						effectiveModel, fallback, truncateOAuth(bodyStr, 200))
+					effectiveModel = fallback
+					triedModelFallback = true
+					continue
+				}
+			}
+			statusErr := fmt.Errorf("openai_oauth: status=400 body=%s", truncateOAuth(bodyStr, 400))
+			emit(out, StreamEvent{Kind: StreamError, Err: statusErr.Error()})
+			return resp, statusErr
+		}
+
+		// Transient HTTP status — retry the same request after backoff.
+		if httpResp.StatusCode/100 != 2 {
+			raw, _ := io.ReadAll(httpResp.Body)
+			httpResp.Body.Close()
+			statusErr := fmt.Errorf("openai_oauth: status=%d body=%s", httpResp.StatusCode, truncateOAuth(string(raw), 400))
+			lastErr = statusErr
+			if attempt < maxAttempts && isTransientStatus(httpResp.StatusCode) && ctx.Err() == nil {
+				unknownOAIEventLog.Printf("openai_oauth: transient status %d, retry %d/%d after %s",
+					httpResp.StatusCode, attempt, maxAttempts-1, backoff)
+				if !sleepBackoff(ctx, &backoff) {
+					break
+				}
+				continue
+			}
+			emit(out, StreamEvent{Kind: StreamError, Err: statusErr.Error()})
+			return resp, statusErr
+		}
+
+		// 2xx — consume the SSE stream.
+		r, sErr := readResponsesSSE(httpResp.Body, out)
 		httpResp.Body.Close()
-		bodyStr := string(raw)
-		if looksLikeModelRejection(bodyStr) {
-			fallback := o.model
-			if fallback == "" || fallback == effectiveModel {
-				fallback = oauthFallbackModel()
+		if sErr != nil {
+			var rt *retryableStreamError
+			if errors.As(sErr, &rt) {
+				// Clean transient failure mid-stream (no content emitted yet).
+				lastErr = errors.New(rt.msg)
+				if attempt < maxAttempts && ctx.Err() == nil {
+					unknownOAIEventLog.Printf("openai_oauth: transient stream error, retry %d/%d after %s: %s",
+						attempt, maxAttempts-1, backoff, truncateOAuth(rt.msg, 160))
+					if !sleepBackoff(ctx, &backoff) {
+						break
+					}
+					continue
+				}
+				// Retries exhausted: emit the terminal events readResponsesSSE
+				// deferred to us so the caller's stream still closes cleanly.
+				emit(out, StreamEvent{Kind: StreamError, Err: rt.msg})
+				emit(out, StreamEvent{Kind: StreamComplete, StopReason: "error"})
+				return r, lastErr
 			}
-			if fallback != "" && fallback != effectiveModel {
-				unknownOAIEventLog.Printf(
-					"openai_oauth: model %q rejected, retrying with %q (reason: %s)",
-					effectiveModel, fallback, truncateOAuth(bodyStr, 200),
-				)
-				httpResp, attemptErr = o.attemptStream(ctx, tok, fallback, system, messages, tools)
-			} else {
-				httpResp.Body = io.NopCloser(bytes.NewReader(raw))
-			}
-		} else {
-			// Re-emit the original body for the non-retry path below.
-			httpResp.Body = io.NopCloser(bytes.NewReader(raw))
+			// Non-retryable stream error: readResponsesSSE already emitted the
+			// terminal events; pass it straight through.
+			return r, sErr
+		}
+		return r, nil
+	}
+
+	// Fell out of the loop — typically ctx cancelled during a backoff sleep.
+	if lastErr == nil {
+		lastErr = errors.New("openai_oauth: exhausted transient retries")
+	}
+	emit(out, StreamEvent{Kind: StreamError, Err: lastErr.Error()})
+	emit(out, StreamEvent{Kind: StreamComplete, StopReason: "error"})
+	return resp, lastErr
+}
+
+// --- Transient-failure retry helpers ----------------------------------------
+
+// retryableStreamError marks an in-stream provider error that occurred BEFORE
+// any content was emitted, so Stream can re-issue the request without
+// duplicating output. readResponsesSSE returns this instead of emitting
+// terminal events; Stream owns the retry-or-surface decision.
+type retryableStreamError struct{ msg string }
+
+func (e *retryableStreamError) Error() string { return e.msg }
+
+// transientMaxAttempts is total attempts (1 + retries). LLM_OPENAI_OAUTH_RETRIES
+// sets the retry count; default 3 → 4 attempts.
+func transientMaxAttempts() int {
+	if v := strings.TrimSpace(os.Getenv("LLM_OPENAI_OAUTH_RETRIES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n + 1
 		}
 	}
+	return 4
+}
 
-	if attemptErr != nil {
-		emit(out, StreamEvent{Kind: StreamError, Err: attemptErr.Error()})
-		return resp, attemptErr
+// transientBackoffBase is the first backoff delay; doubles each retry, capped
+// at maxTransientBackoff. Override via LLM_OPENAI_OAUTH_RETRY_BACKOFF.
+func transientBackoffBase() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("LLM_OPENAI_OAUTH_RETRY_BACKOFF")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
 	}
-	defer httpResp.Body.Close()
+	return 600 * time.Millisecond
+}
 
-	if httpResp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(httpResp.Body)
-		err := fmt.Errorf("openai_oauth: status=%d body=%s", httpResp.StatusCode, truncateOAuth(string(raw), 400))
-		emit(out, StreamEvent{Kind: StreamError, Err: err.Error()})
-		return resp, err
+const maxTransientBackoff = 8 * time.Second
+
+// sleepBackoff waits *d (then doubles it, capped) unless ctx is cancelled
+// first. Returns false if ctx ended during the wait so the caller stops.
+func sleepBackoff(ctx context.Context, d *time.Duration) bool {
+	t := time.NewTimer(*d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		if *d *= 2; *d > maxTransientBackoff {
+			*d = maxTransientBackoff
+		}
+		return true
+	case <-ctx.Done():
+		return false
 	}
+}
 
-	return readResponsesSSE(httpResp.Body, out)
+// isTransientStatus reports whether an HTTP status warrants a retry: rate
+// limits, overload, and 5xx server errors. 4xx (other than 408/425/429) are
+// client errors we should NOT hammer.
+func isTransientStatus(code int) bool {
+	switch code {
+	case 408, 425, 429, 500, 502, 503, 504, 529:
+		return true
+	}
+	return false
+}
+
+// isTransientResponsesError matches the in-stream error payloads OpenAI emits
+// for provider-side hiccups — the ones that self-heal on a retry.
+func isTransientResponsesError(raw string) bool {
+	s := strings.ToLower(raw)
+	for _, needle := range []string{
+		"server_error", "server had an error", "internal error", "internal_error",
+		"overloaded", "rate_limit", "rate limit", "temporarily", "try again",
+		"timeout", "timed out", "503", "502", "500",
+	} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTransientNetErr matches connection-level blips worth retrying. Caller
+// cancellation / deadline is deliberately NOT retryable — that's the loop's
+// own budget, not a provider problem.
+func isTransientNetErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"connection reset", "broken pipe", "unexpected eof", "connection refused",
+		"i/o timeout", "tls handshake timeout", "server closed", "use of closed",
+		"http2: ", "stream error", "goaway", "eof",
+	} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // attemptStream issues a single /responses request for the given model
@@ -696,6 +855,12 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 	// live canvas stream would silently never fire on this path).
 	byItem := make(map[string]*pendingToolCall)
 
+	// Tracks whether any reasoning has streamed to `out`. Combined with
+	// resp.Text / resp.ToolCalls / pending below, it tells the caller whether a
+	// mid-stream error can be retried cleanly — once ANY user-visible content
+	// has been emitted, a retry would duplicate it, so we surface instead.
+	var sawThinking bool
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -707,13 +872,13 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 		}
 
 		var evt struct {
-			Type     string          `json:"type"`
-			Delta    string          `json:"delta"`
-			Text     string          `json:"text"`
-			Response json.RawMessage `json:"response"`
-			Item     json.RawMessage `json:"item"`
-			ItemID   string          `json:"item_id"`
-			Arguments string         `json:"arguments"`
+			Type      string          `json:"type"`
+			Delta     string          `json:"delta"`
+			Text      string          `json:"text"`
+			Response  json.RawMessage `json:"response"`
+			Item      json.RawMessage `json:"item"`
+			ItemID    string          `json:"item_id"`
+			Arguments string          `json:"arguments"`
 			Output    json.RawMessage `json:"output"`
 		}
 		if err := json.Unmarshal([]byte(raw), &evt); err != nil {
@@ -738,6 +903,7 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			"response.reasoning_summary_part.delta",
 			"response.reasoning_text.delta":
 			if evt.Delta != "" {
+				sawThinking = true
 				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: evt.Delta})
 			}
 		case "response.output_item.added":
@@ -832,6 +998,17 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			resp.StopReason = "end_turn"
 		case "response.error", "error":
 			errMsg := truncateOAuth(raw, 400)
+			// If the failure is a transient provider hiccup (server_error,
+			// overloaded, rate_limit, …) AND we haven't emitted any
+			// user-visible content yet, hand it back as retryable WITHOUT
+			// emitting terminal events — Stream's retry loop owns the decision
+			// to re-issue or give up. This is the fix for the boss's
+			// inbox-triage cron dying on a `server_error` at sequence_number:1.
+			emittedContent := resp.Text != "" || len(resp.ToolCalls) > 0 ||
+				len(pending) > 0 || len(byItem) > 0 || sawThinking
+			if isTransientResponsesError(raw) && !emittedContent {
+				return resp, &retryableStreamError{msg: errMsg}
+			}
 			emit(out, StreamEvent{Kind: StreamError, Err: errMsg})
 			emit(out, StreamEvent{Kind: StreamComplete, StopReason: "error"})
 			return resp, errors.New(errMsg)

@@ -870,7 +870,15 @@ func serveCmd() *cobra.Command {
 				// mem_memories). Auto-trigger also reads this struct
 				// via Loop.SetCompactor for the >= 80% threshold path.
 				if pool != nil && provider != nil {
-					convCompactor := memory.NewConversationCompactor(store, provider)
+					// Compact on the boss's ACTIVE model (activeModel), not the
+					// static boot provider. Before this, a long conversation's
+					// auto-compaction silently ran on the boot-time model
+					// (e.g. gpt-5-codex) instead of the gpt-5.4 he set in
+					// Settings — the same "is my settings model actually used?"
+					// class of bug. activeModel resolves provider+model live per
+					// call, so compaction always matches chat. Non-nil here
+					// because pool != nil (assigned above).
+					convCompactor := memory.NewConversationCompactor(store, activeModel)
 					registry.Register(&agent.CompactContext{Loop: loop, Compactor: convCompactor})
 					loop.SetCompactor(convCompactor)
 				}

@@ -331,7 +331,11 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	end := time.Now().UTC()
 	status := "ok (manual)"
 	if execErr != nil {
-		status = "error (manual): " + execErr.Error()
+		// Humanize for the cron list's last_run_status, same as the scheduled
+		// path (makeFireFn) - so a manual run reads "The model provider hit a
+		// snag" instead of raw provider JSON. The full raw error + human_error
+		// still land on the mem_runs row via handle.Finish above.
+		status = "error (manual): " + errs.Humanize(execErr).Title
 	}
 	if s.pool != nil {
 		_, _ = s.pool.Exec(ctx, `
