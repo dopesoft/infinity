@@ -46,6 +46,22 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
 const LENSES = ["turns", "runs"] as const;
 type Lens = (typeof LENSES)[number];
 
+// CountChip is the small count badge shared by both the lens tabs and the
+// status filter chips, so they render identically.
+function CountChip({ n, active }: { n: number; active: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+        active ? "bg-foreground text-background" : "bg-muted-foreground/15 text-muted-foreground",
+      )}
+      aria-label={`${n} matching`}
+    >
+      {n}
+    </span>
+  );
+}
+
 export default function LogsPage() {
   const [turns, setTurns] = useState<TurnRowDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,33 +134,10 @@ export default function LogsPage() {
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
-          {/* Lens toggle: chat/agent Turns vs the durable Runs record. */}
-          <div className="mx-auto w-full sm:max-w-2xl">
-            <PageTabs value={lens} onValueChange={(v) => setLens(v as Lens)} className="w-full">
-              <PageTabsList scrollable>
-                <PageTabsTrigger value="turns">Turns</PageTabsTrigger>
-                <PageTabsTrigger value="runs" className="gap-1.5">
-                  <span>Runs</span>
-                  <span
-                    className={cn(
-                      "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                      lens === "runs"
-                        ? "bg-foreground text-background"
-                        : "bg-muted-foreground/15 text-muted-foreground",
-                    )}
-                  >
-                    {runs.length}
-                  </span>
-                </PageTabsTrigger>
-              </PageTabsList>
-            </PageTabs>
-          </div>
-
           {/* Search row centered on desktop with a sane max width - mirrors
-              Memory + Skills so the three tabs read as the same family.
-              Mobile stays full-width. Pull-to-refresh (mobile) and the
-              browser refresh (desktop) handle re-fetch, so no inline
-              reload button. */}
+              Memory + Skills so the pages read as the same family. Mobile stays
+              full-width. Pull-to-refresh (mobile) and browser refresh (desktop)
+              handle re-fetch, so no inline reload button. */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -165,33 +158,38 @@ export default function LogsPage() {
             </div>
           </form>
 
+          {/* Primary lens (Turns vs the durable Runs record) sits below the
+              search as a full-width chip rail — same shape + placement as the
+              view switcher on /memory, so the pages read as one family. */}
+          <PageTabs value={lens} onValueChange={(v) => setLens(v as Lens)} className="w-full">
+            <PageTabsList scrollable>
+              <PageTabsTrigger value="turns" className="gap-1.5">
+                <span>Turns</span>
+                <CountChip n={turns.length} active={lens === "turns"} />
+              </PageTabsTrigger>
+              <PageTabsTrigger value="runs" className="gap-1.5">
+                <span>Runs</span>
+                <CountChip n={runs.length} active={lens === "runs"} />
+              </PageTabsTrigger>
+            </PageTabsList>
+          </PageTabs>
+
+          {/* Status sub-filter — only meaningful for Turns. */}
           {lens === "turns" ? (
-            <div className="space-y-3">
-              <PageTabs
-                value={statusFilter}
-                onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-                className="w-full"
-              >
-                <PageTabsList scrollable>
-                  {STATUS_FILTERS.map((s) => (
-                    <PageTabsTrigger key={s} value={s} className="gap-1.5">
-                      <span>{STATUS_LABELS[s]}</span>
-                      <span
-                        className={cn(
-                          "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                          statusFilter === s
-                            ? "bg-foreground text-background"
-                            : "bg-muted-foreground/15 text-muted-foreground",
-                        )}
-                        aria-label={`${counts[s]} matching`}
-                      >
-                        {counts[s]}
-                      </span>
-                    </PageTabsTrigger>
-                  ))}
-                </PageTabsList>
-              </PageTabs>
-            </div>
+            <PageTabs
+              value={statusFilter}
+              onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+              className="w-full"
+            >
+              <PageTabsList scrollable>
+                {STATUS_FILTERS.map((s) => (
+                  <PageTabsTrigger key={s} value={s} className="gap-1.5">
+                    <span>{STATUS_LABELS[s]}</span>
+                    <CountChip n={counts[s]} active={statusFilter === s} />
+                  </PageTabsTrigger>
+                ))}
+              </PageTabsList>
+            </PageTabs>
           ) : null}
         </div>
 
