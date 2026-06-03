@@ -1697,9 +1697,16 @@ func (s *Server) handleCanvasTerminalExec(w http.ResponseWriter, r *http.Request
 	// Cloud session: run on the cloud /workspace bridge (longer timeout than
 	// the canvas's quick git calls - terminal commands can be npm installs).
 	if cloudB, isCloud := s.canvasCloudFS(r.Context(), req.SessionID); isCloud {
-		body, status, ok := cloudB.Post(r.Context(), "/bash", map[string]any{"cmd": cmd, "timeout_sec": 180})
+		// Source the persistent workspace env (HOME=/workspace/.jarvis, with
+		// $HOME/.local/bin on PATH + XDG dirs) so this terminal shares Jarvis's
+		// installed CLIs AND their saved credentials. Without it the terminal's
+		// HOME differs from where Jarvis installs/authenticates, so an installed
+		// `higgsfield` or its login state would be invisible here. Mirrors
+		// extensions.cliBash (path = extensions.EnvFilePath).
+		wrapped := "source /workspace/.jarvis/env.sh 2>/dev/null; " + cmd
+		body, status, ok := cloudB.Post(r.Context(), "/bash", map[string]any{"cmd": wrapped, "timeout_sec": 180})
 		if !ok || status >= 300 {
-			writeJSON(w, http.StatusBadGateway, terminalExecResponse{Bridge: "cloud", Error: "cloud bridge unreachable"})
+			writeJSON(w, http.StatusBadGateway, terminalExecResponse{Bridge: "cloud", Error: "cloud workspace didn't respond within 180s — a long-running or interactive command (like a device `auth login` that waits for a browser) can't complete in this one-shot terminal. Ask Jarvis to run those instead."})
 			return
 		}
 		var resp struct {

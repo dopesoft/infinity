@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 )
@@ -298,6 +299,33 @@ func (s *Server) onHeartbeatFinding(ctx context.Context, f proactive.Finding) {
 		Text:        text,
 		FindingKind: f.Kind,
 		CuriosityID: f.CuriosityID,
+	})
+}
+
+// ResumeFromExtensionAuth is wired as extensions.Manager.OnAuthComplete. When a
+// cli tool's sign-in is verified via the /check probe (the inline auth card),
+// it broadcasts the SAME "tool is ready + resume_intent" turn the heartbeat
+// ExtensionAuthChecklist would have - so the agent picks up automatically the
+// instant the boss finishes, with no "ok, I'm signed in" message. The /check
+// path completes auth itself, so the heartbeat would otherwise never see it as
+// pending and the resume would be lost; this closes that gap.
+func (s *Server) ResumeFromExtensionAuth(ctx context.Context, ext *extensions.Extension) {
+	if s == nil || ext == nil {
+		return
+	}
+	detail := fmt.Sprintf(
+		"The %q tool is installed and authenticated in the cloud workspace - run it via bash_run (source %s first so it uses the saved credentials).",
+		ext.Name, extensions.EnvFilePath)
+	if ext.ResumeIntent != "" {
+		detail += "\nResume what you set it up for: " + ext.ResumeIntent
+	}
+	s.onHeartbeatFinding(ctx, proactive.Finding{
+		Kind:        "outcome",
+		Title:       fmt.Sprintf("%s is authenticated and ready", ext.Name),
+		Detail:      detail,
+		PreApproved: true,
+		Source:      "extension_auth",
+		SourceTag:   "extension_auth:" + ext.Name,
 	})
 }
 

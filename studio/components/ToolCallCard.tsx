@@ -14,7 +14,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { ToolIcon } from "@/components/ToolIcon";
 import { cn } from "@/lib/utils";
-import { decideTrust } from "@/lib/api";
 import {
   extractToolFilePath,
   extractToolFilePaths,
@@ -101,29 +100,10 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
     status === "error" ||
     (status === "running" && isWriteCall);
   const [open, setOpen] = useState<boolean>(defaultOpen);
-  const [deciding, setDeciding] = useState<"approve" | "deny" | null>(null);
-  const [decisionError, setDecisionError] = useState<string | null>(null);
-  const [decisionMade, setDecisionMade] = useState<"approved" | "denied" | null>(null);
 
   if (!call) return null;
   const gated = detectGated(result?.output);
   const isDiff = looksLikeDiff(result?.output);
-
-  async function decide(action: "approve" | "deny") {
-    if (!call?.contract_id) return;
-    setDeciding(action);
-    setDecisionError(null);
-    const ok = await decideTrust(
-      call.contract_id,
-      action === "approve" ? "approved" : "denied",
-    );
-    setDeciding(null);
-    if (ok) {
-      setDecisionMade(action === "approve" ? "approved" : "denied");
-    } else {
-      setDecisionError("Couldn't reach Core. Try again.");
-    }
-  }
 
   // Header label - for code/repo writes, lead with what actually matters
   // (the file path, or the count when multiple). The tool name moves
@@ -239,9 +219,9 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
             <Section title="Approval required">
               <div className="rounded-md border border-warning/40 bg-warning/5 p-2 dark:bg-warning/10">
                 <p className="text-xs leading-relaxed text-foreground">
-                  This call is paused waiting for your approval. Tap{" "}
-                  <span className="font-semibold">Approve</span> and the same
-                  command runs immediately - the output shows up right here.
+                  Paused for your approval. Approve it in the{" "}
+                  <span className="font-semibold">Approvals</span> bar above the
+                  composer and it continues on its own — you don&apos;t have to message back.
                 </p>
                 {call.preview ? (
                   <pre className="mt-2 min-w-0 max-w-full max-h-32 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md bg-muted/70 p-2 font-mono text-[11px] text-muted-foreground scroll-touch sm:text-xs">
@@ -249,46 +229,6 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
                   </pre>
                 ) : null}
               </div>
-              {decisionMade ? (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {decisionMade === "approved"
-                    ? "Approved - running now…"
-                    : "Denied. Tell the agent if you want it to try something else."}
-                </p>
-              ) : (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => decide("approve")}
-                    disabled={deciding !== null}
-                    className="h-9"
-                  >
-                    {deciding === "approve" ? (
-                      <Loader2 className="mr-1 size-4 animate-spin" />
-                    ) : (
-                      <Check className="mr-1 size-4" />
-                    )}
-                    Approve
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => decide("deny")}
-                    disabled={deciding !== null}
-                    className="h-9"
-                  >
-                    {deciding === "deny" ? (
-                      <Loader2 className="mr-1 size-4 animate-spin" />
-                    ) : (
-                      <X className="mr-1 size-4" />
-                    )}
-                    Deny
-                  </Button>
-                </div>
-              )}
-              {decisionError ? (
-                <p className="mt-2 text-xs text-danger">{decisionError}</p>
-              ) : null}
             </Section>
           )}
           {result && (

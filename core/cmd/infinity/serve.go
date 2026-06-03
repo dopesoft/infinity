@@ -1564,6 +1564,14 @@ func serveCmd() *cobra.Command {
 				WorkspaceToken:   workspaceToken,
 			})
 
+			// Resume the agent automatically the instant an inline auth card
+			// verifies a cli tool's sign-in - broadcasts the same unprompted
+			// "tool ready + resume_intent" turn the heartbeat checklist uses, so
+			// the boss never has to message "ok, I'm signed in".
+			if extManager != nil {
+				extManager.SetOnAuthComplete(srv.ResumeFromExtensionAuth)
+			}
+
 			// Late-bind the Voyager auto-promote → chat-bubble notifier. The
 			// callback was registered earlier (so we don't drop events that
 			// arrive before this point) but its target needed the server

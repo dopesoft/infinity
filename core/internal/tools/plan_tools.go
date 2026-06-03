@@ -272,11 +272,14 @@ func (t *planVerify) Schema() map[string]any {
 	}
 }
 func (t *planVerify) Execute(ctx context.Context, in map[string]any) (string, error) {
-	stepID := strings.TrimSpace(strString(in, "step_id"))
+	stepID, err := resolveStepRef(ctx, t.store, strString(in, "step_id"))
+	if err != nil {
+		return "", err
+	}
 	verdict := strings.ToLower(strings.TrimSpace(strString(in, "verdict")))
 	evidence := strString(in, "evidence")
-	if stepID == "" || verdict == "" || evidence == "" {
-		return "", errors.New("step_id, verdict, and evidence are all required")
+	if verdict == "" || evidence == "" {
+		return "", errors.New("verdict and evidence are required")
 	}
 	p, err := t.store.RecordVerify(ctx, stepID, verdict, evidence, strString(in, "method"))
 	if err != nil {

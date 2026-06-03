@@ -20,6 +20,27 @@ type Manager struct {
 	mcp      *tools.MCPManager
 	router   *bridge.Router // for kind=cli: where install/check commands run
 	logger   *slog.Logger
+	// onAuthComplete fires the instant a pending_auth cli extension is verified
+	// (via the /check probe), so the agent resumes what it set the tool up for
+	// WITHOUT the boss having to message "ok I'm signed in". Wired in the server
+	// layer to broadcast the resume as an unprompted turn (same path the
+	// heartbeat ExtensionAuthChecklist uses). Nil-safe.
+	onAuthComplete func(context.Context, *Extension)
+}
+
+// SetOnAuthComplete registers the resume callback (server wiring). Mirrors the
+// OnSkillPromoted seam: the Manager stays decoupled from proactive/server while
+// the callback builds + broadcasts the resume turn.
+func (m *Manager) SetOnAuthComplete(fn func(context.Context, *Extension)) {
+	if m != nil {
+		m.onAuthComplete = fn
+	}
+}
+
+func (m *Manager) fireAuthComplete(ctx context.Context, ext *Extension) {
+	if m != nil && m.onAuthComplete != nil && ext != nil {
+		m.onAuthComplete(ctx, ext)
+	}
 }
 
 func NewManager(store *Store, registry *tools.Registry, mcpManager *tools.MCPManager, router *bridge.Router, logger *slog.Logger) *Manager {

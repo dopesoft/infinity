@@ -3,6 +3,7 @@
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { BackgroundJobDock } from "@/components/BackgroundJobDock";
+import { PendingApprovalsDock } from "@/components/PendingApprovalsDock";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
 import { useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
@@ -53,6 +54,7 @@ export function WorkspaceChatColumn({
           background_build telemetry. Sits above the composer so the boss can
           keep chatting and still watch progress. Renders nothing when no plan
           is in flight and no background job is running. */}
+      <PendingApprovalsDock />
       <BackgroundJobDock sessionId={chat.sessionId} />
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <PromptInputBox

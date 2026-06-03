@@ -220,6 +220,12 @@ func (a *API) check(w http.ResponseWriter, r *http.Request, name string) {
 	if fresh == nil {
 		fresh = ext
 	}
+	// Auth just completed via this probe -> resume the agent automatically so
+	// the boss doesn't have to message "ok, I'm signed in". The heartbeat
+	// checklist would otherwise miss it (the row is already active now).
+	if ready {
+		a.mgr.fireAuthComplete(r.Context(), fresh)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ready": ready, "extension": toDTO(fresh)})
 }
 

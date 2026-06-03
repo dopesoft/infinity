@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MonitorPlay, MonitorX, Sparkles, Loader2, AlertTriangle } from "lucide-react";
 import { CanvasPreviewToolbar } from "@/components/canvas/CanvasPreviewToolbar";
 import { CanvasBrowserView } from "@/components/canvas/CanvasBrowser";
+import { CanvasAuthCard, usePendingAuthExtension } from "@/components/canvas/CanvasAuthCard";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
 import { useWebSocket } from "@/lib/ws/provider";
 import { useRuns } from "@/lib/runs/useRuns";
@@ -38,6 +39,8 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   const ws = useWebSocket();
   const projectCtx = useProjectContext();
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A cli tool waiting on device-login surfaces here as a sign-in card.
+  const { pending: pendingAuth, refresh: refreshAuth } = usePendingAuthExtension();
 
   // Live cloud-browser screencast. We reuse THIS tab (Preview) to show the
   // stream rather than spawning a second tab — when a browser session is
@@ -132,6 +135,11 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   // (Mac) dev server, or a cloud project that's actually running. Reloading an
   // empty/cloud-splash preview just re-flashes it for no reason.
   const previewIsLive = !!baseUrl && (!isCloudPreview || projectStatus === "running");
+  // A cloud preview only has something to show while its dev server is running
+  // or booting. Pointing the iframe at the proxy otherwise just renders the
+  // bridge's raw "404 page not found" (no dev server behind it) - which reads
+  // as "broken" when nothing's actually wrong. Show a calm idle state instead.
+  const cloudAppLive = projectStatus === "running" || projectStatus === "booting";
 
   // Auto-refresh on code-change tool_result events — but ONLY for THIS session's
   // edits to a live app. Without the session filter, every background fs/github
@@ -253,6 +261,14 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     );
   }
 
+  // A tool waiting on device-login takes over the pane with a sign-in card -
+  // self-contained, no trip to Settings, and it replaces the old raw-404 dead
+  // end. Authenticating is the one thing only the boss can do, so it outranks
+  // the app / empty states below.
+  if (pendingAuth) {
+    return <CanvasAuthCard ext={pendingAuth} onResolved={refreshAuth} />;
+  }
+
   // No project on this session - Canvas is a passive surface. Show a
   // "tell the agent what to build" empty state instead of trying to
   // proxy through the bridge. This is the v1 path for new sessions.
@@ -276,6 +292,10 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
       {!effectiveUrl ? (
         <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
           <EmptyPreview />
+        </div>
+      ) : isCloudPreview && !cloudAppLive ? (
+        <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
+          <CloudIdlePreview />
         </div>
       ) : dims ? (
         <div
@@ -378,6 +398,26 @@ function ProjectStatusBanner({ status, error }: { status: string; error?: string
     <div className={"flex items-center gap-2 border-b px-3 py-1 text-[11px] " + tone}>
       {icon}
       <span className="truncate">{label}</span>
+    </div>
+  );
+}
+
+// CloudIdlePreview - shown when a cloud session has no running dev server, so
+// the proxy would otherwise serve a raw 404. Calm "nothing running yet" state
+// instead of a fake error.
+function CloudIdlePreview() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <MonitorPlay className="size-5" aria-hidden />
+      </span>
+      <div className="max-w-md space-y-1">
+        <h3 className="text-sm font-semibold">Nothing running here yet</h3>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          This is a cloud session with no live app. Ask Jarvis to build or start one and
+          it&apos;ll appear here automatically.
+        </p>
+      </div>
     </div>
   );
 }
