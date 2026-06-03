@@ -1139,6 +1139,9 @@ func serveCmd() *cobra.Command {
 			var connectorPoller *connectors.Poller
 			if pool != nil && composioExec != nil {
 				connectorPoller = connectors.NewPoller(pool, composioExec, pipeline)
+				// Wire the cache so an all_active poll discovers every live
+				// Gmail account (reconnect-proof, no hardcoded ca_ ids).
+				connectorPoller.SetCache(connectorsCache)
 				// Wire the followup triager so newly-polled emails get
 				// metadata.intent / mode / classification chips populated
 				// asynchronously - same Gmail cron, one extra classify call per

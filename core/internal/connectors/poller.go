@@ -52,6 +52,13 @@ type PollConfig struct {
 	ConnectedAccountID string         `json:"connected_account_id"` // "ca_..."
 	Arguments          map[string]any `json:"arguments,omitempty"`
 	Sink               string         `json:"sink"` // "followups" | "calendar"
+	// AllActive: when true, the poller ignores ConnectedAccountID and instead
+	// runs the action against EVERY currently-ACTIVE account of Toolkit,
+	// discovered live from the connectors cache. This is the reconnect-proof
+	// way to cover all of the boss's mailboxes (e.g. 3 Gmails) without ever
+	// hardcoding a ca_ id — a revoke+reauth mints a new id and this picks it up
+	// automatically. Requires the poller to have a cache wired (SetCache).
+	AllActive bool `json:"all_active,omitempty"`
 }
 
 // Validate checks for the required surface area before we hit Composio.
@@ -60,8 +67,12 @@ func (p PollConfig) Validate() error {
 	if strings.TrimSpace(p.Action) == "" {
 		return fmt.Errorf("target_config.action required")
 	}
-	if strings.TrimSpace(p.ConnectedAccountID) == "" {
-		return fmt.Errorf("target_config.connected_account_id required")
+	if p.AllActive {
+		if strings.TrimSpace(p.Toolkit) == "" {
+			return fmt.Errorf("target_config.toolkit required when all_active is set")
+		}
+	} else if strings.TrimSpace(p.ConnectedAccountID) == "" {
+		return fmt.Errorf("target_config.connected_account_id required (or set all_active with a toolkit)")
 	}
 	switch p.Sink {
 	case "followups", "calendar":
@@ -88,7 +99,18 @@ type Poller struct {
 	pipeline     *hooks.Pipeline
 	triager      *triage.Triager
 	notifier     FollowupNotifier
+	cache        *Cache
 	logger       *slog.Logger
+}
+
+// SetCache wires the connectors cache so AllActive polls can enumerate the
+// live ACTIVE accounts of a toolkit. Safe to call after NewPoller; nil cache
+// just means AllActive configs error at poll time (caught, surfaced in status).
+func (p *Poller) SetCache(c *Cache) {
+	if p == nil {
+		return
+	}
+	p.cache = c
 }
 
 func NewPoller(pool *pgxpool.Pool, exec *ExecuteClient, pipeline *hooks.Pipeline) *Poller {
@@ -145,6 +167,43 @@ func (p *Poller) Poll(ctx context.Context, jobName string, cfg PollConfig) (*Pol
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	// AllActive: fan out across every currently-ACTIVE account of the toolkit,
+	// discovered live (reconnect-proof — never a hardcoded ca_ id). Each account
+	// is polled with the same action/args; results aggregate. A dead account
+	// can't appear here, so no revoked husk is ever hit.
+	if cfg.AllActive {
+		if p.cache == nil {
+			return &PollResult{JobName: jobName, Errors: 1}, fmt.Errorf("all_active poll needs a connectors cache (not wired)")
+		}
+		accounts := p.cache.ActiveAccountsByToolkit(strings.ToLower(strings.TrimSpace(cfg.Toolkit)))
+		agg := &PollResult{JobName: jobName}
+		start := time.Now()
+		var firstErr error
+		for _, a := range accounts {
+			one := cfg
+			one.AllActive = false
+			one.ConnectedAccountID = a.ID
+			res, err := p.pollOne(ctx, jobName, one)
+			if res != nil {
+				agg.Fetched += res.Fetched
+				agg.Written += res.Written
+				agg.Skipped += res.Skipped
+				agg.Errors += res.Errors
+			}
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		agg.DurationMS = time.Since(start).Milliseconds()
+		infoLog.Printf("connector poll %s (%s) all_active: accounts=%d fetched=%d written=%d skipped=%d errors=%d",
+			jobName, cfg.Action, len(accounts), agg.Fetched, agg.Written, agg.Skipped, agg.Errors)
+		return agg, firstErr
+	}
+	return p.pollOne(ctx, jobName, cfg)
+}
+
+// pollOne runs the action against a single concrete connected account.
+func (p *Poller) pollOne(ctx context.Context, jobName string, cfg PollConfig) (*PollResult, error) {
 	start := time.Now()
 	resp, err := p.exec.Execute(ctx, ExecuteRequest{
 		Slug:               cfg.Action,
