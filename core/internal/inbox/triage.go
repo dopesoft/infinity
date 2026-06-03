@@ -341,7 +341,7 @@ func parseDecisions(text string) []decision {
 func defaultEmailActions() []surface.Action {
 	return []surface.Action{
 		{ID: "draft_reply", Label: "Draft reply", Style: "primary",
-			Intent: "Draft a reply to this email for the boss to review and edit. Create it ONLY as a Gmail draft on the same thread — do NOT send it. When the draft is saved, surface_update this item so the boss can see a reply is ready to review."},
+			Intent: "Draft a reply to this email for the boss to review and edit. Create it ONLY as a Gmail draft on the same thread - do NOT send it. When the draft is saved, call surface_update with metadata.draft set to the exact drafted reply text and leave status open so the boss can review/send it."},
 		{ID: "archive", Label: "Archive", Style: "default",
 			Intent: "Archive this email in Gmail (remove it from the inbox, keep it in All Mail), then mark this follow-up done via surface_update."},
 		{ID: "snooze", Label: "Snooze 1d", Style: "default",

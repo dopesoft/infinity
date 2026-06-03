@@ -607,6 +607,83 @@ func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) 
 	}
 }
 
+func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
+	if send == nil {
+		return
+	}
+	switch ev.Kind {
+	case agent.EventDelta:
+		send(wsServerEvent{Type: "delta", SessionID: ev.SessionID, Text: ev.TextDelta})
+	case agent.EventThinking:
+		send(wsServerEvent{Type: "thinking", SessionID: ev.SessionID, Text: ev.ThinkingDelta})
+	case agent.EventToolCall:
+		if ev.ToolCall != nil {
+			// Forward the full ToolEvent including the gate's
+			// awaiting_approval signal - without these fields the
+			// browser never knows to render the inline Approve /
+			// Deny buttons and the user watches the card spin
+			// while the agent loop is blocked on WaitForDecision.
+			send(wsServerEvent{
+				Type:      "tool_call",
+				SessionID: ev.SessionID,
+				ToolCall: &wsToolEvent{
+					ID:               ev.ToolCall.ID,
+					Name:             ev.ToolCall.Name,
+					Input:            ev.ToolCall.Input,
+					StartedAt:        ev.ToolCall.StartedAt,
+					AwaitingApproval: ev.ToolCall.AwaitingApproval,
+					ContractID:       ev.ToolCall.ContractID,
+					Preview:          ev.ToolCall.Preview,
+				},
+			})
+		}
+	case agent.EventToolInputDelta:
+		// Live tool-argument tokens -> Studio opens the file in the canvas
+		// and types it in as the model writes it. Skip empty/idless chunks
+		// (some providers send the name/id before any argument bytes).
+		if ev.InputDelta != "" {
+			send(wsServerEvent{
+				Type:      "tool_input_delta",
+				SessionID: ev.SessionID,
+				ToolInputDelta: &wsToolInputDelta{
+					ID:    ev.ToolCallID,
+					Name:  ev.ToolName,
+					Delta: ev.InputDelta,
+				},
+			})
+		}
+	case agent.EventToolResult:
+		if ev.ToolResult != nil {
+			send(wsServerEvent{
+				Type:      "tool_result",
+				SessionID: ev.SessionID,
+				ToolResult: &wsToolEvent{
+					ID:        ev.ToolResult.ID,
+					Name:      ev.ToolResult.Name,
+					Output:    ev.ToolResult.Output,
+					IsError:   ev.ToolResult.IsError,
+					StartedAt: ev.ToolResult.StartedAt,
+					EndedAt:   ev.ToolResult.EndedAt,
+				},
+			})
+		}
+	case agent.EventComplete:
+		usage := map[string]int{}
+		if ev.Usage != nil {
+			usage["input"] = ev.Usage.Input
+			usage["output"] = ev.Usage.Output
+		}
+		send(wsServerEvent{
+			Type:       "complete",
+			SessionID:  ev.SessionID,
+			Usage:      usage,
+			StopReason: ev.StopReason,
+		})
+	case agent.EventError:
+		send(wsServerEvent{Type: "error", SessionID: ev.SessionID, Message: ev.Error})
+	}
+}
+
 // runTurn drives one agent turn and pumps RunEvent → WS frames. The caller
 // (startTurn) owns the cancel + steer channel via the turns registry; we
 // receive the steer channel as a receive-only param so the agent loop can
@@ -632,75 +709,11 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 	var assistantText strings.Builder
 
 	for ev := range events {
-		switch ev.Kind {
-		case agent.EventDelta:
+		if ev.Kind == agent.EventDelta {
 			assistantText.WriteString(ev.TextDelta)
-			send(wsServerEvent{Type: "delta", SessionID: ev.SessionID, Text: ev.TextDelta})
-		case agent.EventThinking:
-			send(wsServerEvent{Type: "thinking", SessionID: ev.SessionID, Text: ev.ThinkingDelta})
-		case agent.EventToolCall:
-			if ev.ToolCall != nil {
-				// Forward the full ToolEvent including the gate's
-				// awaiting_approval signal - without these fields the
-				// browser never knows to render the inline Approve /
-				// Deny buttons and the user watches the card spin
-				// while the agent loop is blocked on WaitForDecision.
-				send(wsServerEvent{
-					Type:      "tool_call",
-					SessionID: ev.SessionID,
-					ToolCall: &wsToolEvent{
-						ID:               ev.ToolCall.ID,
-						Name:             ev.ToolCall.Name,
-						Input:            ev.ToolCall.Input,
-						StartedAt:        ev.ToolCall.StartedAt,
-						AwaitingApproval: ev.ToolCall.AwaitingApproval,
-						ContractID:       ev.ToolCall.ContractID,
-						Preview:          ev.ToolCall.Preview,
-					},
-				})
-			}
-		case agent.EventToolInputDelta:
-			// Live tool-argument tokens → Studio opens the file in the canvas
-			// and types it in as the model writes it. Skip empty/idless chunks
-			// (some providers send the name/id before any argument bytes).
-			if ev.InputDelta != "" {
-				send(wsServerEvent{
-					Type:      "tool_input_delta",
-					SessionID: ev.SessionID,
-					ToolInputDelta: &wsToolInputDelta{
-						ID:    ev.ToolCallID,
-						Name:  ev.ToolName,
-						Delta: ev.InputDelta,
-					},
-				})
-			}
-		case agent.EventToolResult:
-			if ev.ToolResult != nil {
-				send(wsServerEvent{
-					Type:      "tool_result",
-					SessionID: ev.SessionID,
-					ToolResult: &wsToolEvent{
-						ID:        ev.ToolResult.ID,
-						Name:      ev.ToolResult.Name,
-						Output:    ev.ToolResult.Output,
-						IsError:   ev.ToolResult.IsError,
-						StartedAt: ev.ToolResult.StartedAt,
-						EndedAt:   ev.ToolResult.EndedAt,
-					},
-				})
-			}
-		case agent.EventComplete:
-			usage := map[string]int{}
-			if ev.Usage != nil {
-				usage["input"] = ev.Usage.Input
-				usage["output"] = ev.Usage.Output
-			}
-			send(wsServerEvent{
-				Type:       "complete",
-				SessionID:  ev.SessionID,
-				Usage:      usage,
-				StopReason: ev.StopReason,
-			})
+		}
+		sendRunEventToWS(send, ev)
+		if ev.Kind == agent.EventComplete {
 			/* Mirror this exchange into mem_working_buffer iff the
 			 * model's context window crossed the proactive threshold
 			 * (default 0.6 of max). Heuristic ctx_max - provider
@@ -712,8 +725,6 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 				usedTokens = ev.Usage.Input + ev.Usage.Output
 			}
 			s.captureWorkingBuffer(ctx, ev.SessionID, content, assistantText.String(), usedTokens)
-		case agent.EventError:
-			send(wsServerEvent{Type: "error", SessionID: ev.SessionID, Message: ev.Error})
 		}
 	}
 

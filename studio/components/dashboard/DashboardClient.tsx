@@ -179,6 +179,51 @@ export function DashboardClient() {
 
   const openViewer = useCallback((item: DashboardItem) => setViewing(item), []);
   const closeViewer = useCallback(() => setViewing(null), []);
+  const liveViewing = useMemo<DashboardItem | null>(() => {
+    if (!viewing) return null;
+    const id = (viewing.data as { id?: string }).id;
+    if (!id) return viewing;
+    switch (viewing.kind) {
+      case "approval":
+        return approvals.find((a) => a.id === id)
+          ? { kind: "approval", data: approvals.find((a) => a.id === id)! }
+          : viewing;
+      case "followup":
+        return followUps.find((f) => f.id === id)
+          ? { kind: "followup", data: followUps.find((f) => f.id === id)! }
+          : viewing;
+      case "surface": {
+        const found = Object.values(surfaceItems).flat().find((s) => s.id === id);
+        return found ? { kind: "surface", data: found } : viewing;
+      }
+      case "work":
+        return work.find((w) => w.id === id)
+          ? { kind: "work", data: work.find((w) => w.id === id)! }
+          : viewing;
+      case "event":
+        return events.find((e) => e.id === id)
+          ? { kind: "event", data: events.find((e) => e.id === id)! }
+          : viewing;
+      case "todo":
+        return todos.find((t) => t.id === id)
+          ? { kind: "todo", data: todos.find((t) => t.id === id)! }
+          : viewing;
+      case "pursuit":
+        return pursuits.find((p) => p.id === id)
+          ? { kind: "pursuit", data: pursuits.find((p) => p.id === id)! }
+          : viewing;
+      case "saved":
+        return saved.find((s) => s.id === id)
+          ? { kind: "saved", data: saved.find((s) => s.id === id)! }
+          : viewing;
+      case "activity":
+        return activity.find((a) => a.id === id)
+          ? { kind: "activity", data: activity.find((a) => a.id === id)! }
+          : viewing;
+      default:
+        return viewing;
+    }
+  }, [viewing, approvals, followUps, surfaceItems, work, events, todos, pursuits, saved, activity]);
   const resolveViewerItem = useCallback((item: DashboardItem) => {
     if (item.kind === "approval") {
       const id = item.data.id;
@@ -413,7 +458,7 @@ export function DashboardClient() {
         {s.memoryFooter && <MemoryFooter stats={memoryStats} />}
       </div>
 
-      <ObjectViewer item={viewing} onClose={closeViewer} onResolved={resolveViewerItem} />
+      <ObjectViewer item={liveViewing} onClose={closeViewer} onResolved={resolveViewerItem} />
 
       <AddTodoModal
         open={addingTodo}

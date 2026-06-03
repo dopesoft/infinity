@@ -71,22 +71,31 @@ export async function renameSession(id: string, name: string): Promise<boolean> 
 
 // postSurfaceAction fires a surfaced-item action button (the surface
 // return-path). The server looks up the item + action, then seeds an
-// autonomous agent turn tracked in mem_runs (kind="surface.action",
-// targetId=item id) - watch it with useRuns/RunIndicator. Returns true on
-// 202 Accepted.
+// explicit action turn tracked in mem_runs (kind="surface.action",
+// targetId=item id) - watch it with useRuns/RunIndicator. For send_reply,
+// draftText carries the boss-edited reply body.
+export type SurfaceActionResult = {
+  ok: boolean;
+  kind?: string;
+  target_id?: string;
+  session_id?: string;
+};
+
 export async function postSurfaceAction(
   id: string,
   actionId: string,
-): Promise<boolean> {
+  opts: { draftText?: string } = {},
+): Promise<SurfaceActionResult | null> {
   try {
     const res = await authedFetch(`/api/surface/action`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, action_id: actionId }),
+      body: JSON.stringify({ id, action_id: actionId, draft_text: opts.draftText }),
     });
-    return res.ok;
+    if (!res.ok) return null;
+    return (await res.json()) as SurfaceActionResult;
   } catch {
-    return false;
+    return null;
   }
 }
 

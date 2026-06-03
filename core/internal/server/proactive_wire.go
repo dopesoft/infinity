@@ -157,6 +157,25 @@ func (s *Server) broadcastProactive(ev wsServerEvent) {
 	}
 }
 
+// broadcastAll pushes an already-scoped WS event to every active browser
+// connection without rewriting SessionID. Use this for non-chat work streams
+// such as surface actions, where Studio filters by the run's synthetic
+// session id from the event payload.
+func (s *Server) broadcastAll(ev wsServerEvent) {
+	if s == nil {
+		return
+	}
+	s.activeMu.Lock()
+	sends := make([]func(wsServerEvent), 0, len(s.activeSessions))
+	for _, fn := range s.activeSessions {
+		sends = append(sends, fn)
+	}
+	s.activeMu.Unlock()
+	for _, fn := range sends {
+		fn(ev)
+	}
+}
+
 // BroadcastSkillPromoted surfaces a Voyager-auto-promoted skill as a
 // chat bubble in every active session. Wired from serve.go alongside
 // the procedural-memory write-through so the boss sees:

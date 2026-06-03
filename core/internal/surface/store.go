@@ -218,17 +218,26 @@ func (s *Store) Update(ctx context.Context, id string, p Patch) error {
 			*p.Importance = 100
 		}
 	}
+	metaJSON := "{}"
+	if p.MetadataMerge != nil {
+		b, err := json.Marshal(p.MetadataMerge)
+		if err != nil {
+			return fmt.Errorf("surface: marshal metadata patch: %w", err)
+		}
+		metaJSON = string(b)
+	}
 	ct, err := s.pool.Exec(ctx, `
 		UPDATE mem_surface_items SET
 		  status            = COALESCE($2, status),
 		  importance        = COALESCE($3, importance),
 		  importance_reason = COALESCE($4, importance_reason),
 		  snoozed_until     = COALESCE($5, snoozed_until),
+		  metadata          = COALESCE(metadata, '{}'::jsonb) || $6::jsonb,
 		  scored_at         = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE scored_at END,
 		  decided_at        = CASE WHEN $2 IN ('done','dismissed') THEN NOW() ELSE decided_at END,
 		  updated_at        = NOW()
 		WHERE id = $1::uuid
-	`, id, status, p.Importance, p.ImportanceReason, p.SnoozedUntil)
+	`, id, status, p.Importance, p.ImportanceReason, p.SnoozedUntil, metaJSON)
 	if err != nil {
 		return fmt.Errorf("surface: update: %w", err)
 	}

@@ -34,14 +34,14 @@ func (s Status) Valid() bool {
 
 // Item is one row of the generic dashboard surface contract.
 type Item struct {
-	ID               string         `json:"id"`
-	Surface          string         `json:"surface"`
-	Kind             string         `json:"kind"`
-	Source           string         `json:"source"`
-	ExternalID       string         `json:"externalId,omitempty"`
-	Title            string         `json:"title"`
-	Subtitle         string         `json:"subtitle,omitempty"`
-	Body             string         `json:"body,omitempty"`
+	ID         string `json:"id"`
+	Surface    string `json:"surface"`
+	Kind       string `json:"kind"`
+	Source     string `json:"source"`
+	ExternalID string `json:"externalId,omitempty"`
+	Title      string `json:"title"`
+	Subtitle   string `json:"subtitle,omitempty"`
+	Body       string `json:"body,omitempty"`
 	// CachedHTML / CachedText carry a pre-rendered message body (e.g. the full
 	// HTML email a triage recipe already fetched) so the dashboard renders it
 	// WITHOUT a live connector call - durable even if the connector is later
@@ -58,13 +58,13 @@ type Item struct {
 	// Tapping one fires POST /api/surface/action which seeds an autonomous
 	// agent turn prompted with the action's Intent + this item's context -
 	// the "surface return-path". Empty for a render-only item.
-	Actions          []Action       `json:"actions,omitempty"`
-	Status           Status         `json:"status"`
-	SnoozedUntil     *time.Time     `json:"snoozedUntil,omitempty"`
-	ExpiresAt        *time.Time     `json:"expiresAt,omitempty"`
-	CreatedAt        time.Time      `json:"createdAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
-	ScoredAt         *time.Time     `json:"scoredAt,omitempty"`
+	Actions      []Action   `json:"actions,omitempty"`
+	Status       Status     `json:"status"`
+	SnoozedUntil *time.Time `json:"snoozedUntil,omitempty"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+	ScoredAt     *time.Time `json:"scoredAt,omitempty"`
 }
 
 // Action is a boss-tappable control on a surfaced item - the return half of
@@ -87,4 +87,5 @@ type Patch struct {
 	Importance       *int
 	ImportanceReason *string
 	SnoozedUntil     *time.Time
+	MetadataMerge    map[string]any
 }

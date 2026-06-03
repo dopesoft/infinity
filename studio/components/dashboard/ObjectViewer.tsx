@@ -28,6 +28,7 @@ import {
   Paperclip,
   Quote,
   Repeat,
+  Send,
   Sparkles,
   Target,
   Terminal,
@@ -35,12 +36,15 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { authedFetch, triggerCron, cancelWork } from "@/lib/api";
-import { RunIndicator } from "@/lib/runs";
+import { authedFetch, triggerCron, cancelWork, postSurfaceAction } from "@/lib/api";
+import { RunIndicator, useRuns } from "@/lib/runs";
+import { useWebSocket } from "@/lib/ws/provider";
 import {
   ResponsiveModal,
   ResponsiveModalHeader,
 } from "@/components/ui/responsive-modal";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ModalChips,
   ModalCode,
@@ -53,7 +57,6 @@ import {
 } from "@/components/ui/modal-content";
 import { Chip, classificationTone, intentTone, modeTone, type ChipTone } from "./Chip";
 import { PlanTimeline } from "./PlanTimeline";
-import { SurfaceActionRow } from "./SurfaceActions";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, fullDateTime, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
@@ -645,15 +648,18 @@ function ViewerActions({
       // 'dismissed' on mem_followups or mem_surface_items); the poller
       // re-poll path won't resurface it.
       return (
-        <button
-          type="button"
-          onClick={dismissFollowup}
-          disabled={dismissing}
-          className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
-        >
-          <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
-          {dismissing ? "Dismissing..." : "Dismiss"}
-        </button>
+        <>
+          <FollowupFooterActions followup={item.data} />
+          <button
+            type="button"
+            onClick={dismissFollowup}
+            disabled={dismissing}
+            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+          >
+            <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+            {dismissing ? "Dismissing..." : "Dismiss"}
+          </button>
+        </>
       );
     }
     if (item.kind === "event") {
@@ -772,6 +778,49 @@ function ViewerActions({
         <ArrowRight className="size-3.5" aria-hidden />
       </button>
     </>
+  );
+}
+
+function FollowupFooterActions({ followup }: { followup: FollowUp }) {
+  const actions = followup.actions ?? [];
+  const { running } = useSurfaceActionActivity(followup.id);
+  const [firing, setFiring] = React.useState<string | null>(null);
+
+  if (actions.length === 0) return null;
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {actions.map((action) => {
+        const variant =
+          action.style === "primary"
+            ? "default"
+            : action.style === "danger"
+              ? "destructive"
+              : "outline";
+        const pending = running || firing === action.id;
+        return (
+          <Button
+            key={action.id}
+            type="button"
+            size="sm"
+            variant={variant}
+            disabled={pending}
+            className="h-10 gap-1.5"
+            onClick={async () => {
+              setFiring(action.id);
+              try {
+                await postSurfaceAction(followup.id, action.id);
+              } finally {
+                setFiring(null);
+              }
+            }}
+          >
+            {pending ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+            {pending && action.id === "draft_reply" ? "Drafting..." : action.label}
+          </Button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1532,6 +1581,7 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   // showing the chip summary inside the opened modal.
   const pollBody = f.origin === "surface" ? "" : (f.body ?? "").trim();
   const plain = (text ?? "").trim() || pollBody;
+  const actionActivity = useSurfaceActionActivity(f.id);
 
   return (
     <div className="space-y-1 pt-3">
@@ -1579,12 +1629,6 @@ function FollowUpBody({ f }: { f: FollowUp }) {
         ) : null}
       </div>
 
-      {/* One-tap actions (Draft reply / Archive / Snooze …). Tapping seeds an
-          agent turn from the action's intent — "Draft reply" drafts only, never
-          sends. Renders nothing when the item carries no actions. */}
-      <SurfaceActionRow itemId={f.id} actions={f.actions} className="flex flex-wrap gap-2 pt-1" />
-
-
       {/* Context (summary) - ABOVE the email, under From/Subject. Stays
           silent when there's no triage summary (raw poll rows). */}
       {f.summary?.trim() ? (
@@ -1596,6 +1640,14 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           <ModalPre>{f.summary.trim()}</ModalPre>
         </ModalSection>
       ) : null}
+
+      <DraftReplyPanel
+        itemId={f.id}
+        draft={f.draft}
+        streamedText={actionActivity.text}
+        running={actionActivity.running}
+        error={actionActivity.error}
+      />
 
       {/* Message - the real email, rendered as HTML when available. */}
       <ModalSection
@@ -1652,16 +1704,6 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           </p>
         ) : null}
       </ModalSection>
-
-      {f.draft ? (
-        <ModalSection
-          label="Draft"
-          icon={<Sparkles className="size-3.5 shrink-0 text-brand" aria-hidden />}
-          meta="Jarvis drafted"
-        >
-          <ModalPre>{f.draft}</ModalPre>
-        </ModalSection>
-      ) : null}
     </div>
   );
 }
@@ -1694,6 +1736,128 @@ function metaStr(m: Record<string, unknown> | undefined, ...keys: string[]): str
     if (typeof v === "string" && v.trim()) return v.trim();
   }
   return "";
+}
+
+function useSurfaceActionActivity(itemId: string): {
+  running: boolean;
+  text: string;
+  error: string;
+} {
+  const { latest } = useRuns({ kind: "surface.action", targetId: itemId, limit: 3 });
+  const ws = useWebSocket();
+  const [text, setText] = React.useState("");
+  const [error, setError] = React.useState("");
+  const sessionId = itemId ? `surface-action-${itemId}` : "";
+
+  React.useEffect(() => {
+    if (!sessionId) return;
+    return ws.subscribe((ev) => {
+      if ("session_id" in ev && ev.session_id !== sessionId) return;
+      if (ev.type === "delta") {
+        setText((t) => t + ev.text);
+      } else if (ev.type === "error") {
+        setError(ev.message);
+      } else if (ev.type === "complete") {
+        setError("");
+      }
+    });
+  }, [sessionId, ws]);
+
+  const running = latest?.status === "running";
+  return {
+    running,
+    text: text.trim(),
+    error: error || (latest?.status === "error" ? latest.error || "Action failed." : ""),
+  };
+}
+
+function DraftReplyPanel({
+  itemId,
+  draft,
+  streamedText,
+  running,
+  error,
+}: {
+  itemId: string;
+  draft?: string;
+  streamedText: string;
+  running: boolean;
+  error: string;
+}) {
+  const incoming = (draft || streamedText || "").trim();
+  const [value, setValue] = React.useState(incoming);
+  const [dirty, setDirty] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+
+  React.useEffect(() => {
+    if (incoming && !dirty) setValue(incoming);
+  }, [dirty, incoming]);
+
+  if (!running && !incoming && !error) return null;
+
+  return (
+    <ModalSection
+      label="Draft reply"
+      icon={
+        running ? (
+          <Loader2 className="size-3.5 shrink-0 animate-spin text-brand" aria-hidden />
+        ) : (
+          <Sparkles className="size-3.5 shrink-0 text-brand" aria-hidden />
+        )
+      }
+      meta={running ? "Jarvis is writing" : draft ? "saved draft" : "latest action"}
+      className="border-brand/25 bg-brand/[0.04]"
+    >
+      <div className="space-y-2">
+        {error ? (
+          <p className="inline-flex items-center gap-1.5 text-[12px] text-danger">
+            <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
+            {error}
+          </p>
+        ) : null}
+        <Textarea
+          value={value}
+          onChange={(e) => {
+            setDirty(true);
+            setValue(e.target.value);
+          }}
+          placeholder={running ? "Jarvis is drafting..." : "No draft text captured yet."}
+          className="min-h-[180px] resize-y bg-background text-[14px] leading-relaxed"
+        />
+        {running ? (
+          <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" aria-hidden />
+            Keep this open to watch the draft stream in. The run is also tracked durably if you navigate away.
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            disabled={running || sending || value.trim().length === 0}
+            className="h-10 gap-1.5"
+            onClick={async () => {
+              const draftText = value.trim();
+              if (!draftText) return;
+              setSending(true);
+              try {
+                await postSurfaceAction(itemId, "send_reply", { draftText });
+              } finally {
+                setSending(false);
+              }
+            }}
+          >
+            {sending ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Send className="size-3.5" aria-hidden />
+            )}
+            {sending ? "Sending..." : "Send reply"}
+          </Button>
+        </div>
+      </div>
+    </ModalSection>
+  );
 }
 
 // Lazily fetch the full email body for a follow-up when the viewer opens.

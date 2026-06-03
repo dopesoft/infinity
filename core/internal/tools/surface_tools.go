@@ -233,7 +233,7 @@ func defaultEmailActions() []surface.Action {
 			ID:     "draft_reply",
 			Label:  "Draft reply",
 			Style:  "primary",
-			Intent: "Draft a reply to this email for the boss to review and edit. Create it ONLY as a Gmail draft on the same thread — do NOT send it. When the draft is saved, surface_update this item so the boss can see a reply is ready to review.",
+			Intent: "Draft a reply to this email for the boss to review and edit. Create it ONLY as a Gmail draft on the same thread - do NOT send it. When the draft is saved, call surface_update with metadata.draft set to the exact drafted reply text and leave status open so the boss can review/send it.",
 		},
 		{
 			ID:     "archive",
@@ -341,6 +341,7 @@ func (t *surfaceUpdateTool) Schema() map[string]any {
 			"status":            map[string]any{"type": "string", "enum": []string{"open", "snoozed", "done", "dismissed"}, "description": "New lifecycle state."},
 			"importance":        map[string]any{"type": "integer", "description": "Re-rank 0-100."},
 			"importance_reason": map[string]any{"type": "string", "description": "One line explaining the new score."},
+			"metadata":          map[string]any{"type": "object", "description": "Optional metadata keys to merge into the item. Use this for durable action results like {\"draft\":\"...\"} after creating an email draft. Existing metadata keys not mentioned are preserved."},
 			"snooze_hours":      map[string]any{"type": "number", "description": "Hide the item for this many hours (sets status=snoozed automatically)."},
 		},
 		"required": []string{"id"},
@@ -373,6 +374,9 @@ func (t *surfaceUpdateTool) Execute(ctx context.Context, in map[string]any) (str
 	}
 	if r := strString(in, "importance_reason"); r != "" {
 		p.ImportanceReason = &r
+	}
+	if raw, ok := in["metadata"].(map[string]any); ok && len(raw) > 0 {
+		p.MetadataMerge = raw
 	}
 	if v, ok := in["snooze_hours"].(float64); ok && v > 0 {
 		until := time.Now().UTC().Add(time.Duration(v * float64(time.Hour)))

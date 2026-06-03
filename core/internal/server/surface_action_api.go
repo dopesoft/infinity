@@ -12,7 +12,6 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/surface"
-	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
 // handleSurfaceAction is the SURFACE RETURN-PATH endpoint. When the boss taps
@@ -36,8 +35,9 @@ func (s *Server) handleSurfaceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID       string `json:"id"`
-		ActionID string `json:"action_id"`
+		ID        string `json:"id"`
+		ActionID  string `json:"action_id"`
+		DraftText string `json:"draft_text,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -67,52 +67,79 @@ func (s *Server) handleSurfaceAction(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if action == nil && req.ActionID == "send_reply" && isEmailSurfaceItem(it) && strings.TrimSpace(req.DraftText) != "" {
+		action = &surface.Action{
+			ID:     "send_reply",
+			Label:  "Send reply",
+			Style:  "primary",
+			Intent: "Send the boss-edited reply text on this same email thread using the connected Gmail account. Use an existing draft id from metadata when available; otherwise send it as a reply in the same thread. After the send succeeds, call surface_update with status done.",
+		}
+	}
 	if action == nil {
 		writeError(w, http.StatusBadRequest, "unknown action for this item")
 		return
 	}
 
-	prompt := buildSurfaceActionPrompt(it, action)
+	prompt := buildSurfaceActionPrompt(it, action, req.DraftText)
 	label := action.Label
 	if it.Title != "" {
 		label = action.Label + " · " + it.Title
 	}
+	sessionID := "surface-action-" + it.ID
 
 	// Fire in the background; the mem_runs row + realtime carry progress to
 	// the UI. We intentionally do NOT block the HTTP response on the agent
 	// turn - it can take minutes, and the client watches via useRuns().
 	go func() {
 		_ = runs.Track(context.Background(), runs.KindSurfaceAction, it.ID, label, runs.SourceAgent, func(ctx context.Context) error {
-			ctx = tools.WithAutonomous(ctx)
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
-			sessionID := "surface-action-" + it.ID
 			out := make(chan agent.RunEvent, 256)
 			go func() {
-				for range out { //nolint:revive // drain; capture hooks persist what matters
+				for ev := range out {
+					sendRunEventToWS(func(frame wsServerEvent) {
+						s.broadcastAll(frame)
+					}, ev)
 				}
 			}()
-			return s.loop.Run(ctx, sessionID, prompt, "", nil, out)
+			err := s.loop.Run(ctx, sessionID, prompt, "", nil, out)
+			close(out)
+			if err != nil {
+				s.broadcastAll(wsServerEvent{Type: "error", SessionID: sessionID, Message: err.Error()})
+			}
+			return err
 		})
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"ok":        true,
-		"kind":      string(runs.KindSurfaceAction),
-		"target_id": it.ID,
+		"ok":         true,
+		"kind":       string(runs.KindSurfaceAction),
+		"target_id":  it.ID,
+		"session_id": sessionID,
 	})
 }
 
-// buildSurfaceActionPrompt composes the autonomous turn's user message from
-// the chosen action's intent + the item's context, so the agent has
+// buildSurfaceActionPrompt composes the action turn's user message from the
+// chosen action's intent + the item's context, so the agent has
 // everything it needs to act without re-fetching.
-func buildSurfaceActionPrompt(it *surface.Item, a *surface.Action) string {
+func buildSurfaceActionPrompt(it *surface.Item, a *surface.Action, draftText string) string {
 	var b strings.Builder
 	b.WriteString("The boss tapped the \"")
 	b.WriteString(a.Label)
-	b.WriteString("\" action on a dashboard item. Carry out this instruction now using your tools, then report the real outcome. If your action resolves the item, surface_update it (pass the id below); otherwise leave it open.\n\n")
+	b.WriteString("\" action on a dashboard item. This is an explicit boss-clicked action, not an unattended cron. Carry out this instruction now using your tools, then report the real outcome. If your action resolves the item, surface_update it (pass the id below); otherwise leave it open.\n\n")
 	b.WriteString("INSTRUCTION: ")
 	b.WriteString(a.Intent)
+	if a.ID == "draft_reply" {
+		b.WriteString("\n\nDRAFT RESULT CONTRACT: after creating the Gmail draft, call surface_update with this item id and metadata {\"draft\":\"<the exact reply text you drafted>\",\"draft_id\":\"<gmail draft id if the tool returned one>\"}. Do not mark the item done or dismissed; the boss still needs to review/send it.")
+	}
+	if a.ID == "send_reply" {
+		if txt := strings.TrimSpace(draftText); txt != "" {
+			b.WriteString("\n\nBOSS-EDITED REPLY TEXT TO SEND:\n")
+			b.WriteString(txt)
+			b.WriteString("\n\nUse this exact edited text as the reply body unless a required upstream field forces harmless formatting.")
+		}
+		b.WriteString("\n\nSEND RESULT CONTRACT: sending email is destructive, so use the normal tool approval gate if the selected Gmail send tool requires it. Only call surface_update status=done after the send succeeds.")
+	}
 	b.WriteString("\n\nITEM CONTEXT:\n")
 	fmt.Fprintf(&b, "- id: %s   (use this for surface_update)\n", it.ID)
 	fmt.Fprintf(&b, "- surface/kind: %s / %s\n", it.Surface, it.Kind)
@@ -137,4 +164,13 @@ func buildSurfaceActionPrompt(it *surface.Item, a *surface.Action) string {
 		}
 	}
 	return b.String()
+}
+
+func isEmailSurfaceItem(it *surface.Item) bool {
+	if it == nil {
+		return false
+	}
+	surf := strings.ToLower(strings.TrimSpace(it.Surface))
+	kind := strings.ToLower(strings.TrimSpace(it.Kind))
+	return kind == "email" && (surf == "followups" || surf == "inbox")
 }
