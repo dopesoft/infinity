@@ -83,7 +83,7 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 	var b strings.Builder
 	b.WriteString("<active_plan>\n")
 	b.WriteString("Your durable plan for this task (survives across turns/restarts). Keep it current with plan_update as you work, and plan_verify before marking a step done. ")
-	b.WriteString("If you've drifted from it, get back on it or revise it.\n")
+	b.WriteString("If the boss changes direction or says 'let's do this instead', reshape this plan YOURSELF with plan_revise (prune steps that no longer apply, rewrite a step to what you're now doing, add new ones) so it always matches reality — never make him name step numbers, and never tick a step 'done' that didn't actually happen. If he says to drop/kill/stop the plan, use plan_cancel.\n")
 	fmt.Fprintf(&b, "Plan: %s", title)
 	if strings.TrimSpace(goal) != "" {
 		fmt.Fprintf(&b, " — %s", goal)

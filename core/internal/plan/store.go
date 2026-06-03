@@ -428,6 +428,112 @@ func (s *Store) SetStatus(ctx context.Context, planID, status string) error {
 
 // recompute sets current_step to the first non-terminal step and rolls the
 // plan to a terminal status when every step is resolved.
+// CancelActive cancels the session's current active/paused plan - the boss's
+// "kill the plan". Cancelled (not deleted) so history survives, and PlanProvider
+// stops injecting it so it drops out of the agent's context and off the live
+// plan dock. Returns the cancelled plan, or nil if the session had none.
+func (s *Store) CancelActive(ctx context.Context, sessionID string) (*Plan, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return nil, nil
+	}
+	var planID string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE mem_plans SET status = 'cancelled', updated_at = NOW()
+		 WHERE session_id = $1::uuid AND status IN ('active','paused')
+		RETURNING id::text
+	`, sessionID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cancel active plan: %w", err)
+	}
+	return s.Get(ctx, planID)
+}
+
+// Cancel cancels a specific plan by id (no-op if it's already terminal).
+func (s *Store) Cancel(ctx context.Context, planID string) (*Plan, error) {
+	if s == nil || s.pool == nil || planID == "" {
+		return nil, errors.New("plan store not configured")
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE mem_plans SET status = 'cancelled', updated_at = NOW()
+		 WHERE id = $1::uuid AND status NOT IN ('completed','failed','cancelled')
+	`, planID); err != nil {
+		return nil, fmt.Errorf("cancel plan: %w", err)
+	}
+	return s.Get(ctx, planID)
+}
+
+// EditStep rewrites a step's title and/or detail in place (empty = unchanged).
+// This is how a plan adapts when work diverts - a step is repurposed rather than
+// faked done or the whole plan thrown away.
+func (s *Store) EditStep(ctx context.Context, stepID, title, detail string) error {
+	if s == nil || s.pool == nil || stepID == "" {
+		return errors.New("plan store not configured")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE mem_plan_steps
+		   SET title  = CASE WHEN $2 = '' THEN title  ELSE $2 END,
+		       detail = CASE WHEN $3 = '' THEN detail ELSE $3 END
+		 WHERE id = $1::uuid
+	`, stepID, title, detail)
+	return err
+}
+
+// RemoveStep deletes a step (prune). Returns the parent plan id so the caller
+// can renumber + recompute.
+func (s *Store) RemoveStep(ctx context.Context, stepID string) (string, error) {
+	if s == nil || s.pool == nil || stepID == "" {
+		return "", errors.New("plan store not configured")
+	}
+	var planID string
+	err := s.pool.QueryRow(ctx, `
+		DELETE FROM mem_plan_steps WHERE id = $1::uuid RETURNING plan_id::text
+	`, stepID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return planID, err
+}
+
+// AppendStep adds a new pending step at the end of a plan.
+func (s *Store) AppendStep(ctx context.Context, planID string, in NewStepInput) error {
+	if s == nil || s.pool == nil || planID == "" {
+		return errors.New("plan store not configured")
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO mem_plan_steps (plan_id, idx, title, detail, status, is_checkpoint, verify_required)
+		VALUES ($1::uuid,
+		        (SELECT COALESCE(MAX(idx)+1, 0) FROM mem_plan_steps WHERE plan_id = $1::uuid),
+		        $2, $3, 'pending', $4, $5)
+	`, planID, in.Title, in.Detail, in.IsCheckpoint, in.VerifyRequired)
+	return err
+}
+
+// RenumberSteps compacts idx to 0..n-1 in current idx order (call after prunes
+// so positions stay contiguous).
+func (s *Store) RenumberSteps(ctx context.Context, planID string) error {
+	if s == nil || s.pool == nil || planID == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		WITH ordered AS (
+			SELECT id, ROW_NUMBER() OVER (ORDER BY idx ASC) - 1 AS new_idx
+			  FROM mem_plan_steps WHERE plan_id = $1::uuid
+		)
+		UPDATE mem_plan_steps s SET idx = o.new_idx
+		  FROM ordered o WHERE s.id = o.id AND s.idx <> o.new_idx
+	`, planID)
+	return err
+}
+
+// Recompute exposes lifecycle recomputation so tools can refresh a plan's
+// status/current_step after structural edits.
+func (s *Store) Recompute(ctx context.Context, planID string) error {
+	return s.recompute(ctx, planID)
+}
+
 func (s *Store) recompute(ctx context.Context, planID string) error {
 	steps, err := s.steps(ctx, planID)
 	if err != nil {

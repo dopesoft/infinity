@@ -39,13 +39,30 @@ func resolveStepRef(ctx context.Context, store *plan.Store, raw string) (string,
 	if raw == "" {
 		return "", errors.New("step_id required")
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil {
-		return raw, nil // not an integer -> treat as a real step id (uuid)
+	// Clean integer -> positional ref.
+	if n, err := strconv.Atoi(raw); err == nil {
+		return resolvePositionalStep(ctx, store, n)
 	}
-	p, perr := store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
-	if perr != nil {
-		return "", perr
+	// Not a clean integer. A real UUID always contains '-' (36-char hex-dashed);
+	// if the ref has no dash but starts with a digit it's a mangled positional
+	// emission like "2'}},{" from a sloppy tool call - recover the leading number.
+	if !strings.Contains(raw, "-") && raw[0] >= '0' && raw[0] <= '9' {
+		end := 0
+		for end < len(raw) && raw[end] >= '0' && raw[end] <= '9' {
+			end++
+		}
+		if n, err := strconv.Atoi(raw[:end]); err == nil {
+			return resolvePositionalStep(ctx, store, n)
+		}
+	}
+	return raw, nil // treat as a real step id (uuid)
+}
+
+// resolvePositionalStep maps a 1-based step number to the active plan's step id.
+func resolvePositionalStep(ctx context.Context, store *plan.Store, n int) (string, error) {
+	p, err := store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
+	if err != nil {
+		return "", err
 	}
 	if p == nil || len(p.Steps) == 0 {
 		return "", fmt.Errorf("there's no active plan to resolve step %d against - call plan_get first", n)
@@ -53,7 +70,7 @@ func resolveStepRef(ctx context.Context, store *plan.Store, raw string) (string,
 	if n < 1 || n > len(p.Steps) {
 		return "", fmt.Errorf("step %d is out of range - this plan has %d steps (use 1..%d)", n, len(p.Steps), len(p.Steps))
 	}
-	return p.Steps[n-1].ID, nil
+	return p.Steps[n-1].ID, nil // Steps come back ordered idx ASC.
 }
 
 // RegisterPlanTools wires the plan substrate tools. No-op when pool is nil so
@@ -68,6 +85,8 @@ func RegisterPlanTools(r *Registry, pool *pgxpool.Pool) {
 	r.Register(&planVerify{store: store})
 	r.Register(&planGet{store: store})
 	r.Register(&planList{store: store})
+	r.Register(&planRevise{store: store})
+	r.Register(&planCancel{store: store})
 }
 
 // renderPlan is the compact JSON the tools hand back so the model sees the
@@ -338,7 +357,232 @@ func (t *planList) Execute(ctx context.Context, in map[string]any) (string, erro
 	return string(out), nil
 }
 
+// ── plan_revise ──────────────────────────────────────────────────────────
+//
+// In-place plan editing for when work DIVERTS from the plan: prune steps that
+// no longer apply, rewrite a step to what you're actually doing now, add new
+// steps. This is the honest alternative to faking a step done or nuking the
+// whole plan with plan_create - the steps already finished stay finished.
+
+type planRevise struct{ store *plan.Store }
+
+func (t *planRevise) Name() string { return "plan_revise" }
+func (t *planRevise) Description() string {
+	return "Revise the current plan IN PLACE when the work diverts from it - the right move instead of " +
+		"faking a step done or starting over. `edit` rewrites a step's title/detail (e.g. step 2 was " +
+		"'Install X' but it failed, so repurpose it to 'Clean up the failed install'); `remove` prunes " +
+		"steps that no longer apply (e.g. drop the last 2); `add` appends new steps. Steps already done " +
+		"stay done. Refer to a step by its 1-based number or its id. Operates on this session's active " +
+		"plan unless plan_id is given. To kill a plan entirely, use plan_cancel instead."
+}
+func (t *planRevise) Schema() map[string]any {
+	stepRef := map[string]any{"type": "string", "description": "Step's 1-based number (e.g. \"2\") or its id."}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"plan_id": map[string]any{"type": "string", "description": "Optional: a specific plan id. Omit for this session's active plan."},
+			"edit": map[string]any{
+				"type":        "array",
+				"description": "Rewrite existing steps.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"step":   stepRef,
+						"title":  map[string]any{"type": "string", "description": "New title (omit to keep)."},
+						"detail": map[string]any{"type": "string", "description": "New detail (omit to keep)."},
+					},
+					"required": []string{"step"},
+				},
+			},
+			"remove": map[string]any{
+				"type":        "array",
+				"description": "Prune these steps (by number or id).",
+				"items":       map[string]any{"type": "string"},
+			},
+			"add": map[string]any{
+				"type":        "array",
+				"description": "Append new steps to the end.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"title":           map[string]any{"type": "string"},
+						"detail":          map[string]any{"type": "string"},
+						"is_checkpoint":   map[string]any{"type": "boolean"},
+						"verify_required": map[string]any{"type": "boolean"},
+					},
+					"required": []string{"title"},
+				},
+			},
+		},
+	}
+}
+func (t *planRevise) Execute(ctx context.Context, in map[string]any) (string, error) {
+	// Snapshot the plan FIRST so positional refs resolve against the pre-edit
+	// order (prunes shift positions, so all refs must be resolved up front).
+	var (
+		p   *plan.Plan
+		err error
+	)
+	if id := strings.TrimSpace(strString(in, "plan_id")); id != "" {
+		p, err = t.store.Get(ctx, id)
+	} else {
+		p, err = t.store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
+	}
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		return "", errors.New("no active plan to revise - create one with plan_create first")
+	}
+
+	resolve := func(ref string) (string, error) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return "", errors.New("empty step reference")
+		}
+		if n, e := strconv.Atoi(ref); e == nil {
+			if n < 1 || n > len(p.Steps) {
+				return "", fmt.Errorf("step %d is out of range (this plan has %d steps)", n, len(p.Steps))
+			}
+			return p.Steps[n-1].ID, nil
+		}
+		for i := range p.Steps {
+			if p.Steps[i].ID == ref {
+				return ref, nil
+			}
+		}
+		return "", fmt.Errorf("no step %q in this plan", ref)
+	}
+
+	// Resolve every ref up front against the snapshot.
+	type editOp struct{ id, title, detail string }
+	var edits []editOp
+	for _, raw := range arrOf(in, "edit") {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sid, e := resolve(strString(m, "step"))
+		if e != nil {
+			return "", e
+		}
+		edits = append(edits, editOp{id: sid, title: strString(m, "title"), detail: strString(m, "detail")})
+	}
+	var removeIDs []string
+	for _, raw := range arrOf(in, "remove") {
+		ref, _ := raw.(string)
+		sid, e := resolve(ref)
+		if e != nil {
+			return "", e
+		}
+		removeIDs = append(removeIDs, sid)
+	}
+	var adds []plan.NewStepInput
+	for _, raw := range arrOf(in, "add") {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		title := strings.TrimSpace(strString(m, "title"))
+		if title == "" {
+			continue
+		}
+		adds = append(adds, plan.NewStepInput{
+			Title:          title,
+			Detail:         strString(m, "detail"),
+			IsCheckpoint:   boolOrFalse(m, "is_checkpoint"),
+			VerifyRequired: boolOrFalse(m, "verify_required"),
+		})
+	}
+	if len(edits) == 0 && len(removeIDs) == 0 && len(adds) == 0 {
+		return "", errors.New("nothing to revise - pass edit, remove, and/or add")
+	}
+
+	// Apply by id (order-independent now that refs are resolved).
+	for _, e := range edits {
+		if err := t.store.EditStep(ctx, e.id, e.title, e.detail); err != nil {
+			return "", err
+		}
+	}
+	for _, sid := range removeIDs {
+		if _, err := t.store.RemoveStep(ctx, sid); err != nil {
+			return "", err
+		}
+	}
+	for _, a := range adds {
+		if err := t.store.AppendStep(ctx, p.ID, a); err != nil {
+			return "", err
+		}
+	}
+	if err := t.store.RenumberSteps(ctx, p.ID); err != nil {
+		return "", err
+	}
+	if err := t.store.Recompute(ctx, p.ID); err != nil {
+		return "", err
+	}
+	refreshed, err := t.store.Get(ctx, p.ID)
+	if err != nil {
+		return "", err
+	}
+	return renderPlan(refreshed), nil
+}
+
+// ── plan_cancel ──────────────────────────────────────────────────────────
+
+type planCancel struct{ store *plan.Store }
+
+func (t *planCancel) Name() string { return "plan_cancel" }
+func (t *planCancel) Description() string {
+	return "Kill the current plan when the boss tells you to drop / kill / cancel / stop / abandon it, or " +
+		"when it genuinely can't succeed. This CANCELS the plan (status=cancelled, kept for history) so it " +
+		"stops driving your work, leaves your context, and clears off the boss's dashboard. Cancels this " +
+		"session's active plan by default; pass plan_id for a specific one. NEVER fake a kill by marking " +
+		"steps 'done' - 'done' means the step actually succeeded. If you've diverted but aren't killing the " +
+		"whole plan, use plan_revise to prune/rewrite steps instead."
+}
+func (t *planCancel) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"plan_id": map[string]any{"type": "string", "description": "Optional: a specific plan id. Omit to cancel this session's active plan."},
+		},
+	}
+}
+func (t *planCancel) Execute(ctx context.Context, in map[string]any) (string, error) {
+	var (
+		p   *plan.Plan
+		err error
+	)
+	if id := strings.TrimSpace(strString(in, "plan_id")); id != "" {
+		p, err = t.store.Cancel(ctx, id)
+	} else {
+		p, err = t.store.CancelActive(ctx, SessionIDFromContext(ctx))
+	}
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		out, _ := json.Marshal(map[string]any{"plan": nil, "note": "There's no active plan to cancel."})
+		return string(out), nil
+	}
+	// Close any live spinner left on an in-progress step so the dashboard
+	// doesn't dangle a running indicator after the plan is gone.
+	for i := range p.Steps {
+		if p.Steps[i].Status == plan.StepInProgress && p.Steps[i].RunID != "" {
+			runs.FinishByID(ctx, p.Steps[i].RunID, nil, "plan cancelled")
+		}
+	}
+	out, _ := json.Marshal(map[string]any{"plan": p, "note": "Plan cancelled - it's off the board and out of your active context."})
+	return string(out), nil
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
+
+// arrOf returns the []any stored at key (nil when absent or the wrong type).
+func arrOf(in map[string]any, key string) []any {
+	v, _ := in[key].([]any)
+	return v
+}
 
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {

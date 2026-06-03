@@ -1652,7 +1652,7 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	}
 
 	codeRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, title, target_path, risk_level, created_at
+		SELECT id::text, title, target_path, rationale, proposed_change, risk_level, created_at
 		FROM mem_code_proposals
 		WHERE status = 'candidate'
 		ORDER BY created_at DESC
@@ -1661,11 +1661,11 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	if err == nil {
 		for codeRows.Next() {
 			var (
-				id, title, risk string
-				targetPath      *string
-				created         time.Time
+				id, title, rationale, change, risk string
+				targetPath                         *string
+				created                            time.Time
 			)
-			if err := codeRows.Scan(&id, &title, &targetPath, &risk, &created); err != nil {
+			if err := codeRows.Scan(&id, &title, &targetPath, &rationale, &change, &risk, &created); err != nil {
 				codeRows.Close()
 				return nil, err
 			}
@@ -1679,10 +1679,15 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			}
 			c := created
 			out = append(out, WorkItem{
-				ID:         "code-" + id,
-				Kind:       "code_proposal",
-				Title:      title,
+				ID:    "code-" + id,
+				Kind:  "code_proposal",
+				Title: title,
+				// Subtitle stays the short "file · risk" status; Summary carries
+				// the actual context (what Jarvis noticed + what it proposes + the
+				// ask) so the card isn't a contextless title. Without this the
+				// dashboard read only the title and dropped the whole draft.
 				Subtitle:   sub,
+				Summary:    codeProposalReport(rationale, change),
 				Engine:     "Code",
 				Ref:        path,
 				Column:     "awaiting",
@@ -1927,6 +1932,29 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 // "session_pattern_1780423167" — is dropped because it reads like a science
 // experiment and adds nothing on the card; the exact id is preserved on
 // WorkItem.Ref for the detail view. Returns "" for empty input.
+// codeProposalReport composes the human-readable narrative for a code-proposal
+// work card: what Jarvis noticed, what it proposes, and the ask. Without it the
+// card showed only a title + "path · risk" with zero context on what it is.
+func codeProposalReport(rationale, change string) string {
+	var b strings.Builder
+	if r := strings.TrimSpace(rationale); r != "" {
+		b.WriteString("What Jarvis noticed\n")
+		b.WriteString(r)
+	}
+	if c := strings.TrimSpace(change); c != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Proposed change\n")
+		b.WriteString(c)
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("This is a draft Jarvis flagged on its own — nothing changes until you approve it in Code Proposals.")
+	return b.String()
+}
+
 func humanizeName(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
