@@ -133,15 +133,12 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 			imp := dec.Importance
 			it.Importance = &imp
 		}
-		// Durable HTML body now (so the boss reads the real email later, even if
-		// the account is revoked). Best-effort.
-		if d.Fetcher != nil {
-			if html, text, _, ferr := d.Fetcher.FetchMessage(ctx, "gmail", em.accountID, em.msgID); ferr == nil &&
-				(strings.TrimSpace(html) != "" || strings.TrimSpace(text) != "") {
-				it.CachedHTML = html
-				it.CachedText = text
-			}
-		}
+		// NOTE: we deliberately do NOT fetch the HTML body here. Doing it inline,
+		// per email, in a loop made the run hang for minutes on a parade of slow
+		// Composio calls. The dashboard's /api/followups/message endpoint already
+		// fetches + caches the full HTML lazily the first time the boss opens the
+		// email, so the body is there when he needs it — and the run stays fast
+		// (decision + upsert only, seconds not minutes).
 		if _, err := d.Surface.Upsert(ctx, it); err != nil {
 			log.Warn("inbox triage surface", "msg", em.msgID, "err", err)
 			continue
