@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -94,6 +96,24 @@ func (e *AgentExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	// prose — see tools.RegisterJobForSession.
 	tools.RegisterJobForSession(sessionID, j.Name)
 	defer tools.UnregisterJobForSession(sessionID)
+
+	// Lock the turn to the job's tool_scope allowlist (if any). A cron like
+	// inbox-triage carries {"tool_scope":{"allow":[...]}} in TargetConfig; this
+	// makes every off-task tool physically invisible for the session so the
+	// model can't wander into delegate / skill_optimize / recall / system_map and
+	// quit with the work undone (Rule #1b: mechanic, not droppable prose). See
+	// tools.RegisterToolScopeForSession + the scope visibility func in serve.go.
+	if allow := toolScopeAllow(j.TargetConfig); len(allow) > 0 {
+		tools.RegisterToolScopeForSession(sessionID, allow)
+		defer tools.UnregisterToolScopeForSession(sessionID)
+	}
+
+	// Close this turn's plan bookkeeping the moment it ends. When the agent
+	// finishes (even by giving up via TaskCompleted), its plan.step runs would
+	// otherwise stay 'running' and the plan 'active' forever — a phantom
+	// "Running" card on the Agent Work board (the 6.4-hour zombie the boss saw).
+	// The reaper ticker is the safety net; this makes the close immediate.
+	defer e.finalizeSession(sessionID)
 
 	out := make(chan agent.RunEvent, 64)
 	go func() {
@@ -231,6 +251,26 @@ func (e *AgentExecutor) summarizeRun(sessionID string) RunSummary {
 	}
 }
 
+// toolScopeAllow extracts the optional tool_scope.allow allowlist from a job's
+// TargetConfig. Returns nil when the job carries no scope (the common case:
+// full toolset). This is what lets a cron lock its turn to a specific toolset —
+// e.g. inbox-triage to mail+surface tools only — as pure data on the job, with
+// no per-job branch anywhere in the loop.
+func toolScopeAllow(cfg json.RawMessage) []string {
+	if len(cfg) == 0 {
+		return nil
+	}
+	var parsed struct {
+		ToolScope struct {
+			Allow []string `json:"allow"`
+		} `json:"tool_scope"`
+	}
+	if err := json.Unmarshal(cfg, &parsed); err != nil {
+		return nil
+	}
+	return parsed.ToolScope.Allow
+}
+
 func plural(n int) string {
 	if n == 1 {
 		return ""
@@ -335,6 +375,26 @@ func (e *AgentExecutor) seedSelfImproveApprovals(sessionID string, j Job) {
 			"Pre-seeded by INFINITY_SELF_IMPROVE_AUTONOMY for self-improve session "+sessionID+". Session-scoped; expires with the gate TTL.",
 			"session-scoped auto-approval for "+tool,
 		)
+	}
+}
+
+// finalizeSession closes the turn's plan/run bookkeeping right after Loop.Run
+// returns, so a finished (or given-up) cron turn never leaves a phantom
+// "Running" card on the Agent Work board. Best-effort + nil-safe; non-UUID
+// (system_event) sessions have no UUID-keyed plans and are skipped.
+func (e *AgentExecutor) finalizeSession(sessionID string) {
+	if e == nil || e.Pool == nil || sessionID == "" {
+		return
+	}
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if _, err := plan.NewStore(e.Pool).FinalizeSession(ctx, sessionID); err != nil {
+		// Real failure → stderr (severity:error). Success is silent; the plan
+		// reconcile ticker logs aggregate counts.
+		log.Printf("cron finalize session %s: %v", sessionID, err)
 	}
 }
 

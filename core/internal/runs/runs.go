@@ -248,6 +248,50 @@ func (t *Tracker) RecoverStranded(ctx context.Context) (int, error) {
 	return int(tag.RowsAffected()), nil
 }
 
+// ReapTimedOut closes mem_runs still 'running' past maxAge — a run whose owning
+// turn or process ended without closing it (the agent gave up mid-turn, the box
+// restarted, a detached job hung). Without this a stale row spins forever on the
+// Agent Work board (the exact symptom: an inbox-triage plan.step stuck 'running'
+// for 6 hours after the turn had already TaskCompleted). Unlike RecoverStranded
+// (boot-only, closes ALL running rows), this is age-bounded so it's SAFE to run
+// on a live process — a run younger than maxAge is presumed still legitimately
+// working. background.build is excluded: those are long-lived detached jobs that
+// manage their own lifecycle. The boss-facing human_error is set so the card
+// reads "(stalled)" rather than going silent. Returns rows closed.
+func (t *Tracker) ReapTimedOut(ctx context.Context, maxAge time.Duration) (int, error) {
+	if t == nil || t.pool == nil {
+		return 0, nil
+	}
+	if maxAge <= 0 {
+		maxAge = 45 * time.Minute
+	}
+	humanJSON := "{}"
+	if b, err := json.Marshal(errs.HumanizeString("the run ran past its time budget and was stopped")); err == nil {
+		humanJSON = string(b)
+	}
+	tag, err := t.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET status = 'error',
+		       ended_at = COALESCE(ended_at, NOW()),
+		       duration_ms = COALESCE(duration_ms,
+		           LEAST(2147483647, GREATEST(0,
+		               EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
+		       error = COALESCE(NULLIF(error, ''), 'run exceeded its time budget and was reaped'),
+		       result_summary = COALESCE(NULLIF(result_summary, ''), '(stalled — no result recorded)'),
+		       human_error = CASE
+		           WHEN human_error IS NULL OR human_error = '{}'::jsonb THEN $2::jsonb
+		           ELSE human_error
+		       END
+		 WHERE status = 'running'
+		   AND kind <> $3
+		   AND started_at < NOW() - ($1 * interval '1 second')
+	`, maxAge.Seconds(), humanJSON, string(KindBackgroundBuild))
+	if err != nil {
+		return 0, fmt.Errorf("reap timed-out runs: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // FinishByID closes a run row by its id, without needing the original Handle.
 // Used when begin and finish span different turns / tool calls (eg. a plan
 // step booked 'running' by plan_update on one turn and closed on a later turn),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +17,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	robfig "github.com/robfig/cron/v3"
 )
+
+// infoLog writes success/operational lines to stdout so Railway tags them
+// `severity:info` instead of the red `error` that stdlib log (stderr) would
+// produce. Failures still use the default stderr logger. See CLAUDE.md →
+// "Logging — severity must match reality".
+var infoLog = log.New(os.Stdout, "cron: ", log.LstdFlags)
 
 // Scheduler wraps robfig/cron/v3 with DB-backed job state.
 type Scheduler struct {
@@ -185,6 +192,22 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		ctx, cancel := context.WithTimeout(context.Background(), jobTimeout(j))
 		defer cancel()
 
+		// Overlap guard: if a prior run of THIS cron is still in-flight, skip
+		// this fire instead of stacking a second concurrent run. A stalled or
+		// slow run otherwise piles up a fresh zombie session/plan every period —
+		// the exact inbox-triage double-fire the boss saw. Keyed on the cron's
+		// own mem_runs rows (idx_mem_runs_target_running); generic for every
+		// cron. Manual RunOnce is deliberately NOT guarded — that's an explicit
+		// boss action and may override.
+		if s.cronInFlight(ctx, j.ID) {
+			infoLog.Printf("skipping fire of %q (%s) — prior run still in-flight", j.Name, j.ID)
+			_, _ = s.pool.Exec(ctx, `
+				UPDATE mem_crons SET last_run_at = $2, last_run_status = 'skipped (overlap)'
+				 WHERE id = $1::uuid
+			`, j.ID, time.Now().UTC())
+			return
+		}
+
 		// Begin/Finish (not Track) so the executor's RunSummary lands on the
 		// mem_runs row: result_summary gets the "what I did / how it went"
 		// narrative and meta gets the structured detail. That's what turns the
@@ -228,6 +251,27 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 			 WHERE id = $1::uuid
 		`, j.ID, end, status, end.Sub(start).Milliseconds(), execErr != nil, nextPtr)
 	}
+}
+
+// cronInFlight reports whether a run of this cron is still executing, so the
+// fire path can skip an overlapping concurrent run of the same schedule. Fails
+// OPEN (returns false) on any query error — a rare overlap is better than a
+// cron that silently never fires again because one status check hiccupped.
+func (s *Scheduler) cronInFlight(ctx context.Context, cronID string) bool {
+	if s == nil || s.pool == nil {
+		return false
+	}
+	var inFlight bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM mem_runs
+			 WHERE kind = $1 AND target_id = $2 AND status = 'running'
+		)
+	`, string(runs.KindCron), cronID).Scan(&inFlight)
+	if err != nil {
+		return false
+	}
+	return inFlight
 }
 
 // Upsert creates or updates a cron row by name. Returns the row's UUID.

@@ -176,6 +176,34 @@ func (c *Cache) Refresh(ctx context.Context) error {
 		}
 	}
 
+	// Prune husk overlays: drop alias/identity entries whose account is no
+	// longer ACTIVE (the revoked dup a reconnect leaves behind) or no longer
+	// present at all (deleted). This permanently kills the "still pointing at
+	// the old ca_ id after revoke/reauth" footgun — without it the husks
+	// accumulate in infinity_meta and pollute the per-turn overlay with dead
+	// duplicate mailboxes. Guard on a non-empty account list so a transient
+	// empty fetch can't wipe every overlay.
+	if len(accounts) > 0 {
+		activeIDs := make(map[string]struct{}, len(accounts))
+		for _, a := range accounts {
+			if accountActive(a) {
+				activeIDs[a.ID] = struct{}{}
+			}
+		}
+		if pruned, changed := pruneOverlayToActive(aliases, activeIDs); changed {
+			aliases = pruned
+			if perr := c.saveAliases(ctx, aliases); perr != nil {
+				c.recordErr("alias prune persist: " + perr.Error())
+			}
+		}
+		if pruned, changed := pruneOverlayToActive(identities, activeIDs); changed {
+			identities = pruned
+			if perr := c.saveIdentities(ctx, identities); perr != nil {
+				c.recordErr("identity prune persist: " + perr.Error())
+			}
+		}
+	}
+
 	byToolkit := make(map[string][]*Account, len(accounts))
 	for _, a := range accounts {
 		byToolkit[strings.ToLower(a.ToolkitSlug)] = append(byToolkit[strings.ToLower(a.ToolkitSlug)], a)
@@ -230,6 +258,25 @@ func (c *Cache) SetOnChange(fn func()) {
 	c.onChangeMu.Lock()
 	c.onChange = fn
 	c.onChangeMu.Unlock()
+}
+
+// pruneOverlayToActive returns m with every entry whose account id is not in
+// activeIDs removed, plus whether anything was dropped. Used by Refresh to evict
+// the alias/identity husks a Composio revoke+reconnect leaves behind (the old
+// ca_ id goes REVOKED or vanishes while a fresh ACTIVE id takes over the same
+// mailbox). The id set spans all toolkits, so an active account on another
+// toolkit is never pruned.
+func pruneOverlayToActive(m map[string]string, activeIDs map[string]struct{}) (map[string]string, bool) {
+	if len(m) == 0 {
+		return m, false
+	}
+	out := make(map[string]string, len(m))
+	for id, v := range m {
+		if _, ok := activeIDs[id]; ok {
+			out[id] = v
+		}
+	}
+	return out, len(out) != len(m)
 }
 
 // sameShape returns true when the two toolkit→count maps are identical.
@@ -585,13 +632,13 @@ func (c *Cache) SystemPromptBlock() string {
 	}
 	sort.Strings(slugs)
 
-	// Detect any account missing its real upstream identity so we can
-	// tell the agent to self-resolve. The list is rendered inline below
-	// each toolkit so the instruction is right next to the data.
+	// Detect any ACTIVE account missing its real upstream identity so we can
+	// tell the agent to self-resolve. Only active accounts matter — a revoked
+	// husk with no identity must not trigger the resolve nudge.
 	missingIdentity := false
 	for _, accs := range c.byToolkit {
 		for _, a := range accs {
-			if a.IdentityHint == "" {
+			if accountActive(a) && a.IdentityHint == "" {
 				missingIdentity = true
 				break
 			}
@@ -613,6 +660,55 @@ func (c *Cache) SystemPromptBlock() string {
 		if len(accs) == 0 {
 			continue
 		}
+		// Which identities have a live (ACTIVE) account behind them.
+		activeIdentities := map[string]struct{}{}
+		for _, a := range accs {
+			if accountActive(a) {
+				activeIdentities[strings.ToLower(a.IdentityHint)] = struct{}{}
+			}
+		}
+		// Routable: ACTIVE accounts only, de-duped by identity (a mailbox
+		// reconnected twice shows once). Sort order is created-asc, so the
+		// first kept per identity is stable.
+		var active []*Account
+		seen := map[string]struct{}{}
+		for _, a := range accs {
+			if !accountActive(a) {
+				continue
+			}
+			key := strings.ToLower(a.IdentityHint)
+			if key != "" {
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+			}
+			active = append(active, a)
+		}
+		// Disconnected: non-active accounts whose mailbox has NO active
+		// replacement. A revoked husk that's been superseded by an active
+		// reconnect is pure noise and is dropped entirely.
+		var disconnected []*Account
+		seenDead := map[string]struct{}{}
+		for _, a := range accs {
+			if accountActive(a) {
+				continue
+			}
+			key := strings.ToLower(a.IdentityHint)
+			if key != "" {
+				if _, covered := activeIdentities[key]; covered {
+					continue
+				}
+				if _, dup := seenDead[key]; dup {
+					continue
+				}
+				seenDead[key] = struct{}{}
+			}
+			disconnected = append(disconnected, a)
+		}
+		if len(active) == 0 && len(disconnected) == 0 {
+			continue
+		}
 		name := accs[0].ToolkitName
 		if name == "" {
 			name = slug
@@ -621,7 +717,7 @@ func (c *Cache) SystemPromptBlock() string {
 		b.WriteString(" (")
 		b.WriteString(slug)
 		b.WriteString("):\n")
-		for _, a := range accs {
+		for _, a := range active {
 			b.WriteString("  - id=")
 			b.WriteString(a.ID)
 			if a.Alias != "" {
@@ -634,11 +730,24 @@ func (c *Cache) SystemPromptBlock() string {
 				b.WriteString(a.IdentityHint)
 				b.WriteString("\"")
 			}
-			if a.Status != "" && strings.ToUpper(a.Status) != "ACTIVE" {
-				b.WriteString("  status=")
-				b.WriteString(a.Status)
-			}
 			b.WriteString("\n")
+		}
+		for _, a := range disconnected {
+			b.WriteString("  - DISCONNECTED")
+			if a.IdentityHint != "" {
+				b.WriteString(" identity=\"")
+				b.WriteString(a.IdentityHint)
+				b.WriteString("\"")
+			} else {
+				b.WriteString(" id=")
+				b.WriteString(a.ID)
+			}
+			if a.Status != "" {
+				b.WriteString(" (status=")
+				b.WriteString(a.Status)
+				b.WriteString(")")
+			}
+			b.WriteString(" — NOT usable; needs the boss to reconnect. Skip it and report it; never pass this id to a verb.\n")
 		}
 	}
 	b.WriteString("</connected_accounts>")

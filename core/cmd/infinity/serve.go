@@ -927,9 +927,19 @@ func serveCmd() *cobra.Command {
 				// enough; the only reliable fix is making the schemas
 				// physically invisible to the model. Mac sessions see
 				// the full toolset unchanged.
+				// Compose two visibility layers: the bridge filter (hide
+				// claude_code__* on Cloud sessions) AND the per-session tool
+				// scope (lock a cron turn to its allowlist — see
+				// tools.RegisterToolScopeForSession). Both return names to hide;
+				// the composite unions them. Scope visibility is always wired
+				// because it's keyed per session and stays silent unless the
+				// executor registered a scope for that turn.
+				visFns := []agent.ToolVisibilityFunc{}
 				if activeBridgeRouter != nil {
-					loop.SetToolVisibility(makeBridgeToolVisibility(activeBridgeRouter, activeBridgePrefs))
+					visFns = append(visFns, makeBridgeToolVisibility(activeBridgeRouter, activeBridgePrefs))
 				}
+				visFns = append(visFns, makeScopeToolVisibility(registry))
+				loop.SetToolVisibility(composeToolVisibility(visFns...))
 				// Central active-model resolver. Every Loop.Run that
 				// passes an empty model string now picks up the boss's
 				// Studio selection here - cron, workflow executor,
@@ -1797,6 +1807,44 @@ func serveCmd() *cobra.Command {
 	return cmd
 }
 
+// composeToolVisibility unions several ToolVisibilityFuncs into one: a tool is
+// hidden this turn if ANY layer wants it hidden. Nil layers are skipped. Returns
+// an empty set (not nil) so the loop's call site iterates cleanly.
+func composeToolVisibility(fns ...agent.ToolVisibilityFunc) agent.ToolVisibilityFunc {
+	return func(ctx context.Context, sessionID string) map[string]struct{} {
+		out := map[string]struct{}{}
+		for _, fn := range fns {
+			if fn == nil {
+				continue
+			}
+			for n := range fn(ctx, sessionID) {
+				out[n] = struct{}{}
+			}
+		}
+		return out
+	}
+}
+
+// makeScopeToolVisibility returns a ToolVisibilityFunc that enforces a session's
+// registered tool scope (see tools.RegisterToolScopeForSession): every tool in
+// the registry NOT on the session's allowlist is hidden. Sessions without a
+// scope (the common case) see the full toolset — the func stays silent. The
+// registry is the universe of tool names, so the complement is computed against
+// every native + MCP tool, hiding even the core-pinned footguns for the locked
+// turn.
+func makeScopeToolVisibility(registry *tools.Registry) agent.ToolVisibilityFunc {
+	if registry == nil {
+		return nil
+	}
+	return func(ctx context.Context, sessionID string) map[string]struct{} {
+		hidden, ok := tools.HiddenBySessionScope(sessionID, registry.Names())
+		if !ok {
+			return nil
+		}
+		return hidden
+	}
+}
+
 // makeBridgeToolVisibility returns an agent.ToolVisibilityFunc that hides
 // the Mac-only `claude_code__*` toolset from the model when the session's
 // active bridge is the Cloud workspace. This is the structural fix for
@@ -2129,11 +2177,14 @@ func runMaintenanceTicker(ctx context.Context, pool *pgxpool.Pool) {
 	}
 }
 
-// runPlanReconcileTicker fails plan steps stranded 'in_progress' after their
-// tracking run has already errored, so a half-dead plan doesn't linger as a
-// "Running" card on the Agent Work board. Cheap single query; runs every 2 min
-// (override via INFINITY_PLAN_RECONCILE_INTERVAL). Failures log to stdout but
-// never kill the server.
+// runPlanReconcileTicker keeps the Agent Work board honest on a live process.
+// Each tick it (1) reaps mem_runs stuck 'running' past the reaper age (a turn or
+// process that died without closing them), then (2) fails plan steps stranded
+// 'in_progress' behind a now-errored run and recomputes the plan. Without the
+// reaper, ReconcileStranded could never act on a run that hung (its status stays
+// 'running' forever). Cheap; runs every 2 min (override via
+// INFINITY_PLAN_RECONCILE_INTERVAL). Failures log to stderr but never kill the
+// server.
 func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
 	interval := 2 * time.Minute
 	if v := strings.TrimSpace(os.Getenv("INFINITY_PLAN_RECONCILE_INTERVAL")); v != "" {
@@ -2143,10 +2194,30 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
 	}
 	infoLog := log.New(os.Stdout, "", log.LstdFlags)
 	store := plan.NewStore(pool)
+	tracker := runs.New(pool)
+
+	// Reaper age: a run still 'running' past this is presumed dead (its turn or
+	// process ended without closing it). Must exceed the 30-min agent job
+	// timeout so a legitimately-long run isn't reaped. Override with
+	// INFINITY_RUN_REAPER_MAX_AGE.
+	reapAge := 45 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("INFINITY_RUN_REAPER_MAX_AGE")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			reapAge = d
+		}
+	}
 
 	runOnce := func() {
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+		// Reap stranded runs FIRST so the steps they back flip to a terminal
+		// 'error' run, then reconcile cascades those to failed + recomputes the
+		// plan. Order matters: reconcile keys off run.status='error'.
+		if n, err := tracker.ReapTimedOut(runCtx, reapAge); err != nil {
+			fmt.Fprintf(os.Stderr, "run reaper: %v\n", err)
+		} else if n > 0 {
+			infoLog.Printf("run reaper: closed %d run(s) stranded 'running' past %s", n, reapAge)
+		}
 		if n, err := store.ReconcileStranded(runCtx); err != nil {
 			fmt.Fprintf(os.Stderr, "plan reconcile: %v\n", err)
 		} else if n > 0 {

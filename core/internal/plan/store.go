@@ -468,6 +468,44 @@ func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// FinalizeSession closes a cron/isolated turn's plan bookkeeping the instant the
+// turn ends, so the Agent Work board never shows a phantom "Running" card for a
+// turn that already finished (e.g. the agent TaskCompleted but left a step
+// in_progress). It (1) closes any plan.step mem_runs still 'running' for this
+// session — the turn is over, so they're definitively stranded — then (2)
+// reconciles: ReconcileStranded marks the now-errored steps failed and the plan
+// recomputes (done / paused). Idempotent and safe; a session with no plan, or a
+// plan whose steps all closed cleanly, is a no-op (a cleanly-completed plan was
+// already recomputed to 'done' during the turn). Returns steps reconciled.
+func (s *Store) FinalizeSession(ctx context.Context, sessionID string) (int, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return 0, nil
+	}
+	// 1. Close stranded plan.step runs for this session's plan. The turn that
+	// would have closed them via plan_update has ended, so a still-'running'
+	// step run is dead weight driving a phantom card.
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE mem_runs r
+		   SET status = 'error',
+		       ended_at = COALESCE(r.ended_at, NOW()),
+		       duration_ms = COALESCE(r.duration_ms,
+		           LEAST(2147483647, GREATEST(0,
+		               EXTRACT(EPOCH FROM (NOW() - r.started_at)) * 1000))::int),
+		       error = COALESCE(NULLIF(r.error, ''), 'turn ended before this step closed'),
+		       result_summary = COALESCE(NULLIF(r.result_summary, ''), '(stalled — turn ended)')
+		  FROM mem_plan_steps st, mem_plans p
+		 WHERE st.run_id = r.id
+		   AND p.id = st.plan_id
+		   AND p.session_id = $1::uuid
+		   AND r.status = 'running'
+	`, sessionID); err != nil {
+		return 0, fmt.Errorf("finalize session runs: %w", err)
+	}
+	// 2. Reconcile: in_progress steps whose run just closed → failed → plan
+	// recomputes off the active/running state.
+	return s.ReconcileStranded(ctx)
+}
+
 // SetStepRun links a step to the mem_runs row tracking its execution so the
 // UI can show a navigation-proof live spinner.
 func (s *Store) SetStepRun(ctx context.Context, stepID, runID string) error {
