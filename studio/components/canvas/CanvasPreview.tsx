@@ -128,10 +128,22 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     return `${baseUrl}${sep}_cv=${mountKeyRef.current}-${store.previewRefreshKey}`;
   }, [baseUrl, store.previewRefreshKey]);
 
-  // Auto-refresh on code-change tool_result events.
+  // Only auto-reload when there's actually a live app in the frame: a non-cloud
+  // (Mac) dev server, or a cloud project that's actually running. Reloading an
+  // empty/cloud-splash preview just re-flashes it for no reason.
+  const previewIsLive = !!baseUrl && (!isCloudPreview || projectStatus === "running");
+
+  // Auto-refresh on code-change tool_result events — but ONLY for THIS session's
+  // edits to a live app. Without the session filter, every background fs/github
+  // write from any other session (crons, heartbeat, self-improve, autonomous
+  // turns) remounted the iframe and flashed the preview even when the boss was
+  // doing nothing in it. (The browser_frame subscription above already scopes by
+  // session; this one was missing the same guard.)
   useEffect(() => {
     return ws.subscribe((ev) => {
       if (ev.type !== "tool_result") return;
+      if (sessionId && ev.session_id && ev.session_id !== sessionId) return;
+      if (!previewIsLive) return;
       if (!isCodeChangeTool(ev.tool_result.name)) return;
       if (autoTimer.current) clearTimeout(autoTimer.current);
       autoTimer.current = setTimeout(() => {
@@ -139,7 +151,7 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
         autoTimer.current = null;
       }, AUTO_REFRESH_DEBOUNCE_MS);
     });
-  }, [ws, store]);
+  }, [ws, store, sessionId, previewIsLive]);
 
   useEffect(() => () => {
     if (autoTimer.current) clearTimeout(autoTimer.current);

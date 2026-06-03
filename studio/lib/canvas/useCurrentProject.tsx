@@ -62,19 +62,23 @@ export function useCurrentProject(): CurrentProject {
     };
   }, []);
 
-  // Fetch the session row whenever the id changes.
-  async function loadSession() {
+  // Fetch the session row whenever the id changes. `background` refreshes
+  // (realtime ticks, project_changed) DON'T toggle `loading` - the agent writes
+  // mem_sessions on every turn, so flipping loading true→false each time caused
+  // re-render churn that flickered the canvas/preview. Only the initial load for
+  // a new session id shows the loading state.
+  async function loadSession(background = false) {
     if (!sessionId) {
       setSession(null);
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!background) setLoading(true);
     setError(null);
     const rows = await fetchSessions();
     const me = rows?.find((r) => r.id === sessionId) ?? null;
     setSession(me);
-    setLoading(false);
+    if (!background) setLoading(false);
   }
 
   useEffect(() => {
@@ -83,7 +87,7 @@ export function useCurrentProject(): CurrentProject {
   }, [sessionId]);
 
   useRealtime("mem_sessions", () => {
-    if (sessionId) loadSession();
+    if (sessionId) loadSession(true);
   });
 
   // Deterministic refresh: project_create/clone/open fire a `project_changed`
@@ -97,7 +101,7 @@ export function useCurrentProject(): CurrentProject {
     return ws.subscribe((ev) => {
       if (ev.type !== "project_changed") return;
       if (ev.session_id && sessionId && ev.session_id !== sessionId) return;
-      if (sessionId) loadSession();
+      if (sessionId) loadSession(true);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws, sessionId]);
