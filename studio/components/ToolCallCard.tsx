@@ -11,7 +11,6 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { ToolIcon } from "@/components/ToolIcon";
 import { cn } from "@/lib/utils";
 import {

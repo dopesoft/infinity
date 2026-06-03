@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -41,6 +42,45 @@ const cronErrorPrefix = "error"
 // times in the look-back window before it earns a Fix-this proposal.
 const repeatedErrorThreshold = 5
 const repeatedErrorWindow = "24 hours"
+
+// localLoc resolves the boss's timezone once so every surfaced timestamp
+// reads in HIS frame (CST/CDT by default), never a UTC RFC3339 string he
+// can't parse at a glance. Mirrors initiative.NewLocalTimeProvider's default;
+// a bad/empty INFINITY_USER_TIMEZONE falls back to UTC rather than crashing.
+var localLoc = func() *time.Location {
+	tz := strings.TrimSpace(os.Getenv("INFINITY_USER_TIMEZONE"))
+	if tz == "" {
+		tz = "America/Chicago"
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		return loc
+	}
+	return time.UTC
+}()
+
+// humanWhen renders t as a casual local-time phrase ("today at 12:29am",
+// "yesterday at 8:34pm", "Mon 1 Jun at 11:35am") instead of a UTC RFC3339
+// stamp. Findings are boss-facing — he reads them at a glance — so they
+// speak his clock, per the local-time provider's rule. Zero time → "".
+func humanWhen(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	lt := t.In(localLoc)
+	now := time.Now().In(localLoc)
+	clock := strings.ToLower(lt.Format("3:04pm"))
+	y, m, d := lt.Date()
+	ny, nm, nd := now.Date()
+	yy, ym, yd := now.AddDate(0, 0, -1).Date()
+	switch {
+	case y == ny && m == nm && d == nd:
+		return "today at " + clock
+	case y == yy && m == ym && d == yd:
+		return "yesterday at " + clock
+	default:
+		return lt.Format("Mon 2 Jan") + " at " + clock
+	}
+}
 
 // MacBridgeProbe is the optional callback the healer uses to find out
 // whether the Mac bridge is currently reachable. When the probe is
@@ -178,7 +218,7 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 func buildCronFailureContext(name, status string, lastRun *time.Time, target, summary, rawErr, humanSummary, humanAction, humanRaw string) string {
 	var b strings.Builder
 	if lastRun != nil {
-		fmt.Fprintf(&b, "Last fired %s.\n", lastRun.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&b, "Last fired %s.\n", humanWhen(*lastRun))
 	}
 	if t := oneLineCtx(target); t != "" {
 		fmt.Fprintf(&b, "What this job does: %s\n", truncate(t, 240))
@@ -277,6 +317,34 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 		`)
 	}
 
+	// Recovered sweep: a tool that has SUCCEEDED more recently than its last
+	// failure is fixed - clear its open card NOW even though stale failures
+	// still sit in the window. Without this, fixing a tool (or deploying a fix)
+	// still shows "Tool X keeps failing" for a full 24h, which is precisely
+	// what makes a healthy system feel broken. Clears both the curiosity
+	// question and the self_heal finding (the Activity-stream row) so the two
+	// surfaces stay in lockstep.
+	if pool != nil {
+		const recoveredCond = `
+			   AND EXISTS (
+			       SELECT 1 FROM mem_observations o
+			        WHERE o.created_at > NOW() - INTERVAL '` + repeatedErrorWindow + `'
+			          AND 'repeated_tool_error:' || COALESCE(o.payload->>'name','') = t.source_tag
+			       HAVING MAX(o.created_at) FILTER (WHERE o.hook_name = 'PostToolUse')
+			            > MAX(o.created_at) FILTER (WHERE o.hook_name = 'PostToolUseFailure')
+			   )`
+		_, _ = pool.Exec(ctx, `
+			UPDATE mem_curiosity_questions t
+			   SET status = 'dismissed', resolved_at = NOW(), resolved_reason = 'recovered'
+			 WHERE t.status = 'open'
+			   AND t.source_tag LIKE 'repeated_tool_error:%'`+recoveredCond)
+		_, _ = pool.Exec(ctx, `
+			UPDATE mem_heartbeat_findings t
+			   SET status = 'resolved', resolved_at = NOW()
+			 WHERE t.status = 'open'
+			   AND t.source_tag LIKE 'repeated_tool_error:%'`+recoveredCond)
+	}
+
 	// Build the freshness query. claude_code__* (coding-bridge class) is
 	// excluded unconditionally - command-level non-zero exits are normal
 	// coding work, never a tool malfunction. Excluding at the query level
@@ -291,15 +359,33 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 	// the Mac bridge is offline, claude_code__* failures are excluded
 	// at the query level via toolExclusion.
 	rows, err := pool.Query(ctx, `
-		WITH failures AS (
-			SELECT
-				payload->>'name' AS tool_name,
-				payload->>'output' AS sample_output,
-				created_at
+		WITH last_success AS (
+			-- Most recent SUCCESSFUL call per tool in the window. A tool that
+			-- has succeeded since its last failure is fixed - we must not keep
+			-- crying "keeps failing" off stale failures that already recovered.
+			SELECT payload->>'name' AS tool_name, MAX(created_at) AS ok_at
 			  FROM mem_observations
-			 WHERE hook_name = 'PostToolUseFailure'
+			 WHERE hook_name = 'PostToolUse'
 			   AND created_at > NOW() - INTERVAL '`+repeatedErrorWindow+`'
 			   AND COALESCE(payload->>'name','') <> ''
+			 GROUP BY payload->>'name'
+		),
+		failures AS (
+			SELECT
+				o.payload->>'name' AS tool_name,
+				o.payload->>'output' AS sample_output,
+				o.created_at
+			  FROM mem_observations o
+			  LEFT JOIN last_success s ON s.tool_name = o.payload->>'name'
+			 WHERE o.hook_name = 'PostToolUseFailure'
+			   AND o.created_at > NOW() - INTERVAL '`+repeatedErrorWindow+`'
+			   AND COALESCE(o.payload->>'name','') <> ''
+			   -- THE fix for already-resolved issues resurfacing: only count a
+			   -- failure the tool has NOT recovered from. A success AFTER the
+			   -- failure (a fix, a deploy) clears it from the signal, so a tool
+			   -- the boss fixed at 5:30am stops showing "keeps failing" instantly
+			   -- instead of haunting the board for a full 24h window.
+			   AND (s.ok_at IS NULL OR o.created_at > s.ok_at)
 			   `+toolExclusion+`
 		),
 		grouped AS (
@@ -343,7 +429,7 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 		// title (which would create count-varying duplicates).
 		question := fmt.Sprintf("Tool %q keeps failing. Fix it?", tool)
 		rationale := fmt.Sprintf("Most recent failure %s\n\n%s",
-			lastSeen.UTC().Format(time.RFC3339), truncate(sample, 600))
+			humanWhen(lastSeen), truncate(sample, 600))
 		tag := "repeated_tool_error:" + tool
 		_, _, _, _ = UpsertQuestion(ctx, pool, slog.Default(), QuestionDraft{
 			Question:   question,

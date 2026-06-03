@@ -440,6 +440,21 @@ function ViewerActions({
     }
   }
 
+  async function dismissCodeProposal() {
+    if (item.kind !== "approval" || item.data.kind !== "code_proposal") return;
+    setDismissing(true);
+    try {
+      const res = await authedFetch(`/api/voyager/code-proposals/${item.data.id}/decide`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision: "rejected" }),
+      });
+      if (res.ok && onResolved) onResolved(item);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
   async function dismissSurface() {
     if (item.kind !== "surface") return;
     setDismissing(true);
@@ -514,7 +529,26 @@ function ViewerActions({
       );
     }
     if (item.kind === "approval" && item.data.kind === "code_proposal") {
-      return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
+      // Dismiss sits next to "Open in Lab" so the boss can drop a proposal
+      // in one tap without detouring through Lab. Same canonical decide
+      // endpoint (status='rejected', durable on mem_code_proposals). The
+      // proposal only re-surfaces if Voyager's source extractor re-detects
+      // the same file-fight in a future session - a fresh signal, not a
+      // resurrected row.
+      return (
+        <>
+          <OpenInButton href="/lab?tab=open" label="Open in Lab" />
+          <button
+            type="button"
+            onClick={dismissCodeProposal}
+            disabled={dismissing}
+            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+          >
+            <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+            {dismissing ? "Dismissing..." : "Dismiss"}
+          </button>
+        </>
+      );
     }
     if (item.kind === "approval" && item.data.kind === "curiosity") {
       return (
