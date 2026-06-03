@@ -20,12 +20,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// resolveStepRef turns the model's step reference into a real step UUID. The
+// runtime LLM routinely addresses a step positionally ("2") instead of by its
+// opaque UUID, which would otherwise blow up as a raw Postgres 22P02. Per Rule
+// #1b this is a mechanic, so it's enforced in code, not asked for in prose: a
+// UUID is used directly; a bare integer N resolves to the 1-based position in
+// this session's active plan (step 1 = first). Steps come back ordered idx ASC.
+func resolveStepRef(ctx context.Context, store *plan.Store, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("step_id required")
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return raw, nil // not an integer -> treat as a real step id (uuid)
+	}
+	p, perr := store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
+	if perr != nil {
+		return "", perr
+	}
+	if p == nil || len(p.Steps) == 0 {
+		return "", fmt.Errorf("there's no active plan to resolve step %d against - call plan_get first", n)
+	}
+	if n < 1 || n > len(p.Steps) {
+		return "", fmt.Errorf("step %d is out of range - this plan has %d steps (use 1..%d)", n, len(p.Steps), len(p.Steps))
+	}
+	return p.Steps[n-1].ID, nil
+}
 
 // RegisterPlanTools wires the plan substrate tools. No-op when pool is nil so
 // chat-only deployments don't break.
@@ -141,7 +170,7 @@ func (t *planUpdate) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"step_id":        map[string]any{"type": "string", "description": "The id of the step (from plan_create / plan_get)."},
+			"step_id":        map[string]any{"type": "string", "description": "The step's id from plan_create / plan_get, OR its 1-based number in the plan (e.g. \"2\" for the second step)."},
 			"status":         map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done", "skipped", "failed"}},
 			"result_summary": map[string]any{"type": "string", "description": "Short note on how the step went."},
 		},
@@ -149,12 +178,12 @@ func (t *planUpdate) Schema() map[string]any {
 	}
 }
 func (t *planUpdate) Execute(ctx context.Context, in map[string]any) (string, error) {
-	stepID := strings.TrimSpace(strString(in, "step_id"))
+	stepID, err := resolveStepRef(ctx, t.store, strString(in, "step_id"))
+	if err != nil {
+		return "", err
+	}
 	status := plan.NormalizeStepStatus(strString(in, "status"))
 	summary := strString(in, "result_summary")
-	if stepID == "" {
-		return "", errors.New("step_id required")
-	}
 
 	prev, err := t.store.GetStep(ctx, stepID)
 	if err != nil {
@@ -215,7 +244,7 @@ func (t *planVerify) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"step_id":  map[string]any{"type": "string"},
+			"step_id":  map[string]any{"type": "string", "description": "The step's id from plan_get, OR its 1-based number in the plan (e.g. \"2\" for the second step)."},
 			"verdict":  map[string]any{"type": "string", "enum": []string{"pass", "fail"}},
 			"evidence": map[string]any{"type": "string", "description": "The concrete proof you checked, e.g. 'go build ./... exited 0', 'GET /health -> 200', 'file dist/app.js exists, 4.2kb'."},
 			"method":   map[string]any{"type": "string", "description": "Optional: how you checked."},
