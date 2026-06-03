@@ -19,10 +19,18 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
+
+// planTitle is the headline of the visible step plan + matches the cron name so
+// the run card and the plan card read the same thing.
+const planTitle = "Inbox triage"
 
 // Deps are the deterministic building blocks the skill orchestrates. All are
 // generic; none are triage-specific. Wired once in serve.go.
@@ -32,6 +40,8 @@ type Deps struct {
 	Fetcher *connectors.MessageFetcher // for durable HTML body at surface time
 	LLM     llm.Provider               // the boss's Settings model — the one judgment
 	Surface *surface.Store
+	Plan    *plan.Store // visible step timeline (Read → Decide → Surface)
+	Pool    *pgxpool.Pool
 	Logger  *slog.Logger
 }
 
@@ -43,9 +53,10 @@ type Config struct {
 
 // Summary is the run report (lands on the cron's mem_runs row).
 type Summary struct {
-	Accounts int `json:"accounts"`
-	Fetched  int `json:"fetched"`
-	Surfaced int `json:"surfaced"`
+	Accounts  int    `json:"accounts"`
+	Fetched   int    `json:"fetched"`
+	Surfaced  int    `json:"surfaced"`
+	SessionID string `json:"session_id,omitempty"` // ties the cron run card to the step plan
 }
 
 type email struct {
@@ -81,6 +92,34 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 		cfg.MaxResults = 40
 	}
 
+	// Visible step timeline — the SAME RUNNING-card plan UI the boss liked: this
+	// skill writes a real mem_plans row with steps, so PlanTimeline renders the
+	// step list, live statuses, and a red FAILED step if one breaks. Not a new
+	// UI — we feed the existing one. Best-effort; a nil plan store just skips it.
+	var sum Summary
+	var s1, s2, s3 string
+	if d.Plan != nil {
+		d.sweepStalePlans(ctx) // clear any prior orphaned inbox plan — no pile-up
+		sid := uuid.NewString()
+		if pl, err := d.Plan.Create(ctx, sid, planTitle,
+			"Read your inboxes, decide which emails need your reply, and surface those.", "",
+			[]plan.NewStepInput{
+				{Title: "Read your inboxes"},
+				{Title: "Decide what needs your reply"},
+				{Title: "Surface reply-worthy emails"},
+			}); err == nil && len(pl.Steps) >= 3 {
+			sum.SessionID = sid
+			s1, s2, s3 = pl.Steps[0].ID, pl.Steps[1].ID, pl.Steps[2].ID
+		}
+	}
+	mark := func(id, status, summary string) {
+		if d.Plan != nil && id != "" {
+			_, _ = d.Plan.MarkStep(ctx, id, status, summary)
+		}
+	}
+
+	// Step 1 — read the inboxes (broad fetch; the LLM is the filter, not the query).
+	mark(s1, plan.StepInProgress, "")
 	accounts := d.Cache.ActiveAccountsByToolkit("gmail")
 	var emails []email
 	for _, a := range accounts {
@@ -104,15 +143,34 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 		}
 		emails = append(emails, parseEmails(resp.Data, a.ID)...)
 	}
-
-	sum := Summary{Accounts: len(accounts), Fetched: len(emails)}
+	sum.Accounts = len(accounts)
+	sum.Fetched = len(emails)
 	if len(emails) == 0 {
+		mark(s1, plan.StepDone, fmt.Sprintf("No new mail across %d mailbox(es).", len(accounts)))
+		mark(s2, plan.StepDone, "Nothing to decide.")
+		mark(s3, plan.StepDone, "Nothing to surface.")
 		return sum, nil
 	}
+	mark(s1, plan.StepDone, fmt.Sprintf("Read %d email(s) across %d mailbox(es).", len(emails), len(accounts)))
 
-	// The one judgment: which of these need the boss? One batched LLM call.
+	// Step 2 — the one judgment: which need the boss's reply? One batched LLM call.
+	mark(s2, plan.StepInProgress, "")
 	decisions := d.classify(ctx, emails)
+	if len(decisions) == 0 {
+		mark(s2, plan.StepFailed, "The model didn't return a usable decision — surfaced nothing rather than guess.")
+		return sum, fmt.Errorf("classify returned no decisions")
+	}
+	needReply := 0
+	for _, dec := range decisions {
+		if dec.NeedsReply {
+			needReply++
+		}
+	}
+	mark(s2, plan.StepDone, fmt.Sprintf("Flagged %d of %d as needing your reply.", needReply, len(emails)))
 
+	// Step 3 — surface the winners (decision + upsert only; HTML loads lazily on
+	// open via /api/followups/message, so the run stays fast and can't hang).
+	mark(s3, plan.StepInProgress, "")
 	for i, em := range emails {
 		dec, ok := decisions[i]
 		if !ok || !dec.NeedsReply {
@@ -133,19 +191,25 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 			imp := dec.Importance
 			it.Importance = &imp
 		}
-		// NOTE: we deliberately do NOT fetch the HTML body here. Doing it inline,
-		// per email, in a loop made the run hang for minutes on a parade of slow
-		// Composio calls. The dashboard's /api/followups/message endpoint already
-		// fetches + caches the full HTML lazily the first time the boss opens the
-		// email, so the body is there when he needs it — and the run stays fast
-		// (decision + upsert only, seconds not minutes).
 		if _, err := d.Surface.Upsert(ctx, it); err != nil {
 			log.Warn("inbox triage surface", "msg", em.msgID, "err", err)
 			continue
 		}
 		sum.Surfaced++
 	}
+	mark(s3, plan.StepDone, fmt.Sprintf("Surfaced %d email(s) to Follow-ups.", sum.Surfaced))
 	return sum, nil
+}
+
+// sweepStalePlans clears any prior "Inbox triage" plan still active/paused (an
+// orphan from a crashed run) so the step plans never pile up on the board.
+func (d Deps) sweepStalePlans(ctx context.Context) {
+	if d.Pool == nil {
+		return
+	}
+	_, _ = d.Pool.Exec(ctx,
+		`UPDATE mem_plans SET status='failed', updated_at=NOW() WHERE title=$1 AND status IN ('active','paused')`,
+		planTitle)
 }
 
 // classify makes ONE call to the Settings model and returns index→decision.

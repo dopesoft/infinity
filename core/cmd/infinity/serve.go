@@ -1296,6 +1296,8 @@ func serveCmd() *cobra.Command {
 						Fetcher: connectors.NewMessageFetcher(composioExec, connectorsCache),
 						LLM:     activeModel,
 						Surface: surface.NewStore(pool, slog.Default()),
+						Plan:    plan.NewStore(pool),
+						Pool:    pool,
 						Logger:  slog.Default(),
 					})
 				}

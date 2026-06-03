@@ -67,7 +67,9 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		return RunSummary{
 			Summary: fmt.Sprintf("Triaged %d email(s) across %d mailbox(es); surfaced %d needing your reply.",
 				s.Fetched, s.Accounts, s.Surfaced),
-			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced},
+			// session_id ties this cron run to the step plan so the board folds
+			// them into one card (the plan's step timeline) instead of two.
+			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced, "session_id": s.SessionID},
 		}, err
 	default:
 		return RunSummary{}, fmt.Errorf("unknown system task %q", task)
