@@ -88,6 +88,7 @@ func (e *AgentExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		sessionID = uuid.NewString()
 	}
 	e.markCronSession(sessionID, j)
+	e.tagCronRunSession(j.ID, sessionID)
 	e.seedSelfImproveApprovals(sessionID, j)
 
 	// Bind the job's name to this session so any plan the agent builds inside
@@ -396,6 +397,33 @@ func (e *AgentExecutor) finalizeSession(sessionID string) {
 		// reconcile ticker logs aggregate counts.
 		log.Printf("cron finalize session %s: %v", sessionID, err)
 	}
+}
+
+// tagCronRunSession stamps the freshly-minted session id onto the cron's
+// in-flight mem_runs row immediately. The dashboard folds a cron's run card
+// INTO the plan the turn creates by matching session id — but the scheduler
+// only writes meta.session_id AFTER the turn finishes (its post-run SetMeta),
+// so during the run the fold key is missing and the board shows TWO "Inbox
+// triage" cards for one fire (the run card + the plan card). Stamping it at the
+// start closes that gap. Best-effort + nil-safe; the overlap guard guarantees
+// at most one running row per cron, so "most recent running" is unambiguous.
+func (e *AgentExecutor) tagCronRunSession(cronID, sessionID string) {
+	if e == nil || e.Pool == nil || cronID == "" || sessionID == "" {
+		return
+	}
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return
+	}
+	_, _ = e.Pool.Exec(context.Background(), `
+		UPDATE mem_runs
+		   SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('session_id', $2::text)
+		 WHERE id = (
+		     SELECT id FROM mem_runs
+		      WHERE kind = 'cron' AND target_id = $1 AND status = 'running'
+		      ORDER BY started_at DESC
+		      LIMIT 1
+		 )
+	`, cronID, sessionID)
 }
 
 func (e *AgentExecutor) markCronSession(sessionID string, j Job) {

@@ -214,6 +214,17 @@ export function DashboardClient() {
       setViewing(null);
       return;
     }
+    if (item.kind === "work") {
+      // Agent Work card dismissed/cancelled/denied — drop it from the board
+      // optimistically (realtime reconciles the underlying run/plan/proposal).
+      const id = item.data.id;
+      setWork((prev) => prev.filter((w) => w.id !== id));
+      setViewing(null);
+      return;
+    }
+    // Catch-all: any other kind still closes the viewer so a dismiss never
+    // leaves the modal hanging open over a resolved item.
+    setViewing(null);
   }, []);
 
   const toggleHabit = useCallback((id: string) => {

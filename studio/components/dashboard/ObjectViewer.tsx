@@ -116,7 +116,7 @@ export function ObjectViewer({
       title={item ? getViewerTitle(item) : "Item"}
       description={item ? getViewerKindLabel(item) : undefined}
       header={item ? <ItemHeader item={item} /> : undefined}
-      footer={item && hasFooter ? <ViewerActions item={item} onResolved={onResolved} /> : undefined}
+      footer={item && hasFooter ? <ViewerActions item={item} onResolved={onResolved} onClose={onClose} /> : undefined}
       footerClassName={footerOverride}
     >
       <AnimatePresence mode="wait">
@@ -393,10 +393,25 @@ function cronIDFromWorkItem(w: WorkItem): string {
 function ViewerActions({
   item,
   onResolved,
+  onClose,
 }: {
   item: DashboardItem;
   onResolved?: (item: DashboardItem) => void;
+  onClose?: () => void;
 }) {
+  // Every dismiss/cancel/deny should close the modal immediately, not just
+  // remove the row underneath it (which left the modal open over a now-empty
+  // card and made the screen blink until the boss clicked away). resolveAndClose
+  // removes the item AND closes the viewer in one go.
+  const resolveAndClose = React.useCallback(() => {
+    // onClose MUST run even if onResolved throws or no-ops for this kind —
+    // closing the modal is the guarantee, removing the row is best-effort.
+    try {
+      if (onResolved) onResolved(item);
+    } finally {
+      if (onClose) onClose();
+    }
+  }, [item, onResolved, onClose]);
   // Every item gets a "Discuss with Jarvis" primary CTA. Kind-specific
   // secondary actions are preview-only "Open in <surface>" deep-links
   // (per the IA defrag), no inline approve/reject here anymore. The
@@ -409,29 +424,23 @@ function ViewerActions({
   const [dismissing, setDismissing] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(false);
 
-  // Stop/cancel a running OR awaiting work item — kills the in-flight agent
-  // turn, cancels the owning plan, and clears the card. The WorkItem id carries
-  // a "plan-"/"run-" prefix for uniqueness on the board; strip it for the API.
-  async function cancelWorkItem() {
+  // ALL dismiss/cancel actions close the modal the INSTANT they're clicked
+  // (optimistic) and fire their request in the background — the boss never
+  // waits on the network, and the row is reconciled by realtime. This is the
+  // fix for "I hit dismiss and the modal just sat there." resolveAndClose
+  // removes the row (best-effort) AND closes the modal, guaranteed.
+  function cancelWorkItem() {
     if (item.kind !== "work") return;
     const w = item.data;
     const rawId = w.id.replace(/^(plan|run)-/, "");
     setCancelling(true);
-    try {
-      const ok = await cancelWork({ kind: w.kind, id: rawId, sessionId: w.sessionId });
-      if (ok && onResolved) onResolved(item);
-    } finally {
-      setCancelling(false);
-    }
+    resolveAndClose();
+    void cancelWork({ kind: w.kind, id: rawId, sessionId: w.sessionId });
   }
 
   // Dismiss an awaiting approval-style work item (code proposal / trust)
-  // surfaced on the Agent Work board. These have their OWN decide endpoints — not
-  // the turn-cancel path — so a board tap drops them durably (reject/deny), same
-  // as their canonical surface. (Curiosity isn't here — it surfaces as a
-  // "surfaced by Jarvis" item, dismissed on that surface.) The WorkItem id
-  // carries a kind prefix ("code-"/"trust-") for board uniqueness; strip it.
-  async function dismissWorkItem() {
+  // surfaced on the Agent Work board — their own durable decide endpoints.
+  function dismissWorkItem() {
     if (item.kind !== "work") return;
     const w = item.data;
     let url = "";
@@ -449,97 +458,76 @@ function ViewerActions({
         return;
     }
     setDismissing(true);
-    try {
-      const res = await authedFetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.ok && onResolved) onResolved(item);
-    } finally {
-      setDismissing(false);
-    }
+    resolveAndClose();
+    void authedFetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
   }
 
-  async function dismissFollowup() {
+  function dismissFollowup() {
     if (item.kind !== "followup") return;
     const id = item.data.id;
     const origin = item.data.origin ?? "followup";
     setDismissing(true);
-    try {
-      const res = await authedFetch("/api/followups/dismiss", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id, origin }),
-      });
-      if (res.ok && onResolved) onResolved(item);
-    } finally {
-      setDismissing(false);
-    }
+    resolveAndClose();
+    void authedFetch("/api/followups/dismiss", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, origin }),
+    });
   }
 
-  async function dismissCuriosity() {
+  function dismissCuriosity() {
     if (item.kind !== "approval" || item.data.kind !== "curiosity") return;
+    const id = item.data.id;
     setDismissing(true);
-    try {
-      const res = await authedFetch(`/api/curiosity/questions/${item.data.id}/decide`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision: "dismissed" }),
-      });
-      if (res.ok && onResolved) onResolved(item);
-    } finally {
-      setDismissing(false);
-    }
+    resolveAndClose();
+    void authedFetch(`/api/curiosity/questions/${id}/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "dismissed" }),
+    });
   }
 
-  async function dismissCodeProposal() {
+  function dismissCodeProposal() {
     if (item.kind !== "approval" || item.data.kind !== "code_proposal") return;
+    const id = item.data.id;
     setDismissing(true);
-    try {
-      const res = await authedFetch(`/api/voyager/code-proposals/${item.data.id}/decide`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision: "rejected" }),
-      });
-      if (res.ok && onResolved) onResolved(item);
-    } finally {
-      setDismissing(false);
-    }
+    resolveAndClose();
+    void authedFetch(`/api/voyager/code-proposals/${id}/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "rejected" }),
+    });
   }
 
-  async function dismissSurface() {
+  function dismissSurface() {
     if (item.kind !== "surface") return;
+    const id = item.data.id;
     setDismissing(true);
-    try {
-      const res = await authedFetch("/api/followups/dismiss", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: item.data.id, origin: "surface" }),
-      });
-      if (res.ok && onResolved) onResolved(item);
-    } finally {
-      setDismissing(false);
-    }
+    resolveAndClose();
+    void authedFetch("/api/followups/dismiss", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, origin: "surface" }),
+    });
   }
 
   // Folded "system" notes in the Activity feed carry a dismiss handle
   // (origin + id) mapping back to mem_surface_items, so they stay clearable
   // through the same endpoint without inventing a per-kind route.
-  async function dismissActivity() {
+  function dismissActivity() {
     if (item.kind !== "activity" || !item.data.dismiss) return;
     const { id, origin } = item.data.dismiss;
     setDismissing(true);
-    try {
-      const res = await authedFetch("/api/followups/dismiss", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id, origin }),
-      });
-      if (res.ok && onResolved) onResolved(item);
-    } finally {
-      setDismissing(false);
-    }
+    resolveAndClose();
+    void authedFetch("/api/followups/dismiss", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, origin }),
+    });
   }
 
   async function discuss() {
@@ -749,7 +737,12 @@ function ViewerActions({
             title="Fire this scheduled job immediately. The next regular run still happens on schedule. Progress survives navigation and refresh."
             showResult={false}
             onRun={async () => {
-              await triggerCron(cronID);
+              // Close the modal immediately so the boss watches it move into
+              // RUNNING on the board, rather than staring at the modal while the
+              // (synchronous) run endpoint holds the request open. The run row is
+              // booked server-side at fire time, so the board picks it up live.
+              if (onClose) onClose();
+              void triggerCron(cronID);
             }}
           />
         );
