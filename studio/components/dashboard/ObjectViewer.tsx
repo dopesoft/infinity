@@ -425,6 +425,42 @@ function ViewerActions({
     }
   }
 
+  // Dismiss an awaiting approval-style work item (code proposal / trust)
+  // surfaced on the Agent Work board. These have their OWN decide endpoints — not
+  // the turn-cancel path — so a board tap drops them durably (reject/deny), same
+  // as their canonical surface. (Curiosity isn't here — it surfaces as a
+  // "surfaced by Jarvis" item, dismissed on that surface.) The WorkItem id
+  // carries a kind prefix ("code-"/"trust-") for board uniqueness; strip it.
+  async function dismissWorkItem() {
+    if (item.kind !== "work") return;
+    const w = item.data;
+    let url = "";
+    let body: Record<string, string> = {};
+    switch (w.kind) {
+      case "code_proposal":
+        url = `/api/voyager/code-proposals/${w.id.replace(/^code-/, "")}/decide`;
+        body = { decision: "rejected" };
+        break;
+      case "trust":
+        url = `/api/trust-contracts/${w.id.replace(/^trust-/, "")}/decide`;
+        body = { decision: "denied" };
+        break;
+      default:
+        return;
+    }
+    setDismissing(true);
+    try {
+      const res = await authedFetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok && onResolved) onResolved(item);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
   async function dismissFollowup() {
     if (item.kind !== "followup") return;
     const id = item.data.id;
@@ -643,6 +679,42 @@ function ViewerActions({
     }
     if (item.kind === "work") {
       const w = item.data;
+      // Approval-style awaiting work (code proposals, trust contracts) have their
+      // own durable decide endpoints — drop them in one tap from the board, same
+      // as their canonical surface, alongside an "Open in" deep-link.
+      if (w.kind === "code_proposal") {
+        return (
+          <>
+            <OpenInButton href="/code-proposals" label="Open in Code" />
+            <button
+              type="button"
+              onClick={dismissWorkItem}
+              disabled={dismissing}
+              className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+            >
+              <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+              {dismissing ? "Dismissing..." : "Dismiss"}
+            </button>
+          </>
+        );
+      }
+      if (w.kind === "trust") {
+        return (
+          <>
+            <OpenInButton href="/settings?section=trust" label="Open in Trust" />
+            <button
+              type="button"
+              onClick={dismissWorkItem}
+              disabled={dismissing}
+              title="Deny this pending approval — the gated action won't run. The agent can re-request it later."
+              className="inline-flex h-10 items-center gap-1.5 rounded-md border border-danger/40 bg-background px-3 text-[13px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
+            >
+              <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
+              {dismissing ? "Denying..." : "Deny"}
+            </button>
+          </>
+        );
+      }
       // Running or awaiting work the boss wants to kill: a stuck plan, an
       // in-flight cron/agent turn, a paused plan sitting in "awaiting". Stop
       // aborts the live turn, cancels the plan, and clears the card. Covers the
