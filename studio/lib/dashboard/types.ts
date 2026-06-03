@@ -282,6 +282,55 @@ export type WorkItem = {
   workflowSteps?: WorkflowStep[];
 };
 
+// ── Plans (the durable, verifiable plan substrate - "the Cortex") ────────────
+// Mirror of core/internal/dashboard.Plan / PlanStep. The agent lays out a plan
+// with plan_create and works it step by step; this is the read model the
+// dashboard PlanCard, the /plans page, and the detail timeline render.
+export type PlanStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type PlanStepStatus =
+  | "pending"
+  | "in_progress"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "skipped";
+
+export type PlanStep = {
+  id: string;
+  idx: number;
+  title: string;
+  detail?: string;
+  status: PlanStepStatus;
+  isCheckpoint: boolean;
+  verifyRequired: boolean;
+  // { verdict: "pass"|"fail", evidence, method, at }
+  verifyResult?: Record<string, unknown>;
+  resultSummary?: string;
+  // mem_runs row id for this step's execution - drives the live spinner.
+  runId?: string;
+  startedAt?: string;
+  endedAt?: string;
+};
+
+export type Plan = {
+  id: string;
+  title: string;
+  goal?: string;
+  status: PlanStatus;
+  currentStep: number;
+  createdAt: string;
+  updatedAt: string;
+  steps: PlanStep[];
+  doneCount: number;
+  totalCount: number;
+};
+
 // ── Saved (articles, links, notes, quotes) ───────────────────────────────────
 export type SavedKind = "article" | "link" | "note" | "quote";
 

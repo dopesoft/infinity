@@ -7,6 +7,7 @@ import type {
   CalendarEvent,
   FollowUp,
   MemoryStats,
+  Plan,
   Pursuit,
   Reflection,
   Saved,
@@ -39,6 +40,8 @@ export type DashboardResponse = {
   memoryStats: MemoryStats | null;
   // Generic surface contract: items grouped by `surface` key.
   surfaceItems: Record<string, SurfaceItem[]> | null;
+  // Active + paused plans (the Cortex). Empty array when nothing is in flight.
+  plans: Plan[] | null;
 };
 
 type RawResponse = {
@@ -59,6 +62,7 @@ type RawResponse = {
   work?: WorkItem[] | null;
   memoryStats?: MemoryStats | null;
   surfaceItems?: Record<string, SurfaceItem[]> | null;
+  plans?: Plan[] | null;
 };
 
 // Stale-while-revalidate cache. The dashboard renders instantly from the
@@ -104,6 +108,7 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
       work: raw.work ?? null,
       memoryStats: raw.memoryStats ?? null,
       surfaceItems: raw.surfaceItems ?? null,
+      plans: raw.plans ?? null,
     };
     writeDashboardCache(data);
     return data;

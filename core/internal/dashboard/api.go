@@ -67,6 +67,13 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// separate store, no client-only state.
 	mux.HandleFunc("/api/tasks/create", a.handleTaskCreate)
 	mux.HandleFunc("/api/tasks/update", a.handleTaskUpdate)
+	// Durable plan substrate ("the Cortex") read endpoints: the /plans page
+	// lists by status, the detail modal fetches one plan with its steps. Plans
+	// also ride the /api/dashboard aggregate so the dashboard card paints in
+	// the same round trip. Writes happen through the agent's plan_* tools and
+	// the checkpoint surface-action path, never here.
+	mux.HandleFunc("/api/plans", a.handlePlans)
+	mux.HandleFunc("/api/plans/get", a.handlePlanGet)
 }
 
 // Response is the single payload returned to Studio. Each section is a
@@ -82,6 +89,7 @@ type Response struct {
 	Reflection     *Reflection     `json:"reflection,omitempty"`
 	Activity       []ActivityEvent `json:"activity"`
 	Work           []WorkItem      `json:"work"`
+	Plans          []Plan          `json:"plans"`
 	MemoryStats    *MemoryStats    `json:"memoryStats,omitempty"`
 	// SurfaceItems is the generic surface contract: mem_surface_items
 	// grouped by `surface` key. Studio renders each group with one
@@ -403,6 +411,16 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		mu.Lock()
 		resp.Pursuits = v
+		mu.Unlock()
+		return nil
+	})
+	run("plans", func() error {
+		v, err := a.loadPlans(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Plans = v
 		mu.Unlock()
 		return nil
 	})

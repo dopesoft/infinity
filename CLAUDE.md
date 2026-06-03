@@ -44,6 +44,21 @@ The form is whatever actually closes the loop best. Optimize for the boss's func
 
 If you find yourself writing the sentence "we could also ship this as a [skill|prompt update|memory rule|checklist]" or "I'd recommend doing X next" in your reply to the boss — **stop, decide what gives him the best functionality, do that in this PR, then reply with it done**. Surface tradeoffs only when the form choice is genuinely ambiguous; when it's obvious, just pick — and pick for *quality*, not for *minimal diff*.
 
+### Rule #1b — skills are JUDGMENT-only; mechanics live in code, never in prose
+
+**This is the law for the entire skills system, not one skill.** A skill body is a recipe the LLM executes, and the runtime LLM (currently a gpt-5.x OAuth brain) **will drop instructions** — it does it routinely. So any behavior expressed as a *sentence in a skill* is behavior that can silently vanish on the next run. We have re-lived this repeatedly (the triage skill told to "capture the full email body" and "draft under a Trust batch" — it summarized instead of capturing, and the real email never showed; it depended on prose for a mechanic).
+
+The fix is NOT "rewrite skills in Go" — that kills the assembly bet of Rule #1. The fix is the split:
+
+- **Mechanics → tools, gates, contracts (deterministic Go). Never droppable.** A mechanic is anything where there is exactly one correct behavior and no judgment: *fetch/capture/store the real artifact, use a stable id, dedupe, retry, batch, never-send, never-auto-dismiss, gating, mark coverage, emit the default action set, RRF retrieval, hook capture.* These must be guaranteed by code that runs regardless of what the skill says.
+- **Judgment → skill prose. The only thing the recipe contains.** Judgment is *which / whether / what / how-much*: which mail needs a reply, what the reply says, how to prioritise, how to classify, when to escalate. This is what the LLM is actually for.
+
+**The test, applied to every line of every skill:** *if I delete this sentence, does a feature break?* If yes, it is a mechanic in the wrong place — **move it into the tool/gate/contract and delete the sentence.** A skill you can't break by dropping a line is a deterministic skill. Reference: this is exactly why `surface_item` now *always* fetches the real email body and stamps the default actions, and why `ComposioGate` ungates drafts — those mechanics were pulled out of the triage prose into code, so the run can no longer "forget" them.
+
+**Applies to authoring AND evolution.** When you write or refactor a skill: audit each line with the test above; every mechanic moves to code; the skill shrinks to judgment. When Voyager/GEPA drafts a skill revision, the same holds — a candidate that encodes a mechanic in prose is a bug to fix at the tool, not to approve. New skills ship judgment-only or they don't ship.
+
+**The standing migration of intent:** sweep the existing skills the same way (inbox-triage is the reference rewrite). Any skill still leaning on prose for a mechanic gets that mechanic moved into a tool/gate, then the prose deleted. The goal state: every skill is a short list of judgment calls, and the system behaves identically whether or not the LLM remembers the recipe word-for-word.
+
 ## What this is
 
 Infinity is a single-user, always-on AI agent with persistent memory. It is built to be the user's permanent companion across every device — a personal cognitive substrate, not a chatbot. The differentiator vs. Hermes / nanobot / openclaw is the memory layer: every observation is captured, compressed, retrieved, and consolidated so the agent's understanding of the user, their projects, and their work compounds over time.

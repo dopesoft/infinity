@@ -64,6 +64,14 @@ func CorePinnedTools() []string {
 		"mem_list",
 		"mem_act",
 		"action_register",
+		// Plan substrate ("the Cortex"). Planning is load-bearing for any
+		// non-trivial task and the verify-before-done reflex must always be
+		// in hand - pinned so the agent never has to tool_search for it
+		// before laying out or advancing a plan.
+		"plan_create",
+		"plan_update",
+		"plan_verify",
+		"plan_get",
 	}
 }
 

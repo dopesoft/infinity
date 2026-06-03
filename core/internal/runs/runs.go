@@ -48,6 +48,7 @@ const (
 	KindExtension       Kind = "extension.register"
 	KindBackgroundBuild Kind = "background.build"
 	KindSurfaceAction   Kind = "surface.action"
+	KindPlanStep        Kind = "plan.step"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs
@@ -245,6 +246,40 @@ func (t *Tracker) RecoverStranded(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("recover stranded runs: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// FinishByID closes a run row by its id, without needing the original Handle.
+// Used when begin and finish span different turns / tool calls (eg. a plan
+// step booked 'running' by plan_update on one turn and closed on a later turn),
+// where the in-memory Handle from BeginGlobal can't be held. err==nil ->
+// status='ok'; err!=nil -> status='error'. summary is the optional human
+// narrative. nil-safe; a row already closed is left untouched.
+func FinishByID(ctx context.Context, runID string, err error, summary string) {
+	if global == nil || global.pool == nil || runID == "" {
+		return
+	}
+	status := "ok"
+	errStr := ""
+	humanJSON := "{}"
+	if err != nil {
+		status = "error"
+		errStr = err.Error()
+		if b, mErr := json.Marshal(errs.HumanizeString(errStr)); mErr == nil {
+			humanJSON = string(b)
+		}
+	}
+	_, _ = global.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET status = $2,
+		       ended_at = NOW(),
+		       duration_ms = COALESCE(duration_ms,
+		           LEAST(2147483647, GREATEST(0,
+		               EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
+		       error = $3,
+		       result_summary = CASE WHEN $4 = '' THEN result_summary ELSE $4 END,
+		       human_error = $5::jsonb
+		 WHERE id = $1::uuid AND status = 'running'
+	`, runID, status, errStr, summary, humanJSON)
 }
 
 // Progress updates the optional 0..1 progress + label mid-flight. Safe

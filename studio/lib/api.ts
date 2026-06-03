@@ -1,4 +1,5 @@
 import { getAccessToken } from "@/lib/auth/session";
+import type { Plan } from "@/lib/dashboard/types";
 
 export type CoreStatus = {
   version: string;
@@ -86,6 +87,35 @@ export async function postSurfaceAction(
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+// ── Plans (the Cortex - mem_plans / mem_plan_steps) ──────────────────────────
+// Read-only from Studio: the agent owns writes through its plan_* tools and the
+// checkpoint surface-action path. The /plans page lists by status; the detail
+// modal fetches one plan with its steps. Realtime on mem_plans / mem_plan_steps
+// repaints both without a manual refetch.
+
+export async function fetchPlans(status?: string, signal?: AbortSignal): Promise<Plan[]> {
+  try {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    const res = await authedFetch(`/api/plans${qs}`, { signal });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { plans?: Plan[] };
+    return data.plans ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getPlan(id: string, signal?: AbortSignal): Promise<Plan | null> {
+  try {
+    const res = await authedFetch(`/api/plans/get?id=${encodeURIComponent(id)}`, { signal });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { plan?: Plan | null };
+    return data.plan ?? null;
+  } catch {
+    return null;
   }
 }
 

@@ -507,6 +507,13 @@ func serveCmd() *cobra.Command {
 					// The agent assembles multi-step processes; the engine
 					// (wired below, after the loop exists) runs them.
 					tools.RegisterWorkflowTools(registry, p)
+					// Durable plan substrate ("the Cortex"): plan_create /
+					// plan_update / plan_verify / plan_get / plan_list. The
+					// agent's own steerable, resumable todolist with a
+					// verify-before-done reflex. Unlike todo_write this survives
+					// compaction / restart / session boundaries and is
+					// re-injected every turn by PlanProvider (wired below).
+					tools.RegisterPlanTools(registry, p)
 					// Verification substrate (Phase 4): eval_record /
 					// eval_scorecard. How the agent learns whether what it
 					// assembled actually works, and catches regressions.
@@ -748,6 +755,9 @@ func serveCmd() *cobra.Command {
 				// supposed to be doing across sessions, not just the current
 				// message.
 				if pool != nil {
+					memProviders = append(memProviders, memory.NewPlanProvider(pool))
+				}
+				if pool != nil {
 					memProviders = append(memProviders, worldmodel.NewGoalsProvider(pool))
 				}
 				// Active project: inject "you're scoped to project X at <path>"
@@ -764,12 +774,15 @@ func serveCmd() *cobra.Command {
 				// it has noticed before without seeing the same lesson on every
 				// turn.
 				if pool != nil {
-					memProviders = append(memProviders, memory.NewReflectionChainsProvider(pool))
+					// Query-adaptive gate (context intelligence): gated to turns with
+					// real task content via SubstantiveQuery (deterministic, no LLM
+					// in the routing path) so a bare greeting doesn't drag these in.
+					memProviders = append(memProviders, agent.NewGatedProvider(memory.NewReflectionChainsProvider(pool), agent.SubstantiveQuery))
 					// Proven lessons: mem_lessons was write-only until now. This
 					// injects the highest-conviction individual behavioral rules
 					// (round-robined) so the agent's hard-won lessons actually
 					// shape its behavior, not just sit in an archive.
-					memProviders = append(memProviders, memory.NewLessonsProvider(pool))
+					memProviders = append(memProviders, agent.NewGatedProvider(memory.NewLessonsProvider(pool), agent.SubstantiveQuery))
 				}
 				// Self-model: mem_agent_metrics is rolled up nightly with
 				// today's behaviour vs. the 14-day baseline. The provider

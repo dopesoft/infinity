@@ -1384,9 +1384,9 @@ function FollowUpBody({ f }: { f: FollowUp }) {
 
       {/* From / Subject - each a flex row with symmetric padding +
           items-center so the label and value sit dead-center in their row.
-          mt-8 (was mt-6) gives ~8px more breathing room below the chip row so
-          the meta chips don't crowd the FROM line. */}
-      <div className="mt-8 overflow-hidden rounded-lg border border-border bg-muted/20">
+          mt-10 (40px) gives a clearly visible gap below the chip row so the
+          meta chips don't crowd the FROM line. */}
+      <div className="mt-10 overflow-hidden rounded-lg border border-border bg-muted/20">
         <div className="flex items-center gap-4 px-3 py-3">
           <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             From

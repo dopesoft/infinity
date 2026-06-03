@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TabFrame } from "@/components/TabFrame";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
+import { PlanCard } from "./PlanCard";
 import { TodosCard } from "./TodosCard";
 import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
@@ -27,6 +28,7 @@ import type {
   DashboardItem,
   FollowUp,
   MemoryStats,
+  Plan,
   Pursuit,
   Reflection,
   Saved,
@@ -83,6 +85,7 @@ export function DashboardClient() {
   // No mock fixtures, no fallback fixtures - if the fetch fails the
   // dashboard shows empty state, not a lie.
   const [pursuits, setPursuits] = useState<Pursuit[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -107,6 +110,7 @@ export function DashboardClient() {
   // hydrate and every fetch/realtime refresh so they can't drift.
   const applyData = useCallback((data: DashboardResponse) => {
     setPursuits(data.pursuits ?? []);
+    setPlans(data.plans ?? []);
     setTodos(data.todos ?? []);
     setEvents(data.calendarEvents ?? []);
     setFollowUps(data.followUps ?? []);
@@ -264,6 +268,7 @@ export function DashboardClient() {
     if (!q) {
       return {
         pursuits,
+        plans,
         todos,
         events,
         approvals,
@@ -286,6 +291,9 @@ export function DashboardClient() {
     }
     return {
       pursuits: pursuits.filter((p) => match(p.title, p.cadence)),
+      plans: plans.filter((p) =>
+        match(p.title, p.goal, p.status, ...p.steps.map((s) => s.title)),
+      ),
       todos: todos.filter((t) => match(t.title, t.priority, t.source)),
       events: events.filter((e) =>
         match(e.title, e.classification, e.location, ...e.prep.map((p) => p.label)),
@@ -301,7 +309,7 @@ export function DashboardClient() {
       activity: activity.filter((e) => match(e.title, e.detail)),
       surfaceItems: surfaceFiltered,
     };
-  }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
+  }, [q, pursuits, plans, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
 
   // The unified "Surfaced by Jarvis" list - approvals + every agent surface
   // (alerts, insights, digest, …) merged into one importance-sorted stream.
@@ -348,6 +356,12 @@ export function DashboardClient() {
         />
 
         <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
+          {/* Active plans ("the Cortex") - what the agent is working through
+              right now, with live per-step status. Sits at the top because
+              "what am I doing now" is the most load-bearing glance. Renders
+              nothing when no plan is in flight. */}
+          {s.plans && <PlanCard plans={filtered.plans} />}
+
           {/* TODAY row - collapses to fewer columns if any sub-section is off.
               `grid-cols-1` is REQUIRED as the default - without it, the
               implicit grid column sizes to `max-content`, letting any

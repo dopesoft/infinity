@@ -180,9 +180,20 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 	// revoked before he ever opens it. The fetch + MIME decode run in Go
 	// (connectors.MessageFetcher), never through the model. Best-effort: a miss
 	// just leaves the lazy open-time path (which also caches) to fill it later.
-	if it.CachedHTML == "" && it.CachedText == "" && t.fetcher != nil &&
-		it.ExternalID != "" && isFollowupEmailItem(it.Surface, it.Kind) {
-		if html, text, _, ferr := t.fetcher.FetchMessage(ctx, it.Source, metaAccountHint(it.Metadata), it.ExternalID); ferr == nil {
+	//
+	// For a follow-up EMAIL the Message pane must ALWAYS be the real Gmail body
+	// — never a summary, never the skill's paraphrase. The triage skill
+	// sometimes (wrongly) passes its own summary as body_html/body_text, and
+	// the old `cached == ""` guard then SKIPPED this fetch, so the real email
+	// silently went missing and the Message pane showed a summary. So for an
+	// email with a fetchable id we ALWAYS fetch the real body and let it WIN
+	// over whatever the skill supplied. The skill's summary still shows in the
+	// Context pane (the separate `body` field). Best-effort: if the fetch fails
+	// (e.g. a revoked account) we keep what was passed so the item degrades to
+	// the summary instead of going blank, and the open-time path retries.
+	if t.fetcher != nil && it.ExternalID != "" && isFollowupEmailItem(it.Surface, it.Kind) {
+		if html, text, _, ferr := t.fetcher.FetchMessage(ctx, it.Source, metaAccountHint(it.Metadata), it.ExternalID); ferr == nil &&
+			(strings.TrimSpace(html) != "" || strings.TrimSpace(text) != "") {
 			it.CachedHTML = html
 			it.CachedText = text
 		}

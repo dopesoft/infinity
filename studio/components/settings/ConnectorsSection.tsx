@@ -18,10 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CustomExtensions } from "@/components/settings/CustomExtensions";
-import { useMediaQuery } from "@/lib/use-media-query";
 import { useTabParam } from "@/lib/useTabParam";
 import { cn } from "@/lib/utils";
 import {
@@ -1045,7 +1043,6 @@ function NameAccountPrompt({
   onCancel: () => void;
   onSubmit: (alias: string) => void;
 }) {
-  const isDesktop = useMediaQuery("(min-width: 640px)");
   const [alias, setAlias] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1152,46 +1149,36 @@ function NameAccountPrompt({
     </div>
   );
 
-  if (isDesktop) {
-    return (
-      <Dialog open onOpenChange={(o) => !o && onCancel()}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader className="p-5 pb-3">
-            <DialogTitle asChild>{header}</DialogTitle>
-            <DialogDescription className="sr-only">Connect {toolkit.name}</DialogDescription>
-          </DialogHeader>
-          <div className="px-5 pb-5">{body}</div>
-          <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-            <Button variant="ghost" size="sm" onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={tryCommit}>
-              Continue to OAuth
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
+  // Routes through ResponsiveModal (the canonical modal primitive) so the
+  // Dialog-vs-Drawer split, a11y title/description, overflow chain, pinned
+  // footer, and pb-safe are all owned by the primitive - never hand-rolled
+  // per consumer (reuse-first rule). The custom `header` keeps the logo +
+  // kind subtitle; the body sits inside the disciplined scroll container.
   return (
-    <Drawer open onOpenChange={(o) => !o && onCancel()}>
-      <DrawerContent>
-        <DrawerHeader className="px-5 pb-3 pt-2">
-          <DrawerTitle asChild>{header}</DrawerTitle>
-          <DrawerDescription className="sr-only">Connect {toolkit.name}</DrawerDescription>
-        </DrawerHeader>
-        <div className="px-5 pb-4">{body}</div>
-        <DrawerFooter className="flex-row justify-end gap-2 border-t bg-muted/30 px-5 py-3">
+    <ResponsiveModal
+      open
+      onOpenChange={(o) => !o && onCancel()}
+      title={`Connect ${toolkit.name}`}
+      description={`Connect ${toolkit.name}`}
+      size="md"
+      header={
+        <header className="flex shrink-0 items-start gap-3 border-b px-4 pb-3 pt-4 sm:px-5">
+          {header}
+        </header>
+      }
+      footer={
+        <>
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Cancel
           </Button>
           <Button size="sm" onClick={tryCommit}>
             Continue to OAuth
           </Button>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+        </>
+      }
+    >
+      {body}
+    </ResponsiveModal>
   );
 }
 
