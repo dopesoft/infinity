@@ -89,7 +89,12 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 		cfg.Query = "in:inbox newer_than:3d"
 	}
 	if cfg.MaxResults <= 0 {
-		cfg.MaxResults = 40
+		cfg.MaxResults = 20
+	}
+	if cfg.MaxResults > 20 {
+		// GMAIL_FETCH_EMAILS 413s ("payload too large") on a big inbox above
+		// ~25 messages; cap well under that. The LLM is the filter, not volume.
+		cfg.MaxResults = 20
 	}
 
 	// Visible step timeline — the SAME RUNNING-card plan UI the boss liked: this
@@ -123,16 +128,7 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	accounts := d.Cache.ActiveAccountsByToolkit("gmail")
 	var emails []email
 	for _, a := range accounts {
-		resp, err := d.Exec.Execute(ctx, connectors.ExecuteRequest{
-			Slug:               "GMAIL_FETCH_EMAILS",
-			ConnectedAccountID: a.ID,
-			UserID:             a.UserID, // entity — Composio 1811s without it
-			Arguments: map[string]any{
-				"query":       cfg.Query,
-				"max_results": cfg.MaxResults,
-				"verbose":     true,
-			},
-		})
+		resp, err := fetchEmailBatch(ctx, d.Exec, a, cfg)
 		if err != nil {
 			log.Warn("inbox triage fetch", "account", a.ID, "err", err)
 			continue
@@ -201,6 +197,41 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	return sum, nil
 }
 
+func fetchEmailBatch(ctx context.Context, exec *connectors.ExecuteClient, a *connectors.Account, cfg Config) (*connectors.ExecuteResponse, error) {
+	if exec == nil || a == nil {
+		return nil, fmt.Errorf("inbox triage fetch not configured")
+	}
+	call := func(max int) (*connectors.ExecuteResponse, error) {
+		return exec.Execute(ctx, connectors.ExecuteRequest{
+			Slug:               "GMAIL_FETCH_EMAILS",
+			ConnectedAccountID: a.ID,
+			UserID:             a.UserID, // entity — Composio 1811s without it
+			Arguments: map[string]any{
+				"query":       cfg.Query,
+				"max_results": max,
+				// Keep the list response concise. Full HTML/text is fetched lazily
+				// when the boss opens a surfaced item; verbose list payloads 413 on
+				// large inboxes before the LLM ever gets to decide.
+				"verbose": false,
+			},
+		})
+	}
+	resp, err := call(cfg.MaxResults)
+	if isPayloadTooLarge(err) || (resp != nil && !resp.Successful && isPayloadTooLargeText(resp.Error)) {
+		return call(10)
+	}
+	return resp, err
+}
+
+func isPayloadTooLarge(err error) bool {
+	return err != nil && isPayloadTooLargeText(err.Error())
+}
+
+func isPayloadTooLargeText(s string) bool {
+	s = strings.ToLower(s)
+	return strings.Contains(s, "413") || strings.Contains(s, "payloadtoolarge") || strings.Contains(s, "payload too large")
+}
+
 // sweepStalePlans clears any prior "Inbox triage" plan still active/paused (an
 // orphan from a crashed run) so the step plans never pile up on the board.
 func (d Deps) sweepStalePlans(ctx context.Context) {
@@ -227,32 +258,12 @@ func (d Deps) classify(ctx context.Context, emails []email) map[int]decision {
 	}
 
 	model := d.LLM.Model()
-	stream := make(chan llm.StreamEvent, 16)
-	respCh := make(chan llm.Response, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		resp, err := d.LLM.Stream(ctx, model, classifySystemPrompt,
-			[]llm.Message{{Role: llm.RoleUser, Content: b.String()}}, nil, stream)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		respCh <- resp
-	}()
-	for range stream {
-		// drain; we only want the final response
-	}
-
-	var resp llm.Response
-	select {
-	case resp = <-respCh:
-	case <-errCh:
-		return out
-	case <-ctx.Done():
+	text, err := llm.Complete(ctx, d.LLM, model, classifySystemPrompt, b.String())
+	if err != nil {
 		return out
 	}
 
-	decisions := parseDecisions(resp.Text)
+	decisions := parseDecisions(text)
 	for _, dec := range decisions {
 		if dec.Index >= 0 && dec.Index < len(emails) {
 			out[dec.Index] = dec

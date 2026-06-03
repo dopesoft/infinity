@@ -216,15 +216,9 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// actual report. The row also drives the live spinner that persists
 		// across navigation / focus / refresh. Errors still propagate to the
 		// post-run mem_crons UPDATE below unchanged.
-		var execErr error
-		var summary RunSummary
 		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
-		if s.executor != nil {
-			summary, execErr = s.executor.ExecuteJob(j)
-		} else {
-			execErr = errors.New("no executor configured")
-		}
-		handle.SetMeta(ctx, summary.Meta)
+		summary, execErr, attempts := s.executeWithRetries(ctx, j)
+		handle.SetMeta(ctx, runMetaWithAttempts(summary.Meta, attempts))
 		handle.Finish(ctx, execErr, summary.Summary)
 
 		end := time.Now().UTC()
@@ -252,6 +246,49 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 			 WHERE id = $1::uuid
 		`, j.ID, end, status, end.Sub(start).Milliseconds(), execErr != nil, nextPtr)
 	}
+}
+
+func (s *Scheduler) executeWithRetries(ctx context.Context, j Job) (RunSummary, error, int) {
+	attempts := 0
+	maxAttempts := 1
+	if j.MaxRetries > 0 {
+		maxAttempts += j.MaxRetries
+	}
+	backoff := time.Duration(j.BackoffSeconds) * time.Second
+	var lastSummary RunSummary
+	var lastErr error
+	for attempts < maxAttempts {
+		attempts++
+		if s.executor != nil {
+			lastSummary, lastErr = s.executor.ExecuteJob(j)
+		} else {
+			lastSummary, lastErr = RunSummary{}, errors.New("no executor configured")
+		}
+		if lastErr == nil || attempts >= maxAttempts {
+			return lastSummary, lastErr, attempts
+		}
+		infoLog.Printf("retrying cron %q after attempt %d/%d failed: %v", j.Name, attempts, maxAttempts, lastErr)
+		if backoff > 0 {
+			select {
+			case <-ctx.Done():
+				return lastSummary, ctx.Err(), attempts
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return lastSummary, lastErr, attempts
+}
+
+func runMetaWithAttempts(meta map[string]any, attempts int) map[string]any {
+	if attempts <= 1 {
+		return meta
+	}
+	out := make(map[string]any, len(meta)+1)
+	for k, v := range meta {
+		out[k] = v
+	}
+	out["attempts"] = attempts
+	return out
 }
 
 // cronInFlight reports whether a run of this cron is still executing, so the
@@ -432,20 +469,14 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 		return errors.New("scheduler nil")
 	}
 	start := time.Now().UTC()
-	var execErr error
-	var summary RunSummary
 	// Begin/Finish exposes "this cron is running" to every device on the
 	// network via mem_runs + realtime (survives navigating away from /cron or
 	// closing the tab) AND persists the executor's narrative + meta onto the
 	// row so the manual run reads as a report, not a bare ok. See CLAUDE.md →
 	// "Server-tracked progress".
 	handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual)
-	if s.executor != nil {
-		summary, execErr = s.executor.ExecuteJob(j)
-	} else {
-		execErr = errors.New("no executor configured")
-	}
-	handle.SetMeta(ctx, summary.Meta)
+	summary, execErr, attempts := s.executeWithRetries(ctx, j)
+	handle.SetMeta(ctx, runMetaWithAttempts(summary.Meta, attempts))
 	handle.Finish(ctx, execErr, summary.Summary)
 	end := time.Now().UTC()
 	status := "ok (manual)"

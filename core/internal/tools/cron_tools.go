@@ -11,9 +11,10 @@
 //
 // These wrap the existing cron.Scheduler (same package the HTTP API uses).
 // Designed to be the "Hey Jarvis, check my email every 15 minutes" path:
-// the model picks cron_create_poll with a sensible default for action +
-// connected_account_id, the row lands in mem_crons, the scheduler picks it
-// up on next reload, and it runs forever until the boss says stop.
+// the model assembles a deterministic cron from generic building blocks
+// (connector_poll/system_task/isolated_agent_turn as appropriate), the row
+// lands in mem_crons, the scheduler retries transient failures, and it runs
+// forever until the boss says stop.
 
 package tools
 
@@ -85,15 +86,15 @@ type cronCreateAgent struct{ sched CronScheduler }
 
 func (t *cronCreateAgent) Name() string { return "cron_create_agent" }
 func (t *cronCreateAgent) Description() string {
-	return "Schedule a recurring agent turn. The cron expression fires a fresh sub-agent that runs the given prompt. Use for 'every morning, draft me a digest' style recurring work."
+	return "Schedule a recurring agent turn. The cron expression fires in the boss's local timezone and starts a fresh sub-agent with the given prompt. Use only when the scheduled work needs open-ended reasoning; prefer deterministic connector_poll/system_task crons for API polling and fixed mechanics."
 }
 func (t *cronCreateAgent) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"name":             map[string]any{"type": "string", "description": "Unique name (kebab-case). Reused to update an existing cron."},
-			"schedule":         map[string]any{"type": "string", "description": "5-field cron expression in UTC (e.g. '*/15 * * * *', '0 9 * * 1-5')."},
-			"schedule_natural": map[string]any{"type": "string", "description": "Optional human description ('every 15 min', 'weekdays 9am UTC')."},
+			"schedule":         map[string]any{"type": "string", "description": "5-field cron expression in the boss's local timezone (e.g. '*/15 * * * *', '0 9 * * 1-5')."},
+			"schedule_natural": map[string]any{"type": "string", "description": "Optional human description ('every 15 min', 'weekdays 9am local time')."},
 			"prompt":           map[string]any{"type": "string", "description": "Prompt the sub-agent runs each fire."},
 		},
 		"required": []string{"name", "schedule", "prompt"},
@@ -187,14 +188,14 @@ type cronCreatePoll struct{ sched CronScheduler }
 
 func (t *cronCreatePoll) Name() string { return "cron_create_poll" }
 func (t *cronCreatePoll) Description() string {
-	return "Schedule a recurring Composio action poll (no LLM). Use to populate the dashboard from Gmail, Calendar, etc. Pick `action` from the toolkit's published action slugs (e.g. GMAIL_FETCH_EMAILS, GOOGLECALENDAR_EVENTS_LIST). `sink` decides which dashboard table the response writes into."
+	return "Schedule a deterministic recurring Composio action poll (no LLM). This is the reliable cron path for API polling: the scheduler executes the action, retries transient failures, and writes through a typed sink. Pick `action` from the toolkit's published action slugs (e.g. GMAIL_FETCH_EMAILS, GOOGLECALENDAR_EVENTS_LIST)."
 }
 func (t *cronCreatePoll) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"name":                 map[string]any{"type": "string", "description": "Unique name (kebab-case)."},
-			"schedule":             map[string]any{"type": "string", "description": "5-field cron expression UTC (e.g. '*/15 * * * *')."},
+			"schedule":             map[string]any{"type": "string", "description": "5-field cron expression in the boss's local timezone (e.g. '*/15 * * * *')."},
 			"schedule_natural":     map[string]any{"type": "string", "description": "Optional human description."},
 			"toolkit":              map[string]any{"type": "string", "description": "Composio toolkit slug ('gmail', 'googlecalendar', ...). Used for source labeling."},
 			"action":               map[string]any{"type": "string", "description": "Composio action slug ('GMAIL_FETCH_EMAILS', 'GOOGLECALENDAR_EVENTS_LIST', ...)."},
