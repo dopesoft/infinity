@@ -406,6 +406,68 @@ func (s *Store) RecordVerify(ctx context.Context, stepID, verdict, evidence, met
 	return s.Get(ctx, planID)
 }
 
+// ReconcileStranded closes plan steps left 'in_progress' after the mem_runs row
+// tracking their execution has already terminated in error. This is the
+// plan-layer analogue of runs.RecoverStranded.
+//
+// A step books a 'plan.step' run when plan_update marks it in_progress and only
+// flips to a terminal status when plan_update is called again with done/failed/
+// skipped (see tools/plan_tools.go). If the turn — or a delegate child doing the
+// step's work — dies mid-step, the run gets closed 'error' (by FinishByID or the
+// boot run-sweep) while the step is left 'in_progress' forever. recompute() never
+// runs, so the whole plan sits 'active' — a permanent "Running" card on the Agent
+// Work board with a dead step under it, while the cron/run that spawned it already
+// shows "Done". That split is the exact confusion this fixes.
+//
+// A terminal-error run is unambiguous proof the execution finished and failed, so
+// the step is marked 'failed'; recompute then pauses (or fails) the plan and it
+// surfaces under "Awaiting you" for the boss to replan or close out. Safe to call
+// on a live process precisely because it only acts on steps whose run has already
+// ENDED — never one still legitimately executing (its run is still 'running').
+// Returns the number of steps reconciled.
+func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.id::text
+		  FROM mem_plan_steps s
+		  JOIN mem_runs r ON r.id = s.run_id
+		  JOIN mem_plans p ON p.id = s.plan_id
+		 WHERE s.status = 'in_progress'
+		   AND r.status = 'error'
+		   AND p.status IN ('active', 'paused')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("scan stranded steps: %w", err)
+	}
+	var stepIDs []string
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan stranded step id: %w", scanErr)
+		}
+		stepIDs = append(stepIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	n := 0
+	for _, id := range stepIDs {
+		// MarkStep recomputes the parent plan's lifecycle (failed step + later
+		// pending steps -> paused), so reuse it rather than re-rolling recompute.
+		if _, err := s.MarkStep(ctx, id, StepFailed,
+			"step execution ended without recording a result — reconciled from its run, which had already failed"); err != nil {
+			return n, fmt.Errorf("reconcile stranded step %s: %w", id, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
 // SetStepRun links a step to the mem_runs row tracking its execution so the
 // UI can show a navigation-proof live spinner.
 func (s *Store) SetStepRun(ctx context.Context, stepID, runID string) error {

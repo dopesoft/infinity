@@ -124,6 +124,26 @@ func (t *bridgeFSRead) Schema() map[string]any {
 		"required": []string{"path"},
 	}
 }
+// bridgeErrText pulls a human reason out of a bridge error response. The bridges
+// return {"error":"..."} on 4xx; surfacing it beats a bare status code - e.g.
+// "path is outside the workspace root /workspace" instead of just "status=400".
+func bridgeErrText(body []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && strings.TrimSpace(e.Error) != "" {
+		return strings.TrimSpace(e.Error)
+	}
+	s := strings.TrimSpace(string(body))
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	if s == "" {
+		return "no reason given"
+	}
+	return s
+}
+
 func (t *bridgeFSRead) Execute(ctx context.Context, in map[string]any) (string, error) {
 	b, why, err := pickBridge(ctx, t.router, t.prefs)
 	if err != nil {
@@ -139,7 +159,7 @@ func (t *bridgeFSRead) Execute(ctx context.Context, in map[string]any) (string, 
 	}
 	body, status, ok := b.Get(ctx, q)
 	if !ok || status >= 300 {
-		return "", fmt.Errorf("fs_read via %s failed (status=%d)", b.Name(), status)
+		return "", fmt.Errorf("fs_read via %s failed (status=%d): %s", b.Name(), status, bridgeErrText(body))
 	}
 	return formatBridgeResult(b, body), nil
 }
@@ -172,7 +192,7 @@ func (t *bridgeFSLS) Execute(ctx context.Context, in map[string]any) (string, er
 	path := strString(in, "path")
 	body, status, ok := b.Get(ctx, "/fs/ls?path="+urlEscape(path))
 	if !ok || status >= 300 {
-		return "", fmt.Errorf("fs_ls via %s failed (status=%d)", b.Name(), status)
+		return "", fmt.Errorf("fs_ls via %s failed (status=%d): %s", b.Name(), status, bridgeErrText(body))
 	}
 	return formatBridgeResult(b, body), nil
 }

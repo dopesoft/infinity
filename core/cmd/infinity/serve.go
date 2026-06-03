@@ -30,6 +30,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/maintenance"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/projects"
@@ -170,6 +171,24 @@ func serveCmd() *cobra.Command {
 						infoLog.Printf("run recovery: closed %d stranded running mem_runs row(s) from prior boot", n)
 					}
 					rrcancel()
+
+					// Stranded-plan reconciliation: a plan step whose tracking run
+					// just got swept to 'error' above (or errored mid-flight while
+					// the agent's turn died without calling plan_update) is left
+					// 'in_progress', so its plan sits 'active' forever — a "Running"
+					// card on the Agent Work board even though its work failed,
+					// alongside a "Done" cron/run for the same task. Run AFTER the
+					// run sweep so orphaned plan.step runs are already 'error' and
+					// this catches them in the same boot. Fails the dead step ->
+					// recompute pauses the plan -> it moves to "Awaiting you".
+					prctx2, prcancel2 := context.WithTimeout(cmd.Context(), 10*time.Second)
+					if n, err := plan.NewStore(p).ReconcileStranded(prctx2); err != nil {
+						log.Printf("plan reconcile: %v", err)
+					} else if n > 0 {
+						infoLog := log.New(os.Stdout, "", log.LstdFlags)
+						infoLog.Printf("plan reconcile: failed %d stranded in_progress step(s) whose run had errored", n)
+					}
+					prcancel2()
 
 					// Stranded-prediction recovery: predictions recorded at
 					// PreToolUse whose PostToolUse hook never fired (session died
@@ -1724,6 +1743,16 @@ func serveCmd() *cobra.Command {
 				go runMaintenanceTicker(ctx, pool)
 			}
 
+			// Plan reconcile ticker. The boot sweep above only unsticks plans
+			// orphaned by a restart; a plan whose step errors mid-flight on a
+			// LIVE process (turn dies / delegate child fails without plan_update)
+			// would otherwise sit "Running" until the next deploy. This re-runs
+			// the same reconcile on a short cadence so a stuck plan self-heals
+			// into "Awaiting you" within minutes, no restart required.
+			if pool != nil {
+				go runPlanReconcileTicker(ctx, pool)
+			}
+
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Start() }()
 
@@ -2079,6 +2108,43 @@ func runMaintenanceTicker(ctx context.Context, pool *pgxpool.Pool) {
 	case <-time.After(30 * time.Second):
 	}
 	runOnce()
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			runOnce()
+		}
+	}
+}
+
+// runPlanReconcileTicker fails plan steps stranded 'in_progress' after their
+// tracking run has already errored, so a half-dead plan doesn't linger as a
+// "Running" card on the Agent Work board. Cheap single query; runs every 2 min
+// (override via INFINITY_PLAN_RECONCILE_INTERVAL). Failures log to stdout but
+// never kill the server.
+func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
+	interval := 2 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("INFINITY_PLAN_RECONCILE_INTERVAL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			interval = d
+		}
+	}
+	infoLog := log.New(os.Stdout, "", log.LstdFlags)
+	store := plan.NewStore(pool)
+
+	runOnce := func() {
+		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if n, err := store.ReconcileStranded(runCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "plan reconcile: %v\n", err)
+		} else if n > 0 {
+			infoLog.Printf("plan reconcile: failed %d stranded in_progress step(s) whose run had errored", n)
+		}
+	}
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
