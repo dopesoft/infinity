@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -292,6 +293,12 @@ func (s *Scheduler) Upsert(ctx context.Context, j Job) (string, error) {
 	if targetCfg == "" {
 		targetCfg = "{}"
 	}
+	// Auto-derive the cron's tool scope from the skill it runs, so a scoped
+	// skill (e.g. inbox-triage) locks every cron that invokes it WITHOUT anyone
+	// hand-setting target_config. The boss makes crons by asking the agent; the
+	// lockdown must follow the skill deterministically, not depend on the agent
+	// remembering to attach a scope (Rule #1b).
+	targetCfg = s.deriveToolScope(ctx, j.Target, targetCfg)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_crons (id, name, schedule, schedule_natural, job_kind, target,
 		                       target_config, enabled, max_retries, backoff_seconds)
@@ -309,6 +316,61 @@ func (s *Scheduler) Upsert(ctx context.Context, j Job) (string, error) {
 		return "", err
 	}
 	return j.ID, s.Reload(ctx)
+}
+
+// skillInvokeRe extracts the skill name from a cron target that runs a skill,
+// e.g. skills_invoke({name:"inbox-triage"}) — tolerant of spaces and quote
+// style. Used to auto-derive a cron's tool scope from the skill it runs.
+var skillInvokeRe = regexp.MustCompile(`skills_invoke\s*\(\s*\{[^}]*?name\s*:\s*["']([^"']+)["']`)
+
+// deriveToolScope auto-stamps a cron's tool_scope from the skill it invokes, so
+// a scoped skill locks every cron that runs it without anyone hand-setting
+// target_config. An explicit tool_scope already on the cron wins (the caller
+// meant it); a skill with no declared allowed_tools yields no scope (full
+// toolset — self-improve / nightly-cognition are unaffected). Returns the
+// possibly-updated target_config JSON. Best-effort: any parse/query hiccup
+// returns the config unchanged so cron creation never fails over scoping.
+func (s *Scheduler) deriveToolScope(ctx context.Context, target, cfg string) string {
+	if s == nil || s.pool == nil {
+		return cfg
+	}
+	if strings.TrimSpace(cfg) == "" {
+		cfg = "{}"
+	}
+	merged := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(cfg), &merged); err != nil {
+		return cfg
+	}
+	if _, explicit := merged["tool_scope"]; explicit {
+		return cfg // caller set a scope deliberately — respect it
+	}
+	m := skillInvokeRe.FindStringSubmatch(target)
+	if len(m) < 2 {
+		return cfg // not a skill-running cron → no scope to derive
+	}
+	var allowedJSON []byte
+	if err := s.pool.QueryRow(ctx, `
+		SELECT allowed_tools FROM mem_skills
+		 WHERE name = $1 AND allowed_tools IS NOT NULL
+		   AND jsonb_typeof(allowed_tools) = 'array'
+		   AND jsonb_array_length(allowed_tools) > 0
+	`, m[1]).Scan(&allowedJSON); err != nil || len(allowedJSON) == 0 {
+		return cfg // skill declares no tool surface → full toolset
+	}
+	scope, err := json.Marshal(map[string]any{
+		"allow":              json.RawMessage(allowedJSON),
+		"derived_from_skill": m[1],
+	})
+	if err != nil {
+		return cfg
+	}
+	merged["tool_scope"] = scope
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return cfg
+	}
+	infoLog.Printf("derived tool_scope for cron running skill %q from its declared allowed_tools", m[1])
+	return string(out)
 }
 
 // Delete removes a cron row by id.
