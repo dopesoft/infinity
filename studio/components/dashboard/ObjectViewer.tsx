@@ -35,7 +35,7 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { authedFetch, triggerCron } from "@/lib/api";
+import { authedFetch, triggerCron, cancelWork } from "@/lib/api";
 import { RunIndicator } from "@/lib/runs";
 import {
   ResponsiveModal,
@@ -407,6 +407,23 @@ function ViewerActions({
   const router = useRouter();
   const [seeding, setSeeding] = React.useState(false);
   const [dismissing, setDismissing] = React.useState(false);
+  const [cancelling, setCancelling] = React.useState(false);
+
+  // Stop/cancel a running OR awaiting work item — kills the in-flight agent
+  // turn, cancels the owning plan, and clears the card. The WorkItem id carries
+  // a "plan-"/"run-" prefix for uniqueness on the board; strip it for the API.
+  async function cancelWorkItem() {
+    if (item.kind !== "work") return;
+    const w = item.data;
+    const rawId = w.id.replace(/^(plan|run)-/, "");
+    setCancelling(true);
+    try {
+      const ok = await cancelWork({ kind: w.kind, id: rawId, sessionId: w.sessionId });
+      if (ok && onResolved) onResolved(item);
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   async function dismissFollowup() {
     if (item.kind !== "followup") return;
@@ -625,11 +642,32 @@ function ViewerActions({
       return <RsvpButtons event={ev} onResolved={onResolved} item={item} />;
     }
     if (item.kind === "work") {
-      // A scheduled job shouldn't be a read-only card — let the boss fire it
-      // immediately from here instead of "wait for the next tick or go to
-      // /cron". RunIndicator books a mem_runs row so the spinner survives
-      // navigation/refresh, identical to the cron page's own Run now.
-      const cronID = cronIDFromWorkItem(item.data);
+      const w = item.data;
+      // Running or awaiting work the boss wants to kill: a stuck plan, an
+      // in-flight cron/agent turn, a paused plan sitting in "awaiting". Stop
+      // aborts the live turn, cancels the plan, and clears the card. Covers the
+      // gap where the board had no way to cancel an active/awaiting item.
+      const canCancel =
+        (w.column === "running" || w.column === "awaiting") &&
+        ["plan", "cron_run", "skill_run", "workflow"].includes(w.kind);
+      if (canCancel) {
+        return (
+          <button
+            type="button"
+            onClick={cancelWorkItem}
+            disabled={cancelling}
+            title="Stop this item: aborts the running agent turn, cancels its plan, and clears the card."
+            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-danger/40 bg-background px-3 text-[13px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
+          >
+            <X className={cn("size-3.5", cancelling && "animate-pulse")} aria-hidden />
+            {cancelling ? "Stopping..." : w.column === "awaiting" ? "Dismiss" : "Stop"}
+          </button>
+        );
+      }
+      // A scheduled (queued) job shouldn't be a read-only card — let the boss
+      // fire it immediately. RunIndicator books a mem_runs row so the spinner
+      // survives navigation/refresh, identical to the cron page's own Run now.
+      const cronID = cronIDFromWorkItem(w);
       if (cronID) {
         return (
           <RunIndicator

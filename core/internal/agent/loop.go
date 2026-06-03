@@ -295,6 +295,16 @@ type Loop struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 
+	// runCancels lets an out-of-band caller (the Stop button on the Agent
+	// Work board) abort an in-flight turn by session id. Every Run registers
+	// its cancel func here for its duration; CancelSession looks it up and
+	// fires it, tearing the turn down at the next ctx check. The generation
+	// token guards against a finished turn's deferred clear deleting a newer
+	// turn's entry on the same session. Guarded by cancelMu.
+	cancelMu   sync.Mutex
+	cancelGen  uint64
+	runCancels map[string]*runCancelEntry
+
 	systemPrompt      string
 	maxToolIterations int
 
@@ -329,6 +339,61 @@ type Loop struct {
 	// not the silent default. Guarded by providerMu since it's read on
 	// every turn alongside the live provider.
 	activeModelFn func(ctx context.Context) string
+}
+
+// runCancelEntry pairs a turn's cancel func with a generation token so a
+// stale deferred clear can't evict a newer turn's entry on the same session.
+type runCancelEntry struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+// registerRunCancel records the cancel func for an in-flight turn and returns
+// its generation token (passed back to clearRunCancel). Last writer wins for a
+// given session — fine because a session runs at most one turn at a time.
+func (l *Loop) registerRunCancel(sessionID string, cancel context.CancelFunc) uint64 {
+	if l == nil || sessionID == "" {
+		return 0
+	}
+	l.cancelMu.Lock()
+	defer l.cancelMu.Unlock()
+	if l.runCancels == nil {
+		l.runCancels = map[string]*runCancelEntry{}
+	}
+	l.cancelGen++
+	l.runCancels[sessionID] = &runCancelEntry{gen: l.cancelGen, cancel: cancel}
+	return l.cancelGen
+}
+
+// clearRunCancel removes a turn's entry, but only if it's still the same
+// generation (a newer turn on the same session must not be evicted).
+func (l *Loop) clearRunCancel(sessionID string, gen uint64) {
+	if l == nil || sessionID == "" {
+		return
+	}
+	l.cancelMu.Lock()
+	defer l.cancelMu.Unlock()
+	if e, ok := l.runCancels[sessionID]; ok && e.gen == gen {
+		delete(l.runCancels, sessionID)
+	}
+}
+
+// CancelSession aborts the in-flight turn for a session (the Stop button). It
+// cancels the turn's context, so the loop exits at its next ctx check and the
+// run/plan bookkeeping closes through the normal finish path. Returns true when
+// a live turn was found and signalled. nil-safe.
+func (l *Loop) CancelSession(sessionID string) bool {
+	if l == nil || sessionID == "" {
+		return false
+	}
+	l.cancelMu.Lock()
+	e, ok := l.runCancels[sessionID]
+	l.cancelMu.Unlock()
+	if ok && e != nil && e.cancel != nil {
+		e.cancel()
+		return true
+	}
+	return false
 }
 
 // hiddenForSession reads the visibility hook under providerMu and
@@ -902,6 +967,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	if steerCh == nil {
 		ctx = tools.WithAutonomous(ctx)
 	}
+
+	// Make the turn cancelable out-of-band so the Stop button on the Agent
+	// Work board can abort it. CancelSession(sessionID) fires this cancel; the
+	// loop then exits at its next ctx check and bookkeeping closes normally.
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	cancelGen := l.registerRunCancel(sessionID, cancelRun)
+	defer l.clearRunCancel(sessionID, cancelGen)
 
 	s := l.GetOrCreateSession(sessionID)
 

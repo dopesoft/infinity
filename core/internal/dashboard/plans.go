@@ -204,6 +204,7 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 			Subtitle:   sub,
 			Engine:     "Plan",
 			Column:     column,
+			SessionID:  p.SessionID,
 			StartedAt:  &created,
 			FinishedAt: &updated,
 			PlanSteps:  steps,

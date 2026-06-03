@@ -343,7 +343,12 @@ type WorkItem struct {
 	// Ref is the raw technical identifier (auto-generated skill name, cron
 	// schedule, watch type) kept off the card title but shown in the detail for
 	// anyone who needs the exact handle.
-	Ref          string     `json:"ref,omitempty"`
+	Ref string `json:"ref,omitempty"`
+	// SessionID is the agent turn behind a running/awaiting item, when known.
+	// Carried so the Stop button can cancel the live turn (loop.CancelSession)
+	// and close the right runs. Empty for items with no agent session (queued
+	// crons, trust rows, code proposals).
+	SessionID    string     `json:"sessionId,omitempty"`
 	ScheduledFor *time.Time `json:"scheduledFor,omitempty"`
 	StartedAt    *time.Time `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
@@ -1628,6 +1633,7 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				Engine:     engine,
 				Ref:        label,
 				Column:     "running",
+				SessionID:  sessionID,
 				StartedAt:  &s,
 				DetailHref: href,
 			})

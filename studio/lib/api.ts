@@ -90,6 +90,32 @@ export async function postSurfaceAction(
   }
 }
 
+// ── Agent Work: cancel/stop a running or awaiting item ───────────────────────
+// Kills a plan / cron run / agent turn from the Agent Work board: aborts the
+// in-flight turn (so the agent actually stops), cancels the owning plan, and
+// closes its lingering runs so the card clears. Works for running AND awaiting
+// items. `id` is the WorkItem id with its "plan-"/"run-" prefix stripped.
+export async function cancelWork(input: {
+  kind: string;
+  id: string;
+  sessionId?: string;
+}): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/work/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: input.kind,
+        id: input.id,
+        session_id: input.sessionId ?? "",
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Plans (the Cortex - mem_plans) ───────────────────────────────────────────
 // The active/paused plan for a chat session, powering the pinned dock so it
 // shows the same plan the dashboard Agent Work board does. Read-only from

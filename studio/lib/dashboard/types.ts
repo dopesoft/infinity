@@ -273,6 +273,9 @@ export type WorkItem = {
   // card title (readable plain English) and show in the detail view.
   engine?: string;
   ref?: string;
+  // the agent turn behind a running/awaiting item, when known — used by the
+  // Stop button to cancel the live turn and close the right runs.
+  sessionId?: string;
   scheduledFor?: string;
   startedAt?: string;
   finishedAt?: string;
