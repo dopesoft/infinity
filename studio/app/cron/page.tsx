@@ -162,10 +162,15 @@ function CronSection() {
                     last {casualTime(j.last_run_at)}
                   </span>
                 )}
-                <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                {/* Subtle outcome of the most recent run — the full
+                    "what I did / how it went" narrative lives one tap away
+                    in CronDetailModal, so the row stays quiet. */}
+                <RunIndicator kind="cron" targetId={j.id} mode="inline" />
+                <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                   <RunIndicator
                     kind="cron"
                     targetId={j.id}
+                    mode="icon"
                     label="Run now"
                     title="Fire this cron immediately, regardless of schedule. The next regular fire still happens on the cron expression's next tick. Progress survives navigation and refresh."
                     onRun={() => runNow(j.id)}

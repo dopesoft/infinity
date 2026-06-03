@@ -9,6 +9,51 @@ Newest first.
 
 ---
 
+## 2026-06-02 — Durable plans ("the Cortex") + todo/plan unification
+
+The agent gets a durable, steerable, verifiable plan, and the old ephemeral
+"todo checklist" is folded into it so there's ONE concept shown the same way in
+chat and on the dashboard. Full wiring in
+[`ARCHITECTURE.md`](../ARCHITECTURE.md#durable-plans-the-cortex--todoplan-unification-2026-06-02).
+
+### 1. Plan substrate — plan → execute → verify → replan
+Migrations `116_mem_plans.sql` (tables + realtime + RLS) and
+`117_seed_planning_skill.sql` (the `plan-and-verify` default skill), both applied
+to prod. New `core/internal/plan/` package + `plan_create` / `plan_update` /
+`plan_verify` / `plan_get` / `plan_list` tools (pinned). A plan survives
+compaction, restart, and session boundaries — `PlanProvider` re-injects the
+active plan + next step every turn, so a long task resumes where it left off.
+**Verify-before-done is enforced in code:** a `verify_required` step can't be
+marked done until `plan_verify` records passing evidence; a fail blocks the step
+and prompts a replan. The cognition (how to decompose / when to verify) lives in
+the skill + soul rule #11, never in Go.
+
+### 2. todo/plan unification — one substrate, two synced views
+`todo_write` is now an alias that writes the plan substrate
+(`plan.Store.SyncChecklist`) instead of a separate `mem_runs.meta.todos` list. A
+background build binds its plan to the **parent** chat session (`run_binding.go`
+now carries `parentSession`), so the boss sees it in his conversation and on the
+dashboard, not on the throwaway child session. The background `mem_runs` row is
+now execution telemetry only (running?, current file), not a second checklist.
+- **Dashboard:** a plan is a `kind:"plan"` card on the **Agent Work board** with a
+  `4/7` step-progress bar; tapping it opens the full step timeline in ObjectViewer
+  (shared `PlanTimeline`). There is **no separate `/plans` page** — a plan is
+  agent work, so it lives on the board.
+- **Chat:** the pinned dock renders the same plan via `usePlan` →
+  `GET /api/plans/active` + realtime, so chat and dashboard stay in sync.
+
+### 3. Context intelligence + ops
+- `agent.GatedProvider` + `SubstantiveQuery`: a deterministic relevance gate that
+  skips the heavy behavioral providers (proven lessons, reflection chains) on bare
+  greetings, so the memory chain scales without per-turn token bloat.
+- `INFINITY_AUTO_COMPRESS=true` in prod — observations promote to episodic memory
+  daily (runs on the active model, not Anthropic-only).
+- `ConnectorsSection.tsx` migrated to `<ResponsiveModal>` (reuse-first rule).
+- Dashboard reorganized: Agent Work → Upcoming · Follow-ups → Surfaced · Pursuits
+  · Todos.
+
+---
+
 ## 2026-05-30 — "Steal from the field" pass (nanobot / Hermes / openclaw recon)
 
 Three improvements adopted after reviewing the latest from nanobot, Hermes

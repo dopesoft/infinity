@@ -231,6 +231,10 @@ core/
     workflow/          durable workflow engine — types, store, engine
                        (background worker, retries, checkpoints, resume),
                        validate (static step-list check)
+    plan/              durable agent plan ("the Cortex") — types, store
+                       (CRUD + SyncChecklist), no engine: the AGENT drives
+                       steps from its own loop. Backs plan_* + todo_write
+                       tools; PlanProvider injects the active plan each turn
     extensions/        runtime self-extension — types, store, http_tool
                        (generic REST tool), manager, tools (extension_*)
     eval/              verification substrate — eval.go (Store + Scorecard
@@ -1171,3 +1175,97 @@ With both set, the child runs in a stable `peer:<name>` session that is **not**
 cleared on return, so repeated consults resume context. Ephemeral one-shot
 delegation is unchanged (fresh `delegate:<uuid>`, cleared on return). Live peers
 are LRU-capped at `maxLivePeers` (6); eviction clears the oldest peer's session.
+
+## Durable plans ("the Cortex") + todo/plan unification (2026-06-02)
+
+The agent gains a durable, steerable, verifiable plan — the thing a reactive
+loop is missing. It can now lay out a multi-step task, track each step, prove a
+step worked before calling it done, and resume from saved state after a
+compaction or restart. The plan is the single concept behind both the
+chat checklist and the dashboard work card (they were two stores; now they're
+one). Cognition lives in the model + a seeded skill, not in Go (Rule #1).
+
+### The substrate (building block)
+
+- **Schema:** `116_mem_plans.sql` — `mem_plans` (session-owned instance:
+  `title`, `goal`, `status` active|paused|completed|failed|cancelled,
+  `current_step`, optional `goal_id` link to `mem_agent_goals`) + `mem_plan_steps`
+  (`idx`, `title`, `detail`, `status` pending|in_progress|blocked|done|failed|skipped,
+  `is_checkpoint`, `verify_required`, `verify_result jsonb`, `result_summary`,
+  `run_id`). Both added to `supabase_realtime` + given `authenticated` SELECT RLS
+  (083's loop only covered tables that existed then). Applied to prod.
+- **Store:** `core/internal/plan/{types,store}.go` — plain pgx CRUD. **No engine**:
+  the agent executes steps in its own loop; this is durable working memory, not
+  `workflow.Engine`. `recompute` rolls `current_step` + plan status from the step
+  set after every mutation.
+- **Tools:** `core/internal/tools/plan_tools.go` — `plan_create` / `plan_update` /
+  `plan_verify` / `plan_get` / `plan_list`, pinned in `CorePinnedTools()`.
+  Each in-flight step books a `runs.Track(KindPlanStep, stepID, …)` row (via
+  `runs.BeginGlobal` + the new `runs.FinishByID`, since begin/finish span turns)
+  so the UI shows a navigation-proof live spinner per step.
+- **Verify-before-done is structural, not just prompted:** `plan_update` refuses
+  to mark a `verify_required` step `done` until `plan_verify` has recorded a
+  passing verdict; a failing verdict flips the step to `blocked` and returns a
+  replan nudge.
+- **Provider (closes the loop):** `core/internal/memory/provider_plan.go`
+  (`PlanProvider`) injects the session's active plan + "next pending step" into
+  the system prompt every turn — silent when none — so a long task resumes
+  exactly where it left off. Wired into the `memProviders` chain in `serve.go`.
+
+### Cognition (skill + soul, not Go)
+
+- **Soul:** operating principle #11 + a Plans tool entry in `soul.md` nudge plan
+  for any 3+ step / multi-turn task and verification before "done".
+- **Seeded skill:** `117_seed_planning_skill.sql` ships the `plan-and-verify`
+  default skill carrying the decompose → execute → verify → replan recipe and the
+  evidence rubric (Voyager/GEPA can evolve it). Checkpoints surface via the
+  existing surface-action rail (`surface_item` with approve/skip actions).
+
+### todo/plan unification — one concept, two synced views
+
+`todo_write` was a *separate* ephemeral checklist on `mem_runs.meta.todos`
+(background-build only). It is now an **alias onto the plan substrate** — a flat
+checklist is just a plan with plain steps:
+
+- `plan.Store.SyncChecklist(sessionID, title, items)` upserts the session's
+  active plan, preserving its id (no flicker) and replacing steps to mirror the
+  list. `todo_write` calls it; the duplicate `mem_runs.meta.todos` write is gone.
+- **Session binding:** `run_binding.go` now carries `parentSession`. A background
+  build (`agent/background.go`) runs in a throwaway child session; `todo_write`
+  resolves the **parent** chat session and binds the plan there, so it shows in
+  the boss's conversation + the dashboard, not on the orphan child. The
+  background `mem_runs` row stays as *execution telemetry only* (running?,
+  current file) — not a second checklist.
+- **Two synced views of `mem_plans`:**
+  - **Dashboard:** a plan is a `WorkItem` of `kind:"plan"` on the **Agent Work
+    board** (`dashboard/plans.go` `planWorkItems` in `loadWork`): active → Running
+    (with a `4/7` step-progress bar in `AgentWorkBoard.tsx`), paused → Awaiting
+    you, finished-today → Done. Steps ride inline so tapping the card opens the
+    full timeline in `ObjectViewer` (the shared `PlanTimeline.tsx`), mirroring
+    how workflow runs render. **There is no separate `/plans` page** — a plan is
+    agent work, so it lives on the board (the consolidate-surfaces rule).
+  - **Chat:** the pinned `BackgroundJobDock` renders the session's active plan via
+    `usePlan(sessionId)` → `GET /api/plans/active?session_id=`
+    (`dashboard/plans.go handlePlanActive`) + realtime on `mem_plans` /
+    `mem_plan_steps`. Same rows as the dashboard card → chat and dashboard stay
+    in sync.
+
+### Context intelligence + ops (same batch)
+
+- **Query-adaptive memory gate:** `agent.GatedProvider` (`composite_memory.go`)
+  wraps a provider with a deterministic relevance predicate, returning "" when
+  not relevant so the rest of the chain still runs. `agent.SubstantiveQuery`
+  gates the heavy behavioral providers (proven lessons, reflection chains) off
+  bare greetings — no LLM in the routing path. Lets the chain scale without
+  per-turn token bloat.
+- **Daily compression on:** `INFINITY_AUTO_COMPRESS=true` in prod — observations
+  promote to episodic `mem_memories` daily (the compressor runs on the active
+  model, not Anthropic-only). Nightly consolidate still housekeeps regardless.
+- **Reuse-first fix:** `settings/ConnectorsSection.tsx` migrated off raw
+  `Dialog`/`Drawer` + `useMediaQuery` to `<ResponsiveModal>`.
+
+### Dashboard layout (reorganized)
+
+Under the search: **Agent Work** (full width) → **Upcoming · Follow-ups**
+(2-col) → **Surfaced by Jarvis · Pursuits · Todos** (3-col) → Reflection, Saved,
+Activity, memory footer. (`DashboardClient.tsx`.)

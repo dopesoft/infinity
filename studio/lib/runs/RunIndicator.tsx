@@ -46,10 +46,12 @@ export type RunIndicatorProps = {
   // 'running'. When the server reports the row before the promise
   // settles (the common case), the spinner is driven by realtime.
   onRun?: () => void | Promise<void>;
-  // Render shape. 'button' (default) = full clickable affordance.
-  // 'badge' = status pill only, no click. 'inline' = tiny spinner +
-  // text inline for use inside row metadata.
-  mode?: "button" | "badge" | "inline";
+  // Render shape. 'button' (default) = full clickable affordance with an
+  // inline result/error chip below it. 'icon' = compact icon-only button
+  // (Play → spinner) with NO result chip — for dense list rows where the
+  // narrative lives one tap away in a detail modal. 'badge' = status pill
+  // only, no click. 'inline' = tiny spinner + text inside row metadata.
+  mode?: "button" | "icon" | "badge" | "inline";
   // Button sizing for mode='button'. Defaults to "sm" so it slots into
   // dense row layouts; pass "default" for full-size CTA placements.
   size?: "sm" | "default" | "lg" | "icon";
@@ -57,6 +59,12 @@ export type RunIndicatorProps = {
   // Override the running indicator's render. Useful when you want to
   // show a custom progress bar instead of the default spinner+label.
   renderRunning?: (run: RunDTO) => React.ReactNode;
+  // mode='button' only. When false, the result/error chip below the
+  // button is suppressed so the control is just the trigger. Use this
+  // when the run's outcome is surfaced elsewhere (e.g. a modal footer
+  // whose body already has a "Last run" section) — otherwise the chip
+  // wraps and clips inside a pinned action bar. Defaults to true.
+  showResult?: boolean;
 };
 
 export function RunIndicator({
@@ -69,6 +77,7 @@ export function RunIndicator({
   size = "sm",
   className,
   renderRunning,
+  showResult = true,
 }: RunIndicatorProps) {
   // Filter to "this exact target's runs" so the spinner reflects this
   // row only, not "anything of kind=X anywhere."
@@ -100,6 +109,31 @@ export function RunIndicator({
     } catch {
       setOptimisticRunning(false);
     }
+  }
+
+  if (mode === "icon") {
+    // Compact icon-only trigger for dense rows. Matches the sibling
+    // ghost icon-buttons (e.g. delete) so an action cluster reads as a
+    // tidy row of equal-weight controls, never a full-width bar. The
+    // run's narrative/error is surfaced elsewhere (a detail modal or an
+    // inline status), so we deliberately render NO result chip here.
+    return (
+      <Button
+        size="icon"
+        variant="ghost"
+        className={className}
+        onClick={() => void handleClick()}
+        disabled={running || !onRun}
+        title={title}
+        aria-label={label}
+      >
+        {running ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <Play className="size-4" />
+        )}
+      </Button>
+    );
   }
 
   if (mode === "badge") {
@@ -153,10 +187,10 @@ export function RunIndicator({
         )}
         {running ? (latest?.progress_label || "running…") : label}
       </Button>
-      {!running && latest?.status === "error" && (
+      {showResult && !running && latest?.status === "error" && (
         <RunErrorChip run={latest} />
       )}
-      {!running && latest?.status === "ok" && (
+      {showResult && !running && latest?.status === "ok" && (
         <p className="rounded-md border border-success/40 bg-success/5 px-2 py-1 text-[11px] text-success">
           {latest.result_summary || "completed"}
         </p>

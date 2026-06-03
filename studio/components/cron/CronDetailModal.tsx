@@ -88,6 +88,7 @@ export function CronDetailModal({
             targetId={cron.id}
             label="Run now"
             title="Fire this cron immediately, regardless of schedule. Progress survives navigation and refresh."
+            showResult={false}
             onRun={async () => {
               await triggerCron(cron.id);
             }}

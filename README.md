@@ -120,6 +120,14 @@ You're not configuring a tool. You're describing an outcome, and it builds the m
 
 **The tactics behind it:** a generic surface contract every capability writes through, runtime skill-authoring straight into the live registry, a durable workflow engine (state machine + retries + human checkpoints, resumable across restarts), runtime MCP / REST-API self-extension. The competitors *execute what you wired* — Infinity assembles what you asked for.
 
+### Shows its work — a plan you can watch, with every step verified
+
+For anything bigger than a one-shot — *"build me an app, add auth, deploy it"* — Infinity lays out a **plan** first: an ordered, durable checklist you can watch fill in live. You see the same plan whether you're in the chat (a pinned strip above the composer) or on the dashboard (a card on the Agent Work board with a `4/7` progress bar) — it's one thing, in sync everywhere.
+
+The difference from a chatbot that says "done": it **verifies each step before it counts it done** — the file exists, the test passed, the API returned 200 — and if a check fails, that step blocks and it replans instead of bluffing. The plan is durable, so if the server restarts mid-task it resumes exactly where it left off rather than starting over. Steps you should sign off on become checkpoints that pause and ping you.
+
+**The tactics behind it:** a durable plan substrate (`mem_plans`) the agent drives from its own loop, a structurally-enforced verify-before-done gate, a `PlanProvider` that re-injects the active plan every turn so long tasks survive context compaction, and a single concept behind both the chat dock and the dashboard card (the old ephemeral todo list is now just the quick form of a plan).
+
 ### Holds goals — and knows if it's delivering
 
 Infinity keeps its own goals, not just yours. *"Get the migration shipped," "keep the inbox triaged daily"* — it carries a living plan for each, records its own progress, and if one stalls or gets blocked, the heartbeat pulls it back into view so it re-plans instead of forgetting.
@@ -330,7 +338,11 @@ Full env-var reference, service-by-service deploy notes, Supabase pooler details
 
 ## Recent changes
 
-See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the running record. Most recent (2026-05-30), adopted after reviewing the latest from nanobot, Hermes, and openclaw:
+See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the running record. Most recent (2026-06-02):
+
+- **Durable plans ("the Cortex") + todo/plan unification** — the agent now lays out a verifiable, resumable plan for any multi-step task, proves each step before marking it done, and shows the *same* plan in chat and on the dashboard (one substrate, two synced views). The old ephemeral background "todo list" is folded in as the quick form of a plan. Migrations `116` / `117`; `core/internal/plan/`. Full wiring: [ARCHITECTURE.md](ARCHITECTURE.md#durable-plans-the-cortex--todoplan-unification-2026-06-02).
+
+Earlier (2026-05-30), adopted after reviewing the latest from nanobot, Hermes, and openclaw:
 
 - **GEPA promotion gates** — self-improvement can no longer make a skill dumber. The optimizer now rejects a rewritten `SKILL.md` that drops the skill's name, declared env vars / toolsets, `##` sections, or that drifts too far in meaning (embedding cosine `< 0.82`). `core/internal/voyager/optimizer.go`.
 - **Surface return-path** — the dashboard now *acts*, not just shows. Surfaced items can carry boss-tappable actions (`Summarize` · `Draft reply` · `Investigate`); a tap seeds an autonomous agent turn with a live, navigation-proof spinner. Generic + schema-driven. Full doc: [`docs/surface-return-path/README.md`](docs/surface-return-path/README.md). Migration `084`.
