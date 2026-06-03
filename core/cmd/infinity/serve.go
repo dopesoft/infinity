@@ -25,6 +25,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
+	"github.com/dopesoft/infinity/core/internal/inbox"
 	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
@@ -1283,6 +1284,21 @@ func serveCmd() *cobra.Command {
 					Embedder:   embedder,
 					Logger:     slog.Default(),
 				})
+				// Wire the deterministic inbox-triage skill (fetch → 1 LLM
+				// decide → surface with actions/HTML). Reuses the same Composio
+				// exec, cache, message fetcher, Settings model, and surface store
+				// the rest of the system uses — generic building blocks, one
+				// judgment call. Routed via the "inbox_triage" system task.
+				if connectorsCache != nil && composioExec != nil {
+					systemExec.SetInbox(inbox.Deps{
+						Exec:    composioExec,
+						Cache:   connectorsCache,
+						Fetcher: connectors.NewMessageFetcher(composioExec, connectorsCache),
+						LLM:     activeModel,
+						Surface: surface.NewStore(pool, slog.Default()),
+						Logger:  slog.Default(),
+					})
+				}
 				cronScheduler = cron.New(pool, cron.NewCompositeExecutor(agentExec, connectorExec, systemExec))
 				if err := cronScheduler.Start(cmd.Context()); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: cron start: %v\n", err)

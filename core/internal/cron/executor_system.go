@@ -7,15 +7,26 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/inbox"
 	"github.com/dopesoft/infinity/core/internal/maintenance"
 )
 
 type SystemExecutor struct {
-	Deps maintenance.Deps
+	Deps  maintenance.Deps
+	Inbox inbox.Deps // deterministic inbox-triage skill (fetch → 1 LLM decide → surface)
 }
 
 func NewSystemExecutor(deps maintenance.Deps) *SystemExecutor {
 	return &SystemExecutor{Deps: deps}
+}
+
+// SetInbox wires the deterministic inbox-triage skill's dependencies. Called
+// from serve.go after the connectors/LLM/surface pieces exist.
+func (e *SystemExecutor) SetInbox(d inbox.Deps) {
+	if e == nil {
+		return
+	}
+	e.Inbox = d
 }
 
 func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
@@ -44,6 +55,19 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		return RunSummary{
 			Summary: rep.Summary(),
 			Meta:    map[string]any{"report": rep},
+		}, err
+	case "inbox_triage":
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		var ic inbox.Config
+		if len(j.TargetConfig) > 0 {
+			_ = json.Unmarshal(j.TargetConfig, &ic)
+		}
+		s, err := inbox.Run(ctx, e.Inbox, ic)
+		return RunSummary{
+			Summary: fmt.Sprintf("Triaged %d email(s) across %d mailbox(es); surfaced %d needing your reply.",
+				s.Fetched, s.Accounts, s.Surfaced),
+			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced},
 		}, err
 	default:
 		return RunSummary{}, fmt.Errorf("unknown system task %q", task)
