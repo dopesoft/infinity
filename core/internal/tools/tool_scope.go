@@ -84,6 +84,35 @@ func HiddenBySessionScope(sessionID string, allNames []string) (map[string]struc
 	return hidden, true
 }
 
+// ScopeConcreteAllow returns the non-wildcard tool names a scoped session
+// allows, so the loop can pre-load them into the session's active set as
+// permanent entries. This makes the locked recipe (skills_invoke + the
+// mail/surface tools) directly callable from the first iteration instead of
+// forcing a load_tools dance the runtime brain fumbles under TTL decay — the
+// observed failure where the triage turn re-loaded skills_invoke until the loop
+// guard tripped and never invoked it. Wildcard entries (e.g. "composio__GMAIL_*")
+// are skipped: those legitimately load on demand. Returns nil when no scope is
+// registered for the session.
+func ScopeConcreteAllow(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	toolScopeMu.RLock()
+	allow, ok := sessionScopes[sessionID]
+	toolScopeMu.RUnlock()
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(allow))
+	for _, a := range allow {
+		if a == "" || strings.HasSuffix(a, "*") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // scopeAllows reports whether name is permitted by the allowlist, matching
 // exact names and trailing "*" prefix wildcards.
 func scopeAllows(allow []string, name string) bool {

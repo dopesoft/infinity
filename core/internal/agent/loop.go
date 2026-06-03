@@ -978,6 +978,16 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 	s := l.GetOrCreateSession(sessionID)
 
+	// A scoped turn (e.g. the locked inbox-triage cron) pre-loads its
+	// allowlisted recipe tools as PERMANENT so skills_invoke + the mail/surface
+	// tools are directly callable from the first iteration. Without this the
+	// brain must load_tools them first and — under TTL decay + the tiny locked
+	// catalog — gets stuck re-loading until the loop guard trips, never actually
+	// invoking the skill. Wildcards (composio__GMAIL_*) still load on demand.
+	if concrete := tools.ScopeConcreteAllow(sessionID); len(concrete) > 0 {
+		s.Active.Load(concrete, 0)
+	}
+
 	// Tag this turn's observations with the session's ACTIVE project so memory
 	// stays per-project coherent when the boss switches projects mid-conversation.
 	if p := l.projectFor(ctx, sessionID); p != "" {
