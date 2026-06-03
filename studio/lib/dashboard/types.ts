@@ -239,6 +239,7 @@ export type WorkItemKind =
   | "sentinel"
   | "skill_run"
   | "workflow"
+  | "plan"
   | "trust"
   | "code_proposal"
   | "curiosity"
@@ -280,12 +281,20 @@ export type WorkItem = {
   detailHref?: string;
   // populated only for kind === "workflow" - the run's step state-machine.
   workflowSteps?: WorkflowStep[];
+  // populated only for kind === "plan" - the durable plan's ordered steps,
+  // carried inline so the Kanban card opens the full step timeline in
+  // ObjectViewer with no second fetch. doneCount/totalCount drive the "4/7"
+  // progress bar on the running card.
+  planSteps?: PlanStep[];
+  doneCount?: number;
+  totalCount?: number;
 };
 
 // ── Plans (the durable, verifiable plan substrate - "the Cortex") ────────────
-// Mirror of core/internal/dashboard.Plan / PlanStep. The agent lays out a plan
-// with plan_create and works it step by step; this is the read model the
-// dashboard PlanCard, the /plans page, and the detail timeline render.
+// Mirror of core/internal/dashboard.PlanStep. The agent lays out a plan with
+// plan_create and works it step by step; a plan surfaces on the Agent Work
+// board as a WorkItem of kind "plan" (steps ride inline on WorkItem.planSteps),
+// and the PlanTimeline component renders them inside ObjectViewer.
 export type PlanStatus =
   | "active"
   | "paused"
@@ -318,17 +327,18 @@ export type PlanStep = {
   endedAt?: string;
 };
 
+// A plan surfaces on the Agent Work board as a WorkItem of kind "plan" (steps
+// inline on the work item). The chat dock renders the SAME plan via the
+// session-scoped GET /api/plans/active, typed below - one substrate, two views.
 export type Plan = {
   id: string;
   title: string;
   goal?: string;
   status: PlanStatus;
   currentStep: number;
-  createdAt: string;
-  updatedAt: string;
-  steps: PlanStep[];
   doneCount: number;
   totalCount: number;
+  steps: PlanStep[];
 };
 
 // ── Saved (articles, links, notes, quotes) ───────────────────────────────────

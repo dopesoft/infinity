@@ -90,27 +90,14 @@ export async function postSurfaceAction(
   }
 }
 
-// ── Plans (the Cortex - mem_plans / mem_plan_steps) ──────────────────────────
-// Read-only from Studio: the agent owns writes through its plan_* tools and the
-// checkpoint surface-action path. The /plans page lists by status; the detail
-// modal fetches one plan with its steps. Realtime on mem_plans / mem_plan_steps
-// repaints both without a manual refetch.
-
-export async function fetchPlans(status?: string, signal?: AbortSignal): Promise<Plan[]> {
+// ── Plans (the Cortex - mem_plans) ───────────────────────────────────────────
+// The active/paused plan for a chat session, powering the pinned dock so it
+// shows the same plan the dashboard Agent Work board does. Read-only from
+// Studio; the agent owns writes via its plan_* / todo_write tools.
+export async function fetchActivePlan(sessionId: string, signal?: AbortSignal): Promise<Plan | null> {
+  if (!sessionId) return null;
   try {
-    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-    const res = await authedFetch(`/api/plans${qs}`, { signal });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { plans?: Plan[] };
-    return data.plans ?? [];
-  } catch {
-    return [];
-  }
-}
-
-export async function getPlan(id: string, signal?: AbortSignal): Promise<Plan | null> {
-  try {
-    const res = await authedFetch(`/api/plans/get?id=${encodeURIComponent(id)}`, { signal });
+    const res = await authedFetch(`/api/plans/active?session_id=${encodeURIComponent(sessionId)}`, { signal });
     if (!res.ok) return null;
     const data = (await res.json()) as { plan?: Plan | null };
     return data.plan ?? null;

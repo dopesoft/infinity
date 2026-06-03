@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
 // infoLog writes to stdout so Railway tags these lines severity=info
@@ -44,19 +45,19 @@ func loadApprovalTTL() time.Duration {
 //
 // Policy (overridable via env):
 //
-//   • claude_code__write, claude_code__edit                      → allow (source
+//   - claude_code__write, claude_code__edit                      → allow (source
 //     edits are git-reversible; gating them is what made walk-away coding
 //     impossible — the whole point of this gate is to NOT do that)
-//   • claude_code__bash                                          → CONTENT-AWARE:
-//       - read-only git (status/diff/log/…)        → allow
-//       - any non-filesystem-destructive command   → allow (go build, npm test,
-//                                                     git commit, mkdir, …)
-//       - filesystem-destructive command           → queue (rm/rmdir/shred/dd/
-//                                                     mkfs/truncate/find -delete/
-//                                                     mv …/dev/null, …)
-//   • claude_code__read, claude_code__ls, claude_code__grep,
+//   - claude_code__bash                                          → CONTENT-AWARE:
+//   - read-only git (status/diff/log/…)        → allow
+//   - any non-filesystem-destructive command   → allow (go build, npm test,
+//     git commit, mkdir, …)
+//   - filesystem-destructive command           → queue (rm/rmdir/shred/dd/
+//     mkfs/truncate/find -delete/
+//     mv …/dev/null, …)
+//   - claude_code__read, claude_code__ls, claude_code__grep,
 //     claude_code__glob                                          → allow
-//   • everything else                                            → allow
+//   - everything else                                            → allow
 //
 // The boss explicitly scoped "deletes and shit" to *filesystem deletes*. Git
 // history/remote rewrites, DB drops, and deploys are deliberately NOT gated by
@@ -64,17 +65,18 @@ func loadApprovalTTL() time.Duration {
 // the destructive set via env if that changes.
 //
 // Override:
-//   $INFINITY_CLAUDE_CODE_AUTOAPPROVE        comma list of tool suffixes that
-//                                            always allow (e.g. "bash" for full
-//                                            trust on the box)
-//   $INFINITY_CLAUDE_CODE_BLOCK              comma list of tool suffixes subject
-//                                            to gating (default = "bash"; add
-//                                            "write,edit" to gate those again)
-//   $INFINITY_CLAUDE_CODE_BASH_GATE_ALL=true restore legacy behavior: gate EVERY
-//                                            bash (except read-only git), not
-//                                            just destructive ones
-//   $INFINITY_CLAUDE_CODE_BASH_DESTRUCTIVE   comma list of extra substrings that
-//                                            mark a bash command destructive
+//
+//	$INFINITY_CLAUDE_CODE_AUTOAPPROVE        comma list of tool suffixes that
+//	                                         always allow (e.g. "bash" for full
+//	                                         trust on the box)
+//	$INFINITY_CLAUDE_CODE_BLOCK              comma list of tool suffixes subject
+//	                                         to gating (default = "bash"; add
+//	                                         "write,edit" to gate those again)
+//	$INFINITY_CLAUDE_CODE_BASH_GATE_ALL=true restore legacy behavior: gate EVERY
+//	                                         bash (except read-only git), not
+//	                                         just destructive ones
+//	$INFINITY_CLAUDE_CODE_BASH_DESTRUCTIVE   comma list of extra substrings that
+//	                                         mark a bash command destructive
 type ClaudeCodeGate struct {
 	trust           *TrustStore
 	autoAllow       map[string]struct{}
@@ -186,6 +188,49 @@ func (g *ClaudeCodeGate) isDestructiveBash(input map[string]any) bool {
 	return isDestructiveCommand(raw, g.bashDestructive)
 }
 
+// isForcePush reports whether a bash command force-pushes git history — a
+// rewrite of a remote ref. Catches `git push --force` / `-f` /
+// `--force-with-lease`, and a `+` refspec (`git push origin +main`). Walks
+// shell segments so a force-push hidden behind && / | / $() is still caught,
+// and tolerates global git flags (`git -C path push --force`). Used to block
+// force-push in autonomous runs (see Authorize).
+func isForcePush(raw string) bool {
+	low := strings.ToLower(strings.TrimSpace(raw))
+	if low == "" {
+		return false
+	}
+	for _, seg := range splitShellSegments(low) {
+		toks := strings.Fields(seg)
+		gitIdx := -1
+		for i, t := range toks {
+			if t == "git" {
+				gitIdx = i
+				break
+			}
+		}
+		if gitIdx < 0 {
+			continue
+		}
+		pushIdx := -1
+		for i := gitIdx + 1; i < len(toks); i++ {
+			if toks[i] == "push" {
+				pushIdx = i
+				break
+			}
+		}
+		if pushIdx < 0 {
+			continue
+		}
+		for _, t := range toks[pushIdx+1:] {
+			if t == "-f" || t == "--force" || strings.HasPrefix(t, "--force-with-lease") ||
+				(strings.HasPrefix(t, "+") && len(t) > 1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isDestructiveCommand is the shared filesystem-destruction classifier used by
 // both ClaudeCodeGate (claude_code__bash, input key "command") and BridgeGate
 // (bash_run, input key "cmd"). `extra` is an optional set of additional
@@ -291,6 +336,21 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 	// $INFINITY_CLAUDE_CODE_BASH_GATE_ALL=true restores the legacy behavior of
 	// gating every non-readonly-git bash.
 	if suffix == "bash" {
+		// Force-push is blocked in AUTONOMOUS runs (self-improve / deploy crons,
+		// heartbeat, delegated sub-agents). Rewriting shared history unattended
+		// is exactly what the "never force-push" line in those skills guarded —
+		// and per Rule #1b that mechanic must be enforced HERE, not trusted to
+		// prose the LLM can drop. Interactive turns (the boss driving the chat)
+		// are untouched: a human force-push is the boss's call.
+		if tools.IsAutonomous(ctx) {
+			if cmd, _ := input["command"].(string); isForcePush(cmd) {
+				infoLog.Printf("ClaudeCodeGate: blocked autonomous force-push: %s", strings.TrimSpace(cmd))
+				return agent.GateDecision{
+					Allow:  false,
+					Reason: "Force-push is not allowed during autonomous runs — rewriting shared git history unattended is blocked. If this is genuinely required, do it from an interactive session where you're driving.",
+				}
+			}
+		}
 		if g.isReadOnlyGit(input) {
 			return agent.GateDecision{Allow: true}
 		}

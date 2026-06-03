@@ -18,6 +18,11 @@ import "sync"
 type runBinding struct {
 	runID    string
 	hasTodos bool
+	// parentSession is the chat/voice session that kicked off this background
+	// run. todo_write (executing in the detached CHILD session) binds its plan
+	// to the PARENT so the plan shows up in the boss's chat dock + the dashboard
+	// Agent Work board, not orphaned on the throwaway child session.
+	parentSession string
 }
 
 var (
@@ -28,13 +33,28 @@ var (
 // RegisterRunForSession binds a session id to its mem_runs row id. Called by
 // the background agent right after it creates the child session. No-op on
 // empty input.
-func RegisterRunForSession(sessionID, runID string) {
+func RegisterRunForSession(sessionID, runID, parentSession string) {
 	if sessionID == "" || runID == "" {
 		return
 	}
 	runBindMu.Lock()
 	defer runBindMu.Unlock()
-	runBindings[sessionID] = &runBinding{runID: runID}
+	runBindings[sessionID] = &runBinding{runID: runID, parentSession: parentSession}
+}
+
+// ParentSessionForSession returns the session that kicked off this background
+// run, or "" when the session isn't a tracked background child. Used by
+// todo_write to bind its plan to the boss's originating chat session.
+func ParentSessionForSession(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	runBindMu.RLock()
+	defer runBindMu.RUnlock()
+	if b := runBindings[sessionID]; b != nil {
+		return b.parentSession
+	}
+	return ""
 }
 
 // UnregisterRunForSession drops the binding. The background agent defers this

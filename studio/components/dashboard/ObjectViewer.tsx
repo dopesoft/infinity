@@ -51,6 +51,7 @@ import {
   ModalUrl,
 } from "@/components/ui/modal-content";
 import { Chip, classificationTone, intentTone, modeTone, type ChipTone } from "./Chip";
+import { PlanTimeline } from "./PlanTimeline";
 import { SurfaceActionRow } from "./SurfaceActions";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, fullDateTime, relTime } from "@/lib/dashboard/format";
@@ -1832,6 +1833,18 @@ function WorkBody({ w }: { w: WorkItem }) {
               </li>
             ))}
           </ol>
+        </ModalSection>
+      ) : null}
+
+      {/* Plans carry their durable step timeline inline - the Kanban card IS
+          the plan view. Same pattern as workflow runs, richer per-step (status,
+          verification evidence, live spinner). */}
+      {w.kind === "plan" && w.planSteps && w.planSteps.length > 0 ? (
+        <ModalSection
+          label="Steps"
+          meta={`${w.doneCount ?? 0}/${w.totalCount ?? w.planSteps.length}`}
+        >
+          <PlanTimeline steps={w.planSteps} />
         </ModalSection>
       ) : null}
 

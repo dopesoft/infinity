@@ -4,7 +4,6 @@ import {
   Brain,
   FlaskConical,
   LayoutDashboard,
-  ListChecks,
   type LucideIcon,
   MessageSquare,
   ScrollText,
@@ -45,7 +44,6 @@ export const NAV_TABS: NavTab[] = [
 ];
 
 export const NAV_OVERFLOW: NavTab[] = [
-  { href: "/plans", label: "Plans", Icon: ListChecks },
   { href: "/lab", label: "Lab", Icon: FlaskConical },
   { href: "/cron", label: "Cron", Icon: Clock },
   { href: "/heartbeat", label: "Heartbeat", Icon: Activity },

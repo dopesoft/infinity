@@ -67,13 +67,10 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// separate store, no client-only state.
 	mux.HandleFunc("/api/tasks/create", a.handleTaskCreate)
 	mux.HandleFunc("/api/tasks/update", a.handleTaskUpdate)
-	// Durable plan substrate ("the Cortex") read endpoints: the /plans page
-	// lists by status, the detail modal fetches one plan with its steps. Plans
-	// also ride the /api/dashboard aggregate so the dashboard card paints in
-	// the same round trip. Writes happen through the agent's plan_* tools and
-	// the checkpoint surface-action path, never here.
-	mux.HandleFunc("/api/plans", a.handlePlans)
-	mux.HandleFunc("/api/plans/get", a.handlePlanGet)
+	// The active plan for a chat session - powers the pinned chat dock so it
+	// renders the same plan the dashboard Agent Work board shows (one substrate,
+	// two synced views). The board itself carries plans inline via loadWork.
+	mux.HandleFunc("/api/plans/active", a.handlePlanActive)
 }
 
 // Response is the single payload returned to Studio. Each section is a
@@ -89,7 +86,6 @@ type Response struct {
 	Reflection     *Reflection     `json:"reflection,omitempty"`
 	Activity       []ActivityEvent `json:"activity"`
 	Work           []WorkItem      `json:"work"`
-	Plans          []Plan          `json:"plans"`
 	MemoryStats    *MemoryStats    `json:"memoryStats,omitempty"`
 	// SurfaceItems is the generic surface contract: mem_surface_items
 	// grouped by `surface` key. Studio renders each group with one
@@ -356,6 +352,14 @@ type WorkItem struct {
 	// step state-machine, carried inline so tapping the Kanban card opens
 	// the drawer with the full workflow without a second fetch.
 	WorkflowSteps []WorkflowStep `json:"workflowSteps,omitempty"`
+	// PlanSteps is populated only for Kind == "plan" - the durable plan's
+	// ordered steps with their status/verification, carried inline so the
+	// Kanban card opens the full step timeline in ObjectViewer without a
+	// second fetch (mirrors WorkflowSteps). DoneCount/TotalCount drive the
+	// "4/7" progress bar rendered on the running card.
+	PlanSteps  []PlanStep `json:"planSteps,omitempty"`
+	DoneCount  *int       `json:"doneCount,omitempty"`
+	TotalCount *int       `json:"totalCount,omitempty"`
 }
 
 // WorkflowStep is one step of a workflow run, surfaced inside a workflow
@@ -411,16 +415,6 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		mu.Lock()
 		resp.Pursuits = v
-		mu.Unlock()
-		return nil
-	})
-	run("plans", func() error {
-		v, err := a.loadPlans(ctx)
-		if err != nil {
-			return err
-		}
-		mu.Lock()
-		resp.Plans = v
 		mu.Unlock()
 		return nil
 	})
@@ -1910,6 +1904,17 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		for _, item := range wfItems {
 			out = append(out, *item)
 		}
+	}
+
+	// ── plans ("the Cortex"): durable, verifiable plans the agent is working
+	// through. A plan IS agent work, so it lives on this board (not a separate
+	// page): active → Running with a step-progress bar, paused-at-checkpoint →
+	// Awaiting you, finished-today → Done. Steps ride inline so the card opens
+	// the full timeline in ObjectViewer, exactly like a workflow run.
+	if planItems, perr := a.planWorkItems(ctx); perr == nil {
+		out = append(out, planItems...)
+	} else {
+		a.Logger.Warn("dashboard: plan work items", "err", perr)
 	}
 
 	return out, nil

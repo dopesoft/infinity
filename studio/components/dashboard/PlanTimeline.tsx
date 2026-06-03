@@ -6,92 +6,34 @@ import {
   Check,
   CircleDot,
   Flag,
-  ListChecks,
   Loader2,
   Minus,
   ShieldCheck,
   X,
 } from "lucide-react";
-import {
-  ResponsiveModal,
-  ResponsiveModalHeader,
-} from "@/components/ui/responsive-modal";
-import { ModalSection } from "@/components/ui/modal-content";
 import { RunIndicator } from "@/lib/runs/RunIndicator";
-import { Chip, type ChipTone } from "./Chip";
+import { Chip } from "./Chip";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
-import type { Plan, PlanStep, PlanStepStatus, PlanStatus } from "@/lib/dashboard/types";
+import type { PlanStep, PlanStepStatus } from "@/lib/dashboard/types";
 
-/* PlanDetailModal - the read view for a durable plan ("the Cortex").
+/* PlanTimeline - the vertical step timeline for a durable plan ("the Cortex").
  *
- * Built entirely on ResponsiveModal + ModalSection (the sanctioned modal
- * primitives) so it carries the mobile-overflow / safe-area discipline for
- * free. The body is a vertical step timeline: a numbered, status-colored
- * gutter with a connector line, the step title + detail, verification
- * evidence, and a live RunIndicator for any step currently executing.
- *
- * Writes (advancing steps, resolving checkpoints) happen through the agent's
- * plan_* tools and the checkpoint surface-action card on the dashboard, never
- * here - this stays a viewing surface, consistent with the dashboard IA. */
-export function PlanDetailModal({
-  plan,
-  open,
-  onClose,
-}: {
-  plan: Plan | null;
-  open: boolean;
-  onClose: () => void;
-}) {
+ * Shared so the one timeline renders wherever a plan is shown - currently
+ * inside ObjectViewer when a "plan" Agent Work item is opened. Numbered,
+ * status-colored gutter with a connector line; each step shows its title +
+ * detail, checkpoint/verify chips, verification evidence, a live RunIndicator
+ * while executing, and its result. */
+export function PlanTimeline({ steps }: { steps: PlanStep[] }) {
+  if (!steps.length) {
+    return <p className="text-[13px] text-muted-foreground">No steps yet.</p>;
+  }
   return (
-    <ResponsiveModal
-      open={open}
-      onOpenChange={(o) => (!o ? onClose() : null)}
-      size="lg"
-      title={plan?.title ?? "Plan"}
-      description={plan ? planSubtitle(plan) : undefined}
-      header={
-        plan ? (
-          <ResponsiveModalHeader
-            icon={<ListChecks className="size-4" aria-hidden />}
-            title={plan.title}
-            subtitle={planSubtitle(plan)}
-            tone={planStatusTone(plan.status)}
-            titleSize="lg"
-            titleClamp={2}
-          />
-        ) : undefined
-      }
-    >
-      {plan ? <PlanBody plan={plan} /> : null}
-    </ResponsiveModal>
-  );
-}
-
-function PlanBody({ plan }: { plan: Plan }) {
-  return (
-    <div className="min-w-0 max-w-full">
-      {plan.goal?.trim() ? (
-        <ModalSection label="Goal">
-          <p className="text-foreground/90">{plan.goal.trim()}</p>
-        </ModalSection>
-      ) : null}
-
-      <ModalSection label={`Steps · ${plan.doneCount}/${plan.totalCount}`}>
-        <ol className="min-w-0">
-          {plan.steps.map((step, i) => (
-            <StepRow
-              key={step.id}
-              step={step}
-              isLast={i === plan.steps.length - 1}
-            />
-          ))}
-          {plan.steps.length === 0 ? (
-            <li className="text-[13px] text-muted-foreground">No steps yet.</li>
-          ) : null}
-        </ol>
-      </ModalSection>
-    </div>
+    <ol className="min-w-0">
+      {steps.map((step, i) => (
+        <StepRow key={step.id} step={step} isLast={i === steps.length - 1} />
+      ))}
+    </ol>
   );
 }
 
@@ -231,38 +173,4 @@ function StepNode({ status }: { status: PlanStepStatus }) {
         </span>
       );
   }
-}
-
-export function planStatusTone(status: PlanStatus): string {
-  switch (status) {
-    case "completed":
-      return "border-success/40 bg-success/10 text-success";
-    case "failed":
-    case "cancelled":
-      return "border-danger/40 bg-danger/10 text-danger";
-    case "paused":
-      return "border-warning/40 bg-warning/10 text-warning";
-    default:
-      return "border-brand/40 bg-brand/10 text-brand";
-  }
-}
-
-export function planStatusChipTone(status: PlanStatus): ChipTone {
-  switch (status) {
-    case "completed":
-      return "success";
-    case "failed":
-    case "cancelled":
-      return "danger";
-    case "paused":
-      return "warn";
-    default:
-      return "brand";
-  }
-}
-
-function planSubtitle(plan: Plan): string {
-  const parts = [`${plan.doneCount}/${plan.totalCount} steps`, plan.status];
-  parts.push(`updated ${relTime(plan.updatedAt)}`);
-  return parts.join(" · ");
 }

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -134,6 +135,14 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 	if m, ok := in["metadata"].(map[string]any); ok {
 		it.Metadata = m
 	}
+	// Dedup-on-rerun is a MECHANIC, not the recipe's job (Rule #1b): the
+	// upsert keys on external_id, so an item surfaced without one would
+	// duplicate every run. If the producer didn't pass one, derive a STABLE
+	// id here — from the upstream message/thread id when present, else a hash
+	// of source+title — so reruns refresh the same row instead of piling up.
+	if strings.TrimSpace(it.ExternalID) == "" {
+		it.ExternalID = deriveExternalID(it)
+	}
 	if v, ok := in["expires_in_hours"].(float64); ok && v > 0 {
 		exp := time.Now().UTC().Add(time.Duration(v * float64(time.Hour)))
 		it.ExpiresAt = &exp
@@ -239,6 +248,22 @@ func defaultEmailActions() []surface.Action {
 			Intent: "Snooze this follow-up for one day: surface_update its snoozed_until to ~24h from now so it drops off the dashboard and resurfaces tomorrow.",
 		},
 	}
+}
+
+// deriveExternalID produces a STABLE external_id for an item surfaced without
+// one, so reruns dedupe instead of duplicating (Rule #1b: the dedup mechanic is
+// the tool's job, not a sentence in the recipe). Prefers the upstream id the
+// producer stashed in metadata (email message/thread id); otherwise a hash of
+// source+title — stable across reruns of the same item.
+func deriveExternalID(it *surface.Item) string {
+	for _, k := range []string{"message_id", "thread_id", "id", "external_id"} {
+		if v, ok := it.Metadata[k].(string); ok && strings.TrimSpace(v) != "" {
+			return "auto:" + strings.TrimSpace(v)
+		}
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(it.Source)) + "\x00" + strings.ToLower(strings.TrimSpace(it.Title))))
+	return fmt.Sprintf("auto:%x", h.Sum64())
 }
 
 // isFollowupEmailItem reports whether a surface item is a follow-up email -

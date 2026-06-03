@@ -14,6 +14,7 @@ import {
   FileCode,
   HelpCircle,
   Layers,
+  ListChecks,
   Loader2,
   Sparkles,
   Terminal,
@@ -48,6 +49,7 @@ const KIND_ICON: Record<WorkItemKind, LucideIcon> = {
   sentinel: Activity,
   skill_run: Cog,
   workflow: Workflow,
+  plan: ListChecks,
   trust: Terminal,
   code_proposal: FileCode,
   curiosity: HelpCircle,
@@ -272,6 +274,11 @@ function WorkRow({ it, onClick }: { it: WorkItem; onClick: () => void }) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-medium text-foreground">{it.title}</p>
+        {/* Plans show a step-progress bar + "4/7" right on the card so the
+            running stage reads at a glance without opening the detail. */}
+        {it.kind === "plan" && typeof it.totalCount === "number" && it.totalCount > 0 ? (
+          <PlanProgress done={it.doneCount ?? 0} total={it.totalCount} failed={it.subtitle === "failed"} />
+        ) : null}
         {it.subtitle ? (
           <p className="truncate text-[11px] text-muted-foreground">{it.subtitle}</p>
         ) : null}
@@ -288,5 +295,25 @@ function WorkRow({ it, onClick }: { it: WorkItem; onClick: () => void }) {
         </p>
       </div>
     </motion.button>
+  );
+}
+
+// PlanProgress - the inline step-progress bar + "4/7" shown on a plan card so
+// its running stage reads at a glance without opening the detail. Brand fill,
+// danger when the plan failed.
+function PlanProgress({ done, total, failed }: { done: number; total: number; failed?: boolean }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  return (
+    <div className="mt-1 flex items-center gap-2">
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn("h-full rounded-full transition-all", failed ? "bg-danger" : "bg-brand")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+        {done}/{total}
+      </span>
+    </div>
   );
 }

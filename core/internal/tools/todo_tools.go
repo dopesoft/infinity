@@ -1,25 +1,28 @@
-// todo_write — the agent's own checklist for a background task.
+// todo_write — the quick-checklist entry point onto the durable plan substrate.
 //
-// This is the generic building block behind the "Claude-Code-style todo list"
-// the boss watches in the pinned dock. Per Rule #1, the cognition (what the
-// steps ARE) lives with the model: it calls todo_write to declare and update an
-// ordered checklist. The substrate just records it. The list lands in the
-// CURRENT background run's mem_runs.meta.todos (a generic JSONB contract), and
-// the dock renders it generically — no per-task Go, no bespoke column.
+// UNIFICATION: a todo checklist and a plan are the SAME thing. todo_write is the
+// flat, lightweight way to lay one out (every step a plain {text, status});
+// plan_create is the richer way (per-step verification + checkpoints). Both
+// write the ONE durable concept — mem_plans / mem_plan_steps — so the boss sees
+// the identical thing whether he's in chat (the pinned dock) or on the dashboard
+// (the Agent Work board's plan card). No second store, no mem_runs.meta.todos
+// copy to drift.
 //
-// Storage is keyed by run id resolved from the session→run binding
-// (run_binding.go), so the tool works identically on the Mac and Cloud bridges:
-// todo_write is native and always registered, and it never touches a bridge —
-// it writes the same mem_runs row the background agent booked.
+// Session binding (run_binding.go): when called inside a detached
+// background_build CHILD session, the plan is bound to the PARENT chat session
+// that kicked the build off, so it surfaces in the boss's conversation + the
+// dashboard rather than orphaning on a throwaway child id. Called directly in a
+// normal chat, it just writes the current session's plan. Bridge-agnostic and
+// always registered, so it works on Mac and Cloud alike.
 package tools
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -29,21 +32,25 @@ func RegisterTodoTools(r *Registry, pool *pgxpool.Pool) {
 	if r == nil || pool == nil {
 		return
 	}
-	r.Register(&todoWrite{pool: pool})
+	r.Register(&todoWrite{pool: pool, plans: plan.NewStore(pool)})
 }
 
-type todoWrite struct{ pool *pgxpool.Pool }
+type todoWrite struct {
+	pool  *pgxpool.Pool
+	plans *plan.Store
+}
 
 func (t *todoWrite) Name() string   { return "todo_write" }
 func (t *todoWrite) ReadOnly() bool { return false }
 
 func (t *todoWrite) Description() string {
-	return "Track your work on a multi-step background task with a live checklist the boss watches. " +
-		"Call this ONCE at the very start with your full ordered plan (every item status 'pending'), then " +
-		"call it again each time a step changes — mark the step you're starting 'in_progress' and finished " +
-		"steps 'completed', exactly one item in_progress at a time. Each call REPLACES the whole list, so " +
-		"always send the complete checklist. Optionally pass 'repo' (the repo/project you're working in) so " +
-		"it pins at the top. Only meaningful inside a background_build run; skip it for a trivial one-step task."
+	return "Lay out and update a live checklist the boss watches in chat AND on the dashboard - it's the " +
+		"quick form of a plan (use plan_create instead when steps need verification or a checkpoint). " +
+		"Call this ONCE at the start with your full ordered list (every item status 'pending'), then call it " +
+		"again each time a step changes - mark the step you're starting 'in_progress' and finished steps " +
+		"'completed', exactly one in_progress at a time. Each call REPLACES the whole list, so always send the " +
+		"complete checklist. Optionally pass 'repo' (the project you're working in) as the checklist title. " +
+		"Skip it for a trivial one-step task."
 }
 
 func (t *todoWrite) Schema() map[string]any {
@@ -75,10 +82,6 @@ type todoItem struct {
 
 func (t *todoWrite) Execute(ctx context.Context, in map[string]any) (string, error) {
 	sid := SessionIDFromContext(ctx)
-	runID := RunIDForSession(sid)
-	if runID == "" {
-		return "", errors.New("todo_write only works inside a background_build run — there's no run to attach the checklist to here")
-	}
 
 	raw, _ := in["todos"].([]any)
 	todos := make([]todoItem, 0, len(raw))
@@ -101,7 +104,7 @@ func (t *todoWrite) Execute(ctx context.Context, in map[string]any) (string, err
 		}
 	}
 	if len(todos) == 0 {
-		return "", errors.New("todos must contain at least one {text, status} item")
+		return "", fmt.Errorf("todos must contain at least one {text, status} item")
 	}
 
 	done, total := 0, len(todos)
@@ -115,7 +118,6 @@ func (t *todoWrite) Execute(ctx context.Context, in map[string]any) (string, err
 		}
 	}
 	if current == "" {
-		// No explicit in_progress: surface the first pending, else the last done.
 		for _, it := range todos {
 			if it.Status == "pending" {
 				current = it.Text
@@ -127,39 +129,50 @@ func (t *todoWrite) Execute(ctx context.Context, in map[string]any) (string, err
 		}
 	}
 
-	// completed/total, clamped so the bar never reads 0% or hits a full 100%
-	// before Finish flips the row to ok.
-	frac := float32(done) / float32(total)
-	if frac < 0.02 {
-		frac = 0.02
+	// Bind the plan to the boss's chat session: inside a detached background
+	// build, sid is the throwaway child — write the plan to the PARENT so it
+	// shows in his conversation + the dashboard, not on the orphan child.
+	planSession := sid
+	if parent := ParentSessionForSession(sid); parent != "" {
+		planSession = parent
 	}
-	if frac > 0.98 {
-		frac = 0.98
-	}
-	label := fmt.Sprintf("%d/%d - %s", done, total, current)
 
-	// Build the meta patch: top-level merge (||) so we set todos (+ optional
-	// repo) without clobbering currentFile the background loop writes.
-	patch := map[string]any{"todos": todos}
-	if repo := strings.TrimSpace(strString(in, "repo")); repo != "" {
-		patch["repo"] = repo
+	items := make([]plan.ChecklistItem, 0, len(todos))
+	for _, it := range todos {
+		items = append(items, plan.ChecklistItem{Text: it.Text, Status: it.Status})
 	}
-	patchJSON, err := json.Marshal(patch)
-	if err != nil {
+	title := strings.TrimSpace(strString(in, "repo"))
+	if _, err := t.plans.SyncChecklist(ctx, planSession, title, items); err != nil {
 		return "", err
 	}
 
-	_, err = t.pool.Exec(ctx, `
-		UPDATE mem_runs
-		   SET meta           = COALESCE(meta,'{}'::jsonb) || $2::jsonb,
-		       progress       = $3,
-		       progress_label = $4
-		 WHERE id = $1::uuid
-	`, runID, patchJSON, frac, label)
-	if err != nil {
-		return "", err
+	// Keep the background run's progress + current-step telemetry live for the
+	// dock's spinner and the run row, when this is running inside a bound build.
+	// The checklist itself now lives in the plan (single source) - we only push
+	// the % / label here, no duplicate todo list on mem_runs.
+	if runID := RunIDForSession(sid); runID != "" {
+		frac := float32(done) / float32(total)
+		if frac < 0.02 {
+			frac = 0.02
+		}
+		if frac > 0.98 {
+			frac = 0.98
+		}
+		label := fmt.Sprintf("%d/%d - %s", done, total, current)
+		meta := map[string]any{}
+		if title != "" {
+			meta["repo"] = title
+		}
+		metaJSON, _ := json.Marshal(meta)
+		_, _ = t.pool.Exec(ctx, `
+			UPDATE mem_runs
+			   SET meta           = COALESCE(meta,'{}'::jsonb) || $2::jsonb,
+			       progress       = $3,
+			       progress_label = $4
+			 WHERE id = $1::uuid
+		`, runID, string(metaJSON), frac, label)
+		MarkSessionHasTodos(sid)
 	}
-	MarkSessionHasTodos(sid)
 
 	return fmt.Sprintf("checklist updated: %d/%d done, now: %s", done, total, current), nil
 }

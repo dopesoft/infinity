@@ -245,7 +245,7 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 	// Bind this child session to its mem_runs row so the native todo_write
 	// tool (executing inside this loop) can find the row to write its checklist
 	// onto. Bridge-agnostic: keyed by session id, independent of Mac/Cloud.
-	tools.RegisterRunForSession(childID, runID)
+	tools.RegisterRunForSession(childID, runID, parentSession)
 	defer tools.UnregisterRunForSession(childID)
 
 	// Full default loadout unless the caller narrowed it - a build needs

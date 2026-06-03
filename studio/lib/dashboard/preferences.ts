@@ -12,7 +12,6 @@ import { useEffect, useState } from "react";
 
 export type DashboardSectionKey =
   | "pursuits"
-  | "plans"
   | "todos"
   | "upcoming"
   | "reflection"
@@ -31,10 +30,6 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
   pursuits: {
     title: "Pursuits",
     description: "Daily habits, weekly cadences, and long-term goals - merged with cadence tags.",
-  },
-  plans: {
-    title: "Plans",
-    description: "Multi-step plans the agent is working through, with live per-step status and verification.",
   },
   todos: {
     title: "Todos",
@@ -77,7 +72,6 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
 
 export const SECTION_ORDER: DashboardSectionKey[] = [
   "pursuits",
-  "plans",
   "todos",
   "upcoming",
   "reflection",
@@ -92,7 +86,6 @@ export const SECTION_ORDER: DashboardSectionKey[] = [
 export const DEFAULT_PREFS: DashboardPreferences = {
   sections: {
     pursuits: true,
-    plans: true,
     todos: true,
     upcoming: true,
     reflection: true,

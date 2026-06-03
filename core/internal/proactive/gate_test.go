@@ -3,6 +3,8 @@ package proactive
 import (
 	"context"
 	"testing"
+
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
 // bashInput is a small helper mirroring the claude_code__bash tool input shape.
@@ -162,5 +164,57 @@ func TestAuthorizeGateAllBash(t *testing.T) {
 	// Otherwise every bash gates.
 	if g.Authorize(ctx, "s", "p", "claude_code__bash", bashInput("go build ./...")).Allow {
 		t.Fatal("gate-all mode must gate even safe bash")
+	}
+}
+
+func TestIsForcePush(t *testing.T) {
+	yes := []string{
+		"git push --force",
+		"git push -f origin main",
+		"git push --force-with-lease",
+		"git push origin +main",
+		"git -C /repo push --force",
+		"cd /x && git push -f",
+		"git commit -m ok && git push --force origin main",
+	}
+	for _, c := range yes {
+		if !isForcePush(c) {
+			t.Errorf("isForcePush(%q) = false, want true", c)
+		}
+	}
+	no := []string{
+		"git push",
+		"git push origin main",
+		"git commit -m x && git push",
+		"git status",
+		"echo force push",
+		"npm run push",
+		"git pull --force", // pull, not push
+	}
+	for _, c := range no {
+		if isForcePush(c) {
+			t.Errorf("isForcePush(%q) = true, want false", c)
+		}
+	}
+}
+
+// Force-push must be blocked ONLY in autonomous runs; interactive (boss-driven)
+// turns keep full git control. This pins the boss's explicit rule.
+func TestForcePushBlockedOnlyWhenAutonomous(t *testing.T) {
+	g := NewClaudeCodeGate(nil)
+	in := map[string]any{"command": "git push --force origin main"}
+
+	// Interactive (no autonomy marker): allowed.
+	if dec := g.Authorize(context.Background(), "s", "p", "claude_code__bash", in); !dec.Allow {
+		t.Errorf("interactive force-push should be ALLOWED, got blocked: %s", dec.Reason)
+	}
+	// Autonomous: blocked.
+	actx := tools.WithAutonomous(context.Background())
+	if dec := g.Authorize(actx, "s", "p", "claude_code__bash", in); dec.Allow {
+		t.Error("autonomous force-push should be BLOCKED, got allowed")
+	}
+	// A normal autonomous push (no force) is NOT blocked by this rule.
+	if dec := g.Authorize(actx, "s", "p", "claude_code__bash", map[string]any{"command": "git push origin main"}); !dec.Allow {
+		t.Errorf("autonomous normal push should be allowed, got blocked: %s", dec.Reason)
 	}
 }

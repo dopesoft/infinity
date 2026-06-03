@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TabFrame } from "@/components/TabFrame";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
-import { PlanCard } from "./PlanCard";
 import { TodosCard } from "./TodosCard";
 import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
@@ -28,7 +27,6 @@ import type {
   DashboardItem,
   FollowUp,
   MemoryStats,
-  Plan,
   Pursuit,
   Reflection,
   Saved,
@@ -85,7 +83,6 @@ export function DashboardClient() {
   // No mock fixtures, no fallback fixtures - if the fetch fails the
   // dashboard shows empty state, not a lie.
   const [pursuits, setPursuits] = useState<Pursuit[]>([]);
-  const [plans, setPlans] = useState<Plan[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -110,7 +107,6 @@ export function DashboardClient() {
   // hydrate and every fetch/realtime refresh so they can't drift.
   const applyData = useCallback((data: DashboardResponse) => {
     setPursuits(data.pursuits ?? []);
-    setPlans(data.plans ?? []);
     setTodos(data.todos ?? []);
     setEvents(data.calendarEvents ?? []);
     setFollowUps(data.followUps ?? []);
@@ -268,7 +264,6 @@ export function DashboardClient() {
     if (!q) {
       return {
         pursuits,
-        plans,
         todos,
         events,
         approvals,
@@ -291,9 +286,6 @@ export function DashboardClient() {
     }
     return {
       pursuits: pursuits.filter((p) => match(p.title, p.cadence)),
-      plans: plans.filter((p) =>
-        match(p.title, p.goal, p.status, ...p.steps.map((s) => s.title)),
-      ),
       todos: todos.filter((t) => match(t.title, t.priority, t.source)),
       events: events.filter((e) =>
         match(e.title, e.classification, e.location, ...e.prep.map((p) => p.label)),
@@ -309,7 +301,7 @@ export function DashboardClient() {
       activity: activity.filter((e) => match(e.title, e.detail)),
       surfaceItems: surfaceFiltered,
     };
-  }, [q, pursuits, plans, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
+  }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
 
   // The unified "Surfaced by Jarvis" list - approvals + every agent surface
   // (alerts, insights, digest, …) merged into one importance-sorted stream.
@@ -356,20 +348,30 @@ export function DashboardClient() {
         />
 
         <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
-          {/* Active plans ("the Cortex") - what the agent is working through
-              right now, with live per-step status. Sits at the top because
-              "what am I doing now" is the most load-bearing glance. Renders
-              nothing when no plan is in flight. */}
-          {s.plans && <PlanCard plans={filtered.plans} />}
+          {/* Row 1 - Agent Work first under the search. It's the live picture
+              of what Jarvis is doing right now (crons, plans, skills, …), so it
+              leads. Plans surface here as their own column kind with a
+              step-progress bar; tapping one opens the full timeline. */}
+          {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
 
-          {/* TODAY row - collapses to fewer columns if any sub-section is off.
-              `grid-cols-1` is REQUIRED as the default - without it, the
-              implicit grid column sizes to `max-content`, letting any
-              long unbroken text (question title, email subject) blow the
-              column past the viewport on mobile. With `minmax(0, 1fr)`
-              the column is clamped and the `truncate` chain works. */}
-          {(s.pursuits || s.todos || s.upcoming) && (
+          {/* Row 2 - Upcoming (your calendar) beside Follow-ups (people waiting
+              on you). `grid-cols-1` default is REQUIRED so an implicit
+              max-content track can't blow the column past the viewport on
+              mobile; lg splits to two. */}
+          {(s.upcoming || s.followups) && (
+            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
+              {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
+              {s.followups && (
+                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
+              )}
+            </div>
+          )}
+
+          {/* Row 3 - Surfaced by Jarvis (everything the agent raises) beside
+              your Pursuits and Todos. Three columns on lg, stacked on mobile. */}
+          {(s.approvals || s.pursuits || s.todos) && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
+              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
               {s.pursuits && (
                 <PursuitsCard
                   pursuits={filtered.pursuits}
@@ -385,28 +387,12 @@ export function DashboardClient() {
                   onAdd={() => setAddingTodo(true)}
                 />
               )}
-              {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
-            </div>
-          )}
-
-          {/* "Surfaced by Jarvis" - the ONE card for everything the agent
-              raises (approvals + curiosity + alerts + insights + any future
-              surface), importance-sorted, every row dismissable. Sits beside
-              Follow-ups (humans waiting on the boss). */}
-          {(s.approvals || s.followups) && (
-            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
-              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
-              {s.followups && (
-                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
-              )}
             </div>
           )}
 
           {s.reflection && reflection && (
             <ReflectionCard reflection={reflection} onOpen={openViewer} />
           )}
-
-          {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
 
           {s.saved && <SavedCard saved={filtered.saved} onOpen={openViewer} />}
 

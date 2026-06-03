@@ -106,6 +106,91 @@ func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID strin
 	return out, nil
 }
 
+// ChecklistItem is the flat {text, status} shape the todo_write alias passes.
+// A checklist is just a plan with plain steps (no verify/checkpoint), so it
+// writes through the SAME plan substrate - one durable concept, two ergonomic
+// entry points (plan_create for rich plans, todo_write for a quick checklist).
+type ChecklistItem struct {
+	Text   string
+	Status string
+}
+
+// SyncChecklist upserts the session's active plan to match a flat checklist:
+// it keeps the existing active/paused plan (preserving its id so the dashboard
+// card + chat dock don't flicker) and replaces its steps to mirror the list,
+// or creates a new plan when none is active. This is the unification seam -
+// todo_write maps onto it so its checklist and a plan are the same thing.
+func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, items []ChecklistItem) (*Plan, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("plan store not configured")
+	}
+	if sessionID == "" {
+		return nil, errors.New("session required")
+	}
+	if len(items) == 0 {
+		return nil, errors.New("checklist needs at least one item")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var planID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text FROM mem_plans
+		 WHERE session_id = $1::uuid AND status IN ('active','paused')
+		 ORDER BY updated_at DESC LIMIT 1
+	`, sessionID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		planID = ""
+	} else if err != nil {
+		return nil, err
+	}
+
+	if planID == "" {
+		t := title
+		if t == "" {
+			t = "Checklist"
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO mem_plans (session_id, title, goal, status, current_step)
+			VALUES ($1::uuid, $2, '', 'active', 0)
+			RETURNING id::text
+		`, sessionID, t).Scan(&planID); err != nil {
+			return nil, fmt.Errorf("create checklist plan: %w", err)
+		}
+	} else if title != "" {
+		if _, err := tx.Exec(ctx, `UPDATE mem_plans SET title = $2 WHERE id = $1::uuid`, planID, title); err != nil {
+			return nil, err
+		}
+	}
+
+	// Replace the step set to mirror the checklist. todo-driven steps carry no
+	// runs/verification, so a wholesale replace is safe and keeps the call
+	// idempotent (todo_write resends the full list each time).
+	if _, err := tx.Exec(ctx, `DELETE FROM mem_plan_steps WHERE plan_id = $1::uuid`, planID); err != nil {
+		return nil, err
+	}
+	for i, it := range items {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO mem_plan_steps (plan_id, idx, title, status)
+			VALUES ($1::uuid, $2, $3, $4)
+		`, planID, i, it.Text, NormalizeStepStatus(it.Status)); err != nil {
+			return nil, fmt.Errorf("insert checklist step %d: %w", i, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.recompute(ctx, planID); err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, planID)
+}
+
 // GetActiveBySession returns the session's current active/paused plan (with
 // steps), or nil when there is none.
 func (s *Store) GetActiveBySession(ctx context.Context, sessionID string) (*Plan, error) {
