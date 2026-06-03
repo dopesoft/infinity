@@ -52,6 +52,12 @@ type PollConfig struct {
 	ConnectedAccountID string         `json:"connected_account_id"` // "ca_..."
 	Arguments          map[string]any `json:"arguments,omitempty"`
 	Sink               string         `json:"sink"` // "followups" | "calendar"
+	// UserID is the Composio entity (user_id) for the account. Composio's
+	// execute API 1811s ("User ID is required with connected account") unless
+	// BOTH connected_account_id AND this are sent. For all_active polls it's
+	// filled per-account from the cache automatically; for a single-account
+	// config set it alongside connected_account_id.
+	UserID string `json:"user_id,omitempty"`
 	// AllActive: when true, the poller ignores ConnectedAccountID and instead
 	// runs the action against EVERY currently-ACTIVE account of Toolkit,
 	// discovered live from the connectors cache. This is the reconnect-proof
@@ -183,6 +189,7 @@ func (p *Poller) Poll(ctx context.Context, jobName string, cfg PollConfig) (*Pol
 			one := cfg
 			one.AllActive = false
 			one.ConnectedAccountID = a.ID
+			one.UserID = a.UserID // entity — Composio 1811s without it
 			res, err := p.pollOne(ctx, jobName, one)
 			if res != nil {
 				agg.Fetched += res.Fetched
@@ -208,6 +215,7 @@ func (p *Poller) pollOne(ctx context.Context, jobName string, cfg PollConfig) (*
 	resp, err := p.exec.Execute(ctx, ExecuteRequest{
 		Slug:               cfg.Action,
 		ConnectedAccountID: cfg.ConnectedAccountID,
+		UserID:             cfg.UserID, // entity — Composio 1811s without it
 		Arguments:          cfg.Arguments,
 	})
 	if err != nil {
@@ -318,7 +326,7 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 			    (source, account, from_name, subject, preview, body,
 			     thread_url, source_ref, received_at, status, unread)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,COALESCE($9, NOW()),'open',TRUE)
-			ON CONFLICT (source, ((source_ref->>'remote_id'))) DO NOTHING
+			ON CONFLICT (source, ((source_ref->>'remote_id'))) WHERE (source_ref ? 'remote_id') DO NOTHING
 		`, source, cfg.ConnectedAccountID, fromName, subject, preview, body, threadURL, string(srcRef), receivedAt)
 		if derr != nil {
 			p.logger.Warn("followup upsert", "remote_id", remoteID, "err", derr)
