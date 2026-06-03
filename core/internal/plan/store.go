@@ -467,7 +467,12 @@ func (s *Store) recompute(ctx context.Context, planID string) error {
 		status = PlanFailed
 	case allTerminal:
 		status = PlanCompleted
-	case anyBlocked || anyCheckpointPause:
+	case anyBlocked || anyCheckpointPause || anyFailed:
+		// A failed step pauses the whole plan even while later steps are still
+		// pending, so a half-abandoned plan surfaces as needs-attention instead
+		// of lingering silently as 'active' forever. The agent then either
+		// replans the failure or closes the plan out (marks the rest skipped ->
+		// terminal -> it drops out of context).
 		status = PlanPaused
 	}
 	if current > len(steps)-1 {
