@@ -8,38 +8,26 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path"
 	"strings"
 	"time"
 )
 
 type HTTPFetch struct {
-	allowed         []string
-	enforceAllowlist bool
-	client          *http.Client
+	client *http.Client
 }
 
 func NewHTTPFetchFromEnv() (*HTTPFetch, error) {
-	raw := strings.TrimSpace(os.Getenv("HTTP_FETCH_ALLOWED_DOMAINS"))
-	enforce := raw != ""
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(strings.ToLower(p))
-		if p != "" {
-			out = append(out, p)
-		}
-	}
+	// No domain allowlist: this is a single-user personal agent and "the internet"
+	// is a first-class building block (see Rule #1). The only network restriction is
+	// the SSRF guard below (localhost / private ranges / cloud metadata), which is a
+	// security boundary, not an allowlist.
 	return &HTTPFetch{
-		allowed:          out,
-		enforceAllowlist: enforce,
-		client:           &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
 
 func (h *HTTPFetch) Name() string        { return "http_fetch" }
-func (h *HTTPFetch) Description() string { return "Fetch a URL via HTTP. Allowlist enforced. Returns response text and status." }
+func (h *HTTPFetch) Description() string { return "Fetch any URL via HTTP(S). Returns response text and status." }
 
 func (h *HTTPFetch) Schema() map[string]any {
 	return map[string]any{
@@ -63,7 +51,7 @@ func (h *HTTPFetch) Execute(ctx context.Context, input map[string]any) (string, 
 		return "", fmt.Errorf("invalid url: %w", err)
 	}
 	host := strings.ToLower(parsed.Hostname())
-	if err := validateHTTPFetchTarget(parsed, host, h.enforceAllowlist, h.allowed); err != nil {
+	if err := validateHTTPFetchTarget(parsed, host); err != nil {
 		return "", err
 	}
 
@@ -95,23 +83,10 @@ func (h *HTTPFetch) Execute(ctx context.Context, input map[string]any) (string, 
 	return fmt.Sprintf("HTTP %d %s\n\n%s", resp.StatusCode, resp.Status, string(data)), nil
 }
 
-func (h *HTTPFetch) matches(host string) bool {
-	for _, pattern := range h.allowed {
-		if pattern == host {
-			return true
-		}
-		ok, _ := path.Match(pattern, host)
-		if ok {
-			return true
-		}
-		if strings.HasPrefix(pattern, "*.") && strings.HasSuffix(host, strings.TrimPrefix(pattern, "*")) {
-			return true
-		}
-	}
-	return false
-}
-
-func validateHTTPFetchTarget(parsed *url.URL, host string, enforceAllowlist bool, allowed []string) error {
+// validateHTTPFetchTarget enforces the SSRF boundary only: a real http(s) scheme
+// and a host that isn't localhost, a private/link-local range, or a cloud-metadata
+// endpoint. There is deliberately no domain allowlist.
+func validateHTTPFetchTarget(parsed *url.URL, host string) error {
 	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
 	if scheme != "http" && scheme != "https" {
 		return fmt.Errorf("unsupported scheme %q", parsed.Scheme)
@@ -127,21 +102,6 @@ func validateHTTPFetchTarget(parsed *url.URL, host string, enforceAllowlist bool
 		if isBlockedHostname(host) {
 			return fmt.Errorf("host %q blocked by network policy", host)
 		}
-	}
-	if enforceAllowlist {
-		for _, pattern := range allowed {
-			if pattern == host {
-				return nil
-			}
-			ok, _ := path.Match(pattern, host)
-			if ok {
-				return nil
-			}
-			if strings.HasPrefix(pattern, "*.") && strings.HasSuffix(host, strings.TrimPrefix(pattern, "*")) {
-				return nil
-			}
-		}
-		return fmt.Errorf("host %q not in allowlist", host)
 	}
 	return nil
 }
