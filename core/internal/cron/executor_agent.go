@@ -11,6 +11,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -86,6 +87,13 @@ func (e *AgentExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	}
 	e.markCronSession(sessionID, j)
 	e.seedSelfImproveApprovals(sessionID, j)
+
+	// Bind the job's name to this session so any plan the agent builds inside
+	// the turn inherits it as the card headline (cron, card, and plan all read
+	// the same name) instead of the model inventing its own title. Mechanic, not
+	// prose — see tools.RegisterJobForSession.
+	tools.RegisterJobForSession(sessionID, j.Name)
+	defer tools.UnregisterJobForSession(sessionID)
 
 	out := make(chan agent.RunEvent, 64)
 	go func() {

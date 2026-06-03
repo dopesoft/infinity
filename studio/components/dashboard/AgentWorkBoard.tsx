@@ -282,6 +282,21 @@ function WorkRow({ it, onClick }: { it: WorkItem; onClick: () => void }) {
         {it.subtitle ? (
           <p className="truncate text-[11px] text-muted-foreground">{it.subtitle}</p>
         ) : null}
+        {/* The job (cron) is the headline; the skill(s) it ran are the
+            ingredients, shown as chips underneath so one card tells the whole
+            story without two names. */}
+        {it.skills && it.skills.length > 0 ? (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {it.skills.map((s) => (
+              <span
+                key={s}
+                className="inline-flex max-w-full items-center truncate rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+              >
+                {s}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {it.summary ? (
           <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground/90">
             {it.summary}

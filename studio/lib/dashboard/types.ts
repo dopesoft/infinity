@@ -288,6 +288,12 @@ export type WorkItem = {
   planSteps?: PlanStep[];
   doneCount?: number;
   totalCount?: number;
+  // the skill(s) this item runs — for plans, what the agent actually invoked;
+  // for crons, what the job is set to invoke. Shown as chips under the headline.
+  skills?: string[];
+  // plain-English "what this job does": a cron's instruction or a plan's goal.
+  // Lets a queued/running card explain itself without a trip to /cron.
+  instruction?: string;
 };
 
 // ── Plans (the durable, verifiable plan substrate - "the Cortex") ────────────

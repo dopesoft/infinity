@@ -184,6 +184,14 @@ func (v *composioVerb) Execute(ctx context.Context, input map[string]any) (strin
 		return "", fmt.Errorf("connected account %s is missing Composio entity binding (user_id); reconnect it or patch the account registry", accountID)
 	}
 
+	// Drop empty optional params before they hit Composio. Composio VALIDATES
+	// optionals it considers "present", so a draft call carrying
+	// attachment:{s3key:""} is rejected outright — the silent failure that broke
+	// every inbox-triage draft (the model routinely includes a blank attachment).
+	// This is a transport-level mechanic, not skill prose: a blank optional is
+	// now impossible to send, regardless of what the recipe remembers.
+	args = pruneEmptyArgs(args)
+
 	resp, err := v.exec.Execute(ctx, connectors.ExecuteRequest{
 		Slug:               v.slug,
 		ConnectedAccountID: accountID,
@@ -203,6 +211,52 @@ func (v *composioVerb) Execute(ctx context.Context, input map[string]any) (strin
 		return "{}", nil
 	}
 	return string(resp.Data), nil
+}
+
+// pruneEmptyArgs returns a copy of the Composio argument map with empty optional
+// params recursively removed. "Empty" means a blank/whitespace string, nil, an
+// object that prunes down to {}, or an empty array — exactly the shapes Composio
+// rejects when sent as a "present" optional. Genuine values are preserved,
+// INCLUDING false and 0 (those are meaningful, not empty). Top level always
+// returns a map so the caller can pass it straight to Execute.
+func pruneEmptyArgs(in map[string]any) map[string]any {
+	pruned, _ := pruneEmptyValue(in)
+	if m, ok := pruned.(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+// pruneEmptyValue recursively prunes v and reports whether the result is empty
+// (and should therefore be dropped by its parent).
+func pruneEmptyValue(v any) (any, bool) {
+	switch t := v.(type) {
+	case nil:
+		return nil, true
+	case string:
+		return t, strings.TrimSpace(t) == ""
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			pv, empty := pruneEmptyValue(val)
+			if !empty {
+				out[k] = pv
+			}
+		}
+		return out, len(out) == 0
+	case []any:
+		out := make([]any, 0, len(t))
+		for _, val := range t {
+			pv, empty := pruneEmptyValue(val)
+			if !empty {
+				out = append(out, pv)
+			}
+		}
+		return out, len(out) == 0
+	default:
+		// numbers, bools, and anything else are real values — keep them.
+		return v, false
+	}
 }
 
 func (v *composioVerb) accountByID(accountID string) (*connectors.Account, error) {

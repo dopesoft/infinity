@@ -30,7 +30,7 @@ import { useTabParam } from "@/lib/useTabParam";
 import { RunIndicator } from "@/lib/runs";
 import { CronDetailModal } from "@/components/cron/CronDetailModal";
 import { SentinelDetailModal } from "@/components/cron/SentinelDetailModal";
-import { cronKindMeta, watchTypeMeta, casualTime, localTzAbbrev, CRON_KIND_META } from "@/components/cron/cronMeta";
+import { cronKindMeta, watchTypeMeta, casualTime, localTzAbbrev, cronToHuman, CRON_KIND_META } from "@/components/cron/cronMeta";
 
 const CRON_TABS = ["cron", "sentinel"] as const;
 type CronTab = (typeof CRON_TABS)[number];
@@ -141,14 +141,15 @@ function CronSection() {
             >
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <code className="truncate font-mono text-foreground">{j.name}</code>
-                <span className="flex shrink-0 items-center gap-1 font-mono">
+                {/* Readable cadence is the headline ("every 6 hours"), not the
+                    raw cron expression. Author's words win; cronToHuman is the
+                    fallback; the raw expression drops to the mono line below. */}
+                <span className="flex shrink-0 items-center gap-1">
                   <Clock className="size-3" aria-hidden />
-                  {j.schedule}
+                  {j.schedule_natural || cronToHuman(j.schedule)}
                 </span>
               </div>
-              {j.schedule_natural && (
-                <p className="mt-1 text-xs text-muted-foreground">{j.schedule_natural}</p>
-              )}
+              <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">{j.schedule}</p>
               <p className="mt-1 line-clamp-2 break-words text-sm">{j.target}</p>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
                 <Badge variant="outline">{cronKindMeta(j.job_kind).label}</Badge>

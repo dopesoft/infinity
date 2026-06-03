@@ -106,6 +106,72 @@ export function casualTime(iso?: string | null): string {
   return `${date}, ${time}`;
 }
 
+/* Turn a standard 5-field cron expression into readable English ("every 6
+ * hours", "9:00 AM on weekdays") so the UI never shows a raw cron expression as
+ * the primary label. Covers the patterns the agent actually generates; anything
+ * it can't confidently read falls back to the raw expression rather than lying.
+ * Always pair as `schedule_natural || cronToHuman(schedule)` — the author's own
+ * words win, this is the fallback. */
+const CRON_DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function cronTimeLabel(min: string, hour: string): string | null {
+  const m = Number(min);
+  const h = Number(hour);
+  if (!Number.isInteger(m) || !Number.isInteger(h) || m < 0 || m > 59 || h < 0 || h > 23) return null;
+  const ampm = h < 12 ? "AM" : "PM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function cronDowLabel(dow: string): string | null {
+  if (dow === "*" || dow === "?") return null;
+  if (dow === "1-5") return "weekdays";
+  if (dow === "0,6" || dow === "6,0" || dow === "0-6" || dow === "6-7") return "weekends";
+  const parts = dow.split(",").map((p) => Number(p.replace("7", "0")));
+  if (parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 6)) {
+    const names = parts.map((n) => `${CRON_DOW[n]}s`);
+    if (names.length === 1) return names[0];
+    return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  }
+  return null;
+}
+
+export function cronToHuman(expr?: string | null): string {
+  const raw = (expr ?? "").trim();
+  if (!raw) return "";
+  const f = raw.split(/\s+/);
+  if (f.length !== 5) return raw; // 6-field / @-macros / unknown → show as-is
+  const [min, hour, dom, mon, dow] = f;
+
+  // every N minutes
+  const minEvery = /^\*\/(\d+)$/.exec(min);
+  if (minEvery && hour === "*" && dom === "*" && mon === "*" && dow === "*") {
+    const n = Number(minEvery[1]);
+    return n === 1 ? "every minute" : `every ${n} minutes`;
+  }
+  // every N hours (on the hour)
+  const hourEvery = /^\*\/(\d+)$/.exec(hour);
+  if (min === "0" && hourEvery && dom === "*" && mon === "*" && dow === "*") {
+    const n = Number(hourEvery[1]);
+    return n === 1 ? "every hour" : `every ${n} hours`;
+  }
+  // top of every hour
+  if (min === "0" && hour === "*" && dom === "*" && mon === "*" && dow === "*") {
+    return "every hour";
+  }
+
+  // fixed time-of-day variants
+  const time = cronTimeLabel(min, hour);
+  if (time && mon === "*") {
+    const dowLabel = cronDowLabel(dow);
+    if (dom === "*" && !dowLabel) return `${time} daily`;
+    if (dom === "*" && dowLabel) return `${time} on ${dowLabel}`;
+    if (dom !== "*" && dow === "*") return `${time} on day ${dom} of the month`;
+  }
+
+  return raw; // honest fallback
+}
+
 /* The browser's local timezone abbreviation (e.g. "CST"), used to label times
  * so the single convention is explicit. Falls back to "local time". */
 export function localTzAbbrev(): string {

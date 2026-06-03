@@ -54,6 +54,82 @@ func toPlanSteps(steps []plan.Step) (out []PlanStep, done int) {
 	return out, done
 }
 
+// planSessionIDs returns the set of session_ids for every plan that
+// planWorkItems would surface (active/paused, or terminal-but-updated-today).
+//
+// This is the key to NOT double-counting one job. A plan is the canonical,
+// rich representation of a unit of agent work — it carries the title, the step
+// timeline, the verdicts. But the SAME unit of work ALSO booked run rows: the
+// cron that fired it (mem_runs kind 'cron' / mem_crons.last_run), the plan.step
+// spinners, maybe a skill run. Left alone, loadWork draws a card for each, so a
+// single nightly triage shows up as "inbox-triage (Done)" AND "Gmail triage…
+// (Running)" — two cards, two names, one job. loadWork uses this set to suppress
+// any run/cron/skill card whose session produced a surfaced plan: the plan wins,
+// everything else in that session folds into it.
+func (a *API) planSessionIDs(ctx context.Context) (map[string]bool, error) {
+	if a == nil || a.Pool == nil {
+		return map[string]bool{}, nil
+	}
+	rows, err := a.Pool.Query(ctx, `
+		SELECT DISTINCT session_id
+		FROM mem_plans
+		WHERE session_id IS NOT NULL AND session_id <> ''
+		  AND (
+		        status IN ('active', 'paused')
+		     OR (status IN ('completed', 'failed', 'cancelled')
+		         AND updated_at >= date_trunc('day', NOW()))
+		      )
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	set := map[string]bool{}
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, err
+		}
+		set[sid] = true
+	}
+	return set, rows.Err()
+}
+
+// planSkillsBySession returns, per session id, the distinct skills the agent
+// invoked in that session — read from the durable observation record of
+// skills_invoke tool calls (payload {"name":"skills_invoke","input":{"name":…}}).
+// This is the generic, contract-driven source (mem_skill_runs isn't reliably
+// session-linked), so the plan card can show "skills: inbox-triage" underneath
+// its job headline with zero per-skill wiring. Best-effort: any error yields an
+// empty map and the chip simply doesn't render.
+func (a *API) planSkillsBySession(ctx context.Context, sessionIDs []string) map[string][]string {
+	out := map[string][]string{}
+	if a == nil || a.Pool == nil || len(sessionIDs) == 0 {
+		return out
+	}
+	rows, err := a.Pool.Query(ctx, `
+		SELECT session_id, payload->'input'->>'name' AS skill
+		FROM mem_observations
+		WHERE session_id = ANY($1)
+		  AND hook_name = 'PreToolUse'
+		  AND payload->>'name' = 'skills_invoke'
+		  AND COALESCE(payload->'input'->>'name', '') <> ''
+		GROUP BY session_id, payload->'input'->>'name'
+	`, sessionIDs)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid, skill string
+		if err := rows.Scan(&sid, &skill); err != nil {
+			return out
+		}
+		out[sid] = append(out[sid], skill)
+	}
+	return out
+}
+
 // planWorkItems turns the agent's in-flight + finished-today plans into Agent
 // Work board items. Mapping:
 //   - active   -> Running   (with the doneCount/totalCount progress bar)
@@ -73,6 +149,14 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	sessionIDs := make([]string, 0, len(plans))
+	for _, p := range plans {
+		if p.SessionID != "" {
+			sessionIDs = append(sessionIDs, p.SessionID)
+		}
+	}
+	skillsBySession := a.planSkillsBySession(ctx, sessionIDs)
 
 	startOfDay := time.Now().UTC().Truncate(24 * time.Hour)
 	out := make([]WorkItem, 0, len(plans))
@@ -125,6 +209,11 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 			PlanSteps:  steps,
 			DoneCount:  &doneCount,
 			TotalCount: &totalCount,
+			Skills:     skillsBySession[p.SessionID],
+			// The goal carries the model's own description of the work (and, for
+			// job-launched plans, the descriptive title it would have used) — so
+			// the card explains what it's doing beneath the job headline.
+			Instruction: p.Goal,
 		})
 	}
 	return out, nil

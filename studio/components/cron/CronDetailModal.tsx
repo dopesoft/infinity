@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RunIndicator, useRuns } from "@/lib/runs";
 import { previewCron, triggerCron, type CronJobDTO } from "@/lib/api";
-import { cronKindMeta, casualTime, localTzAbbrev } from "./cronMeta";
+import { cronKindMeta, casualTime, localTzAbbrev, cronToHuman } from "./cronMeta";
 
 /* The full cron, on click. Closes the boss's "I can't even read the entire
  * cron" gap: the list row shows a title + schedule; tapping it opens this
@@ -71,7 +71,7 @@ export function CronDetailModal({
           icon={<CalendarClock className="size-4" />}
           eyebrow={meta.label}
           title={cron.name}
-          subtitle={cron.schedule_natural || `runs on schedule ${cron.schedule}`}
+          subtitle={cron.schedule_natural || cronToHuman(cron.schedule)}
           trailing={
             cron.enabled ? (
               <Badge variant="success">enabled</Badge>
@@ -108,7 +108,7 @@ export function CronDetailModal({
       {/* Schedule — explained in the boss's local frame. ONE convention. */}
       <ModalSection label="Schedule" icon={<Clock className="size-3.5 text-muted-foreground" />}>
         <p className="text-[13px] text-foreground/90">
-          {cron.schedule_natural || "Runs on a fixed schedule."}
+          {cron.schedule_natural || cronToHuman(cron.schedule) || "Runs on a fixed schedule."}
         </p>
         <p className="mt-1 font-mono text-[11px] text-muted-foreground">{cron.schedule}</p>
         <div className="mt-3">

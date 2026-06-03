@@ -166,7 +166,20 @@ func (t *planCreate) Execute(ctx context.Context, in map[string]any) (string, er
 		return "", errors.New("steps must contain at least one {title} item")
 	}
 	sid := SessionIDFromContext(ctx)
-	p, err := t.store.Create(ctx, sid, title, strString(in, "goal"), strString(in, "goal_id"), steps)
+	goal := strString(in, "goal")
+	// A plan launched by a named job (a cron) inherits the JOB's name as its
+	// headline so the cron, the card, and the plan all read the same thing —
+	// instead of the model inventing a fresh title and the board showing one job
+	// under two names. The model's descriptive title is kept as the goal so it
+	// still rides in the card detail. Ordinary boss-chat plans (no job binding)
+	// keep the model's title untouched.
+	if job := JobForSession(sid); job != "" {
+		if strings.TrimSpace(goal) == "" {
+			goal = title
+		}
+		title = humanizeJobName(job)
+	}
+	p, err := t.store.Create(ctx, sid, title, goal, strString(in, "goal_id"), steps)
 	if err != nil {
 		return "", err
 	}

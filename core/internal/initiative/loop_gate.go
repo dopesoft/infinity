@@ -127,6 +127,23 @@ func isCodeWriteTool(tool string) bool {
 	return ok
 }
 
+// idempotentMaintenanceTools are self-housekeeping verbs that are SAFE to call
+// redundantly: the call just no-ops and tells the agent so. Repeating one is
+// never a runaway — it's the model being over-eager about hygiene — so the
+// repeat hard-block must NOT fire for them. Without this exemption a model that
+// reflexively re-calls compact_context (nudged when its buffer feels heavy) trips
+// the loop guard at 3 and the WHOLE TURN dies before the real task finishes —
+// the exact inbox-triage failure. They still count toward the session ceiling,
+// so a genuine spam-storm is caught there.
+var idempotentMaintenanceTools = map[string]struct{}{
+	"compact_context": {},
+}
+
+func isIdempotentMaintenanceTool(tool string) bool {
+	_, ok := idempotentMaintenanceTools[strings.ToLower(tool)]
+	return ok
+}
+
 // LoopGate is the agent.ToolGate that catches retry loops + runaway
 // sessions. Pluggable on top of the existing GateChain - every tool call
 // passes through it AFTER the per-MCP gates have had their say.
@@ -256,8 +273,11 @@ func (g *LoopGate) Authorize(ctx context.Context, sessionID, project, toolName s
 
 	// Repeat guard is universal — it fires for EVERY tool, code-write
 	// included, because re-running the identical call is the real loop. This
-	// is unchanged by the coding-aware ceiling below.
-	if repeatCount >= repeatLimit {
+	// is unchanged by the coding-aware ceiling below. The ONE exception is
+	// idempotent maintenance verbs (compact_context): repeating one is a
+	// harmless no-op, not a runaway, so blocking it — which ends the turn —
+	// would be worse than letting it fall through to its own no-op response.
+	if repeatCount >= repeatLimit && !isIdempotentMaintenanceTool(toolName) {
 		return agent.GateDecision{
 			Allow: false,
 			Reason: fmt.Sprintf("loop detected: %s with these exact inputs has fired %d times in the last %s. Stop. Change the input, try a different approach, or ask the boss what to do.",

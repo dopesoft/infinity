@@ -20,6 +20,7 @@ import (
 	htmlpkg "html"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -360,6 +361,15 @@ type WorkItem struct {
 	PlanSteps  []PlanStep `json:"planSteps,omitempty"`
 	DoneCount  *int       `json:"doneCount,omitempty"`
 	TotalCount *int       `json:"totalCount,omitempty"`
+	// Skills lists the skill(s) this item runs. For plans it's what the agent
+	// actually invoked (from the session's skills_invoke calls); for crons it's
+	// what the job is set to invoke (parsed from its instruction). Either way the
+	// card shows the ingredients under the job headline.
+	Skills []string `json:"skills,omitempty"`
+	// Instruction is the plain-English "what this job does" — a cron's target
+	// prompt, or a plan's goal. Surfaced so a queued/running item explains itself
+	// in the detail without a trip to /cron.
+	Instruction string `json:"instruction,omitempty"`
 }
 
 // WorkflowStep is one step of a workflow run, surfaced inside a workflow
@@ -1447,9 +1457,14 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	const perCol = 10
 	out := make([]WorkItem, 0, perCol*4)
 
+	// Sessions that produced a plan: their cron/skill/agent run cards fold into
+	// the canonical plan card so one job is one card, not two (see
+	// planSessionIDs). Best-effort — a query error just means no collapsing.
+	planSessions, _ := a.planSessionIDs(ctx)
+
 	// ── queued: upcoming crons ────────────────────────────────────────
 	cronQRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, name, schedule_natural, schedule, next_run_at
+		SELECT id::text, name, schedule_natural, schedule, next_run_at, COALESCE(target, '')
 		FROM mem_crons
 		WHERE enabled = TRUE AND next_run_at IS NOT NULL AND next_run_at > NOW()
 		ORDER BY next_run_at ASC
@@ -1461,8 +1476,9 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				id, name          string
 				natural, schedule *string
 				nextRunAt         time.Time
+				target            string
 			)
-			if err := cronQRows.Scan(&id, &name, &natural, &schedule, &nextRunAt); err != nil {
+			if err := cronQRows.Scan(&id, &name, &natural, &schedule, &nextRunAt, &target); err != nil {
 				cronQRows.Close()
 				return nil, err
 			}
@@ -1483,6 +1499,11 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				Column:       "queued",
 				ScheduledFor: &nra,
 				DetailHref:   "/cron",
+				// Self-explaining queued card: what the job actually does (its
+				// instruction) and which skill(s) it's set to invoke — so the boss
+				// reads it here, not in /cron.
+				Instruction: strings.TrimSpace(target),
+				Skills:      cronInvokedSkills(target),
 			})
 		}
 		cronQRows.Close()
@@ -1576,7 +1597,8 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	// 1h cap so a row orphaned by a crash (swept to 'error' at boot anyway)
 	// can't linger.
 	runningRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, kind, COALESCE(NULLIF(label,''), kind) AS label, source, started_at
+		SELECT id::text, kind, COALESCE(NULLIF(label,''), kind) AS label, source, started_at,
+		       COALESCE(meta->>'session_id', '') AS session_id
 		FROM mem_runs
 		WHERE status = 'running' AND started_at >= NOW() - INTERVAL '1 hour'
 		ORDER BY started_at DESC
@@ -1584,11 +1606,17 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	`, perCol)
 	if err == nil {
 		for runningRows.Next() {
-			var id, kind, label, source string
+			var id, kind, label, source, sessionID string
 			var startedAt time.Time
-			if err := runningRows.Scan(&id, &kind, &label, &source, &startedAt); err != nil {
+			if err := runningRows.Scan(&id, &kind, &label, &source, &startedAt, &sessionID); err != nil {
 				runningRows.Close()
 				return nil, err
+			}
+			// plan.step rows are the per-step spinners that ride INSIDE a plan
+			// card's timeline — never a standalone job. And any run whose session
+			// produced a plan folds into that plan card. Either way, skip it here.
+			if kind == "plan.step" || planSessions[sessionID] {
+				continue
 			}
 			wkind, href, engine := runWorkKind(kind)
 			s := startedAt
@@ -1705,10 +1733,10 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	// the agent's own closing words.
 	cronDoneRows, err := a.Pool.Query(ctx, `
 		SELECT c.id::text, c.name, c.last_run_at, c.last_run_status, c.last_run_duration_ms,
-		       COALESCE(r.result_summary, '')
+		       COALESCE(r.result_summary, ''), COALESCE(r.session_id, ''), COALESCE(c.target, '')
 		FROM mem_crons c
 		LEFT JOIN LATERAL (
-			SELECT result_summary
+			SELECT result_summary, meta->>'session_id' AS session_id
 			FROM mem_runs
 			WHERE kind = 'cron' AND target_id = c.id::text AND ended_at IS NOT NULL
 			ORDER BY started_at DESC
@@ -1727,10 +1755,17 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				status     *string
 				durationMs *int
 				summary    string
+				sessionID  string
+				target     string
 			)
-			if err := cronDoneRows.Scan(&id, &name, &lastRunAt, &status, &durationMs, &summary); err != nil {
+			if err := cronDoneRows.Scan(&id, &name, &lastRunAt, &status, &durationMs, &summary, &sessionID, &target); err != nil {
 				cronDoneRows.Close()
 				return nil, err
+			}
+			// If this cron's run built a plan, the plan card already represents
+			// the job (with its steps + real outcome) — don't draw a second card.
+			if planSessions[sessionID] {
+				continue
 			}
 			sub := "completed"
 			if status != nil && *status != "" {
@@ -1743,11 +1778,13 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				Title:      humanizeName(name),
 				Subtitle:   sub,
 				Summary:    summary,
-				Engine:     "Schedule",
-				Ref:        name,
-				Column:     "done",
-				FinishedAt: &fa,
-				DetailHref: "/cron",
+				Engine:      "Schedule",
+				Ref:         name,
+				Column:      "done",
+				FinishedAt:  &fa,
+				DetailHref:  "/cron",
+				Instruction: strings.TrimSpace(target),
+				Skills:      cronInvokedSkills(target),
 			}
 			if durationMs != nil {
 				d := *durationMs
@@ -1759,7 +1796,7 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	}
 
 	skillDoneRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, skill_name, ended_at, duration_ms, success
+		SELECT id::text, skill_name, ended_at, duration_ms, success, COALESCE(session_id, '')
 		FROM mem_skill_runs
 		WHERE ended_at IS NOT NULL
 		  AND ended_at >= date_trunc('day', NOW())
@@ -1773,10 +1810,16 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				endedAt    time.Time
 				durationMs int
 				success    bool
+				sessionID  string
 			)
-			if err := skillDoneRows.Scan(&id, &name, &endedAt, &durationMs, &success); err != nil {
+			if err := skillDoneRows.Scan(&id, &name, &endedAt, &durationMs, &success, &sessionID); err != nil {
 				skillDoneRows.Close()
 				return nil, err
+			}
+			// Same job, one card: if this skill ran inside a session that built a
+			// plan, the plan card already represents it.
+			if planSessions[sessionID] {
+				continue
 			}
 			sub := "succeeded"
 			if !success {
@@ -1953,6 +1996,36 @@ func codeProposalReport(rationale, change string) string {
 	}
 	b.WriteString("This is a draft Jarvis flagged on its own — nothing changes until you approve it in Code Proposals.")
 	return b.String()
+}
+
+// cronSkillRe captures the skill name out of a skills_invoke call embedded in a
+// cron's instruction, e.g. skills_invoke({name:"inbox-triage"}). Tolerant of
+// quote style and spacing so authored prompts parse regardless of formatting.
+var cronSkillRe = regexp.MustCompile(`skills_invoke\s*\(\s*\{?\s*["']?name["']?\s*:\s*["']([^"']+)["']`)
+
+// cronInvokedSkills returns the distinct skills a cron's instruction tells the
+// agent to run, in first-seen order. This is the queued-card source of "what
+// skill does this job invoke" — deterministic, no run required, so an upcoming
+// cron explains itself before it has ever fired.
+func cronInvokedSkills(target string) []string {
+	if strings.TrimSpace(target) == "" {
+		return nil
+	}
+	matches := cronSkillRe.FindAllStringSubmatch(target, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		name := strings.TrimSpace(m[1])
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 func humanizeName(raw string) string {

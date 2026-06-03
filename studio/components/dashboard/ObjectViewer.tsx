@@ -35,7 +35,8 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { authedFetch } from "@/lib/api";
+import { authedFetch, triggerCron } from "@/lib/api";
+import { RunIndicator } from "@/lib/runs";
 import {
   ResponsiveModal,
   ResponsiveModalHeader,
@@ -378,6 +379,17 @@ function ViewerBody({ item }: { item: DashboardItem }) {
   );
 }
 
+// cronIDFromWorkItem returns the cron's UUID for a work item that maps to a
+// triggerable cron (queued or done cron cards carry ids "cron-q-<uuid>" /
+// "cron-d-<uuid>"), or "" for plans/workflows/skill runs that aren't crons.
+// This is what lets the Agent Work detail offer "Run now" without a per-kind API.
+function cronIDFromWorkItem(w: WorkItem): string {
+  for (const prefix of ["cron-q-", "cron-d-"]) {
+    if (w.id.startsWith(prefix)) return w.id.slice(prefix.length);
+  }
+  return "";
+}
+
 function ViewerActions({
   item,
   onResolved,
@@ -577,6 +589,28 @@ function ViewerActions({
       const ev = item.data;
       if (!ev.responseStatus) return null;
       return <RsvpButtons event={ev} onResolved={onResolved} item={item} />;
+    }
+    if (item.kind === "work") {
+      // A scheduled job shouldn't be a read-only card — let the boss fire it
+      // immediately from here instead of "wait for the next tick or go to
+      // /cron". RunIndicator books a mem_runs row so the spinner survives
+      // navigation/refresh, identical to the cron page's own Run now.
+      const cronID = cronIDFromWorkItem(item.data);
+      if (cronID) {
+        return (
+          <RunIndicator
+            kind="cron"
+            targetId={cronID}
+            label="Run now"
+            title="Fire this scheduled job immediately. The next regular run still happens on schedule. Progress survives navigation and refresh."
+            showResult={false}
+            onRun={async () => {
+              await triggerCron(cronID);
+            }}
+          />
+        );
+      }
+      return null;
     }
     return null;
   }
@@ -1758,6 +1792,32 @@ function WorkBody({ w }: { w: WorkItem }) {
           <span className="font-mono">· {formatDuration(w.durationMs)}</span>
         ) : null}
       </ModalChips>
+
+      {/* What it does — the job's actual instruction (cron) or goal (plan), so a
+          queued/running item explains itself inline instead of sending the boss
+          to /cron to find out what it is. */}
+      {w.instruction?.trim() ? (
+        <ModalSection label="What it does">
+          <ModalPre>{w.instruction.trim()}</ModalPre>
+        </ModalSection>
+      ) : null}
+
+      {/* Skills it runs — the ingredients under the job headline. Chips, not a
+          wall of text, so it reads at a glance. */}
+      {w.skills && w.skills.length > 0 ? (
+        <ModalSection label={w.skills.length === 1 ? "Skill" : "Skills"}>
+          <div className="flex flex-wrap gap-1.5">
+            {w.skills.map((s) => (
+              <span
+                key={s}
+                className="inline-flex max-w-full items-center truncate rounded-md border border-border bg-muted px-2 py-1 font-mono text-[11px] text-foreground/80"
+              >
+                {s}
+              </span>
+            ))}
+          </div>
+        </ModalSection>
+      ) : null}
 
       {/* The narrative the run wrote ("what it did / how it went / outcome").
           ModalPre preserves the header + body line break the executor built. */}
