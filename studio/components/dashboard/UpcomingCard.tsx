@@ -56,8 +56,9 @@ export function UpcomingCard({
       {/* noPad on Section means the month header background spans the
           full card width edge-to-edge. Individual event rows still get
           horizontal breathing room via their own px-4 below.
-          max={5} = 1 month header + 4 event rows visible; rest scroll. */}
-      <ScrollList max={5}>
+          max={4} forces a clip at the 5th row (month header counts as one),
+          so the card locks to a fixed height and scrolls the rest. */}
+      <ScrollList max={4}>
         <ol className="divide-y divide-border/60">
           {rows.length === 0 ? (
             <li className="px-4 py-6 text-center text-xs text-muted-foreground">
