@@ -49,9 +49,16 @@ function metaFor(source: string): { Icon: LucideIcon; tone: string; label: strin
 export function FollowUpsCard({
   followUps,
   onOpen,
+  onMeasure,
 }: {
   followUps: FollowUp[];
   onOpen: (item: DashboardItem) => void;
+  /**
+   * Reports this card's measured 4-row clip height (px) so the Upcoming
+   * card beside it can match the same fade line. Follow-ups is the
+   * reference height; Upcoming consumes it. See ScrollList "matched" mode.
+   */
+  onMeasure?: (px: number | null) => void;
 }) {
   return (
     <Section
@@ -66,7 +73,7 @@ export function FollowUpsCard({
           Inbox zero - no one is waiting on you.
         </div>
       ) : (
-        <ScrollList max={4}>
+        <ScrollList max={4} onMeasure={onMeasure}>
           <ul className="space-y-1.5">
             {followUps.map((f) => (
               <li key={f.id}>

@@ -172,6 +172,11 @@ export function DashboardClient() {
   useRealtime("*", debouncedRefetch);
 
   const [search, setSearch] = useState("");
+  // Follow-ups is the reference card height for the Upcoming/Follow-ups
+  // row: it reports its measured 4-row scroll height here, and Upcoming
+  // consumes it so both fade lines sit on the same y. setListHeight is a
+  // stable useState setter, safe to pass straight into onMeasure.
+  const [listHeight, setListHeight] = useState<number | null>(null);
   const [addingTodo, setAddingTodo] = useState(false);
   const [viewing, setViewing] = useState<DashboardItem | null>(null);
   const { prefs } = useDashboardPrefs();
@@ -416,9 +421,19 @@ export function DashboardClient() {
               mobile; lg splits to two. */}
           {(s.upcoming || s.followups) && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
-              {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
+              {s.upcoming && (
+                <UpcomingCard
+                  events={filtered.events}
+                  onOpen={openViewer}
+                  matchHeight={listHeight}
+                />
+              )}
               {s.followups && (
-                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
+                <FollowUpsCard
+                  followUps={filtered.followUps}
+                  onOpen={openViewer}
+                  onMeasure={setListHeight}
+                />
               )}
             </div>
           )}

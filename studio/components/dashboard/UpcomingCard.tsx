@@ -13,12 +13,29 @@ type Row =
   | { kind: "month"; label: string }
   | { kind: "event"; event: CalendarEvent };
 
+// The Follow-ups card body is padded (p-5 → 20px above its ScrollList on
+// lg); Upcoming uses `noPad` (0px above its ScrollList) so the month
+// header band can span edge-to-edge. To make the two fade lines land on
+// the SAME y, Upcoming clips 20px lower than Follow-ups' measured height,
+// cancelling that top-offset difference. Desktop-only concern — the cards
+// stack on mobile where alignment is moot.
+const NOPAD_TOP_OFFSET = 20;
+
 export function UpcomingCard({
   events,
   onOpen,
+  matchHeight,
 }: {
   events: CalendarEvent[];
   onOpen: (item: DashboardItem) => void;
+  /**
+   * Pixel height of the Follow-ups card's scroll region (its measured
+   * 4-row clip height). When provided, Upcoming clips at the matching
+   * line so both fades sit level and the shorter event rows fill the
+   * space with ~6 events + scroll instead of 3 + dead space. Falls back
+   * to a row-count cap before the sibling has measured / on mobile.
+   */
+  matchHeight?: number | null;
 }) {
   const rows = useMemo<Row[]>(() => {
     const today = startOfDay(new Date());
@@ -56,9 +73,15 @@ export function UpcomingCard({
       {/* noPad on Section means the month header background spans the
           full card width edge-to-edge. Individual event rows still get
           horizontal breathing room via their own px-4 below.
-          max={4} forces a clip at the 5th row (month header counts as one),
-          so the card locks to a fixed height and scrolls the rest. */}
-      <ScrollList max={4}>
+          Matched mode: clip to the Follow-ups card's measured height
+          (+ the noPad offset) so the fade lines align and the short event
+          rows fill the space. Before the sibling has reported a height
+          (first paint / mobile), fall back to a generous row count so the
+          card still shows several events rather than 3. */}
+      <ScrollList
+        max={7}
+        maxHeight={matchHeight != null ? matchHeight + NOPAD_TOP_OFFSET : undefined}
+      >
         <ol className="divide-y divide-border/60">
           {rows.length === 0 ? (
             <li className="px-4 py-6 text-center text-xs text-muted-foreground">
