@@ -61,6 +61,14 @@ type Job struct {
 	NextRunAt       *time.Time      `json:"next_run_at,omitempty"`
 	FailureCount    int             `json:"failure_count"`
 	CreatedAt       time.Time       `json:"created_at"`
+
+	// RunSessionID is a transient, per-fire session id the scheduler mints
+	// BEFORE executing and stamps onto the run's mem_runs row immediately (so a
+	// long-running job folds into its plan card live, instead of only at
+	// finish). Executors that build a plan should use this id as the plan's
+	// session_id so the board collapses run + plan into one rich card. Not
+	// persisted to mem_crons (json:"-"); set fresh on every fire.
+	RunSessionID string `json:"-"`
 }
 
 // RunSummary is what an executor reports back about a job it just ran, so the

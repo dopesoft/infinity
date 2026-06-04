@@ -179,6 +179,10 @@ export type FollowUp = {
   threadUrl?: string;
   // optional pre-drafted reply from the agent
   draft?: string;
+  // The exact reply text the boss sent (persisted server-side the moment Send
+  // is tapped). When present, the viewer renders a read-only "Response" section
+  // instead of the editable draft box; it survives refresh and device switch.
+  sentReply?: string;
   // Which table the row came from. "followup" → mem_followups (connector
   // poll), "surface" → mem_surface_items with surface='followups'. The
   // dismiss endpoint reads this to update the right table.

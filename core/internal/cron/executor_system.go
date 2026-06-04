@@ -63,6 +63,10 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		if len(j.TargetConfig) > 0 {
 			_ = json.Unmarshal(j.TargetConfig, &ic)
 		}
+		// Use the scheduler's pre-stamped session id for the step plan so the run
+		// row (which already carries this id from Begin) and the plan collapse
+		// into one live step-timeline card on the board while the job runs.
+		ic.SessionID = j.RunSessionID
 		s, err := inbox.Run(ctx, e.Inbox, ic)
 		return RunSummary{
 			Summary: fmt.Sprintf("Triaged %d email(s) across %d mailbox(es); surfaced %d needing your reply.",

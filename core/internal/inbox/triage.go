@@ -49,6 +49,11 @@ type Deps struct {
 type Config struct {
 	Query      string `json:"query"`       // Gmail search; broad on purpose — the LLM filters, not the query
 	MaxResults int    `json:"max_results"` // per account
+	// SessionID is the run's session id, minted by the scheduler and already
+	// stamped on the run's mem_runs row. We reuse it as the step plan's
+	// session_id so the board folds the running cron + its plan into one live
+	// step-timeline card. Empty (e.g. an ad-hoc call) → we mint our own.
+	SessionID string `json:"-"`
 }
 
 // Summary is the run report (lands on the cron's mem_runs row).
@@ -105,14 +110,24 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	var s1, s2, s3 string
 	if d.Plan != nil {
 		d.sweepStalePlans(ctx) // clear any prior orphaned inbox plan — no pile-up
-		sid := uuid.NewString()
-		if pl, err := d.Plan.Create(ctx, sid, planTitle,
+		// Reuse the scheduler's session id (already on the run row) so the board
+		// folds run + plan into one live card; mint one only for ad-hoc callers.
+		sid := strings.TrimSpace(cfg.SessionID)
+		if sid == "" {
+			sid = uuid.NewString()
+		}
+		pl, err := d.Plan.Create(ctx, sid, planTitle,
 			"Read your inboxes, decide which emails need your reply, and surface those.", "",
 			[]plan.NewStepInput{
 				{Title: "Read your inboxes"},
 				{Title: "Decide what needs your reply"},
 				{Title: "Surface reply-worthy emails"},
-			}); err == nil && len(pl.Steps) >= 3 {
+			})
+		if err != nil {
+			// Don't swallow it — a silent create failure is why a running triage
+			// card had no step timeline. Log loud; the run still proceeds.
+			log.Error("inbox triage: step plan create failed; running without a step timeline", "err", err)
+		} else if len(pl.Steps) >= 3 {
 			sum.SessionID = sid
 			s1, s2, s3 = pl.Steps[0].ID, pl.Steps[1].ID, pl.Steps[2].ID
 		}
@@ -154,6 +169,9 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	decisions := d.classify(ctx, emails)
 	if len(decisions) == 0 {
 		mark(s2, plan.StepFailed, "The model didn't return a usable decision — surfaced nothing rather than guess.")
+		// Close out the last step so the plan reaches a terminal state (failed)
+		// instead of lingering 'paused' until the next run sweeps it.
+		mark(s3, plan.StepSkipped, "Skipped — nothing to surface after the decision step failed.")
 		return sum, fmt.Errorf("classify returned no decisions")
 	}
 	needReply := 0

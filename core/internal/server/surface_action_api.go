@@ -80,6 +80,22 @@ func (s *Server) handleSurfaceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Persist the sent reply text deterministically the moment Send is tapped —
+	// a mechanic, not LLM prose (Rule #1b). This is what the viewer renders as a
+	// read-only "Response" section, and because it lives in metadata it survives
+	// refresh and shows on a second device. The agent turn below still performs
+	// the real Gmail send and marks the item done.
+	if req.ActionID == "send_reply" {
+		if txt := strings.TrimSpace(req.DraftText); txt != "" {
+			_ = store.Update(r.Context(), it.ID, surface.Patch{
+				MetadataMerge: map[string]any{
+					"sent_reply": txt,
+					"sent_at":    time.Now().UTC().Format(time.RFC3339),
+				},
+			})
+		}
+	}
+
 	prompt := buildSurfaceActionPrompt(it, action, req.DraftText)
 	label := action.Label
 	if it.Title != "" {

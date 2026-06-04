@@ -201,6 +201,10 @@ type FollowUp struct {
 	Summary    string    `json:"summary,omitempty"`
 	ThreadURL  string    `json:"threadUrl,omitempty"`
 	Draft      string    `json:"draft,omitempty"`
+	// SentReply is the exact reply text the boss sent (persisted to metadata by
+	// the send_reply action the moment Send is tapped). When present the viewer
+	// renders a read-only "Response" section instead of the editable draft box.
+	SentReply  string    `json:"sentReply,omitempty"`
 	Unread     bool      `json:"unread"`
 	ReceivedAt time.Time `json:"receivedAt"`
 	// Origin discriminates which table this row came from so the dismiss
@@ -782,6 +786,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		if len(metaRaw) > 0 {
 			_ = json.Unmarshal(metaRaw, &f.Metadata)
 		}
+		f.SentReply = strFromMeta(f.Metadata, "sent_reply")
 		f.Account = displayAccount(f.Account, labels)
 		out = append(out, f)
 	}
@@ -857,6 +862,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 			Summary:    body,
 			ThreadURL:  firstNonEmpty(url, strFromMeta(meta, "thread_url", "url")),
 			Draft:      strFromMeta(meta, "draft"),
+			SentReply:  strFromMeta(meta, "sent_reply"),
 			Unread:     true,
 			ReceivedAt: createdAt,
 			Origin:     "surface",

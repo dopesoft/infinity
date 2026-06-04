@@ -783,7 +783,7 @@ function ViewerActions({
 
 function FollowupFooterActions({ followup }: { followup: FollowUp }) {
   const actions = followup.actions ?? [];
-  const { running } = useSurfaceActionActivity(followup.id);
+  const { running, runningLabel } = useSurfaceActionActivity(followup.id);
   const [firing, setFiring] = React.useState<string | null>(null);
 
   if (actions.length === 0) return null;
@@ -797,7 +797,10 @@ function FollowupFooterActions({ followup }: { followup: FollowUp }) {
             : action.style === "danger"
               ? "destructive"
               : "outline";
-        const pending = running || firing === action.id;
+        // Spin ONLY for this action: while we POST it (firing) or while the
+        // in-flight run is this action (runningLabel match). A send_reply run no
+        // longer spins Draft/Archive/Snooze.
+        const pending = firing === action.id || (running && runningLabel === action.label);
         return (
           <Button
             key={action.id}
@@ -1583,6 +1586,12 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   const plain = (text ?? "").trim() || pollBody;
   const actionActivity = useSurfaceActionActivity(f.id);
 
+  // Once a reply is sent, the editable draft box becomes a read-only "Response".
+  // f.sentReply is the durable server-persisted source (survives refresh/device);
+  // optimisticSent flips the in-modal view instantly on a successful send POST.
+  const [optimisticSent, setOptimisticSent] = React.useState("");
+  const sentReply = (f.sentReply ?? "").trim() || optimisticSent.trim();
+
   return (
     <div className="space-y-1 pt-3">
       {/* Source · account · time + triage chips */}
@@ -1641,13 +1650,18 @@ function FollowUpBody({ f }: { f: FollowUp }) {
         </ModalSection>
       ) : null}
 
-      <DraftReplyPanel
-        itemId={f.id}
-        draft={f.draft}
-        streamedText={actionActivity.text}
-        running={actionActivity.running}
-        error={actionActivity.error}
-      />
+      {sentReply ? (
+        <SentReplySection text={sentReply} source={f.source} />
+      ) : (
+        <DraftReplyPanel
+          itemId={f.id}
+          draft={f.draft}
+          streamedText={actionActivity.text}
+          running={actionActivity.running}
+          error={actionActivity.error}
+          onSent={(t) => setOptimisticSent(t)}
+        />
+      )}
 
       {/* Message - the real email, rendered as HTML when available. */}
       <ModalSection
@@ -1740,6 +1754,10 @@ function metaStr(m: Record<string, unknown> | undefined, ...keys: string[]): str
 
 function useSurfaceActionActivity(itemId: string): {
   running: boolean;
+  // The action label of the run currently in flight, with the " · <title>"
+  // suffix stripped — so a footer button can spin ONLY for its own action
+  // instead of every button sharing one item-level `running` flag.
+  runningLabel: string;
   text: string;
   error: string;
 } {
@@ -1764,11 +1782,34 @@ function useSurfaceActionActivity(itemId: string): {
   }, [sessionId, ws]);
 
   const running = latest?.status === "running";
+  // Run labels are built server-side as `${action.label} · ${item.title}`
+  // (surface_action_api.go). Strip the title suffix back to the action label so
+  // FollowupFooterActions can match a specific button to the in-flight run.
+  const runningLabel =
+    running && latest?.label ? latest.label.split(" · ")[0].trim() : "";
   return {
     running,
+    runningLabel,
     text: text.trim(),
     error: error || (latest?.status === "error" ? latest.error || "Action failed." : ""),
   };
+}
+
+// SentReplySection - the read-only "Response" the draft box becomes once a reply
+// is sent. Styled like the "Message" section (ModalSection + ModalPre) but
+// success-tinted so it reads as "this is what you sent back", sitting above the
+// incoming Message exactly where the draft box was.
+function SentReplySection({ text, source }: { text: string; source: string }) {
+  return (
+    <ModalSection
+      label="Response"
+      icon={<CheckCircle2 className="size-3.5 shrink-0 text-success" aria-hidden />}
+      meta={`you replied${source ? " · " + source : ""}`}
+      className="border-success/25 bg-success/[0.04]"
+    >
+      <ModalPre>{text}</ModalPre>
+    </ModalSection>
+  );
 }
 
 function DraftReplyPanel({
@@ -1777,12 +1818,16 @@ function DraftReplyPanel({
   streamedText,
   running,
   error,
+  onSent,
 }: {
   itemId: string;
   draft?: string;
   streamedText: string;
   running: boolean;
   error: string;
+  // Fired with the sent text on a successful send POST so the parent can flip
+  // to the read-only "Response" view immediately (server state confirms it).
+  onSent?: (text: string) => void;
 }) {
   const incoming = (draft || streamedText || "").trim();
   const [value, setValue] = React.useState(incoming);
@@ -1842,6 +1887,7 @@ function DraftReplyPanel({
               setSending(true);
               try {
                 await postSurfaceAction(itemId, "send_reply", { draftText });
+                onSent?.(draftText);
               } finally {
                 setSending(false);
               }

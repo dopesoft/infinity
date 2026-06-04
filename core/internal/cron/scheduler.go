@@ -216,7 +216,16 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// actual report. The row also drives the live spinner that persists
 		// across navigation / focus / refresh. Errors still propagate to the
 		// post-run mem_crons UPDATE below unchanged.
+		// Mint the run's session id up front and stamp it on the row at BEGIN
+		// (not finish). A plan-producing executor uses this same id for its
+		// mem_plans row, so while the job runs the board can fold run + plan into
+		// one live step-timeline card instead of showing a bare step-less card
+		// until done. The executor's own meta (with the real session id, if it
+		// differs) still lands at finish below — the jsonb merge lets the later
+		// write win for any overlapping key.
+		j.RunSessionID = uuid.NewString()
 		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
+		handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 		summary, execErr, attempts := s.executeWithRetries(ctx, j)
 		handle.SetMeta(ctx, runMetaWithAttempts(summary.Meta, attempts))
 		handle.Finish(ctx, execErr, summary.Summary)
@@ -474,7 +483,11 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	// closing the tab) AND persists the executor's narrative + meta onto the
 	// row so the manual run reads as a report, not a bare ok. See CLAUDE.md →
 	// "Server-tracked progress".
+	// Same as the scheduled path: mint + stamp the session id at begin so a
+	// manual "Run now" of a plan-producing job shows its live step timeline.
+	j.RunSessionID = uuid.NewString()
 	handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual)
+	handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 	summary, execErr, attempts := s.executeWithRetries(ctx, j)
 	handle.SetMeta(ctx, runMetaWithAttempts(summary.Meta, attempts))
 	handle.Finish(ctx, execErr, summary.Summary)
