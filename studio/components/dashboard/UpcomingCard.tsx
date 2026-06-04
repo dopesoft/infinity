@@ -4,25 +4,10 @@ import { useMemo } from "react";
 import { motion } from "framer-motion";
 import { CalendarRange, MapPin } from "lucide-react";
 import { Section } from "./Section";
+import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, startOfDay } from "@/lib/dashboard/format";
 import type { CalendarEvent, DashboardItem } from "@/lib/dashboard/types";
-
-/* Upcoming - calendar feed, 6 months out, flat list.
- *
- * No day-bucket headers, no "X days clear" gap rows - the boss wants
- * one continuous list of future events sorted by start time. Each
- * row carries its own inline date so the temporal context still
- * reads at a glance without section breaks.
- *
- * Visible height is locked to ~4 rows; the rest scroll inside the
- * card so the dashboard column never grows unbounded.
- */
-
-// Approximate height of one EventRow (px) with the typical chip row
-// rendered. 4 rows × ROW_PX defines the visible viewport before
-// scrolling kicks in.
-const ROW_PX = 82;
 
 type Row =
   | { kind: "month"; label: string }
@@ -70,38 +55,34 @@ export function UpcomingCard({
     >
       {/* noPad on Section means the month header background spans the
           full card width edge-to-edge. Individual event rows still get
-          horizontal breathing room via their own px-4 below. */}
-      <div className="overflow-hidden">
-        <div
-          className="overflow-y-auto scroll-touch"
-          style={{ maxHeight: `${ROW_PX * 4}px` }}
-        >
-          <ol className="divide-y divide-border/60">
-            {rows.length === 0 ? (
-              <li className="px-4 py-6 text-center text-xs text-muted-foreground">
-                Nothing scheduled in the next 6 months.
-              </li>
-            ) : (
-              rows.map((row, i) =>
-                row.kind === "month" ? (
-                  <li
-                    key={`m-${row.label}-${i}`}
-                    className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-4 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
-                  >
-                    {row.label}
-                  </li>
-                ) : (
-                  <EventRow
-                    key={row.event.id}
-                    e={row.event}
-                    onClick={() => onOpen({ kind: "event", data: row.event })}
-                  />
-                ),
-              )
-            )}
-          </ol>
-        </div>
-      </div>
+          horizontal breathing room via their own px-4 below.
+          max={5} = 1 month header + 4 event rows visible; rest scroll. */}
+      <ScrollList max={5}>
+        <ol className="divide-y divide-border/60">
+          {rows.length === 0 ? (
+            <li className="px-4 py-6 text-center text-xs text-muted-foreground">
+              Nothing scheduled in the next 6 months.
+            </li>
+          ) : (
+            rows.map((row, i) =>
+              row.kind === "month" ? (
+                <li
+                  key={`m-${row.label}-${i}`}
+                  className="sticky top-0 z-10 border-b border-border/60 bg-card/95 px-4 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-card/85"
+                >
+                  {row.label}
+                </li>
+              ) : (
+                <EventRow
+                  key={row.event.id}
+                  e={row.event}
+                  onClick={() => onOpen({ kind: "event", data: row.event })}
+                />
+              ),
+            )
+          )}
+        </ol>
+      </ScrollList>
     </Section>
   );
 }
