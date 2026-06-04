@@ -291,6 +291,11 @@ export function useVoice(
           flushAssistantUiQueue();
           void recordVoiceTurn({ sessionId, role: "user", text: cleanText });
         },
+        onUserTranscriptIgnored: () => {
+          clearUserTranscriptOrderTimer();
+          waitingForUserTranscriptRef.current = false;
+          flushAssistantUiQueue();
+        },
         onAssistantTranscript: (event) => {
           const cleanText = preserveVoiceTranscript(event.text);
           if (!event.isFinal) {

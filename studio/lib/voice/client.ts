@@ -42,6 +42,7 @@ export type AssistantTranscriptEvent = {
 export type VoiceCallbacks = {
   onStatus?: (s: VoiceStatus, detail?: string) => void;
   onUserTranscript?: (text: string, isFinal: boolean) => void;
+  onUserTranscriptIgnored?: () => void;
   onAssistantTranscript?: (event: AssistantTranscriptEvent) => void;
   onToolCall?: (call: VoiceToolCall) => void;
   onLevel?: (kind: "mic" | "out", level01: number) => void;
@@ -62,6 +63,7 @@ export class VoiceClient {
   private micLevelTimer: number | null = null;
   private micAnalyser: AnalyserNode | null = null;
   private audioCtx: AudioContext | null = null;
+  private lastAssistantAudioAt = 0;
   // Buffer assistant transcript deltas per response so final
   // response.output_audio_transcript.done can replace the live bubble
   // with the provider-authoritative transcript for the audio that was
@@ -306,6 +308,7 @@ export class VoiceClient {
     this.assistantBuf.clear();
     this.assistantSeq.clear();
     this.finalizedResponses.clear();
+    this.lastAssistantAudioAt = 0;
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -335,6 +338,40 @@ export class VoiceClient {
       sequence,
       source: "output_audio_transcript",
     });
+  }
+
+  private requestAssistantResponse(): void {
+    if (!this.dc || this.dc.readyState !== "open") return;
+    this.dc.send(JSON.stringify({ type: "response.create" }));
+  }
+
+  private shouldIgnoreUserTranscript(text: string): boolean {
+    const normalized = text.trim().toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
+    if (!normalized) return true;
+
+    const sinceAssistantAudio = Date.now() - this.lastAssistantAudioAt;
+    if (sinceAssistantAudio > 2500) return false;
+
+    // The broken path shows up as tiny ASR fragments produced by Jarvis's
+    // own speaker audio ("you" in the screenshot). Keep real barge-in:
+    // speech_started still interrupts the provider immediately, and any
+    // substantive transcript below will request the next response.
+    const words = normalized.split(/\s+/).filter(Boolean);
+    if (words.length === 1 && words[0].length <= 3) return true;
+
+    const echoFragments = new Set([
+      "you",
+      "your",
+      "boss",
+      "good",
+      "morning",
+      "service",
+      "systems",
+      "stable",
+    ]);
+    if (words.length <= 2 && words.every((w) => echoFragments.has(w))) return true;
+
+    return false;
   }
 
   private handleEvent(raw: unknown): void {
@@ -369,7 +406,14 @@ export class VoiceClient {
       // would replace the caption text mid-utterance and feel jittery.
       case "conversation.item.input_audio_transcription.completed": {
         const text = String((evt as { transcript?: string }).transcript ?? "").trim();
-        if (text) cb.onUserTranscript?.(text, true);
+        if (this.shouldIgnoreUserTranscript(text)) {
+          cb.onUserTranscriptIgnored?.();
+          break;
+        }
+        if (text) {
+          cb.onUserTranscript?.(text, true);
+          this.requestAssistantResponse();
+        }
         break;
       }
 
@@ -380,6 +424,7 @@ export class VoiceClient {
         const delta = String((evt as { delta?: string }).delta ?? "");
         if (!delta) break;
         this.ensureAudioPlayback();
+        this.lastAssistantAudioAt = Date.now();
         const respId = String((evt as { response_id?: string }).response_id ?? "");
         if (respId && this.finalizedResponses.has(respId)) break;
         if (respId) {
@@ -392,6 +437,7 @@ export class VoiceClient {
 
       case "response.output_audio.delta": {
         this.ensureAudioPlayback();
+        this.lastAssistantAudioAt = Date.now();
         cb.onStatus?.("assistant-speaking");
         break;
       }

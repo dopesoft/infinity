@@ -194,16 +194,15 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 				"noise_reduction": map[string]any{
 					"type": "near_field",
 				},
-				// Server-side VAD drives barge-in. `create_response: true`
-				// makes the model speak back automatically after the user
-				// stops, and `interrupt_response: true` makes a real user
-				// barge-in cancel the current response at the provider.
-				// Studio commits transcripts from output transcript events,
-				// not from speech_started, so a false VAD start does not
-				// split Jarvis into phantom bubbles.
+				// Server-side VAD drives barge-in. Keep
+				// `interrupt_response: true` so Kai can interrupt Jarvis, but
+				// set `create_response: false` so a false VAD stop from
+				// speaker echo cannot make the model answer itself. Studio
+				// sends response.create only after a real completed user
+				// transcript passes echo filtering.
 				"turn_detection": map[string]any{
 					"type":                "server_vad",
-					"create_response":     true,
+					"create_response":     false,
 					"interrupt_response":  true,
 					"threshold":           0.65,
 					"prefix_padding_ms":   300,

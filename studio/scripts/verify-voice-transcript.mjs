@@ -5,9 +5,11 @@ import vm from "node:vm";
 const voiceHookPath = resolve(new URL("..", import.meta.url).pathname, "lib/voice/use-voice.ts");
 const voiceClientPath = resolve(new URL("..", import.meta.url).pathname, "lib/voice/client.ts");
 const chatHookPath = resolve(new URL("..", import.meta.url).pathname, "hooks/useChat.ts");
+const realtimePath = resolve(new URL("..", import.meta.url).pathname, "../core/internal/voice/realtime.go");
 const source = readFileSync(voiceHookPath, "utf8");
 const clientSource = readFileSync(voiceClientPath, "utf8");
 const chatSource = readFileSync(chatHookPath, "utf8");
+const realtimeSource = readFileSync(realtimePath, "utf8");
 const match = source.match(/function preserveVoiceTranscript\(text: string\): string \{\n([\s\S]*?)\n\}/);
 
 if (!match) {
@@ -48,6 +50,9 @@ const requiredSnippets = [
   'if (next[i].voiceResponseId === event.responseId) return next',
   'private finalizedResponses: Set<string> = new Set();',
   'this.finalizedResponses.has(respId)',
+  'onUserTranscriptIgnored?: () => void',
+  'this.requestAssistantResponse();',
+  'onUserTranscriptIgnored: () =>',
 ];
 
 for (const snippet of requiredSnippets) {
@@ -62,6 +67,12 @@ if (!speechStartedCase) {
 }
 if (speechStartedCase[1].includes('emitAssistantTranscript') || speechStartedCase[1].includes('assistantBuf.clear')) {
   throw new Error('speech_started still finalizes or clears assistant transcript buffers');
+}
+if (!realtimeSource.includes('"create_response":     false') || !realtimeSource.includes('"interrupt_response":  true')) {
+  throw new Error('Realtime VAD must keep barge-in enabled but gate automatic responses in the browser');
+}
+if (clientSource.includes('suppressMicDuringAssistant') || clientSource.includes('assistantMicSuppressed')) {
+  throw new Error('voice client still suppresses the mic during assistant speech');
 }
 
 function applyVoiceEvent(messages, event) {
