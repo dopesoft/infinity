@@ -12,7 +12,56 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/surface"
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
+
+// emailActionScope returns the tool allowlist a boss-initiated email action's
+// agent turn is locked to, plus the send tools to pre-approve for the session.
+//
+// This is the MECHANIC behind two boss complaints (Rule #1b — never trust the
+// gpt-5.x brain to "just not" do something via prose):
+//   - It freelanced GMAIL_DELETE_MESSAGE while sending a reply. Tool-scoping the
+//     turn makes delete/trash physically invisible, so it CAN'T.
+//   - It re-prompted Trust for every Gmail verb even though the boss had already
+//     tapped Send. The send tools are returned in `preapprove` so the handler can
+//     record the consent up front (the tap IS the approval).
+//
+// Empty allow → no scope (the item isn't a known email action; behave as before).
+func emailActionScope(actionID string) (allow []string, preapprove []string) {
+	// Reads every reply/draft turn legitimately needs to resolve the thread.
+	reads := []string{
+		"composio__GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
+		"composio__GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+		"composio__GMAIL_LIST_THREADS",
+		"surface_update",
+		"surface_list",
+	}
+	switch actionID {
+	case "send_reply":
+		send := []string{
+			"composio__GMAIL_REPLY_TO_THREAD",
+			"composio__GMAIL_SEND_DRAFT",
+			"composio__GMAIL_SEND_EMAIL",
+			"composio__GMAIL_LIST_DRAFTS",
+		}
+		return append(send, reads...), send
+	case "draft_reply":
+		// Drafts are non-destructive (ComposioGate already ungates them), so no
+		// pre-approval needed — just keep the brain from wandering into deletes.
+		return append([]string{"composio__GMAIL_CREATE_EMAIL_DRAFT"}, reads...), nil
+	case "archive":
+		// Archive = drop the INBOX label. NEVER delete/trash.
+		return append([]string{
+			"composio__GMAIL_MODIFY_THREAD_LABELS",
+			"composio__GMAIL_REMOVE_LABEL",
+			"composio__GMAIL_ADD_LABEL_TO_EMAIL",
+		}, reads...), nil
+	case "snooze":
+		return []string{"surface_update"}, nil
+	default:
+		return nil, nil
+	}
+}
 
 // handleSurfaceAction is the SURFACE RETURN-PATH endpoint. When the boss taps
 // an action button on a dashboard card, Studio POSTs {id, action_id} here. We
@@ -103,10 +152,28 @@ func (s *Server) handleSurfaceAction(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := "surface-action-" + it.ID
 
+	// Lock this boss-initiated turn to a small, safe allowlist for email actions
+	// (no delete/trash — the brain freelanced GMAIL_DELETE_MESSAGE mid-reply), and
+	// pre-approve the send tools so the boss isn't re-prompted for a send he
+	// already tapped. Both are MECHANICS, not prose the model can drop (Rule #1b).
+	var scopeAllow, preapprove []string
+	if isEmailSurfaceItem(it) {
+		scopeAllow, preapprove = emailActionScope(req.ActionID)
+		if len(scopeAllow) > 0 {
+			tools.RegisterToolScopeForSession(sessionID, scopeAllow)
+		}
+		if len(preapprove) > 0 && s.trust != nil {
+			s.trust.PreApproveTools(r.Context(), sessionID, preapprove)
+		}
+	}
+
 	// Fire in the background; the mem_runs row + realtime carry progress to
 	// the UI. We intentionally do NOT block the HTTP response on the agent
 	// turn - it can take minutes, and the client watches via useRuns().
 	go func() {
+		if len(scopeAllow) > 0 {
+			defer tools.UnregisterToolScopeForSession(sessionID)
+		}
 		_ = runs.Track(context.Background(), runs.KindSurfaceAction, it.ID, label, runs.SourceAgent, func(ctx context.Context) error {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()

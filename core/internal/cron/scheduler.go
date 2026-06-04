@@ -224,6 +224,12 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// differs) still lands at finish below — the jsonb merge lets the later
 		// write win for any overlapping key.
 		j.RunSessionID = uuid.NewString()
+		// The session id must exist in mem_sessions BEFORE any executor writes a
+		// mem_plans row keyed on it — mem_plans.session_id is a FK to
+		// mem_sessions, so a bare minted uuid makes plan.Create fail (SQLSTATE
+		// 23503) and the step-timeline card silently never appears. Book the row
+		// here, once, for every fire.
+		s.ensureSession(ctx, j.RunSessionID)
 		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
 		handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 		summary, execErr, attempts := s.executeWithRetries(ctx, j)
@@ -298,6 +304,26 @@ func runMetaWithAttempts(meta map[string]any, attempts int) map[string]any {
 	}
 	out["attempts"] = attempts
 	return out
+}
+
+// ensureSession books a mem_sessions row for the run's minted session id so any
+// executor that writes a session-keyed artifact (mem_plans, mem_turns, …) doesn't
+// trip a foreign-key violation. mem_plans.session_id REFERENCES mem_sessions(id),
+// so without this the inbox-triage step plan (and any future plan-producing
+// system task) fails to insert and the live step-timeline card never shows.
+// Best-effort + idempotent (ON CONFLICT DO NOTHING); a failure here never blocks
+// the fire — the executor just falls back to a NULL/own session as before.
+func (s *Scheduler) ensureSession(ctx context.Context, id string) {
+	if s == nil || s.pool == nil || id == "" {
+		return
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO mem_sessions (id, kind, started_at)
+		VALUES ($1::uuid, 'cron', NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, id); err != nil {
+		log.Printf("cron: ensureSession %s: %v", id, err)
+	}
 }
 
 // cronInFlight reports whether a run of this cron is still executing, so the
@@ -486,6 +512,7 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	// Same as the scheduled path: mint + stamp the session id at begin so a
 	// manual "Run now" of a plan-producing job shows its live step timeline.
 	j.RunSessionID = uuid.NewString()
+	s.ensureSession(ctx, j.RunSessionID) // FK: mem_plans.session_id → mem_sessions (see makeFireFn)
 	handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual)
 	handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 	summary, execErr, attempts := s.executeWithRetries(ctx, j)

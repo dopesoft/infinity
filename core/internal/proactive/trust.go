@@ -340,6 +340,39 @@ func (s *TrustStore) ConsumeApprovedForTool(ctx context.Context, sessionID, tool
 	return true, nil
 }
 
+// PreApproveTools records boss-consented approvals for the given tools scoped to
+// a session, so ComposioGate.HasRecentApprovalForTool passes WITHOUT queuing a
+// fresh Trust prompt. Used when the boss EXPLICITLY initiated the action in the
+// UI (e.g. tapped "Send reply" with text he wrote) — that tap IS the approval, so
+// re-prompting per Gmail verb is redundant friction the boss has called out.
+// Bounded + safe: the rows are scoped to this one session id, and the same
+// surface-action turn is tool-scoped to a small send/draft/update allowlist, so
+// nothing destructive can ride this consent. Best-effort; never blocks the send.
+func (s *TrustStore) PreApproveTools(ctx context.Context, sessionID string, tools []string) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return
+	}
+	for _, t := range tools {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		spec, _ := json.Marshal(map[string]any{
+			"tool": t, "session_id": sessionID, "preapproved": true,
+		})
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO mem_trust_contracts
+			  (id, title, risk_level, source, action_spec, reasoning,
+			   cited_memory_ids, risk_assessment, preview, status, decided_at)
+			VALUES ($1::uuid, $2, 'high', 'surface_action_preapprove', $3::jsonb, $4,
+			   '{}'::uuid[], '{}'::jsonb, '', 'approved', NOW())
+		`, uuid.NewString(), "Boss-initiated action (pre-approved)", string(spec),
+			"Boss tapped this action in Studio; that tap is the approval."); err != nil {
+			log.Printf("trust.preapprove: %s session=%s err=%v", t, sessionID, err)
+		}
+	}
+}
+
 func (s *TrustStore) Decide(ctx context.Context, id, decision, note string) error {
 	if s == nil || s.pool == nil {
 		return nil
