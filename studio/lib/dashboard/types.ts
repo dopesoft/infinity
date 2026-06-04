@@ -35,6 +35,7 @@ export type Pursuit = {
 export type Todo = {
   id: string;
   title: string;
+  body?: string;
   done: boolean;
   dueAt?: string; // ISO
   priority?: "low" | "med" | "high";

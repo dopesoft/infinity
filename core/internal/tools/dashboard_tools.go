@@ -57,7 +57,7 @@ type taskCreate struct{ pool *pgxpool.Pool }
 
 func (t *taskCreate) Name() string { return "task_create" }
 func (t *taskCreate) Description() string {
-	return "Create a todo on the dashboard. Source is set to 'agent' so the boss can see Jarvis filed it. Returns the new task id."
+	return "Create a personal reminder/todo on the boss's dashboard (mem_tasks), e.g. benefits/open enrollment, bills, errands, follow-ups, or anything the boss asked to remember. Source is set to 'agent' so the boss can see Jarvis filed it. Use todo_write only for a live multi-step work checklist/plan. If the boss gives a date like 'June 10', convert it to an explicit YYYY-MM-DD date for the current year unless they specify another year. Returns the new task id."
 }
 func (t *taskCreate) Schema() map[string]any {
 	return map[string]any{
@@ -66,7 +66,7 @@ func (t *taskCreate) Schema() map[string]any {
 			"title":    map[string]any{"type": "string", "description": "Short imperative ('Call insurance about claim')."},
 			"body":     map[string]any{"type": "string", "description": "Optional notes."},
 			"priority": map[string]any{"type": "string", "enum": []string{"low", "med", "high"}, "default": "med"},
-			"due_at":   map[string]any{"type": "string", "description": "ISO 8601 timestamp. Optional."},
+			"due_at":   map[string]any{"type": "string", "description": "Optional deadline as RFC3339 or YYYY-MM-DD. For bare spoken dates, use an explicit date like 2026-06-10; never invent a placeholder date."},
 		},
 		"required": []string{"title"},
 	}
@@ -78,9 +78,12 @@ func (t *taskCreate) Execute(ctx context.Context, in map[string]any) (string, er
 	}
 	priority := strDefault(in, "priority", "med")
 	body := strString(in, "body")
-	dueAt, _ := parseTime(in["due_at"])
+	dueAt, err := parseOptionalTime(in["due_at"])
+	if err != nil {
+		return "", err
+	}
 	id := uuid.New()
-	_, err := t.pool.Exec(ctx, `
+	_, err = t.pool.Exec(ctx, `
 		INSERT INTO mem_tasks (id, title, body, source, priority, status, due_at, created_at, updated_at)
 		VALUES ($1, $2, $3, 'agent', $4, 'open', $5, NOW(), NOW())
 	`, id, title, body, priority, dueAt)
@@ -96,7 +99,7 @@ type taskUpdate struct{ pool *pgxpool.Pool }
 
 func (t *taskUpdate) Name() string { return "task_update" }
 func (t *taskUpdate) Description() string {
-	return "Update fields on a todo by id (title/body/priority/due_at/status). Only non-empty fields are applied."
+	return "Update fields on a personal dashboard todo by id (title/body/priority/due_at/status). Use task_list before updating when you do not know the id. Omitted fields are unchanged; due_at='' clears the deadline; non-empty due_at must be RFC3339 or YYYY-MM-DD. Use this for correcting reminder metadata like an open-enrollment due date."
 }
 func (t *taskUpdate) Schema() map[string]any {
 	return map[string]any{
@@ -106,7 +109,7 @@ func (t *taskUpdate) Schema() map[string]any {
 			"title":    map[string]any{"type": "string"},
 			"body":     map[string]any{"type": "string"},
 			"priority": map[string]any{"type": "string", "enum": []string{"low", "med", "high"}},
-			"due_at":   map[string]any{"type": "string"},
+			"due_at":   map[string]any{"type": "string", "description": "RFC3339 or YYYY-MM-DD. Pass an empty string to clear the due date."},
 			"status":   map[string]any{"type": "string", "enum": []string{"open", "done", "dropped"}},
 		},
 		"required": []string{"id"},
@@ -122,6 +125,7 @@ func (t *taskUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 	var (
 		title, body, priority, status *string
 		dueAt                         *time.Time
+		setDueAt                      bool
 	)
 	if v, ok := in["title"].(string); ok && v != "" {
 		title = &v
@@ -135,12 +139,21 @@ func (t *taskUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 	if v, ok := in["status"].(string); ok && v != "" {
 		status = &v
 	}
-	if d, ok := parseTime(in["due_at"]); ok {
-		dueAt = &d
+	if raw, exists := in["due_at"]; exists {
+		d, err := parseOptionalTime(raw)
+		if err != nil {
+			return "", err
+		}
+		dueAt = d
+		setDueAt = true
 	}
 	doneAtClause := "done_at"
-	if status != nil && *status == "done" {
-		doneAtClause = "COALESCE(done_at, NOW())"
+	if status != nil {
+		if *status == "done" {
+			doneAtClause = "COALESCE(done_at, NOW())"
+		} else {
+			doneAtClause = "NULL"
+		}
 	}
 	_, err := t.pool.Exec(ctx, `
 		UPDATE mem_tasks
@@ -148,11 +161,11 @@ func (t *taskUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 		       body     = COALESCE($3, body),
 		       priority = COALESCE($4, priority),
 		       status   = COALESCE($5, status),
-		       due_at   = COALESCE($6, due_at),
+		       due_at   = CASE WHEN $7 THEN $6 ELSE due_at END,
 		       done_at  = `+doneAtClause+`,
 		       updated_at = NOW()
 		 WHERE id = $1
-	`, id, title, body, priority, status, dueAt)
+	`, id, title, body, priority, status, dueAt, setDueAt)
 	if err != nil {
 		return "", err
 	}
@@ -714,16 +727,25 @@ func numFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-func parseTime(v any) (time.Time, bool) {
+func parseOptionalTime(v any) (*time.Time, error) {
 	s, ok := v.(string)
 	if !ok || s == "" {
-		return time.Time{}, false
+		return nil, nil
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, true
+		return &t, nil
 	}
 	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t, true
+		d := time.Date(t.Year(), t.Month(), t.Day(), 12, 0, 0, 0, time.UTC)
+		return &d, nil
 	}
-	return time.Time{}, false
+	return nil, fmt.Errorf("bad due_at %q: use RFC3339 or YYYY-MM-DD", s)
+}
+
+func parseTime(v any) (time.Time, bool) {
+	t, err := parseOptionalTime(v)
+	if err != nil || t == nil {
+		return time.Time{}, false
+	}
+	return *t, true
 }

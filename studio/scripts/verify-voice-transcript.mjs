@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 import vm from "node:vm";
 
 const voiceHookPath = resolve(new URL("..", import.meta.url).pathname, "lib/voice/use-voice.ts");
+const voiceClientPath = resolve(new URL("..", import.meta.url).pathname, "lib/voice/client.ts");
 const chatHookPath = resolve(new URL("..", import.meta.url).pathname, "hooks/useChat.ts");
 const source = readFileSync(voiceHookPath, "utf8");
+const clientSource = readFileSync(voiceClientPath, "utf8");
 const chatSource = readFileSync(chatHookPath, "utf8");
 const match = source.match(/function preserveVoiceTranscript\(text: string\): string \{\n([\s\S]*?)\n\}/);
 
@@ -44,12 +46,22 @@ const requiredSnippets = [
   '(pending.voiceLastSequence ?? 0) >= event.sequence',
   'text: event.isFinal ? (finalText || pending.text) : pending.text + text',
   'if (next[i].voiceResponseId === event.responseId) return next',
+  'private finalizedResponses: Set<string> = new Set();',
+  'this.finalizedResponses.has(respId)',
 ];
 
 for (const snippet of requiredSnippets) {
-  if (!chatSource.includes(snippet) && !source.includes(snippet)) {
+  if (!chatSource.includes(snippet) && !source.includes(snippet) && !clientSource.includes(snippet)) {
     throw new Error(`missing voice transcript pipeline guard: ${snippet}`);
   }
+}
+
+const speechStartedCase = clientSource.match(/case "input_audio_buffer\.speech_started": \{([\s\S]*?)break;\n      \}/);
+if (!speechStartedCase) {
+  throw new Error('speech_started handler not found');
+}
+if (speechStartedCase[1].includes('emitAssistantTranscript') || speechStartedCase[1].includes('assistantBuf.clear')) {
+  throw new Error('speech_started still finalizes or clears assistant transcript buffers');
 }
 
 function applyVoiceEvent(messages, event) {
@@ -80,6 +92,11 @@ function applyVoiceEvent(messages, event) {
       };
       return next;
     }
+  }
+  for (let i = next.length - 1, seen = 0; i >= 0 && seen < 8; i--) {
+    if (next[i].role !== 'assistant') continue;
+    seen++;
+    if (next[i].voiceResponseId === event.responseId) return next;
   }
   next.push({
     role: 'assistant',

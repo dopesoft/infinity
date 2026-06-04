@@ -26,6 +26,7 @@ import {
   MapPin,
   MessageCircle,
   Paperclip,
+  Pencil,
   Quote,
   Repeat,
   Send,
@@ -57,6 +58,7 @@ import {
 } from "@/components/ui/modal-content";
 import { Chip, classificationTone, intentTone, modeTone, type ChipTone } from "./Chip";
 import { PlanTimeline } from "./PlanTimeline";
+import { EditTodoModal } from "./EditTodoModal";
 import { cn } from "@/lib/utils";
 import { clockTime, dayLabel, formatDuration, fullDateTime, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
@@ -110,22 +112,41 @@ export function ObjectViewer({
   // comfortably AND doesn't grow/shrink as the lazy email body loads. Other
   // kinds keep the snug, content-sized `lg` modal.
   const isFollowup = item?.kind === "followup";
+  const [editingTodo, setEditingTodo] = React.useState<Todo | null>(null);
   return (
-    <ResponsiveModal
-      open={open}
-      onOpenChange={(o) => (!o ? onClose() : null)}
-      size={isFollowup ? "xl" : "lg"}
-      desktopHeight={isFollowup ? "tall" : "auto"}
-      title={item ? getViewerTitle(item) : "Item"}
-      description={item ? getViewerKindLabel(item) : undefined}
-      header={item ? <ItemHeader item={item} /> : undefined}
-      footer={item && hasFooter ? <ViewerActions item={item} onResolved={onResolved} onClose={onClose} /> : undefined}
-      footerClassName={footerOverride}
-    >
-      <AnimatePresence mode="wait">
-        {item ? <ViewerBody key={getViewerKey(item)} item={item} /> : null}
-      </AnimatePresence>
-    </ResponsiveModal>
+    <>
+      <ResponsiveModal
+        open={open}
+        onOpenChange={(o) => (!o ? onClose() : null)}
+        size={isFollowup ? "xl" : "lg"}
+        desktopHeight={isFollowup ? "tall" : "auto"}
+        title={item ? getViewerTitle(item) : "Item"}
+        description={item ? getViewerKindLabel(item) : undefined}
+        header={item ? <ItemHeader item={item} /> : undefined}
+        footer={
+          item && hasFooter ? (
+            <ViewerActions
+              item={item}
+              onResolved={onResolved}
+              onClose={onClose}
+              onEditTodo={setEditingTodo}
+            />
+          ) : undefined
+        }
+        footerClassName={footerOverride}
+      >
+        <AnimatePresence mode="wait">
+          {item ? <ViewerBody key={getViewerKey(item)} item={item} /> : null}
+        </AnimatePresence>
+      </ResponsiveModal>
+      <EditTodoModal
+        todo={editingTodo}
+        open={!!editingTodo}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setEditingTodo(null);
+        }}
+      />
+    </>
   );
 }
 
@@ -397,10 +418,12 @@ function ViewerActions({
   item,
   onResolved,
   onClose,
+  onEditTodo,
 }: {
   item: DashboardItem;
   onResolved?: (item: DashboardItem) => void;
   onClose?: () => void;
+  onEditTodo?: (todo: Todo) => void;
 }) {
   // Every dismiss/cancel/deny should close the modal immediately, not just
   // remove the row underneath it (which left the modal open over a now-empty
@@ -670,6 +693,22 @@ function ViewerActions({
       const ev = item.data;
       if (!ev.responseStatus) return null;
       return <RsvpButtons event={ev} onResolved={onResolved} item={item} />;
+    }
+    if (item.kind === "todo") {
+      return (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 gap-1.5"
+          onClick={() => {
+            onEditTodo?.(item.data);
+            onClose?.();
+          }}
+        >
+          <Pencil className="size-3.5" aria-hidden />
+          Edit
+        </Button>
+      );
     }
     if (item.kind === "work") {
       const w = item.data;
@@ -1081,12 +1120,17 @@ function TodoBody({ t }: { t: Todo }) {
             className="font-mono uppercase tracking-wider text-muted-foreground"
             suppressHydrationWarning
           >
-            due {dayLabel(t.dueAt).toLowerCase()} · {clockTime(t.dueAt)}
+            due {todoDueLabel(t.dueAt).toLowerCase()}
           </span>
         ) : null}
       </div>
       <ModalSection>
         <p className="text-foreground/85">{t.title}</p>
+        {t.body ? (
+          <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-muted-foreground">
+            {t.body}
+          </p>
+        ) : null}
         {t.source === "agent" ? (
           <p className="mt-2 text-[12px] text-muted-foreground">
             Jarvis created this todo based on your recent activity. Discuss to ask why.
@@ -1095,6 +1139,19 @@ function TodoBody({ t }: { t: Todo }) {
       </ModalSection>
     </div>
   );
+}
+
+function todoDueLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return dayLabel(iso);
+  const relative = dayLabel(iso);
+  if (["Today", "Tomorrow", "Yesterday"].includes(relative)) return relative;
+  return d.toLocaleDateString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 // ── CalendarEvent ─────────────────────────────────────────────────────────

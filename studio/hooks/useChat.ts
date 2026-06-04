@@ -1339,11 +1339,15 @@ export function useChat() {
           return next;
         }
       }
+      for (let i = next.length - 1, seen = 0; i >= 0 && seen < 8; i--) {
+        if (next[i].role !== "assistant") continue;
+        seen++;
+        if (next[i].voiceResponseId === event.responseId) return next;
+      }
       if (event.isFinal) {
         for (let i = next.length - 1, seen = 0; i >= 0 && seen < 8; i--) {
           if (next[i].role !== "assistant") continue;
           seen++;
-          if (next[i].voiceResponseId === event.responseId) return next;
           if (isDuplicateVoiceAssistantText(next[i].text, finalText)) return next;
         }
       }

@@ -188,19 +188,26 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 		"output_modalities": []string{"audio"},
 		"audio": map[string]any{
 			"input": map[string]any{
-				// Server-side VAD drives barge-in: the browser pauses
-				// the audio element on
-				// `input_audio_buffer.speech_started` and the model
-				// truncates its own response. `create_response: true`
-				// makes the model speak back automatically after the
-				// user stops, so we don't have to issue manual
-				// response.create from the client.
+				// Noise reduction runs before VAD/turn detection. Near-field
+				// matches the browser mic use case and reduces false
+				// speech_started events from speaker echo.
+				"noise_reduction": map[string]any{
+					"type": "near_field",
+				},
+				// Server-side VAD drives barge-in. `create_response: true`
+				// makes the model speak back automatically after the user
+				// stops, and `interrupt_response: true` makes a real user
+				// barge-in cancel the current response at the provider.
+				// Studio commits transcripts from output transcript events,
+				// not from speech_started, so a false VAD start does not
+				// split Jarvis into phantom bubbles.
 				"turn_detection": map[string]any{
 					"type":                "server_vad",
 					"create_response":     true,
-					"threshold":           0.5,
+					"interrupt_response":  true,
+					"threshold":           0.65,
 					"prefix_padding_ms":   300,
-					"silence_duration_ms": 500,
+					"silence_duration_ms": 700,
 				},
 				// Captions: ask for live transcription so Studio can
 				// render the rolling caption strip.

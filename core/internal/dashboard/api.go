@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	htmlpkg "html"
 	"log/slog"
 	"net/http"
@@ -198,9 +199,9 @@ type FollowUp struct {
 	// rendered in the ObjectViewer's "Context" pane ABOVE the email. For
 	// surface-origin rows this is the agent-authored body; connector-poll
 	// rows have none (raw mail only) unless a recipe attached one.
-	Summary    string    `json:"summary,omitempty"`
-	ThreadURL  string    `json:"threadUrl,omitempty"`
-	Draft      string    `json:"draft,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	ThreadURL string `json:"threadUrl,omitempty"`
+	Draft     string `json:"draft,omitempty"`
 	// SentReply is the exact reply text the boss sent (persisted to metadata by
 	// the send_reply action the moment Send is tapped). When present the viewer
 	// renders a read-only "Response" section instead of the editable draft box.
@@ -1785,11 +1786,11 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			}
 			fa := lastRunAt
 			item := WorkItem{
-				ID:         "cron-d-" + id,
-				Kind:       "cron_run",
-				Title:      humanizeName(name),
-				Subtitle:   sub,
-				Summary:    summary,
+				ID:          "cron-d-" + id,
+				Kind:        "cron_run",
+				Title:       humanizeName(name),
+				Subtitle:    sub,
+				Summary:     summary,
 				Engine:      "Schedule",
 				Ref:         name,
 				Column:      "done",
@@ -2193,21 +2194,22 @@ func (a *API) handleFollowupDismiss(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseDueAt accepts an RFC3339 timestamp or a bare YYYY-MM-DD date (the
-// shape an <input type="date"> produces) and returns a *time.Time, or nil
-// when the field is empty/unparseable. Mirrors the tools-package parser so
-// the UI and the agent's task_* tools accept the same date shapes.
-func parseDueAt(s string) *time.Time {
+// shape an <input type="date"> produces). Empty string is a deliberate
+// "no date" value; malformed non-empty strings fail loudly so a bad UI/tool
+// payload never silently preserves or drops the wrong deadline.
+func parseDueAt(s string) (*time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil
+		return nil, nil
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return &t
+		return &t, nil
 	}
 	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return &t
+		d := time.Date(t.Year(), t.Month(), t.Day(), 12, 0, 0, 0, time.UTC)
+		return &d, nil
 	}
-	return nil
+	return nil, fmt.Errorf("bad due_at: use RFC3339 or YYYY-MM-DD")
 }
 
 // normalizePriority clamps the priority field to the mem_tasks enum
@@ -2254,11 +2256,16 @@ func (a *API) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "title required")
 		return
 	}
+	dueAt, err := parseDueAt(body.DueAt)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	id := uuid.New()
 	if _, err := a.Pool.Exec(r.Context(), `
 		INSERT INTO mem_tasks (id, title, body, source, priority, status, due_at, created_at, updated_at)
 		VALUES ($1, $2, $3, 'manual', $4, 'open', $5, NOW(), NOW())
-	`, id, body.Title, strings.TrimSpace(body.Body), normalizePriority(body.Priority), parseDueAt(body.DueAt)); err != nil {
+	`, id, body.Title, strings.TrimSpace(body.Body), normalizePriority(body.Priority), dueAt); err != nil {
 		a.Logger.Warn("task create", "err", err)
 		writeErr(w, http.StatusInternalServerError, "create failed")
 		return
@@ -2306,6 +2313,7 @@ func (a *API) handleTaskUpdate(w http.ResponseWriter, r *http.Request) {
 	var (
 		title, bodyText, priority, status *string
 		dueAt                             *time.Time
+		setDueAt                          bool
 	)
 	if body.Title != nil && strings.TrimSpace(*body.Title) != "" {
 		v := strings.TrimSpace(*body.Title)
@@ -2330,7 +2338,13 @@ func (a *API) handleTaskUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.DueAt != nil {
-		dueAt = parseDueAt(*body.DueAt)
+		var err error
+		dueAt, err = parseDueAt(*body.DueAt)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		setDueAt = true
 	}
 
 	// done_at follows status: stamp on the first transition to done, clear
@@ -2349,11 +2363,11 @@ func (a *API) handleTaskUpdate(w http.ResponseWriter, r *http.Request) {
 		       body     = COALESCE($3, body),
 		       priority = COALESCE($4, priority),
 		       status   = COALESCE($5, status),
-		       due_at   = COALESCE($6, due_at),
+		       due_at   = CASE WHEN $7 THEN $6 ELSE due_at END,
 		       done_at  = `+doneAtClause+`,
 		       updated_at = NOW()
 		 WHERE id::text = $1
-	`, body.ID, title, bodyText, priority, status, dueAt); err != nil {
+	`, body.ID, title, bodyText, priority, status, dueAt, setDueAt); err != nil {
 		a.Logger.Warn("task update", "id", body.ID, "err", err)
 		writeErr(w, http.StatusInternalServerError, "update failed")
 		return
