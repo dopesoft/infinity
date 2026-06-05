@@ -282,7 +282,7 @@ func (s *Store) Close(ctx context.Context, mandateID string) (*Mandate, error) {
 			strings.Join(m.FailingCriteria(), "; "))
 	}
 	if m.HighStakes && m.VerifiedAt == nil {
-		return nil, errors.New("this is a high-stakes mandate — run mandate_verify first so a second model audits the result against the criteria; it can't close on your word alone")
+		return nil, errors.New("this is a high-stakes mandate — run mandate_verify first: a fresh, independent pass audits the result against the criteria; it can't close on your word alone")
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE mem_mandates SET status = 'done', updated_at = NOW() WHERE id = $1::uuid

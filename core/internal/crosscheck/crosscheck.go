@@ -1,13 +1,17 @@
-// Package crosscheck is the cross-vendor VERIFICATION pass for a Mandate.
+// Package crosscheck is the VERIFICATION pass for a Mandate.
 //
 // On the work that matters (high-stakes mandates), the agent doesn't get to
-// grade its own homework: a DIFFERENT LLM vendor than the runtime brain audits
-// the result against the mandate's binary criteria and the evidence the agent
-// claimed for each. The verdict is folded back onto the criteria (a criterion
-// the auditor rejects flips to fail) and stamped on the mandate; a passing
-// overall verdict clears the high-stakes done-gate.
+// close on its own say-so: a fresh, deliberately-skeptical pass — on the boss's
+// OWN active model (gpt-5.x / whatever is selected), with an independent
+// "you did not do this work, try to refute it" persona — audits the result
+// against the mandate's binary criteria and the evidence claimed for each. The
+// verdict is folded back onto the criteria (a rejected criterion flips to fail)
+// and stamped on the mandate; a passing overall verdict clears the high-stakes
+// done-gate.
 //
-// The vendor selection + the call + the verdict persistence are MECHANICS (this
+// This uses the SAME model the boss chose — it is not a different vendor. The
+// independence comes from a clean context + an adversarial persona, not from
+// swapping brains. The call + the verdict persistence are MECHANICS (this
 // package). Whether a mandate is high-stakes — i.e. whether this even runs — is
 // JUDGMENT, in the frame-the-mandate skill.
 package crosscheck
@@ -33,79 +37,57 @@ type CriterionVerdict struct {
 
 // Verdict is the full audit outcome.
 type Verdict struct {
-	Overall      string             `json:"overall"` // pass | fail
-	Confidence   float64            `json:"confidence"`
-	Notes        string             `json:"notes"`
-	Criteria     []CriterionVerdict `json:"criteria"`
-	Auditor      string             `json:"auditor"`       // the vendor that audited
-	SingleVendor bool               `json:"single_vendor"` // true when no alternate vendor was available
+	Overall    string             `json:"overall"` // pass | fail
+	Confidence float64            `json:"confidence"`
+	Notes      string             `json:"notes"`
+	Criteria   []CriterionVerdict `json:"criteria"`
+	Auditor    string             `json:"auditor"` // the model that audited (the boss's active model)
 }
 
 // Passed reports an overall pass.
 func (v Verdict) Passed() bool { return strings.EqualFold(v.Overall, "pass") }
 
-// Verifier runs cross-vendor audits.
+// Verifier runs verification audits on the boss's OWN active model.
 type Verifier struct {
-	reg       *llm.Registry
-	activeFn  func() string // returns the active brain's provider id
-	store     *mandate.Store
+	reg      *llm.Registry
+	activeFn func() (provider string, model string) // the currently-selected brain
+	store    *mandate.Store
 }
 
-// NewVerifier builds a Verifier. activeFn returns the currently-selected
-// provider id (e.g. from settings) so we can pick a DIFFERENT vendor to audit.
-func NewVerifier(reg *llm.Registry, store *mandate.Store, activeFn func() string) *Verifier {
+// NewVerifier builds a Verifier. activeFn returns the boss's currently-selected
+// (provider, model) — e.g. ("openai_oauth", "gpt-5.4") from settings — so the
+// audit runs on the SAME brain the boss is already paying for (his ChatGPT
+// subscription), never a different vendor and never an extra-billed API.
+func NewVerifier(reg *llm.Registry, store *mandate.Store, activeFn func() (string, string)) *Verifier {
 	return &Verifier{reg: reg, store: store, activeFn: activeFn}
 }
 
-// familyOf collapses provider ids to a vendor family so openai and openai_oauth
-// count as the same vendor (auditing OpenAI-with-OpenAI isn't a cross-check).
-func familyOf(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	switch {
-	case strings.HasPrefix(name, "openai"):
-		return "openai"
-	case strings.HasPrefix(name, "anthropic"), strings.HasPrefix(name, "claude"):
-		return "anthropic"
-	case strings.HasPrefix(name, "google"), strings.HasPrefix(name, "gemini"):
-		return "google"
-	}
-	return name
-}
-
-// pickAuditor chooses an alternate provider whose family differs from the
-// active brain. Returns (provider, name, singleVendor). singleVendor is true
-// when only the active vendor's family is available — we still audit (with an
-// adversarial persona) but flag that it wasn't truly cross-vendor.
-func (v *Verifier) pickAuditor() (llm.Provider, string, bool) {
+// pickAuditor returns the boss's active provider + model. The independence of
+// the audit comes from a clean context + an adversarial persona, NOT from
+// swapping vendors — so it always rides the selected brain and bills the same
+// way the chat does. Falls back to the registry default only if the active
+// provider can't be resolved.
+func (v *Verifier) pickAuditor() (llm.Provider, string, string) {
 	if v == nil || v.reg == nil {
-		return nil, "", false
+		return nil, "", ""
 	}
-	active := ""
+	name, model := "", ""
 	if v.activeFn != nil {
-		active = v.activeFn()
+		name, model = v.activeFn()
 	}
-	activeFamily := familyOf(active)
-	avail := v.reg.Available()
-	// First choice: a different family.
-	for _, name := range avail {
-		if familyOf(name) != activeFamily {
-			if p, ok := v.reg.Get(name); ok {
-				return p, name, false
-			}
-		}
-	}
-	// Fallback: same family (or the active provider) with an adversarial persona.
-	if active != "" {
-		if p, ok := v.reg.Get(active); ok {
-			return p, active, true
-		}
-	}
-	for _, name := range avail {
+	if name != "" {
 		if p, ok := v.reg.Get(name); ok {
-			return p, name, true
+			return p, name, model
 		}
 	}
-	return nil, "", false
+	// No usable active selection: use whatever single provider is registered,
+	// on its default model. (Shouldn't happen in normal operation.)
+	for _, n := range v.reg.Available() {
+		if p, ok := v.reg.Get(n); ok {
+			return p, n, ""
+		}
+	}
+	return nil, "", ""
 }
 
 // Verify audits a mandate. resultNarrative is the agent's optional summary of
@@ -120,22 +102,27 @@ func (v *Verifier) Verify(ctx context.Context, mandateID, resultNarrative string
 	if err != nil {
 		return Verdict{}, err
 	}
-	provider, auditor, single := v.pickAuditor()
+	provider, auditorName, auditorModel := v.pickAuditor()
 	if provider == nil {
-		return Verdict{}, errors.New("no LLM provider available to crosscheck with")
+		return Verdict{}, errors.New("no LLM provider available to verify with")
+	}
+	// Label the audit by the model when known (e.g. "gpt-5.4"), else the
+	// provider id — this is the boss's own selected brain either way.
+	auditorLabel := auditorModel
+	if auditorLabel == "" {
+		auditorLabel = auditorName
 	}
 
 	var verdict Verdict
 	handle := runs.BeginGlobal(ctx, runs.Kind("crosscheck"), mandateID,
-		fmt.Sprintf("Crosscheck: %s", trim(m.Title, 60)), runs.SourceAgent)
+		fmt.Sprintf("Verify: %s", trim(m.Title, 60)), runs.SourceAgent)
 
 	runErr := func() error {
-		system := verifySystem
-		if single {
-			system = verifySystemSingleVendor
-		}
 		prompt := buildPrompt(m, resultNarrative)
-		raw, cerr := llm.Complete(ctx, provider, "", system, prompt)
+		// Empty-string model falls back to the provider default; pass the boss's
+		// selected model explicitly so the audit uses the EXACT brain he's on
+		// (and bills the same — subscription, not a separate API).
+		raw, cerr := llm.Complete(ctx, provider, auditorModel, verifySystem, prompt)
 		if cerr != nil {
 			return cerr
 		}
@@ -143,30 +130,28 @@ func (v *Verifier) Verify(ctx context.Context, mandateID, resultNarrative string
 		if cerr != nil {
 			return cerr
 		}
-		verdict.Auditor = auditor
-		verdict.SingleVendor = single
+		verdict.Auditor = auditorLabel
 
-		// Fold per-criterion results back onto the mandate: an auditor REJECTION
-		// flips that criterion to fail (so the done-gate holds). We don't auto-
-		// promote pending→pass on the auditor's word; the agent owns claiming pass.
+		// Fold per-criterion results back onto the mandate: a REJECTION flips
+		// that criterion to fail (so the done-gate holds). We don't auto-promote
+		// pending→pass on the audit's word; the agent owns claiming pass.
 		for _, cv := range verdict.Criteria {
 			if !cv.Pass {
 				_ = v.store.CheckCriterion(ctx, mandateID, cv.ID, mandate.CritFail,
-					"crosscheck ("+auditor+"): "+cv.Note)
+					"verify: "+cv.Note)
 			}
 		}
 		_ = v.store.SetCrosscheck(ctx, mandateID, verdictToMap(verdict), verdict.Passed())
 		return nil
 	}()
 
-	summary := verdictSummary(verdict, single, runErr)
+	summary := verdictSummary(verdict, runErr)
 	if handle != nil {
 		handle.SetMeta(ctx, map[string]any{
-			"auditor":       auditor,
-			"single_vendor": single,
-			"overall":       verdict.Overall,
-			"confidence":    verdict.Confidence,
-			"notes":         verdict.Notes,
+			"auditor":    auditorLabel,
+			"overall":    verdict.Overall,
+			"confidence": verdict.Confidence,
+			"notes":      verdict.Notes,
 		})
 		handle.Finish(ctx, runErr, summary)
 	}
@@ -176,18 +161,14 @@ func (v *Verifier) Verify(ctx context.Context, mandateID, resultNarrative string
 	return verdict, nil
 }
 
-func verdictSummary(v Verdict, single bool, err error) string {
+func verdictSummary(v Verdict, err error) string {
 	if err != nil {
-		return "Crosscheck could not complete: " + err.Error()
-	}
-	tag := "cross-vendor"
-	if single {
-		tag = "single-vendor (no alternate brain available)"
+		return "Verification could not complete: " + err.Error()
 	}
 	if v.Passed() {
-		return fmt.Sprintf("Passed crosscheck (%s by %s, confidence %.0f%%).", tag, v.Auditor, v.Confidence*100)
+		return fmt.Sprintf("Passed verification (by %s, confidence %.0f%%).", v.Auditor, v.Confidence*100)
 	}
-	return fmt.Sprintf("Crosscheck FAILED (%s by %s): %s", tag, v.Auditor, trim(v.Notes, 200))
+	return fmt.Sprintf("Verification FAILED (by %s): %s", v.Auditor, trim(v.Notes, 200))
 }
 
 func verdictToMap(v Verdict) map[string]any {
@@ -197,9 +178,9 @@ func verdictToMap(v Verdict) map[string]any {
 	return m
 }
 
-const verifySystem = `You are an independent auditor. You did NOT do this work; a different AI did, and you are checking it.
+const verifySystem = `You are an independent auditor with a fresh, skeptical eye. Treat this as work someone ELSE did that you must check — do not assume it's correct because it looks plausible.
 
-You'll be given a task's DEFINITION OF DONE — a list of binary acceptance criteria — and, for each, the evidence the worker claimed. Your job: for each criterion, decide whether the evidence ACTUALLY proves it. Be strict and skeptical. "I did the step" is not proof the step worked. Missing or hand-wavy evidence is a fail.
+You'll be given a task's DEFINITION OF DONE — a list of binary acceptance criteria — and, for each, the evidence the worker claimed. For each criterion, decide whether the evidence ACTUALLY proves it. Be strict and adversarial: actively try to find a reason each criterion has NOT been met. "I did the step" is not proof the step worked. Missing or hand-wavy evidence is a fail.
 
 Return ONLY a JSON object, no prose, no code fences:
 {
@@ -210,10 +191,6 @@ Return ONLY a JSON object, no prose, no code fences:
 }
 
 overall is "pass" ONLY if every criterion genuinely passes. If any criterion's evidence doesn't hold, overall is "fail". confidence is 0..1.`
-
-const verifySystemSingleVendor = verifySystem + `
-
-(Note: you are the same vendor family as the worker — there was no alternate model available. Compensate by being EXTRA adversarial: actively try to find a reason each criterion has NOT been met.)`
 
 func buildPrompt(m *mandate.Mandate, resultNarrative string) string {
 	var b strings.Builder

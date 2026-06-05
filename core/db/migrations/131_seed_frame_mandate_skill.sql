@@ -80,9 +80,10 @@ the right place, it's been verified — not just "I did the steps".
 Set `high_stakes: true` when being wrong is expensive or hard to undo — money
 moves, something is sent or published, data is deleted, the boss is going to
 act on the result without re-checking it himself. A high-stakes mandate will
-not let you close it until you run `mandate_verify`, which has a *different* AI
-model audit your result against the criteria. That's a feature: on the work
-that matters, you don't get to grade your own homework.
+not let you close it until you run `mandate_verify`, which has a fresh,
+independent, skeptical pass — on the boss's own model — re-check your result
+against the criteria. That's a feature: on the work that matters, you don't get
+to wave your own work through.
 
 ## The loop
 

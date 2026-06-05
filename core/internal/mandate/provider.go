@@ -34,7 +34,7 @@ func (p *Provider) BuildSystemPrefix(ctx context.Context, sessionID, query strin
 	b.WriteString("<mandate>\n")
 	b.WriteString("Your definition of done for this task. You are NOT finished until every criterion below is checked off as passed (with evidence). Mark each with mandate_check the moment it's actually true; never tick one that isn't. When all pass, mandate_close — it will refuse if any criterion is still open. ")
 	if m.HighStakes {
-		b.WriteString("This is HIGH-STAKES: run mandate_verify (a second model audits your result) before you can close it. ")
+		b.WriteString("This is HIGH-STAKES: run mandate_verify (a fresh, independent pass audits your result) before you can close it. ")
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "Mandate: %s (id=%s)\n", m.Title, m.ID)

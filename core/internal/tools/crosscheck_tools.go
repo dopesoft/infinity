@@ -30,13 +30,14 @@ type mandateVerifyTool struct {
 
 func (t *mandateVerifyTool) Name() string { return "mandate_verify" }
 func (t *mandateVerifyTool) Description() string {
-	return "Crosscheck the current Mandate: a DIFFERENT AI model audits your result " +
-		"against each acceptance criterion and the evidence you recorded. Required " +
-		"before you can close a high-stakes mandate — you don't get to grade your own " +
-		"work on the things that matter. Pass an optional `result` summarizing what you " +
-		"produced; the criteria + evidence come from the mandate. Returns the verdict " +
-		"(overall pass/fail, per-criterion, the auditing vendor). A rejected criterion " +
-		"is flipped to fail, so if it fails, go fix what the auditor flagged."
+	return "Verify the current Mandate: a fresh, independent, deliberately-skeptical " +
+		"pass — on the SAME model the boss is using (no other vendor, no extra cost) — " +
+		"audits your result against each acceptance criterion and the evidence you " +
+		"recorded. Required before you can close a high-stakes mandate: you don't get " +
+		"to wave your own work through on the things that matter. Pass an optional " +
+		"`result` summarizing what you produced; the criteria + evidence come from the " +
+		"mandate. Returns the verdict (overall pass/fail, per-criterion). A rejected " +
+		"criterion is flipped to fail, so if it fails, go fix what was flagged."
 }
 func (t *mandateVerifyTool) Schema() map[string]any {
 	return map[string]any{
@@ -64,15 +65,14 @@ func (t *mandateVerifyTool) Execute(ctx context.Context, in map[string]any) (str
 		return "", err
 	}
 	out, _ := json.Marshal(map[string]any{
-		"ok":            true,
-		"mandate_id":    id,
-		"overall":       verdict.Overall,
-		"passed":        verdict.Passed(),
-		"confidence":    verdict.Confidence,
-		"auditor":       verdict.Auditor,
-		"single_vendor": verdict.SingleVendor,
-		"notes":         verdict.Notes,
-		"criteria":      verdict.Criteria,
+		"ok":         true,
+		"mandate_id": id,
+		"overall":    verdict.Overall,
+		"passed":     verdict.Passed(),
+		"confidence": verdict.Confidence,
+		"auditor":    verdict.Auditor,
+		"notes":      verdict.Notes,
+		"criteria":   verdict.Criteria,
 	})
 	return string(out), nil
 }

@@ -146,7 +146,7 @@ function MandateModal({ mandate, onClose }: { mandate: MandateDTO | null; onClos
 
           {m.high_stakes ? (
             <ModalSection
-              label="Crosscheck"
+              label="Verification"
               icon={<ClipboardCheck className="size-3.5" />}
               tone={cross?.overall === "pass" ? "success" : cross?.overall === "fail" ? "error" : "default"}
             >
@@ -154,7 +154,7 @@ function MandateModal({ mandate, onClose }: { mandate: MandateDTO | null; onClos
                 <ModalDl
                   entries={[
                     { k: "Verdict", v: cross.overall === "pass" ? "Passed" : "Failed" },
-                    { k: "Audited by", v: cross.auditor ?? "—" },
+                    { k: "Verified by", v: cross.auditor ?? "—" },
                     {
                       k: "Confidence",
                       v:
@@ -162,15 +162,12 @@ function MandateModal({ mandate, onClose }: { mandate: MandateDTO | null; onClos
                           ? `${Math.round(cross.confidence * 100)}%`
                           : "—",
                     },
-                    ...(cross.single_vendor
-                      ? [{ k: "Note", v: "single-vendor (no alternate brain available)" }]
-                      : []),
                     ...(cross.notes ? [{ k: "Notes", v: cross.notes }] : []),
                   ]}
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  High-stakes — awaiting a second-model crosscheck before this can close.
+                  High-stakes — awaiting an independent verification pass before this can close.
                 </p>
               )}
             </ModalSection>

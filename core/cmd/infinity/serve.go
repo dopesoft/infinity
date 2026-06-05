@@ -1567,8 +1567,13 @@ func serveCmd() *cobra.Command {
 				tools.RegisterMandateTools(registry, mandateStore)
 				if llmRegistry != nil {
 					mandateSettings := settings.New(pool)
-					verifier := crosscheck.NewVerifier(llmRegistry, mandateStore, func() string {
-						return mandateSettings.GetProvider(context.Background())
+					// Verify on the boss's OWN selected brain (provider+model) —
+					// his ChatGPT subscription, not a different vendor and not a
+					// separately-billed API. Independence comes from a clean
+					// context + adversarial persona, not from swapping models.
+					verifier := crosscheck.NewVerifier(llmRegistry, mandateStore, func() (string, string) {
+						ctx := context.Background()
+						return mandateSettings.GetProvider(ctx), mandateSettings.GetModel(ctx)
 					})
 					tools.RegisterCrosscheckTools(registry, verifier, mandateStore)
 				}

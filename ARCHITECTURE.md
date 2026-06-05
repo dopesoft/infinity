@@ -1312,18 +1312,21 @@ safe.
 - Judgment lives in the seeded **`frame-the-mandate`** skill (migration 131):
   when to open one, how to decompose into binary criteria, when it's high-stakes.
 
-### Crosscheck — cross-vendor verification (no migration; uses `mem_runs`)
+### Crosscheck — independent verification on the boss's OWN model (no migration; uses `mem_runs`)
 - `core/internal/crosscheck/crosscheck.go` + `tools/crosscheck_tools.go`
-  (`mandate_verify`). On the work that matters, the agent doesn't grade its own
-  homework: `Verify` picks a **different LLM vendor family** than the active
-  brain (`familyOf` collapses openai/openai_oauth) from `llm.Registry`, runs a
-  strict-JSON audit via `llm.Complete` against the mandate's criteria + the
-  agent's claimed evidence, folds rejections back onto the criteria (a rejected
-  criterion flips to fail), stamps the mandate, and books a `mem_runs`
-  (`kind="crosscheck"`) row carrying the verdict in `meta` (the "runs carry a
-  narrative" pattern). Single-vendor fallback uses an extra-adversarial persona
-  and tags `single_vendor`.
-- Verdict renders inside the Mandate modal and as a run in `/logs`.
+  (`mandate_verify`). On the work that matters, the agent doesn't wave its own
+  work through: `Verify` runs a fresh, deliberately-adversarial audit on the
+  boss's **own active provider + model** (`activeFn` returns settings'
+  provider+model — e.g. `openai_oauth` / `gpt-5.4`) via `llm.Complete`, against
+  the mandate's criteria + the agent's claimed evidence. **It is NOT cross-vendor
+  by design** — the boss runs on his ChatGPT subscription, so pulling another
+  vendor's API would mean unexpected charges. Independence comes from a clean
+  context + a "you did not do this work, try to refute it" persona, not from
+  swapping brains. Rejections fold back onto the criteria (a rejected criterion
+  flips to fail), the mandate is stamped, and a `mem_runs` (`kind="crosscheck"`)
+  row carries the verdict in `meta`.
+- Verdict renders inside the Mandate modal ("Verified by &lt;model&gt;") and as
+  a run in `/logs`.
 
 ### Gauge — up-front effort sizing (`mem_gauge_reads`, migration 130)
 - `core/internal/gauge/{gauge,provider}.go`. A cheap classifier (same shape as

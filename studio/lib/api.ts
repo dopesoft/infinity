@@ -2126,7 +2126,6 @@ export type MandateCrosscheck = {
   confidence?: number;
   notes?: string;
   auditor?: string;
-  single_vendor?: boolean;
   criteria?: Array<{ id: string; pass: boolean; note: string }>;
 };
 
