@@ -5,7 +5,6 @@ import { TabFrame } from "@/components/TabFrame";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
 import { TodosCard } from "./TodosCard";
-import { MandatesCard } from "./MandatesCard";
 import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
 import { SurfacedCard } from "./SurfacedCard";
@@ -24,6 +23,7 @@ import { useRealtime } from "@/lib/realtime/provider";
 import type {
   ActivityEvent,
   Approval,
+  Artifact,
   CalendarEvent,
   DashboardItem,
   FollowUp,
@@ -90,6 +90,7 @@ export function DashboardClient() {
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
   const [work, setWork] = useState<WorkItem[]>([]);
   const [saved, setSaved] = useState<Saved[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [reflection, setReflection] = useState<Reflection | null>(null);
   const [memoryStats, setMemoryStats] = useState<MemoryStats>(ZERO_MEMORY_STATS);
@@ -112,6 +113,7 @@ export function DashboardClient() {
     setEvents(data.calendarEvents ?? []);
     setFollowUps(data.followUps ?? []);
     setSaved(data.saved ?? []);
+    setArtifacts(data.artifacts ?? []);
     setApprovals(data.approvals ?? []);
     setActivity(data.activity ?? []);
     setWork(data.work ?? []);
@@ -222,6 +224,10 @@ export function DashboardClient() {
         return saved.find((s) => s.id === id)
           ? { kind: "saved", data: saved.find((s) => s.id === id)! }
           : viewing;
+      case "artifact":
+        return artifacts.find((a) => a.id === id)
+          ? { kind: "artifact", data: artifacts.find((a) => a.id === id)! }
+          : viewing;
       case "activity":
         return activity.find((a) => a.id === id)
           ? { kind: "activity", data: activity.find((a) => a.id === id)! }
@@ -229,7 +235,7 @@ export function DashboardClient() {
       default:
         return viewing;
     }
-  }, [viewing, approvals, followUps, surfaceItems, work, events, todos, pursuits, saved, activity]);
+  }, [viewing, approvals, followUps, surfaceItems, work, events, todos, pursuits, saved, artifacts, activity]);
   const resolveViewerItem = useCallback((item: DashboardItem) => {
     if (item.kind === "approval") {
       const id = item.data.id;
@@ -332,6 +338,7 @@ export function DashboardClient() {
         followUps,
         work,
         saved,
+        artifacts,
         activity,
         surfaceItems,
       };
@@ -360,10 +367,11 @@ export function DashboardClient() {
       ),
       work: work.filter((w) => match(w.title, w.subtitle, w.kind)),
       saved: saved.filter((s) => match(s.title, s.body, s.source, s.url)),
+      artifacts: artifacts.filter((a) => match(a.name, a.description, a.kind, a.virtualPath)),
       activity: activity.filter((e) => match(e.title, e.detail)),
       surfaceItems: surfaceFiltered,
     };
-  }, [q, pursuits, todos, events, approvals, followUps, work, saved, activity, surfaceItems]);
+  }, [q, pursuits, todos, events, approvals, followUps, work, saved, artifacts, activity, surfaceItems]);
 
   // The unified "Surfaced by Jarvis" list - approvals + every agent surface
   // (alerts, insights, digest, …) merged into one importance-sorted stream.
@@ -459,7 +467,6 @@ export function DashboardClient() {
                   onAdd={() => setAddingTodo(true)}
                 />
               )}
-              {s.mandates && <MandatesCard />}
             </div>
           )}
 
@@ -467,7 +474,9 @@ export function DashboardClient() {
             <ReflectionCard reflection={reflection} onOpen={openViewer} />
           )}
 
-          {s.saved && <SavedCard saved={filtered.saved} onOpen={openViewer} />}
+          {s.saved && (
+            <SavedCard saved={filtered.saved} artifacts={filtered.artifacts} onOpen={openViewer} />
+          )}
 
           {s.activity && <ActivityCard activity={filtered.activity} onOpen={openViewer} />}
         </main>

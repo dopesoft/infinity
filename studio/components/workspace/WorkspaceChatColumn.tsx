@@ -94,8 +94,7 @@ export function WorkspaceChatColumn({
             // a roundtrip on its end.
             void setModel(nextId);
           }}
-          onVoiceUserMessage={chat.addVoiceUserMessage}
-          onVoiceAssistantDelta={chat.streamVoiceAssistantDelta}
+          onVoiceSend={(t) => void chat.send(t, undefined, { voice: true })}
           minimal={minimalComposer}
         />
       </div>

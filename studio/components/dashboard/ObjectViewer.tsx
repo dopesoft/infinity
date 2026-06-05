@@ -37,7 +37,7 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { authedFetch, triggerCron, cancelWork, postSurfaceAction } from "@/lib/api";
+import { authedFetch, triggerCron, cancelWork, postSurfaceAction, canvasProjectActivate } from "@/lib/api";
 import { RunIndicator, useRuns } from "@/lib/runs";
 import { useWebSocket } from "@/lib/ws/provider";
 import {
@@ -65,6 +65,7 @@ import { seedSession } from "@/lib/dashboard/seed";
 import { parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type {
   Approval,
+  Artifact,
   CalendarEvent,
   DashboardItem,
   FollowUp,
@@ -170,6 +171,7 @@ function ItemHeader({ item }: { item: DashboardItem }) {
     item.kind === "surface" ||
     item.kind === "followup" ||
     item.kind === "saved" ||
+    item.kind === "artifact" ||
     item.kind === "reflection";
 
   if (useCalmHeader) {
@@ -339,6 +341,9 @@ function calmSubtitle(item: DashboardItem, kindLabel: string): React.ReactNode {
   } else if (item.kind === "saved") {
     if (item.data.kind) parts.push(item.data.kind);
     parts.push(`saved ${relTime(item.data.savedAt)}`);
+  } else if (item.kind === "artifact") {
+    parts.push(item.data.kind);
+    parts.push(`built ${relTime(item.data.createdAt)}`);
   } else if (item.kind === "reflection") {
     parts.push(`${item.data.evidenceCount} sources`);
     parts.push(relTime(item.data.capturedAt));
@@ -361,6 +366,7 @@ function getViewerTitle(item: DashboardItem): string {
     case "surface": return item.data.title;
     case "work": return item.data.title;
     case "saved": return item.data.title;
+    case "artifact": return item.data.name;
     case "activity": return item.data.title;
   }
 }
@@ -376,6 +382,7 @@ function getViewerKindLabel(item: DashboardItem): string {
     case "surface": return surfaceKindLabel(item.data.surface);
     case "work": return "Agent work item";
     case "saved": return "Saved item";
+    case "artifact": return "Made by Jarvis";
     case "activity": return "Activity event";
   }
 }
@@ -630,6 +637,12 @@ function ViewerActions({
         </button>
       );
     }
+    if (item.kind === "artifact") {
+      // Generated artifacts (apps, docs, dashboards Jarvis built) lead with
+      // "Open" — it launches the live artifact wherever it lives. Discuss
+      // still trails as the universal CTA so the boss can ask about it.
+      return <ArtifactOpenButton artifact={item.data} onClose={onClose} />;
+    }
     if (item.kind === "surface") {
       // Everything Jarvis surfaces (alerts, insights, digest, …) is
       // dismissable in one tap. Persistence is server-side (status =
@@ -866,6 +879,67 @@ function FollowupFooterActions({ followup }: { followup: FollowUp }) {
   );
 }
 
+// openArtifact - routes a generated artifact (mem_artifacts row) to wherever it
+// actually lives, off its storage fields. Priority: a project/app on a bridge
+// opens live in the canvas; a hosted/object-store URL opens directly; a GitHub
+// repo opens on GitHub; everything else falls back to the canvas Library. No
+// per-kind table — the storage shape is the whole contract.
+function isURL(s: string): boolean {
+  return /^https?:\/\//i.test(s);
+}
+
+async function openArtifact(
+  a: Artifact,
+  router: ReturnType<typeof useRouter>,
+  onClose?: () => void,
+) {
+  // A canvas project is the high-value case — reopen it running, not a snapshot.
+  if (a.kind === "project" && a.storagePath) {
+    await canvasProjectActivate({ project_path: a.storagePath });
+    router.push("/live");
+    onClose?.();
+    return;
+  }
+  // A hosted artifact (image on R2, a deployed site, a doc URL) opens directly.
+  if (a.storageKind === "object_store" && a.storagePath && isURL(a.storagePath)) {
+    window.open(a.storagePath, "_blank", "noopener,noreferrer");
+    return;
+  }
+  if (a.githubUrl) {
+    window.open(a.githubUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+  // Anything else (a filesystem doc/dataset) lives in the canvas Library.
+  router.push("/live");
+  onClose?.();
+}
+
+// ArtifactOpenButton - the prominent "Open" CTA for a generated artifact
+// (app / doc / dashboard Jarvis built). Launches the live artifact; sits
+// alongside the universal "Discuss with Jarvis" trailing button.
+function ArtifactOpenButton({ artifact, onClose }: { artifact: Artifact; onClose?: () => void }) {
+  const router = useRouter();
+  const [opening, setOpening] = React.useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        setOpening(true);
+        try {
+          await openArtifact(artifact, router, onClose);
+        } finally {
+          setOpening(false);
+        }
+      }}
+      disabled={opening}
+      className="inline-flex h-10 items-center gap-1.5 rounded-md border border-tier-procedural/40 bg-tier-procedural/10 px-3 text-[13px] font-medium text-tier-procedural transition-colors hover:bg-tier-procedural/20 disabled:opacity-60"
+    >
+      <ExternalLink className={cn("size-3.5", opening && "animate-pulse")} aria-hidden />
+      {opening ? "Opening..." : "Open"}
+    </button>
+  );
+}
+
 // OpenInButton - the canonical "preview-only" CTA for agent-originated
 // dashboard rows. Routes the user to the canonical action surface so
 // dashboard stays a viewing surface and Lab/Settings/Chat stay the
@@ -1031,6 +1105,7 @@ function ViewerContent({ item }: { item: DashboardItem }) {
     case "surface": return <SurfaceBody item={item.data} />;
     case "work": return <WorkBody w={item.data} />;
     case "saved": return <SavedBody s={item.data} />;
+    case "artifact": return <ArtifactBody a={item.data} />;
     case "activity": return <ActivityBody e={item.data} />;
   }
 }
@@ -2163,6 +2238,43 @@ function SavedBody({ s }: { s: Saved }) {
   );
 }
 
+// ── Artifact (Made by Jarvis) ──────────────────────────────────────────────
+function ArtifactBody({ a }: { a: Artifact }) {
+  const meta: { k: string; v: React.ReactNode }[] = [];
+  if (a.virtualPath) meta.push({ k: "path", v: <span className="break-all font-mono text-[11px]">{a.virtualPath}</span> });
+  if (a.sourceTool) meta.push({ k: "built with", v: a.sourceTool });
+  if (a.bridge) meta.push({ k: "where", v: a.bridge === "mac" ? "your Mac" : "cloud workspace" });
+  return (
+    <div className="space-y-3 pt-3">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="rounded-full bg-tier-procedural/10 px-2 py-0.5 font-mono uppercase tracking-wider text-tier-procedural">
+          {a.kind}
+        </span>
+        <span className="inline-flex items-center gap-1 font-mono text-tier-procedural">
+          <Sparkles className="size-3" aria-hidden /> made by jarvis
+        </span>
+        <span className="font-mono" suppressHydrationWarning>
+          · built {relTime(a.createdAt)}
+        </span>
+      </div>
+      <ModalSection label="What it is">
+        <p className="text-[13px] text-muted-foreground">
+          {a.description?.trim()
+            ? a.description
+            : "Jarvis built this for you."}{" "}
+          Tap <span className="font-medium text-foreground">Open</span> to launch it.
+        </p>
+      </ModalSection>
+      {meta.length > 0 ? <ModalDl entries={meta} /> : null}
+      {a.githubUrl ? (
+        <ModalUrl href={a.githubUrl} icon={<ExternalLink className="size-3.5" aria-hidden />}>
+          {a.githubUrl}
+        </ModalUrl>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Work ──────────────────────────────────────────────────────────────────
 function WorkBody({ w }: { w: WorkItem }) {
   // The subtitle is "agent-narrated outcome" - when it leads with
@@ -2312,6 +2424,67 @@ function WorkBody({ w }: { w: WorkItem }) {
         </ModalSection>
       ) : null}
 
+      {/* Mandate — the definition of done (binary criteria) + the verification
+          verdict, inline so the Kanban card carries the full contract. */}
+      {w.kind === "mandate" && w.mandateCriteria && w.mandateCriteria.length > 0 ? (
+        <ModalSection
+          label="Definition of done"
+          meta={`${w.doneCount ?? 0}/${w.totalCount ?? w.mandateCriteria.length}`}
+        >
+          <ul className="space-y-2">
+            {w.mandateCriteria.map((c) => (
+              <li key={c.id} className="flex items-start gap-2 text-sm min-w-0">
+                <span
+                  className={cn(
+                    "mt-0.5 shrink-0 font-mono text-xs",
+                    c.status === "pass"
+                      ? "text-emerald-500"
+                      : c.status === "fail"
+                        ? "text-rose-500"
+                        : "text-muted-foreground",
+                  )}
+                  aria-hidden
+                >
+                  {c.status === "pass" ? "[x]" : c.status === "fail" ? "[✗]" : "[ ]"}
+                </span>
+                <div className="min-w-0">
+                  <span className="break-words">{c.text}</span>
+                  {c.evidence ? (
+                    <span className="mt-0.5 block break-words text-xs text-muted-foreground">
+                      {c.evidence}
+                    </span>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </ModalSection>
+      ) : null}
+
+      {w.kind === "mandate" && w.crosscheck?.overall ? (
+        <ModalSection
+          label="Verification"
+          tone={
+            w.crosscheck.overall === "pass"
+              ? "success"
+              : w.crosscheck.overall === "fail"
+                ? "error"
+                : "default"
+          }
+        >
+          <ModalDl
+            entries={[
+              { k: "Verdict", v: w.crosscheck.overall === "pass" ? "Passed" : "Failed" },
+              { k: "Verified by", v: w.crosscheck.auditor ?? "—" },
+              ...(typeof w.crosscheck.confidence === "number"
+                ? [{ k: "Confidence", v: `${Math.round(w.crosscheck.confidence * 100)}%` }]
+                : []),
+              ...(w.crosscheck.notes ? [{ k: "Notes", v: w.crosscheck.notes }] : []),
+            ]}
+          />
+        </ModalSection>
+      ) : null}
+
       {w.detailHref ? (
         <ModalUrl
           href={w.detailHref}
@@ -2413,6 +2586,8 @@ function headerMeta(item: DashboardItem): {
       return { Icon: Layers, label: "Agent work", tone: "border-border bg-muted text-foreground" };
     case "saved":
       return { Icon: item.data.kind === "quote" ? Quote : Sparkles, label: "Saved", tone: "border-border bg-muted text-foreground" };
+    case "artifact":
+      return { Icon: Sparkles, label: "Made by Jarvis", tone: "border-tier-procedural/40 bg-tier-procedural/10 text-tier-procedural" };
     case "activity":
       return { Icon: Activity, label: "Activity", tone: "border-border bg-muted text-foreground" };
   }

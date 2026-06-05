@@ -1111,7 +1111,7 @@ export function useChat() {
   }, [ws, sessionId, armWatchdog, clearWatchdog]);
 
   const send = useCallback(
-    async (content: string, files?: File[]) => {
+    async (content: string, files?: File[], opts?: { voice?: boolean }) => {
       const trimmed = content.trim();
       const attachments = await Promise.all((files ?? []).map(fileToAttachmentPayload));
       const usableAttachments = attachments.filter(isUsableAttachment);
@@ -1192,6 +1192,9 @@ export function useChat() {
         session_id: sessionId,
         content: trimmed,
         attachments: usableAttachments.map(toSendAttachment),
+        // Voice turns run the SAME Loop.Run as text; the flag just tells Core
+        // to also speak the reply (TTS) and add the spoken-delivery overlay.
+        ...(opts?.voice ? { voice: true } : {}),
       });
       if (!ok) {
         clearWatchdog();

@@ -13,7 +13,6 @@ import { useEffect, useState } from "react";
 export type DashboardSectionKey =
   | "pursuits"
   | "todos"
-  | "mandates"
   | "upcoming"
   | "reflection"
   | "approvals"
@@ -35,10 +34,6 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
   todos: {
     title: "Todos",
     description: "Your task list. Agent-created todos appear here automatically.",
-  },
-  mandates: {
-    title: "Mandates",
-    description: "Active definitions of done — the binary criteria Jarvis is working to verify.",
   },
   upcoming: {
     title: "Upcoming",
@@ -78,7 +73,6 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
 export const SECTION_ORDER: DashboardSectionKey[] = [
   "pursuits",
   "todos",
-  "mandates",
   "upcoming",
   "reflection",
   "approvals",
@@ -93,7 +87,6 @@ export const DEFAULT_PREFS: DashboardPreferences = {
   sections: {
     pursuits: true,
     todos: true,
-    mandates: true,
     upcoming: true,
     reflection: true,
     approvals: true,

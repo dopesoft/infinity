@@ -8,7 +8,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
 import { VoiceOrb } from "@/components/VoiceOrb";
-import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { useVoice } from "@/lib/voice/use-voice";
 
 /**
@@ -220,7 +219,6 @@ function writeStoredDraft(value: string) {
 function voiceCaptionLabel(v: {
   status: import("@/lib/voice/client").VoiceStatus;
   muted: boolean;
-  toolName: string | null;
   error: string | null;
 }): string {
   if (v.error) return `Voice error · ${v.error}`;
@@ -232,10 +230,13 @@ function voiceCaptionLabel(v: {
       return "Connecting…";
     case "user-speaking":
       return "Listening…";
+    // assistant-speaking / tool-running come from the demoted realtime model
+    // and no longer fire (cognition + speech moved off it); keep the cases so
+    // the union stays exhaustive without a tool name.
     case "assistant-speaking":
       return "Speaking…";
     case "tool-running":
-      return v.toolName ? `Running ${v.toolName}` : "Running tool…";
+      return "Working…";
     case "listening":
       return "Listening";
     case "error":
@@ -302,12 +303,11 @@ export interface PromptInputBoxProps {
    * sends a steer instead of stopping.
    */
   onStop?: () => void;
-  /** Voice mode hooks: voice's finalised user transcript becomes a
-   *  conversation message; assistant deltas stream into the same
-   *  conversation as a pending bubble until the response finalises.
-   *  See useChat.addVoiceUserMessage / streamVoiceAssistantDelta. */
-  onVoiceUserMessage?: (text: string) => void;
-  onVoiceAssistantDelta?: (event: AssistantTranscriptEvent) => void;
+  /** Voice mode: a finalized voice transcript is sent to the real brain via
+   *  this callback (host wires it to chat.send(text, {voice:true})). The reply
+   *  streams back as normal chat deltas (rendered like any turn) plus spoken
+   *  TTS audio (handled inside useVoice). */
+  onVoiceSend?: (text: string) => void;
 }
 
 export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxProps>(
@@ -327,8 +327,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       minimal = false,
       onSlash,
       onStop,
-      onVoiceUserMessage,
-      onVoiceAssistantDelta,
+      onVoiceSend,
     } = props;
 
     // Empty on first server render; hydrated from localStorage in the mount
@@ -378,8 +377,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
     // into the conversation stream via the host's callbacks - the
     // composer never renders caption text itself.
     const voice = useVoice(sessionId, {
-      onUserMessage: onVoiceUserMessage,
-      onAssistantDelta: onVoiceAssistantDelta,
+      onSend: onVoiceSend,
     });
     const voiceActive = voice.active;
 

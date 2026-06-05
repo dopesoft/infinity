@@ -15,6 +15,7 @@ import {
   HelpCircle,
   Layers,
   ListChecks,
+  Target,
   Loader2,
   Sparkles,
   Terminal,
@@ -50,6 +51,7 @@ const KIND_ICON: Record<WorkItemKind, LucideIcon> = {
   skill_run: Cog,
   workflow: Workflow,
   plan: ListChecks,
+  mandate: Target,
   trust: Terminal,
   code_proposal: FileCode,
   curiosity: HelpCircle,
@@ -274,10 +276,17 @@ function WorkRow({ it, onClick }: { it: WorkItem; onClick: () => void }) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-medium text-foreground">{it.title}</p>
-        {/* Plans show a step-progress bar + "4/7" right on the card so the
-            running stage reads at a glance without opening the detail. */}
-        {it.kind === "plan" && typeof it.totalCount === "number" && it.totalCount > 0 ? (
-          <PlanProgress done={it.doneCount ?? 0} total={it.totalCount} failed={it.subtitle === "failed"} />
+        {/* Plans AND mandates show a progress bar + "4/7" right on the card so
+            the running stage reads at a glance without opening the detail. For a
+            mandate it's "criteria verified". */}
+        {(it.kind === "plan" || it.kind === "mandate") &&
+        typeof it.totalCount === "number" &&
+        it.totalCount > 0 ? (
+          <PlanProgress
+            done={it.doneCount ?? 0}
+            total={it.totalCount}
+            failed={it.subtitle === "failed" || it.subtitle === "abandoned"}
+          />
         ) : null}
         {it.subtitle ? (
           <p className="truncate text-[11px] text-muted-foreground">{it.subtitle}</p>

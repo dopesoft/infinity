@@ -4,6 +4,7 @@ import { authedFetch } from "@/lib/api";
 import type {
   ActivityEvent,
   Approval,
+  Artifact,
   CalendarEvent,
   FollowUp,
   MemoryStats,
@@ -32,6 +33,7 @@ export type DashboardResponse = {
   calendarEvents: CalendarEvent[] | null;
   followUps: FollowUp[] | null;
   saved: Saved[] | null;
+  artifacts: Artifact[] | null;
   approvals: Approval[] | null;
   reflection: Reflection | null;
   activity: ActivityEvent[] | null;
@@ -53,6 +55,7 @@ type RawResponse = {
   calendarEvents?: CalendarEvent[] | null;
   followUps?: Array<FollowUp & { from?: string; from_name?: string }> | null;
   saved?: Saved[] | null;
+  artifacts?: Artifact[] | null;
   approvals?: Approval[] | null;
   reflection?: Reflection | null;
   activity?: ActivityEvent[] | null;
@@ -65,7 +68,7 @@ type RawResponse = {
 // last-known payload (localStorage) on mount, then fetchDashboard refreshes
 // in the background. Modern-app feel: no blank-cards-for-5-seconds cold
 // start. Bump the version suffix if DashboardResponse's shape changes.
-const DASHBOARD_CACHE_KEY = "infinity:dashboard:v1";
+const DASHBOARD_CACHE_KEY = "infinity:dashboard:v2";
 
 export function readDashboardCache(): DashboardResponse | null {
   if (typeof window === "undefined") return null;
@@ -98,6 +101,7 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
       calendarEvents: raw.calendarEvents ?? null,
       followUps: raw.followUps ? raw.followUps.map(mapFollowUp) : null,
       saved: raw.saved ?? null,
+      artifacts: raw.artifacts ?? null,
       approvals: raw.approvals ?? null,
       reflection: raw.reflection ?? null,
       activity: raw.activity ?? null,

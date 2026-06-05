@@ -1305,10 +1305,16 @@ safe.
 - **Ambient "done"**: on close → `mandateAnnouncer` (a `push.Sender` adapter in
   `cmd/infinity/initiative_deliverer.go`) pushes the boss a notification — PAI's
   TTS-on-Stop equivalent, expressed as a push.
-- HTTP: `GET /api/mandates[?active=1]`, `GET /api/mandates/:id`. Studio:
-  `components/dashboard/MandatesCard.tsx` (active mandates with criteria
-  progress; tap → `ResponsiveModal` showing criteria + crosscheck verdict),
-  gated by the `mandates` dashboard preference. History is queryable via the API.
+- HTTP: `GET /api/mandates[?active=1]`, `GET /api/mandates/:id`. **Studio: a
+  mandate rides the existing Agent Work board (Kanban) as a `kind:"mandate"`
+  WorkItem — open → Running (with a passed/total criteria progress bar),
+  verifying → Awaiting you, done/abandoned-today → Done — exactly like a `plan`.
+  No separate dashboard card** (it's a unit of agent work with a status, so it
+  belongs on the work board, not its own surface). Server side
+  `internal/dashboard/mandates.go` mirrors `plans.go` and appends to `loadWork`;
+  the criteria + verification verdict render inline in the ObjectViewer
+  (`AgentWorkBoard.tsx` reuses the plan progress bar; `ObjectViewer.tsx` adds the
+  "Definition of done" + "Verification" sections).
 - Judgment lives in the seeded **`frame-the-mandate`** skill (migration 131):
   when to open one, how to decompose into binary criteria, when it's high-stakes.
 

@@ -1480,8 +1480,12 @@ func serveCmd() *cobra.Command {
 			// the /api/voice/* endpoints simply 503.
 			voiceMinter := voice.New()
 			if voiceMinter != nil {
-				fmt.Printf("  voice: realtime enabled (model=%s, voice=%s)\n", voiceMinter.Model(), voiceMinter.Voice())
+				fmt.Printf("  voice: realtime input enabled (model=%s, voice=%s)\n", voiceMinter.Model(), voiceMinter.Voice())
 			}
+			// Speaker: TTS for voice replies. The realtime model is demoted to
+			// transcription only; cognition runs through Loop.Run and its text
+			// reply is spoken via the Speaker. nil-safe (shares OPENAI_API_KEY).
+			voiceSpeaker := voice.NewSpeaker()
 
 			// Push notifications. Sender requires VAPID env vars; when
 			// they're missing we still expose the API so Studio can show
@@ -1651,6 +1655,7 @@ func serveCmd() *cobra.Command {
 				LLMRegistry:      llmRegistry,
 				Connectors:       connectorsCache,
 				Voice:            voiceMinter,
+				Speaker:          voiceSpeaker,
 				PushAPI:          pushAPI,
 				DashboardAPI:     dashboardAPI,
 				BridgeRouter:     activeBridgeRouter,

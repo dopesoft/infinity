@@ -1073,6 +1073,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			systemPrompt = accountsBlock + "\n\n" + systemPrompt
 		}
 	}
+	// Voice turns get a thin delivery overlay at the very top (most salient).
+	// Per-turn via ctx, not a Session field, because text + voice share the
+	// session. Capability is unchanged - this only shapes how the same brain
+	// talks when its words are being spoken aloud.
+	if VoiceModeFromContext(ctx) {
+		systemPrompt = voiceModeSystemOverlay + "\n\n" + systemPrompt
+	}
 
 	for iter := 0; iter < l.maxToolIterations; iter++ {
 		// Age out TTL'd entries before the next LLM call - keeps an

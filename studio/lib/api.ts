@@ -1854,31 +1854,6 @@ export async function startVoiceSession(
   }
 }
 
-export async function runVoiceTool(args: {
-  sessionId: string;
-  callId: string;
-  name: string;
-  input: Record<string, unknown>;
-}): Promise<VoiceToolResult | { error: string }> {
-  try {
-    const res = await authedFetch("/api/voice/tool", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: args.sessionId,
-        call_id: args.callId,
-        name: args.name,
-        input: args.input,
-      }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: body?.error ?? `voice/tool ${res.status}` };
-    return body as VoiceToolResult;
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
 // reportVoiceError tells Core that a realtime voice session failed to
 // connect. The WebRTC SDP exchange happens browser→OpenAI directly, so
 // Core never sees these failures (no Railway log, no server signal) -
@@ -1899,27 +1874,6 @@ export async function reportVoiceError(args: {
         session_id: args.sessionId,
         kind: args.kind,
         message: args.message,
-      }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-export async function recordVoiceTurn(args: {
-  sessionId: string;
-  role: "user" | "assistant";
-  text: string;
-}): Promise<boolean> {
-  try {
-    const res = await authedFetch("/api/voice/turn", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: args.sessionId,
-        role: args.role,
-        text: args.text,
       }),
     });
     return res.ok;

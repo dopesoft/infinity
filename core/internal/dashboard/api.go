@@ -84,6 +84,7 @@ type Response struct {
 	CalendarEvents []CalendarEvent `json:"calendarEvents"`
 	FollowUps      []FollowUp      `json:"followUps"`
 	Saved          []Saved         `json:"saved"`
+	Artifacts      []Artifact      `json:"artifacts"`
 	Approvals      []Approval      `json:"approvals"`
 	Reflection     *Reflection     `json:"reflection,omitempty"`
 	Activity       []ActivityEvent `json:"activity"`
@@ -266,6 +267,25 @@ type Saved struct {
 	SavedAt        time.Time `json:"savedAt"`
 }
 
+// Artifact mirrors studio/lib/dashboard/types.ts Artifact. A curated view of
+// mem_artifacts (the canonical "things I've made" store) surfaced on the Saved
+// card's "Made by Jarvis" segment. The storage fields drive the viewer's Open
+// routing; this is read-only — generators still write rows via artifact_save.
+type Artifact struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	VirtualPath string    `json:"virtualPath"`
+	StorageKind string    `json:"storageKind"`
+	StoragePath string    `json:"storagePath,omitempty"`
+	StorageMime string    `json:"storageMime,omitempty"`
+	Bridge      string    `json:"bridge,omitempty"`
+	GithubURL   string    `json:"githubUrl,omitempty"`
+	SourceTool  string    `json:"sourceTool,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
 type MemoryStats struct {
 	NewToday      int `json:"newToday"`
 	PromotedToday int `json:"promotedToday"`
@@ -380,6 +400,23 @@ type WorkItem struct {
 	// prompt, or a plan's goal. Surfaced so a queued/running item explains itself
 	// in the detail without a trip to /cron.
 	Instruction string `json:"instruction,omitempty"`
+	// MandateCriteria is populated only for Kind == "mandate" — the binary
+	// acceptance criteria with their pass/fail status + evidence, carried inline
+	// so the Kanban card opens the full definition-of-done in ObjectViewer
+	// (mirrors PlanSteps). DoneCount/TotalCount drive the same progress bar.
+	MandateCriteria []MandateCriterionDTO `json:"mandateCriteria,omitempty"`
+	// Crosscheck is the verification verdict for a high-stakes mandate (overall,
+	// confidence, auditing model, notes), shown in the ObjectViewer. Empty until
+	// mandate_verify has run.
+	Crosscheck map[string]any `json:"crosscheck,omitempty"`
+}
+
+// MandateCriterionDTO is one acceptance criterion of a mandate WorkItem.
+type MandateCriterionDTO struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Status   string `json:"status"` // pending | pass | fail
+	Evidence string `json:"evidence,omitempty"`
 }
 
 // WorkflowStep is one step of a workflow run, surfaced inside a workflow
@@ -475,6 +512,16 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		mu.Lock()
 		resp.Saved = v
+		mu.Unlock()
+		return nil
+	})
+	run("artifacts", func() error {
+		v, err := a.loadArtifacts(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Artifacts = v
 		mu.Unlock()
 		return nil
 	})
@@ -1066,6 +1113,39 @@ func (a *API) loadSaved(ctx context.Context) ([]Saved, error) {
 			s.Source = *source
 		}
 		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// loadArtifacts reads a curated view of mem_artifacts for the Saved card's
+// "Made by Jarvis" segment. Curated, not the firehose: substantive deliverables
+// (projects/apps, documents, datasets, other) only — raw generated media
+// (image/audio/video) and internal 'memory' artifacts stay in the canvas
+// Library so the dashboard glance reads as "things Jarvis shipped." Read-only:
+// generators still own the writes via artifact_save.
+func (a *API) loadArtifacts(ctx context.Context) ([]Artifact, error) {
+	rows, err := a.Pool.Query(ctx, `
+		SELECT id::text, kind, name, COALESCE(description,''), virtual_path, storage_kind,
+		       COALESCE(storage_path,''), COALESCE(storage_mime,''), COALESCE(bridge,''),
+		       COALESCE(github_url,''), COALESCE(source_tool,''), created_at
+		FROM mem_artifacts
+		WHERE deleted_at IS NULL
+		  AND kind IN ('project', 'document', 'dataset', 'other')
+		ORDER BY created_at DESC
+		LIMIT 24
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Artifact
+	for rows.Next() {
+		var a Artifact
+		if err := rows.Scan(&a.ID, &a.Kind, &a.Name, &a.Description, &a.VirtualPath, &a.StorageKind,
+			&a.StoragePath, &a.StorageMime, &a.Bridge, &a.GithubURL, &a.SourceTool, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }
@@ -1976,6 +2056,15 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		out = append(out, planItems...)
 	} else {
 		a.Logger.Warn("dashboard: plan work items", "err", perr)
+	}
+
+	// Mandates — a definition of done is a unit of agent work; it rides the same
+	// Kanban as plans (open→Running, verifying→Awaiting, done-today→Done), with
+	// criteria inline. No separate dashboard card.
+	if mandateItems, perr := a.mandateWorkItems(ctx); perr == nil {
+		out = append(out, mandateItems...)
+	} else {
+		a.Logger.Warn("dashboard: mandate work items", "err", perr)
 	}
 
 	return out, nil

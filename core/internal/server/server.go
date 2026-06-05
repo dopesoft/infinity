@@ -94,6 +94,12 @@ type Config struct {
 	// /api/voice/* endpoints all return 503 and Studio's mic button
 	// surfaces "voice not configured".
 	Voice *voice.Minter
+	// Speaker synthesizes Jarvis's text response into spoken audio for voice
+	// turns. Voice cognition runs through the SAME Loop.Run as text (the
+	// realtime model is demoted to mic + transcription only); the Speaker is
+	// the mouth. Nil-safe: unset (OPENAI_API_KEY missing) → voice turns fall
+	// back to captions-only.
+	Speaker *voice.Speaker
 	// PushAPI registers /api/push/* - VAPID key, subscribe/unsubscribe,
 	// device list, test send. Nil-safe: missing VAPID env disables push
 	// and the handlers return empty / 503 cleanly.
@@ -156,6 +162,7 @@ type Server struct {
 	llmReg     *llm.Registry
 	connectors *connectors.Cache
 	voice      *voice.Minter
+	speaker    *voice.Speaker
 	started    time.Time
 
 	intentDet *intent.Detector
@@ -204,6 +211,7 @@ func New(cfg Config) *Server {
 		llmReg:         cfg.LLMRegistry,
 		connectors:     cfg.Connectors,
 		voice:          cfg.Voice,
+		speaker:        cfg.Speaker,
 		started:        time.Now(),
 		turns:          make(map[string]*turnState),
 		intentDet:      cfg.IntentDetector,
@@ -373,11 +381,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/connectors/composio/cache", s.handleComposioCacheStatus)
 	mux.HandleFunc("/webhooks/composio", s.handleComposioWebhook)
 
-	// Voice - OpenAI Realtime over WebRTC. Browser holds the audio
-	// pipes, Core mints the key, runs tools, and persists turns.
+	// Voice - the realtime session is mic + transcription only; cognition
+	// runs through Loop.Run (a voice utterance is a `message` frame with
+	// voice:true on the chat WS) and the reply is spoken via the Speaker.
+	// /session mints the input-only key; /error records connection failures.
 	mux.HandleFunc("/api/voice/session", s.handleVoiceSession)
-	mux.HandleFunc("/api/voice/tool", s.handleVoiceTool)
-	mux.HandleFunc("/api/voice/turn", s.handleVoiceTurn)
 	mux.HandleFunc("/api/voice/error", s.handleVoiceError)
 
 	// "Is the running binary behind main?" detection. Compares the

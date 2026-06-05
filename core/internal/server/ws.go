@@ -40,6 +40,12 @@ type wsClientMessage struct {
 	SessionID   string               `json:"session_id"`
 	Content     string               `json:"content"`
 	Attachments []wsClientAttachment `json:"attachments,omitempty"`
+	// Voice marks a `message` frame whose content is a finalized voice
+	// transcript. The turn runs the IDENTICAL Loop.Run as text (same brain,
+	// memory, skills, tools, gate) and additionally streams the spoken reply
+	// back as `voice_audio` frames. This is the whole of voice parity: voice
+	// is just a text turn with a mic on the front and TTS on the back.
+	Voice bool `json:"voice,omitempty"`
 }
 
 type wsServerEvent struct {
@@ -106,6 +112,20 @@ type wsServerEvent struct {
 	// called project_open/create/clone, or the boss switched it) so Studio
 	// re-scopes the canvas instantly instead of waiting on the 1.5s poll.
 	ProjectChanged *wsProjectChanged `json:"project_changed,omitempty"`
+	// Audio carries one synthesized speech clip for a voice turn (one
+	// sentence of Jarvis's spoken reply). Studio decodes + plays clips in
+	// Seq order. Rides the turn's event stream so it stops cleanly on
+	// interrupt/barge-in.
+	Audio *wsVoiceAudio `json:"audio,omitempty"`
+}
+
+// wsVoiceAudio is one TTS clip. Data is base64-encoded audio bytes of MimeType
+// (audio/mpeg). Seq orders clips within a turn so the browser plays them in the
+// order Jarvis said them even if synthesis latency varies.
+type wsVoiceAudio struct {
+	Seq      int    `json:"seq"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
 }
 
 // wsProjectChanged tells Studio the session is now scoped to a different project
@@ -396,7 +416,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), send)
+			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, send)
 			continue
 		case "message":
 			sessionID := msg.SessionID
@@ -435,7 +455,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), send)
+			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, send)
 		case "resume":
 			// Run one agent turn against a session's existing history
 			// without a fresh user message. Discuss-with-Jarvis uses this:
@@ -473,7 +493,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume - session has no history"})
 				continue
 			}
-			s.startTurn(connCtx, userID, sessionID, "", send)
+			s.startTurn(connCtx, userID, sessionID, "", false, send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
@@ -503,7 +523,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // page) rather than carried on the WS frame - that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
-func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, _ func(wsServerEvent)) {
+func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, voiceTurn bool, _ func(wsServerEvent)) {
 	// Use a fresh background context so the WS dying doesn't cancel this
 	// turn. The 5-minute timeout below is the only deadline that applies.
 	base := context.Background()
@@ -514,6 +534,12 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	// off the request user have it available. Then wrap in a per-turn
 	// timeout so a wedged provider doesn't pin a goroutine forever.
 	ctxWithUser := context.WithValue(base, auth.ContextKey{}, userID)
+	// Voice turns carry a per-turn flag so the loop adds the spoken-delivery
+	// overlay and runTurn streams TTS. Per-turn (not per-session) because
+	// text + voice share the session id.
+	if voiceTurn {
+		ctxWithUser = agent.WithVoiceMode(ctxWithUser)
+	}
 	turnCtx, cancel := context.WithTimeout(ctxWithUser, 5*time.Minute)
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
 	// Route every WS frame through the live session binding rather than
@@ -544,7 +570,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 			}
 			s.turnsMu.Unlock()
 		}()
-		s.runTurn(turnCtx, sessionID, runContent, model, state.steer, send)
+		s.runTurn(turnCtx, sessionID, runContent, model, voiceTurn, state.steer, send)
 		if recovered && s.buffer != nil {
 			_ = s.buffer.Clear(context.Background(), sessionID)
 		}
@@ -695,7 +721,7 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 // receive the steer channel as a receive-only param so the agent loop can
 // drain it between iterations. ctx is already wrapped with the per-turn
 // 5-minute timeout, so we don't re-wrap it here.
-func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, steer <-chan string, send func(wsServerEvent)) {
+func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, voiceTurn bool, steer <-chan string, send func(wsServerEvent)) {
 	events := make(chan agent.RunEvent, 128)
 	done := make(chan struct{})
 
@@ -707,6 +733,11 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 		close(events)
 	}()
 
+	// Voice turns speak the brain's streamed text via TTS. nil for text
+	// turns (and voice turns when no Speaker is configured) - then this is
+	// the exact text path, captions only.
+	speak := s.newSpeakPump(ctx, sessionID, voiceTurn, send)
+
 	/* Accumulate the assistant's streamed text so on EventComplete we can
 	 * write the full user/assistant pair into the WorkingBuffer when the
 	 * context window is past threshold. We only need text deltas - tool
@@ -717,6 +748,10 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 	for ev := range events {
 		if ev.Kind == agent.EventDelta {
 			assistantText.WriteString(ev.TextDelta)
+			speak.onDelta(ev.TextDelta)
+		}
+		if ev.Kind == agent.EventToolCall && ev.ToolCall != nil {
+			speak.onToolCall(ev.ToolCall.Name)
 		}
 		sendRunEventToWS(send, ev)
 		if ev.Kind == agent.EventComplete {
@@ -734,5 +769,8 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 		}
 	}
 
+	// Speak the trailing partial sentence and wait for synthesis to drain so
+	// the last clip ships before the turn ctx is cancelled. No-op for text.
+	speak.finish()
 	<-done
 }

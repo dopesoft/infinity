@@ -32,6 +32,11 @@ export type WSEvent =
       stop_reason?: string;
     }
   | { type: "error"; session_id: string; message: string }
+  // voice_audio carries one synthesized speech clip (a sentence of Jarvis's
+  // spoken reply) for a voice turn. data is base64 audio of mime_type; seq
+  // orders clips within the turn. useVoice decodes + plays them; useChat
+  // ignores them (the text already renders via the normal `delta` frames).
+  | { type: "voice_audio"; session_id: string; audio: { seq: number; mime_type: string; data: string } }
   | { type: "cleared"; session_id: string }
   | { type: "pong"; session_id: string }
   // steer_received echoes a mid-turn steer back to all connected tabs so

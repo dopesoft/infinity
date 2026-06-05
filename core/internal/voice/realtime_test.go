@@ -5,43 +5,48 @@ import (
 	"testing"
 )
 
-func TestBuildVoiceInstructionsIncludesIdentityAccessBlock(t *testing.T) {
-	instructions, err := buildVoiceInstructions("You are Jarvis.\n\nAbout the boss: Kai builds Infinity.")
-	if err != nil {
-		t.Fatalf("buildVoiceInstructions returned error: %v", err)
-	}
+// The realtime model is demoted to a transcriber now - identity, tools, and
+// dispatch discipline live in the agent loop, not in a frozen voice prompt, so
+// the old buildVoiceInstructions trim/identity tests are gone. What's worth
+// testing here is the SentenceChunker that decides when to speak.
 
-	mustContain := []string{
-		"Your name is Jarvis.",
-		"Your boss is Kai.",
-		"Infinity is the platform and codebase you run inside.",
-		"You are Kai's developer and operator for Infinity.",
-		"You can inspect, change, test, commit, deploy, or kick off code work through the available tools.",
-		"never deflect with 'ask the developers', 'contact support', or 'I cannot modify the system'",
+func TestSentenceChunkerEmitsCompleteSentences(t *testing.T) {
+	var c SentenceChunker
+
+	// A partial clause should stay buffered, not emit.
+	if got := c.Push("Right, checking your inbox"); len(got) != 0 {
+		t.Fatalf("partial clause should not emit, got %v", got)
 	}
-	for _, want := range mustContain {
-		if !strings.Contains(instructions, want) {
-			t.Fatalf("instructions missing %q\n\n%s", want, instructions)
-		}
+	// Completing the sentence emits it.
+	got := c.Push(" now. Pulling the thread")
+	if len(got) != 1 || strings.TrimSpace(got[0]) != "Right, checking your inbox now." {
+		t.Fatalf("expected one complete sentence, got %v", got)
+	}
+	// Flush returns the trailing partial.
+	tail := c.Flush()
+	if len(tail) != 1 || !strings.Contains(tail[0], "Pulling the thread") {
+		t.Fatalf("flush should return trailing partial, got %v", tail)
 	}
 }
 
-func TestBuildVoiceInstructionsPreservesIdentityAccessBlockWhenOverBudget(t *testing.T) {
-	oversizedSections := make([]string, 0, 200)
-	for i := 0; i < 200; i++ {
-		oversizedSections = append(oversizedSections, strings.Repeat("tool catalog filler ", 120))
+func TestSentenceChunkerKeepsShortAbbreviations(t *testing.T) {
+	var c SentenceChunker
+	// "Mr." is under the min length and shouldn't be spoken as its own clip
+	// while more text is still coming.
+	got := c.Push("Mr. Khaya is on the call")
+	if len(got) != 0 {
+		t.Fatalf("short abbreviation should not split into its own clip, got %v", got)
 	}
-	systemPrompt := strings.Join(oversizedSections, "\n\n")
+	final := c.Push(".")
+	if len(final) != 1 || !strings.Contains(final[0], "Mr. Khaya is on the call") {
+		t.Fatalf("expected the full sentence after the real terminator, got %v", final)
+	}
+}
 
-	instructions, err := buildVoiceInstructions(systemPrompt)
-	if err != nil {
-		t.Fatalf("buildVoiceInstructions returned error: %v", err)
-	}
-
-	if !strings.Contains(instructions, voiceIdentityAccessBlock) {
-		t.Fatalf("identity access block was trimmed from over-budget instructions")
-	}
-	if got := estimateTokens(instructions); got > realtimeInstructionHardLimit {
-		t.Fatalf("instructions exceed hard limit: got %d, limit %d", got, realtimeInstructionHardLimit)
+func TestSentenceChunkerSplitsOnNewline(t *testing.T) {
+	var c SentenceChunker
+	got := c.Push("First the short version\nthen the detail")
+	if len(got) != 1 || !strings.Contains(got[0], "First the short version") {
+		t.Fatalf("newline should break a spoken chunk, got %v", got)
 	}
 }

@@ -245,11 +245,21 @@ export type WorkItemKind =
   | "skill_run"
   | "workflow"
   | "plan"
+  | "mandate"
   | "trust"
   | "code_proposal"
   | "curiosity"
   | "memory_op"
   | "reflection";
+
+// One acceptance criterion of a mandate WorkItem — carried inline on the card
+// so the ObjectViewer shows the full definition-of-done with no second fetch.
+export type MandateCriterion = {
+  id: string;
+  text: string;
+  status: "pending" | "pass" | "fail";
+  evidence?: string;
+};
 
 // One step of a workflow run's state-machine - carried inline on a
 // workflow WorkItem so tapping the Kanban card opens the drawer with the
@@ -296,6 +306,19 @@ export type WorkItem = {
   planSteps?: PlanStep[];
   doneCount?: number;
   totalCount?: number;
+  // populated only for kind === "mandate" - the binary acceptance criteria with
+  // pass/fail + evidence, carried inline so the card opens the full
+  // definition-of-done in ObjectViewer. doneCount/totalCount drive the same
+  // progress bar as a plan.
+  mandateCriteria?: MandateCriterion[];
+  // verification verdict for a high-stakes mandate (overall/confidence/auditor/
+  // notes), shown in ObjectViewer. Empty until mandate_verify has run.
+  crosscheck?: {
+    overall?: string;
+    confidence?: number;
+    notes?: string;
+    auditor?: string;
+  };
   // the skill(s) this item runs — for plans, what the agent actually invoked;
   // for crons, what the job is set to invoke. Shown as chips under the headline.
   skills?: string[];
@@ -369,6 +392,27 @@ export type Saved = {
   savedAt: string;
 };
 
+// ── Artifact (Made by Jarvis) ────────────────────────────────────────────────
+// A generated deliverable Jarvis shipped — an app/project, doc, dataset, etc.
+// Sourced from mem_artifacts (the canonical "things I've made" store that
+// project_create / document_create / image_generate already populate) and
+// surfaced on the dashboard's Saved card under the "Made by Jarvis" segment.
+// The storage fields are what the ObjectViewer routes on to reopen it live.
+export type Artifact = {
+  id: string;
+  kind: string; // project | document | dataset | other (curated for the dashboard)
+  name: string;
+  description?: string;
+  virtualPath: string; // boss-facing Library path
+  storageKind: "filesystem" | "object_store" | "postgres" | "inline";
+  storagePath?: string; // real FS path on a bridge OR object-store URL
+  storageMime?: string;
+  bridge?: "mac" | "cloud";
+  githubUrl?: string;
+  sourceTool?: string; // 'project_create' | 'document_create' | …
+  createdAt: string;
+};
+
 // ── Activity feed ────────────────────────────────────────────────────────────
 export type ActivityKind =
   | "scheduled"
@@ -411,4 +455,5 @@ export type DashboardItem =
   | { kind: "surface"; data: SurfaceItem }
   | { kind: "work"; data: WorkItem }
   | { kind: "saved"; data: Saved }
+  | { kind: "artifact"; data: Artifact }
   | { kind: "activity"; data: ActivityEvent };

@@ -47,6 +47,11 @@ export type VoiceCallbacks = {
   onToolCall?: (call: VoiceToolCall) => void;
   onLevel?: (kind: "mic" | "out", level01: number) => void;
   onError?: (msg: string) => void;
+  // onBargeIn fires the instant the mic VAD detects the boss starting to
+  // speak. The realtime model is demoted (it never speaks), so this is purely
+  // the signal to stop Jarvis's TTS playback immediately - the boss is talking
+  // over him. The finalized transcript that follows steers/starts a turn.
+  onBargeIn?: () => void;
 };
 
 export type VoiceClientArgs = {
@@ -218,39 +223,6 @@ export class VoiceClient {
     for (const t of this.localStream.getAudioTracks()) t.enabled = !muted;
   }
 
-  /** Submit a tool result back into the conversation. Caller is whoever
-   * dispatched the tool call to Core (see /api/voice/tool). */
-  submitToolResult(callId: string, output: string): void {
-    if (!this.dc || this.dc.readyState !== "open") return;
-    this.dc.send(
-      JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output,
-        },
-      }),
-    );
-    // Nudge the model to continue. Without this prompt the model will
-    // sit on the tool result instead of speaking back.
-    this.dc.send(JSON.stringify({ type: "response.create" }));
-  }
-
-  /** Replace the realtime session's tools list. Used after a tool call
-   * (load_tools / unload_tools / tool_search) mutates Core's per-session
-   * ActiveSet - the diffed tool defs come back on the /api/voice/tool
-   * response and we push them here so the next turn sees the new
-   * schemas. No-op when the data channel isn't open. */
-  updateTools(tools: Array<Record<string, unknown>>): void {
-    if (!this.dc || this.dc.readyState !== "open") return;
-    this.dc.send(
-      JSON.stringify({
-        type: "session.update",
-        session: { type: "realtime", tools, tool_choice: "auto" },
-      }),
-    );
-  }
 
   /** Tear everything down and report the session as "closed". Safe to
    * call multiple times. Use this for a normal end-of-session stop. For
@@ -340,10 +312,6 @@ export class VoiceClient {
     });
   }
 
-  private requestAssistantResponse(): void {
-    if (!this.dc || this.dc.readyState !== "open") return;
-    this.dc.send(JSON.stringify({ type: "response.create" }));
-  }
 
   private shouldIgnoreUserTranscript(text: string): boolean {
     const normalized = text.trim().toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
@@ -394,6 +362,9 @@ export class VoiceClient {
       // tracks audio the provider actually emitted.
       case "input_audio_buffer.speech_started": {
         cb.onStatus?.("user-speaking");
+        // Barge-in: cut Jarvis's spoken reply the moment the boss starts
+        // talking. Local + immediate so it never lags the network.
+        cb.onBargeIn?.();
         break;
       }
       case "input_audio_buffer.speech_stopped": {
@@ -411,8 +382,11 @@ export class VoiceClient {
           break;
         }
         if (text) {
+          // The transcript goes to the REAL brain (Loop.Run) via the chat
+          // WebSocket - NOT to the realtime model. We never send
+          // response.create anymore; the demoted realtime session only
+          // transcribes. The reply comes back as text deltas + TTS audio.
           cb.onUserTranscript?.(text, true);
-          this.requestAssistantResponse();
         }
         break;
       }
