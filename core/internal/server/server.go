@@ -14,6 +14,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/extensions"
+	"github.com/dopesoft/infinity/core/internal/gauge"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
@@ -73,6 +74,8 @@ type Config struct {
 	// turns on any active WS session).
 	IntentDetector *intent.Detector
 	IntentStore    *intent.Store
+	GaugeDetector  *gauge.Detector
+	GaugeStore     *gauge.Store
 	WAL            *proactive.WAL
 	WorkingBuffer  *proactive.WorkingBuffer
 	Heartbeat      *proactive.Heartbeat
@@ -157,6 +160,8 @@ type Server struct {
 
 	intentDet *intent.Detector
 	intentDB  *intent.Store
+	gaugeDet  *gauge.Detector
+	gaugeDB   *gauge.Store
 	wal       *proactive.WAL
 	buffer    *proactive.WorkingBuffer
 	heartbeat *proactive.Heartbeat
@@ -203,6 +208,8 @@ func New(cfg Config) *Server {
 		turns:          make(map[string]*turnState),
 		intentDet:      cfg.IntentDetector,
 		intentDB:       cfg.IntentStore,
+		gaugeDet:       cfg.GaugeDetector,
+		gaugeDB:        cfg.GaugeStore,
 		wal:            cfg.WAL,
 		buffer:         cfg.WorkingBuffer,
 		heartbeat:      cfg.Heartbeat,
@@ -304,6 +311,19 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/cite/", s.handleMemoryCite)
 	mux.HandleFunc("/api/memory/audit", s.handleAuditLog)
 	mux.HandleFunc("/api/memory/profile", s.handleProfile)
+	// Compass — the boss's authored north-star (mission/goals/principles),
+	// injected every turn by compass.Provider. GET lists the canonical
+	// sections + stored content; PUT upserts one section.
+	mux.HandleFunc("/api/compass", s.handleCompass)
+	// Mandates — per-task definitions of done with binary criteria. GET lists
+	// active/recent; GET /api/mandates/<id> reads one with its crosscheck.
+	mux.HandleFunc("/api/mandates", s.handleMandates)
+	mux.HandleFunc("/api/mandates/", s.handleMandate)
+	// Wards — structural privacy zones enforced by proactive.WardGate. GET
+	// lists; PUT adds; DELETE?id= removes.
+	mux.HandleFunc("/api/wards", s.handleWards)
+	// Gauge — recent effort-sizing reads, for the Intent/effort chip.
+	mux.HandleFunc("/api/gauge/recent", s.handleGaugeRecent)
 	mux.HandleFunc("/api/gym", s.handleGym)
 	mux.HandleFunc("/api/surface/action", s.handleSurfaceAction)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)

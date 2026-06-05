@@ -17,12 +17,15 @@ import (
 	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/browser"
 	"github.com/dopesoft/infinity/core/internal/calendar"
+	"github.com/dopesoft/infinity/core/internal/compass"
 	"github.com/dopesoft/infinity/core/internal/connectors"
+	"github.com/dopesoft/infinity/core/internal/crosscheck"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/eval"
 	"github.com/dopesoft/infinity/core/internal/extensions"
+	"github.com/dopesoft/infinity/core/internal/gauge"
 	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
 	"github.com/dopesoft/infinity/core/internal/inbox"
@@ -30,6 +33,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/maintenance"
+	"github.com/dopesoft/infinity/core/internal/mandate"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
@@ -764,6 +768,13 @@ func serveCmd() *cobra.Command {
 				// Configured via INFINITY_USER_TIMEZONE (default
 				// America/Chicago).
 				memProviders = append(memProviders, initiative.NewLocalTimeProvider())
+				// Compass: the boss's AUTHORED north-star (mission/goals/
+				// principles), injected early so his declared priorities frame
+				// every turn before any retrieved memory. Silent until he
+				// writes one in Settings → Compass.
+				if pool != nil {
+					memProviders = append(memProviders, compass.NewProvider(pool))
+				}
 				if searcher != nil {
 					memProviders = append(memProviders, searcher)
 				}
@@ -776,6 +787,13 @@ func serveCmd() *cobra.Command {
 				// message.
 				if pool != nil {
 					memProviders = append(memProviders, memory.NewPlanProvider(pool))
+				}
+				// Mandate: the session's open definition-of-done. Injected so the
+				// agent stays anchored to the binary acceptance criteria across
+				// turns and can't drift into "I think it's done". Silent when the
+				// session has no open mandate.
+				if pool != nil {
+					memProviders = append(memProviders, mandate.NewProvider(pool))
 				}
 				if pool != nil {
 					memProviders = append(memProviders, worldmodel.NewGoalsProvider(pool))
@@ -811,6 +829,13 @@ func serveCmd() *cobra.Command {
 				// otherwise.
 				if pool != nil {
 					memProviders = append(memProviders, memory.NewSelfModelProvider(pool))
+				}
+				// Gauge: fold the session's latest effort read back in. Only
+				// speaks on a DEEP read — nudging the agent to plan, verify, and
+				// open a Mandate on the follow-through of a long task. Advisory,
+				// never a cap.
+				if pool != nil {
+					memProviders = append(memProviders, gauge.NewProvider(pool))
 				}
 				// Loop awareness: surface the session's own tool-call rate
 				// every turn once it crosses 50% of the ceiling, so the
@@ -866,6 +891,13 @@ func serveCmd() *cobra.Command {
 						// unattended; only transactional acts (buy/pay/
 						// checkout/delete-account) queue a Trust contract.
 						proactive.NewBrowserGate(earlyTrust),
+						// WardGate enforces structural PRIVACY zones (mem_wards):
+						// a 'private' ward denies a file read outright, a
+						// 'sensitive' one routes it through Trust. Inspects
+						// claude_code__read/edit/write, filesystem__read_*, and any
+						// bash command that names a warded path. Credential/.env/key
+						// defaults ship seeded.
+						proactive.NewWardGate(earlyTrust, pool),
 						// LoopGate is the safety net: hard-blocks the same
 						// exact tool+input repeating ≥3 times in 60s, and
 						// routes through Trust when a session blows past
@@ -999,6 +1031,8 @@ func serveCmd() *cobra.Command {
 			var (
 				intentDetector *intent.Detector
 				intentDB       *intent.Store
+				gaugeDetector  *gauge.Detector
+				gaugeStore     *gauge.Store
 				heartbeat      *proactive.Heartbeat
 				trustStore     *proactive.TrustStore
 				proactiveAPI   *proactive.API
@@ -1116,6 +1150,10 @@ func serveCmd() *cobra.Command {
 						Provider: activeModel,
 						Model:    os.Getenv("INFINITY_INTENT_MODEL"),
 					})
+					// Gauge effort-sizing runs on the same active brain, async +
+					// off the hot path. Store is the durable record + chip source.
+					gaugeDetector = gauge.NewDetector(activeModel)
+					gaugeStore = gauge.NewStore(pool)
 				}
 				/* WAL + WorkingBuffer are the durable substrates for
 				 * compaction-recovery and load-bearing-fragment capture.
@@ -1514,6 +1552,29 @@ func serveCmd() *cobra.Command {
 				fmt.Println("  initiative: notify + cost tools wired")
 			}
 
+			// Mandate + Crosscheck: per-task definitions of done with binary
+			// criteria, and a cross-vendor audit of high-stakes results. The
+			// store carries the done-gate (can't close until every criterion
+			// passes; high-stakes needs a passing crosscheck); the announcer
+			// pings the boss when a mandate closes (the ambient "done"). The
+			// crosscheck verifier picks a DIFFERENT vendor than the active
+			// brain so the agent never grades its own homework.
+			if pool != nil {
+				mandateStore := mandate.NewStore(pool)
+				if pushSender != nil {
+					mandateStore.SetAnnouncer(&mandateAnnouncer{sender: pushSender})
+				}
+				tools.RegisterMandateTools(registry, mandateStore)
+				if llmRegistry != nil {
+					mandateSettings := settings.New(pool)
+					verifier := crosscheck.NewVerifier(llmRegistry, mandateStore, func() string {
+						return mandateSettings.GetProvider(context.Background())
+					})
+					tools.RegisterCrosscheckTools(registry, verifier, mandateStore)
+				}
+				fmt.Println("  mandate: open/check/close + crosscheck tools wired")
+			}
+
 			// Dashboard aggregator. Reads from migration-014 tables;
 			// 200 OK with empty arrays when those tables are empty so
 			// Studio can fall back to its local mock fixture.
@@ -1577,6 +1638,8 @@ func serveCmd() *cobra.Command {
 				Namer:            sessionNamer,
 				IntentDetector:   intentDetector,
 				IntentStore:      intentDB,
+				GaugeDetector:    gaugeDetector,
+				GaugeStore:       gaugeStore,
 				WAL:              walStore,
 				WorkingBuffer:    workingBuf,
 				Heartbeat:        heartbeat,

@@ -1269,3 +1269,88 @@ checklist is just a plan with plain steps:
 Under the search: **Agent Work** (full width) → **Upcoming · Follow-ups**
 (2-col) → **Surfaced by Jarvis · Pursuits · Todos** (3-col) → Reflection, Saved,
 Activity, memory footer. (`DashboardClient.tsx`.)
+
+## 19. Planning & verification primitives (migrations 128–132)
+
+Five generic building blocks — branded ours, learned from Daniel Miessler's PAI
+(Personal AI Infrastructure) but implemented the Rule #1 way: mechanics in Go,
+judgment in one seeded skill, everything generic and folded into existing UI
+(zero new pages). Together they turn the stated-but-unenforced "loop until
+verified" rule into structure: **Compass** frames *why*, **Gauge** sizes *how
+hard*, **Mandate** defines *done*, **Crosscheck** proves it, **Wards** keep it
+safe.
+
+### Compass — the boss's authored north-star (`mem_compass`, migration 128)
+- `core/internal/compass/{store,provider}.go`. A handful of free-text sections
+  (mission / goals / challenges / principles / fronts) the boss authors in
+  **Settings → Compass**. `compass.Provider` (a `MemoryProvider`, registered
+  early in `serve.go` right after local-time, before the searcher) injects a
+  `<compass>` block on **every turn** so the boss's declared priorities frame
+  everything before any retrieved memory. Silent until authored.
+- HTTP: `GET/PUT /api/compass`. Studio: `components/settings/CompassSection.tsx`
+  (live across devices via the `mem_compass` realtime publication) + a final
+  "North star" step in the onboarding wizard that seeds `mission`.
+- The agent **reads** the Compass; only the boss writes it (v1).
+
+### Mandate — a per-task definition of done (`mem_mandates`, migration 129)
+- `core/internal/mandate/{store,provider}.go` + tools in
+  `core/internal/tools/mandate_tools.go` (`mandate_open` / `mandate_check` /
+  `mandate_close` / `mandate_abandon`). A Mandate is a title + binary,
+  testable acceptance `criteria` (`[{id,text,status,evidence}]`).
+- **The done-gate is the load-bearing mechanic** (`Store.Close`, Go, not skill
+  prose per Rule #1b): it refuses `done` unless **every criterion is pass**, and
+  — for a `high_stakes` mandate — unless a passing Crosscheck has stamped
+  `verified_at`. The session-scoped `mandate.Provider` injects the open mandate
+  every turn so the agent stays anchored.
+- **Ambient "done"**: on close → `mandateAnnouncer` (a `push.Sender` adapter in
+  `cmd/infinity/initiative_deliverer.go`) pushes the boss a notification — PAI's
+  TTS-on-Stop equivalent, expressed as a push.
+- HTTP: `GET /api/mandates[?active=1]`, `GET /api/mandates/:id`. Studio:
+  `components/dashboard/MandatesCard.tsx` (active mandates with criteria
+  progress; tap → `ResponsiveModal` showing criteria + crosscheck verdict),
+  gated by the `mandates` dashboard preference. History is queryable via the API.
+- Judgment lives in the seeded **`frame-the-mandate`** skill (migration 131):
+  when to open one, how to decompose into binary criteria, when it's high-stakes.
+
+### Crosscheck — cross-vendor verification (no migration; uses `mem_runs`)
+- `core/internal/crosscheck/crosscheck.go` + `tools/crosscheck_tools.go`
+  (`mandate_verify`). On the work that matters, the agent doesn't grade its own
+  homework: `Verify` picks a **different LLM vendor family** than the active
+  brain (`familyOf` collapses openai/openai_oauth) from `llm.Registry`, runs a
+  strict-JSON audit via `llm.Complete` against the mandate's criteria + the
+  agent's claimed evidence, folds rejections back onto the criteria (a rejected
+  criterion flips to fail), stamps the mandate, and books a `mem_runs`
+  (`kind="crosscheck"`) row carrying the verdict in `meta` (the "runs carry a
+  narrative" pattern). Single-vendor fallback uses an extra-adversarial persona
+  and tags `single_vendor`.
+- Verdict renders inside the Mandate modal and as a run in `/logs`.
+
+### Gauge — up-front effort sizing (`mem_gauge_reads`, migration 130)
+- `core/internal/gauge/{gauge,provider}.go`. A cheap classifier (same shape as
+  `intent.Detector`, active brain, fail-open to `standard`) sizes each
+  substantive turn glance / standard / deep. **Runs async, off the chat hot
+  path** (the boss is latency-sensitive), gated by `agent.SubstantiveQuery`.
+  Fired in `ws.go` next to `classifyIntentAsync`; emitted as a `gauge` WS frame
+  and persisted. The session-scoped `gauge.Provider` injects an `<effort>` hint
+  on follow-up turns **only on a DEEP read** (nudging plan + verify + open a
+  Mandate). Advisory, never a cognition cap. Turn-1 is observability.
+- HTTP: `GET /api/gauge/recent`. Studio: an effort chip in the Intent panel
+  (`components/IntentStream.tsx`).
+
+### Wards — structural privacy zones (`mem_wards`, migration 132)
+- `core/internal/proactive/ward_gate.go` — a new `agent.ToolGate` composed into
+  the `GateChain` (before `loopGate`). Inspects path-bearing tools
+  (`claude_code__read/edit/write`, `filesystem__read_*`, and any
+  bash/`bash_run` command that names a warded path). A **`private`** ward denies
+  the read outright; a **`sensitive`** ward queues a `mem_trust_contracts` row
+  for boss approval (same durable path as the other gates). This complements
+  `memory.StripSecrets` (which redacts at *capture*) by controlling what the
+  agent may *read*. Credential / `.env` / key defaults ship **seeded** so
+  they're live on first boot.
+- HTTP: `GET/PUT/DELETE /api/wards`. Studio:
+  `components/settings/PrivacySection.tsx` (**Settings → Privacy**).
+
+### Provider registration (additions to the `memProviders` list, §13 / serve.go)
+Early: `compass.Provider`. Session-scoped: `mandate.Provider`, `gauge.Provider`.
+### Gate chain (addition, §"Runaway-loop defense")
+`proactive.WardGate` sits before `loopGate`.

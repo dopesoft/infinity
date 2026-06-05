@@ -69,6 +69,10 @@ type wsServerEvent struct {
 	// on type="intent" frames. Studio's IntentStream panel reads this
 	// directly; the chat transcript ignores it.
 	Intent *wsIntent `json:"intent,omitempty"`
+	// Gauge carries the per-turn effort sizing (glance/standard/deep). Only
+	// present on type="gauge" frames. Studio renders it as a chip beside the
+	// intent chip; the transcript ignores it.
+	Gauge *wsGauge `json:"gauge,omitempty"`
 	// FindingKind is set on type="proactive_message" frames so Studio can
 	// render an icon + tone consistent with the Heartbeat tab - e.g.
 	// "surprise" gets a lightbulb, "security" gets a shield.
@@ -390,6 +394,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			s.appendWAL(connCtx, sessionID, msg.Content)
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
+			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
 			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), send)
 			continue
@@ -417,6 +422,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			 * recorded for analytics and emitted as an `intent` frame so
 			 * Studio's IntentStream panel updates live. */
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
+			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types - the

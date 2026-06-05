@@ -5,6 +5,7 @@ import { TabFrame } from "@/components/TabFrame";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
 import { TodosCard } from "./TodosCard";
+import { MandatesCard } from "./MandatesCard";
 import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
 import { SurfacedCard } from "./SurfacedCard";
@@ -458,6 +459,7 @@ export function DashboardClient() {
                   onAdd={() => setAddingTodo(true)}
                 />
               )}
+              {s.mandates && <MandatesCard />}
             </div>
           )}
 

@@ -584,6 +584,40 @@ func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg str
 	}()
 }
 
+// wsGauge is the per-turn effort sizing emitted on a type="gauge" frame.
+type wsGauge struct {
+	Tier   string `json:"tier"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// classifyGaugeAsync sizes a user message's effort (glance/standard/deep)
+// without blocking the turn — same async, fail-open discipline as the intent
+// classifier (the boss is latency-sensitive; sizing must never stall chat). The
+// read is persisted (the durable record + the session-scoped GaugeProvider's
+// source) and emitted as a `gauge` frame for the Studio chip. Gated to
+// substantive turns so a greeting doesn't burn a model call.
+func (s *Server) classifyGaugeAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent)) {
+	if s == nil || s.gaugeDet == nil || strings.TrimSpace(userMsg) == "" {
+		return
+	}
+	if !agent.SubstantiveQuery(userMsg) {
+		return
+	}
+	go func() {
+		read := s.gaugeDet.Classify(ctx, userMsg, "")
+		if s.gaugeDB != nil {
+			s.gaugeDB.Record(ctx, sessionID, userMsg, read)
+		}
+		if send != nil {
+			send(wsServerEvent{
+				Type:      "gauge",
+				SessionID: sessionID,
+				Gauge:     &wsGauge{Tier: string(read.Tier), Reason: read.Reason},
+			})
+		}
+	}()
+}
+
 // appendWAL extracts load-bearing fragments from a user message and writes
 // them to mem_session_state. Synchronous and fast (regex over the message
 // string only - no LLM). Runs before the turn so a corrective phrase

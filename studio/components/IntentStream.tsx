@@ -2,8 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { fetchIntentRecent, type IntentRecordDTO } from "@/lib/api";
+import {
+  fetchGaugeRecent,
+  fetchIntentRecent,
+  type GaugeReadDTO,
+  type IntentRecordDTO,
+} from "@/lib/api";
 import { SidePanelCard } from "@/components/SidePanelCard";
+
+const GAUGE_STYLES: Record<GaugeReadDTO["tier"], { label: string; cls: string }> = {
+  glance: { label: "GLANCE", cls: "bg-muted text-muted-foreground" },
+  standard: { label: "STANDARD", cls: "bg-info/15 text-info" },
+  deep: { label: "DEEP", cls: "bg-primary/15 text-primary" },
+};
 
 const TOKEN_STYLES: Record<IntentRecordDTO["token"], { label: string; cls: string }> = {
   fast_intervention: {
@@ -35,13 +46,20 @@ function relTime(iso: string): string {
 
 export function IntentStream() {
   const [items, setItems] = useState<IntentRecordDTO[] | null>(null);
+  const [gauge, setGauge] = useState<GaugeReadDTO | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const ctl = new AbortController();
     async function load() {
-      const rows = await fetchIntentRecent(5, ctl.signal);
-      if (!cancelled) setItems(rows ?? []);
+      const [rows, gauges] = await Promise.all([
+        fetchIntentRecent(5, ctl.signal),
+        fetchGaugeRecent(1, ctl.signal),
+      ]);
+      if (!cancelled) {
+        setItems(rows ?? []);
+        setGauge(gauges?.[0] ?? null);
+      }
     }
     load();
     const id = setInterval(load, 8000);
@@ -52,8 +70,28 @@ export function IntentStream() {
     };
   }, []);
 
+  const gaugeStyle = gauge ? GAUGE_STYLES[gauge.tier] ?? GAUGE_STYLES.standard : null;
+
   return (
     <SidePanelCard label="Intent stream">
+      {gauge && gaugeStyle ? (
+        <div className="mb-2 flex items-center gap-2 border-b border-border/60 pb-2">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Effort
+          </span>
+          <span
+            className={cn(
+              "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider",
+              gaugeStyle.cls,
+            )}
+          >
+            {gaugeStyle.label}
+          </span>
+          {gauge.reason ? (
+            <span className="truncate text-[11px] text-muted-foreground">{gauge.reason}</span>
+          ) : null}
+        </div>
+      ) : null}
       {items === null ? (
         <p className="text-xs text-muted-foreground">Loading…</p>
       ) : items.length === 0 ? (

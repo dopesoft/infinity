@@ -338,7 +338,9 @@ Full env-var reference, service-by-service deploy notes, Supabase pooler details
 
 ## Recent changes
 
-See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the running record. Most recent (2026-06-02):
+See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the running record. Most recent (2026-06-04):
+
+- **Planning & verification primitives** — five generic building blocks, learned from Daniel Miessler's PAI but built the Rule #1 way (mechanics in Go, judgment in one seeded skill, folded into existing UI — zero new pages). **Compass** (`mem_compass`): the boss's authored mission/goals/principles, injected into *every* turn (Settings → Compass). **Mandate** (`mem_mandates`): a per-task definition of done as binary acceptance criteria with a Go-enforced done-gate — the agent *cannot* call it done until every criterion passes. **Crosscheck**: a *different* LLM vendor audits high-stakes results against those criteria before close (no grading your own homework). **Gauge** (`mem_gauge_reads`): cheap, async, off-the-hot-path effort sizing (glance/standard/deep) that nudges deep work to plan + verify. **Wards** (`mem_wards`): structural privacy zones — a new tool-gate that blocks/queues reads of declared-private paths (credentials/.env seeded). Migrations `128`–`132`; `core/internal/{compass,mandate,crosscheck,gauge}/` + `proactive/ward_gate.go`. Full wiring: [ARCHITECTURE.md §19](ARCHITECTURE.md#19-planning--verification-primitives-migrations-128132).
 
 - **Durable plans ("the Cortex") + todo/plan unification** — the agent now lays out a verifiable, resumable plan for any multi-step task, proves each step before marking it done, and shows the *same* plan in chat and on the dashboard (one substrate, two synced views). The old ephemeral background "todo list" is folded in as the quick form of a plan. Migrations `116` / `117`; `core/internal/plan/`. Full wiring: [ARCHITECTURE.md](ARCHITECTURE.md#durable-plans-the-cortex--todoplan-unification-2026-06-02).
 

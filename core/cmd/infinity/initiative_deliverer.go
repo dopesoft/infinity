@@ -4,9 +4,34 @@ import (
 	"context"
 
 	"github.com/dopesoft/infinity/core/internal/initiative"
+	"github.com/dopesoft/infinity/core/internal/mandate"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
+
+// mandateAnnouncer is the concrete mandate.Announcer — it pings the boss's
+// phone when a Mandate closes (the ambient "done", PAI's TTS-on-Stop
+// equivalent expressed as a push). Nil-safe via the same Sender guard.
+type mandateAnnouncer struct {
+	sender *push.Sender
+}
+
+func (a *mandateAnnouncer) Announce(ctx context.Context, m *mandate.Mandate) {
+	if a == nil || a.sender == nil || m == nil {
+		return
+	}
+	body := m.Summary
+	if body == "" {
+		body = "All acceptance criteria verified."
+	}
+	a.sender.Notify(ctx, push.Notification{
+		Title: "Done: " + m.Title,
+		Body:  body,
+		URL:   "/",
+		Kind:  "mandate_done",
+		Tag:   "mandate-" + m.ID,
+	})
+}
 
 // initiativeDeliverer is the concrete initiative.Deliverer - it bridges
 // the initiative package's urgency policy to the real delivery channels:

@@ -1061,6 +1061,12 @@ export function useChat() {
            * future TS strictness doesn't blow up. */
           break;
         }
+        case "gauge": {
+          /* Effort sizing (glance/standard/deep) - like intent, surfaced by
+           * the Intent/effort panel via its own DB fetch path, not the chat
+           * transcript. Acknowledged for switch exhaustiveness. */
+          break;
+        }
         case "proactive_message": {
           /* Unprompted assistant turn pushed by the heartbeat. Render it
            * as a regular assistant bubble so the transcript reads

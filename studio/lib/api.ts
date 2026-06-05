@@ -2080,3 +2080,126 @@ export async function checkExtension(
     return { ok: false, error: err instanceof Error ? err.message : "network error" };
   }
 }
+
+// ── Compass / Mandate / Gauge / Wards (planning & verification primitives) ──
+//
+// These back the PAI-inspired building blocks: Compass (authored north-star),
+// Mandate (per-task definition of done), Wards (privacy zones). Crosscheck and
+// Gauge surface through existing channels (mem_runs / the WS gauge frame).
+
+export type CompassSection = {
+  section: string;
+  label: string;
+  content: string;
+  position: number;
+};
+
+export const fetchCompass = (signal?: AbortSignal) =>
+  getJSON<CompassSection[]>("/api/compass", signal);
+
+export async function putCompassSection(
+  section: string,
+  content: string,
+  position: number,
+): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/compass", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ section, content, position }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type MandateCriterion = {
+  id: string;
+  text: string;
+  status: "pending" | "pass" | "fail";
+  evidence?: string;
+};
+
+export type MandateCrosscheck = {
+  overall?: string;
+  confidence?: number;
+  notes?: string;
+  auditor?: string;
+  single_vendor?: boolean;
+  criteria?: Array<{ id: string; pass: boolean; note: string }>;
+};
+
+export type MandateDTO = {
+  id: string;
+  session_id?: string;
+  title: string;
+  summary: string;
+  status: "open" | "verifying" | "done" | "abandoned";
+  criteria: MandateCriterion[];
+  high_stakes: boolean;
+  importance?: number;
+  source: string;
+  verified_at?: string;
+  crosscheck?: MandateCrosscheck;
+  created_at: string;
+  updated_at: string;
+};
+
+export const fetchMandates = (opts: { active?: boolean; limit?: number } = {}, signal?: AbortSignal) => {
+  const q = new URLSearchParams();
+  if (opts.active) q.set("active", "1");
+  if (opts.limit) q.set("limit", String(opts.limit));
+  const qs = q.toString();
+  return getJSON<MandateDTO[]>(`/api/mandates${qs ? `?${qs}` : ""}`, signal);
+};
+
+export const fetchMandate = (id: string, signal?: AbortSignal) =>
+  getJSON<MandateDTO>(`/api/mandates/${encodeURIComponent(id)}`, signal);
+
+export type WardDTO = {
+  id?: string;
+  glob: string;
+  level: "private" | "sensitive";
+  note?: string;
+};
+
+export const fetchWards = (signal?: AbortSignal) =>
+  getJSON<WardDTO[]>("/api/wards", signal);
+
+export async function putWard(ward: WardDTO): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/wards", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ward),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteWard(idOrGlob: { id?: string; glob?: string }): Promise<boolean> {
+  try {
+    const q = new URLSearchParams();
+    if (idOrGlob.id) q.set("id", idOrGlob.id);
+    else if (idOrGlob.glob) q.set("glob", idOrGlob.glob);
+    const res = await authedFetch(`/api/wards?${q.toString()}`, { method: "DELETE" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type GaugeReadDTO = {
+  id: string;
+  session_id?: string;
+  turn_excerpt: string;
+  tier: "glance" | "standard" | "deep";
+  reason: string;
+  created_at: string;
+};
+
+export const fetchGaugeRecent = (limit = 5, signal?: AbortSignal) =>
+  getJSON<GaugeReadDTO[]>(`/api/gauge/recent?limit=${limit}`, signal);

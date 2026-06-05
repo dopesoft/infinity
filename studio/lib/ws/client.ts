@@ -44,6 +44,10 @@ export type WSEvent =
   // after `complete` depending on Haiku latency. The IntentStream panel
   // consumes it; the chat transcript ignores it.
   | { type: "intent"; session_id: string; intent: WSIntent }
+  // gauge is the per-turn effort sizing (glance/standard/deep). Emitted async
+  // like intent; the Intent/effort panel reads it via its own DB fetch path,
+  // and the chat transcript ignores it.
+  | { type: "gauge"; session_id: string; gauge: WSGauge }
   // proactive_message is an unprompted assistant turn - broadcast by the
   // heartbeat when a finding crosses the surface threshold (surprise,
   // curiosity, security, or any pre-approved finding). useChat renders
@@ -103,6 +107,11 @@ export type WSIntent = {
   confidence: number;
   reason?: string;
   suggested_action?: string;
+};
+
+export type WSGauge = {
+  tier: "glance" | "standard" | "deep";
+  reason?: string;
 };
 
 export type WSToolInputDelta = {

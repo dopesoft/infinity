@@ -6,7 +6,7 @@ import { Infinity as InfinityIcon, ArrowLeft, ArrowRight, Check } from "lucide-r
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { setMeta, upsertProfileFact } from "@/lib/api";
+import { putCompassSection, setMeta, upsertProfileFact } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /* First Run wizard. Collects identity context from the user once and writes
@@ -27,6 +27,10 @@ type Step = {
   placeholder: string;
   long?: boolean;
   optional?: boolean;
+  /* When set, this answer is written to the Compass (mem_compass) section of
+   * this name instead of a mem_memories profile fact. The Compass is the boss's
+   * authored north-star, injected into every turn by compass.Provider. */
+  compass?: string;
   /* importance maps to the mem_memories.importance score. 9 is the default for
    * boss-profile rows; we bump load-bearing facts (name, role) to 10 so they
    * float to the top of the system prompt and never drop on truncation. */
@@ -97,6 +101,17 @@ const STEPS: Step[] = [
     optional: true,
     importance: 8,
   },
+  {
+    key: "North star",
+    title: "What are you ultimately building toward?",
+    subtitle:
+      "Your mission, in one paragraph. This becomes your Compass - I keep it in mind on every single turn and let it frame what matters. You can edit it anytime in Settings → Compass.",
+    placeholder: "Build the AI companion that compounds my judgment and runs my world, so I can operate at 10x without losing the human edge.",
+    long: true,
+    optional: true,
+    compass: "mission",
+    importance: 9,
+  },
 ];
 
 export default function OnboardingPage() {
@@ -130,6 +145,11 @@ export default function OnboardingPage() {
     const writes = STEPS.map(async (s) => {
       const content = (answers[s.key] ?? "").trim();
       if (!content) return null;
+      // Compass steps author the boss's north-star (mem_compass), injected
+      // every turn; everything else is a profile fact (mem_memories).
+      if (s.compass) {
+        return (await putCompassSection(s.compass, content, 0)) ? { ok: true } : null;
+      }
       return upsertProfileFact({
         title: s.key,
         content,
