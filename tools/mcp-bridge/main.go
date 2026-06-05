@@ -499,7 +499,7 @@ func (b *bridge) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 func runGit(ctx context.Context, repo string, args ...string) (string, error) {
 	full := append([]string{"-C", repo}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), err
 	}
