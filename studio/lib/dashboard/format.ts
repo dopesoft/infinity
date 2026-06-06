@@ -53,8 +53,23 @@ export function clockTime(iso: string | null | undefined, opts: { seconds?: bool
   });
 }
 
-export function dayLabel(iso: string): string {
+// eventDate resolves a calendar event's start to the Date that should drive
+// LOCAL-time day rendering. All-day events (birthdays, anniversaries) are
+// date-only: Google sends "2026-06-06" and Core stores it as UTC midnight, so
+// the event's UTC Y/M/D ARE the intended calendar date. Reading that instant in
+// a negative-offset zone shifts the day back one (June 6 → June 5, 7pm in CST) —
+// the off-by-one that displayed same-day birthdays as "yesterday" and made the
+// local-day filter drop them once the real date arrived. For all-day events we
+// rebuild a LOCAL midnight Date from the UTC components; timed events are real
+// instants and pass through unchanged.
+export function eventDate(iso: string, allDay?: boolean): Date {
   const d = new Date(iso);
+  if (!allDay || Number.isNaN(d.getTime())) return d;
+  return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+export function dayLabel(iso: string, allDay?: boolean): string {
+  const d = eventDate(iso, allDay);
   const today = new Date();
   const startOfDay = (x: Date) => {
     const c = new Date(x);

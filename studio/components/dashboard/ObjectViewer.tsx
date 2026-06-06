@@ -60,7 +60,7 @@ import { Chip, classificationTone, intentTone, modeTone, type ChipTone } from ".
 import { PlanTimeline } from "./PlanTimeline";
 import { EditTodoModal } from "./EditTodoModal";
 import { cn } from "@/lib/utils";
-import { clockTime, dayLabel, formatDuration, fullDateTime, relTime } from "@/lib/dashboard/format";
+import { clockTime, dayLabel, eventDate, formatDuration, fullDateTime, relTime } from "@/lib/dashboard/format";
 import { seedSession } from "@/lib/dashboard/seed";
 import { parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type {
@@ -238,7 +238,7 @@ function EventHeader({ event }: { event: CalendarEvent }) {
         className="flex flex-wrap items-baseline gap-x-3 text-[13px] text-foreground/80"
         suppressHydrationWarning
       >
-        <span>{eventDateLine(event.startsAt)}</span>
+        <span>{eventDateLine(event.startsAt, event.allDay)}</span>
         {!event.allDay ? (
           <>
             <span>
@@ -289,8 +289,8 @@ function eventClassificationTone(cls: string): string {
 
 // eventDateLine: "Thu, 1st April, 2026" format from the design ref.
 // Uses ordinal suffix on the day. en-GB locale ordering (day-month-year).
-function eventDateLine(iso: string): string {
-  const d = new Date(iso);
+function eventDateLine(iso: string, allDay?: boolean): string {
+  const d = eventDate(iso, allDay);
   if (Number.isNaN(d.getTime())) return "";
   const weekday = d.toLocaleDateString("en-GB", { weekday: "short" });
   const day = d.getDate();

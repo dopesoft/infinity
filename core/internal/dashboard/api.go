@@ -678,7 +678,8 @@ func (a *API) loadCalendar(ctx context.Context) ([]CalendarEvent, error) {
 		       COALESCE(account_id, '')
 		FROM mem_calendar_events
 		WHERE (ends_at IS NULL AND starts_at >= NOW() - INTERVAL '1 day')
-		   OR ends_at >= NOW()
+		   OR (COALESCE(all_day, FALSE) AND ends_at >= NOW() - INTERVAL '1 day')
+		   OR (NOT COALESCE(all_day, FALSE) AND ends_at >= NOW())
 		ORDER BY starts_at ASC
 		LIMIT 200
 	`)

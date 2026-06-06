@@ -6,7 +6,7 @@ import { CalendarRange, MapPin } from "lucide-react";
 import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
-import { clockTime, dayLabel, startOfDay } from "@/lib/dashboard/format";
+import { clockTime, dayLabel, eventDate, startOfDay } from "@/lib/dashboard/format";
 import type { CalendarEvent, DashboardItem } from "@/lib/dashboard/types";
 
 type Row =
@@ -40,12 +40,12 @@ export function UpcomingCard({
   const rows = useMemo<Row[]>(() => {
     const today = startOfDay(new Date());
     const future = events
-      .filter((e) => startOfDay(e.startsAt) >= today)
+      .filter((e) => startOfDay(eventDate(e.startsAt, e.allDay)) >= today)
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
     const out: Row[] = [];
     let lastMonth = "";
     for (const e of future) {
-      const d = new Date(e.startsAt);
+      const d = eventDate(e.startsAt, e.allDay);
       // Stable monthKey so we never re-render the same header twice
       // even across timezone boundaries. Compare via getFullYear() +
       // getMonth() rather than locale string.
@@ -112,8 +112,9 @@ export function UpcomingCard({
 }
 
 function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
-  // Day-of-month for the date tile (e.g. "13" for May 13th).
-  const day = new Date(e.startsAt).getDate();
+  // Day-of-month for the date tile (e.g. "13" for May 13th). All-day events
+  // resolve by calendar date so a June 6 birthday tiles "6", not "5".
+  const day = eventDate(e.startsAt, e.allDay).getDate();
   const openPrep = e.prep.filter((p) => !p.done).length;
   // Conference / video provider for the optional 'meet' / 'zoom' chip.
   const videoSolution = (
@@ -155,8 +156,12 @@ function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
             className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-muted-foreground"
             suppressHydrationWarning
           >
-            <span className="font-medium text-foreground/80">{dayLabel(e.startsAt)}</span>
-            <span className="font-mono">{clockTime(e.startsAt)}</span>
+            <span className="font-medium text-foreground/80">{dayLabel(e.startsAt, e.allDay)}</span>
+            {e.allDay ? (
+              <span>all day</span>
+            ) : (
+              <span className="font-mono">{clockTime(e.startsAt)}</span>
+            )}
             {e.location ? (
               <>
                 <span aria-hidden>·</span>
