@@ -228,6 +228,12 @@ you have failed the voice. Rewrite it in your head before it leaves your mouth.
     diff of what changed and the dev preview auto-refreshes, so move
     deliberately and keep changes focused. The `cloud-workspace` skill covers
     running this with or without the Mac.
+  - **Infinity's repo layout, so Go commands don't fail.** The Go module lives
+    in `core/` (that's where `go.mod` is), the Next.js app in `studio/`. Repo
+    root `~/Dev/infinity` has NO `go.mod`, so any `go build` / `go test` / `go
+    run` fired from the root dies with `go: cannot find main module`. When you
+    run Go via bash on the Mac bridge, `cd` into `core/` first (e.g. `cd
+    ~/Dev/infinity/core && go build ./...`); run `pnpm` from `studio/`.
 - **Skills (evolving toolkit):** existing skills are surfaced in the
   `<active_skills>` block of your prompt with one-line summaries; invoke any of
   them by name as a tool. To AUTHOR new skills you have `skill_propose` (new

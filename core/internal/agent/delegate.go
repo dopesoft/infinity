@@ -348,6 +348,28 @@ func (d *Delegate) run(ctx context.Context, args runArgs) (string, error) {
 	}
 
 	if runErr != nil {
+		// Context-window overflow is a special, dangerous failure mode. The
+		// sub-agent's input blew past the model's context window, so it
+		// retrieved NOTHING - but a blank result reads, to a careless parent,
+		// like "the source was empty," and the parent fabricates a plausible
+		// answer (the exact incident that prompted this guard: a delegated
+		// inbox check died on context_length_exceeded and the agent invented
+		// an email thread). A generic error blob with an empty partial_summary
+		// is too quiet to stop that. Return a loud, unambiguous directive
+		// instead: no data exists, do NOT invent any, retry with a tighter
+		// scope. This is a non-droppable mechanic in the tool result, not a
+		// line of prose the runtime model can forget.
+		if isContextOverflow(runErr) {
+			body := map[string]any{
+				"error":     "context_window_exceeded",
+				"retrieved": false,
+				"task":      args.task,
+				"directive": "The sub-agent's input exceeded the model's context window, so it retrieved NOTHING. You have NO data from this call. Do NOT fabricate, infer, or summarize any result. Retry with a SMALLER scope - fewer items, pagination, a tighter query, or a larger-context model - or tell the boss plainly that the fetch was too large to complete this turn.",
+				"detail":    runErr.Error(),
+			}
+			b, _ := json.Marshal(body)
+			return string(b), nil
+		}
 		// Return partial output alongside the error so the parent can
 		// salvage what's there.
 		body := map[string]any{
@@ -359,6 +381,32 @@ func (d *Delegate) run(ctx context.Context, args runArgs) (string, error) {
 		return string(b), nil
 	}
 	return summary, nil
+}
+
+// isContextOverflow reports whether a sub-agent run error is the provider's
+// "input exceeded the model's context window" signal (OpenAI
+// context_length_exceeded, Anthropic prompt-too-long, etc.). These are
+// recoverable only by retrying with a SMALLER scope - never by fabricating a
+// result, which is the failure mode the caller guards against.
+func isContextOverflow(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"context_length_exceeded",
+		"context length exceeded",
+		"maximum context length",
+		"prompt is too long",
+		"input is too long",
+		"request too large",
+		"too many tokens",
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── persistent named-peer registry ────────────────────────────────────────
