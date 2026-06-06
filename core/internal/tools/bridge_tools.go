@@ -351,7 +351,11 @@ func (t *bridgeGitStatus) Execute(ctx context.Context, in map[string]any) (strin
 	}
 	body, status, ok := b.Get(ctx, "/git/status?repo="+urlEscape(strString(in, "repo")))
 	if !ok || status >= 300 {
-		return "", fmt.Errorf("git_status via %s failed (status=%d)", b.Name(), status)
+		reason := bridgeErrText(body)
+		if strings.TrimSpace(reason) == "" || reason == "no reason given" {
+			reason = "repo state unknown"
+		}
+		return "", fmt.Errorf("git_status via %s failed (status=%d): %s", b.Name(), status, reason)
 	}
 	return formatBridgeResult(b, body), nil
 }
