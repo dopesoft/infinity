@@ -58,8 +58,12 @@ type Step struct {
 	VerifyResult   map[string]any `json:"verify_result,omitempty"`
 	ResultSummary  string         `json:"result_summary,omitempty"`
 	RunID          string         `json:"run_id,omitempty"`
-	StartedAt      *time.Time     `json:"started_at,omitempty"`
-	EndedAt        *time.Time     `json:"ended_at,omitempty"`
+	// RecoveryAttempted guards the one-shot "auto-recovery, then stop" policy:
+	// a transient/bridge-class background failure may be re-dispatched once;
+	// after that this is true and a second failure stops + surfaces.
+	RecoveryAttempted bool       `json:"recovery_attempted,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	EndedAt           *time.Time `json:"ended_at,omitempty"`
 }
 
 // NewStepInput is the shape plan_create accepts for each step it lays out.

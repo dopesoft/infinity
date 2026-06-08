@@ -292,6 +292,46 @@ func (t *Tracker) ReapTimedOut(ctx context.Context, maxAge time.Duration) (int, 
 	return int(tag.RowsAffected()), nil
 }
 
+// ReapTimedOutKind is ReapTimedOut scoped to a single kind, so a class of run
+// with a tighter SLA than the global 45-min budget can be reaped faster. Used
+// for 'plan.step' spinners: a step stranded by a crashed turn (the OnDone settle
+// is the normal close path) should surface within minutes, not 45. Age-bounded
+// so a step still legitimately executing (run younger than maxAge) is untouched.
+// Returns rows closed.
+func (t *Tracker) ReapTimedOutKind(ctx context.Context, kind Kind, maxAge time.Duration) (int, error) {
+	if t == nil || t.pool == nil {
+		return 0, nil
+	}
+	if maxAge <= 0 {
+		maxAge = 10 * time.Minute
+	}
+	humanJSON := "{}"
+	if b, err := json.Marshal(errs.HumanizeString("the step ran past its time budget and was stopped")); err == nil {
+		humanJSON = string(b)
+	}
+	tag, err := t.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET status = 'error',
+		       ended_at = COALESCE(ended_at, NOW()),
+		       duration_ms = COALESCE(duration_ms,
+		           LEAST(2147483647, GREATEST(0,
+		               EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
+		       error = COALESCE(NULLIF(error, ''), 'step exceeded its time budget and was reaped'),
+		       result_summary = COALESCE(NULLIF(result_summary, ''), '(stalled — no result recorded)'),
+		       human_error = CASE
+		           WHEN human_error IS NULL OR human_error = '{}'::jsonb THEN $2::jsonb
+		           ELSE human_error
+		       END
+		 WHERE status = 'running'
+		   AND kind = $3
+		   AND started_at < NOW() - ($1 * interval '1 second')
+	`, maxAge.Seconds(), humanJSON, string(kind))
+	if err != nil {
+		return 0, fmt.Errorf("reap timed-out %s runs: %w", kind, err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // FinishByID closes a run row by its id, without needing the original Handle.
 // Used when begin and finish span different turns / tool calls (eg. a plan
 // step booked 'running' by plan_update on one turn and closed on a later turn),

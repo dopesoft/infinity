@@ -19,10 +19,11 @@ import (
 	"github.com/dopesoft/infinity/core/internal/calendar"
 	"github.com/dopesoft/infinity/core/internal/compass"
 	"github.com/dopesoft/infinity/core/internal/connectors"
-	"github.com/dopesoft/infinity/core/internal/crosscheck"
 	"github.com/dopesoft/infinity/core/internal/cron"
+	"github.com/dopesoft/infinity/core/internal/crosscheck"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/dopesoft/infinity/core/internal/embed"
+	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/eval"
 	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/gauge"
@@ -913,6 +914,12 @@ func serveCmd() *cobra.Command {
 				if projectProvider != nil {
 					loop.SetProjectFetcher(projectProvider.ProjectFetcher())
 				}
+				// Mac->Cloud failover for claude_code__* tool errors: when the
+				// Mac bridge dies mid-turn the loop hands the model the cloud
+				// primitives instead of spinning retries to the iteration cap.
+				if activeBridgeRouter != nil {
+					loop.SetBridgeRouter(activeBridgeRouter)
+				}
 				// Register the delegate + delegate_parallel sub-agent
 				// spawners now that the loop exists. They live in the
 				// agent package (need direct Loop access) but register
@@ -1693,17 +1700,66 @@ func serveCmd() *cobra.Command {
 					srv.BroadcastBackgroundProgress(p)
 				}
 				bgAgent.OnDone = func(ctx context.Context, r agent.BackgroundResult) {
-					srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
+					// Deterministically settle the parent session's ONE durable
+					// plan (Rule #1b: never depend on the LLM's final todo_write
+					// landing). This is the fix for "plan step spins forever after
+					// the build finishes". Decide settle/recovery BEFORE notifying
+					// so the chat bubble + push match what actually happened.
+					recovering := false
+					if pool != nil && r.ParentSession != "" {
+						pstore := plan.NewStore(pool)
+						switch {
+						case r.Err == "":
+							if _, err := pstore.SettlePlanForSession(context.Background(), r.ParentSession, plan.StepDone, r.Summary); err != nil {
+								fmt.Fprintf(os.Stderr, "plan settle (done) for %s: %v\n", r.ParentSession, err)
+							}
+						default:
+							// One auto-recovery, then stop: re-dispatch ONCE for a
+							// transient/bridge-class failure if the in_progress step
+							// hasn't already been retried; the recovery_attempted
+							// guard makes this un-loopable.
+							if isRecoverableErr(r.Err) {
+								if step, sErr := pstore.InProgressStepForSession(context.Background(), r.ParentSession); sErr == nil && step != nil && !step.RecoveryAttempted {
+									if mErr := pstore.MarkRecoveryAttempted(context.Background(), step.ID); mErr == nil {
+										rctx := tools.WithSessionID(context.Background(), r.ParentSession)
+										if _, dErr := bgAgent.Execute(rctx, map[string]any{"task": r.Task}); dErr == nil {
+											recovering = true
+										}
+									}
+								}
+							}
+							if !recovering {
+								// Stop and surface the REAL error: step -> failed,
+								// plan -> paused, under "Awaiting you".
+								if _, err := pstore.SettlePlanForSession(context.Background(), r.ParentSession, plan.StepFailed, r.Err); err != nil {
+									fmt.Fprintf(os.Stderr, "plan settle (failed) for %s: %v\n", r.ParentSession, err)
+								}
+							}
+						}
+					}
+
+					if recovering {
+						srv.BroadcastBackgroundDone(r.Task, "First attempt hit a transient issue — retrying once on the cloud workspace.", "")
+					} else {
+						srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
+					}
 					if localPush != nil {
 						title := "Build complete"
 						body := r.Task
-						if r.Err != "" {
+						switch {
+						case recovering:
+							title = "Retrying on cloud"
+							body = r.Task
+							if r.Err != "" {
+								body += " — first attempt hit: " + r.Err
+							}
+						case r.Err != "":
 							title = "Build failed"
 							if body != "" {
 								body += " — "
 							}
 							body += r.Err
-						} else if r.Summary != "" {
+						case r.Summary != "":
 							body = r.Summary
 						}
 						localPush.Notify(ctx, push.Notification{
@@ -2300,6 +2356,17 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
 			reapAge = d
 		}
 	}
+	// Plan steps have a tighter SLA than the global run budget: the normal close
+	// path is the OnDone settle (immediate), so a 'plan.step' run still 'running'
+	// after a few minutes means the turn that owned it died. Surface that fast
+	// (the boss's "if it gets stuck, stop and show me the error") instead of
+	// waiting the full 45 min. Override with INFINITY_PLAN_STEP_REAPER_MAX_AGE.
+	stepReapAge := 10 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("INFINITY_PLAN_STEP_REAPER_MAX_AGE")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			stepReapAge = d
+		}
+	}
 
 	runOnce := func() {
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -2307,6 +2374,12 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
 		// Reap stranded runs FIRST so the steps they back flip to a terminal
 		// 'error' run, then reconcile cascades those to failed + recomputes the
 		// plan. Order matters: reconcile keys off run.status='error'.
+		// plan.step runs get the tighter age; everything else the 45-min budget.
+		if n, err := tracker.ReapTimedOutKind(runCtx, runs.KindPlanStep, stepReapAge); err != nil {
+			fmt.Fprintf(os.Stderr, "plan-step reaper: %v\n", err)
+		} else if n > 0 {
+			infoLog.Printf("plan-step reaper: closed %d plan.step run(s) stranded 'running' past %s", n, stepReapAge)
+		}
 		if n, err := tracker.ReapTimedOut(runCtx, reapAge); err != nil {
 			fmt.Fprintf(os.Stderr, "run reaper: %v\n", err)
 		} else if n > 0 {
@@ -2341,6 +2414,24 @@ func clipPush(s string, max int) string {
 		return s
 	}
 	return strings.TrimSpace(string(r[:max])) + "…"
+}
+
+// isRecoverableErr reports whether a background build failure is transient
+// enough to warrant the one-shot auto-recovery re-dispatch: a bridge outage, a
+// provider rate-limit, or a timeout/connection blip. Everything else (a real
+// build/test/logic failure) stops and surfaces the error to the boss.
+func isRecoverableErr(raw string) bool {
+	switch errs.HumanizeString(raw).Category {
+	case errs.CatBridge, errs.CatRateLimit:
+		return true
+	}
+	low := strings.ToLower(raw)
+	for _, s := range []string{"timeout", "timed out", "deadline exceeded", "connection refused", "connection reset", "eof"} {
+		if strings.Contains(low, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // heartbeatInterval reads $INFINITY_HEARTBEAT_INTERVAL (Go duration form,

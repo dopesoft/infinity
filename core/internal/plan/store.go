@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -167,6 +168,37 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 		}
 	}
 
+	// Before replacing the step set, collect any still-running 'plan.step'
+	// spinner runs on the steps we're about to delete. A foreground
+	// plan_update(step,in_progress) books such a run; if that step is now being
+	// replaced by the (background) checklist, the DELETE would ORPHAN the run —
+	// nothing could ever close it and it would spin until the 45-min reaper.
+	// That orphaned spinner was the "plan step spins forever" bug. We close them
+	// (after commit) so the replace is clean.
+	orphanRows, err := tx.Query(ctx, `
+		SELECT run_id::text FROM mem_plan_steps
+		 WHERE plan_id = $1::uuid AND run_id IS NOT NULL
+		   AND status NOT IN ('done','failed','skipped')
+	`, planID)
+	if err != nil {
+		return nil, err
+	}
+	var orphanRunIDs []string
+	for orphanRows.Next() {
+		var rid string
+		if scanErr := orphanRows.Scan(&rid); scanErr != nil {
+			orphanRows.Close()
+			return nil, scanErr
+		}
+		if rid != "" {
+			orphanRunIDs = append(orphanRunIDs, rid)
+		}
+	}
+	orphanRows.Close()
+	if err := orphanRows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Replace the step set to mirror the checklist. todo-driven steps carry no
 	// runs/verification, so a wholesale replace is safe and keeps the call
 	// idempotent (todo_write resends the full list each time).
@@ -184,6 +216,12 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
+	}
+	// Settle the orphaned spinner runs (best-effort; the step rows they tracked
+	// are gone, superseded by the new checklist). FinishByID is pool-based, so
+	// it runs independent of the committed tx.
+	for _, rid := range orphanRunIDs {
+		runs.FinishByID(ctx, rid, nil, "superseded by updated checklist")
 	}
 	if err := s.recompute(ctx, planID); err != nil {
 		return nil, err
@@ -285,7 +323,8 @@ func (s *Store) steps(ctx context.Context, planID string) ([]Step, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, plan_id::text, idx, title, detail, status,
 		       is_checkpoint, verify_required, verify_result::text,
-		       result_summary, run_id::text, started_at, ended_at
+		       result_summary, run_id::text, recovery_attempted,
+		       started_at, ended_at
 		  FROM mem_plan_steps WHERE plan_id = $1::uuid ORDER BY idx ASC
 	`, planID)
 	if err != nil {
@@ -303,7 +342,8 @@ func (s *Store) steps(ctx context.Context, planID string) ([]Step, error) {
 		)
 		if err := rows.Scan(&st.ID, &st.PlanID, &st.Idx, &st.Title, &st.Detail, &st.Status,
 			&st.IsCheckpoint, &st.VerifyRequired, &verifyRaw,
-			&st.ResultSummary, &runID, &started, &ended); err != nil {
+			&st.ResultSummary, &runID, &st.RecoveryAttempted,
+			&started, &ended); err != nil {
 			return nil, err
 		}
 		if verifyRaw != nil && *verifyRaw != "" {
@@ -430,7 +470,8 @@ func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT s.id::text
+		SELECT s.id::text,
+		       COALESCE(NULLIF(r.result_summary, ''), NULLIF(r.error, ''), '') AS run_detail
 		  FROM mem_plan_steps s
 		  JOIN mem_runs r ON r.id = s.run_id
 		  JOIN mem_plans p ON p.id = s.plan_id
@@ -441,14 +482,15 @@ func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("scan stranded steps: %w", err)
 	}
-	var stepIDs []string
+	type stranded struct{ id, detail string }
+	var steps []stranded
 	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
+		var st stranded
+		if scanErr := rows.Scan(&st.id, &st.detail); scanErr != nil {
 			rows.Close()
 			return 0, fmt.Errorf("scan stranded step id: %w", scanErr)
 		}
-		stepIDs = append(stepIDs, id)
+		steps = append(steps, st)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -456,12 +498,14 @@ func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
 	}
 
 	n := 0
-	for _, id := range stepIDs {
-		// MarkStep recomputes the parent plan's lifecycle (failed step + later
-		// pending steps -> paused), so reuse it rather than re-rolling recompute.
-		if _, err := s.MarkStep(ctx, id, StepFailed,
-			"step execution ended without recording a result — reconciled from its run, which had already failed"); err != nil {
-			return n, fmt.Errorf("reconcile stranded step %s: %w", id, err)
+	for _, st := range steps {
+		// Surface the run's ACTUAL error so the boss sees what broke, not a
+		// generic placeholder. MarkStep recomputes the parent plan's lifecycle
+		// (failed step + later pending steps -> paused).
+		summary := firstNonEmptySummary(st.detail,
+			"step execution ended without recording a result — reconciled from its run, which had already failed")
+		if _, err := s.MarkStep(ctx, st.id, StepFailed, summary); err != nil {
+			return n, fmt.Errorf("reconcile stranded step %s: %w", st.id, err)
 		}
 		n++
 	}
@@ -514,6 +558,146 @@ func (s *Store) SetStepRun(ctx context.Context, stepID, runID string) error {
 	}
 	_, err := s.pool.Exec(ctx, `UPDATE mem_plan_steps SET run_id = $2::uuid WHERE id = $1::uuid`, stepID, runID)
 	return err
+}
+
+// InProgressStepForSession returns the in_progress step of the session's
+// active/paused plan, or (when none is in flight) the first non-terminal step,
+// or nil if the session has no plan. This is the step a background build was
+// executing when it finished — what the settle + recovery paths act on.
+func (s *Store) InProgressStepForSession(ctx context.Context, sessionID string) (*Step, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return nil, nil
+	}
+	p, err := s.GetActiveBySession(ctx, sessionID)
+	if err != nil || p == nil {
+		return nil, err
+	}
+	var firstPending *Step
+	for i := range p.Steps {
+		if p.Steps[i].Status == StepInProgress {
+			return &p.Steps[i], nil
+		}
+		if firstPending == nil && !isTerminalStep(p.Steps[i].Status) {
+			firstPending = &p.Steps[i]
+		}
+	}
+	return firstPending, nil
+}
+
+// MarkRecoveryAttempted flips the one-shot recovery guard so a re-dispatched
+// background build can never be retried a second time.
+func (s *Store) MarkRecoveryAttempted(ctx context.Context, stepID string) error {
+	if s == nil || s.pool == nil || stepID == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE mem_plan_steps SET recovery_attempted = TRUE WHERE id = $1::uuid`, stepID)
+	return err
+}
+
+// SettlePlanForSession is the deterministic settle mechanic (Rule #1: in code,
+// never via the LLM remembering to call plan_update). A detached background.build
+// drives the parent session's ONE durable plan through todo_write; when the build
+// finishes, this closes the loop regardless of whether the LLM's final todo_write
+// landed or the task was trivial (no checklist at all):
+//
+//   - success: every non-terminal step -> done (the build ran the task to
+//     completion), each step's open 'plan.step' spinner run closed ok, plan
+//     recomputes to completed.
+//   - failure: the in_progress (or first non-terminal) step -> failed carrying
+//     the REAL error, its run closed error (human_error populated), plan pauses
+//     and surfaces under "Awaiting you".
+//
+// No-op when the session has no active plan (the build wasn't plan-shaped).
+// Returns the refreshed plan (nil when there was none).
+func (s *Store) SettlePlanForSession(ctx context.Context, sessionID, status, summary string) (*Plan, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return nil, nil
+	}
+	p, err := s.GetActiveBySession(ctx, sessionID)
+	if err != nil || p == nil {
+		return nil, err
+	}
+	status = NormalizeStepStatus(status)
+
+	if status == StepFailed {
+		target := stepInFlight(p)
+		if target == nil {
+			return p, nil // nothing in flight to fail (already settled)
+		}
+		if _, err := s.MarkStep(ctx, target.ID, StepFailed, firstNonEmptySummary(summary, "background build failed")); err != nil {
+			return nil, err
+		}
+		s.closeStepRun(ctx, target, StepFailed, summary)
+		return s.Get(ctx, p.ID)
+	}
+
+	// Success: drive every non-terminal step to done and settle its run.
+	for i := range p.Steps {
+		st := p.Steps[i]
+		if isTerminalStep(st.Status) {
+			continue
+		}
+		stepSummary := ""
+		if st.Status == StepInProgress {
+			stepSummary = summary
+		}
+		if _, err := s.MarkStep(ctx, st.ID, StepDone, stepSummary); err != nil {
+			return nil, err
+		}
+		s.closeStepRun(ctx, &st, StepDone, stepSummary)
+	}
+	return s.Get(ctx, p.ID)
+}
+
+// closeStepRun settles a step's own 'plan.step' spinner run so the live
+// indicator stops instead of spinning until the reaper. Failure carries the
+// real error so runs.FinishByID humanizes it into human_error.
+func (s *Store) closeStepRun(ctx context.Context, st *Step, status, summary string) {
+	if st == nil || st.RunID == "" {
+		return
+	}
+	var runErr error
+	if status == StepFailed {
+		runErr = errors.New(firstNonEmptySummary(summary, "step failed"))
+	}
+	runs.FinishByID(ctx, st.RunID, runErr, summary)
+}
+
+// stepInFlight returns the in_progress step, else the first non-terminal step.
+func stepInFlight(p *Plan) *Step {
+	if p == nil {
+		return nil
+	}
+	var firstPending *Step
+	for i := range p.Steps {
+		if p.Steps[i].Status == StepInProgress {
+			return &p.Steps[i]
+		}
+		if firstPending == nil && !isTerminalStep(p.Steps[i].Status) {
+			firstPending = &p.Steps[i]
+		}
+	}
+	return firstPending
+}
+
+// isTerminalStep reports whether a step status is settled (no further work).
+func isTerminalStep(status string) bool {
+	switch status {
+	case StepDone, StepFailed, StepSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// firstNonEmptySummary returns the first non-blank string, or the last fallback.
+func firstNonEmptySummary(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // SetStatus forces a plan's lifecycle status (used by checkpoint resolution +

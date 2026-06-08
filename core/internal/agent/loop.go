@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -339,6 +341,16 @@ type Loop struct {
 	// not the silent default. Guarded by providerMu since it's read on
 	// every turn alongside the live provider.
 	activeModelFn func(ctx context.Context) string
+
+	// bridgeRouter lets a failed claude_code__* (Mac-only) tool call fail OVER
+	// to the cloud bridge instead of spinning retries to the iteration cap. When
+	// a claude_code call errors and the Mac bridge is unhealthy, the loop
+	// invalidates the router's health cache (so the next turn routes to Cloud and
+	// hides the claude_code__* schemas) and hands the model a structured fallback
+	// directive pointing at the cloud primitives. Nil-safe + hot-swap via
+	// SetBridgeRouter so boot wiring order doesn't matter. Guarded by providerMu
+	// (read once per iteration like the other per-turn snapshots).
+	bridgeRouter *bridge.Router
 }
 
 // runCancelEntry pairs a turn's cancel func with a generation token so a
@@ -647,6 +659,18 @@ func (l *Loop) SetToolVisibility(fn ToolVisibilityFunc) {
 	}
 	l.providerMu.Lock()
 	l.toolVisibility = fn
+	l.providerMu.Unlock()
+}
+
+// SetBridgeRouter installs (or replaces) the bridge router used for Mac->Cloud
+// failover on claude_code__* tool errors. Safe to call after agent.New(); the
+// loop reads it under providerMu per iteration. Nil is fine (no failover).
+func (l *Loop) SetBridgeRouter(r *bridge.Router) {
+	if l == nil {
+		return
+	}
+	l.providerMu.Lock()
+	l.bridgeRouter = r
 	l.providerMu.Unlock()
 }
 
@@ -1401,6 +1425,19 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				})
 			}
 
+			// Mac->Cloud failover: if a claude_code__* (Mac-only) tool errored
+			// because the Mac bridge is down, don't surface a raw ERROR the
+			// model will retry to the iteration cap. Invalidate the health cache
+			// (so the next turn routes to Cloud + hides claude_code__*), drop a
+			// one-line heads-up into the chat stream, and hand back a structured
+			// directive pointing at the cloud primitives. Consuming execErr is
+			// what stops the retry death-spiral.
+			if execErr != nil {
+				if fb, ok := l.maybeBridgeFailover(out, s, tc.Name); ok {
+					output, execErr = fb, nil
+				}
+			}
+
 			isErr := execErr != nil
 			if isErr {
 				output = fmt.Sprintf("ERROR: %v", execErr)
@@ -1585,6 +1622,55 @@ func emit(ch chan<- RunEvent, ev RunEvent) {
 	case ch <- ev:
 	default:
 	}
+}
+
+// maybeBridgeFailover handles a claude_code__* (Mac-only) tool error by failing
+// over to the cloud bridge when the Mac bridge is unhealthy. It invalidates the
+// router health cache (so the next turn routes to Cloud and the visibility filter
+// hides the claude_code__* schemas), emits a deterministic one-line heads-up into
+// the chat stream, and returns a structured directive the model can act on this
+// turn. Returns (directive, true) when it handled the error; ("", false) to let
+// the normal ERROR path run (non-claude_code tool, no router, or Mac healthy so
+// the failure is a real tool error, not a bridge outage).
+func (l *Loop) maybeBridgeFailover(out chan<- RunEvent, s *Session, toolName string) (string, bool) {
+	if !strings.HasPrefix(toolName, "claude_code__") {
+		return "", false
+	}
+	l.providerMu.RLock()
+	router := l.bridgeRouter
+	l.providerMu.RUnlock()
+	if router == nil || router.MacBridgeHealthy() {
+		return "", false
+	}
+	router.Invalidate()
+	cloudHealthy := router.Snapshot().CloudHealthy
+
+	notice := "\n\n_Mac bridge went offline — continuing on the cloud workspace._\n"
+	if !cloudHealthy {
+		notice = "\n\n_Mac bridge went offline and the cloud workspace is also unreachable — I can't make code changes until a bridge is back._\n"
+	}
+	emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: notice})
+	return macBridgeDownFallback(toolName, cloudHealthy), true
+}
+
+// macBridgeDownFallback is the structured tool result handed to the model when a
+// claude_code__* call dies on a downed Mac bridge — a deterministic directive
+// (Rule #1b: the mechanic is in code, this only tells the model where to go), not
+// a raw ERROR it would retry to the iteration cap.
+func macBridgeDownFallback(toolName string, cloudHealthy bool) string {
+	payload := map[string]any{
+		"error":     "mac_bridge_unavailable",
+		"tool":      toolName,
+		"both_down": !cloudHealthy,
+	}
+	if cloudHealthy {
+		payload["fallback"] = "The Mac bridge is offline. Do NOT retry this claude_code__* call. load_tools the cloud primitives (fs_read, fs_ls, fs_save, fs_edit, bash_run, git_status, git_diff, git_stage, git_commit, git_push, git_pull) and redo this change on /workspace."
+		payload["important"] = "Cloud /workspace is a git-synced clone, NOT the same filesystem as the Mac — run `git -C /workspace/<repo> pull` first so you edit current code, then commit + push when done."
+	} else {
+		payload["fallback"] = "Both the Mac bridge and the cloud workspace are unreachable. Do NOT retry. Tell the boss code changes can't be made until a bridge is back online."
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
 }
 
 // formatGatedOutput is the synthetic tool result shown to the LLM when a
