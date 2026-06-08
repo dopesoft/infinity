@@ -59,6 +59,16 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         ghostscript \
         tesseract-ocr \
         fonts-liberation \
+        # ── media + motion-graphics rendering stack ──
+        # ffmpeg: cut/crop/caption/encode for shorts AND the design renderer's
+        #   encode step (image-sequence -> ProRes/mp4). Also self-installs via
+        #   the ffmpeg CLI extension; baking it guarantees the renderer's path.
+        # chromium: headless engine the design renderer drives (puppeteer-core
+        #   points at /usr/bin/chromium). fonts-* keep text rendering correct.
+        ffmpeg \
+        chromium \
+        fonts-noto-color-emoji \
+        fonts-noto-cjk \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g pnpm \
@@ -75,6 +85,17 @@ RUN cd /opt/docgen \
     && python3 -m venv venv \
     && ./venv/bin/pip install --no-cache-dir -r requirements.txt
 ENV DOCGEN_DIR=/opt/docgen
+
+# Baked HTML->video renderer (the design engine's finishing harness). The
+# render-html-to-prores skill invokes `node /opt/render/render.js …` through
+# media_job. puppeteer-core drives the system chromium (no bundled download),
+# so the image stays lean. RENDER_DIR is read by the skill; PUPPETEER_* pins
+# the engine + skips the chromium download at npm install.
+ENV PUPPETEER_SKIP_DOWNLOAD=1
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+COPY render/ /opt/render/
+RUN cd /opt/render && npm install --omit=dev --no-audit --no-fund
+ENV RENDER_DIR=/opt/render
 
 # Pre-bake the Go toolchain (pinned to infinity core's go.mod — 1.26.x) so the
 # cloud workspace can `go build ./... && go vet ./... && go test ./...` its own

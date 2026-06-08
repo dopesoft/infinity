@@ -28,6 +28,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
+	"github.com/dopesoft/infinity/core/internal/workflow"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -43,20 +44,21 @@ type turnState struct {
 }
 
 type Config struct {
-	Addr         string
-	Version      string
-	Loop         *agent.Loop
-	MCP          *tools.MCPManager
-	Pool         *pgxpool.Pool
-	Store        *memory.Store
-	Searcher     *memory.Searcher
+	Addr          string
+	Version       string
+	Loop          *agent.Loop
+	MCP           *tools.MCPManager
+	Pool          *pgxpool.Pool
+	Store         *memory.Store
+	Searcher      *memory.Searcher
 	SkillsAPI     *skills.API
 	ExtensionsAPI *extensions.API
 	ProactiveAPI  *proactive.API
 	CronAPI       *cron.API
-	SentinelAPI  *sentinel.API
-	VoyagerAPI   *voyager.API
-	Auth         *auth.Verifier
+	WorkflowAPI   *workflow.API
+	SentinelAPI   *sentinel.API
+	VoyagerAPI    *voyager.API
+	Auth          *auth.Verifier
 	// Trust is the durable approval store. Canvas's git mutations and
 	// file saves queue contracts here and block on user approval before
 	// touching the home Mac. Same store the agent gate uses.
@@ -252,6 +254,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.ProactiveAPI != nil {
 		cfg.ProactiveAPI.Routes(mux)
+	}
+	if cfg.WorkflowAPI != nil {
+		cfg.WorkflowAPI.Routes(mux)
 	}
 	if cfg.CronAPI != nil {
 		cfg.CronAPI.Routes(mux)

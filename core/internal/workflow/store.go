@@ -38,21 +38,30 @@ func (s *Store) UpsertWorkflow(ctx context.Context, wf *Workflow) (string, error
 	if err != nil {
 		return "", fmt.Errorf("workflow: marshal steps: %w", err)
 	}
+	inputs := wf.Inputs
+	if inputs == nil {
+		inputs = []InputDef{}
+	}
+	inputsJSON, err := json.Marshal(inputs)
+	if err != nil {
+		return "", fmt.Errorf("workflow: marshal inputs: %w", err)
+	}
 	source := wf.Source
 	if source == "" {
 		source = "agent"
 	}
 	var id string
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO mem_workflows (name, description, steps, source, enabled)
-		VALUES ($1, $2, $3::jsonb, $4, TRUE)
+		INSERT INTO mem_workflows (name, description, steps, inputs, source, enabled)
+		VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, TRUE)
 		ON CONFLICT (name) DO UPDATE SET
 		  description = EXCLUDED.description,
 		  steps       = EXCLUDED.steps,
+		  inputs      = EXCLUDED.inputs,
 		  source      = EXCLUDED.source,
 		  updated_at  = NOW()
 		RETURNING id::text
-	`, wf.Name, wf.Description, string(stepsJSON), source).Scan(&id)
+	`, wf.Name, wf.Description, string(stepsJSON), string(inputsJSON), source).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("workflow: upsert: %w", err)
 	}
@@ -66,11 +75,11 @@ func (s *Store) GetWorkflow(ctx context.Context, nameOrID string) (*Workflow, er
 		return nil, errors.New("workflow: no pool")
 	}
 	nameOrID = strings.TrimSpace(nameOrID)
-	q := `SELECT id::text, name, description, steps, source, enabled, created_at, updated_at
+	q := `SELECT id::text, name, description, steps, inputs, source, enabled, created_at, updated_at
 	        FROM mem_workflows WHERE name = $1`
 	arg := any(nameOrID)
 	if looksLikeUUID(nameOrID) {
-		q = `SELECT id::text, name, description, steps, source, enabled, created_at, updated_at
+		q = `SELECT id::text, name, description, steps, inputs, source, enabled, created_at, updated_at
 		       FROM mem_workflows WHERE id = $1::uuid`
 	}
 	wf, err := scanWorkflow(s.pool.QueryRow(ctx, q, arg))
@@ -86,7 +95,7 @@ func (s *Store) ListWorkflows(ctx context.Context) ([]*Workflow, error) {
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::text, name, description, steps, source, enabled, created_at, updated_at
+		SELECT id::text, name, description, steps, inputs, source, enabled, created_at, updated_at
 		  FROM mem_workflows ORDER BY updated_at DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
@@ -482,17 +491,21 @@ func scanRun(row pgx.Row) (*Run, error) {
 
 func scanWorkflow(row pgx.Row) (*Workflow, error) {
 	var (
-		wf       Workflow
-		stepsRaw []byte
+		wf        Workflow
+		stepsRaw  []byte
+		inputsRaw []byte
 	)
 	if err := row.Scan(
-		&wf.ID, &wf.Name, &wf.Description, &stepsRaw, &wf.Source, &wf.Enabled,
+		&wf.ID, &wf.Name, &wf.Description, &stepsRaw, &inputsRaw, &wf.Source, &wf.Enabled,
 		&wf.CreatedAt, &wf.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
 	if len(stepsRaw) > 0 {
 		_ = json.Unmarshal(stepsRaw, &wf.Steps)
+	}
+	if len(inputsRaw) > 0 {
+		_ = json.Unmarshal(inputsRaw, &wf.Inputs)
 	}
 	return &wf, nil
 }

@@ -49,6 +49,11 @@ const (
 	KindBackgroundBuild Kind = "background.build"
 	KindSurfaceAction   Kind = "surface.action"
 	KindPlanStep        Kind = "plan.step"
+	// KindMediaGenerate is a media-producing job (image/video/graphic render)
+	// run via the generic media_job tool. target_id is the session id so the
+	// Studio Media tab can filter media.generate runs to the current session,
+	// and the produced assets ride mem_runs.meta.media for live display.
+	KindMediaGenerate Kind = "media.generate"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

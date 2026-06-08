@@ -528,6 +528,48 @@ export function ModalField({
   );
 }
 
+/** Media preview - an image or video shown full-width inside a modal body,
+ *  contained so it never escapes the frame on mobile. Use for generated
+ *  assets (the Media tab tap-through) instead of a bare <img>/<video> that
+ *  would miss the overflow + rounding discipline. `kind` picks the element;
+ *  videos get native controls. */
+export function ModalMedia({
+  src,
+  kind,
+  alt,
+  className,
+}: {
+  src: string;
+  kind: "image" | "video";
+  alt?: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "mt-4 flex min-w-0 max-w-full items-center justify-center overflow-hidden rounded-lg border bg-black/40",
+        className,
+      )}
+    >
+      {kind === "video" ? (
+        <video
+          src={src}
+          controls
+          playsInline
+          className="max-h-[70dvh] w-full max-w-full object-contain"
+        />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt={alt ?? "Generated media"}
+          className="max-h-[70dvh] w-full max-w-full object-contain"
+        />
+      )}
+    </div>
+  );
+}
+
 /** Horizontal chip row - the standardized "eyebrow with badges" line that
  *  sits above the body content (kind, time, risk, etc.). Wraps on mobile. */
 export function ModalChips({

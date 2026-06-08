@@ -510,10 +510,22 @@ export type HumanError = {
 // currentFile per tool call. All optional — a run with no checklist has none.
 export type TodoStatus = "pending" | "in_progress" | "completed";
 export type RunTodo = { text: string; status: TodoStatus };
+// MediaItem is one asset produced by a media.generate run (the media_job tool).
+// Stamped onto mem_runs.meta.media so the Media tab renders finished assets from
+// the same useRuns stream that drives the in-progress spinner.
+export type MediaItem = {
+  id?: string;
+  kind: "image" | "video";
+  mime?: string;
+  name?: string;
+  url: string; // browser-loadable src (public CDN url, or /api/workspace/download)
+  path?: string;
+};
 export type RunMeta = {
   todos?: RunTodo[];
   repo?: string;
   currentFile?: string;
+  media?: MediaItem[];
 };
 
 export type FetchRunsOpts = {
@@ -1404,6 +1416,64 @@ export async function triggerCron(
     return (await res.json()) as { ok: boolean; error?: string };
   } catch {
     return null;
+  }
+}
+
+// ── Workflows (saved pipeline definitions) ───────────────────────────────────
+// A workflow is a durable, repeatable multi-step pipeline (the Go engine runs
+// the steps in fixed order, the LLM out of the loop). The Workflows tab lists
+// these DEFINITIONS (runs surface on the Agent Work board). InputDef declares
+// what a run needs, so the Run button collects it via a form instead of firing
+// blind.
+export type WorkflowInputDef = {
+  key: string;
+  label?: string;
+  type?: "text" | "enum" | "number";
+  options?: string[];
+  required?: boolean;
+  default?: string;
+  doc?: string;
+};
+
+export type WorkflowStepDef = {
+  name: string;
+  kind: "tool" | "skill" | "agent" | "checkpoint";
+  spec?: Record<string, unknown>;
+  max_attempts?: number;
+};
+
+export type WorkflowDTO = {
+  id: string;
+  name: string;
+  description: string;
+  steps: WorkflowStepDef[];
+  inputs?: WorkflowInputDef[];
+  source: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const fetchWorkflows = (signal?: AbortSignal) =>
+  getJSON<WorkflowDTO[]>("/api/workflows", signal);
+
+// runWorkflow starts a run of a saved workflow with collected inputs. The
+// engine claims it on the next tick; the run surfaces on the Agent Work board.
+export async function runWorkflow(
+  workflow: string,
+  input: Record<string, unknown>,
+): Promise<{ ok: boolean; run_id?: string; error?: string } | null> {
+  try {
+    const res = await authedFetch(`/api/workflows/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workflow, input }),
+    });
+    const body = (await res.json()) as { ok?: boolean; run_id?: string; error?: string };
+    if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+    return { ok: true, run_id: body.run_id };
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
 }
 

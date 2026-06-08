@@ -1,6 +1,5 @@
 import {
   Activity,
-  Clock,
   Brain,
   FlaskConical,
   LayoutDashboard,
@@ -8,6 +7,7 @@ import {
   MessageSquare,
   ScrollText,
   Settings,
+  Workflow,
   Wrench,
 } from "lucide-react";
 
@@ -45,7 +45,7 @@ export const NAV_TABS: NavTab[] = [
 
 export const NAV_OVERFLOW: NavTab[] = [
   { href: "/lab", label: "Lab", Icon: FlaskConical },
-  { href: "/cron", label: "Cron", Icon: Clock },
+  { href: "/cron", label: "Workflows", Icon: Workflow },
   { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
   { href: "/logs", label: "Logs", Icon: ScrollText },
   { href: "/settings", label: "Settings", Icon: Settings },

@@ -423,6 +423,14 @@ func serveCmd() *cobra.Command {
 					// internally and indexes itself into mem_artifacts.
 					tools.RegisterArtifactTools(registry, p)
 					projectTools = tools.RegisterProjectTools(registry, p, activeBridgeRouter, activeBridgePrefs)
+					// media_job — the ONE generic media-producing runner. Runs
+					// any media command (higgsfield gen now; html→video / ffmpeg
+					// later) on the active bridge, tracks it as a live mem_runs
+					// job, downloads + indexes the assets, and stamps them onto
+					// the run so the Studio Media tab shows them. Per Rule #1:
+					// zero per-vendor branches — new capability = new command in
+					// a skill, never new Go here.
+					tools.RegisterMediaTools(registry, p, activeBridgeRouter, activeBridgePrefs)
 					// document_create — generate .xlsx/.docx/.pptx/.pdf/.md via
 					// the workspace bridge's baked helpers (openpyxl/docx-js/
 					// pptxgenjs/reportlab). Cloud-only (the stack lives in the
@@ -1009,6 +1017,7 @@ func serveCmd() *cobra.Command {
 			// persisting after every step so a restart resumes mid-flow.
 			// Checkpoint steps surface a card on the dashboard via the
 			// surface contract.
+			var workflowAPI *workflow.API
 			if pool != nil && loop != nil {
 				wfStore := workflow.NewStore(pool, slog.Default())
 				wfExec := &workflowExecutor{
@@ -1030,6 +1039,9 @@ func serveCmd() *cobra.Command {
 				}
 				wfEngine.Start(cmd.Context())
 				fmt.Printf("  workflows: engine started (durable, resumable)\n")
+				// Expose /api/workflows so the Studio Workflows tab lists saved
+				// definitions and runs one with collected inputs.
+				workflowAPI = workflow.NewAPI(wfStore)
 			}
 
 			// Proactive engine: IntentFlow + WAL + Working Buffer + Heartbeat +
@@ -1647,6 +1659,7 @@ func serveCmd() *cobra.Command {
 				ExtensionsAPI:    extensions.NewAPI(extManager),
 				ProactiveAPI:     proactiveAPI,
 				CronAPI:          cronAPI,
+				WorkflowAPI:      workflowAPI,
 				SentinelAPI:      sentinelAPI,
 				VoyagerAPI:       voyagerAPI,
 				Auth:             authVerifier,

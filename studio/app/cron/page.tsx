@@ -30,20 +30,23 @@ import { useTabParam } from "@/lib/useTabParam";
 import { RunIndicator } from "@/lib/runs";
 import { CronDetailModal } from "@/components/cron/CronDetailModal";
 import { SentinelDetailModal } from "@/components/cron/SentinelDetailModal";
+import { WorkflowsSection } from "@/components/workflows/WorkflowsSection";
 import { cronKindMeta, watchTypeMeta, casualTime, localTzAbbrev, cronToHuman, CRON_KIND_META } from "@/components/cron/cronMeta";
 
-const CRON_TABS = ["cron", "sentinel"] as const;
+// Workflows is the page's primary concept now (repeatable pipelines), with Cron
+// (time-fired jobs) and Sentinels (event-fired) as siblings. Workflows leads.
+const CRON_TABS = ["workflows", "cron", "sentinel"] as const;
 type CronTab = (typeof CRON_TABS)[number];
 
 export default function CronPage() {
-  // Active tab persists in ?tab=<id> so a refresh keeps Cron vs Sentinels.
-  const [tab, setTab] = useTabParam<CronTab>("tab", "cron", CRON_TABS);
+  // Active tab persists in ?tab=<id> so a refresh keeps the chosen lens.
+  const [tab, setTab] = useTabParam<CronTab>("tab", "workflows", CRON_TABS);
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-safe scroll-touch">
         <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
           <h1 className="text-base font-semibold tracking-tight text-foreground">
-            Cron
+            Workflows
           </h1>
         </div>
         <Tabs
@@ -53,10 +56,14 @@ export default function CronPage() {
         >
           <div className="px-4 pb-3 sm:px-6 lg:px-8">
             <PageTabsList scrollable>
+              <PageTabsTrigger value="workflows">Workflows</PageTabsTrigger>
               <PageTabsTrigger value="cron">Cron</PageTabsTrigger>
               <PageTabsTrigger value="sentinel">Sentinels</PageTabsTrigger>
             </PageTabsList>
           </div>
+          <TabsContent value="workflows" className="flex flex-col px-4 py-5 sm:px-6 lg:px-8">
+            <WorkflowsSection />
+          </TabsContent>
           <TabsContent value="cron" className="flex flex-col px-4 py-5 sm:px-6 lg:px-8">
             <CronSection />
           </TabsContent>

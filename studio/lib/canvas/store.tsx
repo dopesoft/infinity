@@ -34,11 +34,12 @@ import { extractStreamingContent, extractStreamingPath } from "./streaming";
 
 export type DevicePreset = "mobile" | "tablet" | "desktop";
 
-export type CanvasTabKind = "preview" | "terminal" | "file" | "document";
+export type CanvasTabKind = "preview" | "terminal" | "media" | "file" | "document";
 
 export type CanvasTab =
   | { kind: "preview"; id: "preview" }
   | { kind: "terminal"; id: "terminal" }
+  | { kind: "media"; id: "media" }
   | { kind: "file"; id: string; path: string }
   | { kind: "document"; id: string; filename: string; format: string; path: string };
 
@@ -519,6 +520,7 @@ export function CanvasStoreProvider({
     return [
       { kind: "preview", id: "preview" } as const,
       { kind: "terminal", id: "terminal" } as const,
+      { kind: "media", id: "media" } as const,
       ...openPaths.map((p) => ({ kind: "file", id: fileTabId(p), path: p }) as const),
       ...documents.map((d) =>
         ({ kind: "document", id: d.id, filename: d.filename, format: d.format, path: d.path }) as const),

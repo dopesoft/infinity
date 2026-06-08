@@ -99,6 +99,76 @@ func parseSteps(raw any) ([]workflow.StepDef, error) {
 	return out, nil
 }
 
+// inputsParamSchema is the JSON schema for a workflow's declared inputs - what
+// the Workflows-tab Run form renders, and what the agent reads to ask for any
+// missing required input in chat before workflow_run.
+func inputsParamSchema() map[string]any {
+	return map[string]any{
+		"type": "array",
+		"description": "Optional declared parameters this workflow needs before it can run. Each is " +
+			"templated into step specs as {{input.<key>}}. The Workflows-tab Run form builds itself " +
+			"from these (a text field, an option chip group, or a number).",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"key":      map[string]any{"type": "string", "description": "Templating key, e.g. 'youtube_url'."},
+				"label":    map[string]any{"type": "string", "description": "Human label for the form field."},
+				"type":     map[string]any{"type": "string", "enum": []string{"text", "enum", "number"}, "description": "Field type. Default text."},
+				"options":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Choices for type=enum."},
+				"required": map[string]any{"type": "boolean"},
+				"default":  map[string]any{"type": "string"},
+				"doc":      map[string]any{"type": "string", "description": "Help text shown under the field."},
+			},
+			"required": []string{"key"},
+		},
+	}
+}
+
+// parseInputs decodes the inputs array into []workflow.InputDef. Tolerant:
+// skips malformed entries, defaults type to text.
+func parseInputs(raw any) []workflow.InputDef {
+	arr, ok := raw.([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	out := make([]workflow.InputDef, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		key := strings.TrimSpace(fmt.Sprint(m["key"]))
+		if key == "" {
+			continue
+		}
+		def := workflow.InputDef{
+			Key:      key,
+			Label:    asString(m["label"]),
+			Type:     asString(m["type"]),
+			Required: asBool(m["required"]),
+			Default:  asString(m["default"]),
+			Doc:      asString(m["doc"]),
+		}
+		if def.Type == "" {
+			def.Type = "text"
+		}
+		if opts, ok := m["options"].([]any); ok {
+			for _, o := range opts {
+				if s, ok := o.(string); ok && s != "" {
+					def.Options = append(def.Options, s)
+				}
+			}
+		}
+		out = append(out, def)
+	}
+	return out
+}
+
+func asBool(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
 // ── workflow_create ─────────────────────────────────────────────────────────
 
 type workflowCreateTool struct{ store *workflow.Store }
@@ -120,6 +190,7 @@ func (t *workflowCreateTool) Schema() map[string]any {
 			"name":        map[string]any{"type": "string", "description": "kebab-case workflow name (e.g. 'morning-brief')."},
 			"description": map[string]any{"type": "string", "description": "One or two sentences: what the workflow does."},
 			"steps":       stepsParamSchema(),
+			"inputs":      inputsParamSchema(),
 		},
 		"required": []string{"name", "steps"},
 	}
@@ -137,6 +208,7 @@ func (t *workflowCreateTool) Execute(ctx context.Context, in map[string]any) (st
 		Name:        name,
 		Description: strString(in, "description"),
 		Steps:       steps,
+		Inputs:      parseInputs(in["inputs"]),
 		Source:      "agent",
 	}
 	id, err := t.store.UpsertWorkflow(ctx, wf)

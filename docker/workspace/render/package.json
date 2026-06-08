@@ -1,0 +1,10 @@
+{
+  "name": "jarvis-html-render",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless-Chrome HTML -> ProRes/mp4 renderer for the design engine. Baked into the cloud workspace image; invoked via media_job.",
+  "type": "commonjs",
+  "dependencies": {
+    "puppeteer-core": "^23.0.0"
+  }
+}

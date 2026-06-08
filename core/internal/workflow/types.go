@@ -74,16 +74,32 @@ type StepDef struct {
 	MaxAttempts int            `json:"max_attempts,omitempty"`
 }
 
+// InputDef declares one parameter a workflow needs before it can run. The
+// Workflows-tab Run form renders itself from these (a text field, an option
+// chip group, or a number), and the agent reads them to ask for any missing
+// required input in chat before calling workflow_run. Values are templated into
+// steps via {{input.<key>}}.
+type InputDef struct {
+	Key      string   `json:"key"`
+	Label    string   `json:"label,omitempty"`
+	Type     string   `json:"type,omitempty"`    // text | enum | number (default text)
+	Options  []string `json:"options,omitempty"` // for type=enum
+	Required bool     `json:"required,omitempty"`
+	Default  string   `json:"default,omitempty"`
+	Doc      string   `json:"doc,omitempty"`
+}
+
 // Workflow is a saved, reusable definition.
 type Workflow struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Steps       []StepDef `json:"steps"`
-	Source      string    `json:"source"`
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Steps       []StepDef  `json:"steps"`
+	Inputs      []InputDef `json:"inputs,omitempty"`
+	Source      string     `json:"source"`
+	Enabled     bool       `json:"enabled"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
 // Run is one execution instance - the durable thing.

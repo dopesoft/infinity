@@ -86,6 +86,11 @@ func DefaultLoadedTools() []string {
 		// Web reach - cheap and universally useful.
 		"web_search",
 		"http_fetch",
+		// media_job - the generic media-producing runner. Loaded by default so
+		// "make me an image/video" works out of the box: the generate-media
+		// skill crafts a higgsfield command and hands it to media_job, which
+		// tracks/downloads/indexes the assets into the Media tab + Library.
+		"media_job",
 		// Document generation - "make me a spreadsheet/report/deck" should
 		// work out of the box (boss wants it default). Renders via the
 		// workspace bridge's baked helpers; no-op if no workspace wired.
