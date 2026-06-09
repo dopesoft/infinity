@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/errs"
@@ -196,6 +197,7 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 	status := "ok"
 	errStr := ""
 	humanJSON := "{}"
+	pushMsg := "" // boss-facing text for the push; human title on failure
 	if err != nil {
 		status = "error"
 		errStr = err.Error()
@@ -203,9 +205,18 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 		// raw string, so the UI can show "your model token was revoked" instead
 		// of the provider's JSON. Best-effort: a marshal failure just leaves
 		// human_error empty, never blocks the row close.
-		if b, mErr := json.Marshal(errs.HumanizeString(errStr)); mErr == nil {
+		human := errs.HumanizeString(errStr)
+		pushMsg = human.Title
+		if b, mErr := json.Marshal(human); mErr == nil {
 			humanJSON = string(b)
 		}
+	}
+	// Never close a successful run with a blank narrative — the dashboard would
+	// render an explanation-less card that reads as "did it even run?". A
+	// guaranteed floor keeps every Done card legible (callers that have a real
+	// summary still win; this only fills the gap).
+	if status == "ok" && strings.TrimSpace(summary) == "" {
+		summary = "Completed — nothing to report."
 	}
 	_, _ = h.tracker.pool.Exec(ctx, `
 		UPDATE mem_runs
@@ -218,7 +229,13 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 		 WHERE id = $1::uuid
 	`, h.id, status, end, end.Sub(h.start).Milliseconds(), errStr, summary, humanJSON)
 	if notifier != nil {
-		go notifier.NotifyRunFinished(context.Background(), h.id, h.kind, h.label, status, errStr, end.Sub(h.start))
+		// On failure, hand the notifier the humanized title (not the raw
+		// provider JSON) so the push reads like a thought, not a stack trace.
+		msg := errStr
+		if pushMsg != "" {
+			msg = pushMsg
+		}
+		go notifier.NotifyRunFinished(context.Background(), h.id, h.kind, h.label, status, msg, end.Sub(h.start))
 	}
 	// Clear id so a second Finish call no-ops.
 	h.id = ""

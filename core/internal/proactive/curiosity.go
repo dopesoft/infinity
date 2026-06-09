@@ -151,7 +151,7 @@ func (c *CuriosityScan) scanContradictions(ctx context.Context) (int, error) {
 		if err := rows.Scan(&srcID, &tgtID, &srcTitle, &tgtTitle, &srcBody, &tgtBody); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Two memories disagree - which is right: %q or %q?",
+		question := fmt.Sprintf("I've got two things on record that don't match. Which is right: %q or %q?",
 			clipShort(srcTitle, 80), clipShort(tgtTitle, 80))
 		// Show BOTH memories' content so the boss can actually adjudicate.
 		rationale := fmt.Sprintf(
@@ -210,7 +210,7 @@ func (c *CuriosityScan) scanUncoveredMentions(ctx context.Context) (int, error) 
 		if shouldSuppressUncoveredMention(kind, name) {
 			continue
 		}
-		question := fmt.Sprintf("The boss has mentioned %s %q multiple times - what's important about it?", kind, name)
+		question := fmt.Sprintf("You've brought up %s %q a few times — what should I know about it?", kind, name)
 		rationale := fmt.Sprintf(
 			"You've referenced this %s %d times across sessions, but I never distilled a memory about it.",
 			kind, mentions)
@@ -305,7 +305,7 @@ func (c *CuriosityScan) scanHighSurprise(ctx context.Context) (int, error) {
 		if shouldSuppressHighSurpriseQuestion(tool, expected, actual) {
 			continue
 		}
-		question := fmt.Sprintf("Tool %s returned something unexpected, should I rework the prompt around it?", tool)
+		question := fmt.Sprintf("One of the tools I use (%s) keeps giving me results I didn't expect. Want me to look into it?", tool)
 		// Structured, un-escaped, one concept per line so both the
 		// Heartbeat tab and the chat formatter can render it cleanly.
 		// oneLine collapses embedded whitespace so each value stays on a

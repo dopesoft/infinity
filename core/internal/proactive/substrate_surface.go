@@ -162,10 +162,10 @@ func surfaceSubstrateHealth(ctx context.Context, pool *pgxpool.Pool, store *surf
 				Kind:             "alert",
 				Source:           "substrate-health",
 				ExternalID:       extID,
-				Title:            fmt.Sprintf("%s %q is failing", kind, name),
-				Subtitle:         "last 3 runs failed",
+				Title:            fmt.Sprintf("%s %q keeps failing", kind, name),
+				Subtitle:         "Its last 3 runs all failed",
 				Importance:       &imp,
-				ImportanceReason: "Regressed - the last 3 recorded outcomes were all failures",
+				ImportanceReason: "It's failed 3 times in a row — something's off and it's worth a look.",
 			})
 		}
 		rows.Close()

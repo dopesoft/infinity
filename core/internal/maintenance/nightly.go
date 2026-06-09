@@ -227,9 +227,10 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 	}
 
 	report.EndedAt = time.Now().UTC()
-	if err := writeSurfaceReport(ctx, deps.Surface, report); err != nil {
-		addErr("surface_report", err)
-	}
+	// The run's boss-facing outcome is surfaced generically by the cron
+	// scheduler (surfaceRunOutcome → "Surfaced by Jarvis"), so nightly no
+	// longer writes its own bespoke 'system'-surface card — that would
+	// double-post and land in the Activity stream instead of the inbox.
 	if len(report.Errors) > 0 {
 		return report, fmt.Errorf("nightly cognition failed stages: %s", report.ErrorSummary())
 	}
@@ -281,40 +282,10 @@ func (r Report) Summary() string {
 	return body
 }
 
-func writeSurfaceReport(ctx context.Context, store *surface.Store, report Report) error {
-	if store == nil {
-		return nil
-	}
-	importance := 5
-	reason := "nightly cognition completed with no significant changes"
-	if changed(report) {
-		importance = 7
-		reason = "nightly cognition changed memory, lessons, or training examples"
-	}
-	if len(report.Errors) > 0 {
-		importance = 9
-		reason = "one or more nightly cognition stages failed"
-	}
-	body := report.Summary()
-	_, err := store.Upsert(ctx, &surface.Item{
-		Surface:          "system",
-		Kind:             "insight",
-		Source:           "nightly-cognition",
-		ExternalID:       "nightly-cognition:last",
-		Title:            "Nightly cognition complete",
-		Subtitle:         report.EndedAt.Format(time.RFC3339),
-		Body:             body,
-		Importance:       &importance,
-		ImportanceReason: reason,
-		Metadata: map[string]any{
-			"report": report,
-		},
-		Status: surface.StatusOpen,
-	})
-	return err
-}
-
-func changed(r Report) bool {
+// Changed reports whether the run actually touched anything — memory, lessons,
+// training examples, or the world model. The cron executor reads this to label
+// the run's outcome "did work" vs. "nothing needed" for the boss's inbox.
+func (r Report) Changed() bool {
 	return r.HasCoreChanges() ||
 		r.TrainingExamples.Inserted > 0 ||
 		r.WorldModel.Upserted > 0

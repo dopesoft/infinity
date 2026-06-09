@@ -52,9 +52,17 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		// of the run. Surface it on the mem_runs row (Summary) and stash the
 		// full struct in meta so the run detail can show every stage count.
 		rep, err := maintenance.RunNightlyCognition(ctx, e.Deps, maintenance.ParseOptions(cfg.Options))
+		// The executor knows its own internals better than the generic
+		// classifier can: a quiet night that changed nothing is "nothing
+		// needed", a night that touched memory is "did work". A stage failure
+		// surfaces via err → the classifier's "failed".
+		outcome := OutcomeDidWork
+		if !rep.Changed() {
+			outcome = OutcomeNothingNeeded
+		}
 		return RunSummary{
 			Summary: rep.Summary(),
-			Meta:    map[string]any{"report": rep},
+			Meta:    map[string]any{"report": rep, "outcome": string(outcome)},
 		}, err
 	case "inbox_triage":
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -68,12 +76,19 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		// into one live step-timeline card on the board while the job runs.
 		ic.SessionID = j.RunSessionID
 		s, err := inbox.Run(ctx, e.Inbox, ic)
+		// An empty mailbox is "nothing needed"; anything fetched is work done.
+		// (Surfaced follow-ups live in the Follow-ups card, not as a decision
+		// gate, so triage is never "needs_you".)
+		triageOutcome := OutcomeDidWork
+		if s.Fetched == 0 {
+			triageOutcome = OutcomeNothingNeeded
+		}
 		return RunSummary{
 			Summary: fmt.Sprintf("Triaged %d email(s) across %d mailbox(es); surfaced %d needing your reply.",
 				s.Fetched, s.Accounts, s.Surfaced),
 			// session_id ties this cron run to the step plan so the board folds
 			// them into one card (the plan's step timeline) instead of two.
-			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced, "session_id": s.SessionID},
+			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced, "session_id": s.SessionID, "outcome": string(triageOutcome)},
 		}, err
 	default:
 		return RunSummary{}, fmt.Errorf("unknown system task %q", task)

@@ -157,6 +157,11 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 		}
 	}
 	skillsBySession := a.planSkillsBySession(ctx, sessionIDs)
+	// The cron run that drove each plan carries the boss-facing narrative +
+	// outcome class on its mem_runs row. Fold that onto the plan card so the
+	// reason ("stopped early because the tree was dirty") is visible instead of
+	// stranded on the folded-away run card.
+	runInfo := a.cronRunsBySession(ctx, sessionIDs)
 
 	startOfDay := time.Now().UTC().Truncate(24 * time.Hour)
 	out := make([]WorkItem, 0, len(plans))
@@ -193,6 +198,34 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 			sub = "cancelled"
 		}
 
+		// Outcome-driven placement + narrative fold. When the cron run that
+		// drove this plan has FINISHED (not still in-flight), its outcome class
+		// decides where the card lands: only a genuine pending decision
+		// (needs_you) sits in "awaiting you"; a plan the agent left incomplete
+		// on its own reads as "stopped early" in Done with its reason on the
+		// card — never a cryptic "paused at checkpoint" in the needs-you lane.
+		summary := ""
+		if info, ok := runInfo[p.SessionID]; ok {
+			summary = info.summary
+			finished := info.status != "" && info.status != "running"
+			if finished && (p.Status == plan.PlanActive || p.Status == plan.PlanPaused) {
+				switch info.outcome {
+				case "needs_you":
+					column = "awaiting"
+					sub = "needs your okay"
+				case "failed":
+					column = "done"
+					sub = "failed"
+				case "nothing_needed":
+					column = "done"
+					sub = "nothing to do"
+				default:
+					column = "done"
+					sub = "stopped early"
+				}
+			}
+		}
+
 		doneCount := done
 		totalCount := total
 		created := p.CreatedAt
@@ -202,6 +235,7 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 			Kind:       "plan",
 			Title:      p.Title,
 			Subtitle:   sub,
+			Summary:    summary,
 			Engine:     "Plan",
 			Column:     column,
 			SessionID:  p.SessionID,
@@ -218,6 +252,50 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 		})
 	}
 	return out, nil
+}
+
+// cronRunInfo is the slice of a cron's mem_runs row the plan card needs: the
+// run's lifecycle status, its boss-facing outcome class, and the narrative the
+// executor wrote. Keyed by session id so it folds onto the plan that shares it.
+type cronRunInfo struct {
+	status  string
+	outcome string
+	summary string
+}
+
+// cronRunsBySession returns the most-recent cron run per session id, so a plan
+// card can show that run's outcome + narrative. DISTINCT ON keeps the latest
+// fire when a cron has run the same session more than once.
+func (a *API) cronRunsBySession(ctx context.Context, sessionIDs []string) map[string]cronRunInfo {
+	if a == nil || a.Pool == nil || len(sessionIDs) == 0 {
+		return nil
+	}
+	rows, err := a.Pool.Query(ctx, `
+		SELECT DISTINCT ON (meta->>'session_id')
+		       meta->>'session_id',
+		       status,
+		       COALESCE(meta->>'outcome', ''),
+		       COALESCE(result_summary, '')
+		  FROM mem_runs
+		 WHERE kind = 'cron' AND meta->>'session_id' = ANY($1)
+		 ORDER BY meta->>'session_id', started_at DESC
+	`, sessionIDs)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]cronRunInfo{}
+	for rows.Next() {
+		var sid string
+		var info cronRunInfo
+		if err := rows.Scan(&sid, &info.status, &info.outcome, &info.summary); err != nil {
+			return out
+		}
+		if sid != "" {
+			out[sid] = info
+		}
+	}
+	return out
 }
 
 // Plan is the camelCase DTO for the single-plan read used by the chat dock

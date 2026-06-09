@@ -215,7 +215,16 @@ func (e *AgentExecutor) summarizeRun(sessionID string) RunSummary {
 		}
 	}
 	if turns == 0 {
-		return RunSummary{}
+		// A run that produced no turns did nothing — but it still happened, so
+		// don't return a blank: stamp the counts so the classifier reads it as
+		// "nothing needed" and the inbox/floor can speak for it. The empty
+		// Summary is filled by the run-close floor (runs.Finish).
+		return RunSummary{Meta: map[string]any{
+			"session_id": sessionID,
+			"turns":      0,
+			"tool_calls": 0,
+			"failures":   0,
+		}}
 	}
 
 	// Prefer the agent's FULL closing message (its actual report of what it

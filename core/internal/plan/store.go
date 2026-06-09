@@ -525,29 +525,71 @@ func (s *Store) FinalizeSession(ctx context.Context, sessionID string) (int, err
 	if s == nil || s.pool == nil || sessionID == "" {
 		return 0, nil
 	}
-	// 1. Close stranded plan.step runs for this session's plan. The turn that
-	// would have closed them via plan_update has ended, so a still-'running'
-	// step run is dead weight driving a phantom card.
-	if _, err := s.pool.Exec(ctx, `
-		UPDATE mem_runs r
-		   SET status = 'error',
-		       ended_at = COALESCE(r.ended_at, NOW()),
-		       duration_ms = COALESCE(r.duration_ms,
-		           LEAST(2147483647, GREATEST(0,
-		               EXTRACT(EPOCH FROM (NOW() - r.started_at)) * 1000))::int),
-		       error = COALESCE(NULLIF(r.error, ''), 'turn ended before this step closed'),
-		       result_summary = COALESCE(NULLIF(r.result_summary, ''), '(stalled — turn ended)')
-		  FROM mem_plan_steps st, mem_plans p
-		 WHERE st.run_id = r.id
-		   AND p.id = st.plan_id
-		   AND p.session_id = $1::uuid
-		   AND r.status = 'running'
-	`, sessionID); err != nil {
-		return 0, fmt.Errorf("finalize session runs: %w", err)
+	// 1. A step still 'in_progress' when the turn ends — whose run is still
+	// 'running' (or has none) — was NOT a failure. The agent simply stopped
+	// before finishing it: a clean turn end, often a deliberate "I'm not going
+	// to act here" decision (e.g. the nightly self-improve run halting on a
+	// dirty tree). Settle those as 'skipped' with a plain-English reason so the
+	// card reads "I stopped here" instead of the misleading "step failed", and
+	// close their still-running run rows cleanly (status 'ok', not 'error') so
+	// /logs doesn't show a phantom failure either. This also keeps the parent
+	// plan out of the failed→paused→"needs you" lane it doesn't belong in
+	// (recompute only pauses on a real failed/blocked step). A step whose run
+	// ALREADY ended in error is a genuine failure → left for ReconcileStranded.
+	rows, err := s.pool.Query(ctx, `
+		SELECT st.id::text, COALESCE(st.run_id::text, '')
+		  FROM mem_plan_steps st
+		  JOIN mem_plans p ON p.id = st.plan_id
+		 WHERE p.session_id = $1::uuid
+		   AND st.status = 'in_progress'
+		   AND (st.run_id IS NULL OR EXISTS (
+		         SELECT 1 FROM mem_runs r WHERE r.id = st.run_id AND r.status = 'running'))
+	`, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("finalize session scan: %w", err)
 	}
-	// 2. Reconcile: in_progress steps whose run just closed → failed → plan
-	// recomputes off the active/running state.
-	return s.ReconcileStranded(ctx)
+	type openStep struct{ id, runID string }
+	var open []openStep
+	for rows.Next() {
+		var os openStep
+		if scanErr := rows.Scan(&os.id, &os.runID); scanErr != nil {
+			rows.Close()
+			return 0, fmt.Errorf("finalize session scan row: %w", scanErr)
+		}
+		open = append(open, os)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	const skipReason = "I stopped here — the run ended before I got to this step."
+	n := 0
+	for _, os := range open {
+		if os.runID != "" {
+			// The step didn't fail; the turn ended. Close its run cleanly.
+			_, _ = s.pool.Exec(ctx, `
+				UPDATE mem_runs
+				   SET status = 'ok',
+				       ended_at = COALESCE(ended_at, NOW()),
+				       duration_ms = COALESCE(duration_ms,
+				           LEAST(2147483647, GREATEST(0,
+				               EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
+				       result_summary = COALESCE(NULLIF(result_summary, ''), '(skipped — turn ended before this step ran)')
+				 WHERE id = $1::uuid AND status = 'running'
+			`, os.runID)
+		}
+		if _, err := s.MarkStep(ctx, os.id, StepSkipped, skipReason); err != nil {
+			return n, fmt.Errorf("finalize skip step %s: %w", os.id, err)
+		}
+		n++
+	}
+
+	// 2. Genuine failures remain failures: a step left 'in_progress' whose run
+	// ALREADY ended in error is real, so ReconcileStranded marks it failed and
+	// the plan recomputes (paused/failed) for the boss to act on.
+	m, err := s.ReconcileStranded(ctx)
+	return n + m, err
 }
 
 // SetStepRun links a step to the mem_runs row tracking its execution so the

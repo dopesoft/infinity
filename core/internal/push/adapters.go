@@ -172,6 +172,14 @@ func (a *RunsNotifier) NotifyRunFinished(ctx context.Context, runID, kind, label
 	if a == nil || a.Sender == nil || !a.Sender.Configured() {
 		return
 	}
+	// Scheduled-run SUCCESSES no longer ping — they report into the "Surfaced
+	// by Jarvis" inbox instead, so the boss isn't buzzed for "nothing needed"
+	// or routine work. Only a cron FAILURE pings here; a run that needs the
+	// boss's decision pings separately via the Trust queue (NotifyTrustQueued).
+	// Other run kinds (skill / voyager / heartbeat / …) are unchanged.
+	if kind == "cron" && status != "error" {
+		return
+	}
 	verb := "done"
 	if status == "error" {
 		verb = "failed"

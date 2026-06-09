@@ -180,7 +180,7 @@ func scanCronFailures(ctx context.Context, pool *pgxpool.Pool) []Finding {
 			&summary, &rawErr, &humanSummary, &humanAction, &humanRaw); err != nil {
 			continue
 		}
-		question := fmt.Sprintf("Cron job %q is failing. Fix it?", name)
+		question := fmt.Sprintf("One of my scheduled tasks (%q) keeps failing. Want me to fix it?", name)
 		rationale := buildCronFailureContext(name, status, lastRun, target,
 			summary, rawErr, humanSummary, humanAction, humanRaw)
 		tag := "cron_failure:" + id
@@ -427,7 +427,7 @@ func scanRepeatedToolErrors(ctx context.Context, pool *pgxpool.Pool, macBridgeHe
 		// Detail/occurrences_count carry the latest count via the
 		// evidence_log, so we no longer have to bake "N times" into the
 		// title (which would create count-varying duplicates).
-		question := fmt.Sprintf("Tool %q keeps failing. Fix it?", tool)
+		question := fmt.Sprintf("One of the tools I use (%q) keeps erroring out. Want me to fix it?", tool)
 		rationale := fmt.Sprintf("Most recent failure %s\n\n%s",
 			humanWhen(lastSeen), truncate(sample, 600))
 		tag := "repeated_tool_error:" + tool

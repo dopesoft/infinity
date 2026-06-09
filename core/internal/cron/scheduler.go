@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/runs"
+	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	robfig "github.com/robfig/cron/v3"
@@ -29,6 +31,7 @@ var infoLog = log.New(os.Stdout, "cron: ", log.LstdFlags)
 type Scheduler struct {
 	pool     *pgxpool.Pool
 	executor Executor
+	surface  *surface.Store // posts each run's outcome to "Surfaced by Jarvis"
 	cron     *robfig.Cron
 	parser   robfig.Parser
 	loc      *time.Location
@@ -71,6 +74,7 @@ func New(pool *pgxpool.Pool, exec Executor) *Scheduler {
 	return &Scheduler{
 		pool:     pool,
 		executor: exec,
+		surface:  surface.NewStore(pool, slog.Default()),
 		cron:     c,
 		parser:   parser,
 		loc:      loc,
@@ -233,8 +237,21 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
 		handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 		summary, execErr, attempts := s.executeWithRetries(ctx, j)
-		handle.SetMeta(ctx, runMetaWithAttempts(summary.Meta, attempts))
+
+		// Classify the run into a single boss-facing outcome (failed /
+		// needs_you / nothing_needed / stopped_early / did_work), stamp it on
+		// the run row so the dashboard can place + colour it, then post the
+		// human-readable result to the boss's "Surfaced by Jarvis" inbox. All
+		// deterministic — the clear outcome is a mechanic, not skill prose.
+		outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
+		meta := runMetaWithAttempts(summary.Meta, attempts)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["outcome"] = string(outcome)
+		handle.SetMeta(ctx, meta)
 		handle.Finish(ctx, execErr, summary.Summary)
+		s.surfaceRunOutcome(ctx, j, summary, execErr, outcome)
 
 		end := time.Now().UTC()
 		status := "ok"
