@@ -76,8 +76,30 @@ func (t *tracesRecentTool) Execute(ctx context.Context, input map[string]any) (s
 	if err != nil {
 		return "", err
 	}
+	// traces_recent is a LISTING tool ("find a turn id to drill into"). Return
+	// short PREVIEWS of the heavy text fields so a handful of big or errored
+	// turns can't blow the model's context window — the exact post-deploy-verify
+	// `context_length_exceeded` failure, which then created more failed traces
+	// for the next run to choke on. Full bodies come from trace_inspect on a
+	// specific turn id.
+	for i := range rows {
+		rows[i].UserText = clipPreview(rows[i].UserText, 240)
+		rows[i].AssistantText = clipPreview(rows[i].AssistantText, 240)
+		rows[i].Error = clipPreview(rows[i].Error, 300)
+	}
 	out, _ := json.Marshal(rows)
 	return string(out), nil
+}
+
+// clipPreview trims a field to a preview length, appending an ellipsis when it
+// had to cut. Rune-safe so it never splits a multibyte character.
+func clipPreview(s string, max int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // ---- trace_inspect ---------------------------------------------------------

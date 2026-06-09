@@ -63,6 +63,20 @@ func classifyOutcome(ctx context.Context, pool *pgxpool.Pool, sessionID string, 
 		}
 	}
 	if pool != nil && sessionID != "" {
+		// The run hit a both-bridges-down wall — it physically couldn't run
+		// files/shell/git, so its coding work was blocked by infrastructure, NOT
+		// done. That needs the boss (bring a bridge back), so it must read
+		// "needs you", never "did work". The bridge tools stamp a stable
+		// 'bridge_unavailable' marker into the tool result → captured as an
+		// observation. See tools.bridgeUnavailableResult.
+		var hit int
+		if err := pool.QueryRow(ctx, `
+			SELECT 1 FROM mem_observations
+			 WHERE session_id = $1::uuid AND raw_text LIKE '%bridge_unavailable%'
+			 LIMIT 1
+		`, sessionID).Scan(&hit); err == nil {
+			return OutcomeNeedsYou
+		}
 		// A queued trust contract for this session is the canonical "the boss
 		// must decide" signal. Status 'pending' is what the gate waits on.
 		var one int

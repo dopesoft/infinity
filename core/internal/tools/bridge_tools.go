@@ -100,6 +100,63 @@ func formatBridgeResult(b bridge.Bridge, body []byte) string {
 	return fmt.Sprintf("[bridge=%s] %s", b.Name(), string(body))
 }
 
+// bridgeCall is the one execution path for every bridge_* tool: it resolves the
+// session's preferred bridge, runs fn against it, and — when that bridge fails
+// at the BRIDGE level (transport error or 5xx) — automatically fails over to the
+// other bridge (bridge.Router.Call). fn closes over the tool's path/body and
+// just does the Get/Post, so failover is uniform with zero per-tool wiring.
+//
+// This is the fix for the night-after-night self-improve stall: a Mac that
+// flakes mid-run no longer strands the agent — files/shell/git step straight
+// onto the healthy cloud workspace. A 4xx (a real command/param error like a
+// failing build) is returned as-is, never retried, so we don't mask real
+// failures or storm the other bridge.
+func bridgeCall(ctx context.Context, router *bridge.Router, prefs PreferenceFetcher, tool string, fn func(bridge.Bridge) ([]byte, int, bool)) (string, error) {
+	if router == nil {
+		return "", fmt.Errorf("%s: bridge router not configured", tool)
+	}
+	pref := bridge.PrefAuto
+	if prefs != nil {
+		pref = prefs(ctx, SessionIDFromContext(ctx))
+	}
+	served, body, status, failedOver, err := router.Call(ctx, pref, fn)
+	if errors.Is(err, bridge.ErrBothBridgesDown) {
+		// Honest, model-readable "stop and surface" — NOT a raw error the model
+		// retries to the cap. The run-outcome classifier later reads this marker
+		// (mem_observations) to label the run "needs you", not "done".
+		return bridgeUnavailableResult(tool), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s: %s", tool, err.Error())
+	}
+	if status >= 300 {
+		// A 4xx is the bridge answering with a command/param result (it's up) —
+		// surface the real reason, no failover.
+		return "", fmt.Errorf("%s via %s failed (status=%d): %s", tool, served.Name(), status, bridgeErrText(body))
+	}
+	out := formatBridgeResult(served, body)
+	if failedOver {
+		out = fmt.Sprintf("[failover: the preferred bridge failed, served by %s instead]\n%s", served.Name(), out)
+	}
+	return out, nil
+}
+
+// bridgeUnavailableResult is the structured tool result handed to the agent when
+// BOTH bridges are unreachable. Mirrors the agent loop's macBridgeDownFallback
+// shape (kept here to avoid importing the agent package): a directive to stop
+// and surface, not a raw ERROR the model would retry. The stable
+// "bridge_unavailable" token is what the run-outcome classifier greps for.
+func bridgeUnavailableResult(tool string) string {
+	payload := map[string]any{
+		"error":     "bridge_unavailable",
+		"tool":      tool,
+		"both_down": true,
+		"fallback": "Both the Mac bridge and the cloud workspace are unreachable right now, so I can't run files/shell/git. Do NOT retry this in a loop. Surface a HIGH-importance system item with surface_item stating both bridges are down (copy the reason), then stop — the boss needs to bring a bridge back.",
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
 // ── fs_read ──────────────────────────────────────────────────────────────
 
 type bridgeFSRead struct {
@@ -145,10 +202,6 @@ func bridgeErrText(body []byte) string {
 }
 
 func (t *bridgeFSRead) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("fs_read: %s", why)
-	}
 	path := strString(in, "path")
 	q := "/fs/read?path=" + urlEscape(path)
 	if v := intOrZero(in, "start"); v > 0 {
@@ -157,11 +210,9 @@ func (t *bridgeFSRead) Execute(ctx context.Context, in map[string]any) (string, 
 	if v := intOrZero(in, "end"); v > 0 {
 		q += fmt.Sprintf("&end=%d", v)
 	}
-	body, status, ok := b.Get(ctx, q)
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("fs_read via %s failed (status=%d): %s", b.Name(), status, bridgeErrText(body))
-	}
-	return formatBridgeResult(b, body), nil
+	return bridgeCall(ctx, t.router, t.prefs, "fs_read", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Get(ctx, q)
+	})
 }
 
 // ── fs_ls ────────────────────────────────────────────────────────────────
@@ -185,16 +236,10 @@ func (t *bridgeFSLS) Schema() map[string]any {
 	}
 }
 func (t *bridgeFSLS) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("fs_ls: %s", why)
-	}
 	path := strString(in, "path")
-	body, status, ok := b.Get(ctx, "/fs/ls?path="+urlEscape(path))
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("fs_ls via %s failed (status=%d): %s", b.Name(), status, bridgeErrText(body))
-	}
-	return formatBridgeResult(b, body), nil
+	return bridgeCall(ctx, t.router, t.prefs, "fs_ls", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Get(ctx, "/fs/ls?path="+urlEscape(path))
+	})
 }
 
 // ── fs_save ──────────────────────────────────────────────────────────────
@@ -220,18 +265,12 @@ func (t *bridgeFSSave) Schema() map[string]any {
 	}
 }
 func (t *bridgeFSSave) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("fs_save: %s", why)
-	}
-	body, status, ok := b.Post(ctx, "/fs/save", map[string]any{
-		"path":    strString(in, "path"),
-		"content": strString(in, "content"),
+	return bridgeCall(ctx, t.router, t.prefs, "fs_save", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Post(ctx, "/fs/save", map[string]any{
+			"path":    strString(in, "path"),
+			"content": strString(in, "content"),
+		})
 	})
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("fs_save via %s failed (status=%d): %s", b.Name(), status, string(body))
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 // ── fs_edit ──────────────────────────────────────────────────────────────
@@ -260,29 +299,14 @@ func (t *bridgeFSEdit) Schema() map[string]any {
 	}
 }
 func (t *bridgeFSEdit) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("fs_edit: %s", why)
-	}
-	body, status, ok := b.Post(ctx, "/fs/edit", map[string]any{
-		"path":        strString(in, "path"),
-		"old_string":  strString(in, "old_string"),
-		"new_string":  strString(in, "new_string"),
-		"replace_all": boolOrFalse(in, "replace_all"),
+	return bridgeCall(ctx, t.router, t.prefs, "fs_edit", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Post(ctx, "/fs/edit", map[string]any{
+			"path":        strString(in, "path"),
+			"old_string":  strString(in, "old_string"),
+			"new_string":  strString(in, "new_string"),
+			"replace_all": boolOrFalse(in, "replace_all"),
+		})
 	})
-	if !ok {
-		return "", fmt.Errorf("fs_edit via %s unreachable", b.Name())
-	}
-	if status >= 300 {
-		// Surface the bridge's exact error message - Jarvis reads it.
-		var msg struct{ Error string `json:"error"` }
-		_ = json.Unmarshal(body, &msg)
-		if msg.Error != "" {
-			return "", fmt.Errorf("fs_edit via %s: %s", b.Name(), msg.Error)
-		}
-		return "", fmt.Errorf("fs_edit via %s failed (status=%d)", b.Name(), status)
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 // ── bash_run ─────────────────────────────────────────────────────────────
@@ -309,19 +333,13 @@ func (t *bridgeBash) Schema() map[string]any {
 	}
 }
 func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("bash_run: %s", why)
-	}
-	body, status, ok := b.Post(ctx, "/bash", map[string]any{
-		"cmd":         strString(in, "cmd"),
-		"cwd":         strString(in, "cwd"),
-		"timeout_sec": intOrZero(in, "timeout_sec"),
+	return bridgeCall(ctx, t.router, t.prefs, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Post(ctx, "/bash", map[string]any{
+			"cmd":         strString(in, "cmd"),
+			"cwd":         strString(in, "cwd"),
+			"timeout_sec": intOrZero(in, "timeout_sec"),
+		})
 	})
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("bash_run via %s failed (status=%d): %s", b.Name(), status, string(body))
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 // ── git_* ────────────────────────────────────────────────────────────────
@@ -345,19 +363,9 @@ func (t *bridgeGitStatus) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitStatus) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("git_status: %s", why)
-	}
-	body, status, ok := b.Get(ctx, "/git/status?repo="+urlEscape(strString(in, "repo")))
-	if !ok || status >= 300 {
-		reason := bridgeErrText(body)
-		if strings.TrimSpace(reason) == "" || reason == "no reason given" {
-			reason = "repo state unknown"
-		}
-		return "", fmt.Errorf("git_status via %s failed (status=%d): %s", b.Name(), status, reason)
-	}
-	return formatBridgeResult(b, body), nil
+	return bridgeCall(ctx, t.router, t.prefs, "git_status", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Get(ctx, "/git/status?repo="+urlEscape(strString(in, "repo")))
+	})
 }
 
 type bridgeGitDiff struct {
@@ -381,10 +389,6 @@ func (t *bridgeGitDiff) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitDiff) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("git_diff: %s", why)
-	}
 	q := "/git/diff?repo=" + urlEscape(strString(in, "repo"))
 	if p := strString(in, "path"); p != "" {
 		q += "&path=" + urlEscape(p)
@@ -392,11 +396,9 @@ func (t *bridgeGitDiff) Execute(ctx context.Context, in map[string]any) (string,
 	if boolOrFalse(in, "staged") {
 		q += "&staged=1"
 	}
-	body, status, ok := b.Get(ctx, q)
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("git_diff via %s failed (status=%d)", b.Name(), status)
-	}
-	return formatBridgeResult(b, body), nil
+	return bridgeCall(ctx, t.router, t.prefs, "git_diff", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Get(ctx, q)
+	})
 }
 
 type bridgeGitStage struct {
@@ -418,10 +420,6 @@ func (t *bridgeGitStage) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitStage) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("git_stage: %s", why)
-	}
 	files := []string{}
 	if arr, ok := in["files"].([]any); ok {
 		for _, v := range arr {
@@ -430,14 +428,12 @@ func (t *bridgeGitStage) Execute(ctx context.Context, in map[string]any) (string
 			}
 		}
 	}
-	body, status, ok := b.Post(ctx, "/git/stage", map[string]any{
-		"repo":  strString(in, "repo"),
-		"files": files,
+	return bridgeCall(ctx, t.router, t.prefs, "git_stage", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Post(ctx, "/git/stage", map[string]any{
+			"repo":  strString(in, "repo"),
+			"files": files,
+		})
 	})
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("git_stage via %s failed (status=%d): %s", b.Name(), status, string(body))
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 type bridgeGitCommit struct {
@@ -461,26 +457,21 @@ func (t *bridgeGitCommit) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitCommit) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("git_commit: %s", why)
-	}
-	// Per-session branching: when commits land on the Cloud bridge,
-	// auto-route them onto a session-named branch so Jarvis's work
-	// is attributable + revertable without polluting main. Mac
-	// commits use whatever branch the boss has checked out - he's
-	// the human in that loop.
-	if b.Name() == bridge.KindCloud {
-		ensureSessionBranch(ctx, b, strString(in, "repo"), SessionIDFromContext(ctx))
-	}
-	body, status, ok := b.Post(ctx, "/git/commit", map[string]any{
-		"repo":    strString(in, "repo"),
-		"message": strString(in, "message"),
+	return bridgeCall(ctx, t.router, t.prefs, "git_commit", func(b bridge.Bridge) ([]byte, int, bool) {
+		// Per-session branching: when commits land on the Cloud bridge,
+		// auto-route them onto a session-named branch so Jarvis's work
+		// is attributable + revertable without polluting main. Mac
+		// commits use whatever branch the boss has checked out - he's
+		// the human in that loop. Inside fn so it follows the bridge that
+		// actually serves (incl. after a Mac→cloud failover).
+		if b.Name() == bridge.KindCloud {
+			ensureSessionBranch(ctx, b, strString(in, "repo"), SessionIDFromContext(ctx))
+		}
+		return b.Post(ctx, "/git/commit", map[string]any{
+			"repo":    strString(in, "repo"),
+			"message": strString(in, "message"),
+		})
 	})
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("git_commit via %s failed (status=%d): %s", b.Name(), status, string(body))
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 // ensureSessionBranch makes sure the cloud bridge's working tree is
@@ -588,19 +579,13 @@ func (t *bridgeGitPush) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitPush) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("git_push: %s", why)
-	}
-	body, status, ok := b.Post(ctx, "/git/push", map[string]any{
-		"repo":   strString(in, "repo"),
-		"remote": strString(in, "remote"),
-		"branch": strString(in, "branch"),
+	return bridgeCall(ctx, t.router, t.prefs, "git_push", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Post(ctx, "/git/push", map[string]any{
+			"repo":   strString(in, "repo"),
+			"remote": strString(in, "remote"),
+			"branch": strString(in, "branch"),
+		})
 	})
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("git_push via %s failed (status=%d): %s", b.Name(), status, string(body))
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 type bridgeGitPull struct {
@@ -624,19 +609,13 @@ func (t *bridgeGitPull) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitPull) Execute(ctx context.Context, in map[string]any) (string, error) {
-	b, why, err := pickBridge(ctx, t.router, t.prefs)
-	if err != nil {
-		return "", fmt.Errorf("git_pull: %s", why)
-	}
-	body, status, ok := b.Post(ctx, "/git/pull", map[string]any{
-		"repo":   strString(in, "repo"),
-		"remote": strString(in, "remote"),
-		"branch": strString(in, "branch"),
+	return bridgeCall(ctx, t.router, t.prefs, "git_pull", func(b bridge.Bridge) ([]byte, int, bool) {
+		return b.Post(ctx, "/git/pull", map[string]any{
+			"repo":   strString(in, "repo"),
+			"remote": strString(in, "remote"),
+			"branch": strString(in, "branch"),
+		})
 	})
-	if !ok || status >= 300 {
-		return "", fmt.Errorf("git_pull via %s failed (status=%d): %s", b.Name(), status, string(body))
-	}
-	return formatBridgeResult(b, body), nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────

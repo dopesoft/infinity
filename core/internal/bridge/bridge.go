@@ -140,7 +140,12 @@ func (m *MacBridge) Health(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_, status, ok := doRequest(ctx, http.MethodGet, m.base+"/health", nil, m.headers)
-	return ok && status >= 200 && status < 300
+	// "Reachable" — not "200 on /health". Some Mac tunnels route /sse to the
+	// MCP proxy but never wire /health to the bridge binary, so /health 404s
+	// while /fs /bash /git work fine. A 404/4xx means the server ANSWERED (it's
+	// up); only a transport failure or a 5xx means it's actually down. The
+	// Router.Call failover is the real safety net if a specific op then 5xxs.
+	return ok && status < 500
 }
 
 func (m *MacBridge) Get(ctx context.Context, path string) ([]byte, int, bool) {
@@ -355,6 +360,70 @@ func (r *Router) Invalidate() {
 	r.mu.Lock()
 	r.cachedExp = time.Time{}
 	r.mu.Unlock()
+}
+
+// ErrBothBridgesDown is returned by Call when the preferred bridge AND its
+// alternate both fail at the bridge level (transport error or HTTP 5xx). The
+// caller surfaces this as a "can't run, no bridge" event the agent must stop
+// on — NOT a per-tool error it would retry to the iteration cap.
+var ErrBothBridgesDown = errors.New("both bridges unavailable")
+
+// alternate returns the other bridge of the mac/cloud pair, or nil if there
+// isn't one configured.
+func (r *Router) alternate(b Bridge) Bridge {
+	if r == nil || b == nil {
+		return nil
+	}
+	if b == r.mac {
+		return r.cloud
+	}
+	if b == r.cloud {
+		return r.mac
+	}
+	return nil
+}
+
+// Call runs fn against the preferred bridge and, on a BRIDGE-level failure,
+// automatically retries fn once on the other bridge. This is the failover that
+// keeps an autonomous run alive when the Mac flakes mid-run: a 3am self-improve
+// pass that loses the Mac steps straight onto the cloud workspace instead of
+// getting stuck (the night-after-night bug).
+//
+// What counts as a BRIDGE failure (→ fail over): a transport error (ok=false)
+// or an HTTP 5xx. What does NOT (→ returned as-is, no failover): any 2xx, and
+// any 4xx — a 4xx is the bridge answering with a command/param result (e.g. 400
+// "repo required", a `go build` that compiled-and-failed), so retrying on the
+// other bridge would just double the work and mask the real error.
+//
+// Returns the bridge that served the final attempt, its response, whether a
+// failover happened (so the caller can annotate the result), and an error only
+// when NO bridge could be reached (ErrBothBridgesDown).
+func (r *Router) Call(ctx context.Context, pref Preference, fn func(Bridge) ([]byte, int, bool)) (served Bridge, body []byte, status int, failedOver bool, err error) {
+	if r == nil {
+		return nil, nil, 0, false, errors.New("bridge router not configured")
+	}
+	primary, _, perr := r.For(ctx, pref)
+	if perr != nil {
+		return nil, nil, 0, false, perr
+	}
+	body, status, ok := fn(primary)
+	if ok && status < 500 {
+		return primary, body, status, false, nil
+	}
+	// Primary failed at the bridge level. Try the alternate once.
+	alt := r.alternate(primary)
+	if alt == nil {
+		return primary, body, status, false, ErrBothBridgesDown
+	}
+	// The primary's failure is fresh evidence its health is stale — re-probe so
+	// the system prompt / next call reflect reality.
+	r.Invalidate()
+	abody, astatus, aok := fn(alt)
+	if aok && astatus < 500 {
+		return alt, abody, astatus, true, nil
+	}
+	// Both bridges failed at the bridge level.
+	return alt, abody, astatus, true, ErrBothBridgesDown
 }
 
 // Describe is a short human/agent-readable summary of router state.
