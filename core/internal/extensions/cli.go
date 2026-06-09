@@ -38,6 +38,17 @@ export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache"
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+# Python (pip) installs. The cloud workspace's system Python is "externally
+# managed" (PEP 668), so a bare or even ` + "`--user`" + ` pip install is REFUSED
+# with externally-managed-environment — which is exactly why the yt-dlp
+# extension couldn't activate. This workspace is a disposable container, NOT the
+# boss's machine, so overriding PEP 668 here is safe: pin pip to a user install
+# on the persistent volume ($HOME/.local, already on PATH) and allow it past the
+# guard. Net effect: any ` + "`pip install <tool>`" + ` extension just works and
+# survives redeploys, with zero per-tool flags for the agent to remember.
+export PIP_BREAK_SYSTEM_PACKAGES=1
+export PIP_USER=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$HOME/.local/bin" "$HOME/bin" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" 2>/dev/null || true
 `
 
