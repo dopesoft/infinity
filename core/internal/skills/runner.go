@@ -41,7 +41,7 @@ func (r *Runner) SetRiskGate(g RiskGate) {
 // recorded on the run row so the Skills tab can show "manual / conversation /
 // cron / heartbeat / sentinel" filters.
 func (r *Runner) Invoke(ctx context.Context, sessionID, name string, args map[string]any, triggerSource string) (Result, *Run, error) {
-	skill, ok := r.registry.Get(name)
+	skill, ok := r.registry.GetFresh(ctx, name)
 	if !ok {
 		return Result{}, nil, fmt.Errorf("unknown skill: %s", name)
 	}

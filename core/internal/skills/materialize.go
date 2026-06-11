@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -79,6 +80,17 @@ func MaterializeActiveSkills(ctx context.Context, pool *pgxpool.Pool, skillsRoot
 			continue
 		}
 
+		// A body whose own frontmatter declares a DIFFERENT skill name would
+		// be loaded into the registry under THAT name, silently vaporizing
+		// this skill (2026-06-08: a recovery recipe promoted onto
+		// nightly-self-improve's pointer made skills_invoke return "unknown
+		// skill"). A corrupt active pointer is a real error: skip the row and
+		// say so on stderr instead of poisoning the registry directory.
+		if fmName := FrontmatterName(body); fmName != "" && safeFilename(fmName) != safeFilename(name) {
+			log.Printf("materialize: %s: active version %s body declares name %q; pointer is corrupt, skipping (repoint mem_skill_active)", name, version, fmName)
+			continue
+		}
+
 		// If the stored body lacks YAML frontmatter, synthesize one from
 		// the canonical metadata columns and prepend. Loader rejects any
 		// SKILL.md without a leading `---`, so this is what unblocks
@@ -112,6 +124,76 @@ func MaterializeActiveSkills(ctx context.Context, pool *pgxpool.Pool, skillsRoot
 		infoLog.Printf("materialize: wrote %s (%d bytes)", path, len(final))
 	}
 	return written, rows.Err()
+}
+
+// FrontmatterName returns the `name:` a SKILL.md body declares in its YAML
+// frontmatter, or "" when the body has no parseable frontmatter. This is the
+// identity the loader will key the registry on, so writers (materialize,
+// voyager promote) use it to detect bodies that belong to a different skill.
+func FrontmatterName(body string) string {
+	fm, _, err := splitFrontmatter([]byte(body))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(fm.Name)
+}
+
+// healThrottle bounds how often GetFresh may rescan: a skill whose stored
+// frontmatter version legitimately differs from its active pointer would
+// otherwise turn every invoke into a materialize + full reload.
+const healThrottle = 30 * time.Second
+
+// GetFresh returns the named skill, self-healing a stale registry first. A
+// migration or a Voyager promotion can activate or repoint a skill in
+// Postgres while this process is running, but skills only materialize to
+// disk at boot - so the in-memory index misses until the next redeploy (the
+// "unknown skill: nightly-self-improve" failure). On a miss, or when the
+// loaded version differs from mem_skill_active.active_version, this
+// re-materializes active skills, reloads, and retries once. Falls back to
+// plain Get when no store/pool is attached.
+func (r *Registry) GetFresh(ctx context.Context, name string) (*Skill, bool) {
+	s, ok := r.Get(name)
+	r.mu.RLock()
+	store := r.store
+	healed := r.healedAt
+	r.mu.RUnlock()
+	if store == nil || store.Pool() == nil {
+		return s, ok
+	}
+	if ok && !r.versionStale(ctx, store.Pool(), name, s.Version) {
+		return s, ok
+	}
+	if time.Since(healed) < healThrottle {
+		return s, ok
+	}
+	r.mu.Lock()
+	r.healedAt = time.Now()
+	r.mu.Unlock()
+	if _, err := MaterializeActiveSkills(ctx, store.Pool(), r.root); err != nil {
+		log.Printf("skills: self-heal materialize: %v", err)
+	}
+	if _, err := r.Reload(ctx); err != nil {
+		log.Printf("skills: self-heal reload: %v", err)
+		return s, ok
+	}
+	if fresh, fok := r.Get(name); fok {
+		if !ok || fresh.Version != s.Version {
+			infoLog.Printf("skills: self-heal recovered %q (version %s)", name, fresh.Version)
+		}
+		return fresh, true
+	}
+	return s, ok
+}
+
+// versionStale reports whether the loaded skill's version no longer matches
+// the DB's active pointer - the signal that something repointed the skill
+// after this process last materialized it.
+func (r *Registry) versionStale(ctx context.Context, pool *pgxpool.Pool, name, loaded string) bool {
+	var active string
+	err := pool.QueryRow(ctx,
+		`SELECT COALESCE(active_version, '') FROM mem_skill_active WHERE skill_name = $1`,
+		name).Scan(&active)
+	return err == nil && active != "" && active != loaded
 }
 
 // synthesizeFrontmatter rebuilds a minimal-but-loader-valid YAML header

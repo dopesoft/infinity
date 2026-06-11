@@ -135,7 +135,7 @@ func (t *notificationDigestTool) Execute(ctx context.Context, _ map[string]any) 
 	if err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("Flushed %d batched notification(s) into a digest.", n)
+	msg := fmt.Sprintf("I bundled %d updates into one digest.", n)
 	if n == 0 {
 		msg = "Nothing batched - no digest sent."
 	}

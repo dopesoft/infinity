@@ -75,7 +75,7 @@ func (e *AgentExecutor) SetReauthHandler(p CronReauthParker, n CronBossNotifier)
 	e.notify = n
 }
 
-func (e *AgentExecutor) ExecuteJob(j Job) (RunSummary, error) {
+func (e *AgentExecutor) ExecuteJob(j Job) (summary RunSummary, err error) {
 	if e == nil || e.Loop == nil {
 		return RunSummary{}, errors.New("no agent loop wired into cron executor")
 	}
@@ -114,7 +114,21 @@ func (e *AgentExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	// otherwise stay 'running' and the plan 'active' forever — a phantom
 	// "Running" card on the Agent Work board (the 6.4-hour zombie the boss saw).
 	// The reaper ticker is the safety net; this makes the close immediate.
-	defer e.finalizeSession(sessionID)
+	//
+	// The settled count is stamped into the summary the SCHEDULER classifies
+	// from: finalize runs before the caller sees the return values (deferred
+	// func over named returns), but classifyOutcome runs after — so without
+	// this stamp the plan looks complete by the time it's read and a run the
+	// agent abandoned mid-plan would read "done" instead of "stopped early"
+	// (the boss saw exactly that on the broken self-improve nights).
+	defer func() {
+		if n := e.finalizeSession(sessionID); n > 0 {
+			if summary.Meta == nil {
+				summary.Meta = map[string]any{}
+			}
+			summary.Meta["abandoned_steps"] = n
+		}
+	}()
 
 	out := make(chan agent.RunEvent, 64)
 	go func() {
@@ -390,22 +404,27 @@ func (e *AgentExecutor) seedSelfImproveApprovals(sessionID string, j Job) {
 
 // finalizeSession closes the turn's plan/run bookkeeping right after Loop.Run
 // returns, so a finished (or given-up) cron turn never leaves a phantom
-// "Running" card on the Agent Work board. Best-effort + nil-safe; non-UUID
-// (system_event) sessions have no UUID-keyed plans and are skipped.
-func (e *AgentExecutor) finalizeSession(sessionID string) {
+// "Running" card on the Agent Work board. Returns the number of steps it had
+// to force-settle — >0 means the agent walked away from an unfinished plan,
+// which the outcome classifier must read as "stopped early", never "done".
+// Best-effort + nil-safe; non-UUID (system_event) sessions have no UUID-keyed
+// plans and are skipped.
+func (e *AgentExecutor) finalizeSession(sessionID string) int {
 	if e == nil || e.Pool == nil || sessionID == "" {
-		return
+		return 0
 	}
 	if _, err := uuid.Parse(sessionID); err != nil {
-		return
+		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	if _, err := plan.NewStore(e.Pool).FinalizeSession(ctx, sessionID); err != nil {
+	n, err := plan.NewStore(e.Pool).FinalizeSession(ctx, sessionID)
+	if err != nil {
 		// Real failure → stderr (severity:error). Success is silent; the plan
 		// reconcile ticker logs aggregate counts.
 		log.Printf("cron finalize session %s: %v", sessionID, err)
 	}
+	return n
 }
 
 // tagCronRunSession stamps the freshly-minted session id onto the cron's

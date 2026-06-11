@@ -58,10 +58,60 @@ type Config struct {
 
 // Summary is the run report (lands on the cron's mem_runs row).
 type Summary struct {
-	Accounts  int    `json:"accounts"`
-	Fetched   int    `json:"fetched"`
-	Surfaced  int    `json:"surfaced"`
-	SessionID string `json:"session_id,omitempty"` // ties the cron run card to the step plan
+	Accounts  int      `json:"accounts"`
+	Fetched   int      `json:"fetched"`
+	Surfaced  int      `json:"surfaced"`
+	Examples  []string `json:"examples,omitempty"`   // "Sender about \"Subject\"" for surfaced mail — the substance the boss actually wants
+	SessionID string   `json:"session_id,omitempty"` // ties the cron run card to the step plan
+}
+
+// Human renders the run report the way Jarvis would say it to the boss —
+// naming actual senders and subjects when mail was flagged, never bare
+// counters ("Triaged 12 email(s) across 4 mailbox(es)" is dev-speak).
+func (s Summary) Human() string {
+	box := "your inbox"
+	if s.Accounts > 1 {
+		box = fmt.Sprintf("your %d mailboxes", s.Accounts)
+	}
+	switch {
+	case s.Fetched == 0:
+		return "I checked " + box + " and there was no new mail."
+	case s.Surfaced == 0:
+		return fmt.Sprintf("I read %s in %s. None of them need a reply from you.", nEmails(s.Fetched), box)
+	default:
+		flagged := fmt.Sprintf("%d that need", s.Surfaced)
+		if s.Surfaced == 1 {
+			flagged = "1 that needs"
+		}
+		msg := fmt.Sprintf("I read %s in %s and flagged %s your reply", nEmails(s.Fetched), box, flagged)
+		if len(s.Examples) > 0 {
+			ex := s.Examples
+			if len(ex) > 2 {
+				ex = ex[:2]
+			}
+			msg += ", including " + strings.Join(ex, " and ")
+		}
+		msg += ". They are waiting in your Follow-ups."
+		return msg
+	}
+}
+
+func nEmails(n int) string {
+	if n == 1 {
+		return "1 new email"
+	}
+	return fmt.Sprintf("%d new emails", n)
+}
+
+// senderName trims "Namecheap Support <support@namecheap.com>" to the human
+// part, falling back to the raw address.
+func senderName(from string) string {
+	if i := strings.IndexByte(from, '<'); i > 0 {
+		if name := strings.Trim(strings.TrimSpace(from[:i]), `"'`); name != "" {
+			return name
+		}
+	}
+	return strings.Trim(strings.TrimSpace(from), "<>")
 }
 
 type email struct {
@@ -156,13 +206,17 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	}
 	sum.Accounts = len(accounts)
 	sum.Fetched = len(emails)
+	mailboxes := "your inbox"
+	if len(accounts) > 1 {
+		mailboxes = fmt.Sprintf("your %d mailboxes", len(accounts))
+	}
 	if len(emails) == 0 {
-		mark(s1, plan.StepDone, fmt.Sprintf("No new mail across %d mailbox(es).", len(accounts)))
+		mark(s1, plan.StepDone, "No new mail in "+mailboxes+".")
 		mark(s2, plan.StepDone, "Nothing to decide.")
 		mark(s3, plan.StepDone, "Nothing to surface.")
 		return sum, nil
 	}
-	mark(s1, plan.StepDone, fmt.Sprintf("Read %d email(s) across %d mailbox(es).", len(emails), len(accounts)))
+	mark(s1, plan.StepDone, fmt.Sprintf("I read %s in %s.", nEmails(len(emails)), mailboxes))
 
 	// Step 2 — the one judgment: which need the boss's reply? One batched LLM call.
 	mark(s2, plan.StepInProgress, "")
@@ -180,7 +234,7 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 			needReply++
 		}
 	}
-	mark(s2, plan.StepDone, fmt.Sprintf("Flagged %d of %d as needing your reply.", needReply, len(emails)))
+	mark(s2, plan.StepDone, fmt.Sprintf("I flagged %d of the %d as needing your reply.", needReply, len(emails)))
 
 	// Step 3 — surface the winners (decision + upsert only; HTML loads lazily on
 	// open via /api/followups/message, so the run stays fast and can't hang).
@@ -210,8 +264,14 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 			continue
 		}
 		sum.Surfaced++
+		sum.Examples = append(sum.Examples,
+			fmt.Sprintf("%s about %q", senderName(em.from), firstNonEmpty(em.subject, "(no subject)")))
 	}
-	mark(s3, plan.StepDone, fmt.Sprintf("Surfaced %d email(s) to Follow-ups.", sum.Surfaced))
+	if sum.Surfaced == 1 {
+		mark(s3, plan.StepDone, "I put 1 email in your Follow-ups.")
+	} else {
+		mark(s3, plan.StepDone, fmt.Sprintf("I put %d emails in your Follow-ups.", sum.Surfaced))
+	}
 	return sum, nil
 }
 

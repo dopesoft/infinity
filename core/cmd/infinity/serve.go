@@ -1341,6 +1341,13 @@ func serveCmd() *cobra.Command {
 					Embedder:   embedder,
 					Logger:     slog.Default(),
 				})
+				if activeModel != nil {
+					// Nightly digest lead drafted on the boss's active model
+					// (deterministic fallback inside Report.Summary). Set only
+					// when non-nil so a typed-nil pointer can't masquerade as
+					// a usable Drafter.
+					systemExec.Deps.Drafter = activeModel
+				}
 				// Wire the deterministic inbox-triage skill (fetch → 1 LLM
 				// decide → surface with actions/HTML). Reuses the same Composio
 				// exec, cache, message fetcher, Settings model, and surface store
@@ -1362,6 +1369,14 @@ func serveCmd() *cobra.Command {
 				if err := cronScheduler.Start(cmd.Context()); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: cron start: %v\n", err)
 				}
+				// One-shot: rewrite the past week's run cards into the new
+				// human digest shape + honest outcomes (infinity_meta-guarded;
+				// see cron.BackfillRunNarratives). Async — boot never waits.
+				go func() {
+					bctx, bcancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					defer bcancel()
+					cronScheduler.BackfillRunNarratives(bctx)
+				}()
 				cronAPI = cron.NewAPI(cronScheduler)
 				tools.RegisterCronTools(registry, cronSchedulerAdapter{s: cronScheduler}, pool)
 				tools.RegisterOutcomeTools(registry, pool)

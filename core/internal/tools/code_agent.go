@@ -140,6 +140,9 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 			"Max subscription). The active bridge is %q. On the Cloud bridge, write the code yourself with "+
 			"fs_save/fs_edit in /workspace.", b.Name()), nil
 	}
+	// A cloud-flavored repo path (e.g. /workspace/infinity) still resolves on
+	// the Mac: translate it to the Mac layout before launching.
+	repo = bridge.NormalizePath(b, repo)
 
 	// Book the run so Studio shows a live, navigation-proof spinner.
 	// runs.Handle is the real API (Begin → Progress → Finish); it's

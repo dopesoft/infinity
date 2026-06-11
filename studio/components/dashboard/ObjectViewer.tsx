@@ -2155,8 +2155,61 @@ function MessageSkeleton() {
 // it matters" sentence becomes a clean italic intro - no card around
 // it, just a paragraph. The url renders as a thin link at the bottom
 // only when present.
+// dedupeSurfaceBody strips the parts of a body that merely repeat the
+// importanceReason rendered (italic) directly above it. Writers used to put
+// the reason's text inside the body too — the first line of the narrative,
+// and/or a trailing "What this means: <floor>" — so the modal showed the same
+// sentence twice back to back (the duplicated nightly-cognition card the boss
+// caught). Defends against every writer AND historical DB rows.
+function dedupeSurfaceBody(
+  body: string | null | undefined,
+  reason: string | null | undefined,
+): string {
+  const b = (body ?? "").trim();
+  const r = (reason ?? "").trim();
+  if (!b || !r) return b;
+  let out = b;
+  if (out === r) return "";
+  if (out.startsWith(r)) out = out.slice(r.length).trim();
+  const legacySuffix = "What this means: " + r;
+  if (out.endsWith(legacySuffix)) {
+    out = out.slice(0, out.length - legacySuffix.length).trim();
+  }
+  return out;
+}
+
+// FieldValue renders a labelled field's value. Values whose lines are "- "
+// bullets (e.g. the nightly digest's "What I learned" lessons) render as a
+// real list instead of a wall of <br>-joined text.
+function FieldValue({ value }: { value: string }) {
+  const lines = value.split("\n");
+  const bullets = lines.filter((l) => l.trim().startsWith("- "));
+  if (bullets.length > 0 && bullets.length === lines.filter((l) => l.trim() !== "").length) {
+    return (
+      <ul className="list-disc space-y-1.5 pl-4">
+        {bullets.map((l, i) => (
+          <li key={i} className="break-words">
+            {l.trim().slice(2)}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <>
+      {lines.map((line, i, arr) => (
+        <React.Fragment key={i}>
+          {line}
+          {i < arr.length - 1 ? <br /> : null}
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
+
 function SurfaceBody({ item }: { item: SurfaceItem }) {
-  const fields = parseLabeledBody(item.body);
+  const body = dedupeSurfaceBody(item.body, item.importanceReason);
+  const fields = parseLabeledBody(body);
   // When the body parses cleanly into fields, drop the "Why it matters"
   // duplicate from inline rendering since we render importanceReason
   // above as a hero italic. Same for "Account" if it's already shown
@@ -2179,21 +2232,16 @@ function SurfaceBody({ item }: { item: SurfaceItem }) {
           <div className="px-4 py-1.5 sm:px-5">
             {visibleFields.map((f) => (
               <ModalField key={f.label} label={f.label}>
-                {f.value.split("\n").map((line, i, arr) => (
-                  <React.Fragment key={i}>
-                    {line}
-                    {i < arr.length - 1 ? <br /> : null}
-                  </React.Fragment>
-                ))}
+                <FieldValue value={f.value} />
               </ModalField>
             ))}
           </div>
         </div>
-      ) : item.body ? (
+      ) : body ? (
         // Body didn't parse into labelled fields - render as prose so we
         // still show what Jarvis wrote, without the faux-card chrome.
         <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground/90">
-          {item.body}
+          {body}
         </p>
       ) : null}
 

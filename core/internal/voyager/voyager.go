@@ -350,6 +350,21 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 		if strings.TrimSpace(parentSkill) != "" {
 			targetName = strings.TrimSpace(parentSkill)
 		}
+		// The registry keys skills by the BODY's frontmatter name at load
+		// time, so a body that declares an unrelated identity must never
+		// promote in place: it would replace the parent's active version with
+		// a foreign recipe and vaporize the parent from the registry on the
+		// next materialize (2026-06-08: an extracted recovery recipe was
+		// promoted as nightly-self-improve v1.2 and skills_invoke went
+		// "unknown skill: nightly-self-improve"). "<parent>" and
+		// "<parent>-update" bodies (the legitimate in-place cases above) pass
+		// the prefix check; anything else promotes under its own name and
+		// leaves the target untouched.
+		if fmName := skills.FrontmatterName(skillMD); fmName != "" &&
+			!strings.HasPrefix(safeName(fmName), safeName(targetName)) {
+			log.Printf("voyager: proposal %s body declares skill %q, not an update of %q; promoting under its own name", id, fmName, targetName)
+			targetName = fmName
+		}
 		// Persist to Postgres FIRST so the skill survives any container
 		// restart (Railway redeploys wipe the ephemeral filesystem).
 		// Bump from the TARGET skill's currently-active version into the

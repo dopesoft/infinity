@@ -89,7 +89,10 @@ func ConnectorCoverageChecklist(cache *connectors.Cache, pool *pgxpool.Pool) Che
 			return nil, nil
 		}
 
-		title := fmt.Sprintf("%d mailbox(es) not triaged recently", len(stale))
+		title := fmt.Sprintf("I have not checked %d of your mailboxes lately", len(stale))
+		if len(stale) == 1 {
+			title = "I have not checked 1 of your mailboxes lately"
+		}
 		detail := strings.Join([]string{
 			"stale: " + strings.Join(stale, "; "),
 			"action: run inbox triage now via `skills_invoke({name:\"inbox-triage\"})`, then execute every step it returns this turn",

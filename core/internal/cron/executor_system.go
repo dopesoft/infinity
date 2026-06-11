@@ -84,8 +84,9 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 			triageOutcome = OutcomeNothingNeeded
 		}
 		return RunSummary{
-			Summary: fmt.Sprintf("Triaged %d email(s) across %d mailbox(es); surfaced %d needing your reply.",
-				s.Fetched, s.Accounts, s.Surfaced),
+			// Human() names actual senders/subjects ("…including Namecheap
+			// about your domain renewal") — the boss reads this, not counters.
+			Summary: s.Human(),
 			// session_id ties this cron run to the step plan so the board folds
 			// them into one card (the plan's step timeline) instead of two.
 			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced, "session_id": s.SessionID, "outcome": string(triageOutcome)},

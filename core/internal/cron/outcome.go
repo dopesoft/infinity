@@ -91,6 +91,18 @@ func classifyOutcome(ctx context.Context, pool *pgxpool.Pool, sessionID string, 
 	if t, ok := intFromMeta(summary.Meta, "turns"); ok && t == 0 {
 		return OutcomeNothingNeeded
 	}
+	// Work that visibly broke or was force-closed unfinished must never read
+	// "done". abandoned_steps is stamped by the executor's finalize (which
+	// settles the plan BEFORE this classifier runs — the plan check below can
+	// no longer see the abandonment, so the count is the only honest signal);
+	// failures counts errored turns inside the run.
+	if n, ok := intFromMeta(summary.Meta, "abandoned_steps"); ok && n > 0 {
+		return OutcomeStoppedEarly
+	}
+	if f, ok := intFromMeta(summary.Meta, "failures"); ok && f > 0 {
+		return OutcomeStoppedEarly
+	}
+	// Backstop for executors that don't finalize their own plans.
 	if pool != nil && sessionID != "" {
 		if p, err := plan.NewStore(pool).GetActiveBySession(ctx, sessionID); err == nil && p != nil && planIncomplete(p) {
 			return OutcomeStoppedEarly
@@ -153,8 +165,10 @@ func (s *Scheduler) surfaceRunOutcome(ctx context.Context, j Job, summary RunSum
 	narrative := strings.TrimSpace(summary.Summary)
 
 	// The row's one-line "why": the agent's own opening words when it did or
-	// stopped work, otherwise the templated floor. The full narrative + the
-	// "what this means" floor go in the body (shown on tap).
+	// stopped work, otherwise the templated floor. The full narrative goes in
+	// the body (shown on tap). The reason is NOT repeated into the body — the
+	// viewer renders reason (italic) above body, so any overlap reads as the
+	// duplicated-text bug the boss caught on the nightly cognition card.
 	reason := floor
 	if outcome == OutcomeDidWork && narrative != "" {
 		reason = firstLine(narrative)
@@ -162,8 +176,6 @@ func (s *Scheduler) surfaceRunOutcome(ctx context.Context, j Job, summary RunSum
 	body := narrative
 	if body == "" {
 		body = floor
-	} else if floor != "" {
-		body = body + "\n\nWhat this means: " + floor
 	}
 
 	imp := outcomeImportance(outcome)
@@ -241,7 +253,7 @@ func outcomeFloor(o Outcome, execErr error) string {
 	case OutcomeNothingNeeded:
 		return "Everything was already in order — nothing needed your attention."
 	case OutcomeStoppedEarly:
-		return "I stopped before making changes. Open this to see why."
+		return "I stopped before finishing everything. Open this to see what is left."
 	default:
 		return ""
 	}

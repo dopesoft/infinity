@@ -386,7 +386,7 @@ func (n *Notifier) Digest(ctx context.Context) (int, error) {
 	}
 	digest := Notification{
 		Urgency: UrgencyNormal,
-		Title:   fmt.Sprintf("Digest - %d update(s)", len(batched)),
+		Title:   fmt.Sprintf("%d updates while you were away", len(batched)),
 		Body:    strings.TrimSpace(b.String()),
 		Source:  "digest",
 		Channel: "push",

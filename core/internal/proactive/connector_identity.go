@@ -55,7 +55,10 @@ func ConnectorIdentityChecklist(cache *connectors.Cache) Checklist {
 			}
 			return nil, nil
 		}
-		title := fmt.Sprintf("%d connected account(s) need identity resolution", missing)
+		title := fmt.Sprintf("I need to work out whose accounts %d of your connections are", missing)
+		if missing == 1 {
+			title = "I need to work out whose account 1 of your connections is"
+		}
 		detail := strings.Join([]string{
 			"action: run `resolve-connector-identities` via `skills_invoke({name:\"resolve-connector-identities\"})`",
 			"why: it calls each toolkit's profile verb once per unresolved active account, extracts the canonical email/handle/login, and persists via connector_identity_set",

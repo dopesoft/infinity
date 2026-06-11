@@ -202,15 +202,17 @@ func bridgeErrText(body []byte) string {
 }
 
 func (t *bridgeFSRead) Execute(ctx context.Context, in map[string]any) (string, error) {
-	path := strString(in, "path")
-	q := "/fs/read?path=" + urlEscape(path)
-	if v := intOrZero(in, "start"); v > 0 {
-		q += fmt.Sprintf("&start=%d", v)
-	}
-	if v := intOrZero(in, "end"); v > 0 {
-		q += fmt.Sprintf("&end=%d", v)
-	}
+	// Path-bearing params are normalized INSIDE fn, per the bridge that
+	// actually serves the call — including the failover alternate — so a
+	// Mac path keeps working after a Mac→cloud failover and vice versa.
 	return bridgeCall(ctx, t.router, t.prefs, "fs_read", func(b bridge.Bridge) ([]byte, int, bool) {
+		q := "/fs/read?path=" + urlEscape(bridge.NormalizePath(b, strString(in, "path")))
+		if v := intOrZero(in, "start"); v > 0 {
+			q += fmt.Sprintf("&start=%d", v)
+		}
+		if v := intOrZero(in, "end"); v > 0 {
+			q += fmt.Sprintf("&end=%d", v)
+		}
 		return b.Get(ctx, q)
 	})
 }
@@ -236,9 +238,8 @@ func (t *bridgeFSLS) Schema() map[string]any {
 	}
 }
 func (t *bridgeFSLS) Execute(ctx context.Context, in map[string]any) (string, error) {
-	path := strString(in, "path")
 	return bridgeCall(ctx, t.router, t.prefs, "fs_ls", func(b bridge.Bridge) ([]byte, int, bool) {
-		return b.Get(ctx, "/fs/ls?path="+urlEscape(path))
+		return b.Get(ctx, "/fs/ls?path="+urlEscape(bridge.NormalizePath(b, strString(in, "path"))))
 	})
 }
 
@@ -267,7 +268,7 @@ func (t *bridgeFSSave) Schema() map[string]any {
 func (t *bridgeFSSave) Execute(ctx context.Context, in map[string]any) (string, error) {
 	return bridgeCall(ctx, t.router, t.prefs, "fs_save", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/fs/save", map[string]any{
-			"path":    strString(in, "path"),
+			"path":    bridge.NormalizePath(b, strString(in, "path")),
 			"content": strString(in, "content"),
 		})
 	})
@@ -301,7 +302,7 @@ func (t *bridgeFSEdit) Schema() map[string]any {
 func (t *bridgeFSEdit) Execute(ctx context.Context, in map[string]any) (string, error) {
 	return bridgeCall(ctx, t.router, t.prefs, "fs_edit", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/fs/edit", map[string]any{
-			"path":        strString(in, "path"),
+			"path":        bridge.NormalizePath(b, strString(in, "path")),
 			"old_string":  strString(in, "old_string"),
 			"new_string":  strString(in, "new_string"),
 			"replace_all": boolOrFalse(in, "replace_all"),
@@ -336,7 +337,7 @@ func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, er
 	return bridgeCall(ctx, t.router, t.prefs, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/bash", map[string]any{
 			"cmd":         strString(in, "cmd"),
-			"cwd":         strString(in, "cwd"),
+			"cwd":         bridge.NormalizePath(b, strString(in, "cwd")),
 			"timeout_sec": intOrZero(in, "timeout_sec"),
 		})
 	})
@@ -364,7 +365,7 @@ func (t *bridgeGitStatus) Schema() map[string]any {
 }
 func (t *bridgeGitStatus) Execute(ctx context.Context, in map[string]any) (string, error) {
 	return bridgeCall(ctx, t.router, t.prefs, "git_status", func(b bridge.Bridge) ([]byte, int, bool) {
-		return b.Get(ctx, "/git/status?repo="+urlEscape(strString(in, "repo")))
+		return b.Get(ctx, "/git/status?repo="+urlEscape(bridge.NormalizePath(b, strString(in, "repo"))))
 	})
 }
 
@@ -389,14 +390,14 @@ func (t *bridgeGitDiff) Schema() map[string]any {
 	}
 }
 func (t *bridgeGitDiff) Execute(ctx context.Context, in map[string]any) (string, error) {
-	q := "/git/diff?repo=" + urlEscape(strString(in, "repo"))
-	if p := strString(in, "path"); p != "" {
-		q += "&path=" + urlEscape(p)
-	}
-	if boolOrFalse(in, "staged") {
-		q += "&staged=1"
-	}
 	return bridgeCall(ctx, t.router, t.prefs, "git_diff", func(b bridge.Bridge) ([]byte, int, bool) {
+		q := "/git/diff?repo=" + urlEscape(bridge.NormalizePath(b, strString(in, "repo")))
+		if p := strString(in, "path"); p != "" {
+			q += "&path=" + urlEscape(p)
+		}
+		if boolOrFalse(in, "staged") {
+			q += "&staged=1"
+		}
 		return b.Get(ctx, q)
 	})
 }
@@ -430,7 +431,7 @@ func (t *bridgeGitStage) Execute(ctx context.Context, in map[string]any) (string
 	}
 	return bridgeCall(ctx, t.router, t.prefs, "git_stage", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/git/stage", map[string]any{
-			"repo":  strString(in, "repo"),
+			"repo":  bridge.NormalizePath(b, strString(in, "repo")),
 			"files": files,
 		})
 	})
@@ -458,6 +459,7 @@ func (t *bridgeGitCommit) Schema() map[string]any {
 }
 func (t *bridgeGitCommit) Execute(ctx context.Context, in map[string]any) (string, error) {
 	return bridgeCall(ctx, t.router, t.prefs, "git_commit", func(b bridge.Bridge) ([]byte, int, bool) {
+		repo := bridge.NormalizePath(b, strString(in, "repo"))
 		// Per-session branching: when commits land on the Cloud bridge,
 		// auto-route them onto a session-named branch so Jarvis's work
 		// is attributable + revertable without polluting main. Mac
@@ -465,10 +467,10 @@ func (t *bridgeGitCommit) Execute(ctx context.Context, in map[string]any) (strin
 		// the human in that loop. Inside fn so it follows the bridge that
 		// actually serves (incl. after a Mac→cloud failover).
 		if b.Name() == bridge.KindCloud {
-			ensureSessionBranch(ctx, b, strString(in, "repo"), SessionIDFromContext(ctx))
+			ensureSessionBranch(ctx, b, repo, SessionIDFromContext(ctx))
 		}
 		return b.Post(ctx, "/git/commit", map[string]any{
-			"repo":    strString(in, "repo"),
+			"repo":    repo,
 			"message": strString(in, "message"),
 		})
 	})
@@ -581,7 +583,7 @@ func (t *bridgeGitPush) Schema() map[string]any {
 func (t *bridgeGitPush) Execute(ctx context.Context, in map[string]any) (string, error) {
 	return bridgeCall(ctx, t.router, t.prefs, "git_push", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/git/push", map[string]any{
-			"repo":   strString(in, "repo"),
+			"repo":   bridge.NormalizePath(b, strString(in, "repo")),
 			"remote": strString(in, "remote"),
 			"branch": strString(in, "branch"),
 		})
@@ -611,7 +613,7 @@ func (t *bridgeGitPull) Schema() map[string]any {
 func (t *bridgeGitPull) Execute(ctx context.Context, in map[string]any) (string, error) {
 	return bridgeCall(ctx, t.router, t.prefs, "git_pull", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/git/pull", map[string]any{
-			"repo":   strString(in, "repo"),
+			"repo":   bridge.NormalizePath(b, strString(in, "repo")),
 			"remote": strString(in, "remote"),
 			"branch": strString(in, "branch"),
 		})

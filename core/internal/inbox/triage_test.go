@@ -41,3 +41,37 @@ func TestClassifyDoesNotWaitForProviderToCloseStream(t *testing.T) {
 		t.Fatal("classify hung waiting for the provider to close the stream")
 	}
 }
+
+// The run report must read like Jarvis talking, naming actual senders and
+// subjects — never "Triaged 12 email(s) across 4 mailbox(es)" dev-speak.
+func TestSummaryHuman(t *testing.T) {
+	cases := []struct {
+		name string
+		s    Summary
+		want string
+	}{
+		{"no mail, one box", Summary{Accounts: 1}, "I checked your inbox and there was no new mail."},
+		{"no mail, many boxes", Summary{Accounts: 4}, "I checked your 4 mailboxes and there was no new mail."},
+		{"nothing needs reply", Summary{Accounts: 2, Fetched: 7},
+			"I read 7 new emails in your 2 mailboxes. None of them need a reply from you."},
+		{"flagged with examples", Summary{Accounts: 4, Fetched: 12, Surfaced: 3,
+			Examples: []string{`Namecheap Support about "Your domain is expiring"`, `Stripe about "Payout failed"`, `X about "Y"`}},
+			`I read 12 new emails in your 4 mailboxes and flagged 3 that need your reply, including Namecheap Support about "Your domain is expiring" and Stripe about "Payout failed". They are waiting in your Follow-ups.`},
+		{"single flag grammar", Summary{Accounts: 1, Fetched: 1, Surfaced: 1, Examples: []string{`A about "B"`}},
+			`I read 1 new email in your inbox and flagged 1 that needs your reply, including A about "B". They are waiting in your Follow-ups.`},
+	}
+	for _, c := range cases {
+		if got := c.s.Human(); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSenderName(t *testing.T) {
+	if got := senderName(`"Namecheap Support" <support@namecheap.com>`); got != "Namecheap Support" {
+		t.Errorf("senderName = %q", got)
+	}
+	if got := senderName("<bare@addr.com>"); got != "bare@addr.com" {
+		t.Errorf("senderName bare = %q", got)
+	}
+}

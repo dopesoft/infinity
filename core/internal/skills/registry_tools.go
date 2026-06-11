@@ -94,7 +94,7 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 	if a, ok := in["args"].(map[string]any); ok {
 		args = a
 	}
-	skill, ok := t.r.Get(name)
+	skill, ok := t.r.GetFresh(ctx, name)
 	if !ok {
 		return "", fmt.Errorf("unknown skill: %s", name)
 	}
@@ -267,7 +267,7 @@ func (t *skillTestGenerateTool) Schema() map[string]any {
 }
 func (t *skillTestGenerateTool) Execute(ctx context.Context, in map[string]any) (string, error) {
 	name, _ := in["name"].(string)
-	skill, ok := t.r.Get(name)
+	skill, ok := t.r.GetFresh(ctx, name)
 	if !ok {
 		return "", fmt.Errorf("unknown skill: %s", name)
 	}

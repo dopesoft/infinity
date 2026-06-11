@@ -14,12 +14,13 @@ import (
 // run history, version history) lives in *Store; the Registry intentionally
 // does *not* depend on the database so it works with `DATABASE_URL` unset.
 type Registry struct {
-	mu     sync.RWMutex
-	root   string
-	skills map[string]*Skill
-	errs   []LoadError
-	loaded time.Time
-	store  *Store // optional - used to record runs / sync versions
+	mu       sync.RWMutex
+	root     string
+	skills   map[string]*Skill
+	errs     []LoadError
+	loaded   time.Time
+	healedAt time.Time // last GetFresh self-heal; throttles rescans
+	store    *Store    // optional - used to record runs / sync versions
 }
 
 // NewRegistry creates a Registry rooted at `root` (e.g. "./skills"). Callers

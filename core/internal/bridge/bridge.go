@@ -362,6 +362,95 @@ func (r *Router) Invalidate() {
 	r.mu.Unlock()
 }
 
+// NormalizePath rewrites a caller-supplied filesystem path for the bridge that
+// actually serves the call, so a Mac-flavored path survives failover onto the
+// cloud workspace and vice versa. Without this, a failover re-runs the SAME
+// path string on the other bridge — the observed bug: `git_status
+// repo=~/Dev/infinity` failing over to Cloud and opening the nonexistent
+// `/workspace/~/Dev/infinity`. Mapping (mirrors docker/workspace
+// bootstrapLayout: self-clone at /workspace/infinity, other repos at
+// /workspace/projects/<name>; Mac repos live at ~/Dev/<name>):
+//
+//	cloud:  ~ → /workspace · ~/Dev/infinity → /workspace/infinity ·
+//	        ~/Dev/<x> → /workspace/projects/<x> · ~/<r> → /workspace/<r> ·
+//	        /Users/<u>/… treated as ~/…
+//	mac:    /workspace → ~ · /workspace/infinity → ~/Dev/infinity ·
+//	        /workspace/projects/<x> → ~/Dev/<x> · /workspace/<r> → ~/<r>
+//
+// Unknown shapes (relative paths, already-native paths) pass through
+// unchanged. Deterministic; "" stays "".
+func NormalizePath(b Bridge, path string) string {
+	p := strings.TrimSpace(path)
+	if b == nil || p == "" {
+		return path
+	}
+	switch b.Name() {
+	case KindCloud:
+		return cloudPath(p)
+	case KindMac:
+		return macPath(p)
+	}
+	return path
+}
+
+func cloudPath(p string) string {
+	// Collapse a literal Mac home prefix to ~ first so both spellings of a
+	// Mac path map the same way.
+	if strings.HasPrefix(p, "/Users/") {
+		rest := strings.TrimPrefix(p, "/Users/")
+		if j := strings.IndexByte(rest, '/'); j >= 0 {
+			p = "~" + rest[j:]
+		} else {
+			p = "~"
+		}
+	}
+	switch {
+	case p == "~" || p == "~/" || p == "~/Dev" || p == "~/Dev/":
+		return "/workspace"
+	case strings.HasPrefix(p, "~/Dev/"):
+		rest := strings.TrimPrefix(p, "~/Dev/")
+		if rest == "infinity" || strings.HasPrefix(rest, "infinity/") {
+			return "/workspace/" + rest
+		}
+		return "/workspace/projects/" + rest
+	case strings.HasPrefix(p, "~/"):
+		return "/workspace/" + strings.TrimPrefix(p, "~/")
+	}
+	return p
+}
+
+func macPath(p string) string {
+	switch {
+	case p == "/workspace" || p == "/workspace/":
+		return "~"
+	case strings.HasPrefix(p, "/workspace/projects/"):
+		return "~/Dev/" + strings.TrimPrefix(p, "/workspace/projects/")
+	case p == "/workspace/infinity" || strings.HasPrefix(p, "/workspace/infinity/"):
+		return "~/Dev" + strings.TrimPrefix(p, "/workspace")
+	case strings.HasPrefix(p, "/workspace/"):
+		return "~/" + strings.TrimPrefix(p, "/workspace/")
+	}
+	return p
+}
+
+// routeMiss reports whether a 404/405 came from a proxy or tunnel that simply
+// does not serve this route (failover-eligible) rather than from the bridge
+// API itself. Real bridge 4xxs carry the {"error":"..."} JSON contract (e.g.
+// the cloud workspace's fs/read missing-file 404); a Mac tunnel that routes
+// /sse to the MCP proxy but never wired /bash answers a plain-text or HTML
+// 404 — that is a bridge-level miss the alternate CAN serve, not a command
+// result. Observed: bash_run 404 on the Mac bridge stalled the self-improve
+// run instead of failing over to the cloud workspace.
+func routeMiss(status int, body []byte) bool {
+	if status != http.StatusNotFound && status != http.StatusMethodNotAllowed {
+		return false
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	return json.Unmarshal(body, &e) != nil || strings.TrimSpace(e.Error) == ""
+}
+
 // ErrBothBridgesDown is returned by Call when the preferred bridge AND its
 // alternate both fail at the bridge level (transport error or HTTP 5xx). The
 // caller surfaces this as a "can't run, no bridge" event the agent must stop
@@ -389,11 +478,13 @@ func (r *Router) alternate(b Bridge) Bridge {
 // pass that loses the Mac steps straight onto the cloud workspace instead of
 // getting stuck (the night-after-night bug).
 //
-// What counts as a BRIDGE failure (→ fail over): a transport error (ok=false)
-// or an HTTP 5xx. What does NOT (→ returned as-is, no failover): any 2xx, and
-// any 4xx — a 4xx is the bridge answering with a command/param result (e.g. 400
-// "repo required", a `go build` that compiled-and-failed), so retrying on the
-// other bridge would just double the work and mask the real error.
+// What counts as a BRIDGE failure (→ fail over): a transport error (ok=false),
+// an HTTP 5xx, or a contract-less 404/405 (a tunnel/proxy that doesn't serve
+// the route — see routeMiss). What does NOT (→ returned as-is, no failover):
+// any 2xx, and any 4xx carrying the bridge's {"error":...} contract — that's
+// the bridge answering with a command/param result (e.g. 400 "repo required",
+// a `go build` that compiled-and-failed), so retrying on the other bridge
+// would just double the work and mask the real error.
 //
 // Returns the bridge that served the final attempt, its response, whether a
 // failover happened (so the caller can annotate the result), and an error only
@@ -407,7 +498,7 @@ func (r *Router) Call(ctx context.Context, pref Preference, fn func(Bridge) ([]b
 		return nil, nil, 0, false, perr
 	}
 	body, status, ok := fn(primary)
-	if ok && status < 500 {
+	if ok && status < 500 && !routeMiss(status, body) {
 		return primary, body, status, false, nil
 	}
 	// Primary failed at the bridge level. Try the alternate once.
@@ -419,7 +510,7 @@ func (r *Router) Call(ctx context.Context, pref Preference, fn func(Bridge) ([]b
 	// the system prompt / next call reflect reality.
 	r.Invalidate()
 	abody, astatus, aok := fn(alt)
-	if aok && astatus < 500 {
+	if aok && astatus < 500 && !routeMiss(astatus, abody) {
 		return alt, abody, astatus, true, nil
 	}
 	// Both bridges failed at the bridge level.
