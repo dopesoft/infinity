@@ -65,6 +65,17 @@ type Item struct {
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
 	ScoredAt     *time.Time `json:"scoredAt,omitempty"`
+	// Reopen marks a ROLLING item (one card per producer, refreshed every run
+	// — e.g. a cron's nightly outcome) whose upsert carries genuinely NEW
+	// information: if the existing row was dismissed, it flips back to open so
+	// the fresh outcome reaches the boss's inbox. Without this, dismissing a
+	// cron's card once silently swallowed every later night's outcome
+	// (observed 2026-06-11: triage/self-improve/verify outcomes invisible
+	// behind a yesterday's dismissal). One-shot items (emails, alerts) leave
+	// this false — a dismissed email stays dismissed forever ("Follow-ups
+	// never auto-resolved" cuts both ways). Done/snoozed rows are never
+	// touched either way.
+	Reopen bool `json:"-"`
 }
 
 // Action is a boss-tappable control on a surfaced item - the return half of

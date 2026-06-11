@@ -100,6 +100,19 @@ func main() {
 	mux.HandleFunc("/fs/read", b.handleFSRead)
 	mux.HandleFunc("/git/status", b.handleGitStatus)
 	mux.HandleFunc("/git/diff", b.handleGitDiff)
+	// The WRITE half of the bridge contract (exec.go) — bash, file save/edit,
+	// git stage/commit/push/pull — mirroring docker/workspace/main.go so
+	// core's bridge_* tools work identically on Mac and Cloud. Before these
+	// existed every bash_run routed to the Mac answered a plain 404 and the
+	// whole nightly self-improve loop stalled (or, post route-miss failover,
+	// noisily bounced to cloud on every call).
+	mux.HandleFunc("/bash", b.handleBash)
+	mux.HandleFunc("/fs/save", b.handleFSSave)
+	mux.HandleFunc("/fs/edit", b.handleFSEdit)
+	mux.HandleFunc("/git/stage", b.handleGitStage)
+	mux.HandleFunc("/git/commit", b.handleGitCommit)
+	mux.HandleFunc("/git/push", b.handleGitPush)
+	mux.HandleFunc("/git/pull", b.handleGitPull)
 	// Catch-all: every other path is reverse-proxied to the active
 	// project's dev server. This is what makes preview.dopesoft.io a
 	// single permanent tunnel that points at whatever the boss is
@@ -374,7 +387,7 @@ type fsListJSON struct {
 }
 
 func (b *bridge) handleFSList(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
+	path := expandHome(r.URL.Query().Get("path"))
 	if path == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
 		return
@@ -434,7 +447,7 @@ type fsReadJSON struct {
 }
 
 func (b *bridge) handleFSRead(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
+	path := expandHome(r.URL.Query().Get("path"))
 	if path == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
 		return
@@ -460,7 +473,9 @@ func (b *bridge) handleFSRead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *bridge) handleGitStatus(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
+	// expandHome is what fixes the observed `repo=~/Dev/infinity` → git
+	// exit 128: the literal tilde never reached a real directory.
+	repo := expandHome(r.URL.Query().Get("repo"))
 	if repo == "" {
 		http.Error(w, "repo required", http.StatusBadRequest)
 		return
@@ -475,7 +490,7 @@ func (b *bridge) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *bridge) handleGitDiff(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
+	repo := expandHome(r.URL.Query().Get("repo"))
 	if repo == "" {
 		http.Error(w, "repo required", http.StatusBadRequest)
 		return

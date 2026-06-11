@@ -142,6 +142,12 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 			  subtitle          = EXCLUDED.subtitle,
 			  body              = EXCLUDED.body,
 			  url               = EXCLUDED.url,
+			  -- Rolling items (Reopen=true): a fresh run's outcome reopens a row
+			  -- the boss dismissed for a PREVIOUS outcome. Everything else keeps
+			  -- its status untouched, exactly as before.
+			  status            = CASE WHEN $19::boolean AND mem_surface_items.status = 'dismissed'
+			                           THEN 'open'
+			                           ELSE mem_surface_items.status END,
 			  importance        = COALESCE(EXCLUDED.importance, mem_surface_items.importance),
 			  importance_reason = CASE WHEN EXCLUDED.importance IS NOT NULL
 			                           THEN EXCLUDED.importance_reason
@@ -164,7 +170,7 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 		`, it.Surface, it.Kind, it.Source, it.ExternalID, it.Title, it.Subtitle,
 			it.Body, nullStr(it.URL), it.Importance, it.ImportanceReason,
 			string(metaJSON), string(it.Status), it.SnoozedUntil, it.ExpiresAt, scored,
-			it.CachedHTML, it.CachedText, string(actionsJSON)).Scan(&id)
+			it.CachedHTML, it.CachedText, string(actionsJSON), it.Reopen).Scan(&id)
 		if err != nil {
 			return "", fmt.Errorf("surface: upsert: %w", err)
 		}

@@ -195,6 +195,9 @@ func (s *Scheduler) surfaceRunOutcome(ctx context.Context, j Job, summary RunSum
 			"session_id": j.RunSessionID,
 		},
 		Status: surface.StatusOpen,
+		// Rolling card: tonight's outcome is NEW information. Dismissing last
+		// night's card must not swallow it (see surface.Item.Reopen).
+		Reopen: true,
 	}
 	// Informational outcomes self-clear after 36h so the inbox doesn't fill up
 	// with stale "nothing to do" rows; the nightly SweepExpired dismisses them.
