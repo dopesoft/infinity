@@ -86,9 +86,20 @@ servers:
   #
   # Setup:
   #   railway variables --service core --set COMPOSIO_API_KEY=... (Composio Project API Key)
+  # DISABLED 2026-06-11: Composio retired API-key auth on this gateway —
+  # connect.composio.dev/mcp now only accepts an AuthKit (browser-login) JWT,
+  # so every boot logged "mcp: composio failed: initialize: Unauthorized".
+  # This MCP leg only ever supplied the COMPOSIO_SEARCH_TOOLS /
+  # COMPOSIO_MULTI_EXECUTE_TOOL gateway fallbacks; ALL real toolkit verbs
+  # (composio__GMAIL_*, composio__GOOGLECALENDAR_*, …) register via the REST
+  # verb registrar (tools/composio_verbs.go, x-api-key) and are unaffected.
+  # To re-enable: create an MCP server config (POST
+  # backend.composio.dev/api/v3/mcp/servers), then point url at
+  # backend.composio.dev/v3/mcp/<server_id>?user_id=<entity> with
+  # auth_header_name: x-api-key (docs.composio.dev/docs/mcp-quickstart).
   - name: composio
     transport: http
-    enabled: true
+    enabled: false
     url: https://connect.composio.dev/mcp
     auth: header
     auth_header_name: x-consumer-api-key
