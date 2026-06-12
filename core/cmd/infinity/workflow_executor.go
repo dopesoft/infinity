@@ -58,7 +58,14 @@ func (e *workflowExecutor) runTool(ctx context.Context, step workflow.Step) (str
 	if args == nil {
 		args = map[string]any{}
 	}
-	return tool.Execute(ctx, args)
+	out, err := tool.Execute(ctx, args)
+	if err != nil {
+		return out, err
+	}
+	if name == "skills_invoke" && skills.IsRecipeOutput(out) {
+		return "", fmt.Errorf("tool step: skills_invoke returned a recipe, not execution output; invoke the skill as a workflow skill step or have the parent agent execute the recipe")
+	}
+	return out, nil
 }
 
 // runSkill invokes a skill through the skill runner.

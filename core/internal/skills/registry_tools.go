@@ -12,6 +12,19 @@ import (
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
+// recipeDeliverySentinel is prepended to the return value of skills_invoke
+// when the skill has no executable (LLM-only recipe skill). It gives any
+// caller a reliable way to detect that the tool returned a recipe for the
+// LLM to execute rather than actual execution output. See IsRecipeOutput.
+const recipeDeliverySentinel = "[SKILL_RECIPE_DELIVERY]"
+
+// IsRecipeOutput reports whether a string from skills_invoke is a recipe
+// delivery (LLM-only skill) rather than real execution output. Use this
+// to guard against treating recipe text as a successful execution result.
+func IsRecipeOutput(s string) bool {
+	return strings.HasPrefix(strings.TrimSpace(s), recipeDeliverySentinel)
+}
+
 // RegisterTools wires five agent-callable tools backed by the Registry +
 // Runner. The agent can always reach for these regardless of which skills
 // happen to be installed.
@@ -109,9 +122,12 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 		// too. Without this branch, the entire mem_skill_runs table stayed
 		// empty for the 90%-case skill (no executable, just a recipe). We
 		// can't observe the agent's downstream actions from here, so the
-		// row's `output` captures the prompt the agent received and
+		// row's `output` stores only the sentinel (not the full recipe
+		// text) — the recipe contains imperative framing phrases like
+		// "skills_invoke ran nothing on its own" that look like an error
+		// message when read back from the DB out of context.
 		// duration_ms stays 0 (the invocation itself is instantaneous;
-		// the LLM work happens AFTER this return).
+		// the LLM work happens AFTER this return). See IsRecipeOutput.
 		if t.r != nil && t.r.store != nil {
 			now := time.Now().UTC()
 			_, _ = t.r.store.RecordRun(ctx, &Run{
@@ -119,14 +135,18 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 				Version:       skill.Version,
 				TriggerSource: "conversation",
 				Input:         args,
-				Output:        prompt,
+				Output:        recipeDeliverySentinel,
 				Success:       true,
 				DurationMS:    0,
 				StartedAt:     now,
 				EndedAt:       &now,
 			})
 		}
-		return prompt, nil
+		// Prepend the sentinel so any caller receiving the string can
+		// detect it is a recipe (not execution output) via IsRecipeOutput.
+		// The LLM still receives the full recipe text after the sentinel
+		// and the existing "EXECUTE THIS NOW" framing still fires.
+		return recipeDeliverySentinel + "\n" + prompt, nil
 	}
 	res, _, err := t.runner.Invoke(ctx, "", name, args, "conversation")
 	if err != nil {
