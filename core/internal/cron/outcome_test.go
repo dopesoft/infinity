@@ -3,8 +3,39 @@ package cron
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
+
+// bridgeUnavailableInSession must return false when pool is nil so unit tests
+// that pass nil pools don't panic and the path is safe to call speculatively.
+func TestBridgeUnavailableInSession_NilPool(t *testing.T) {
+	if bridgeUnavailableInSession(context.Background(), nil, "any-session-id") {
+		t.Fatal("expected false with nil pool")
+	}
+	if bridgeUnavailableInSession(context.Background(), nil, "") {
+		t.Fatal("expected false with empty sessionID")
+	}
+}
+
+// bridgeBlockedNarrative must not contain any success-indicating words that
+// could be mistaken for a confirmed healthy deploy, and must contain the key
+// blocking signals the boss needs to understand the situation.
+func TestBridgeBlockedNarrative_Content(t *testing.T) {
+	successWords := []string{"healthy", "ran it", "clean", "succeeded", "ok", "verified"}
+	lowered := strings.ToLower(bridgeBlockedNarrative)
+	for _, w := range successWords {
+		if strings.Contains(lowered, w) {
+			t.Errorf("bridgeBlockedNarrative contains success word %q — must not claim success when workspace is down", w)
+		}
+	}
+	blockingSignals := []string{"unreachable", "unconfirmed", "skipped", "bring a bridge back"}
+	for _, sig := range blockingSignals {
+		if !strings.Contains(lowered, sig) {
+			t.Errorf("bridgeBlockedNarrative missing expected blocking signal %q", sig)
+		}
+	}
+}
 
 // A run that abandoned plan steps or had errored turns must never classify as
 // "did_work" — the boss saw "DONE" chips on self-improve runs whose own report

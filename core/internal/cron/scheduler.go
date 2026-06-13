@@ -244,6 +244,14 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// human-readable result to the boss's "Surfaced by Jarvis" inbox. All
 		// deterministic — the clear outcome is a mechanic, not skill prose.
 		outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
+		// Gate: when both bridges were down the agent's closing words cannot be
+		// treated as a verified result (it may have written "healthy" or "Ran it"
+		// without ever reaching the workspace). Replace the narrative so neither
+		// mem_runs.result_summary nor the inbox card surface misleading success
+		// wording. Rule #1b: mechanic, not droppable prose.
+		if outcome == OutcomeNeedsYou && bridgeUnavailableInSession(ctx, s.pool, j.RunSessionID) {
+			summary.Summary = bridgeBlockedNarrative
+		}
 		meta := runMetaWithAttempts(summary.Meta, attempts)
 		if meta == nil {
 			meta = map[string]any{}

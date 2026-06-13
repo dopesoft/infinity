@@ -41,6 +41,35 @@ func (o Outcome) valid() bool {
 	return false
 }
 
+// bridgeBlockedNarrative is the canonical run summary emitted whenever both
+// Mac and cloud bridges were down during a run. It replaces whatever the agent
+// wrote as its closing message so that neither the mem_runs result_summary nor
+// the inbox card ever surfaces misleading success wording ("healthy", "Ran it",
+// "logs look clean") when no workspace access was available to verify anything.
+// Rule #1b: this is a mechanic — it must be guaranteed by code, never droppable
+// skill prose.
+const bridgeBlockedNarrative = "Workspace was unreachable (both Mac and cloud bridges were down) during this run.\n\n" +
+	"Deploy state: unconfirmed — Railway logs and git history were inaccessible.\n" +
+	"Log check: skipped — no bridge to read from.\n" +
+	"Revert actions: intentionally skipped — git requires workspace access that was unavailable.\n\n" +
+	"Bring a bridge back online and re-run to get a confirmed result."
+
+// bridgeUnavailableInSession reports whether any observation in the given
+// session carries the stable 'bridge_unavailable' token, meaning both Mac and
+// cloud bridges were down when the run executed. Returns false when pool is nil
+// or sessionID is empty (safe to call from unit tests with nil pool).
+func bridgeUnavailableInSession(ctx context.Context, pool *pgxpool.Pool, sessionID string) bool {
+	if pool == nil || sessionID == "" {
+		return false
+	}
+	var hit int
+	return pool.QueryRow(ctx, `
+		SELECT 1 FROM mem_observations
+		 WHERE session_id = $1::uuid AND raw_text LIKE '%bridge_unavailable%'
+		 LIMIT 1
+	`, sessionID).Scan(&hit) == nil
+}
+
 // classifyOutcome distills a finished run into one Outcome. Priority order:
 //  1. execErr present                       → failed
 //  2. executor already declared an outcome  → trust it (system tasks know best)
@@ -69,12 +98,7 @@ func classifyOutcome(ctx context.Context, pool *pgxpool.Pool, sessionID string, 
 		// "needs you", never "did work". The bridge tools stamp a stable
 		// 'bridge_unavailable' marker into the tool result → captured as an
 		// observation. See tools.bridgeUnavailableResult.
-		var hit int
-		if err := pool.QueryRow(ctx, `
-			SELECT 1 FROM mem_observations
-			 WHERE session_id = $1::uuid AND raw_text LIKE '%bridge_unavailable%'
-			 LIMIT 1
-		`, sessionID).Scan(&hit); err == nil {
+		if bridgeUnavailableInSession(ctx, pool, sessionID) {
 			return OutcomeNeedsYou
 		}
 		// A queued trust contract for this session is the canonical "the boss
