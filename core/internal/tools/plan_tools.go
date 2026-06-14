@@ -59,13 +59,26 @@ func resolveStepRef(ctx context.Context, store *plan.Store, raw string) (string,
 }
 
 // resolvePositionalStep maps a 1-based step number to the active plan's step id.
+// It first looks up the active plan for the current session; when that yields
+// nothing (cross-session continuation, cron with a new session ID, or a context
+// with no session at all) it falls back to the most recently updated active/paused
+// plan so a positional ref like "5" never spuriously fails just because the caller
+// didn't call plan_get first in this session.
 func resolvePositionalStep(ctx context.Context, store *plan.Store, n int) (string, error) {
 	p, err := store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
 	if err != nil {
 		return "", err
 	}
+	if p == nil {
+		// No plan for this session — fall back to the most recent active plan
+		// globally so cross-session positional refs keep working.
+		p, err = store.GetAnyActive(ctx)
+		if err != nil {
+			return "", err
+		}
+	}
 	if p == nil || len(p.Steps) == 0 {
-		return "", fmt.Errorf("there's no active plan to resolve step %d against - call plan_get first", n)
+		return "", fmt.Errorf("there's no active plan to resolve step %d against — create one with plan_create first", n)
 	}
 	if n < 1 || n > len(p.Steps) {
 		return "", fmt.Errorf("step %d is out of range - this plan has %d steps (use 1..%d)", n, len(p.Steps), len(p.Steps))
