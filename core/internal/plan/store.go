@@ -250,6 +250,29 @@ func (s *Store) GetActiveBySession(ctx context.Context, sessionID string) (*Plan
 	return s.Get(ctx, id)
 }
 
+// GetAnyActive returns the most recently updated active/paused plan regardless
+// of session. Used as a fallback when positional step resolution fails to find
+// a plan for the current session (e.g. cross-session continuation, cron fires
+// with a new session ID, or CLI/test contexts with no session in context).
+func (s *Store) GetAnyActive(ctx context.Context) (*Plan, error) {
+	if s == nil || s.pool == nil {
+		return nil, nil
+	}
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text FROM mem_plans
+		 WHERE status IN ('active','paused')
+		 ORDER BY updated_at DESC LIMIT 1
+	`).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, id)
+}
+
 // Get loads one plan with its ordered steps.
 func (s *Store) Get(ctx context.Context, planID string) (*Plan, error) {
 	if s == nil || s.pool == nil || planID == "" {
