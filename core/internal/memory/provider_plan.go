@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -41,13 +42,20 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 		goal   string
 		status string
 	)
-	// Session-scoped lookup first.
-	err := p.pool.QueryRow(ctx, `
-		SELECT id::text, title, goal, status
-		  FROM mem_plans
-		 WHERE session_id = $1::uuid AND status IN ('active','paused')
-		 ORDER BY updated_at DESC LIMIT 1
-	`, sessionID).Scan(&planID, &title, &goal, &status)
+	// Session-scoped lookup first. When the session id is not a valid UUID
+	// (e.g. system_event crons use "<name>-system"), skip the $1::uuid cast so
+	// we go straight to the cross-session fallback without a 22P02 Postgres error.
+	var err error
+	if _, uuidErr := uuid.Parse(sessionID); uuidErr != nil {
+		err = pgx.ErrNoRows // force cross-session fallback below
+	} else {
+		err = p.pool.QueryRow(ctx, `
+			SELECT id::text, title, goal, status
+			  FROM mem_plans
+			 WHERE session_id = $1::uuid AND status IN ('active','paused')
+			 ORDER BY updated_at DESC LIMIT 1
+		`, sessionID).Scan(&planID, &title, &goal, &status)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Cross-session fallback: cron and resumed sessions get a fresh session
 		// ID each run. Without this fallback the agent never sees the plan it

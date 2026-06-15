@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/runs"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -233,6 +234,12 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 // steps), or nil when there is none.
 func (s *Store) GetActiveBySession(ctx context.Context, sessionID string) (*Plan, error) {
 	if s == nil || s.pool == nil || sessionID == "" {
+		return nil, nil
+	}
+	// system_event crons use a non-UUID session id ("<name>-system"). Guard
+	// before the SQL cast so a 22P02 Postgres error doesn't prevent the
+	// GetAnyActive fallback in resolvePositionalStep from running.
+	if _, err := uuid.Parse(sessionID); err != nil {
 		return nil, nil
 	}
 	var id string
