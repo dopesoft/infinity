@@ -41,12 +41,30 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 		goal   string
 		status string
 	)
+	// Session-scoped lookup first.
 	err := p.pool.QueryRow(ctx, `
 		SELECT id::text, title, goal, status
 		  FROM mem_plans
 		 WHERE session_id = $1::uuid AND status IN ('active','paused')
 		 ORDER BY updated_at DESC LIMIT 1
 	`, sessionID).Scan(&planID, &title, &goal, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Cross-session fallback: cron and resumed sessions get a fresh session
+		// ID each run. Without this fallback the agent never sees the plan it
+		// should continue, calls plan_update with a positional step ref ("5"),
+		// and gets "no active plan to resolve step 5 against" because
+		// resolvePositionalStep's own GetAnyActive call is the ONLY thing that
+		// can match — and that only works if the plan is still active/paused.
+		// Showing the plan here keeps the agent informed so it uses the right
+		// plan (or calls plan_create when it genuinely wants a new one).
+		// Mirrors the GetAnyActive fallback in resolvePositionalStep exactly.
+		err = p.pool.QueryRow(ctx, `
+			SELECT id::text, title, goal, status
+			  FROM mem_plans
+			 WHERE status IN ('active','paused')
+			 ORDER BY updated_at DESC LIMIT 1
+		`).Scan(&planID, &title, &goal, &status)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
