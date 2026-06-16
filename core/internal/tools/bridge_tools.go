@@ -366,8 +366,17 @@ var loginCmdRe = regexp.MustCompile(`(?i)(^|[;&|]\s*|\bsudo\s+)([a-z0-9][\w.-]*\
 // not prose the model can drop). Generic — zero per-vendor wiring. NOTE: the
 // legit self-contained path (extensions Manager.startDetachedAuth) calls the
 // bridge directly, NOT this tool, so it is never caught here.
+// IsInteractiveLoginCmd reports whether a bash command is an interactive CLI
+// sign-in ("<tool> auth login" / "<tool> login"). Exported so every shell entry
+// point — the bridge bash_run tool here AND the claude_code__bash gate — enforces
+// the same "sign-in happens in Jarvis's own cloud browser, never the boss's
+// machine" rule from one source of truth.
+func IsInteractiveLoginCmd(cmd string) bool {
+	return strings.TrimSpace(cmd) != "" && loginCmdRe.MatchString(cmd)
+}
+
 func guardInteractiveLogin(cmd string) (string, bool) {
-	if strings.TrimSpace(cmd) == "" || !loginCmdRe.MatchString(cmd) {
+	if !IsInteractiveLoginCmd(cmd) {
 		return "", false
 	}
 	payload := map[string]any{

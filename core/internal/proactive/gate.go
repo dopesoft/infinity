@@ -316,6 +316,26 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 	suffix := strings.TrimPrefix(toolName, "claude_code__")
 	suffix = strings.ToLower(suffix)
 
+	// Interactive sign-in must NEVER run on the Mac via claude_code — it pops a
+	// browser on the boss's computer and authenticates the wrong machine (he may
+	// be on his phone with no computer at all). Checked BEFORE autoAllow so even
+	// full-box trust ($INFINITY_CLAUDE_CODE_AUTOAPPROVE=bash) can't let a login
+	// slip onto the Mac. Generic, any CLI. Mirrors the bash_run guard so both
+	// shell paths funnel sign-in through extension_activate → browser_open (the
+	// self-contained cloud-browser flow). Rule #1b: mechanic in code, not prose.
+	if suffix == "bash" {
+		if cmd, _ := input["command"].(string); tools.IsInteractiveLoginCmd(cmd) {
+			return agent.GateDecision{
+				Allow: false,
+				Reason: "Interactive sign-in (`auth login` / `login`) must not run on the Mac via claude_code — " +
+					"it opens a browser on the boss's computer and auths the wrong machine (he may be on his phone). " +
+					"Sign in self-contained instead: call extension_activate \"<name>\" (it runs the sign-in on your " +
+					"cloud workspace and returns auth_url), then browser_open that auth_url so the page is live in the " +
+					"boss's Preview pane and he approves it there. Never sign in via claude_code or bash.",
+			}
+		}
+	}
+
 	if _, ok := g.autoAllow[suffix]; ok {
 		return agent.GateDecision{Allow: true}
 	}
