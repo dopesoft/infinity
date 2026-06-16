@@ -28,7 +28,12 @@ dockerfilePath = "Dockerfile"
 [services.deploy]
 startCommand = "infinity serve"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+# Boot now binds the listener in ~2-5s (slow extension/skill I/O is backgrounded),
+# so /health passes almost immediately. Keep generous headroom (120s) so Railway
+# holds the OLD container in service until the new one is genuinely ready —
+# a clean zero-downtime overlap — instead of cutting traffic over to a box that
+# isn't listening yet (which is what produced the long post-deploy "Offline").
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 

@@ -45,9 +45,23 @@ func (r *Registry) AttachStore(s *Store) {
 // Reload re-reads every SKILL.md under the root. Existing skills are replaced
 // atomically. Returns the load errors so callers can surface them.
 func (r *Registry) Reload(ctx context.Context) ([]LoadError, error) {
-	skills, errs, err := LoadFromFS(r.root)
+	skills, errs, err := r.ReloadInMemory()
 	if err != nil {
 		return nil, err
+	}
+	errs = append(errs, r.StoreSync(ctx, skills)...)
+	return errs, nil
+}
+
+// ReloadInMemory walks the skills directory and swaps the in-memory index —
+// the ONLY part of a reload the agent needs to invoke skills this turn. It does
+// no network/DB I/O, so it returns in milliseconds. The returned slice is the
+// loaded skill set, handed to StoreSync (typically on a background goroutine at
+// boot) so the slow Postgres sync never gates the HTTP/WS listener coming up.
+func (r *Registry) ReloadInMemory() ([]*Skill, []LoadError, error) {
+	skills, errs, err := LoadFromFS(r.root)
+	if err != nil {
+		return nil, nil, err
 	}
 	idx := make(map[string]*Skill, len(skills))
 	for _, s := range skills {
@@ -58,28 +72,37 @@ func (r *Registry) Reload(ctx context.Context) ([]LoadError, error) {
 	r.skills = idx
 	r.errs = errs
 	r.loaded = time.Now().UTC()
-	store := r.store
 	r.mu.Unlock()
+	return skills, errs, nil
+}
 
-	// Best-effort sync into the database so the Studio Skills tab can list
-	// skills even with the in-memory cache cold. Each upsert gets its OWN
-	// bounded timeout rather than sharing the caller's deadline across the
-	// whole loop: against the Supabase session pooler a single slow upsert
-	// would otherwise consume the shared budget and cascade "context
-	// deadline exceeded" into every remaining skill (the boot symptom where
-	// ~10 skills failed to load). A per-skill cap isolates the slow one and
-	// lets the rest through; cancellation still propagates from the parent.
-	if store != nil {
-		for _, s := range skills {
-			uctx, ucancel := context.WithTimeout(ctx, 8*time.Second)
-			err := store.UpsertSkill(uctx, s)
-			ucancel()
-			if err != nil {
-				errs = append(errs, LoadError{Path: s.Path, Err: fmt.Sprintf("upsert: %v", err)})
-			}
+// StoreSync best-effort upserts each skill into Postgres so the Studio Skills
+// tab can list them even with the in-memory cache cold. It touches only the
+// store — never the in-memory index — so it is safe to run from a detached
+// background goroutine while the rest of boot proceeds. Each upsert gets its
+// OWN bounded timeout rather than sharing the caller's deadline across the
+// whole loop: against the Supabase session pooler a single slow upsert would
+// otherwise consume the shared budget and cascade "context deadline exceeded"
+// into every remaining skill (the boot symptom where ~10 skills failed to
+// load). A per-skill cap isolates the slow one and lets the rest through;
+// cancellation still propagates from the parent.
+func (r *Registry) StoreSync(ctx context.Context, skills []*Skill) []LoadError {
+	r.mu.RLock()
+	store := r.store
+	r.mu.RUnlock()
+	if store == nil {
+		return nil
+	}
+	var errs []LoadError
+	for _, s := range skills {
+		uctx, ucancel := context.WithTimeout(ctx, 8*time.Second)
+		err := store.UpsertSkill(uctx, s)
+		ucancel()
+		if err != nil {
+			errs = append(errs, LoadError{Path: s.Path, Err: fmt.Sprintf("upsert: %v", err)})
 		}
 	}
-	return errs, nil
+	return errs
 }
 
 // Put adds (or replaces) a skill in the in-memory index and, when a Store

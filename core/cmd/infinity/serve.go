@@ -626,15 +626,27 @@ func serveCmd() *cobra.Command {
 				}
 				mcancel()
 			}
-			loadCtx, loadCancel := context.WithTimeout(cmd.Context(), 90*time.Second)
-			if errs, err := skillRegistry.Reload(loadCtx); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: skills reload: %v\n", err)
-			} else if len(errs) > 0 {
-				for _, e := range errs {
+			// Load the in-memory index synchronously — the agent needs it to
+			// invoke skills — but push the per-skill Postgres sync (59 upserts
+			// against the pooler, ~30s, and only needed for the Studio Skills
+			// listing) onto a detached background goroutine so it never gates
+			// the HTTP/WS listener coming up. Before this split, boot blocked
+			// the full ~30s here and Studio showed "Offline" the whole time.
+			skillsToSync, loadErrs, loadErr := skillRegistry.ReloadInMemory()
+			if loadErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: skills reload: %v\n", loadErr)
+			} else {
+				for _, e := range loadErrs {
 					fmt.Fprintf(os.Stderr, "warning: skill load error %s: %s\n", e.Path, e.Err)
 				}
+				go func(toSync []*skills.Skill) {
+					sctx, scancel := context.WithTimeout(context.Background(), 90*time.Second)
+					defer scancel()
+					for _, e := range skillRegistry.StoreSync(sctx, toSync) {
+						fmt.Fprintf(os.Stderr, "warning: skill store sync %s: %s\n", e.Path, e.Err)
+					}
+				}(skillsToSync)
 			}
-			loadCancel()
 			skillRunner := skills.NewRunner(skillRegistry, skillStore)
 			skills.RegisterTools(registry, skillRegistry, skillRunner)
 			skillsAPI := skills.NewAPI(skillRegistry, skillRunner, skillStore)
@@ -650,12 +662,28 @@ func serveCmd() *cobra.Command {
 				extManager = extensions.NewManager(
 					extensions.NewStore(pool, slog.Default()), registry, mcp, activeBridgeRouter, slog.Default(),
 				)
-				if n, err := extManager.LoadAll(cmd.Context()); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: extensions load: %v\n", err)
-				} else if n > 0 {
-					fmt.Printf("  extensions: re-activated %d runtime extension(s)\n", n)
-				}
+				// The management tools (extension_register/check/...) are cheap
+				// and must be live immediately, so register them synchronously.
 				extensions.RegisterTools(registry, extManager)
+				// Re-activating previously-registered runtime extensions does
+				// network I/O — each one dials its MCP endpoint or probes the
+				// cloud-workspace bridge — SERIALLY and with no per-call deadline.
+				// One slow or parked extension (e.g. a cold cloud workspace, a
+				// device-auth-pending CLI) would otherwise block boot for up to a
+				// minute, which is the dominant cause of the post-deploy "Offline"
+				// window. Run it detached: the registry (mutex-guarded) and MCP
+				// manager (mutex-guarded Connect) accept concurrent registration,
+				// extension tools light up a few seconds after the listener, and a
+				// cold extension degrades to a heartbeat re-probe.
+				go func() {
+					lctx, lcancel := context.WithTimeout(context.Background(), 90*time.Second)
+					defer lcancel()
+					if n, err := extManager.LoadAll(lctx); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: extensions load: %v\n", err)
+					} else if n > 0 {
+						fmt.Printf("  extensions: re-activated %d runtime extension(s)\n", n)
+					}
+				}()
 			}
 
 			soulPrompt, soulSource := soul.Load()
