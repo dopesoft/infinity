@@ -442,6 +442,7 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	start := time.Now()
 	resp := Response{}
 
 	// Each section is an independent DB read. Running them sequentially meant
@@ -587,6 +588,19 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 
 	wg.Wait()
+	// Ground-truth timing for the "dashboard spins 5-10s" report. The loaders
+	// fan out concurrently, so this is the real server-side cost of the whole
+	// payload. Exposed as a Server-Timing header (visible in the browser's
+	// Network tab) AND logged so Railway has it - if this is consistently <1s,
+	// the latency the boss feels is client-side (auth/getSession or network),
+	// not the backend.
+	dur := time.Since(start)
+	w.Header().Set("Server-Timing", fmt.Sprintf("dashboard;dur=%d", dur.Milliseconds()))
+	if dur > 1500*time.Millisecond {
+		a.Logger.Warn("dashboard: slow assembly", "ms", dur.Milliseconds())
+	} else {
+		a.Logger.Info("dashboard: assembled", "ms", dur.Milliseconds())
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -466,6 +466,17 @@ func serveCmd() *cobra.Command {
 					//   - the legacy chromedp/Chromium sidecar (docker/browser) as
 					//     fallback when no Camoufox URL is configured.
 					var browserBackend browser.Backend
+					// Engine override. The Camoufox anti-detect engine polls
+					// screenshots (~1.2s) and has no viewport-resize, so the LIVE
+					// interactive browser the boss drives lags and clips (can't
+					// scroll, login button off-screen). The chromedp sidecar has a
+					// real-time CDP screencast + real mouse/keyboard input + viewport
+					// resize, so it's the right engine when the boss is hands-on.
+					// INFINITY_BROWSER_ENGINE=chromedp forces the sidecar; =camofox or
+					// unset keeps the anti-detect default. Camoufox stays configured
+					// either way (this is a one-word, reversible switch).
+					browserEngine := strings.ToLower(strings.TrimSpace(os.Getenv("INFINITY_BROWSER_ENGINE")))
+					forceSidecar := browserEngine == "chromedp" || browserEngine == "sidecar"
 					camoKey := os.Getenv("CAMOFOX_API_KEY")
 					camoUser := os.Getenv("CAMOFOX_USER_ID")
 					cfID := os.Getenv("CF_ACCESS_CLIENT_ID")
@@ -485,6 +496,8 @@ func serveCmd() *cobra.Command {
 					}
 
 					switch {
+					case forceSidecar:
+						// Skip Camoufox; the sidecar fallback below claims it.
 					case camoMac != nil && camoCloud != nil:
 						// Browser follows the session's bridge selector (mac/cloud
 						// pin honoured, auto = Mac-first by health). Adapt the
@@ -504,14 +517,22 @@ func serveCmd() *cobra.Command {
 					case camoCloud != nil:
 						browserBackend = camoCloud
 						fmt.Printf("  browser: camoufox cloud (%s)\n", camoCloudURL)
-					default:
+					}
+
+					// chromedp sidecar — used when forced (INFINITY_BROWSER_ENGINE=
+					// chromedp) or when no Camoufox engine is configured.
+					if browserBackend == nil {
 						browserURL := strings.TrimSpace(os.Getenv("BROWSER_SIDECAR_URL"))
 						if browserURL == "" && strings.TrimSpace(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != "" {
 							browserURL = "http://browser.railway.internal:8080"
 						}
 						if bc := browser.New(browserURL, os.Getenv("BROWSER_BRIDGE_TOKEN")); bc != nil {
 							browserBackend = bc
-							fmt.Printf("  browser: chromedp sidecar (%s)\n", browserURL)
+							if forceSidecar {
+								fmt.Printf("  browser: chromedp sidecar (%s) [forced via INFINITY_BROWSER_ENGINE]\n", browserURL)
+							} else {
+								fmt.Printf("  browser: chromedp sidecar (%s)\n", browserURL)
+							}
 						}
 					}
 
