@@ -9,6 +9,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/browser"
 	"github.com/dopesoft/infinity/core/internal/calendar"
 	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/cron"
@@ -140,6 +141,13 @@ type Config struct {
 	// decoupled from the browser package. Nil-safe: the route 503s when
 	// the browser backend isn't configured.
 	BrowserClose func(ctx context.Context, sessionID string) error
+	// BrowserNavigate points a live cloud-browser session at a new URL (the
+	// editable URL bar in Studio's live-browser toolbar). Nil-safe.
+	BrowserNavigate func(ctx context.Context, sessionID, url string) error
+	// BrowserInput forwards a raw human interaction (click/type/scroll) to a
+	// live cloud-browser session - the boss's manual takeover of the
+	// screencast. Nil-safe: the route 503s when unset.
+	BrowserInput func(ctx context.Context, sessionID string, ev browser.InputEvent) error
 	// WorkspaceRawBase + WorkspaceToken let /api/workspace/download proxy raw
 	// file bytes from the CLOUD workspace bridge (e.g. generated documents),
 	// so they download/preview from any device independent of the session's
@@ -340,7 +348,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/gym", s.handleGym)
 	mux.HandleFunc("/api/surface/action", s.handleSurfaceAction)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
-	mux.HandleFunc("/api/browser/session/", s.handleBrowserClose)
+	mux.HandleFunc("/api/browser/session/", s.handleBrowserSession)
 	mux.HandleFunc("/api/workspace/download", s.handleWorkspaceDownload)
 	mux.HandleFunc("/api/canvas/fs/ls", s.handleCanvasFSList)
 	mux.HandleFunc("/api/canvas/fs/read", s.handleCanvasFSRead)

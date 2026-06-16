@@ -5,7 +5,7 @@ import { KeyRound, ExternalLink, RefreshCcw, CheckCircle2, Loader2 } from "lucid
 import { Button } from "@/components/ui/button";
 import { ModalUrl } from "@/components/ui/modal-content";
 import { useRealtime } from "@/lib/realtime/provider";
-import { fetchExtensions, checkExtension, type Extension } from "@/lib/api";
+import { fetchExtensions, checkExtension, activateExtension, type Extension } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -63,7 +63,25 @@ export function CanvasAuthCard({
   const [checking, setChecking] = useState(false);
   const [ready, setReady] = useState(false);
   const [note, setNote] = useState<string>("");
+  const [preparing, setPreparing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const activatedRef = useRef(false);
+
+  // A cli extension parked at pending_auth with no captured login URL (e.g.
+  // freshly corrected in the DB) needs its install + auth flow driven so the
+  // device URL appears. Kick it once; the mem_extensions realtime channel
+  // re-renders this card with auth_url the moment it lands.
+  useEffect(() => {
+    if (ext.kind !== "cli" || ext.auth_url || activatedRef.current) return;
+    activatedRef.current = true;
+    setPreparing(true);
+    void activateExtension(ext.name);
+  }, [ext.kind, ext.auth_url, ext.name]);
+
+  // Once a URL arrives, we're no longer preparing.
+  useEffect(() => {
+    if (ext.auth_url) setPreparing(false);
+  }, [ext.auth_url]);
 
   const probe = useCallback(
     async (manual: boolean) => {
@@ -122,6 +140,13 @@ export function CanvasAuthCard({
                 `${prettyName} needs you to sign in once. Open the page below, authorize, and it'll connect automatically.`}
           </p>
         </div>
+
+        {!ready && !ext.auth_url && preparing ? (
+          <p className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            Preparing your sign-in link…
+          </p>
+        ) : null}
 
         {!ready && ext.auth_url ? (
           <div className="w-full space-y-3">

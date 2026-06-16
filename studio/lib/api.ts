@@ -408,6 +408,66 @@ export async function closeBrowserSession(id: string): Promise<boolean> {
   }
 }
 
+// navigateBrowserSession points a live cloud-browser session at a new URL —
+// the boss typing into the live-browser toolbar's URL bar.
+export async function navigateBrowserSession(id: string, url: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/browser/session/${encodeURIComponent(id)}/navigate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// BrowserInputEvent mirrors core/internal/browser.InputEvent — one raw human
+// interaction forwarded to the live session when the boss takes over the
+// screencast by hand (click / type / scroll).
+export type BrowserInputEvent = {
+  type: "click" | "move" | "scroll" | "text" | "key" | "resize";
+  x?: number;
+  y?: number;
+  button?: "left" | "right" | "middle";
+  delta_x?: number;
+  delta_y?: number;
+  text?: string;
+  key?: string;
+  width?: number;
+  height?: number;
+};
+
+// sendBrowserInput forwards one manual interaction to the live session. Fire-
+// and-forget for high-frequency events (the screencast reflects the result).
+export async function sendBrowserInput(id: string, ev: BrowserInputEvent): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/browser/session/${encodeURIComponent(id)}/input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ev),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// activateExtension drives a cli extension's install + auth flow on demand so
+// the device-login URL is captured without waiting for a Core reboot. Returns
+// quickly (202) — the result lands via the mem_extensions realtime channel.
+export async function activateExtension(name: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/extensions/${encodeURIComponent(name)}/activate`, {
+      method: "POST",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // fetchWorkspaceBlob pulls a file's raw bytes from the CLOUD workspace via
 // the cloud-direct proxy (works on any device, independent of the session
 // bridge). Returns a Blob so binaries never round-trip as text. Used for

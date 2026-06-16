@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/browser"
 )
 
 // EmitBrowserFrame routes one live screencast frame to the given chat
@@ -32,23 +35,44 @@ func (s *Server) EmitBrowserFrame(chatSessionID string, seq int, frame, url, bro
 	})
 }
 
-// handleBrowserClose tears down a live browser session (Studio "Stop"
-// button). POST /api/browser/session/{id}/close.
-func (s *Server) handleBrowserClose(w http.ResponseWriter, r *http.Request) {
+// handleBrowserSession dispatches the live-browser control verbs on
+// POST /api/browser/session/{id}/{verb}: close (Stop button), navigate
+// (editable URL bar), and input (the boss's manual click/type/scroll takeover
+// of the screencast). All three act on a live session the registry already
+// tracks; the registry is the bridge-aware authority so these stay engine-
+// agnostic.
+func (s *Server) handleBrowserSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.cfg.BrowserClose == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser not configured"})
+	// Path: /api/browser/session/{id}/{verb}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/browser/session/"), "/")
+	slash := strings.LastIndex(rest, "/")
+	if slash <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session id and verb required"})
 		return
 	}
-	// Path: /api/browser/session/{id}/close
-	rest := strings.TrimPrefix(r.URL.Path, "/api/browser/session/")
-	id := strings.TrimSuffix(rest, "/close")
-	id = strings.Trim(id, "/")
+	id, verb := rest[:slash], rest[slash+1:]
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session id required"})
+		return
+	}
+	switch verb {
+	case "close":
+		s.browserClose(w, r, id)
+	case "navigate":
+		s.browserNavigate(w, r, id)
+	case "input":
+		s.browserInput(w, r, id)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown verb: " + verb})
+	}
+}
+
+func (s *Server) browserClose(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cfg.BrowserClose == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser not configured"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -58,4 +82,46 @@ func (s *Server) handleBrowserClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "closed": id})
+}
+
+func (s *Server) browserNavigate(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cfg.BrowserNavigate == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser not configured"})
+		return
+	}
+	var body struct {
+		URL string `json:"url"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if strings.TrimSpace(body.URL) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.cfg.BrowserNavigate(ctx, id, body.URL); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) browserInput(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cfg.BrowserInput == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser not configured"})
+		return
+	}
+	var ev browser.InputEvent
+	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	// Snappy timeout: human input is high-frequency and must feel instant.
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := s.cfg.BrowserInput(ctx, id, ev); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

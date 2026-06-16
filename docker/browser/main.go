@@ -52,6 +52,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -156,6 +157,8 @@ func routeSession(w http.ResponseWriter, r *http.Request) {
 		handleObserve(w, r, s)
 	case "act":
 		handleAct(w, r, s)
+	case "input":
+		handleInput(w, r, s)
 	case "extract":
 		handleExtract(w, r, s)
 	case "screenshot":
@@ -648,6 +651,99 @@ func (s *Session) act(req actRequest) error {
 	default:
 		return fmt.Errorf("unknown action %q (use click|type|select|press|scroll|clear)", req.Action)
 	}
+}
+
+// inputRequest is a raw, coordinate-based interaction forwarded from Studio
+// when the boss takes over the live browser by hand (clicking the screencast,
+// typing, scrolling). This is the human-takeover path - distinct from /act,
+// which is the agent's index-based verb set. Coordinates are in the
+// screencast's own pixel space (the CDP frame is capped at viewportW×viewportH
+// and emitted at native size, so Studio maps a click on the <img> straight to
+// these coords with no DPI math).
+type inputRequest struct {
+	Type   string  `json:"type"`             // click | move | scroll | text | key | resize
+	X      float64 `json:"x,omitempty"`      // viewport px
+	Y      float64 `json:"y,omitempty"`      // viewport px
+	Button string  `json:"button,omitempty"` // left (default) | right | middle
+	DeltaX float64 `json:"delta_x,omitempty"`
+	DeltaY float64 `json:"delta_y,omitempty"`
+	Text   string  `json:"text,omitempty"`   // for type=text: literal characters to insert
+	Key    string  `json:"key,omitempty"`    // for type=key: Enter|Tab|Backspace|ArrowDown|…
+	Width  int64   `json:"width,omitempty"`  // for type=resize: match the remote viewport to the Studio pane
+	Height int64   `json:"height,omitempty"` // so the page reflows + the screencast fills with no letterbox
+}
+
+func handleInput(w http.ResponseWriter, r *http.Request, s *Session) {
+	var req inputRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid body"))
+		return
+	}
+	if err := s.input(req); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, errBody(err.Error()))
+		return
+	}
+	// No settle() here: human interaction is high-frequency (every keystroke,
+	// every scroll tick) and the screencast already streams the result. A
+	// navigation triggered by a click still updates currentURL via the frame
+	// listener, so the toolbar stays accurate.
+	if cur := currentLocation(s); cur != "" {
+		s.currentURL.Store(cur)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": s.url()})
+}
+
+// input dispatches one raw human interaction through the CDP Input domain.
+func (s *Session) input(req inputRequest) error {
+	switch strings.ToLower(strings.TrimSpace(req.Type)) {
+	case "click":
+		btn := input.Left
+		switch strings.ToLower(req.Button) {
+		case "right":
+			btn = input.Right
+		case "middle":
+			btn = input.Middle
+		}
+		return s.run(
+			input.DispatchMouseEvent(input.MousePressed, req.X, req.Y).WithButton(btn).WithClickCount(1),
+			input.DispatchMouseEvent(input.MouseReleased, req.X, req.Y).WithButton(btn).WithClickCount(1),
+		)
+	case "move":
+		return s.run(input.DispatchMouseEvent(input.MouseMoved, req.X, req.Y))
+	case "scroll":
+		return s.run(input.DispatchMouseEvent(input.MouseWheel, req.X, req.Y).
+			WithDeltaX(req.DeltaX).WithDeltaY(req.DeltaY))
+	case "text":
+		if req.Text == "" {
+			return nil
+		}
+		// InsertText types into whatever is focused (the field the boss just
+		// clicked), exactly like a paste/IME commit - robust across frameworks.
+		return s.run(input.InsertText(req.Text))
+	case "key":
+		return s.run(chromedp.KeyEvent(keyFor(req.Key)))
+	case "resize":
+		// Match the remote page's viewport to the Studio pane so it reflows to
+		// the boss's window size and the screencast fills edge-to-edge instead
+		// of letterboxing a fixed 1280×800 frame. Clamp to sane bounds (and the
+		// screencast's own max) so a stray value can't blow up Chromium.
+		w := clampDim(req.Width, 320, viewportW)
+		h := clampDim(req.Height, 240, viewportH)
+		return s.run(chromedp.EmulateViewport(w, h))
+	default:
+		return fmt.Errorf("unknown input type %q (use click|move|scroll|text|key|resize)", req.Type)
+	}
+}
+
+// clampDim bounds a requested viewport dimension to [lo, hi].
+func clampDim(v, lo, hi int64) int64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 type extractRequest struct {

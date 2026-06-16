@@ -26,8 +26,8 @@ func NewAPI(mgr *Manager) *API {
 }
 
 func (a *API) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/extensions", a.handleCollection)    // GET list · POST register
-	mux.HandleFunc("/api/extensions/", a.handleItem)         // POST .../remove · .../check
+	mux.HandleFunc("/api/extensions", a.handleCollection) // GET list · POST register
+	mux.HandleFunc("/api/extensions/", a.handleItem)      // POST .../remove · .../check
 }
 
 type extensionDTO struct {
@@ -187,9 +187,33 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": name, "status": "disabled"})
 	case "check":
 		a.check(w, r, name)
+	case "activate":
+		a.activate(w, r, name)
 	default:
 		http.Error(w, "unknown action", http.StatusNotFound)
 	}
+}
+
+// activate drives a cli extension's install + auth flow on demand so the
+// device-login URL is captured without waiting for a Core reboot. The install +
+// auth probe can take minutes (download, cloud cold-start), so per the
+// server-tracked-progress rule we never block the request: book a mem_runs row
+// and run in the background. Studio's CanvasAuthCard subscribes to the
+// mem_extensions realtime channel and re-renders the moment auth_url lands.
+func (a *API) activate(w http.ResponseWriter, r *http.Request, name string) {
+	if a == nil || a.mgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "extensions not configured"})
+		return
+	}
+	bg := context.WithoutCancel(r.Context())
+	go func() {
+		_ = runs.Track(bg, runs.KindExtension, name, "sign-in setup: "+name, runs.SourceManual,
+			func(c context.Context) error {
+				_, err := a.mgr.Activate(c, name)
+				return err
+			})
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "async": true, "name": name, "status": "activating"})
 }
 
 func (a *API) check(w http.ResponseWriter, r *http.Request, name string) {

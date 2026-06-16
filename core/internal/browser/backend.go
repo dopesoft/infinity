@@ -25,6 +25,10 @@ type Backend interface {
 	Navigate(ctx context.Context, sessionID, url string) (*NavResult, error)
 	Observe(ctx context.Context, sessionID string) (*ObserveResult, error)
 	Act(ctx context.Context, sessionID string, req ActRequest) (*ActResult, error)
+	// Input forwards a raw human interaction (click/type/scroll) to the live
+	// session - the boss's manual takeover of the screencast. Engines without a
+	// raw-input path return an error so the caller can surface "not supported".
+	Input(ctx context.Context, sessionID string, ev InputEvent) error
 	Extract(ctx context.Context, sessionID, format string) (*ExtractResult, error)
 	Screenshot(ctx context.Context, sessionID string) (*ShotResult, error)
 	Close(ctx context.Context, sessionID string) error

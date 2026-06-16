@@ -1685,8 +1685,12 @@ func serveCmd() *cobra.Command {
 			// browserClose backs Studio's "Stop" button on the Preview pane (live browser).
 			// nil when the browser backend isn't configured (route 503s).
 			var browserClose func(ctx context.Context, sessionID string) error
+			var browserNavigate func(ctx context.Context, sessionID, url string) error
+			var browserInput func(ctx context.Context, sessionID string, ev browser.InputEvent) error
 			if browserReg != nil {
 				browserClose = browserReg.Close
+				browserNavigate = browserReg.Navigate
+				browserInput = browserReg.Input
 			}
 			srv := server.New(server.Config{
 				Addr:             addr,
@@ -1725,6 +1729,8 @@ func serveCmd() *cobra.Command {
 				RunsAPI:          runs.NewAPI(pool),
 				CalendarAPI:      calendarAPI,
 				BrowserClose:     browserClose,
+				BrowserNavigate:  browserNavigate,
+				BrowserInput:     browserInput,
 				WorkspaceRawBase: workspaceRawBase,
 				WorkspaceToken:   workspaceToken,
 			})

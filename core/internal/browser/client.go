@@ -106,6 +106,23 @@ type ShotResult struct {
 	DataURL string `json:"data_url"`
 }
 
+// InputEvent is a raw, coordinate-based human interaction forwarded from
+// Studio when the boss takes over the live browser by hand (clicks the
+// screencast, types, scrolls). Mirrors docker/browser inputRequest. Distinct
+// from ActRequest, which is the agent's index-based verb set.
+type InputEvent struct {
+	Type   string  `json:"type"`             // click | move | scroll | text | key
+	X      float64 `json:"x,omitempty"`      // viewport px
+	Y      float64 `json:"y,omitempty"`      // viewport px
+	Button string  `json:"button,omitempty"` // left (default) | right | middle
+	DeltaX float64 `json:"delta_x,omitempty"`
+	DeltaY float64 `json:"delta_y,omitempty"`
+	Text   string  `json:"text,omitempty"`
+	Key    string  `json:"key,omitempty"`
+	Width  int64   `json:"width,omitempty"`  // for type=resize
+	Height int64   `json:"height,omitempty"` // for type=resize
+}
+
 // Frame is one screencast frame relayed from the sidecar SSE stream. URL is
 // not sent by the sidecar — the registry fills it from the session's last
 // known location so the live tab's toolbar stays accurate.
@@ -177,6 +194,10 @@ func (c *Client) Screenshot(ctx context.Context, sessionID string) (*ShotResult,
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *Client) Input(ctx context.Context, sessionID string, ev InputEvent) error {
+	return c.post(ctx, "/session/"+sessionID+"/input", ev, nil)
 }
 
 func (c *Client) Close(ctx context.Context, sessionID string) error {

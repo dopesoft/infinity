@@ -161,6 +161,49 @@ func (m *Manager) activate(ctx context.Context, ext *Extension) error {
 	}
 }
 
+// Activate re-runs a cli extension's install + auth probe on demand and
+// persists whatever state it lands in (active, or pending_auth with a freshly
+// captured device-login URL). This closes the gap where a row corrected to
+// pending_auth in the DB (e.g. by a migration) has no auth_url until the next
+// Core reboot - the boss would see a sign-in card with no link. The /check
+// endpoint only PROBES readiness; this one drives the cloud-pinned auth flow
+// so the URL is captured immediately. cli-only; a no-op for other kinds.
+func (m *Manager) Activate(ctx context.Context, name string) (*Extension, error) {
+	if m == nil || m.store == nil {
+		return nil, fmt.Errorf("extensions: no store configured")
+	}
+	ext, err := m.store.GetByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if ext == nil {
+		return nil, fmt.Errorf("extensions: no extension named %q", name)
+	}
+	if ext.Kind != KindCLI {
+		return ext, nil // nothing to drive for mcp/http_tool
+	}
+	// activateCLI installs (if needed), probes readiness, and on "not ready"
+	// runs auth_cmd on the CLOUD-pinned bridge (cloudBridge → PrefCloud, which
+	// never fails over to the Mac) to capture the device-login URL. This is the
+	// structural fix for the "auth failed over to the Mac bridge" trace: auth
+	// flows through the manager, not a hand-rolled bash plan step.
+	if err := m.activateCLI(ctx, ext, true); err != nil {
+		_ = m.store.SetStatus(ctx, name, StatusError, err.Error())
+		return nil, err
+	}
+	if err := m.store.SetAuthState(ctx, name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError); err != nil {
+		return nil, err
+	}
+	fresh, _ := m.store.GetByName(ctx, name)
+	if fresh == nil {
+		fresh = ext
+	}
+	if fresh.Status == StatusActive {
+		m.fireAuthComplete(ctx, fresh)
+	}
+	return fresh, nil
+}
+
 // Remove disables an extension. http_tool extensions are unregistered from
 // the live registry immediately; an mcp extension stops loading on the
 // next boot (its already-connected session lives until restart).

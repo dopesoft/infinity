@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -181,6 +182,47 @@ func (r *Registry) URL(browserID string) string {
 		return e.url
 	}
 	return ""
+}
+
+// Navigate points a live session at a new URL (Studio's editable URL bar in
+// the live-browser toolbar). Updates the tracked URL so the toolbar + mem_runs
+// label stay accurate. Errors if the session isn't live.
+func (r *Registry) Navigate(ctx context.Context, browserID, url string) error {
+	if !r.isLive(browserID) {
+		return fmt.Errorf("browser session not found or already closed")
+	}
+	res, err := r.backend.Navigate(ctx, browserID, url)
+	if err != nil {
+		return err
+	}
+	if res != nil && res.URL != "" {
+		r.UpdateURL(browserID, res.URL)
+	} else {
+		r.UpdateURL(browserID, url)
+	}
+	return nil
+}
+
+// Input forwards one raw human interaction (click/type/scroll) to a live
+// session - the boss's manual takeover of the screencast.
+func (r *Registry) Input(ctx context.Context, browserID string, ev InputEvent) error {
+	if !r.isLive(browserID) {
+		return fmt.Errorf("browser session not found or already closed")
+	}
+	return r.backend.Input(ctx, browserID, ev)
+}
+
+// isLive reports whether a browser session id maps to a live entry and bumps
+// its lastUsed so manual interaction defers the idle reaper.
+func (r *Registry) isLive(browserID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.sessions[browserID]
+	if ok && !e.done {
+		e.lastUsed = time.Now()
+		return true
+	}
+	return false
 }
 
 // Close tears down a session: stops the sidecar browser, ends the relay,

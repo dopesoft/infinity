@@ -256,6 +256,7 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
         url={browserUrl}
         running={browserRunning}
         stopping={stoppingBrowser}
+        sessionId={store.browserSessionId ?? ""}
         onStop={() => void handleStopBrowser()}
       />
     );

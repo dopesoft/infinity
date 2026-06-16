@@ -195,6 +195,10 @@ func (r *RoutingBackend) Act(ctx context.Context, sessionID string, req ActReque
 	return r.backendFor(ctx, sessionID).Act(ctx, sessionID, req)
 }
 
+func (r *RoutingBackend) Input(ctx context.Context, sessionID string, ev InputEvent) error {
+	return r.backendFor(ctx, sessionID).Input(ctx, sessionID, ev)
+}
+
 func (r *RoutingBackend) Extract(ctx context.Context, sessionID, format string) (*ExtractResult, error) {
 	return r.backendFor(ctx, sessionID).Extract(ctx, sessionID, format)
 }

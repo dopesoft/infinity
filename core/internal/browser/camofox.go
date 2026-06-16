@@ -273,6 +273,15 @@ func (c *CamofoxBackend) act(ctx context.Context, sessionID string, fields map[s
 	return &ActResult{OK: out.OK, URL: out.URL, Error: out.Error}, nil
 }
 
+// Input is the manual human-takeover path. The Camoufox REST engine has no
+// raw coordinate input domain (it's ref/selector-based for anti-detect agent
+// scraping), and the live takeover screencast always runs on the chromedp
+// engine, so this returns a clear "not supported here" rather than silently
+// dropping the boss's clicks.
+func (c *CamofoxBackend) Input(ctx context.Context, sessionID string, ev InputEvent) error {
+	return fmt.Errorf("manual browser takeover isn't supported on the anti-detect (Camoufox) engine; it runs on the standard cloud browser")
+}
+
 func (c *CamofoxBackend) Extract(ctx context.Context, sessionID, _ string) (*ExtractResult, error) {
 	// No readability endpoint; evaluate innerText in-page. Capped so a huge DOM
 	// can't blow the response. The seeded skill uses extractStructured via
