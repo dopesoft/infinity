@@ -6,6 +6,38 @@ import { Loader2, RotateCcw } from "lucide-react";
 import { ptyStart, ptyInput, ptyResize, ptyClose, ptyStreamResponse } from "@/lib/canvas/api";
 import { Button } from "@/components/ui/button";
 
+// xterm themes aligned with Studio's tokens (true-black dark, white light) so
+// the terminal follows the global light/dark toggle instead of always-black.
+const XTERM_DARK = {
+  background: "#000000",
+  foreground: "#f5f5f5",
+  cursor: "#f5f5f5",
+  cursorAccent: "#000000",
+  selectionBackground: "#2a2a2a",
+};
+const XTERM_LIGHT = {
+  background: "#ffffff",
+  foreground: "#141414",
+  cursor: "#141414",
+  cursorAccent: "#ffffff",
+  selectionBackground: "#d8d8d8",
+};
+
+// useIsDark tracks the `.dark` class Studio toggles on <html>, mirroring the
+// Monaco editor's theme detection so the terminal flips with the global toggle.
+function useIsDark(): boolean {
+  const [isDark, setIsDark] = useState(true);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    setIsDark(root.classList.contains("dark"));
+    const mo = new MutationObserver(() => setIsDark(root.classList.contains("dark")));
+    mo.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => mo.disconnect();
+  }, []);
+  return isDark;
+}
+
 /**
  * CanvasTerminal - a REAL interactive shell (xterm.js) backed by a PTY on the
  * cloud workspace (Jarvis's always-on computer, where installed CLIs and their
@@ -22,6 +54,16 @@ export function CanvasTerminal({ sessionId }: { sessionId: string }) {
   const [status, setStatus] = useState<"connecting" | "ready" | "error">("connecting");
   const [generation, setGeneration] = useState(0); // bump to restart the shell
   const ptyIdRef = useRef<string>("");
+  const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
+  const isDark = useIsDark();
+  const isDarkRef = useRef(isDark);
+  isDarkRef.current = isDark;
+
+  // Flip the live terminal's palette when the global theme toggles — no need to
+  // tear down the shell.
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = isDark ? XTERM_DARK : XTERM_LIGHT;
+  }, [isDark]);
 
   useEffect(() => {
     let disposed = false;
@@ -47,10 +89,11 @@ export function CanvasTerminal({ sessionId }: { sessionId: string }) {
         cursorBlink: true,
         fontSize: 13,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        theme: { background: "#0a0a0a", foreground: "#e4e4e7", cursor: "#e4e4e7" },
+        theme: isDarkRef.current ? XTERM_DARK : XTERM_LIGHT,
         convertEol: false,
         scrollback: 5000,
       });
+      termRef.current = term;
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
@@ -130,13 +173,14 @@ export function CanvasTerminal({ sessionId }: { sessionId: string }) {
       if (ptyIdRef.current) void ptyClose(ptyIdRef.current);
       ptyIdRef.current = "";
       term?.dispose();
+      termRef.current = null;
     };
     // generation restarts the shell on demand; a new session gets a fresh shell.
   }, [generation, sessionId]);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-[#0a0a0a]">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-zinc-800 px-3 text-[11px] text-zinc-400">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-border px-3 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
           {status === "connecting" ? (
             <>
