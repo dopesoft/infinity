@@ -1492,7 +1492,11 @@ func serveCmd() *cobra.Command {
 				// running binary behind main?). Cognition lives in the seeded
 				// `nightly-self-improve` / `post-deploy-verify` skills; these
 				// are the generic building blocks they call.
-				tools.RegisterSelfImproveTools(registry, voyagerMgr, server.DeployStatusSnapshot, pool, cronSchedulerAdapter{s: cronScheduler})
+				tools.RegisterSelfImproveTools(registry, voyagerMgr, func() any {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+					return server.DeployStatusRefresh(ctx)
+				}, pool, cronSchedulerAdapter{s: cronScheduler})
 				if selfImproveAutonomyOn() {
 					fmt.Printf("  self-improve autonomy: ON (nightly loop may push + deploy unattended)\n")
 				} else {
@@ -1797,9 +1801,9 @@ func serveCmd() *cobra.Command {
 					}
 
 					if recovering {
-						srv.BroadcastBackgroundDone(r.Task, "First attempt hit a transient issue — retrying once on the cloud workspace.", "")
+						srv.BroadcastBackgroundDone(r.ParentSession, r.Task, "First attempt hit a transient issue — retrying once on the cloud workspace.", "")
 					} else {
-						srv.BroadcastBackgroundDone(r.Task, r.Summary, r.Err)
+						srv.BroadcastBackgroundDone(r.ParentSession, r.Task, r.Summary, r.Err)
 					}
 					if localPush != nil {
 						title := "Build complete"

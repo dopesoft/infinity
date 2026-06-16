@@ -188,6 +188,15 @@ func DeployStatusSnapshot() any {
 	return globalDeployTracker.snapshot()
 }
 
+// DeployStatusRefresh forces a fresh GitHub check before returning the snapshot.
+// Used by post-push / post-deploy verification paths that need a deterministic
+// read after the usual ~2 minute Railway/GitHub settle delay rather than the
+// passive 5-minute poll cache.
+func DeployStatusRefresh(ctx context.Context) any {
+	_ = globalDeployTracker.refresh(ctx)
+	return globalDeployTracker.snapshot()
+}
+
 func (s *Server) handleDeployStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)

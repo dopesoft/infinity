@@ -49,6 +49,7 @@ func RegisterSelfImproveTools(r *Registry, decider CodeProposalDecider, deployFn
 	}
 	if deployFn != nil {
 		r.Register(&deployStatusTool{fn: deployFn})
+		r.Register(&deployStatusRefreshTool{fn: deployFn})
 	}
 	if pool != nil && sched != nil {
 		r.Register(&selfImproveControl{pool: pool, sched: sched})
@@ -159,6 +160,8 @@ func (t *codeProposalDecide) Execute(ctx context.Context, in map[string]any) (st
 
 type deployStatusTool struct{ fn func() any }
 
+type deployStatusRefreshTool struct{ fn func() any }
+
 func (t *deployStatusTool) Name() string { return "deploy_status" }
 func (t *deployStatusTool) Description() string {
 	return "Report whether the running binary is behind GitHub main: running_sha vs latest_sha, behind (bool), commits_behind, repo, branch, checked_at. Use to confirm a push actually deployed (running_sha catches up to latest_sha) or to detect a stuck/bricked deploy (still behind long after the push)."
@@ -170,6 +173,24 @@ func (t *deployStatusTool) Schema() map[string]any {
 	}
 }
 func (t *deployStatusTool) Execute(_ context.Context, _ map[string]any) (string, error) {
+	b, err := json.Marshal(t.fn())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+func (t *deployStatusRefreshTool) Name() string { return "deploy_status_refresh" }
+func (t *deployStatusRefreshTool) Description() string {
+	return "Force a fresh GitHub-vs-running deploy status check, then return the same snapshot as deploy_status. Use this after a push and settle delay when you need a deterministic post-deploy verification instead of the passive poll cache."
+}
+func (t *deployStatusRefreshTool) Schema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+func (t *deployStatusRefreshTool) Execute(_ context.Context, _ map[string]any) (string, error) {
 	b, err := json.Marshal(t.fn())
 	if err != nil {
 		return "", err

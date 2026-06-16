@@ -12,6 +12,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
 // broadcastFindings tracks fingerprints of findings we've already pushed
@@ -104,6 +105,7 @@ func (s *Server) unregisterSession(sessionID string, send func(wsServerEvent)) {
 // all, in which case the frame is dropped without stalling the agent.
 func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
 	return func(ev wsServerEvent) {
+		sessionID = tools.SessionForPublish(sessionID)
 		if s == nil || sessionID == "" {
 			return
 		}
@@ -113,6 +115,7 @@ func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
 		if send == nil {
 			return
 		}
+		ev.SessionID = sessionID
 		send(ev)
 	}
 }
@@ -273,13 +276,17 @@ func (s *Server) BroadcastBackgroundProgress(p agent.BackgroundProgress) {
 }
 
 // BroadcastBackgroundDone surfaces the completion of a background_build
-// run as a chat bubble in every active session. Wired from serve.go as
+// run as a chat bubble in the ORIGINATING session. Wired from serve.go as
 // the BackgroundAgent.OnDone callback (alongside a push notification, so
 // the boss learns even with no tab open). Renders through the same
 // proactive_message path as heartbeat findings / skill-promoted; the
 // finding_kind drives the icon + label Studio shows.
-func (s *Server) BroadcastBackgroundDone(task, summary, errMsg string) {
+func (s *Server) BroadcastBackgroundDone(sessionID, task, summary, errMsg string) {
 	if s == nil {
+		return
+	}
+	sessionID = tools.SessionForPublish(strings.TrimSpace(sessionID))
+	if sessionID == "" {
 		return
 	}
 	task = strings.TrimSpace(task)
@@ -307,8 +314,9 @@ func (s *Server) BroadcastBackgroundDone(task, summary, errMsg string) {
 		}
 	}
 
-	s.broadcastProactive(wsServerEvent{
+	s.sessionSender(sessionID)(wsServerEvent{
 		Type:        "proactive_message",
+		SessionID:   sessionID,
 		Text:        text,
 		FindingKind: "background_build",
 	})

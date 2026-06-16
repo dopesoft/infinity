@@ -175,7 +175,7 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 	resp := map[string]any{
 		"status":  "started",
 		"run_id":  runID,
-		"message": "Build started in the background on the main model. It'll keep running even if this session ends - the boss gets a chat message and a push when it's done.",
+		"message": "Build started in the background on the settings model. It'll keep running even if this session ends - the boss gets a chat message and a push when it's done.",
 	}
 	out, _ := json.Marshal(resp)
 	return string(out), nil
@@ -384,8 +384,8 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 }
 
 // backgroundLabel produces the short human string Studio shows next to the
-// run spinner. Prefix with the backend so Cloud work never advertises Claude
-// Code. First line of the task, clipped.
+// run spinner. Prefix with the execution venue so the run never advertises
+// Claude Code; background_build always runs on the settings model.
 func backgroundLabel(task, bridgeKind string) string {
 	prefix := backgroundWorkerLabel(bridgeKind)
 	line := task
@@ -521,17 +521,11 @@ func backgroundWorkerLabel(bridgeKind string) string {
 		return "Cloud agent"
 	}
 	if bridgeKind == string(bridge.KindMac) {
-		return "Claude Code"
+		return "Mac agent"
 	}
 	return ""
 }
 
-func backgroundBackendLabel(bridgeKind string) string {
-	if bridgeKind == string(bridge.KindCloud) {
-		return "settings model"
-	}
-	if bridgeKind == string(bridge.KindMac) {
-		return "claude code"
-	}
-	return ""
+func backgroundBackendLabel(string) string {
+	return "settings model"
 }

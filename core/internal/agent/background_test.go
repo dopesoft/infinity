@@ -14,7 +14,7 @@ func TestBackgroundLabelUsesBridgeWorkerPrefix(t *testing.T) {
 	}
 
 	mac := backgroundLabel("Fix the worker label", string(bridge.KindMac))
-	if want := "Claude Code: Fix the worker label"; mac != want {
+	if want := "Mac agent: Fix the worker label"; mac != want {
 		t.Fatalf("mac label = %q, want %q", mac, want)
 	}
 }
@@ -38,10 +38,10 @@ func TestBackgroundWorkerAndBackendLabels(t *testing.T) {
 	if got := backgroundBackendLabel(string(bridge.KindCloud)); got != "settings model" {
 		t.Fatalf("cloud backend label = %q", got)
 	}
-	if got := backgroundWorkerLabel(string(bridge.KindMac)); got != "Claude Code" {
+	if got := backgroundWorkerLabel(string(bridge.KindMac)); got != "Mac agent" {
 		t.Fatalf("mac worker label = %q", got)
 	}
-	if got := backgroundBackendLabel(string(bridge.KindMac)); got != "claude code" {
+	if got := backgroundBackendLabel(string(bridge.KindMac)); got != "settings model" {
 		t.Fatalf("mac backend label = %q", got)
 	}
 }

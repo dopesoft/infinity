@@ -11,6 +11,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -643,11 +644,12 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 	if send == nil {
 		return
 	}
+	sessionID := tools.SessionForPublish(ev.SessionID)
 	switch ev.Kind {
 	case agent.EventDelta:
-		send(wsServerEvent{Type: "delta", SessionID: ev.SessionID, Text: ev.TextDelta})
+		send(wsServerEvent{Type: "delta", SessionID: sessionID, Text: ev.TextDelta})
 	case agent.EventThinking:
-		send(wsServerEvent{Type: "thinking", SessionID: ev.SessionID, Text: ev.ThinkingDelta})
+		send(wsServerEvent{Type: "thinking", SessionID: sessionID, Text: ev.ThinkingDelta})
 	case agent.EventToolCall:
 		if ev.ToolCall != nil {
 			// Forward the full ToolEvent including the gate's
@@ -657,7 +659,7 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 			// while the agent loop is blocked on WaitForDecision.
 			send(wsServerEvent{
 				Type:      "tool_call",
-				SessionID: ev.SessionID,
+				SessionID: sessionID,
 				ToolCall: &wsToolEvent{
 					ID:               ev.ToolCall.ID,
 					Name:             ev.ToolCall.Name,
@@ -676,7 +678,7 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 		if ev.InputDelta != "" {
 			send(wsServerEvent{
 				Type:      "tool_input_delta",
-				SessionID: ev.SessionID,
+				SessionID: sessionID,
 				ToolInputDelta: &wsToolInputDelta{
 					ID:    ev.ToolCallID,
 					Name:  ev.ToolName,
@@ -688,7 +690,7 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 		if ev.ToolResult != nil {
 			send(wsServerEvent{
 				Type:      "tool_result",
-				SessionID: ev.SessionID,
+				SessionID: sessionID,
 				ToolResult: &wsToolEvent{
 					ID:        ev.ToolResult.ID,
 					Name:      ev.ToolResult.Name,
@@ -707,12 +709,12 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 		}
 		send(wsServerEvent{
 			Type:       "complete",
-			SessionID:  ev.SessionID,
+			SessionID:  sessionID,
 			Usage:      usage,
 			StopReason: ev.StopReason,
 		})
 	case agent.EventError:
-		send(wsServerEvent{Type: "error", SessionID: ev.SessionID, Message: ev.Error})
+		send(wsServerEvent{Type: "error", SessionID: sessionID, Message: ev.Error})
 	}
 }
 

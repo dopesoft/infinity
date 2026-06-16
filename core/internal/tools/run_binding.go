@@ -57,6 +57,19 @@ func ParentSessionForSession(sessionID string) string {
 	return ""
 }
 
+// SessionForPublish rewrites detached background child-session ids to their
+// originating chat session, so WS/chat/UI surfaces stay attached to the thread
+// the boss is actually looking at. Non-background sessions pass through.
+func SessionForPublish(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	if parent := ParentSessionForSession(sessionID); parent != "" {
+		return parent
+	}
+	return sessionID
+}
+
 // UnregisterRunForSession drops the binding. The background agent defers this
 // so a finished run doesn't leak its mapping.
 func UnregisterRunForSession(sessionID string) {
