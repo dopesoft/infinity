@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KeyRound, ExternalLink, RefreshCcw, CheckCircle2, Loader2 } from "lucide-react";
+import { KeyRound, ExternalLink, RefreshCcw, CheckCircle2, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModalUrl } from "@/components/ui/modal-content";
 import { useRealtime } from "@/lib/realtime/provider";
@@ -56,9 +56,11 @@ export function usePendingAuthExtension(): {
 export function CanvasAuthCard({
   ext,
   onResolved,
+  onDismiss,
 }: {
   ext: Extension;
   onResolved: () => void;
+  onDismiss?: () => void;
 }) {
   const [checking, setChecking] = useState(false);
   const [ready, setReady] = useState(false);
@@ -82,6 +84,20 @@ export function CanvasAuthCard({
   useEffect(() => {
     if (ext.auth_url) setPreparing(false);
   }, [ext.auth_url]);
+
+  // Some CLIs (e.g. higgsfield) authenticate by opening a real browser rather
+  // than printing a device link, so the headless cloud activate can never
+  // capture a URL and "Preparing…" would spin forever. After a grace period
+  // with no URL, stop spinning and tell the boss the real path instead.
+  const [prepTimedOut, setPrepTimedOut] = useState(false);
+  useEffect(() => {
+    if (!preparing || ext.auth_url) {
+      setPrepTimedOut(false);
+      return;
+    }
+    const t = setTimeout(() => setPrepTimedOut(true), 30_000);
+    return () => clearTimeout(t);
+  }, [preparing, ext.auth_url]);
 
   const probe = useCallback(
     async (manual: boolean) => {
@@ -116,7 +132,17 @@ export function CanvasAuthCard({
   const prettyName = ext.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 px-6 py-10 dark:from-zinc-900/40 dark:to-black">
+    <div className="relative flex h-full min-h-0 flex-col overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 px-6 py-10 dark:from-zinc-900/40 dark:to-black">
+      {onDismiss ? (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss sign-in"
+          className="absolute right-3 top-3 inline-flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      ) : null}
       <div className="mx-auto flex w-full max-w-md flex-col items-center gap-5 text-center">
         <span
           className={cn(
@@ -141,10 +167,20 @@ export function CanvasAuthCard({
           </p>
         </div>
 
-        {!ready && !ext.auth_url && preparing ? (
+        {!ready && !ext.auth_url && preparing && !prepTimedOut ? (
           <p className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
             Preparing your sign-in link…
+          </p>
+        ) : null}
+
+        {!ready && !ext.auth_url && prepTimedOut ? (
+          <p className="max-w-xs text-[12px] leading-relaxed text-muted-foreground">
+            Couldn&apos;t get an automatic link — {prettyName} signs in through a
+            browser, which the cloud workspace can&apos;t open on its own. Open the{" "}
+            <span className="font-medium text-foreground">Terminal</span> tab and run{" "}
+            <code className="rounded bg-muted px-1 font-mono text-[11px]">{ext.name} auth login</code>
+            , or sign in on your Mac and I&apos;ll sync the credentials. You can dismiss this with ✕.
           </p>
         ) : null}
 

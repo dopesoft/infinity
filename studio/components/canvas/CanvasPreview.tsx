@@ -42,6 +42,30 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   // A cli tool waiting on device-login surfaces here as a sign-in card.
   const { pending: pendingAuth, refresh: refreshAuth } = usePendingAuthExtension();
 
+  // Extensions are global (not session-bound), so a still-pending sign-in would
+  // otherwise hijack the Preview pane of EVERY session — including a brand-new
+  // one unrelated to that tool. Let the boss dismiss it; remember the dismissal
+  // for this browser session (sessionStorage) so a fresh page load can re-offer
+  // it but navigating around doesn't keep shoving it back.
+  const [dismissedAuth, setDismissedAuth] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      return new Set(JSON.parse(sessionStorage.getItem("infinity:auth-dismissed") || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+  const dismissAuth = useCallback((name: string) => {
+    setDismissedAuth((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      try {
+        sessionStorage.setItem("infinity:auth-dismissed", JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
+  }, []);
+
   // Live cloud-browser screencast. We reuse THIS tab (Preview) to show the
   // stream rather than spawning a second tab — when a browser session is
   // live, the screencast takes over the Preview surface (see early return
@@ -266,8 +290,14 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   // self-contained, no trip to Settings, and it replaces the old raw-404 dead
   // end. Authenticating is the one thing only the boss can do, so it outranks
   // the app / empty states below.
-  if (pendingAuth) {
-    return <CanvasAuthCard ext={pendingAuth} onResolved={refreshAuth} />;
+  if (pendingAuth && !dismissedAuth.has(pendingAuth.name)) {
+    return (
+      <CanvasAuthCard
+        ext={pendingAuth}
+        onResolved={refreshAuth}
+        onDismiss={() => dismissAuth(pendingAuth.name)}
+      />
+    );
   }
 
   // No project on this session - Canvas is a passive surface. Show a
