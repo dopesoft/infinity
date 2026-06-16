@@ -22,6 +22,12 @@ func TestShouldSelfHeal(t *testing.T) {
 		{"blocked", "I'm blocked on the build failing.", false, true},
 		{"empty after tool error", "", true, true},
 
+		// The exact punt the boss keeps catching — confident, no failure words,
+		// but tells him to open/sign in himself. Must still self-heal:
+		{"browse to punt", "In the preview browser, open https://higgsfield.ai/auth/login and sign in there.", false, true},
+		{"navigate punt", "Navigate to the login page and log in, then tell me done.", false, true},
+		{"go to and sign in", "Go to higgsfield.ai/auth/login and sign in, then say done.", false, true},
+
 		// Must NOT fire — these would just waste a pass:
 		{"clean success", "Done. Deployed and confirmed the endpoint returns 200.", false, false},
 		{"resolved past failure", "The build failed at first but I fixed it and it works now.", false, false},

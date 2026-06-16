@@ -35,6 +35,15 @@ func selfHealDisabled() bool {
 // the "it didn't work / I couldn't" shapes the boss is tired of seeing.
 var failureSignal = regexp.MustCompile(`(?i)\b(could ?n'?t|can ?not|can'?t|was ?n'?t able|were ?n'?t able|unable to|failed to|\bfail(s|ed)?\b|didn'?t work|does ?n'?t work|not working|isn'?t working|ran into (an? )?(error|issue|problem)|something went wrong|went wrong|hit (a|an) (wall|error|snag)|blocked( on| by)|\bstuck\b|no luck|gave up|not able to|couldn'?t (get|complete|finish|find|reach|load|connect|sign)|\berror(ed)?\b|broken|timed? ?out)`)
 
+// browserPuntSignal matches a reply that hands the boss a URL to open / sign in
+// to himself — the exact "go browse to it" punt the boss keeps catching. He
+// CANNOT open a page in the Preview pane; only the agent can (browser_open). So
+// any such instruction is a failure to drive the browser, and must trigger a
+// self-heal pass even when the reply otherwise reads confident (no failure
+// words). Conservative: matches explicit "open/browse/navigate to ... (and sign
+// in)" instructions, not a bare external link the boss would open elsewhere.
+var browserPuntSignal = regexp.MustCompile(`(?i)(in the preview.{0,120}?\bopen\b|\bbrowse to\b|\bnavigate to\b|go to .{0,120}?\b(sign|log) ?in\b|open .{0,120}?\bin the (preview|browser)\b)`)
+
 // resolvedSignal marks a reply that already says it fixed/verified the thing,
 // so a success that merely MENTIONS a past failure isn't re-healed.
 var resolvedSignal = regexp.MustCompile(`(?i)(fixed it|now works|works now|confirmed|verified|sorted (it )?out|\bresolved\b|got it working|up and running|all set|all done)`)
@@ -53,6 +62,11 @@ func shouldSelfHeal(replyText string, toolErred bool) bool {
 		// Empty final reply with no tool calls = confused decode; a nudge often
 		// recovers it, but only bother if something actually errored.
 		return toolErred
+	}
+	// Telling the boss to open/browse to a URL himself is always a punt — he
+	// can't drive the Preview browser. Fire regardless of confident phrasing.
+	if browserPuntSignal.MatchString(t) {
+		return true
 	}
 	if resolvedSignal.MatchString(t) && !toolErred {
 		return false // already says it fixed/verified it
