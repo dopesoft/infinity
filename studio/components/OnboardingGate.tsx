@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth/session";
 import { fetchProfile, getMeta } from "@/lib/api";
@@ -20,35 +20,38 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const [checked, setChecked] = useState(false);
 
+  // The onboarding check is a REDIRECT-ONLY concern - a brand-new boss with no
+  // profile gets routed to the wizard. It must NOT gate first paint: blocking
+  // the whole app behind getMeta + fetchProfile (each a network round-trip,
+  // re-run on every iOS-PWA cold start where localStorage is evicted) was the
+  // "5-10s of Loading… before anything showed" the boss hit - and it sat in
+  // front of the dashboard's own SWR cache, negating it. So we render children
+  // immediately and run the check in the background, redirecting only if the
+  // boss genuinely hasn't onboarded. An already-onboarded boss never sees a
+  // flash; a brand-new one briefly sees the shell before the wizard (one-time).
   useEffect(() => {
-    if (loading) return;
-    if (!user) {
-      setChecked(true);
-      return;
-    }
-    if (pathname && EXEMPT_PREFIXES.some((p) => pathname.startsWith(p))) {
-      setChecked(true);
-      return;
-    }
-    if (typeof window !== "undefined" && localStorage.getItem(LOCAL_FLAG) === "true") {
-      setChecked(true);
-      return;
-    }
+    if (loading || !user) return;
+    if (pathname && EXEMPT_PREFIXES.some((p) => pathname.startsWith(p))) return;
+    if (typeof window !== "undefined" && localStorage.getItem(LOCAL_FLAG) === "true") return;
     let cancelled = false;
     (async () => {
       const flag = await getMeta("boss_onboarded");
       if (cancelled) return;
       if (flag === "true") {
-        try { localStorage.setItem(LOCAL_FLAG, "true"); } catch {}
-        setChecked(true);
+        try {
+          localStorage.setItem(LOCAL_FLAG, "true");
+        } catch {}
         return;
       }
       const profile = await fetchProfile();
       if (cancelled) return;
       if (profile && profile.length > 0) {
-        setChecked(true);
+        // Onboarded (has profile facts) - persist the fast-path flag so we
+        // never pay this network check again on this device.
+        try {
+          localStorage.setItem(LOCAL_FLAG, "true");
+        } catch {}
         return;
       }
       router.replace("/onboarding");
@@ -58,12 +61,5 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     };
   }, [loading, user, pathname, router]);
 
-  if (!checked) {
-    return (
-      <div className="flex h-app min-h-app items-center justify-center bg-background text-sm text-muted-foreground">
-        Loading…
-      </div>
-    );
-  }
   return <>{children}</>;
 }
