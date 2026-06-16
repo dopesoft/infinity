@@ -66,19 +66,39 @@ export function SkillProposalCard({ message }: { message: ChatMessage }) {
     phase = "decided";
     label = isUpdate ? `Update dismissed for ${name}` : `Dismissed: ${name}`;
     detail = "Skill proposal rejected. Jarvis won't re-propose this exact one.";
-  } else if (result.is_error || (parsed && parsed.status !== "proposed")) {
+  } else if (parsed?.status === "merged_into_existing") {
+    // Dedup: the proposal was folded into the canonical skill. That's a
+    // SUCCESS, not a failure — and it must read the same way on reload.
+    phase = "decided";
+    label = `Folded into existing skill: ${name}`;
+    detail =
+      (typeof parsed?.message === "string" && parsed.message) ||
+      "Merged into the canonical skill so there's one flexible recipe, not duplicates.";
+  } else if (result.is_error) {
     phase = "error";
     label = isUpdate ? "Skill update failed" : "Skill proposal failed";
     detail =
       (parsed && typeof parsed.message === "string" && parsed.message) ||
       "The proposal didn't land. The agent may try again on a future turn.";
-  } else {
+  } else if (proposalId) {
+    // A proposal id is the durable signal that this is a real, actionable
+    // proposal — render it as such regardless of whether the persisted output
+    // still carries the exact `status:"proposed"` string. This is what makes
+    // the card survive reload (older / variant outputs omit `status`, which
+    // used to flip the reconstructed card to a scary "failed" state — the
+    // "it disappeared when I came back" bug).
     phase = "proposed";
     label = isUpdate ? `Update proposed for ${name}` : `New skill proposed: ${name}`;
     detail =
       (typeof parsed?.description === "string" && parsed.description) ||
       (typeof parsed?.reasoning === "string" && parsed.reasoning) ||
       "Review the body to install or dismiss.";
+  } else {
+    phase = "error";
+    label = isUpdate ? "Skill update failed" : "Skill proposal failed";
+    detail =
+      (parsed && typeof parsed.message === "string" && parsed.message) ||
+      "The proposal didn't land. The agent may try again on a future turn.";
   }
 
   async function decide(decision: "promoted" | "rejected") {
