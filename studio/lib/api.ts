@@ -525,6 +525,8 @@ export type RunMeta = {
   todos?: RunTodo[];
   repo?: string;
   currentFile?: string;
+  worker?: string;
+  backend?: string;
   media?: MediaItem[];
 };
 

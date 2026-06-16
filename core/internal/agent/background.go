@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
@@ -40,7 +41,8 @@ import (
 // it can actually build - the read-only delegate default would be useless
 // for "build me X". Pass allowed_tools to narrow it.
 type BackgroundAgent struct {
-	Loop *Loop
+	Loop   *Loop
+	Bridge bridge.PrefFetcher
 	// OnDone is invoked once, after the background run finishes (success
 	// or failure). Wired in serve.go to broadcast a chat bubble + send a
 	// push. nil-safe: when unset, the run still completes + persists to
@@ -165,9 +167,10 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 	parentSession := tools.SessionIDFromContext(ctx)
 
 	runID := uuid.NewString()
-	label := backgroundLabel(task)
+	bridgeKind := b.activeBridgeKind(ctx, parentSession)
+	label := backgroundLabel(task, bridgeKind)
 
-	go b.runDetached(parentSession, runID, label, task, brief, allowed, timeout)
+	go b.runDetached(parentSession, runID, label, task, brief, allowed, timeout, bridgeKind)
 
 	resp := map[string]any{
 		"status":  "started",
@@ -180,7 +183,7 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 
 // runDetached owns the whole background lifecycle on a fresh, detached
 // context so it survives the triggering session closing.
-func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief string, allowed []string, timeout time.Duration) {
+func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief string, allowed []string, timeout time.Duration, bridgeKind string) {
 	// Cap the absolute lifetime so a wedged build can't leak a goroutine
 	// forever. context.Background() (not the request ctx) is the point:
 	// hanging up the voice call must NOT cancel the build.
@@ -211,7 +214,7 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 	}
 	handle.Progress(ctx, 0.05, "queued")
 
-	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed, handle)
+	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed, handle, bridgeKind)
 	// Close on a detached context: a timed-out run's ctx is already
 	// cancelled by the defer above, but the row must still flip to ok/error
 	// (otherwise it spins until the next boot's RecoverStranded sweep).
@@ -237,7 +240,7 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 // runToCompletion spins an ephemeral session, runs the agent loop on the
 // DEFAULT (settings) model to completion, and returns the final text.
 // Mirrors delegate.run, minus the synchronous-return contract.
-func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string, handle *runs.Handle) (string, error) {
+func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string, handle *runs.Handle, bridgeKind string) (string, error) {
 	childID := backgroundSessionIDPrefix + uuid.NewString()
 	child := b.Loop.GetOrCreateSession(childID)
 	defer b.Loop.ClearSession(childID)
@@ -274,6 +277,10 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 		base = base + "\n\n## Brief\n" + trimmed
 	}
 	child.SystemPromptOverride = base
+	if bridgeKind != "" {
+		handle.SetMetaString(ctx, "worker", backgroundWorkerLabel(bridgeKind))
+		handle.SetMetaString(ctx, "backend", backgroundBackendLabel(bridgeKind))
+	}
 
 	events := make(chan RunEvent, 256)
 	var (
@@ -377,8 +384,10 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 }
 
 // backgroundLabel produces the short human string Studio shows next to the
-// run spinner. First line of the task, clipped.
-func backgroundLabel(task string) string {
+// run spinner. Prefix with the backend so Cloud work never advertises Claude
+// Code. First line of the task, clipped.
+func backgroundLabel(task, bridgeKind string) string {
+	prefix := backgroundWorkerLabel(bridgeKind)
 	line := task
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
@@ -389,9 +398,15 @@ func backgroundLabel(task string) string {
 		line = line[:max] + "…"
 	}
 	if line == "" {
-		return "background build"
+		if prefix == "" {
+			return "background build"
+		}
+		return prefix + ": background build"
 	}
-	return line
+	if prefix == "" {
+		return line
+	}
+	return prefix + ": " + line
 }
 
 func backgroundProgressLabel(toolName string, toolCallCount int) string {
@@ -490,3 +505,33 @@ Your job:
 At the very START of the task, call todo_write ONCE with your full ordered plan — every step as a short item with status "pending" — and pass the repo/project you're working in. As you work, call todo_write again to mark the step you're starting "in_progress" and finished steps "completed" (exactly one item in_progress at a time). Each call replaces the whole list, so always send the complete checklist. This is the ONLY way the boss sees your progress live while you run detached, so keep it current. Skip the checklist only for a genuinely trivial one-step task.
 
 There is no one to ask mid-task, so make sensible decisions and note them in the summary rather than stopping. If a step genuinely cannot proceed (it needs a Trust-gated approval, a missing credential, or a decision only the boss can make), do as much as you safely can, then clearly state what is blocked and why in the summary.`
+
+func (b *BackgroundAgent) activeBridgeKind(ctx context.Context, sessionID string) string {
+	if b == nil || b.Bridge == nil {
+		return ""
+	}
+	if b.Bridge(ctx, sessionID) == bridge.PrefCloud {
+		return string(bridge.KindCloud)
+	}
+	return string(bridge.KindMac)
+}
+
+func backgroundWorkerLabel(bridgeKind string) string {
+	if bridgeKind == string(bridge.KindCloud) {
+		return "Cloud agent"
+	}
+	if bridgeKind == string(bridge.KindMac) {
+		return "Claude Code"
+	}
+	return ""
+}
+
+func backgroundBackendLabel(bridgeKind string) string {
+	if bridgeKind == string(bridge.KindCloud) {
+		return "settings model"
+	}
+	if bridgeKind == string(bridge.KindMac) {
+		return "claude code"
+	}
+	return ""
+}

@@ -45,6 +45,8 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
   const build = activeBuilds[0];
   const others = activeBuilds.slice(1);
   const currentFile = build?.meta?.currentFile?.trim() ?? "";
+  const worker = build?.meta?.worker?.trim() ?? "";
+  const backend = build?.meta?.backend?.trim() ?? "";
 
   // Nothing to show unless a plan is in flight or a build is running.
   if (!plan && activeBuilds.length === 0) return null;
@@ -67,6 +69,7 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
     ? `${done}/${total} · ${current}`
     : build?.progress_label?.trim() || "working";
   const title = plan?.title?.trim() || build?.label?.trim() || "Background build";
+  const workerDetail = [worker, backend].filter(Boolean).join(" · ");
 
   return (
     <div className="min-w-0 shrink-0 border-t border-info/30 bg-info/[0.06] px-3 py-2 sm:px-4">
@@ -114,6 +117,12 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
           <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-foreground/80">
             <span className="min-w-0 truncate">{title}</span>
           </div>
+
+          {workerDetail && (
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="min-w-0 truncate">{workerDetail}</span>
+            </div>
+          )}
 
           {steps.length > 0 ? (
             <ul className="space-y-1">
