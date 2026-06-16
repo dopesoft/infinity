@@ -27,6 +27,7 @@ func RegisterTools(reg *tools.Registry, mgr *Manager) {
 	reg.Register(&extensionListTool{mgr: mgr})
 	reg.Register(&extensionRemoveTool{mgr: mgr})
 	reg.Register(&extensionCheckTool{mgr: mgr})
+	reg.Register(&extensionActivateTool{mgr: mgr})
 }
 
 // ── extension_register ──────────────────────────────────────────────────────
@@ -265,6 +266,73 @@ func (t *extensionCheckTool) Execute(ctx context.Context, in map[string]any) (st
 			"Still not authenticated. Open the sign-in page in his Preview pane yourself with "+
 				"browser_open (%s) if it isn't already up, and ask him to finish signing in right there "+
 				"in the preview — do not send him a URL to open. Then check again.", ext.AuthURL)
+	}
+	out, _ := json.Marshal(res)
+	return string(out), nil
+}
+
+// ── extension_activate ─────────────────────────────────────────────────────
+
+type extensionActivateTool struct{ mgr *Manager }
+
+func (t *extensionActivateTool) Name() string { return "extension_activate" }
+func (t *extensionActivateTool) Description() string {
+	return "Start (or restart) a cli/mcp extension's sign-in and get back the sign-in " +
+		"URL. Use this for ANY extension that's installed but awaiting sign-in " +
+		"(status pending_auth) - e.g. a media or SaaS CLI the boss needs to log into. " +
+		"It runs the sign-in ON YOUR CLOUD WORKSPACE (never the boss's computer) and " +
+		"returns auth_url. Then call browser_open with that auth_url so the sign-in " +
+		"page is LIVE in the boss's Preview pane and he approves it right there - this " +
+		"works even when he's on his phone with no computer. NEVER run the tool's " +
+		"`auth login` / `login` command yourself via bash_run (that opens a browser on " +
+		"the wrong machine), and NEVER hand the boss a URL to open himself. After he " +
+		"approves, call extension_check to confirm it flipped to active, then continue."
+}
+func (t *extensionActivateTool) Schema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"name": map[string]any{"type": "string", "description": "Extension name, e.g. 'higgsfield'."}},
+		"required":   []string{"name"},
+	}
+}
+func (t *extensionActivateTool) Execute(ctx context.Context, in map[string]any) (string, error) {
+	name := strings.TrimSpace(strString(in, "name"))
+	if name == "" {
+		return "", errors.New("extension_activate: name is required")
+	}
+	ext, err := t.mgr.Activate(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	res := map[string]any{"name": name, "status": string(ext.Status)}
+	switch ext.Status {
+	case StatusPendingAuth:
+		res["auth_url"] = ext.AuthURL
+		res["next_action"] = "browser_open"
+		if ext.AuthURL != "" {
+			res["message"] = fmt.Sprintf(
+				"%q ran its sign-in on your cloud workspace. NOW call browser_open with this auth_url so the "+
+					"sign-in page is live in the boss's Preview pane and he approves it right there (works from his "+
+					"phone): %s . Do NOT hand him the URL and do NOT open it on his computer. Once he approves, call "+
+					"extension_check %q to confirm it's active, then continue.",
+				name, ext.AuthURL, name)
+		} else {
+			res["message"] = fmt.Sprintf(
+				"%q is signing in on your cloud workspace but hasn't printed a link yet. Open the Terminal, run its "+
+					"auth command to surface the link, then browser_open it into the Preview. Don't send the boss a URL.", name)
+		}
+	case StatusActive:
+		res["message"] = fmt.Sprintf(
+			"%q is authenticated and ready. Run it via bash_run (source %s first), or continue what you were doing.",
+			name, EnvFilePath)
+		if ext.ResumeIntent != "" {
+			res["resume_intent"] = ext.ResumeIntent
+		}
+	default:
+		res["message"] = fmt.Sprintf("%q is now %s.", name, ext.Status)
+		if ext.LastError != "" {
+			res["last_error"] = ext.LastError
+		}
 	}
 	out, _ := json.Marshal(res)
 	return string(out), nil

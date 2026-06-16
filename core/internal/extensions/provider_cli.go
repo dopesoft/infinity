@@ -50,6 +50,12 @@ func (p *CLIProvider) BuildSystemPrefix(ctx context.Context, _ string, _ string)
 		"Command-line tools installed in your cloud workspace. Run them via bash_run; "+
 			"prefix the command with `source %s && ` so they use the persistent install + saved credentials.\n",
 		EnvFilePath))
+	b.WriteString(
+		"SIGN-IN RULE (always): to authenticate any of these, call extension_activate \"<name>\" then " +
+			"browser_open the auth_url it returns, so the sign-in page is LIVE in the boss's Preview pane and he " +
+			"approves it there - this works even when he's on his phone. The sign-in ALWAYS happens inside YOUR " +
+			"cloud browser. NEVER run `<tool> auth login` / `<tool> login` via bash_run (that opens a browser on " +
+			"the wrong machine and auths the wrong box), and NEVER hand the boss a URL to open on his own computer.\n")
 	for _, e := range activeCLIs {
 		cfg, perr := parseCLIConfig(e.Config)
 		if perr != nil {
@@ -71,19 +77,12 @@ func (p *CLIProvider) BuildSystemPrefix(ctx context.Context, _ string, _ string)
 			continue
 		}
 		b.WriteString(fmt.Sprintf(
-			"- %s: INSTALLED BUT AWAITING THE BOSS'S SIGN-IN. If it's relevant, remind him: %s\n",
-			e.Name, pendingLine(e)))
+			"- %s: INSTALLED BUT AWAITING SIGN-IN. To finish it YOURSELF: call extension_activate %q, then "+
+				"browser_open the auth_url it returns so the sign-in page is live in the boss's Preview pane and he "+
+				"approves it there (works from his phone). Do NOT run its `auth login`/`login` via bash_run and do "+
+				"NOT hand him a URL or open it on his computer.\n",
+			e.Name, e.Name))
 	}
 	b.WriteString("</installed_cli_tools>")
 	return b.String(), nil
-}
-
-func pendingLine(e *Extension) string {
-	if e.AuthURL != "" {
-		return "open " + e.AuthURL + " to finish setup"
-	}
-	if e.AuthInstructions != "" {
-		return e.AuthInstructions
-	}
-	return "authentication still needed"
 }

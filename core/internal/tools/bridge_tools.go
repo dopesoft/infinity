@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
@@ -334,13 +335,54 @@ func (t *bridgeBash) Schema() map[string]any {
 	}
 }
 func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, error) {
+	cmd := strString(in, "cmd")
+	if redirect, blocked := guardInteractiveLogin(cmd); blocked {
+		return redirect, nil
+	}
 	return bridgeCall(ctx, t.router, t.prefs, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/bash", map[string]any{
-			"cmd":         strString(in, "cmd"),
+			"cmd":         cmd,
 			"cwd":         bridge.NormalizePath(b, strString(in, "cwd")),
 			"timeout_sec": intOrZero(in, "timeout_sec"),
 		})
 	})
+}
+
+// loginCmdRe matches an interactive CLI sign-in invocation — "<tool> auth login"
+// or "<tool> login" — at the start of the command or after a shell separator. The
+// trailing `(\s+-|\s*($|[;&|]))` requires `login` to be the END of the command or
+// be followed only by a flag, so it fires on real subcommands ("vercel login",
+// "gh auth login", "npm login --registry x") but NOT when "login" is just an
+// argument ("grep login app.log", "cat login.txt", "git log").
+var loginCmdRe = regexp.MustCompile(`(?i)(^|[;&|]\s*|\bsudo\s+)([a-z0-9][\w.-]*\s+)?(auth\s+login|login)(\s+-|\s*($|[;&|]))`)
+
+// guardInteractiveLogin intercepts raw "<tool> auth login" / "<tool> login" bash
+// commands. Such flows open a browser and/or hold an OAuth callback on whatever
+// box runs them — via raw bash that can land on the boss's Mac, popping HIS
+// browser and authing the wrong machine (the boss may be on his phone with no
+// computer at all). Sign-in must instead run on the cloud workspace with the URL
+// opened in Jarvis's OWN browser. This is the deterministic backstop behind the
+// catalog steering + extension_activate tool (Rule #1b: the mechanic is in code,
+// not prose the model can drop). Generic — zero per-vendor wiring. NOTE: the
+// legit self-contained path (extensions Manager.startDetachedAuth) calls the
+// bridge directly, NOT this tool, so it is never caught here.
+func guardInteractiveLogin(cmd string) (string, bool) {
+	if strings.TrimSpace(cmd) == "" || !loginCmdRe.MatchString(cmd) {
+		return "", false
+	}
+	payload := map[string]any{
+		"blocked": "interactive_sign_in_via_bash",
+		"why": "Running a CLI sign-in (`auth login` / `login`) directly opens a browser and holds the OAuth " +
+			"callback on whatever machine runs it. Via raw bash that can land on the boss's computer, popping HIS " +
+			"browser and signing in the wrong machine — and the boss may be on his phone with no computer at all.",
+		"do_this_instead": "Sign in self-contained, inside YOUR cloud browser: if this is a registered cli " +
+			"extension, call extension_activate \"<name>\" (it runs the sign-in on your cloud workspace and returns " +
+			"auth_url), then browser_open that auth_url so the page is live in the boss's Preview pane and he approves " +
+			"it there. If it isn't registered yet, extension_register it (kind=cli, with its auth_cmd) first, then " +
+			"extension_activate. Never sign in via bash; never hand the boss a URL or open it on his computer.",
+	}
+	out, _ := json.Marshal(payload)
+	return string(out), true
 }
 
 // ── git_* ────────────────────────────────────────────────────────────────
