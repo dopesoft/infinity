@@ -226,11 +226,15 @@ func (a *API) check(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, "no such extension", http.StatusNotFound)
 		return
 	}
-	if ext.Kind != KindCLI {
+	if ext.Kind != KindCLI && ext.Kind != KindMCP {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "extension": toDTO(ext)})
 		return
 	}
-	ready, perr := a.mgr.ProbeCLIReady(r.Context(), ext)
+	probe := a.mgr.ProbeCLIReady
+	if ext.Kind == KindMCP {
+		probe = a.mgr.mcpReady
+	}
+	ready, perr := probe(r.Context(), ext)
 	if perr != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": perr.Error(), "extension": toDTO(ext)})
 		return

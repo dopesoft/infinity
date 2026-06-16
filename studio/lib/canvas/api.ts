@@ -20,6 +20,73 @@ export type FSListResponse = {
   entries: FSEntry[];
 };
 
+// ── interactive terminal (PTY) ───────────────────────────────────────────
+// Backed by the cloud workspace's /pty/* endpoints, proxied through Core. The
+// stream is consumed via authedFetch (a ReadableStream) rather than EventSource
+// because EventSource can't carry the Supabase bearer.
+
+export async function ptyStart(cols: number, rows: number): Promise<string | null> {
+  try {
+    const res = await authedFetch(`/api/canvas/terminal/pty/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cols, rows }),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { pty_id?: string };
+    return j.pty_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function ptyInput(id: string, data: string): Promise<void> {
+  try {
+    await authedFetch(`/api/canvas/terminal/pty/${encodeURIComponent(id)}/input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data }),
+    });
+  } catch {
+    /* fire-and-forget: the next keystroke or stream frame resyncs */
+  }
+}
+
+export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
+  try {
+    await authedFetch(`/api/canvas/terminal/pty/${encodeURIComponent(id)}/resize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cols, rows }),
+    });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+export async function ptyClose(id: string): Promise<void> {
+  try {
+    await authedFetch(`/api/canvas/terminal/pty/${encodeURIComponent(id)}/close`, { method: "POST" });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+// ptyStreamResponse opens the SSE output stream as an authed fetch so the
+// caller can read response.body (EventSource can't carry the bearer).
+export async function ptyStreamResponse(id: string, signal: AbortSignal): Promise<Response | null> {
+  try {
+    const res = await authedFetch(`/api/canvas/terminal/pty/${encodeURIComponent(id)}/stream`, {
+      headers: { Accept: "text/event-stream" },
+      signal,
+    });
+    if (!res.ok || !res.body) return null;
+    return res;
+  } catch {
+    return null;
+  }
+}
+
 export type FSReadResponse = {
   path: string;
   content: string;

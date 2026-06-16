@@ -370,6 +370,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// (cloud /workspace or Mac). Executes directly (boss typed it); Jarvis's
 	// own commands surface in the same tab via the WS tool stream.
 	mux.HandleFunc("/api/canvas/terminal/exec", s.handleCanvasTerminalExec)
+	mux.HandleFunc("/api/canvas/terminal/pty/", s.handleTerminalPTY) // interactive PTY (start/stream/input/resize/close)
 	// Browser-facing live-preview proxy. JWT-exempt (see HTTPMiddleware list):
 	// an iframe can't attach the Supabase bearer, and this serves only the
 	// single boss's own project preview through to the active cloud bridge.

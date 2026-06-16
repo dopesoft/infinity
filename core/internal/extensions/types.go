@@ -69,10 +69,17 @@ type Extension struct {
 // var NAMES - the actual token stays in the environment, never the DB.
 type MCPConfig struct {
 	URL            string `json:"url"`
-	Transport      string `json:"transport"` // sse | http | streamable_http
+	Transport      string `json:"transport"`                  // sse | http | streamable_http
 	Auth           string `json:"auth,omitempty"`             // bearer | header | cloudflare_access | ""
 	AuthTokenEnv   string `json:"auth_token_env,omitempty"`   // env var holding the token
 	AuthHeaderName string `json:"auth_header_name,omitempty"` // for auth=header
+	// AuthURL is the provider's sign-in / consent page for MCPs that need an
+	// interactive OAuth login (not just a static token). When connecting fails
+	// and this is set, the extension parks status=pending_auth with this URL so
+	// the same CanvasAuthCard the CLI tools use surfaces it; the boss signs in
+	// once in their own browser and the next reconnect succeeds. Generic: zero
+	// per-provider code - the URL is config, the verify is "reconnect works".
+	AuthURL string `json:"auth_url,omitempty"`
 }
 
 // HTTPParam declares one input parameter on a generated http_tool.

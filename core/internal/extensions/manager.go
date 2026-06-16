@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -143,15 +144,18 @@ func (m *Manager) activate(ctx context.Context, ext *Extension) error {
 		if err != nil {
 			return err
 		}
-		return m.mcp.ConnectServer(ctx, tools.MCPServerConfig{
-			Name:           ext.Name,
-			Transport:      cfg.Transport,
-			Enabled:        true,
-			URL:            cfg.URL,
-			Auth:           cfg.Auth,
-			AuthTokenEnv:   cfg.AuthTokenEnv,
-			AuthHeaderName: cfg.AuthHeaderName,
-		}, m.registry)
+		err = m.connectMCP(ctx, ext.Name, cfg)
+		if err != nil && strings.TrimSpace(cfg.AuthURL) != "" {
+			// Interactive-auth MCP that isn't signed in yet: park pending_auth
+			// with the provider's sign-in URL instead of failing. The same
+			// CanvasAuthCard the CLI tools use surfaces it; reconnect verifies.
+			ext.Status = StatusPendingAuth
+			ext.AuthURL = cfg.AuthURL
+			ext.AuthInstructions = fmt.Sprintf("Open %s to sign in to %s. I'll keep checking and pick up automatically once you're done.", cfg.AuthURL, ext.Name)
+			ext.LastError = ""
+			return nil // pending_auth is a valid state, not a failure
+		}
+		return err
 
 	case KindCLI:
 		return m.activateCLI(ctx, ext, true)
@@ -179,8 +183,31 @@ func (m *Manager) Activate(ctx context.Context, name string) (*Extension, error)
 	if ext == nil {
 		return nil, fmt.Errorf("extensions: no extension named %q", name)
 	}
+	if ext.Kind == KindMCP {
+		// Re-attempt the connection; park pending_auth with the sign-in URL if
+		// it still needs the boss, else flip active. Same generic flow as cli.
+		if err := m.activate(ctx, ext); err != nil {
+			_ = m.store.SetStatus(ctx, name, StatusError, err.Error())
+			return nil, err
+		}
+		if ext.Status == "" {
+			ext.Status = StatusActive
+			ext.LastError = ""
+		}
+		if err := m.store.SetAuthState(ctx, name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError); err != nil {
+			return nil, err
+		}
+		fresh, _ := m.store.GetByName(ctx, name)
+		if fresh == nil {
+			fresh = ext
+		}
+		if fresh.Status == StatusActive {
+			m.fireAuthComplete(ctx, fresh)
+		}
+		return fresh, nil
+	}
 	if ext.Kind != KindCLI {
-		return ext, nil // nothing to drive for mcp/http_tool
+		return ext, nil // nothing to drive for http_tool
 	}
 	// activateCLI installs (if needed), probes readiness, and on "not ready"
 	// runs auth_cmd on the CLOUD-pinned bridge (cloudBridge → PrefCloud, which
@@ -202,6 +229,36 @@ func (m *Manager) Activate(ctx context.Context, name string) (*Extension, error)
 		m.fireAuthComplete(ctx, fresh)
 	}
 	return fresh, nil
+}
+
+// connectMCP wires an MCP extension's server into the live registry.
+func (m *Manager) connectMCP(ctx context.Context, name string, cfg MCPConfig) error {
+	return m.mcp.ConnectServer(ctx, tools.MCPServerConfig{
+		Name:           name,
+		Transport:      cfg.Transport,
+		Enabled:        true,
+		URL:            cfg.URL,
+		Auth:           cfg.Auth,
+		AuthTokenEnv:   cfg.AuthTokenEnv,
+		AuthHeaderName: cfg.AuthHeaderName,
+	}, m.registry)
+}
+
+// mcpReady reports whether an interactive-auth MCP can now connect (i.e. the
+// boss finished signing in). Used by the check/activate probe for kind=mcp,
+// mirroring ProbeCLIReady for cli. "Ready" = a clean reconnect.
+func (m *Manager) mcpReady(ctx context.Context, ext *Extension) (bool, error) {
+	if m.mcp == nil {
+		return false, fmt.Errorf("extensions: no MCP manager wired")
+	}
+	cfg, err := parseMCPConfig(ext.Config)
+	if err != nil {
+		return false, err
+	}
+	if err := m.connectMCP(ctx, ext.Name, cfg); err != nil {
+		return false, nil // still not signed in (or server down) - try next tick
+	}
+	return true, nil
 }
 
 // Remove disables an extension. http_tool extensions are unregistered from

@@ -1,190 +1,167 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useWebSocket } from "@/lib/ws/provider";
-import { runTerminalCommand } from "@/lib/canvas/api";
-import { cn } from "@/lib/utils";
+import { useEffect, useRef, useState } from "react";
+import "@xterm/xterm/css/xterm.css";
+import { Loader2, RotateCcw } from "lucide-react";
+import { ptyStart, ptyInput, ptyResize, ptyClose, ptyStreamResponse } from "@/lib/canvas/api";
+import { Button } from "@/components/ui/button";
 
 /**
- * CanvasTerminal - the Terminal tab (column 3, after Preview). One shell view
- * that shows BOTH:
+ * CanvasTerminal - a REAL interactive shell (xterm.js) backed by a PTY on the
+ * cloud workspace (Jarvis's always-on computer, where installed CLIs and their
+ * saved credentials live). Unlike the old one-shot command→result terminal,
+ * this can run programs that wait for input: a device `auth login`, `ssh`, a
+ * REPL, `vim`. Keystrokes stream to the PTY; output streams back over SSE.
  *
- *   • Commands the boss types here - executed directly on the session's active
- *     bridge (cloud /workspace or the Mac) via /api/canvas/terminal/exec. No
- *     Trust prompt: the boss typed it, same model as the git buttons.
- *   • Commands JARVIS runs - mirrored live from the WS tool stream (bash_run on
- *     cloud, claude_code__Bash on Mac), so the boss watches what the agent does
- *     in the shell in the same place.
- *
- * Works for cloud and Mac transparently - the backend routes by the session's
- * bridge, and Jarvis's commands carry whichever tool name the active bridge
- * uses. Output isn't a live PTY (no interactive programs); it's command →
- * result, which covers installs, git, builds, inspection.
+ * The PTY lives on the server, so the shell + scrollback survive navigation and
+ * refresh - reconnecting replays recent output. Cleaned up (PTY killed) on
+ * unmount.
  */
-
-const BASH_TOOLS = new Set(["bash_run", "claude_code__bash"]);
-
-type Line = {
-  id: string;
-  source: "you" | "jarvis";
-  command: string;
-  output: string;
-  exitCode?: number;
-  error?: string;
-  running?: boolean;
-};
-
 export function CanvasTerminal({ sessionId }: { sessionId: string }) {
-  const ws = useWebSocket();
-  const [lines, setLines] = useState<Line[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const pendingRef = useRef<Set<string>>(new Set()); // jarvis tool_call ids awaiting result
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<"connecting" | "ready" | "error">("connecting");
+  const [generation, setGeneration] = useState(0); // bump to restart the shell
+  const ptyIdRef = useRef<string>("");
 
-  // Keep the latest session id without re-subscribing the WS handler.
-  const sidRef = useRef(sessionId);
-  sidRef.current = sessionId;
-
-  // Auto-scroll to the newest line.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [lines]);
+    let disposed = false;
+    const abort = new AbortController();
+    let term: import("@xterm/xterm").Terminal | null = null;
+    let fit: import("@xterm/addon-fit").FitAddon | null = null;
+    let ro: ResizeObserver | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Mirror Jarvis's shell commands from the WS tool stream.
-  useEffect(() => {
-    return ws.subscribe((ev) => {
-      const sid = sidRef.current;
-      if ("session_id" in ev && ev.session_id && sid && ev.session_id !== sid) return;
-      if (ev.type === "tool_call") {
-        const name = (ev.tool_call.name || "").toLowerCase();
-        if (!BASH_TOOLS.has(name)) return;
-        const inp = ev.tool_call.input || {};
-        const cmd = String(inp.cmd ?? inp.command ?? "").trim();
-        if (!cmd) return;
-        pendingRef.current.add(ev.tool_call.id);
-        setLines((prev) => [
-          ...prev,
-          { id: ev.tool_call.id, source: "jarvis", command: cmd, output: "", running: true },
-        ]);
+    (async () => {
+      const host = hostRef.current;
+      if (!host) return;
+      setStatus("connecting");
+
+      // Dynamic import keeps xterm out of the SSR bundle (it touches window).
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-fit"),
+      ]);
+      if (disposed) return;
+
+      term = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        theme: { background: "#0a0a0a", foreground: "#e4e4e7", cursor: "#e4e4e7" },
+        convertEol: false,
+        scrollback: 5000,
+      });
+      fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(host);
+      try {
+        fit.fit();
+      } catch {
+        /* host not laid out yet */
+      }
+
+      const id = await ptyStart(term.cols || 80, term.rows || 24);
+      if (disposed) return;
+      if (!id) {
+        setStatus("error");
+        term.writeln("\x1b[31mCouldn't start a shell — the cloud workspace isn't reachable.\x1b[0m");
         return;
       }
-      if (ev.type === "tool_result") {
-        const id = ev.tool_result.id;
-        if (!pendingRef.current.has(id)) return;
-        pendingRef.current.delete(id);
-        const out = unwrapOutput(ev.tool_result.output ?? "");
-        setLines((prev) =>
-          prev.map((l) => (l.id === id ? { ...l, output: out, running: false } : l)),
-        );
-        return;
-      }
-    });
-  }, [ws]);
+      ptyIdRef.current = id;
+      setStatus("ready");
 
-  const submit = useCallback(async () => {
-    const cmd = input.trim();
-    if (!cmd || busy || !sessionId) return;
-    const id = `you-${Date.now()}`;
-    setLines((prev) => [...prev, { id, source: "you", command: cmd, output: "", running: true }]);
-    setInput("");
-    setBusy(true);
-    const res = await runTerminalCommand(cmd, sessionId);
-    setBusy(false);
-    setLines((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? {
-              ...l,
-              output: res ? res.output : "",
-              exitCode: res?.exit_code,
-              error: res ? res.error : "could not reach the bridge",
-              running: false,
+      // Keystrokes → PTY stdin.
+      term.onData((d) => void ptyInput(id, d));
+
+      // Window/pane resize → refit + tell the PTY (debounced).
+      ro = new ResizeObserver(() => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (!fit || !term) return;
+          try {
+            fit.fit();
+            void ptyResize(id, term.cols, term.rows);
+          } catch {
+            /* mid-layout */
+          }
+        }, 150);
+      });
+      ro.observe(host);
+
+      // Output stream (SSE: `data: <base64>` lines). authedFetch carries the
+      // bearer; we read the ReadableStream and decode chunks into the terminal.
+      const res = await ptyStreamResponse(id, abort.signal);
+      if (disposed || !res?.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (line.startsWith("data: ")) {
+              const b64 = line.slice(6);
+              try {
+                const bin = atob(b64);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                term?.write(bytes);
+              } catch {
+                /* skip malformed frame */
+              }
             }
-          : l,
-      ),
-    );
-  }, [input, busy, sessionId]);
+          }
+        }
+      } catch {
+        /* stream ended / aborted */
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      abort.abort();
+      if (resizeTimer) clearTimeout(resizeTimer);
+      ro?.disconnect();
+      if (ptyIdRef.current) void ptyClose(ptyIdRef.current);
+      ptyIdRef.current = "";
+      term?.dispose();
+    };
+    // generation restarts the shell on demand; a new session gets a fresh shell.
+  }, [generation, sessionId]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#0a0a0a] font-mono text-[12px] leading-relaxed text-zinc-200">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto scroll-touch p-3">
-        {lines.length === 0 && (
-          <div className="text-zinc-500">
-            Terminal — runs on this session&rsquo;s bridge (cloud <span className="text-zinc-400">/workspace</span> or
-            your Mac). Type a command, or watch Jarvis&rsquo;s commands stream in here.
-          </div>
-        )}
-        {lines.map((l) => (
-          <div key={l.id}>
-            <div className="flex items-start gap-1.5">
-              <span
-                className={cn(
-                  "shrink-0 select-none",
-                  l.source === "you" ? "text-info" : "text-tier-procedural",
-                )}
-              >
-                {l.source} $
-              </span>
-              <span className="whitespace-pre-wrap break-all text-zinc-100">{l.command}</span>
-            </div>
-            {l.running ? (
-              <div className="animate-pulse pl-3 text-zinc-500">running…</div>
-            ) : (
-              <>
-                {l.output && (
-                  <pre className="mt-0.5 whitespace-pre-wrap break-all pl-3 text-zinc-400">{l.output}</pre>
-                )}
-                {l.error && <div className="pl-3 text-danger">{l.error}</div>}
-                {typeof l.exitCode === "number" && l.exitCode !== 0 && (
-                  <div className="pl-3 text-warning">exit {l.exitCode}</div>
-                )}
-              </>
-            )}
-          </div>
-        ))}
+    <div className="relative flex h-full min-h-0 flex-col bg-[#0a0a0a]">
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-zinc-800 px-3 text-[11px] text-zinc-400">
+        <span className="inline-flex items-center gap-1.5">
+          {status === "connecting" ? (
+            <>
+              <Loader2 className="size-3 animate-spin" /> starting shell…
+            </>
+          ) : status === "error" ? (
+            <span className="text-danger">workspace unreachable</span>
+          ) : (
+            <>
+              <span className="size-1.5 rounded-full bg-success" /> cloud workspace
+            </>
+          )}
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 gap-1 px-2 text-[11px]"
+          onClick={() => setGeneration((g) => g + 1)}
+          title="Restart the shell"
+        >
+          <RotateCcw className="size-3" />
+          Restart
+        </Button>
       </div>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-        className="flex shrink-0 items-center gap-2 border-t border-zinc-800 px-3 py-2 pb-safe"
-      >
-        <span className="shrink-0 select-none text-info">$</span>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={busy ? "running…" : sessionId ? "type a command" : "start a session first"}
-          disabled={busy || !sessionId}
-          inputMode="text"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          className="min-w-0 flex-1 bg-transparent font-mono text-[12px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none disabled:opacity-50"
-          aria-label="Terminal command"
-        />
-      </form>
+      <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden px-2 py-1" />
     </div>
   );
-}
-
-// unwrapOutput flattens whatever the bridge returned into plain text. bash_run
-// returns the raw output already; claude_code__Bash wraps it as
-// {"stdout":"…","stderr":"…"}. Falls back to the raw string.
-function unwrapOutput(raw: string): string {
-  const s = (raw || "").trim();
-  if (!s.startsWith("{")) return s;
-  try {
-    const obj = JSON.parse(s) as Record<string, unknown>;
-    const parts: string[] = [];
-    if (typeof obj.stdout === "string" && obj.stdout) parts.push(obj.stdout);
-    if (typeof obj.stderr === "string" && obj.stderr) parts.push(obj.stderr);
-    if (parts.length) return parts.join("\n").trim();
-    if (typeof obj.output === "string") return obj.output;
-    return s;
-  } catch {
-    return s;
-  }
 }

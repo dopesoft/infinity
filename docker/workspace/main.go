@@ -83,6 +83,7 @@ func main() {
 	mux.HandleFunc("/fs/save", auth(handleFSSave))
 	mux.HandleFunc("/fs/edit", auth(handleFSEdit))
 	mux.HandleFunc("/bash", auth(handleBash))
+	mux.HandleFunc("/pty/", auth(routePTY)) // interactive terminal (start/stream/input/resize/close)
 	mux.HandleFunc("/git/status", auth(handleGitStatus))
 	mux.HandleFunc("/git/diff", auth(handleGitDiff))
 	mux.HandleFunc("/git/stage", auth(handleGitStage))
@@ -101,6 +102,8 @@ func main() {
 	mux.HandleFunc("/supervisor/status", auth(handleSupervisorStatus))
 	mux.HandleFunc("/supervisor/active", auth(handleSupervisorActive))
 	mux.HandleFunc(previewPrefix+"/", auth(handlePreview))
+
+	go ptyJanitor() // reap idle interactive terminals
 
 	addr := ":" + envDefault("PORT", "8080")
 	infoLog.Printf("workspace bridge: listening on %s (root=%s)", addr, workspaceRoot)
