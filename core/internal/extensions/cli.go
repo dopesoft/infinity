@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
 )
@@ -163,25 +164,59 @@ func (m *Manager) activateCLI(ctx context.Context, ext *Extension, doInstall boo
 
 	// Not ready - try to start the human-in-the-loop auth flow.
 	if strings.TrimSpace(cfg.AuthCmd) != "" {
-		out, _, _ := m.cliBash(ctx, b, cfg.AuthCmd, cfg.Cwd, 90)
-		url := urlRe.FindString(out)
+		// CRITICAL: an OAuth `auth login` must keep RUNNING to receive its
+		// sign-in callback (localhost redirect) or to keep polling (device
+		// code). The old code ran it with a 90s timeout that KILLED it before
+		// the boss could finish - so even a captured URL led nowhere. Instead
+		// launch it DETACHED on the cloud box (survives this call, holds the
+		// callback/poll) and tail its log for the sign-in URL. The matching
+		// browser completion happens in Jarvis's OWN cloud browser (Studio
+		// opens cfg.AuthURL there), so the callback lands back on this same box.
+		url := m.startDetachedAuth(ctx, b, cfg)
 		ext.Status = StatusPendingAuth
 		ext.AuthURL = url
 		if url != "" {
-			ext.AuthInstructions = fmt.Sprintf("Open %s to sign in. I'll keep checking and pick up automatically once you're done.", url)
+			ext.AuthInstructions = "Sign in to finish - I'll open the page in my own browser and pick up automatically once you're done."
 		} else {
-			// No URL captured - surface whatever the auth command said so
-			// the boss/agent can act on it.
-			ext.AuthInstructions = strings.TrimSpace(tailLines(out, 8))
-			if ext.AuthInstructions == "" {
-				ext.AuthInstructions = fmt.Sprintf("Run `%s` on the cloud workspace to authenticate.", cfg.AuthCmd)
-			}
+			ext.AuthInstructions = fmt.Sprintf("Sign-in for %q is running on the cloud workspace but didn't print a link yet. Open the Terminal and run `%s` to see it.", cfg.Binary, cfg.AuthCmd)
 		}
 		ext.LastError = ""
 		return nil // pending_auth is a valid state, not a failure
 	}
 
 	return fmt.Errorf("%q is installed but its check command failed and no auth_cmd is configured to fix it", cfg.Binary)
+}
+
+// startDetachedAuth launches a cli's auth_cmd as a DETACHED, long-lived
+// process on the cloud workspace (so it survives this call and stays up to
+// receive the OAuth callback / keep polling a device code), redirects its
+// output to a log on the persistent volume, and tails that log for the sign-in
+// URL. Returns the captured URL, or "" if none appeared in the grace window
+// (the process keeps running regardless - the boss can finish via the Terminal).
+func (m *Manager) startDetachedAuth(ctx context.Context, b bridge.Bridge, cfg CLIConfig) string {
+	logPath := persistDir + "/auth_" + sanitizeName(cfg.Binary) + ".log"
+	// setsid + & fully detaches from the bash invocation; </dev/null so it
+	// never blocks on stdin; pkill clears any stale run so we don't stack
+	// listeners on the callback port. Best-effort - ignore exit codes.
+	launch := fmt.Sprintf(
+		"pkill -f %s >/dev/null 2>&1; : > %s; setsid %s >%s 2>&1 </dev/null & echo launched",
+		shellQuoteCLI(cfg.AuthCmd), shellQuoteCLI(logPath), cfg.AuthCmd, shellQuoteCLI(logPath))
+	if _, _, ok := m.cliBash(ctx, b, launch, cfg.Cwd, 25); !ok {
+		return ""
+	}
+	// Poll the log for a URL - device-flow CLIs print it within a few seconds.
+	for i := 0; i < 10; i++ {
+		out, _, _ := m.cliBash(ctx, b, "cat "+shellQuoteCLI(logPath)+" 2>/dev/null", cfg.Cwd, 10)
+		if u := urlRe.FindString(out); u != "" {
+			return u
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return ""
 }
 
 // ProbeCLIReady re-runs a cli extension's check command. Used by the

@@ -148,6 +148,12 @@ type Config struct {
 	// live cloud-browser session - the boss's manual takeover of the
 	// screencast. Nil-safe: the route 503s when unset.
 	BrowserInput func(ctx context.Context, sessionID string, ev browser.InputEvent) error
+	// BrowserOpen opens a live cloud-browser session at a URL, routed to the
+	// given chat session so it appears in that session's Preview pane. Used for
+	// self-contained device-OAuth: a cli's sign-in link opens in Jarvis's own
+	// cloud browser so the callback lands back on the cloud box. Returns the
+	// new browser session id. Nil-safe: the route 503s when unset.
+	BrowserOpen func(ctx context.Context, chatSessionID, url string) (string, error)
 	// WorkspaceRawBase + WorkspaceToken let /api/workspace/download proxy raw
 	// file bytes from the CLOUD workspace bridge (e.g. generated documents),
 	// so they download/preview from any device independent of the session's

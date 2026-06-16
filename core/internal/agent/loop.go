@@ -1109,6 +1109,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}
 	}
 	toolCallCount := 0
+	// Reactive self-heal trackers: did any tool error this turn, and how many
+	// self-heal passes have we already injected. See selfheal.go.
+	toolErredThisTurn := false
+	selfHealCount := 0
 	// Per-turn delegate-spawn counter. A runaway model can emit dozens of
 	// `delegate` tool calls in a single message (each spawns a sub-agent); this
 	// hard-caps spawns per turn so a storm can never happen again.
@@ -1370,6 +1374,20 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			// REACTIVE SELF-HEAL: the model is about to end the turn with no
+			// further tool calls. If it's handing back an UNRESOLVED failure
+			// (and we haven't already nudged this turn), don't let it punt —
+			// keep its draft, inject the self-heal directive, and run another
+			// pass so it investigates + fixes + verifies with its own tools.
+			// Capped by maxSelfHealPerTurn so a genuinely-stuck turn still ends.
+			if selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
+				selfHealCount++
+				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+				s.Append(llm.Message{Role: llm.RoleUser, Content: selfHealDirective})
+				toolErredThisTurn = false // fresh slate for the heal pass
+				continue
+			}
+
 			s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, Usage: &resp.Usage, StopReason: resp.StopReason})
 			l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, resp.Text, map[string]any{
@@ -1546,6 +1564,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			isErr := execErr != nil
 			if isErr {
 				output = fmt.Sprintf("ERROR: %v", execErr)
+				toolErredThisTurn = true // feeds the reactive self-heal check
 			} else {
 				// Forward progress for the continuation gate: a segment with
 				// zero successful tool results is thrash and won't be continued.
