@@ -274,12 +274,76 @@ func (c *CamofoxBackend) act(ctx context.Context, sessionID string, fields map[s
 }
 
 // Input is the manual human-takeover path. The Camoufox REST engine has no
-// raw coordinate input domain (it's ref/selector-based for anti-detect agent
-// scraping), and the live takeover screencast always runs on the chromedp
-// engine, so this returns a clear "not supported here" rather than silently
-// dropping the boss's clicks.
+// raw CDP input domain, but it DOES expose /tabs/:id/evaluate, so we drive the
+// boss's click/type/scroll/key as in-page DOM events at the given coordinates.
+// This is best-effort (synthetic events; trusted-event-only sites like some
+// OAuth password fields may resist) - the high-fidelity path is the chromedp
+// sidecar, and device-login itself goes through the CanvasAuthCard (the real
+// page in the boss's own browser), so this covers ordinary in-app browsing.
+// resize is a no-op: Camoufox has no viewport-override endpoint, and the page
+// already renders at the server's fixed window.
 func (c *CamofoxBackend) Input(ctx context.Context, sessionID string, ev InputEvent) error {
-	return fmt.Errorf("manual browser takeover isn't supported on the anti-detect (Camoufox) engine; it runs on the standard cloud browser")
+	expr := camofoxInputJS(ev)
+	if expr == "" {
+		return nil // move/resize or empty - nothing to do on this engine
+	}
+	body := map[string]any{"userId": c.userID, "expression": expr}
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	return c.doJSON(ctx, http.MethodPost, "/tabs/"+url.PathEscape(sessionID)+"/evaluate", body, &out)
+}
+
+// camofoxInputJS renders one human interaction as a self-contained JS
+// expression. Coordinates use elementFromPoint so a click lands on whatever the
+// boss sees under the cursor; text/keys act on the focused element.
+func camofoxInputJS(ev InputEvent) string {
+	switch strings.ToLower(strings.TrimSpace(ev.Type)) {
+	case "click":
+		return fmt.Sprintf(`(function(){var e=document.elementFromPoint(%d,%d);`+
+			`if(!e)return false;try{e.focus&&e.focus();}catch(_){}`+
+			`e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:%d,clientY:%d}));`+
+			`e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:%d,clientY:%d}));`+
+			`e.click&&e.click();return true;})()`,
+			int(ev.X), int(ev.Y), int(ev.X), int(ev.Y), int(ev.X), int(ev.Y))
+	case "scroll":
+		return fmt.Sprintf(`(function(){window.scrollBy(%d,%d);return true;})()`, int(ev.DeltaX), int(ev.DeltaY))
+	case "text":
+		return fmt.Sprintf(`(function(){var t=document.activeElement;if(!t)return false;`+
+			`if('value' in t){t.value=(t.value||'')+%s;t.dispatchEvent(new Event('input',{bubbles:true}));}`+
+			`else if(t.isContentEditable){t.textContent=(t.textContent||'')+%s;}return true;})()`,
+			jsString(ev.Text), jsString(ev.Text))
+	case "key":
+		return camofoxKeyJS(ev.Key)
+	default:
+		return "" // move | resize | unknown → no-op on this engine
+	}
+}
+
+// camofoxKeyJS handles the named keys that matter for forms: Enter submits,
+// Backspace deletes, others fire a key event on the focused element.
+func camofoxKeyJS(key string) string {
+	k := strings.TrimSpace(key)
+	switch k {
+	case "Backspace":
+		return `(function(){var t=document.activeElement;if(!t||!('value' in t))return false;` +
+			`t.value=(t.value||'').slice(0,-1);t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`
+	case "Enter":
+		return `(function(){var t=document.activeElement;if(!t)return false;` +
+			`['keydown','keyup'].forEach(function(tp){t.dispatchEvent(new KeyboardEvent(tp,{key:'Enter',keyCode:13,which:13,bubbles:true}));});` +
+			`if(t.form&&t.form.requestSubmit){t.form.requestSubmit();}return true;})()`
+	default:
+		return fmt.Sprintf(`(function(){var t=document.activeElement;if(!t)return false;`+
+			`['keydown','keyup'].forEach(function(tp){t.dispatchEvent(new KeyboardEvent(tp,{key:%s,bubbles:true}));});return true;})()`,
+			jsString(k))
+	}
+}
+
+// jsString safely encodes a Go string as a JS string literal (JSON is a valid
+// subset of JS for this).
+func jsString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func (c *CamofoxBackend) Extract(ctx context.Context, sessionID, _ string) (*ExtractResult, error) {
