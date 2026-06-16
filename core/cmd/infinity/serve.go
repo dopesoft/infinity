@@ -112,6 +112,7 @@ func serveCmd() *cobra.Command {
 				workspaceRawBase    string // cloud workspace URL for the doc download proxy
 				workspaceToken      string
 				notifySkillPromoted func(name, description string)
+				routineMiner        *voyager.RoutineMiner
 			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -1435,6 +1436,27 @@ func serveCmd() *cobra.Command {
 					// mem_code_proposals for review in Studio.
 					pipeline.RegisterFunc("voyager.source_extract", voyagerMgr.OnSessionEndSource, hooks.SessionEnd)
 				}
+
+				// Routine miner: cluster repeated USER REQUEST patterns into
+				// reviewable skill proposals (distinct from the Voyager
+				// extractor which mines tool sequences in a single session).
+				// One miner instance feeds two paths:
+				//   • nightly: registered as a ConsolidateNightly hook so a
+				//     fresh sweep runs as part of every nightly cognition,
+				//     landing routine cards on surface='routines' (the
+				//     "Surfaced by Jarvis" inbox) plus rows in
+				//     mem_skill_proposals (proposal_kind='routine'). Human
+				//     review only; never auto-installed.
+				//   • active conversation: registered on
+				//     hooks.UserPromptSubmit so a prompt that closes a
+				//     cluster across the threshold mid-turn pushes a chat
+				//     bubble via Server.BroadcastRoutineProposed (late-bound
+				//     after server.New).
+				routineMiner = voyager.NewRoutineMiner(pool, activeModel, slog.Default())
+				if pipeline != nil {
+					pipeline.RegisterFunc("voyager.routine_active", routineMiner.OnUserPrompt, hooks.UserPromptSubmit)
+				}
+				memory.RegisterConsolidateHook(routineMiner.RunNightly)
 				// Promotion → (procedural memory + live chat bubble).
 				// One callback handles both side-effects:
 				//   1. UpsertFromSkill on the procedural tier (CoALA).
@@ -1716,6 +1738,14 @@ func serveCmd() *cobra.Command {
 			// arrive before this point) but its target needed the server
 			// instance to exist.
 			notifySkillPromoted = srv.BroadcastSkillPromoted
+
+			// Late-bind the routine miner's chat-stream notifier. The miner
+			// was constructed in the voyager block; the Server's
+			// BroadcastRoutineProposed is what turns a mid-conversation
+			// detection into a visible chat bubble.
+			if routineMiner != nil {
+				routineMiner.SetNotifier(srv.BroadcastRoutineProposed)
+			}
 
 			// Late-bind background_build's completion notifier now that the
 			// server (chat broadcast) + push sender both exist. A finished

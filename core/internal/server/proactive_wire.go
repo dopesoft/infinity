@@ -212,6 +212,33 @@ func (s *Server) BroadcastSkillPromoted(name, description string) {
 	})
 }
 
+// BroadcastRoutineProposed surfaces a routine miner detection as a chat
+// bubble in the originating session. The miner only calls this when a
+// brand-new cluster crosses the threshold from a fresh prompt — never on
+// the nightly sweep, which lands its findings on surface='routines' so
+// the boss reviews them on the dashboard at a moment of his choosing.
+//
+// Renders through the same proactive_message path as heartbeat findings;
+// finding_kind="routine_proposed" tells Studio to use the routine icon
+// and label.
+func (s *Server) BroadcastRoutineProposed(sessionID, name, markdown string) {
+	if s == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	name = strings.TrimSpace(name)
+	markdown = strings.TrimSpace(markdown)
+	if sessionID == "" || markdown == "" {
+		return
+	}
+	s.sessionSender(sessionID)(wsServerEvent{
+		Type:        "proactive_message",
+		SessionID:   sessionID,
+		Text:        markdown,
+		FindingKind: "routine_proposed",
+	})
+}
+
 // BroadcastBackgroundProgress surfaces a live progress update for a
 // background_build run into the parent chat session. The payload carries
 // the run id so Studio can bind it to mem_runs and render a real progress
