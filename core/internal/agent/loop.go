@@ -42,6 +42,32 @@ type SkillMatcher interface {
 // needs more than a handful.
 const maxDelegateSpawnsPerTurn = 8
 
+// defaultMaxTurnSegments bounds how many times a single turn may exhaust its
+// per-segment tool-iteration budget, checkpoint (compact + persist), and run
+// on. A genuine "diagnose → implement → test → commit → push" job legitimately
+// needs more than one cap's worth of tool calls; rather than hard-erroring at
+// the cap and abandoning a half-done plan, the loop compacts its context and
+// runs another segment — but only while it's still making progress and only up
+// to this many segments, so a stuck model can never spin forever. The durable
+// plan/todo substrate is what makes this safe: progress is checkpointed, so a
+// continuation resumes exactly where the previous segment left off. Override
+// with INFINITY_MAX_TURN_SEGMENTS.
+const defaultMaxTurnSegments = 3
+
+// turnWindDownBlock is appended to the system prompt once a turn crosses ~80%
+// of its per-segment tool-iteration budget. It nudges the model to land the
+// step it's on and stop at a clean boundary — checkpointing to the durable
+// plan/todo so a continuation (this turn's next segment, or a later turn)
+// resumes exactly there — instead of getting cut off mid-action when the
+// budget runs out.
+const turnWindDownBlock = `<budget_notice>
+You are close to this turn's tool-call budget. Do NOT start a new multi-step
+sub-task right now. Finish the action you're on, record where you are with
+plan_update / todo_write so nothing is lost, then write one short line on
+what's done and what's left and stop. Work resumes automatically from that
+checkpoint — a clean handoff at a step boundary beats being cut off mid-action.
+</budget_notice>`
+
 // defaultSystemPrompt is the fallback when no soul has been loaded.
 // In practice the soul package always supplies one (embedded soul.md);
 // this exists only so a misconfigured Loop still has a sane persona.
@@ -309,6 +335,7 @@ type Loop struct {
 
 	systemPrompt      string
 	maxToolIterations int
+	maxTurnSegments   int
 
 	// compactor handles automatic conversation compaction when a turn's
 	// reported input_tokens crosses the threshold. Nil-safe: when unset
@@ -517,6 +544,36 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 	}()
 }
 
+// compactTurnNow runs one SYNCHRONOUS compaction pass and swaps in the tighter
+// message list. Returns true when it actually compacted. The per-turn
+// continuation path uses this between segments: before running another
+// segment we shrink the context so the new segment starts on a tight buffer
+// instead of inheriting the bloated history that filled the previous one.
+// Synchronous (unlike maybeAutoCompact) because the next segment must see the
+// compacted buffer, not race it. No-op + false when no compactor is wired.
+func (l *Loop) compactTurnNow(s *Session) bool {
+	l.compactorMu.RLock()
+	c := l.compactor
+	l.compactorMu.RUnlock()
+	if c == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	newMsgs, res, err := c.Compact(ctx, s.ID, s.Snapshot(), &memory.CompactionConfig{})
+	if err != nil {
+		log.Printf("turn-continuation compact: session=%s err=%v", s.ID, err)
+		return false
+	}
+	if res.CompactedTurns == 0 {
+		return false
+	}
+	s.ReplaceMessages(newMsgs)
+	infoLog.Printf("turn-continuation compact: session=%s compacted %d turns, kept %d, %d observations promoted",
+		s.ID, res.CompactedTurns, res.KeptTurns, len(res.ObservationIDs))
+	return true
+}
+
 func (l *Loop) recordLLMCost(provider llm.Provider, model string, usage llm.TokenUsage) {
 	rec := l.costRecorder()
 	if rec == nil || (usage.Input == 0 && usage.Output == 0) {
@@ -615,6 +672,12 @@ func New(cfg Config) *Loop {
 			cfg.MaxToolIterations = n
 		}
 	}
+	maxSegments := defaultMaxTurnSegments
+	if v := strings.TrimSpace(os.Getenv("INFINITY_MAX_TURN_SEGMENTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxSegments = n
+		}
+	}
 	if cfg.SystemPrompt == "" {
 		cfg.SystemPrompt = defaultSystemPrompt
 	}
@@ -641,6 +704,7 @@ func New(cfg Config) *Loop {
 		accounts:             cfg.Accounts,
 		systemPrompt:         cfg.SystemPrompt,
 		maxToolIterations:    cfg.MaxToolIterations,
+		maxTurnSegments:      maxSegments,
 		sessions:             make(map[string]*Session),
 		autoCompactThreshold: threshold,
 		usageStore:           cfg.UsageStore,
@@ -1105,7 +1169,40 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		systemPrompt = voiceModeSystemOverlay + "\n\n" + systemPrompt
 	}
 
-	for iter := 0; iter < l.maxToolIterations; iter++ {
+	// Per-turn continuation state. A turn runs in "segments": each segment is
+	// up to maxToolIterations tool-loop iterations. When a segment exhausts its
+	// budget mid-work we DON'T hard-error and abandon a half-done plan — we
+	// checkpoint (compact the context; the plan/todo is already durable) and run
+	// another segment, but only while the model is still making progress and
+	// only up to maxTurnSegments. So a long-but-legit "diagnose → build → test →
+	// commit → push" job finishes across segments, while a genuinely stuck one
+	// still stops. windDownAt is ~80% of the segment budget: past it the system
+	// prompt gains turnWindDownBlock so the model lands its step cleanly.
+	segment := 0
+	segmentSuccesses := 0
+	windDownAt := l.maxToolIterations - l.maxToolIterations/5
+	for iter := 0; ; iter++ {
+		if iter >= l.maxToolIterations {
+			// Segment budget exhausted. Continue into a fresh segment only with
+			// segment headroom AND ≥1 successful tool result this segment — a
+			// whole segment with zero successes is thrash, not progress.
+			if segment+1 >= l.maxTurnSegments || segmentSuccesses == 0 {
+				break
+			}
+			compacted := l.compactTurnNow(s)
+			segment++
+			segmentSuccesses = 0
+			iter = 0
+			note := fmt.Sprintf("Hit this turn's tool budget after %d calls — checkpointing and continuing (round %d/%d).",
+				toolCallCount, segment+1, l.maxTurnSegments)
+			if compacted {
+				note += " Compacted the context to stay sharp."
+			}
+			emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: note + "\n"})
+			infoLog.Printf("turn-continuation: session=%s segment=%d/%d toolcalls=%d compacted=%v",
+				s.ID, segment+1, l.maxTurnSegments, toolCallCount, compacted)
+			// fall through to run the new segment's first iteration
+		}
 		// Age out TTL'd entries before the next LLM call - keeps an
 		// exploratory `load_tools` from squatting once the relevant work
 		// is done.
@@ -1149,9 +1246,17 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// mid-session (Mac comes back online, boss flips preference).
 		visibleNames := filterToolNames(s.Active.Names(), l.hiddenForSession(ctx, s.ID))
 		toolDefs := l.tools.DefinitionsFor(visibleNames)
+		// Once this segment crosses ~80% of its tool budget, overlay the
+		// wind-down notice so the model lands its current step and checkpoints
+		// before the cap, rather than getting cut off mid-action. Ephemeral:
+		// applied to this call only, never persisted onto the session.
+		sys := systemPrompt
+		if iter >= windDownAt {
+			sys = systemPrompt + "\n\n" + turnWindDownBlock
+		}
 		go func() {
 			defer close(streamDone)
-			resp, streamErr = provider.Stream(ctx, model, systemPrompt, s.Snapshot(), toolDefs, llmEvents)
+			resp, streamErr = provider.Stream(ctx, model, sys, s.Snapshot(), toolDefs, llmEvents)
 			close(llmEvents)
 		}()
 
@@ -1441,6 +1546,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			isErr := execErr != nil
 			if isErr {
 				output = fmt.Sprintf("ERROR: %v", execErr)
+			} else {
+				// Forward progress for the continuation gate: a segment with
+				// zero successful tool results is thrash and won't be continued.
+				segmentSuccesses++
 			}
 
 			emit(out, RunEvent{
@@ -1476,7 +1585,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}
 	}
 
-	err := errors.New("agent loop exceeded maximum tool iterations")
+	// Reached only after every segment was spent (or a segment made zero
+	// progress). Keep the "iteration cap" phrasing so errs.Humanize still
+	// categorises it as a safety-limit stop; add the round/call counts so the
+	// run narrative reads honestly about how far it got.
+	err := fmt.Errorf("hit the tool-iteration cap after %d tool calls across %d round(s) without finishing", toolCallCount, segment+1)
 	emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: err.Error()})
 	l.closeTurn(context.Background(), turnID, TurnCloseFields{
 		StopReason:    "iteration_cap",
