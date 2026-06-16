@@ -17,10 +17,12 @@ import (
 // punting to the boss. Capped per turn so a genuinely-stuck turn still ends and
 // it can never loop. Off via INFINITY_SELF_HEAL=off.
 
-// maxSelfHealPerTurn bounds the reactive retries. One extra pass catches the
-// "reported a failure it could have fixed" case without turning every turn into
-// a grind or a cost sink.
-const maxSelfHealPerTurn = 1
+// maxSelfHealPerTurn bounds the reactive retries. Two extra passes give the
+// agent real grit — if the first heal attempt also dead-ends, it gets one more
+// genuinely-different shot before the turn is allowed to end — without turning
+// every turn into a grind or a cost sink. The LoopGate (50 calls / 5 min) is
+// the hard runaway backstop underneath this.
+const maxSelfHealPerTurn = 2
 
 // selfHealDisabled lets the boss kill the reflex (INFINITY_SELF_HEAL=off).
 func selfHealDisabled() bool {

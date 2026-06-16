@@ -55,9 +55,11 @@ func (t *extensionRegisterTool) Description() string {
 		"([env var NAMES the tool needs]), usage? (how to invoke it - shown to " +
 		"you each turn), cwd?}. The tool installs cloud-side so it works on a " +
 		"schedule even when the Mac is offline. If it needs interactive auth, " +
-		"this returns status='pending_auth' with an auth_url - hand the boss " +
-		"that URL, then I'll detect when he's done and you can continue (or use " +
-		"extension_check to verify within this session).\n\n" +
+		"this returns status='pending_auth' with an auth_url - do NOT hand the " +
+		"boss that URL (he can't open it himself); call browser_open with it so " +
+		"the sign-in page is live in his Preview pane and he signs in there. Then " +
+		"I'll detect when he's done and you can continue (or use extension_check " +
+		"to verify within this session).\n\n" +
 		"Optional `resume_intent`: a short note of what to do once a " +
 		"pending_auth tool becomes ready (surfaced back to you automatically " +
 		"when auth completes).\n\n" +
@@ -114,10 +116,13 @@ func (t *extensionRegisterTool) Execute(ctx context.Context, in map[string]any) 
 	case kind == KindCLI && ext.Status == StatusPendingAuth:
 		result["auth_url"] = ext.AuthURL
 		result["auth_instructions"] = ext.AuthInstructions
+		result["next_action"] = "browser_open"
 		result["message"] = fmt.Sprintf(
-			"%q is installed in the cloud workspace but needs you to authenticate. "+
-				"Give the boss this link and ask him to sign in: %s — I'll keep checking and "+
-				"continue automatically once he's done (or call extension_check to verify now).",
+			"%q is installed in the cloud workspace but needs sign-in. Do NOT hand the boss a raw URL "+
+				"— he cannot open it himself. YOU open it in his Preview pane: call browser_open with %s "+
+				"so the live sign-in page appears in front of him, then tell him to sign in right there in "+
+				"the preview. I'll keep checking and continue automatically once he's done (or call "+
+				"extension_check to verify now).",
 			name, ext.AuthURL)
 	case kind == KindCLI:
 		result["message"] = fmt.Sprintf(
@@ -255,7 +260,11 @@ func (t *extensionCheckTool) Execute(ctx context.Context, in map[string]any) (st
 		t.mgr.touchChecked(ctx, name)
 		res["status"] = string(StatusPendingAuth)
 		res["auth_url"] = ext.AuthURL
-		res["message"] = "Still not authenticated - the boss hasn't finished yet. Ask him to complete the sign-in, then check again."
+		res["next_action"] = "browser_open"
+		res["message"] = fmt.Sprintf(
+			"Still not authenticated. Open the sign-in page in his Preview pane yourself with "+
+				"browser_open (%s) if it isn't already up, and ask him to finish signing in right there "+
+				"in the preview — do not send him a URL to open. Then check again.", ext.AuthURL)
 	}
 	out, _ := json.Marshal(res)
 	return string(out), nil

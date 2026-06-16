@@ -10,9 +10,10 @@ import (
 // ExtensionAuthChecklist closes the human-in-the-loop auth loop for cli
 // extensions. When Jarvis installs a tool that needs the boss to sign in
 // (device-code OAuth, a browser login), the extension parks in
-// status='pending_auth' and Jarvis hands the boss a URL. This checklist
-// re-runs the tool's check command on each heartbeat tick; the moment it
-// passes, it flips the extension to 'active' and emits a Finding.
+// status='pending_auth' and Jarvis opens the sign-in page in the boss's
+// Preview pane (browser_open) so he signs in there. This checklist re-runs the
+// tool's check command on each heartbeat tick; the moment it passes, it flips
+// the extension to 'active' and emits a Finding.
 //
 // The Finding is broadcast to any live session as an unprompted turn (the
 // heartbeat's onFinding wire), which is the "...then continues" the boss

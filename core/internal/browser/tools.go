@@ -24,9 +24,30 @@ func (r *Registry) resolveSession(ctx context.Context, input map[string]any) (st
 	explicit, _ := input["session_id"].(string)
 	id, ok := r.Resolve(chatID, strings.TrimSpace(explicit))
 	if !ok {
-		return "", errors.New("no open browser session — call browser_open first")
+		return "", errors.New("no open browser session — call browser_open (or browser_navigate with a url) first")
 	}
 	return id, nil
+}
+
+// resolveOrOpen is resolveSession with auto-recovery: if there's no live
+// session for this chat, it opens a fresh one instead of erroring. This is a
+// Rule #1b mechanic — "you need a browser session before you can look at a
+// page" is something the CODE guarantees, not something the model has to
+// remember to do with browser_open first. The reference failure: the agent
+// called browser_extract before browser_open, got "no open browser session",
+// and punted to telling the boss to navigate himself. Now the verb just opens
+// the session it needs and carries on.
+func (r *Registry) resolveOrOpen(ctx context.Context, input map[string]any) (string, error) {
+	chatID := tools.SessionIDFromContext(ctx)
+	explicit, _ := input["session_id"].(string)
+	if id, ok := r.Resolve(chatID, strings.TrimSpace(explicit)); ok {
+		return id, nil
+	}
+	info, err := r.Open(ctx, chatID, "")
+	if err != nil {
+		return "", err
+	}
+	return info.SessionID, nil
 }
 
 // ── browser_open ─────────────────────────────────────────────────────────
@@ -95,9 +116,24 @@ func (t *NavigateTool) Execute(ctx context.Context, input map[string]any) (strin
 	if strings.TrimSpace(url) == "" {
 		return "", errors.New("url is required")
 	}
-	id, err := t.Reg.resolveSession(ctx, input)
-	if err != nil {
-		return "", err
+	chatID := tools.SessionIDFromContext(ctx)
+	explicit, _ := input["session_id"].(string)
+	id, ok := t.Reg.Resolve(chatID, strings.TrimSpace(explicit))
+	if !ok {
+		// No session yet — open one straight onto the target URL instead of
+		// erroring. "Navigate the browser to X" is a complete instruction even
+		// if the agent skipped browser_open; the mechanic lives here, not in the
+		// model's memory of "call browser_open first" (Rule #1b).
+		info, err := t.Reg.Open(ctx, chatID, url)
+		if err != nil {
+			return "", err
+		}
+		t.Reg.UpdateURL(info.SessionID, info.URL)
+		out := fmt.Sprintf("Opened a browser and navigated to %s\nTitle: %s\n\nThe live page is now in the boss's Preview pane. Call browser_observe to see what's on it.", info.URL, info.Title)
+		if info.Error != "" {
+			out += "\nNote: " + info.Error
+		}
+		return out, nil
 	}
 	res, err := t.Reg.backend.Navigate(ctx, id, url)
 	if err != nil {
@@ -129,7 +165,7 @@ func (t *ObserveTool) Schema() map[string]any {
 	}
 }
 func (t *ObserveTool) Execute(ctx context.Context, input map[string]any) (string, error) {
-	id, err := t.Reg.resolveSession(ctx, input)
+	id, err := t.Reg.resolveOrOpen(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -264,7 +300,7 @@ func (t *ExtractTool) Schema() map[string]any {
 	}
 }
 func (t *ExtractTool) Execute(ctx context.Context, input map[string]any) (string, error) {
-	id, err := t.Reg.resolveSession(ctx, input)
+	id, err := t.Reg.resolveOrOpen(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -295,7 +331,8 @@ func (t *CloseTool) Schema() map[string]any {
 func (t *CloseTool) Execute(ctx context.Context, input map[string]any) (string, error) {
 	id, err := t.Reg.resolveSession(ctx, input)
 	if err != nil {
-		return "", err
+		// Nothing open is not a failure to hand back — closing is idempotent.
+		return "No open browser session to close.", nil
 	}
 	if err := t.Reg.Close(ctx, id); err != nil {
 		return "", err
