@@ -321,9 +321,18 @@ func (t *planVerify) Execute(ctx context.Context, in map[string]any) (string, er
 	return renderPlan(p), nil
 }
 
+// planGetter is the minimal store interface planGet needs. A dedicated interface
+// (instead of the concrete *plan.Store) lets unit tests inject a fake without a
+// real DB while every other plan tool continues using the concrete type unchanged.
+type planGetter interface {
+	Get(ctx context.Context, planID string) (*plan.Plan, error)
+	GetActiveBySession(ctx context.Context, sessionID string) (*plan.Plan, error)
+	GetAnyActive(ctx context.Context) (*plan.Plan, error)
+}
+
 // ── plan_get ─────────────────────────────────────────────────────────────
 
-type planGet struct{ store *plan.Store }
+type planGet struct{ store planGetter }
 
 func (t *planGet) Name() string   { return "plan_get" }
 func (t *planGet) ReadOnly() bool { return true }
@@ -350,6 +359,16 @@ func (t *planGet) Execute(ctx context.Context, in map[string]any) (string, error
 	p, err := t.store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
 	if err != nil {
 		return "", err
+	}
+	// Cross-session fallback: after context loss the caller may have a new
+	// session ID that doesn't match the plan's original session. Mirror the
+	// same recovery resolvePositionalStep already uses so plan_get returns the
+	// active plan (not null) when the session ID mismatches.
+	if p == nil {
+		p, err = t.store.GetAnyActive(ctx)
+		if err != nil {
+			return "", err
+		}
 	}
 	return renderPlan(p), nil
 }

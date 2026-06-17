@@ -89,3 +89,52 @@ func TestPlanUpdate_ExecuteWithNoSession(t *testing.T) {
 		t.Fatalf("plan_update still emits plan_get guidance (old behaviour): %v", err)
 	}
 }
+
+// stubPlanGetter is a minimal planGetter for tests: returns injected plans
+// without hitting a real database. bySession is returned from
+// GetActiveBySession; anyActive from GetAnyActive.
+type stubPlanGetter struct {
+	bySession *plan.Plan
+	anyActive *plan.Plan
+}
+
+func (s *stubPlanGetter) Get(_ context.Context, _ string) (*plan.Plan, error) { return nil, nil }
+func (s *stubPlanGetter) GetActiveBySession(_ context.Context, _ string) (*plan.Plan, error) {
+	return s.bySession, nil
+}
+func (s *stubPlanGetter) GetAnyActive(_ context.Context) (*plan.Plan, error) {
+	return s.anyActive, nil
+}
+
+// TestPlanGet_FallsBackToGlobalWhenSessionMisses is the regression test for the
+// 2026-06-14 curiosity item. When plan_get is called in a new session (after
+// context loss), GetActiveBySession returns nil because the plan lives under the
+// old session ID. plan_get must fall back to GetAnyActive and return that plan,
+// not null — so the agent can resume a multi-step task without a spurious error.
+func TestPlanGet_FallsBackToGlobalWhenSessionMisses(t *testing.T) {
+	activePlan := &plan.Plan{ID: "plan-abc", Status: plan.PlanActive, Steps: []plan.Step{}}
+	stub := &stubPlanGetter{bySession: nil, anyActive: activePlan}
+	tool := &planGet{store: stub}
+	out, err := tool.Execute(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "plan-abc") {
+		t.Fatalf("plan_get should return the cross-session active plan, got: %s", out)
+	}
+}
+
+// TestPlanGet_ReturnsNullWhenNoPlanAnywhere verifies that plan_get returns
+// {"plan":null} (not an error) when neither session nor global lookup finds a
+// plan — the caller should get a clear null signal, not a crash.
+func TestPlanGet_ReturnsNullWhenNoPlanAnywhere(t *testing.T) {
+	stub := &stubPlanGetter{bySession: nil, anyActive: nil}
+	tool := &planGet{store: stub}
+	out, err := tool.Execute(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("expected no error when no plan exists, got: %v", err)
+	}
+	if !strings.Contains(out, "null") {
+		t.Fatalf("expected null plan in output, got: %s", out)
+	}
+}
