@@ -381,9 +381,12 @@ var lowValueObsPrefixes = []string{
 	// routine reads — the RESULT is transient working data, not a fact to keep
 	"fs_read:", "fs_ls:", "fs_save:", "fs_edit:", "read_email:",
 	"git_status:", "git_diff:", "ls:", "read:",
-	// routine connector reads that became "inbox fetched with N unread" noise
-	"composio__gmail_fetch", "composio__gmail_list", "composio__gmail_get_profile",
-	"composio__gmail_fetch_message", "composio__googlecalendar_events_list",
+	// routine connector plumbing — profile lookups, ID-list calls, calendar scaffolding.
+	// Fetch/read calls are NOT listed here: they can return real email content (subjects,
+	// bodies) worth keeping; the "inbox fetched with N unread" narration pattern is
+	// already caught by routineActionMarkers below.
+	"composio__gmail_list", "composio__gmail_get_profile",
+	"composio__googlecalendar_events_list",
 	// routine outbound that became "notification sent" noise
 	"notification:", "push_notification:", "notify:", "surface_item:",
 }

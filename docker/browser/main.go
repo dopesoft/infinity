@@ -345,6 +345,16 @@ func newSession(id string) (*Session, error) {
 		allocCancel()
 		return nil, fmt.Errorf("boot chromium: %w", err)
 	}
+
+	// Warm up: run one lightweight action on ctx (not bootCtx) to anchor the
+	// chromedp target against s.ctx before defer bootCancel() fires.  Without
+	// this warm-up, the first external navigate on a no-URL session races with
+	// the bootCtx teardown and returns "context canceled".
+	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
+	var warmTitle string
+	_ = chromedp.Run(warmCtx, chromedp.Title(&warmTitle))
+	warmCancel()
+
 	return s, nil
 }
 
