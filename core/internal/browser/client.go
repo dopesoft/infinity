@@ -158,7 +158,18 @@ func (c *Client) CreateSession(ctx context.Context, url string) (*SessionInfo, e
 
 func (c *Client) Navigate(ctx context.Context, sessionID, url string) (*NavResult, error) {
 	var out NavResult
-	if err := c.post(ctx, "/session/"+sessionID+"/navigate", map[string]any{"url": url}, &out); err != nil {
+	err := c.post(ctx, "/session/"+sessionID+"/navigate", map[string]any{"url": url}, &out)
+	if err != nil && strings.Contains(err.Error(), "browser sidecar: context canceled") {
+		// Sidecar returned context-canceled — the chromedp target can still be
+		// settling right after session creation. Retry once after a brief pause.
+		select {
+		case <-time.After(750 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		err = c.post(ctx, "/session/"+sessionID+"/navigate", map[string]any{"url": url}, &out)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil
