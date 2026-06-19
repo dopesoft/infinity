@@ -137,6 +137,27 @@ func (t *NavigateTool) Execute(ctx context.Context, input map[string]any) (strin
 	}
 	res, err := t.Reg.backend.Navigate(ctx, id, url)
 	if err != nil {
+		// When the sidecar's chromedp target died (context canceled after the
+		// client-level retry) but the outer request is still live, evict the
+		// stale session and open a fresh one straight onto the target URL.
+		// Rule #1b: the model must not need to know "call browser_open again".
+		if ctx.Err() == nil && strings.Contains(err.Error(), "context canceled") {
+			_ = t.Reg.Close(ctx, id) // best-effort; may fail if sidecar is gone
+			info, openErr := t.Reg.Open(ctx, chatID, url)
+			if openErr == nil {
+				t.Reg.UpdateURL(info.SessionID, info.URL)
+				out := fmt.Sprintf("The previous browser session had closed unexpectedly. Opened a fresh session and navigated to %s\nTitle: %s\n\nCall browser_observe to see the page.", info.URL, info.Title)
+				if info.Error != "" {
+					out += "\nNote: " + info.Error
+				}
+				return out, nil
+			}
+			// Recovery failed: return why the re-open failed rather than the
+			// original (now-stale) sidecar "context canceled" error so the
+			// agent has an actionable signal instead of a symptom of the dead
+			// session.
+			return "", fmt.Errorf("browser session closed unexpectedly; could not open a recovery session: %w", openErr)
+		}
 		return "", err
 	}
 	t.Reg.UpdateURL(id, res.URL)
