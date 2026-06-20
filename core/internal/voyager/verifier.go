@@ -3,7 +3,6 @@ package voyager
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 )
 
@@ -71,19 +70,13 @@ func (m *Manager) verifyProposal(ctx context.Context, proposalID, name string) e
 	// actually RUN (read-only, ephemeral session) and return real data. If it
 	// can't, it stays a candidate for human review and the test cleans itself up.
 	if isAutoPromotable(skillMD, riskLevel) {
-		if m.runTurn != nil {
-			passed, notes, _ := m.VerifySkillMD(ctx, name, skillMD, verifyContract{})
-			if !passed {
-				// Quarantine: leave it a candidate. The mem_evals row records WHY.
-				infoLog.Printf("[voyager] skill %q FAILED verification — not promoting (stays candidate): %s", name, notes)
-				return nil
-			}
-			infoLog.Printf("[voyager] skill %q passed verification: %s", name, notes)
-		}
-		// runTurn nil ⇒ no harness wired (loop-less deploy); fall back to the
-		// legacy text gate rather than freezing all learning.
+		// Promotion runs the verification gate inside Decide (harness.go): the
+		// skill must RUN read-only and return real data, or it stays a candidate
+		// for human review. A failed verification (or write) is not fatal to
+		// extraction — quarantine and move on rather than erroring the hook.
 		if err := m.Decide(ctx, proposalID, "promoted"); err != nil {
-			return fmt.Errorf("auto-promote: %w", err)
+			infoLog.Printf("[voyager] candidate skill %q not auto-promoted (stays candidate): %v", name, err)
+			return nil
 		}
 		infoLog.Printf("[voyager] auto-promoted candidate skill: %s\n", name)
 	}

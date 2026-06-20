@@ -21,6 +21,21 @@ type Registry struct {
 	loaded   time.Time
 	healedAt time.Time // last GetFresh self-heal; throttles rescans
 	store    *Store    // optional - used to record runs / sync versions
+	sampler  FrontierSampler
+}
+
+// FrontierSampler optionally supplies a non-champion SKILL.md variant to A/B at
+// invoke time. It is the runtime READ half of the GEPA Pareto frontier whose
+// write half already persists every candidate. Implemented by *voyager.Manager
+// and wired in serve.go — the skills package deliberately does NOT import
+// voyager (structural interface, same decoupling as *Store).
+//
+// SampleVariant returns an alternate recipe body to run in place of the
+// champion plus an opaque variantID for attribution, or ok=false to run the
+// champion. It MUST be cheap and MUST NEVER disrupt an invoke — return
+// ok=false on any problem (epsilon miss, no frontier, db error).
+type FrontierSampler interface {
+	SampleVariant(ctx context.Context, skillName string) (body, variantID string, ok bool)
 }
 
 // NewRegistry creates a Registry rooted at `root` (e.g. "./skills"). Callers
@@ -40,6 +55,21 @@ func (r *Registry) AttachStore(s *Store) {
 	r.mu.Lock()
 	r.store = s
 	r.mu.Unlock()
+}
+
+// AttachFrontierSampler wires the optional GEPA frontier A/B sampler. Safe to
+// call after Reload; set once at boot before traffic.
+func (r *Registry) AttachFrontierSampler(s FrontierSampler) {
+	r.mu.Lock()
+	r.sampler = s
+	r.mu.Unlock()
+}
+
+// frontierSampler returns the wired sampler (nil when none). Locked read.
+func (r *Registry) frontierSampler() FrontierSampler {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.sampler
 }
 
 // Reload re-reads every SKILL.md under the root. Existing skills are replaced

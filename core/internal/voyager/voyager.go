@@ -365,6 +365,28 @@ func (m *Manager) Decide(ctx context.Context, id, decision string) error {
 			log.Printf("voyager: proposal %s body declares skill %q, not an update of %q; promoting under its own name", id, fmName, targetName)
 			targetName = fmName
 		}
+
+		// Verification gate — the boss's rule: a skill is NOT promoted because
+		// its text scored well or "looks safe"; it must actually RUN read-only
+		// in an ephemeral, self-cleaning session and return real data first.
+		// This is the SINGLE chokepoint every promote path flows through — the
+		// GEPA self-rewrite auto-promoter (autotrigger.maybeAutoPromote), the
+		// SessionEnd skill extractor (verifier.go), and the manual /decide API —
+		// so none of them can ship an unverified skill. A failed run returns an
+		// error here and the proposal stays a candidate for human review.
+		// Skipped ONLY when no harness runner is wired (a loop-less deploy must
+		// not freeze learning); there the optimizer's structural gates still
+		// apply. See harness.go + SetVerifyHarness.
+		if m.runTurn != nil {
+			vctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+			passed, notes, _ := m.VerifySkillMD(vctx, targetName, skillMD, m.loadVerifyContract(ctx, targetName))
+			cancel()
+			if !passed {
+				return fmt.Errorf("skill %q failed verification, not promoted: %s", targetName, notes)
+			}
+			infoLog.Printf("voyager: proposal %s verified before promote: %s", id, notes)
+		}
+
 		// Persist to Postgres FIRST so the skill survives any container
 		// restart (Railway redeploys wipe the ephemeral filesystem).
 		// Bump from the TARGET skill's currently-active version into the

@@ -116,6 +116,22 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 		// agent to fold into its own context. The LLM caller is in charge
 		// of executing the instruction. This is the pattern used by the
 		// majority of OpenClaw and Hermes skills.
+		//
+		// GEPA frontier A/B (read half): epsilon-occasionally serve a frontier
+		// variant's recipe instead of the champion's so variants get exercised
+		// on real inputs. The candidate already passed the optimizer's
+		// size/drift/contract gates (a reworded champion). The chosen arm is
+		// stamped on the run row so Studio + history show which recipe ran.
+		// SampleVariant never disrupts the invoke — on any miss the champion runs.
+		variantID := ""
+		if s := t.r.frontierSampler(); s != nil {
+			if body, vid, ok := s.SampleVariant(ctx, skill.Name); ok {
+				clone := *skill
+				clone.Body = body
+				skill = &clone
+				variantID = vid
+			}
+		}
 		prompt := FormatLLMPrompt(skill, args)
 		// Persist an invocation row so the Studio Skill Detail's Runs +
 		// Overview "last run" sample populate for instruction-only skills
@@ -130,12 +146,16 @@ func (t *invokeTool) Execute(ctx context.Context, in map[string]any) (string, er
 		// the LLM work happens AFTER this return). See IsRecipeOutput.
 		if t.r != nil && t.r.store != nil {
 			now := time.Now().UTC()
+			output := recipeDeliverySentinel
+			if variantID != "" {
+				output = recipeDeliverySentinel + " [frontier-variant " + variantID + "]"
+			}
 			_, _ = t.r.store.RecordRun(ctx, &Run{
 				SkillName:     skill.Name,
 				Version:       skill.Version,
 				TriggerSource: "conversation",
 				Input:         args,
-				Output:        recipeDeliverySentinel,
+				Output:        output,
 				Success:       true,
 				DurationMS:    0,
 				StartedAt:     now,

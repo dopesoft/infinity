@@ -575,6 +575,51 @@ func (m *Manager) SampleFromFrontier(ctx context.Context, skillName string) (str
 	return pool[len(pool)-1].id, nil
 }
 
+// SampleVariant is the runtime READ half of the GEPA Pareto frontier: at invoke
+// time it epsilon-occasionally serves a high-scoring frontier candidate's recipe
+// in place of the champion, so the variant gets exercised on real inputs (GEPA's
+// empirical result: stochastic sampling beats champion-only out-of-distribution).
+// The candidate already cleared the optimizer's size, semantic-drift and
+// contract-preservation gates, so it is a REWORDED champion — not an arbitrary
+// recipe. Satisfies skills.FrontierSampler (wired in serve.go via
+// AttachFrontierSampler). It must NEVER disrupt an invoke: any miss/error
+// returns ok=false and the champion runs.
+func (m *Manager) SampleVariant(ctx context.Context, skillName string) (string, string, bool) {
+	if m == nil || m.pool == nil {
+		return "", "", false
+	}
+	eps := frontierEpsilon()
+	if eps <= 0 || rand.Float64() > eps {
+		return "", "", false
+	}
+	id, err := m.SampleFromFrontier(ctx, skillName)
+	if err != nil || id == "" {
+		return "", "", false
+	}
+	var body string
+	if err := m.pool.QueryRow(ctx,
+		`SELECT COALESCE(skill_md, '') FROM mem_skill_proposals WHERE id = $1`, id,
+	).Scan(&body); err != nil || strings.TrimSpace(body) == "" {
+		return "", "", false
+	}
+	return body, id, true
+}
+
+// frontierEpsilon is the probability a skill invoke A/B-serves a frontier
+// variant instead of the champion. INFINITY_FRONTIER_EPSILON overrides; 0
+// disables A/B entirely (champion always). Default is deliberately low — the
+// variant is a reworded champion, but most invokes still run the proven body.
+func frontierEpsilon() float64 {
+	eps := envFloat("INFINITY_FRONTIER_EPSILON", 0.15)
+	if eps < 0 {
+		return 0
+	}
+	if eps > 1 {
+		return 1
+	}
+	return eps
+}
+
 func readSkillMD(skillDir string) (string, error) {
 	if skillDir == "" {
 		return "", errors.New("skill has no on-disk path")

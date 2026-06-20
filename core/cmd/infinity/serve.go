@@ -1462,8 +1462,8 @@ func serveCmd() *cobra.Command {
 			}
 
 			// Voyager auto-skill loop. Wires hooks for SessionEnd (extractor)
-			// and PostToolUse (real-time discovery). Off by default; flip
-			// INFINITY_VOYAGER=true on the core service to enable.
+			// and PostToolUse (real-time discovery). ON by default; set
+			// INFINITY_VOYAGER=false on the core service to disable.
 			var voyagerAPI *voyager.API
 			if pool != nil {
 				// Voyager drafting routes through the shared activeModel, so skill
@@ -1534,6 +1534,14 @@ func serveCmd() *cobra.Command {
 						return runVerifyTurn(vctx, loop, sessionID, prompt)
 					}, eval.NewStore(pool, slog.Default()))
 				}
+				// GEPA frontier A/B (read half): the skill invoke path now
+				// epsilon-serves a high-scoring frontier candidate in place of
+				// the champion so variants get exercised on real inputs. This is
+				// the runtime READ side of the Pareto frontier whose write side
+				// already persisted every candidate (dead/orphaned until now —
+				// migration 011 always intended "the runner samples from the
+				// frontier"). INFINITY_FRONTIER_EPSILON tunes the rate; 0 disables.
+				skillRegistry.AttachFrontierSampler(voyagerMgr)
 				fmt.Printf("  voyager: %s\n", voyagerMgr.Status())
 
 				// Self-improve verbs for the nightly loop: code_proposal_decide
