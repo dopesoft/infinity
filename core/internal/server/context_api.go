@@ -26,6 +26,12 @@ type contextUsageResp struct {
 	ContextWindow int               `json:"context_window"`
 	UsedTokens    int               `json:"used_tokens"`
 	Categories    []contextCategory `json:"categories"`
+	// CacheReadTokens / CacheWriteTokens are the prompt-cache split of the
+	// last turn (a subset of UsedTokens). The modal shows how much of the
+	// window was served from cache - the caching EFFECT, for any model. 0 on
+	// models/turns with no cache hit.
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
 // estimateTokens uses the chars-divided-by-4 heuristic - accurate enough for
@@ -36,15 +42,26 @@ func estimateTokens(s string) int {
 	return (len(s) + 3) / 4
 }
 
-// contextWindowFor returns the model's input context window in tokens.
-// Order matters: more specific patterns first (e.g. "1m" suffix overrides
-// the family default; gpt-4o-mini before gpt-4o). Mirrors the catalog in
-// studio/lib/models-catalog.ts - keep in sync when adding entries there.
+// contextWindowFor returns the model's EFFECTIVE input context window in
+// tokens - the size our client actually gets, which is what the meter must
+// divide by. Numbers verified against vendor model cards (last checked
+// 2026-06-19); update in lock step with studio/lib/models-catalog.ts when a
+// card changes. Order matters: most specific patterns first.
 func contextWindowFor(model string) int {
 	m := strings.ToLower(strings.TrimSpace(model))
+	// Some paths carry a "vendor:model" form (e.g. "openai_oauth:gpt-5.4");
+	// match on the bare model id so a prefix can't silently drop the lookup
+	// to the default window.
+	if i := strings.LastIndex(m, ":"); i >= 0 {
+		m = m[i+1:]
+	}
 
-	// Anthropic - opus/sonnet/haiku 200K standard, opt-in 1M variants
-	// carry a "1m" suffix or bracket. Match the suffix first.
+	// Anthropic - effective 200K. Opus 4.6+/Sonnet 4.6 advertise a 1M window
+	// but it requires the context-1m beta header, which anthropic.go does NOT
+	// send, so >200K input is rejected -> effective 200K. The boss opts into
+	// 1M by picking a model id carrying the "1m" marker (then we'd add the
+	// header). Showing 1M here while the client caps at 200K would UNDER-report
+	// fill (dangerous), so 200K is the honest default.
 	if strings.HasPrefix(m, "claude-") {
 		if strings.Contains(m, "1m") {
 			return 1_000_000
@@ -52,15 +69,29 @@ func contextWindowFor(model string) int {
 		return 200_000
 	}
 
-	// OpenAI - every gpt-5.x flagship variant ships with a 400K input
-	// window. o4 family stays at 200K. gpt-4.1 is the long-context one
-	// at 1M; gpt-4o sits at 128K.
+	// OpenAI gpt-5.x - window differs by MINOR version AND tier. Verified vs
+	// OpenAI cards (all 128K max output):
+	//   gpt-5.4, gpt-5.4-pro, gpt-5.5, gpt-5.5-pro: 1,050,000
+	//   gpt-5.4-mini/-nano, gpt-5.2, gpt-5.1, gpt-5(+pro/mini/nano): 400,000
 	if strings.HasPrefix(m, "gpt-5") {
+		// mini / nano stay at 400K on every minor version (gpt-5.4-mini is
+		// 400K even though gpt-5.4 is 1.05M) - exclude them first.
+		if strings.Contains(m, "-mini") || strings.Contains(m, "-nano") {
+			return 400_000
+		}
+		if strings.HasPrefix(m, "gpt-5.4") || strings.HasPrefix(m, "gpt-5.5") {
+			return 1_050_000
+		}
 		return 400_000
 	}
-	if strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "o3") {
+	// o-series reasoning: o1/o3/o4 are 200K; o1-mini is the 128K exception.
+	if strings.HasPrefix(m, "o1-mini") {
+		return 128_000
+	}
+	if strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") {
 		return 200_000
 	}
+	// gpt-4.1 is the long-context one at ~1M (1,047,576); gpt-4o / gpt-4 at 128K.
 	if strings.HasPrefix(m, "gpt-4.1") {
 		return 1_000_000
 	}
@@ -68,17 +99,24 @@ func contextWindowFor(model string) int {
 		return 128_000
 	}
 
-	// Google - Gemini 3 + 2.5 Pro at 2M; 2.5 Flash + 2.0 Flash at 1M.
-	if strings.HasPrefix(m, "gemini-3") {
-		return 2_000_000
-	}
-	if strings.HasPrefix(m, "gemini-2.5-pro") {
-		return 2_000_000
-	}
-	if strings.HasPrefix(m, "gemini-2.5") {
+	// DeepSeek - V4 flash/pro ship a 1M window (not in the Studio catalog yet,
+	// kept for when the boss wires it).
+	if strings.HasPrefix(m, "deepseek") {
 		return 1_000_000
 	}
-	if strings.HasPrefix(m, "gemini-2.0") {
+
+	// Google Gemini (verified vs Google's cards):
+	//   Gemini 3 Flash: 200K (the small one) - check before the 3-family default
+	//   Gemini 3 Pro / Deep Think: 1M
+	//   Gemini 2.5 Pro / 2.5 Flash / 2.5 Flash-Lite / 2.0 Flash: 1M
+	// (2.5 Pro is 1M, NOT 2M - that was the old Gemini 1.5 Pro.)
+	if strings.HasPrefix(m, "gemini-3-flash") {
+		return 200_000
+	}
+	if strings.HasPrefix(m, "gemini-3") {
+		return 1_000_000
+	}
+	if strings.HasPrefix(m, "gemini-2.5") || strings.HasPrefix(m, "gemini-2.0") {
 		return 1_000_000
 	}
 
@@ -169,5 +207,7 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 			{ID: "messages", Label: "Messages", Tokens: messageTokens},
 			{ID: "free", Label: "Free space", Tokens: free},
 		},
+		CacheReadTokens:  snapshot.LastCacheReadTokens,
+		CacheWriteTokens: snapshot.LastCacheWriteTokens,
 	})
 }

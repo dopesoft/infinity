@@ -126,3 +126,46 @@ func (n *noDashesProvider) Stream(
 	resp.Text = StripDashes(resp.Text)
 	return resp, err
 }
+
+// StreamCached makes the wrapper satisfy CachingProvider so the agent loop's
+// `provider.(llm.CachingProvider)` assertion succeeds THROUGH the sanitizer
+// (the loop holds the wrapper, not the concrete provider). It scrubs em/en
+// dashes with the exact same mid-channel plumbing as Stream, then delegates to
+// the inner provider's StreamCached when the inner caches, or falls back to the
+// inner's plain Stream with the rendered (stable-first) string otherwise - so
+// the dash discipline is never lost regardless of which brain is wired.
+func (n *noDashesProvider) StreamCached(
+	ctx context.Context,
+	model string,
+	sys SystemPrompt,
+	messages []Message,
+	tools []ToolDef,
+	out chan<- StreamEvent,
+) (Response, error) {
+	call := func(mid chan<- StreamEvent) (Response, error) {
+		if cp, ok := n.inner.(CachingProvider); ok {
+			return cp.StreamCached(ctx, model, sys, messages, tools, mid)
+		}
+		return n.inner.Stream(ctx, model, sys.Render(), messages, tools, mid)
+	}
+	if out == nil {
+		resp, err := call(nil)
+		resp.Text = StripDashes(resp.Text)
+		return resp, err
+	}
+	mid := make(chan StreamEvent, 32)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range mid {
+			ev.TextDelta = StripDashes(ev.TextDelta)
+			ev.ThinkingDelta = StripDashes(ev.ThinkingDelta)
+			out <- ev
+		}
+	}()
+	resp, err := call(mid)
+	close(mid)
+	<-done
+	resp.Text = StripDashes(resp.Text)
+	return resp, err
+}

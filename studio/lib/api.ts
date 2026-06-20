@@ -1607,6 +1607,10 @@ export type ContextUsageDTO = {
   context_window: number;
   used_tokens: number;
   categories: ContextCategoryDTO[];
+  // Prompt-cache split of the last turn (subset of used_tokens). Shows how
+  // much of the window was served from cache. 0 on models/turns with no cache.
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
 };
 
 export const fetchContextUsage = (sessionId?: string, signal?: AbortSignal) => {
@@ -2033,6 +2037,11 @@ export type TurnRowDTO = {
   ended_at?: string;
   input_tokens: number;
   output_tokens: number;
+  // Prompt-cache split of this turn (already inside input_tokens). cache_read
+  // = served from cache (~0.1x cost); cache_write = written to cache (~1.25x).
+  // 0 on models/turns with no cache hit.
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   tool_call_count: number;
   latency_ms: number;
   // origin of the session this turn belongs to: "chat" (default), "cron",

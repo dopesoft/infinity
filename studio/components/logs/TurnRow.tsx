@@ -2,7 +2,14 @@
 
 import { type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownToLine, ArrowUpFromLine, Clock, type LucideIcon, Wrench } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Clock,
+  DatabaseZap,
+  type LucideIcon,
+  Wrench,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TurnStatusPip } from "./TurnStatusPip";
 import type { TurnRowDTO } from "@/lib/api";
@@ -141,6 +148,15 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
             {turn.output_tokens.toLocaleString()}
           </MetricChip>
         )}
+        {!!turn.cache_read_tokens && turn.cache_read_tokens > 0 && turn.input_tokens > 0 && (
+          <MetricChip
+            icon={DatabaseZap}
+            positive
+            title={`${turn.cache_read_tokens.toLocaleString()} prompt tokens served from cache at ~0.1x cost`}
+          >
+            {Math.round((turn.cache_read_tokens / turn.input_tokens) * 100)}% cached
+          </MetricChip>
+        )}
         {turn.latency_ms > 0 && (
           <MetricChip icon={Clock} title="Latency">
             {formatLatency(turn.latency_ms)}
@@ -157,18 +173,30 @@ export function TurnRow({ turn }: { turn: TurnRowDTO }) {
 function MetricChip({
   icon: Icon,
   title,
+  positive = false,
   children,
 }: {
   icon?: LucideIcon;
   title?: string;
+  positive?: boolean;
   children: ReactNode;
 }) {
   return (
     <span
       title={title}
-      className="inline-flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-foreground/80"
+      className={cn(
+        "inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono",
+        positive
+          ? "border-success/40 bg-success/10 text-success"
+          : "border-border/60 bg-muted/40 text-foreground/80",
+      )}
     >
-      {Icon && <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+      {Icon && (
+        <Icon
+          className={cn("size-3 shrink-0", positive ? "text-success" : "text-muted-foreground")}
+          aria-hidden
+        />
+      )}
       <span className="truncate">{children}</span>
     </span>
   );

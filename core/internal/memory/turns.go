@@ -52,7 +52,12 @@ type CloseFields struct {
 	StopReason    string
 	InputTokens   int
 	OutputTokens  int
-	ToolCallCount int
+	// CacheReadTokens / CacheWriteTokens are the prompt-cache breakdown of the
+	// turn's prompt (already included in InputTokens, which is the full size).
+	// 0 when the model/turn didn't cache.
+	CacheReadTokens  int
+	CacheWriteTokens int
+	ToolCallCount    int
 	// Status is one of: ok | empty | errored | interrupted. The caller
 	// computes which based on the run outcome.
 	Status  string
@@ -72,15 +77,17 @@ func (s *TurnStore) Close(ctx context.Context, turnID string, f CloseFields) err
 	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE mem_turns
-		   SET ended_at        = NOW(),
-		       assistant_text  = $2,
-		       stop_reason     = $3,
-		       input_tokens    = $4,
-		       output_tokens   = $5,
-		       tool_call_count = $6,
-		       status          = $7,
-		       error           = NULLIF($8, ''),
-		       summary         = $9
+		   SET ended_at           = NOW(),
+		       assistant_text     = $2,
+		       stop_reason        = $3,
+		       input_tokens       = $4,
+		       output_tokens      = $5,
+		       tool_call_count    = $6,
+		       status             = $7,
+		       error              = NULLIF($8, ''),
+		       summary            = $9,
+		       cache_read_tokens  = $10,
+		       cache_write_tokens = $11
 		 WHERE id = $1::uuid
 	`,
 		turnID,
@@ -92,6 +99,8 @@ func (s *TurnStore) Close(ctx context.Context, turnID string, f CloseFields) err
 		status,
 		f.Error,
 		truncateText(f.Summary, 400),
+		f.CacheReadTokens,
+		f.CacheWriteTokens,
 	)
 	return err
 }
@@ -244,28 +253,30 @@ func (s *TurnStore) RecoverStranded(ctx context.Context) (int, error) {
 // TurnRow is one mem_turns row plus the session display name. Used by the
 // /logs list view and trace_* agent tools.
 type TurnRow struct {
-	ID            string
-	SessionID     string
-	SessionName   string
+	ID          string
+	SessionID   string
+	SessionName string
 	// SessionKind is the origin of the session this turn belongs to:
 	// 'chat' (default), 'cron', 'heartbeat', etc. Lets /logs mark a cron run
 	// as a cron instead of rendering it chat-style. OriginLabel is the
 	// human label for non-chat origins (e.g. the cron name "inbox-triage").
-	SessionKind   string
-	OriginLabel   string
-	UserText      string
-	AssistantText string
-	Model         string
-	Status        string
-	StopReason    string
-	Summary       string
-	Error         string
-	StartedAt     string
-	EndedAt       string
-	InputTokens   int
-	OutputTokens  int
-	ToolCallCount int
-	LatencyMS     int64
+	SessionKind      string
+	OriginLabel      string
+	UserText         string
+	AssistantText    string
+	Model            string
+	Status           string
+	StopReason       string
+	Summary          string
+	Error            string
+	StartedAt        string
+	EndedAt          string
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	ToolCallCount    int
+	LatencyMS        int64
 }
 
 // List returns the most recent N turns, optionally filtered by session and/or
@@ -291,7 +302,7 @@ func (s *TurnStore) List(ctx context.Context, sessionID, status string, limit in
 		SELECT t.id, t.session_id, COALESCE(s.name, ''), t.user_text, t.assistant_text,
 		       t.model, t.status, t.stop_reason, t.summary, COALESCE(t.error, ''),
 		       t.started_at, COALESCE(t.ended_at, t.started_at),
-		       t.input_tokens, t.output_tokens, t.tool_call_count,
+		       t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tool_call_count,
 		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000,
 		       COALESCE(s.kind, 'chat'),
 		       COALESCE(s.origin_ref->>'cron_name', s.origin_ref->>'sentinel_name', '')
@@ -317,7 +328,7 @@ func (s *TurnStore) List(ctx context.Context, sessionID, status string, limit in
 			&r.ID, &r.SessionID, &r.SessionName, &r.UserText, &r.AssistantText,
 			&r.Model, &r.Status, &r.StopReason, &r.Summary, &r.Error,
 			&sa.t, &ea.t,
-			&r.InputTokens, &r.OutputTokens, &r.ToolCallCount,
+			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.ToolCallCount,
 			&latency,
 			&r.SessionKind, &r.OriginLabel,
 		); err != nil {
@@ -343,7 +354,7 @@ func (s *TurnStore) Get(ctx context.Context, turnID string) (TurnRow, error) {
 		SELECT t.id, t.session_id, COALESCE(s.name, ''), t.user_text, t.assistant_text,
 		       t.model, t.status, t.stop_reason, t.summary, COALESCE(t.error, ''),
 		       t.started_at, COALESCE(t.ended_at, t.started_at),
-		       t.input_tokens, t.output_tokens, t.tool_call_count,
+		       t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tool_call_count,
 		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000,
 		       COALESCE(s.kind, 'chat'),
 		       COALESCE(s.origin_ref->>'cron_name', s.origin_ref->>'sentinel_name', '')
@@ -499,7 +510,7 @@ func (s *TurnStore) Search(ctx context.Context, query string, limit int) ([]Turn
 		SELECT t.id, t.session_id, COALESCE(s.name, ''), t.user_text, t.assistant_text,
 		       t.model, t.status, t.stop_reason, t.summary, COALESCE(t.error, ''),
 		       t.started_at, COALESCE(t.ended_at, t.started_at),
-		       t.input_tokens, t.output_tokens, t.tool_call_count,
+		       t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tool_call_count,
 		       EXTRACT(EPOCH FROM (COALESCE(t.ended_at, NOW()) - t.started_at)) * 1000
 		FROM mem_turns t
 		LEFT JOIN mem_sessions s ON s.id = t.session_id
@@ -523,7 +534,7 @@ func (s *TurnStore) Search(ctx context.Context, query string, limit int) ([]Turn
 			&r.ID, &r.SessionID, &r.SessionName, &r.UserText, &r.AssistantText,
 			&r.Model, &r.Status, &r.StopReason, &r.Summary, &r.Error,
 			&sa.t, &ea.t,
-			&r.InputTokens, &r.OutputTokens, &r.ToolCallCount,
+			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.ToolCallCount,
 			&latency,
 		); err != nil {
 			return nil, err

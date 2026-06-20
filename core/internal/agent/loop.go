@@ -95,6 +95,12 @@ type Session struct {
 	lastOutputTokens  int
 	totalInputTokens  int
 	totalOutputTokens int
+	// Prompt-cache breakdown of the last turn's prompt (already inside
+	// lastInputTokens). Lets the context modal show how much of the window
+	// was served from cache. Not persisted across restart - repopulates on
+	// the next turn, same as the rest of the live usage.
+	lastCacheReadTokens  int
+	lastCacheWriteTokens int
 
 	// Active is the per-session whitelist of tools whose full schemas are
 	// shipped to the LLM each turn. Everything else lives in the dormant
@@ -147,9 +153,20 @@ func (s *Session) ReplaceMessages(next []llm.Message) {
 func (s *Session) RecordUsage(u llm.TokenUsage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if u.Input > 0 {
-		s.lastInputTokens = u.Input
-		s.totalInputTokens += u.Input
+	// The context meter must reflect the FULL prompt size (uncached input plus
+	// cache reads/writes), so a cache HIT - which reports most of the prompt
+	// under CacheRead with a tiny Input - doesn't make the meter read empty on
+	// a session that's actually full. Cached tokens still occupy the window and
+	// still count to rate limits; only their dollar cost is discounted.
+	inputTotal := u.PromptTokens()
+	if inputTotal > 0 {
+		s.lastInputTokens = inputTotal
+		s.totalInputTokens += inputTotal
+		// Record the cache split of this turn alongside it (only when the
+		// turn actually reported usage, so an erred pre-LLM turn doesn't
+		// zero out the last good reading).
+		s.lastCacheReadTokens = u.CacheRead
+		s.lastCacheWriteTokens = u.CacheWrite
 	}
 	if u.Output > 0 {
 		s.lastOutputTokens = u.Output
@@ -164,16 +181,22 @@ type UsageSnapshot struct {
 	LastOutputTokens  int
 	TotalInputTokens  int
 	TotalOutputTokens int
+	// Cache split of the last turn (subset of LastInputTokens). 0 when the
+	// model/turn didn't cache, so the modal reads accurately on every model.
+	LastCacheReadTokens  int
+	LastCacheWriteTokens int
 }
 
 func (s *Session) UsageSnapshot() UsageSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return UsageSnapshot{
-		LastInputTokens:   s.lastInputTokens,
-		LastOutputTokens:  s.lastOutputTokens,
-		TotalInputTokens:  s.totalInputTokens,
-		TotalOutputTokens: s.totalOutputTokens,
+		LastInputTokens:      s.lastInputTokens,
+		LastOutputTokens:     s.lastOutputTokens,
+		TotalInputTokens:     s.totalInputTokens,
+		TotalOutputTokens:    s.totalOutputTokens,
+		LastCacheReadTokens:  s.lastCacheReadTokens,
+		LastCacheWriteTokens: s.lastCacheWriteTokens,
 	}
 }
 
@@ -237,10 +260,14 @@ type TurnCloseFields struct {
 	StopReason    string
 	InputTokens   int
 	OutputTokens  int
-	ToolCallCount int
-	Status        string
-	Error         string
-	Summary       string
+	// CacheReadTokens / CacheWriteTokens carry the prompt-cache breakdown of
+	// this turn's prompt (already counted inside InputTokens). 0 = no cache.
+	CacheReadTokens  int
+	CacheWriteTokens int
+	ToolCallCount    int
+	Status           string
+	Error            string
+	Summary          string
 }
 
 type CostRecorder interface {
@@ -586,12 +613,20 @@ func (l *Loop) recordLLMCost(provider llm.Provider, model string, usage llm.Toke
 	if provider != nil {
 		subject = provider.Name() + ":" + subject
 	}
-	tokens := usage.Input + usage.Output
-	cost := estimateLLMCostUSD(tokens)
+	// Ledger semantics (kept honest and distinct):
+	//   quantity = ThroughputTokens - the RAW tokens that moved through the
+	//              model (full prompt + output, face value). This is what
+	//              "how many tokens did I use" sums, and it stays consistent
+	//              with pre-caching history.
+	//   cost     = estimate over BilledTokens - the cache-DISCOUNTED figure
+	//              (reads 0.1x, writes 1.25x). Cheaper than throughput on a
+	//              cache hit; that gap is the savings.
+	throughput := usage.ThroughputTokens()
+	cost := estimateLLMCostUSD(usage.BilledTokens())
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		_ = rec.RecordCost(ctx, "llm", subject, cost, "tokens", float64(tokens), "automatic token usage capture")
+		_ = rec.RecordCost(ctx, "llm", subject, cost, "tokens", float64(throughput), "automatic token usage capture")
 	}()
 }
 
@@ -1128,20 +1163,36 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		l.fireHookT(turnID, "UserPromptSubmit", s.ID, s.Project, userMsg, nil)
 	}
 
-	systemPrompt := l.systemPrompt
+	// Prompt caching depends on a byte-identical prefix across a session's
+	// turns, so we split the system prompt into a STABLE segment (the soul/
+	// base - the only thing that doesn't change turn to turn) and a VOLATILE
+	// segment (RRF retrieval, current_time, tool catalog, account overlay,
+	// voice/wind-down). The stable segment leads and carries the cache
+	// breakpoint; the volatile segment follows so it never invalidates the
+	// cached prefix. Reversing the old prepend chain into an appended volatile
+	// builder is the whole fix (see provider.SystemPrompt / CachingProvider).
+	stableSystem := l.systemPrompt
 	if override := strings.TrimSpace(s.SystemPromptOverride); override != "" {
-		systemPrompt = override
+		stableSystem = override
+	}
+	var volatile strings.Builder
+	appendVolatile := func(block string) {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			return
+		}
+		if volatile.Len() > 0 {
+			volatile.WriteString("\n\n")
+		}
+		volatile.WriteString(block)
 	}
 	if l.memory != nil {
-		prefix, err := l.memory.BuildSystemPrefix(ctx, s.ID, userMsg)
-		if err == nil && prefix != "" {
-			systemPrompt = prefix + "\n\n" + systemPrompt
+		if prefix, err := l.memory.BuildSystemPrefix(ctx, s.ID, userMsg); err == nil {
+			appendVolatile(prefix)
 		}
 	}
 	if l.skills != nil {
-		if skillsPrefix := l.skills.MatchAndPrefix(userMsg, 5); skillsPrefix != "" {
-			systemPrompt = skillsPrefix + "\n\n" + systemPrompt
-		}
+		appendVolatile(l.skills.MatchAndPrefix(userMsg, 5))
 	}
 	// Snapshot the per-session hidden-tools set once per turn - used to
 	// drop tools the bridge layer (or any other policy) has decided the
@@ -1152,26 +1203,22 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// Prepend the dormant tool catalog so the model knows what exists
 	// even when it doesn't have the schema in hand. Cheap (~30 tokens
 	// per entry) and unlocks the tool_search → load_tools loop.
-	if catalog := buildToolCatalogBlock(l.tools, s.Active, hidden); catalog != "" {
-		systemPrompt = catalog + "\n\n" + systemPrompt
-	}
+	appendVolatile(buildToolCatalogBlock(l.tools, s.Active, hidden))
 	// Prepend the connected-accounts overlay so the model can route to
 	// the right OAuth account when a tool has multi-account support
 	// (e.g. four Gmail mailboxes). The block lists per-toolkit
 	// alias → account_id mappings; the model picks based on the user's
 	// stated intent.
 	if l.accounts != nil {
-		if accountsBlock := l.accounts.SystemPromptBlock(); accountsBlock != "" {
-			systemPrompt = accountsBlock + "\n\n" + systemPrompt
-		}
+		appendVolatile(l.accounts.SystemPromptBlock())
 	}
-	// Voice turns get a thin delivery overlay at the very top (most salient).
-	// Per-turn via ctx, not a Session field, because text + voice share the
-	// session. Capability is unchanged - this only shapes how the same brain
-	// talks when its words are being spoken aloud.
+	// Voice turns get a thin delivery overlay. Per-turn via ctx, not a Session
+	// field, because text + voice share the session. Capability is unchanged -
+	// this only shapes how the same brain talks when its words are spoken aloud.
 	if VoiceModeFromContext(ctx) {
-		systemPrompt = voiceModeSystemOverlay + "\n\n" + systemPrompt
+		appendVolatile(voiceModeSystemOverlay)
 	}
+	volatileSystem := volatile.String()
 
 	// Per-turn continuation state. A turn runs in "segments": each segment is
 	// up to maxToolIterations tool-loop iterations. When a segment exhausts its
@@ -1253,14 +1300,26 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// Once this segment crosses ~80% of its tool budget, overlay the
 		// wind-down notice so the model lands its current step and checkpoints
 		// before the cap, rather than getting cut off mid-action. Ephemeral:
-		// applied to this call only, never persisted onto the session.
-		sys := systemPrompt
+		// applied to this call only, never persisted onto the session. It is
+		// volatile, so it lands AFTER the cached stable prefix.
+		sysVolatile := volatileSystem
 		if iter >= windDownAt {
-			sys = systemPrompt + "\n\n" + turnWindDownBlock
+			if sysVolatile != "" {
+				sysVolatile = sysVolatile + "\n\n" + turnWindDownBlock
+			} else {
+				sysVolatile = turnWindDownBlock
+			}
 		}
+		sys := llm.SystemPrompt{Stable: stableSystem, Volatile: sysVolatile}
+		// Stamp the session id so OpenAI/OAuth forward it as prompt_cache_key.
+		streamCtx := llm.WithCacheKey(ctx, s.ID)
 		go func() {
 			defer close(streamDone)
-			resp, streamErr = provider.Stream(ctx, model, sys, s.Snapshot(), toolDefs, llmEvents)
+			if cp, ok := provider.(llm.CachingProvider); ok {
+				resp, streamErr = cp.StreamCached(streamCtx, model, sys, s.Snapshot(), toolDefs, llmEvents)
+			} else {
+				resp, streamErr = provider.Stream(streamCtx, model, sys.Render(), s.Snapshot(), toolDefs, llmEvents)
+			}
 			close(llmEvents)
 		}()
 
@@ -1299,7 +1358,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// Persist counters so a process restart doesn't reset the meter
 		// to 0% on a session with real history. Best-effort + detached
 		// context so the user-visible turn isn't gated on the DB write.
-		if store := l.UsageStore(); store != nil && !IsSyntheticSessionID(s.ID) && (resp.Usage.Input > 0 || resp.Usage.Output > 0) {
+		if store := l.UsageStore(); store != nil && !IsSyntheticSessionID(s.ID) && (resp.Usage.Input > 0 || resp.Usage.Output > 0 || resp.Usage.CacheRead > 0) {
 			snap := s.UsageSnapshot()
 			sessionID := s.ID
 			go func() {
@@ -1323,13 +1382,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				}
 				emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
 				l.closeTurn(context.Background(), turnID, TurnCloseFields{
-					AssistantText: partial,
-					StopReason:    "interrupted",
-					Status:        "interrupted",
-					InputTokens:   resp.Usage.Input,
-					OutputTokens:  resp.Usage.Output,
-					ToolCallCount: toolCallCount,
-					Summary:       summarizeReply(partial, toolCallCount),
+					AssistantText:    partial,
+					StopReason:       "interrupted",
+					Status:           "interrupted",
+					InputTokens:      resp.Usage.PromptTokens(),
+					OutputTokens:     resp.Usage.Output,
+					CacheReadTokens:  resp.Usage.CacheRead,
+					CacheWriteTokens: resp.Usage.CacheWrite,
+					ToolCallCount:    toolCallCount,
+					Summary:          summarizeReply(partial, toolCallCount),
 				})
 				return nil
 			}
@@ -1347,13 +1408,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				if perr := parker.Park(context.Background(), s.ID, provName, model, turnText, reason); perr == nil {
 					emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "awaiting_reauth"})
 					l.closeTurn(context.Background(), turnID, TurnCloseFields{
-						StopReason:    "awaiting_reauth",
-						Status:        "awaiting_reauth",
-						InputTokens:   resp.Usage.Input,
-						OutputTokens:  resp.Usage.Output,
-						ToolCallCount: toolCallCount,
-						Error:         reason,
-						Summary:       "paused — model needs re-auth; will auto-resume",
+						StopReason:       "awaiting_reauth",
+						Status:           "awaiting_reauth",
+						InputTokens:      resp.Usage.PromptTokens(),
+						OutputTokens:     resp.Usage.Output,
+						CacheReadTokens:  resp.Usage.CacheRead,
+						CacheWriteTokens: resp.Usage.CacheWrite,
+						ToolCallCount:    toolCallCount,
+						Error:            reason,
+						Summary:          "paused — model needs re-auth; will auto-resume",
 					})
 					return nil
 				}
@@ -1361,14 +1424,16 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			}
 			emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: streamErr.Error()})
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{
-				AssistantText: strings.TrimSpace(partialText.String()),
-				StopReason:    "error",
-				Status:        "errored",
-				InputTokens:   resp.Usage.Input,
-				OutputTokens:  resp.Usage.Output,
-				ToolCallCount: toolCallCount,
-				Error:         streamErr.Error(),
-				Summary:       summarizeReply("", toolCallCount),
+				AssistantText:    strings.TrimSpace(partialText.String()),
+				StopReason:       "error",
+				Status:           "errored",
+				InputTokens:      resp.Usage.PromptTokens(),
+				OutputTokens:     resp.Usage.Output,
+				CacheReadTokens:  resp.Usage.CacheRead,
+				CacheWriteTokens: resp.Usage.CacheWrite,
+				ToolCallCount:    toolCallCount,
+				Error:            streamErr.Error(),
+				Summary:          summarizeReply("", toolCallCount),
 			})
 			return streamErr
 		}
@@ -1391,7 +1456,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, Usage: &resp.Usage, StopReason: resp.StopReason})
 			l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, resp.Text, map[string]any{
-				"input_tokens":  resp.Usage.Input,
+				"input_tokens":  resp.Usage.PromptTokens(),
 				"output_tokens": resp.Usage.Output,
 			})
 			// Status reflects what the boss sees: empty reply with no tool
@@ -1402,13 +1467,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				status = "empty"
 			}
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{
-				AssistantText: resp.Text,
-				StopReason:    resp.StopReason,
-				Status:        status,
-				InputTokens:   resp.Usage.Input,
-				OutputTokens:  resp.Usage.Output,
-				ToolCallCount: toolCallCount,
-				Summary:       summarizeReply(resp.Text, toolCallCount),
+				AssistantText:    resp.Text,
+				StopReason:       resp.StopReason,
+				Status:           status,
+				InputTokens:      resp.Usage.PromptTokens(),
+				OutputTokens:     resp.Usage.Output,
+				CacheReadTokens:  resp.Usage.CacheRead,
+				CacheWriteTokens: resp.Usage.CacheWrite,
+				ToolCallCount:    toolCallCount,
+				Summary:          summarizeReply(resp.Text, toolCallCount),
 			})
 			// Auto-name the session after the first complete exchange.
 			// MaybeName is cheap when the session is already named (one
@@ -1425,7 +1492,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// threshold, run compaction in the background so the *next*
 			// turn lands on a tighter buffer. We don't block the return
 			// because the user's response has already streamed.
-			l.maybeAutoCompact(s, resp.Usage.Input)
+			l.maybeAutoCompact(s, resp.Usage.PromptTokens())
 			return nil
 		}
 
@@ -1595,9 +1662,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				"tool_call_id": tc.ID,
 			})
 
+			// Trim ONLY the transcript copy: the full output already went to
+			// the UI (EventToolResult) and to memory (PostToolUse hook) above.
+			// This keeps a fat result from being re-read in full on every
+			// subsequent LLM call this turn.
 			s.Append(llm.Message{
 				Role:       llm.RoleTool,
-				Content:    output,
+				Content:    trimToolResult(tc.Name, output),
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
 			})

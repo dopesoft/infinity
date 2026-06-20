@@ -26,8 +26,13 @@ type turnRowDTO struct {
 	EndedAt       string `json:"ended_at,omitempty"`
 	InputTokens   int    `json:"input_tokens"`
 	OutputTokens  int    `json:"output_tokens"`
-	ToolCallCount int    `json:"tool_call_count"`
-	LatencyMS     int64  `json:"latency_ms"`
+	// Prompt-cache breakdown of the turn (already counted inside InputTokens).
+	// CacheRead = tokens served from cache at ~0.1x; CacheWrite = tokens
+	// written to cache at ~1.25x. 0 on models/turns with no cache hit.
+	CacheReadTokens  int   `json:"cache_read_tokens"`
+	CacheWriteTokens int   `json:"cache_write_tokens"`
+	ToolCallCount    int   `json:"tool_call_count"`
+	LatencyMS        int64 `json:"latency_ms"`
 	// SessionKind marks the origin: 'chat' (default), 'cron', 'heartbeat', …
 	// so /logs can badge a cron run instead of rendering it chat-style.
 	// OriginLabel is the human name for non-chat origins (e.g. the cron name).
@@ -36,30 +41,32 @@ type turnRowDTO struct {
 }
 
 type traceDetailDTO struct {
-	Turn   turnRowDTO           `json:"turn"`
+	Turn   turnRowDTO          `json:"turn"`
 	Events []memory.TraceEvent `json:"events"`
 }
 
 func toRowDTO(r memory.TurnRow) turnRowDTO {
 	return turnRowDTO{
-		ID:            r.ID,
-		SessionID:     r.SessionID,
-		SessionName:   r.SessionName,
-		UserText:      r.UserText,
-		AssistantText: r.AssistantText,
-		Model:         r.Model,
-		Status:        r.Status,
-		StopReason:    r.StopReason,
-		Summary:       r.Summary,
-		Error:         r.Error,
-		StartedAt:     r.StartedAt,
-		EndedAt:       r.EndedAt,
-		InputTokens:   r.InputTokens,
-		OutputTokens:  r.OutputTokens,
-		ToolCallCount: r.ToolCallCount,
-		LatencyMS:     r.LatencyMS,
-		SessionKind:   r.SessionKind,
-		OriginLabel:   r.OriginLabel,
+		ID:               r.ID,
+		SessionID:        r.SessionID,
+		SessionName:      r.SessionName,
+		UserText:         r.UserText,
+		AssistantText:    r.AssistantText,
+		Model:            r.Model,
+		Status:           r.Status,
+		StopReason:       r.StopReason,
+		Summary:          r.Summary,
+		Error:            r.Error,
+		StartedAt:        r.StartedAt,
+		EndedAt:          r.EndedAt,
+		InputTokens:      r.InputTokens,
+		OutputTokens:     r.OutputTokens,
+		CacheReadTokens:  r.CacheReadTokens,
+		CacheWriteTokens: r.CacheWriteTokens,
+		ToolCallCount:    r.ToolCallCount,
+		LatencyMS:        r.LatencyMS,
+		SessionKind:      r.SessionKind,
+		OriginLabel:      r.OriginLabel,
 	}
 }
 

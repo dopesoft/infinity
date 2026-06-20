@@ -36,6 +36,22 @@ func (o *OpenAI) Stream(
 	tools []ToolDef,
 	out chan<- StreamEvent,
 ) (Response, error) {
+	return o.StreamCached(ctx, model, SystemPrompt{Stable: system}, messages, tools, out)
+}
+
+// StreamCached renders the system stable-first so OpenAI's automatic prompt
+// caching (exact-prefix match on the leading tokens) hits across turns, and
+// pins routing with prompt_cache_key. OpenAI has no explicit cache_control;
+// the win is entirely from keeping the stable bytes contiguous at the front.
+func (o *OpenAI) StreamCached(
+	ctx context.Context,
+	model string,
+	sys SystemPrompt,
+	messages []Message,
+	tools []ToolDef,
+	out chan<- StreamEvent,
+) (Response, error) {
+	system := sys.Render()
 	effectiveModel := o.model
 	if model != "" {
 		if normalized := normalizeOpenAIModel(model); normalized != "" {
@@ -95,6 +111,11 @@ func (o *OpenAI) Stream(
 	}
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
+	}
+	// Pin the cache shard to the session so all of a session's turns share a
+	// route, improving the auto-cache hit rate on the stable prefix.
+	if key := CacheKeyFromContext(ctx); key != "" {
+		params.PromptCacheKey = openai.String(key)
 	}
 
 	stream := o.client.Chat.Completions.NewStreaming(ctx, params)
@@ -159,7 +180,15 @@ func (o *OpenAI) Stream(
 			resp.ToolCalls = append(resp.ToolCalls, call)
 			emit(out, StreamEvent{Kind: StreamToolCall, ToolCall: &call})
 		}
-		resp.Usage = TokenUsage{Input: int(acc.Usage.PromptTokens), Output: int(acc.Usage.CompletionTokens)}
+		// OpenAI's prompt_tokens INCLUDES cached tokens, so subtract them to
+		// get the full-priced uncached input the ledger needs; CacheRead
+		// carries the discounted portion. (No separate cache-write charge.)
+		cached := int(acc.Usage.PromptTokensDetails.CachedTokens)
+		uncached := int(acc.Usage.PromptTokens) - cached
+		if uncached < 0 {
+			uncached = 0
+		}
+		resp.Usage = TokenUsage{Input: uncached, Output: int(acc.Usage.CompletionTokens), CacheRead: cached}
 		resp.StopReason = string(acc.Choices[0].FinishReason)
 	}
 

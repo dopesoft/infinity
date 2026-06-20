@@ -2256,14 +2256,16 @@ func (a turnRecorderAdapter) Open(ctx context.Context, sessionID, userText, mode
 }
 func (a turnRecorderAdapter) Close(ctx context.Context, turnID string, f agent.TurnCloseFields) error {
 	return a.store.Close(ctx, turnID, memory.CloseFields{
-		AssistantText: f.AssistantText,
-		StopReason:    f.StopReason,
-		InputTokens:   f.InputTokens,
-		OutputTokens:  f.OutputTokens,
-		ToolCallCount: f.ToolCallCount,
-		Status:        f.Status,
-		Error:         f.Error,
-		Summary:       f.Summary,
+		AssistantText:    f.AssistantText,
+		StopReason:       f.StopReason,
+		InputTokens:      f.InputTokens,
+		OutputTokens:     f.OutputTokens,
+		CacheReadTokens:  f.CacheReadTokens,
+		CacheWriteTokens: f.CacheWriteTokens,
+		ToolCallCount:    f.ToolCallCount,
+		Status:           f.Status,
+		Error:            f.Error,
+		Summary:          f.Summary,
 	})
 }
 func (a turnRecorderAdapter) IncrementToolCalls(ctx context.Context, turnID string) error {

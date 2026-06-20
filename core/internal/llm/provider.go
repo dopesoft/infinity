@@ -38,15 +38,52 @@ type ToolCall struct {
 }
 
 type TokenUsage struct {
+	// Input is the count of *uncached* prompt tokens billed at full rate.
+	// Each provider normalizes its raw usage into this field so the cost
+	// ledger can apply one cache-discount formula regardless of vendor
+	// (Anthropic already reports input_tokens net of cache; OpenAI's
+	// prompt_tokens includes cached, so its serializer subtracts CacheRead).
 	Input  int `json:"input_tokens"`
 	Output int `json:"output_tokens"`
+	// CacheRead / CacheWrite are the prompt-caching breakdown. CacheRead is
+	// billed at ~0.1x (Anthropic) / heavily discounted (OpenAI); CacheWrite
+	// at ~1.25x (Anthropic only; OpenAI auto-caching has no separate write
+	// charge). Zero when the provider doesn't cache or the prompt missed.
+	// These tokens STILL occupy the context window and STILL count toward
+	// rate limits - only their dollar cost is discounted.
+	CacheRead  int `json:"cache_read_input_tokens,omitempty"`
+	CacheWrite int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// PromptTokens is the FULL prompt size that occupied the context window and
+// counted toward rate limits: uncached input + cache reads + cache writes.
+// ALWAYS use this for context-meter / window / rate-limit math - never bare
+// Input, which providers normalize down to the uncached remainder so the cost
+// ledger can apply the cache discount. (A cache HIT reports most of the prompt
+// under CacheRead with a tiny Input; counting only Input would read near-empty
+// on a full window.)
+func (u TokenUsage) PromptTokens() int { return u.Input + u.CacheRead + u.CacheWrite }
+
+// ThroughputTokens is the raw token count for the cost ledger's `quantity`
+// column - the true number of tokens that moved through the model this call
+// (full prompt + output), at face value with no discount. This keeps "how many
+// tokens did I use" honest and consistent with pre-caching history.
+func (u TokenUsage) ThroughputTokens() int { return u.PromptTokens() + u.Output }
+
+// BilledTokens applies the prompt-cache price multipliers - cache reads bill at
+// ~0.1x and writes at ~1.25x of the base input rate (Anthropic; OpenAI auto-
+// cache reads are discounted with no write charge) - to produce the cost-
+// weighted figure the USD estimate uses. Distinct from ThroughputTokens: this
+// is what it COST, that is how many tokens MOVED.
+func (u TokenUsage) BilledTokens() int {
+	return u.Input + u.Output + u.CacheRead/10 + u.CacheWrite*5/4
 }
 
 type Response struct {
-	Text      string     `json:"text"`
-	ToolCalls []ToolCall `json:"tool_calls"`
-	Usage     TokenUsage `json:"usage"`
-	StopReason string    `json:"stop_reason"`
+	Text       string     `json:"text"`
+	ToolCalls  []ToolCall `json:"tool_calls"`
+	Usage      TokenUsage `json:"usage"`
+	StopReason string     `json:"stop_reason"`
 }
 
 type StreamEvent struct {
@@ -92,6 +129,64 @@ type Provider interface {
 	// studio's model chip switches between Sonnet / Opus / Haiku on a
 	// per-turn basis without restarting Core.
 	Stream(ctx context.Context, model, system string, messages []Message, tools []ToolDef, out chan<- StreamEvent) (Response, error)
+}
+
+// SystemPrompt carries the stable/volatile split so caching providers can put
+// a cache breakpoint after the byte-identical stable segment. This is the
+// generic prompt-caching contract: the loop declares the boundary ONCE, every
+// provider honors it its own way (Anthropic: cache_control breakpoints;
+// OpenAI/DeepSeek: automatic caching on the now-stable prefix). Stable must be
+// byte-identical across a session's turns (the soul/base system prompt);
+// Volatile holds per-turn content (RRF retrieval, current_time, tool catalog,
+// account overlay, voice/wind-down).
+type SystemPrompt struct {
+	Stable   string
+	Volatile string
+}
+
+// Render concatenates the two segments in stable-first order. Used by the
+// non-caching Stream fallback so a provider that doesn't implement caching
+// still benefits from the stable-first ordering (auto-cachers hit; others are
+// unaffected).
+func (s SystemPrompt) Render() string {
+	switch {
+	case s.Stable == "":
+		return s.Volatile
+	case s.Volatile == "":
+		return s.Stable
+	default:
+		return s.Stable + "\n\n" + s.Volatile
+	}
+}
+
+// CachingProvider is the OPTIONAL capability a Provider implements when it can
+// exploit the stable/volatile split for prompt caching. The agent loop calls
+// StreamCached when the provider (seen through any wrapper) implements it, and
+// falls back to Stream with the rendered string otherwise - so non-caching
+// providers and the ~10 one-shot Stream callers are completely unaffected.
+type CachingProvider interface {
+	StreamCached(ctx context.Context, model string, sys SystemPrompt, messages []Message, tools []ToolDef, out chan<- StreamEvent) (Response, error)
+}
+
+type cacheKeyCtxType struct{}
+
+// WithCacheKey stamps a stable routing key (the session id) onto the context.
+// OpenAI/OAuth providers forward it as `prompt_cache_key` so all turns of a
+// session route to the same cache shard, raising the auto-cache hit rate.
+// Anthropic ignores it (its caching is content-addressed via cache_control).
+func WithCacheKey(ctx context.Context, key string) context.Context {
+	if key == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, cacheKeyCtxType{}, key)
+}
+
+// CacheKeyFromContext returns the routing key set by WithCacheKey, or "".
+func CacheKeyFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(cacheKeyCtxType{}).(string); ok {
+		return v
+	}
+	return ""
 }
 
 var ErrNotImplemented = errors.New("provider not implemented")

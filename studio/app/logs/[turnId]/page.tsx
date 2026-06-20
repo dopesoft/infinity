@@ -11,6 +11,7 @@ import {
   Clock,
   Copy,
   Cpu,
+  DatabaseZap,
   type LucideIcon,
   Square,
   Wrench,
@@ -230,6 +231,18 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
                     {turn.output_tokens.toLocaleString()}
                   </MetricChip>
                 )}
+                {!!turn.cache_read_tokens && turn.cache_read_tokens > 0 && (
+                  <MetricChip
+                    icon={DatabaseZap}
+                    tone="positive"
+                    title="Prompt tokens served from cache at ~0.1x cost (already counted in input tokens)"
+                  >
+                    {turn.cache_read_tokens.toLocaleString()} cached
+                    {turn.input_tokens > 0
+                      ? ` (${Math.round((turn.cache_read_tokens / turn.input_tokens) * 100)}%)`
+                      : ""}
+                  </MetricChip>
+                )}
                 {latencyState && (
                   <MetricChip
                     icon={latencyState.tone === "stalled" ? AlertTriangle : Clock}
@@ -406,7 +419,10 @@ function serializeTurnForPaste(detail: TraceDetailDTO): string {
   if (turn.ended_at) out.push(`- ended_at: ${turn.ended_at}`);
   if (turn.latency_ms) out.push(`- latency_ms: ${turn.latency_ms}`);
   if (turn.input_tokens || turn.output_tokens) {
-    out.push(`- tokens: in=${turn.input_tokens} out=${turn.output_tokens}`);
+    const cache = turn.cache_read_tokens
+      ? ` cache_read=${turn.cache_read_tokens}${turn.cache_write_tokens ? ` cache_write=${turn.cache_write_tokens}` : ""}`
+      : "";
+    out.push(`- tokens: in=${turn.input_tokens} out=${turn.output_tokens}${cache}`);
   }
   if (turn.tool_call_count) out.push(`- tool_calls: ${turn.tool_call_count}`);
   if (turn.error) out.push(`- error: ${turn.error}`);
@@ -466,10 +482,11 @@ function MetricChip({
 }: {
   icon?: LucideIcon;
   title?: string;
-  tone?: "default" | "stalled";
+  tone?: "default" | "stalled" | "positive";
   children: ReactNode;
 }) {
   const stalled = tone === "stalled";
+  const positive = tone === "positive";
   return (
     <span
       title={title}
@@ -477,14 +494,20 @@ function MetricChip({
         "inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono",
         stalled
           ? "border-warning/40 bg-warning/10 text-warning"
-          : "border-border/60 bg-muted/40 text-foreground/80",
+          : positive
+            ? "border-success/40 bg-success/10 text-success"
+            : "border-border/60 bg-muted/40 text-foreground/80",
       )}
     >
       {Icon && (
         <Icon
           className={cn(
             "size-3 shrink-0",
-            stalled ? "text-warning" : "text-muted-foreground",
+            stalled
+              ? "text-warning"
+              : positive
+                ? "text-success"
+                : "text-muted-foreground",
           )}
           aria-hidden
         />

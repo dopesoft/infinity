@@ -76,10 +76,30 @@ func (a *Anthropic) Draft(ctx context.Context, model, system, userPrompt string,
 	return string(b), nil
 }
 
+// Stream satisfies the base Provider interface. It is a thin shim over
+// StreamCached treating the whole system string as the (cacheable) stable
+// segment - correct for the one-shot helper callers that have no per-turn
+// volatile content.
 func (a *Anthropic) Stream(
 	ctx context.Context,
 	model string,
 	system string,
+	messages []Message,
+	tools []ToolDef,
+	out chan<- StreamEvent,
+) (Response, error) {
+	return a.StreamCached(ctx, model, SystemPrompt{Stable: system}, messages, tools, out)
+}
+
+// StreamCached is the caching-aware path. It places Anthropic cache_control
+// breakpoints exactly the way Claude Code does: one on the stable system
+// block, one on the last tool definition (so tools+system cache together),
+// and a walking breakpoint on the last message so the growing transcript
+// caches incrementally. Up to 4 breakpoints are allowed; we use 3.
+func (a *Anthropic) StreamCached(
+	ctx context.Context,
+	model string,
+	sys SystemPrompt,
 	messages []Message,
 	tools []ToolDef,
 	out chan<- StreamEvent,
@@ -122,6 +142,20 @@ func (a *Anthropic) Stream(
 		}
 	}
 
+	// Walking message breakpoint: cache_control on the last content block of
+	// the last message caches the growing transcript incrementally, so each
+	// turn only pays to write the newest turn's tokens and reads everything
+	// prior at 0.1x. GetCacheControl returns a writable pointer into the
+	// active union member; nil for block kinds that can't be cached.
+	if n := len(apiMessages); n > 0 {
+		blocks := apiMessages[n-1].Content
+		if b := len(blocks); b > 0 {
+			if cc := blocks[b-1].GetCacheControl(); cc != nil {
+				*cc = anthropic.NewCacheControlEphemeralParam()
+			}
+		}
+	}
+
 	apiTools := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
 		raw, _ := json.Marshal(t.Schema)
@@ -135,6 +169,12 @@ func (a *Anthropic) Stream(
 			},
 		})
 	}
+	// Cache breakpoint on the LAST tool def: the prefix hash is cumulative
+	// tools -> system -> messages, so this caches the whole tool array (and,
+	// with the system breakpoint below, tools+system as one stable prefix).
+	if n := len(apiTools); n > 0 && apiTools[n-1].OfTool != nil {
+		apiTools[n-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
 
 	maxTokens := int64(4096)
 	if a.thinkingBudget > 0 && a.thinkingBudget+1024 > maxTokens {
@@ -145,8 +185,19 @@ func (a *Anthropic) Stream(
 		MaxTokens: maxTokens,
 		Messages:  apiMessages,
 	}
-	if system != "" {
-		params.System = []anthropic.TextBlockParam{{Text: system}}
+	// Stable system block carries the cache breakpoint; the volatile block
+	// (RRF retrieval, current_time, tool catalog, ...) follows AFTER it so it
+	// never invalidates the cached prefix.
+	if sys.Stable != "" {
+		params.System = []anthropic.TextBlockParam{{
+			Text:         sys.Stable,
+			CacheControl: anthropic.NewCacheControlEphemeralParam(),
+		}}
+		if sys.Volatile != "" {
+			params.System = append(params.System, anthropic.TextBlockParam{Text: sys.Volatile})
+		}
+	} else if sys.Volatile != "" {
+		params.System = []anthropic.TextBlockParam{{Text: sys.Volatile}}
 	}
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
@@ -226,7 +277,16 @@ func (a *Anthropic) Stream(
 		}
 	}
 
-	resp.Usage = TokenUsage{Input: int(msg.Usage.InputTokens), Output: int(msg.Usage.OutputTokens)}
+	// Anthropic reports input_tokens NET of cache (the uncached remainder),
+	// with cache reads/writes broken out separately - so Input maps straight
+	// across with no subtraction. The cost ledger applies the 0.1x/1.25x
+	// multipliers; the context meter re-sums all three as window fill.
+	resp.Usage = TokenUsage{
+		Input:      int(msg.Usage.InputTokens),
+		Output:     int(msg.Usage.OutputTokens),
+		CacheRead:  int(msg.Usage.CacheReadInputTokens),
+		CacheWrite: int(msg.Usage.CacheCreationInputTokens),
+	}
 	resp.StopReason = string(msg.StopReason)
 	emit(out, StreamEvent{Kind: StreamComplete, StopReason: resp.StopReason, Usage: &resp.Usage})
 

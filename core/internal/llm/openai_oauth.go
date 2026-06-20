@@ -392,7 +392,23 @@ func (o *OpenAIOAuth) Stream(
 	tools []ToolDef,
 	out chan<- StreamEvent,
 ) (Response, error) {
+	return o.StreamCached(ctx, model, SystemPrompt{Stable: system}, messages, tools, out)
+}
+
+// StreamCached renders the system stable-first into the Responses API
+// `instructions` field and sets `prompt_cache_key` so Codex's automatic
+// caching hits the stable prefix across a session's turns.
+func (o *OpenAIOAuth) StreamCached(
+	ctx context.Context,
+	model string,
+	sys SystemPrompt,
+	messages []Message,
+	tools []ToolDef,
+	out chan<- StreamEvent,
+) (Response, error) {
 	var resp Response
+	system := sys.Render()
+	cacheKey := CacheKeyFromContext(ctx)
 
 	tok, err := o.refreshIfNeeded(ctx)
 	if err != nil {
@@ -428,7 +444,7 @@ func (o *OpenAIOAuth) Stream(
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, messages, tools)
+		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, cacheKey, messages, tools)
 
 		// Network-level failure (no usable response).
 		if attemptErr != nil {
@@ -635,11 +651,11 @@ func isTransientNetErr(err error) bool {
 func (o *OpenAIOAuth) attemptStream(
 	ctx context.Context,
 	tok OAuthToken,
-	model, system string,
+	model, system, cacheKey string,
 	messages []Message,
 	tools []ToolDef,
 ) (*http.Response, error) {
-	body := buildResponsesRequest(model, system, messages, tools)
+	body := buildResponsesRequest(model, system, cacheKey, messages, tools)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -688,7 +704,7 @@ func looksLikeModelRejection(body string) bool {
 // are translated into the Responses API's `input` array (one item per turn).
 // Tool calls and tool results round-trip via `function_call` / `function_call
 // _output` items, the same shape the upstream API documents.
-func buildResponsesRequest(model, system string, messages []Message, tools []ToolDef) map[string]any {
+func buildResponsesRequest(model, system, cacheKey string, messages []Message, tools []ToolDef) map[string]any {
 	input := make([]map[string]any, 0, len(messages))
 	for _, m := range messages {
 		switch m.Role {
@@ -748,6 +764,12 @@ func buildResponsesRequest(model, system string, messages []Message, tools []Too
 	}
 	if system != "" {
 		body["instructions"] = system
+	}
+	// Pin the cache shard to the session so the stable prefix auto-caches
+	// across turns. Codex's /responses honors prompt_cache_key like the
+	// public Responses API.
+	if cacheKey != "" {
+		body["prompt_cache_key"] = cacheKey
 	}
 	// Reasoning-capable models compute thinking tokens internally regardless
 	// of this flag, but the SUMMARY text only streams when we explicitly
@@ -1149,8 +1171,11 @@ func decodeUsage(raw json.RawMessage) *TokenUsage {
 	}
 	var body struct {
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			InputTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -1159,7 +1184,14 @@ func decodeUsage(raw json.RawMessage) *TokenUsage {
 	if body.Usage.InputTokens == 0 && body.Usage.OutputTokens == 0 {
 		return nil
 	}
-	return &TokenUsage{Input: body.Usage.InputTokens, Output: body.Usage.OutputTokens}
+	// input_tokens INCLUDES cached tokens; subtract to get the full-priced
+	// uncached portion and carry the cached count separately.
+	cached := body.Usage.InputTokensDetails.CachedTokens
+	uncached := body.Usage.InputTokens - cached
+	if uncached < 0 {
+		uncached = 0
+	}
+	return &TokenUsage{Input: uncached, Output: body.Usage.OutputTokens, CacheRead: cached}
 }
 
 func truncateOAuth(s string, n int) string {

@@ -704,8 +704,14 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 	case agent.EventComplete:
 		usage := map[string]int{}
 		if ev.Usage != nil {
-			usage["input"] = ev.Usage.Input
+			// input = FULL prompt size (uncached + cache reads/writes) so the
+			// chat meter reflects true window fill on a cache hit; the
+			// cache_read/cache_write split lets the modal show the caching
+			// effect. Accurate for every model: non-caching brains report 0.
+			usage["input"] = ev.Usage.PromptTokens()
 			usage["output"] = ev.Usage.Output
+			usage["cache_read"] = ev.Usage.CacheRead
+			usage["cache_write"] = ev.Usage.CacheWrite
 		}
 		send(wsServerEvent{
 			Type:       "complete",
@@ -765,7 +771,10 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 			 * because the turn already succeeded. */
 			usedTokens := 0
 			if ev.Usage != nil {
-				usedTokens = ev.Usage.Input + ev.Usage.Output
+				// Full window fill (PromptTokens includes cache reads/writes),
+				// not bare Input - else a cache-heavy turn underreports and the
+				// working-buffer mirror fails to trip at the proactive threshold.
+				usedTokens = ev.Usage.PromptTokens() + ev.Usage.Output
 			}
 			s.captureWorkingBuffer(ctx, ev.SessionID, content, assistantText.String(), usedTokens)
 		}
