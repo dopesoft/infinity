@@ -45,7 +45,7 @@ func RegisterSelfImproveTools(r *Registry, decider CodeProposalDecider, deployFn
 		return
 	}
 	if decider != nil {
-		r.Register(&codeProposalDecide{decider: decider})
+		r.Register(&codeProposalDecide{decider: decider, deployFn: deployFn})
 	}
 	if deployFn != nil {
 		r.Register(&deployStatusTool{fn: deployFn})
@@ -121,7 +121,10 @@ func envOn(key string) bool {
 
 // ── code_proposal_decide ──────────────────────────────────────────────────
 
-type codeProposalDecide struct{ decider CodeProposalDecider }
+type codeProposalDecide struct {
+	decider  CodeProposalDecider
+	deployFn func() any // injected from serve.go; nil in tests that don't need the gate
+}
 
 func (t *codeProposalDecide) Name() string { return "code_proposal_decide" }
 func (t *codeProposalDecide) Description() string {
@@ -150,10 +153,61 @@ func (t *codeProposalDecide) Execute(ctx context.Context, in map[string]any) (st
 	default:
 		return "", fmt.Errorf("decision must be approved, rejected, or applied (got %q)", decision)
 	}
+	// Gate: "applied" means "deployed and verified" — the deploy MUST have caught
+	// up before we stamp that. Checked only in autonomous turns (nightly crons,
+	// heartbeat, delegates) because interactive boss turns explicitly decide.
+	// This is the mechanical enforcement of Rule #1b: the skill prose says "check
+	// deploy_status first" but prose can be dropped; the tool refuses to lie.
+	if decision == "applied" && IsAutonomous(ctx) && t.deployFn != nil {
+		if err := checkDeployedBeforeApplied(t.deployFn()); err != nil {
+			return "", err
+		}
+	}
 	if err := t.decider.DecideCodeProposal(ctx, id, decision, note); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(`{"ok":true,"id":%q,"decision":%q}`, id, decision), nil
+}
+
+// checkDeployedBeforeApplied rejects the "applied" stamp when the cached
+// deploy snapshot shows the running binary has not yet caught up to the latest
+// pushed SHA. Returns nil when (a) the snapshot is absent/uninitialised,
+// (b) both SHAs are empty (local dev with no Railway env), or (c) the SHAs
+// match (deploy landed). Returns a descriptive error only when LatestSHA is
+// set, RunningSHA is set, and they differ — i.e. a real push hasn't deployed.
+func checkDeployedBeforeApplied(snapshot any) error {
+	if snapshot == nil {
+		return nil
+	}
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil // marshal failure → don't block
+	}
+	var ds struct {
+		RunningSHA string `json:"running_sha"`
+		LatestSHA  string `json:"latest_sha"`
+	}
+	if err := json.Unmarshal(b, &ds); err != nil {
+		return nil
+	}
+	if ds.LatestSHA == "" || ds.RunningSHA == "" {
+		return nil // uninitialised (local dev, no Railway env)
+	}
+	if ds.RunningSHA == ds.LatestSHA {
+		return nil // deploy has landed
+	}
+	short := func(s string) string {
+		if len(s) >= 8 {
+			return s[:8]
+		}
+		return s
+	}
+	return fmt.Errorf(
+		"cannot mark proposal as applied: deploy has not caught up "+
+			"(running=%s, latest=%s) — wait for the build to land or use 'approved' "+
+			"to record commit intent without confirming the deploy",
+		short(ds.RunningSHA), short(ds.LatestSHA),
+	)
 }
 
 // ── deploy_status ─────────────────────────────────────────────────────────
