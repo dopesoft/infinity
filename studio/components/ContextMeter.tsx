@@ -194,7 +194,7 @@ function UsageBody({ data }: { data: ContextUsageDTO | null }) {
         <div className="flex items-center gap-1.5 rounded-md border border-success/30 bg-success/10 px-2 py-1.5 text-[11px] text-success">
           <DatabaseZap className="size-3 shrink-0" aria-hidden />
           <span className="min-w-0">
-            {formatTokens(data.cache_read_tokens)} of last turn's prompt served from cache
+            {formatTokens(data.cache_read_tokens)} of the last prompt served from cache
             {data.used_tokens > 0
               ? ` (${Math.round((data.cache_read_tokens / data.used_tokens) * 100)}%)`
               : ""}{" "}
