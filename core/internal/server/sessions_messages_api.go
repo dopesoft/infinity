@@ -28,6 +28,10 @@ type sessionMessageDTO struct {
 	Text        string                 `json:"text"`
 	CreatedAt   string                 `json:"created_at"`
 	Attachments []sessionAttachmentDTO `json:"attachments,omitempty"`
+	// Steered marks a user message that was injected mid-turn rather than
+	// opening a fresh top-of-turn prompt. Studio uses this to rebuild the
+	// "steered mid-turn" affordance after navigation/reload.
+	Steered bool `json:"steered,omitempty"`
 	// Kind discriminates non-plain messages so Studio can render them
 	// with distinct chrome. Empty for ordinary user/assistant turns;
 	// "dashboard_seed" for the context block injected by Discuss-with-Jarvis.
@@ -39,11 +43,6 @@ type sessionMessageDTO struct {
 	// curiosity question (best-effort, by artifact-title match). When set,
 	// the card renders an "Approve & fix" action.
 	CuriosityID string `json:"curiosity_id,omitempty"`
-	// Steered marks a UserPromptSubmit row that arrived as a mid-turn steer
-	// (typed while the agent was responding). Surfaced so Studio can render
-	// the "↳ steered" affordance on reload without depending on transient
-	// local state.
-	Steered bool `json:"steered,omitempty"`
 	// Tool-call reconstruction (role="tool"): rebuilt from the captured
 	// PostToolUse observation so the inline ToolCallCard survives navigation
 	// and reload instead of vanishing. ToolInput is the raw arguments JSON.
