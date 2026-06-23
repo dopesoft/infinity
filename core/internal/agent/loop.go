@@ -212,6 +212,8 @@ func (s *Session) SeedUsage(snap UsageSnapshot) {
 	s.lastOutputTokens = snap.LastOutputTokens
 	s.totalInputTokens = snap.TotalInputTokens
 	s.totalOutputTokens = snap.TotalOutputTokens
+	s.lastCacheReadTokens = snap.LastCacheReadTokens
+	s.lastCacheWriteTokens = snap.LastCacheWriteTokens
 }
 
 // MemoryProvider lets memory inject relevant retrievals without coupling.
@@ -603,7 +605,7 @@ func (l *Loop) compactTurnNow(s *Session) bool {
 
 func (l *Loop) recordLLMCost(provider llm.Provider, model string, usage llm.TokenUsage) {
 	rec := l.costRecorder()
-	if rec == nil || (usage.Input == 0 && usage.Output == 0) {
+	if rec == nil || usage.ThroughputTokens() == 0 {
 		return
 	}
 	subject := strings.TrimSpace(model)

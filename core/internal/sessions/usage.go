@@ -12,7 +12,9 @@ import (
 
 // UsagePersistence is the agent.UsageStore implementation backed by the
 // `last_input_tokens / last_output_tokens / total_input_tokens / total_output_tokens`
-// columns added to mem_sessions in migration 013.
+// columns added to mem_sessions in migration 013. The prompt-cache split lives
+// on mem_turns (migration 151), so hydration also reads the latest turn's cache
+// counters when that table/columns exist.
 //
 // Before 013 the loop kept these counters in process memory; Studio's
 // context meter then showed 0% on any session that survived a Railway
@@ -41,15 +43,27 @@ func (u *UsagePersistence) Hydrate(ctx context.Context, sessionID string) (agent
 	}
 	var snap agent.UsageSnapshot
 	err := u.pool.QueryRow(ctx, `
-		SELECT last_input_tokens, last_output_tokens,
-		       total_input_tokens, total_output_tokens
-		FROM mem_sessions
-		WHERE id = $1::uuid
+		SELECT s.last_input_tokens, s.last_output_tokens,
+		       s.total_input_tokens, s.total_output_tokens,
+		       COALESCE(t.cache_read_tokens, 0),
+		       COALESCE(t.cache_write_tokens, 0)
+		FROM mem_sessions s
+		LEFT JOIN LATERAL (
+			SELECT cache_read_tokens, cache_write_tokens
+			  FROM mem_turns
+			 WHERE session_id = s.id
+			   AND ended_at IS NOT NULL
+			 ORDER BY ended_at DESC
+			 LIMIT 1
+		) t ON true
+		WHERE s.id = $1::uuid
 	`, sessionID).Scan(
 		&snap.LastInputTokens,
 		&snap.LastOutputTokens,
 		&snap.TotalInputTokens,
 		&snap.TotalOutputTokens,
+		&snap.LastCacheReadTokens,
+		&snap.LastCacheWriteTokens,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
