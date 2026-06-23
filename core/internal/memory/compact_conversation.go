@@ -13,12 +13,12 @@ import (
 // (manual /compact tool, auto-trigger in the loop) can surface a clean
 // status without re-implementing the math.
 type CompactionResult struct {
-	OriginalTurns      int      `json:"original_turns"`
-	KeptTurns          int      `json:"kept_turns"`
-	CompactedTurns     int      `json:"compacted_turns"`
-	SummaryChars       int      `json:"summary_chars"`
-	ObservationIDs     []string `json:"observation_ids"`
-	SummaryMarkdown    string   `json:"summary_markdown"`
+	OriginalTurns   int      `json:"original_turns"`
+	KeptTurns       int      `json:"kept_turns"`
+	CompactedTurns  int      `json:"compacted_turns"`
+	SummaryChars    int      `json:"summary_chars"`
+	ObservationIDs  []string `json:"observation_ids"`
+	SummaryMarkdown string   `json:"summary_markdown"`
 }
 
 // CompactionConfig tunes the heuristic. Zero values pick sensible defaults
@@ -111,6 +111,31 @@ func (c *ConversationCompactor) Compact(
 		}, nil
 	}
 
+	obsIDs := c.persistCompactedObservations(ctx, sessionID, messages, turnBoundaries, splitAt, keep)
+	compactedTurns := len(turnBoundaries) - keep
+
+	if cp, ok := c.provider.(llm.CompactingProvider); ok {
+		compacted, _, compactErr := cp.CompactContext(ctx, cfg.Model, messages)
+		if compactErr == nil && len(compacted) > 0 {
+			return compacted, CompactionResult{
+				OriginalTurns:   len(turnBoundaries),
+				KeptTurns:       keep,
+				CompactedTurns:  compactedTurns,
+				ObservationIDs:  obsIDs,
+				SummaryMarkdown: "Provider-native Responses compaction.",
+			}, nil
+		}
+		if compactErr != nil && !errors.Is(compactErr, llm.ErrNotImplemented) {
+			// The old summarizer path is still a valid compaction fallback. If
+			// it also fails, report that original provider-native failure below.
+			defer func() {
+				if err != nil {
+					err = fmt.Errorf("provider compact: %v; %w", compactErr, err)
+				}
+			}()
+		}
+	}
+
 	// Build a transcript blob the summariser can chew on.
 	transcript := renderTranscript(older)
 
@@ -140,10 +165,38 @@ func (c *ConversationCompactor) Compact(
 		return messages, CompactionResult{}, errors.New("summarizer returned empty body")
 	}
 
-	// Persist each older turn as an observation so the compress
-	// pipeline can promote durable knowledge to mem_memories. We bundle
-	// per-turn rather than one-blob-per-segment so granularity matches
-	// the rest of the memory substrate.
+	// Build the replacement message list: synthetic system note +
+	// kept tail. The synthetic message is RoleSystem so the model
+	// treats it as instructional context rather than user/assistant
+	// dialogue.
+	synth := llm.Message{
+		Role:    llm.RoleSystem,
+		Content: buildCompactionNote(summary, compactedTurns, len(obsIDs)),
+	}
+	newMessages = append([]llm.Message{synth}, kept...)
+
+	return newMessages, CompactionResult{
+		OriginalTurns:   len(turnBoundaries),
+		KeptTurns:       keep,
+		CompactedTurns:  compactedTurns,
+		SummaryChars:    len(summary),
+		ObservationIDs:  obsIDs,
+		SummaryMarkdown: summary,
+	}, nil
+}
+
+func (c *ConversationCompactor) persistCompactedObservations(
+	ctx context.Context,
+	sessionID string,
+	messages []llm.Message,
+	turnBoundaries []int,
+	splitAt int,
+	keep int,
+) []string {
+	// Persist each older turn as an observation so the compress pipeline can
+	// promote durable knowledge to mem_memories. We bundle per-turn rather
+	// than one-blob-per-segment so granularity matches the rest of the memory
+	// substrate.
 	obsIDs := make([]string, 0, len(turnBoundaries)-keep)
 	for i := 0; i < len(turnBoundaries)-keep; i++ {
 		startIdx := turnBoundaries[i]
@@ -172,25 +225,7 @@ func (c *ConversationCompactor) Compact(
 		}
 		obsIDs = append(obsIDs, id)
 	}
-
-	// Build the replacement message list: synthetic system note +
-	// kept tail. The synthetic message is RoleSystem so the model
-	// treats it as instructional context rather than user/assistant
-	// dialogue.
-	synth := llm.Message{
-		Role:    llm.RoleSystem,
-		Content: buildCompactionNote(summary, len(turnBoundaries)-keep, len(obsIDs)),
-	}
-	newMessages = append([]llm.Message{synth}, kept...)
-
-	return newMessages, CompactionResult{
-		OriginalTurns:   len(turnBoundaries),
-		KeptTurns:       keep,
-		CompactedTurns:  len(turnBoundaries) - keep,
-		SummaryChars:    len(summary),
-		ObservationIDs:  obsIDs,
-		SummaryMarkdown: summary,
-	}, nil
+	return obsIDs
 }
 
 // compactionSystemPrompt is the summariser prompt. Tuned to preserve the

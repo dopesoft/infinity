@@ -676,6 +676,76 @@ func (o *OpenAIOAuth) attemptStream(
 	return o.httpClient.Do(req)
 }
 
+// CompactContext uses the stateless Responses compaction endpoint supported by
+// the ChatGPT Codex backend. Unlike previous_response_id, this does not require
+// store=true (the backend rejects store=true for subscription OAuth) and returns
+// the canonical next input window to pass back on later /responses calls.
+func (o *OpenAIOAuth) CompactContext(ctx context.Context, model string, messages []Message) ([]Message, TokenUsage, error) {
+	tok, err := o.refreshIfNeeded(ctx)
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	effectiveModel := o.model
+	if model != "" {
+		if nickname := tierNicknameToCodex(model); nickname != "" {
+			effectiveModel = nickname
+		} else {
+			effectiveModel = model
+		}
+	}
+	body := map[string]any{
+		"model": effectiveModel,
+		"input": buildResponsesInput(messages),
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	endpoint := strings.TrimRight(o.apiBase, "/") + "/responses/compact"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	if tok.AccountID != "" {
+		req.Header.Set("chatgpt-account-id", tok.AccountID)
+	}
+	req.Header.Set("User-Agent", "infinity-core/1 (openai_oauth)")
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, TokenUsage{}, fmt.Errorf("openai_oauth compact: status=%d body=%s", resp.StatusCode, truncateOAuth(string(raw), 400))
+	}
+	var bodyResp struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &bodyResp); err != nil {
+		return nil, TokenUsage{}, fmt.Errorf("openai_oauth compact decode: %w", err)
+	}
+	if len(bodyResp.Output) == 0 {
+		return nil, TokenUsage{}, errors.New("openai_oauth compact returned empty output")
+	}
+	out := make([]Message, 0, len(bodyResp.Output))
+	for _, item := range bodyResp.Output {
+		out = append(out, responseItemToMessage(item))
+	}
+	usage := TokenUsage{}
+	if u := decodeUsage(raw); u != nil {
+		usage = *u
+	}
+	return out, usage, nil
+}
+
 // looksLikeModelRejection identifies a 400 body whose root cause is the
 // model name (rather than e.g. malformed payload). Codex returns a few
 // distinct phrasings - "is not supported when using Codex with a ChatGPT
@@ -704,9 +774,16 @@ func looksLikeModelRejection(body string) bool {
 // are translated into the Responses API's `input` array (one item per turn).
 // Tool calls and tool results round-trip via `function_call` / `function_call
 // _output` items, the same shape the upstream API documents.
-func buildResponsesRequest(model, system, cacheKey string, messages []Message, tools []ToolDef) map[string]any {
-	input := make([]map[string]any, 0, len(messages))
+func buildResponsesInput(messages []Message) []any {
+	input := make([]any, 0, len(messages))
 	for _, m := range messages {
+		if raw, ok := RawResponseItem(m); ok {
+			var item map[string]any
+			if err := json.Unmarshal(raw, &item); err == nil && len(item) > 0 {
+				input = append(input, item)
+				continue
+			}
+		}
 		switch m.Role {
 		case RoleUser:
 			input = append(input, map[string]any{
@@ -743,10 +820,19 @@ func buildResponsesRequest(model, system, cacheKey string, messages []Message, t
 			})
 		}
 	}
+	return input
+}
 
+// buildResponsesRequest assembles the JSON payload for /responses. Messages
+// are translated into the Responses API's `input` array (one item per turn),
+// except provider-native raw response items returned by /responses/compact are
+// passed through unchanged. Tool calls and tool results round-trip via
+// `function_call` / `function_call_output` items, the same shape the upstream
+// API documents.
+func buildResponsesRequest(model, system, cacheKey string, messages []Message, tools []ToolDef) map[string]any {
 	body := map[string]any{
 		"model":  model,
-		"input":  input,
+		"input":  buildResponsesInput(messages),
 		"stream": true,
 		"store":  false,
 	}
@@ -1148,6 +1234,77 @@ func decodeMessageText(raw json.RawMessage) string {
 		}
 	}
 	return b.String()
+}
+
+func responseItemToMessage(raw json.RawMessage) Message {
+	var item struct {
+		Type      string `json:"type"`
+		Role      string `json:"role"`
+		CallID    string `json:"call_id"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+		Output    any    `json:"output"`
+		Content   []struct {
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Refusal string `json:"refusal"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return WithRawResponseItem(Message{Role: RoleSystem}, raw)
+	}
+	switch item.Type {
+	case "message":
+		var b strings.Builder
+		for _, c := range item.Content {
+			switch c.Type {
+			case "input_text", "output_text":
+				b.WriteString(c.Text)
+			case "refusal":
+				b.WriteString(c.Refusal)
+			}
+		}
+		role := Role(item.Role)
+		if role != RoleUser && role != RoleAssistant && role != RoleSystem {
+			role = RoleSystem
+		}
+		return WithRawResponseItem(Message{Role: role, Content: b.String()}, raw)
+	case "function_call", "custom_tool_call":
+		input := map[string]any{}
+		if item.Arguments != "" {
+			_ = json.Unmarshal([]byte(item.Arguments), &input)
+		}
+		return WithRawResponseItem(Message{
+			Role: RoleAssistant,
+			ToolCalls: []ToolCall{{
+				ID:    item.CallID,
+				Name:  item.Name,
+				Input: input,
+			}},
+		}, raw)
+	case "function_call_output", "custom_tool_call_output":
+		var output string
+		switch v := item.Output.(type) {
+		case string:
+			output = v
+		case nil:
+			output = ""
+		default:
+			if b, err := json.Marshal(v); err == nil {
+				output = string(b)
+			}
+		}
+		return WithRawResponseItem(Message{
+			Role:       RoleTool,
+			Content:    output,
+			ToolCallID: item.CallID,
+		}, raw)
+	default:
+		// Reasoning / compaction items don't map cleanly onto Infinity's
+		// generic chat roles. Keep the raw item so OpenAI sees the canonical
+		// compacted window on the next request.
+		return WithRawResponseItem(Message{Role: RoleSystem}, raw)
+	}
 }
 
 // toolCallAlreadyEmitted prevents the `output_item.done` fallback from

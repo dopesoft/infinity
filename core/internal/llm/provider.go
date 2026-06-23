@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -23,6 +24,45 @@ type Message struct {
 	ToolName   string         `json:"tool_name,omitempty"`
 	Timestamp  time.Time      `json:"timestamp,omitempty"`
 	Meta       map[string]any `json:"-"`
+}
+
+const ResponseItemMetaKey = "openai_response_item"
+
+func WithRawResponseItem(m Message, raw json.RawMessage) Message {
+	if len(raw) == 0 {
+		return m
+	}
+	if m.Meta == nil {
+		m.Meta = map[string]any{}
+	}
+	cp := append(json.RawMessage(nil), raw...)
+	m.Meta[ResponseItemMetaKey] = cp
+	return m
+}
+
+func RawResponseItem(m Message) (json.RawMessage, bool) {
+	if m.Meta == nil {
+		return nil, false
+	}
+	switch v := m.Meta[ResponseItemMetaKey].(type) {
+	case json.RawMessage:
+		if len(v) == 0 {
+			return nil, false
+		}
+		return v, true
+	case []byte:
+		if len(v) == 0 {
+			return nil, false
+		}
+		return json.RawMessage(v), true
+	case string:
+		if v == "" {
+			return nil, false
+		}
+		return json.RawMessage(v), true
+	default:
+		return nil, false
+	}
 }
 
 type ToolDef struct {
@@ -166,6 +206,16 @@ func (s SystemPrompt) Render() string {
 // providers and the ~10 one-shot Stream callers are completely unaffected.
 type CachingProvider interface {
 	StreamCached(ctx context.Context, model string, sys SystemPrompt, messages []Message, tools []ToolDef, out chan<- StreamEvent) (Response, error)
+}
+
+// CompactingProvider is the optional stateless context-compaction capability.
+// Providers that expose an official compact endpoint return the canonical next
+// message window. The caller must replace the old session messages with the
+// returned slice exactly; individual messages may carry provider-native raw
+// response items in Meta so a later Stream can pass them back without lossy
+// re-encoding.
+type CompactingProvider interface {
+	CompactContext(ctx context.Context, model string, messages []Message) ([]Message, TokenUsage, error)
 }
 
 type cacheKeyCtxType struct{}

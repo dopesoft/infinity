@@ -169,3 +169,11 @@ func (n *noDashesProvider) StreamCached(
 	resp.Text = StripDashes(resp.Text)
 	return resp, err
 }
+
+func (n *noDashesProvider) CompactContext(ctx context.Context, model string, messages []Message) ([]Message, TokenUsage, error) {
+	cp, ok := n.inner.(CompactingProvider)
+	if !ok {
+		return nil, TokenUsage{}, ErrNotImplemented
+	}
+	return cp.CompactContext(ctx, model, messages)
+}
