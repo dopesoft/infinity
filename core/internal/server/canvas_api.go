@@ -1799,13 +1799,21 @@ func (s *Server) handleCanvasConfig(w http.ResponseWriter, r *http.Request) {
 		DefaultProjectPath: canvasDefaultProjectPath(),
 	}
 	// Bridge-aware default: when this session resolves to the cloud bridge, the
-	// canvas should default to the cloud /workspace volume (where the agent's
-	// fs_save lands), NOT the Mac repo. Without this the tree opens on the Mac
-	// repo and the boss can't see what Jarvis wrote on cloud.
-	if _, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+	// canvas should default to the ACTIVE cloud repo when present, not the bare
+	// /workspace root. If we point the Files/Changes shell at /workspace, the
+	// file list can still show in-memory dirty files, but the badge poll runs
+	// `git status` against a non-repo root and returns zero. Prefer the Infinity
+	// repo when it exists so cloud badge counts match Mac parity.
+	if b, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
 		resp.Root = cloudWorkspaceRoot
 		resp.RootIsSet = true
 		resp.DefaultProjectPath = cloudWorkspaceRoot
+		if out, code, bok := cloudBash(r.Context(), b, "if [ -d /workspace/infinity/.git ]; then printf /workspace/infinity; else printf /workspace; fi"); bok && code == 0 {
+			path := strings.TrimSpace(out)
+			if path != "" {
+				resp.DefaultProjectPath = path
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

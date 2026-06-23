@@ -28,6 +28,10 @@ type sessionMessageDTO struct {
 	Text        string                 `json:"text"`
 	CreatedAt   string                 `json:"created_at"`
 	Attachments []sessionAttachmentDTO `json:"attachments,omitempty"`
+	// Steered marks a user message that was injected mid-turn rather than
+	// opening a fresh top-of-turn prompt. Studio uses this to rebuild the
+	// "steered mid-turn" affordance after navigation/reload.
+	Steered bool `json:"steered,omitempty"`
 	// Kind discriminates non-plain messages so Studio can render them
 	// with distinct chrome. Empty for ordinary user/assistant turns;
 	// "dashboard_seed" for the context block injected by Discuss-with-Jarvis.
@@ -220,6 +224,11 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		switch hook {
 		case "UserPromptSubmit":
 			msg.Role = "user"
+			var p struct {
+				Steered bool `json:"steered"`
+			}
+			_ = json.Unmarshal([]byte(payload), &p)
+			msg.Steered = p.Steered
 		case "DashboardSeed":
 			msg.Role = "user"
 			msg.Kind = "dashboard_seed"

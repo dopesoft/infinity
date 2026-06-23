@@ -99,6 +99,7 @@ type ServerRow = {
   role: ChatRole;
   text: string;
   created_at: string;
+  steered?: boolean;
   kind?: string;
   seed_kind?: string;
   curiosity_id?: string;
@@ -209,6 +210,7 @@ function rowToMessage(r: ServerRow): ChatMessage {
     text: r.text,
     attachments: rowAttachmentsToChat(r.attachments),
     createdAt: new Date(r.created_at).getTime() || Date.now(),
+    steered: r.steered || undefined,
     seeded: r.kind === "dashboard_seed" || undefined,
     seedKind: r.seed_kind || undefined,
     curiosityId: r.curiosity_id || undefined,

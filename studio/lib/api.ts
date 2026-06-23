@@ -616,6 +616,9 @@ export type SessionMessageDTO = {
   role: "user" | "assistant";
   text: string;
   created_at: string;
+  // steered marks a user message that was injected into an in-flight turn.
+  // The reload transcript uses this to restore the mid-turn affordance.
+  steered?: boolean;
   // kind discriminates non-plain transcript rows. Absent for ordinary
   // turns; "dashboard_seed" for the context block injected by
   // Discuss-with-Jarvis (rendered as a distinct card, not a user bubble).
