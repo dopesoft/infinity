@@ -110,6 +110,10 @@ type ServerRow = {
     preview_url?: string;
     storage_path?: string;
   }[];
+  // steered=true when this UserPromptSubmit row arrived as a mid-turn steer
+  // (the payload carries {"steered":true}). Surfaced so the ChatBubble can
+  // render the "↳ steered" affordance after a navigation/reload.
+  steered?: boolean;
   // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
   // survives navigation/reload. tool_output present = completed.
   tool_call_id?: string;
@@ -212,6 +216,7 @@ function rowToMessage(r: ServerRow): ChatMessage {
     seeded: r.kind === "dashboard_seed" || undefined,
     seedKind: r.seed_kind || undefined,
     curiosityId: r.curiosity_id || undefined,
+    steered: r.steered || undefined,
   };
 }
 
@@ -709,14 +714,26 @@ export function useChat() {
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows) return;
-      const restored: ChatMessage[] = rows.map(rowToMessage);
-      // Core is authoritative - overwrite both state and cache.
-      setMessages(restored);
-      writeCachedMessages(id, restored);
-      // A session whose entire transcript is a single seeded context
-      // block was just opened from Discuss-with-Jarvis and has no reply
-      // yet - fire the opening turn so the agent actually responds.
-      if (restored.length === 1 && restored[0].seeded) {
+      const fromServer: ChatMessage[] = rows.map(rowToMessage);
+      setMessages((prev) => {
+        // Preserve locally-rendered steered messages not yet reflected in
+        // the server transcript. The hook pipeline is async (goroutine →
+        // Postgres INSERT), so there is a small window between the client
+        // sending a steer and the row landing in mem_observations. If the
+        // user navigates away during that window and the mount fetch resolves
+        // before the write commits, the message would otherwise vanish.
+        // Keep any steered local bubbles whose text isn't in the server rows.
+        const serverUserTexts = new Set(
+          fromServer.filter((m) => m.role === "user").map((m) => m.text.trim()),
+        );
+        const orphanedSteers = prev.filter(
+          (m) => m.role === "user" && m.steered && !serverUserTexts.has(m.text.trim()),
+        );
+        if (orphanedSteers.length === 0) return fromServer;
+        return [...fromServer, ...orphanedSteers].sort((a, b) => a.createdAt - b.createdAt);
+      });
+      // Seeded session: fire the opening agent turn now that history is loaded.
+      if (fromServer.length === 1 && fromServer[0].seeded) {
         kickSeededRef.current(id);
       }
     });

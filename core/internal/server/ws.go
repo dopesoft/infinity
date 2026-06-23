@@ -617,6 +617,15 @@ func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) 
 	}
 	select {
 	case state.steer <- content:
+		// Persist to mem_observations immediately so the message survives a
+		// navigation/reload while the turn is still in flight. drainSteer
+		// only appends to the in-memory session; the hook fires here so
+		// fetchSessionMessages returns the steer without waiting for the next
+		// iteration boundary (which can be minutes away when the LLM is
+		// mid-stream or the loop is blocked inside WaitForDecision).
+		if h := s.loop.Hooks(); h != nil {
+			h.Emit("UserPromptSubmit", sessionID, "", content, map[string]any{"steered": true})
+		}
 		// Echo the steered message back so other tabs (and the
 		// originating tab's reconnect path) can render it. The
 		// originating tab already inserted it optimistically.

@@ -1692,16 +1692,17 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 }
 
 // drainSteer pulls every queued steer message off the channel non-blockingly
-// and appends each as a User turn on the session, mirroring the same hook
-// the WS path fires for a normal message. Called between iterations so the
-// next LLM call sees the steer input alongside the original prompt and any
-// intermediate tool results. Empty/whitespace strings are dropped.
+// and appends each as a User turn on the in-memory session. Called between
+// iterations so the next LLM call sees the steer input alongside the original
+// prompt and any intermediate tool results. Empty/whitespace strings are
+// dropped.
 //
-// Steered messages do NOT get a turn_id stamped because they belong to
-// whichever turn is in flight on the receiving session - we don't track
-// that here cleanly, and the missing turn_id on the resulting observation
-// only means it joins the turn via the (session_id, created_at) fallback
-// path the trace API already uses for old rows.
+// The UserPromptSubmit hook (mem_observations persistence) is now fired by
+// the WS handler in steerTurn immediately on receipt, before the message
+// lands in this channel. That way the observation is committed to Postgres
+// without waiting for the next iteration boundary, so a navigation/reload
+// that arrives while the turn is still in flight will find the steer in
+// fetchSessionMessages instead of losing it.
 func (l *Loop) drainSteer(ch <-chan string, s *Session) {
 	if ch == nil || s == nil {
 		return
@@ -1717,9 +1718,6 @@ func (l *Loop) drainSteer(ch <-chan string, s *Session) {
 				continue
 			}
 			s.Append(llm.Message{Role: llm.RoleUser, Content: text})
-			l.fireHook("UserPromptSubmit", s.ID, s.Project, text, map[string]any{
-				"steered": true,
-			})
 		default:
 			return
 		}

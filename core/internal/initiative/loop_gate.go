@@ -303,7 +303,12 @@ func (g *LoopGate) Authorize(ctx context.Context, sessionID, project, toolName s
 	// (/tmp/nonexistent28, 27, 26 …). Code-write tools are exempt — a scaffold
 	// legitimately writes file1.go, file2.go, … in sequence; the exact-repeat
 	// guard still covers a stuck rewrite of the identical file.
-	if !thisIsCodeWrite && shapeCount >= shapeLimit {
+	// Idempotent maintenance verbs (deploy_status, compact_context, …) are also
+	// exempt: they take zero or fixed arguments so every call hashes identically
+	// at both the exact-hash AND shape level. Blocking them via the shape guard
+	// would kill the post-deploy-verify poll loop just as surely as the repeat
+	// guard would — the exemption must cover both guards.
+	if !thisIsCodeWrite && !isIdempotentMaintenanceTool(toolName) && shapeCount >= shapeLimit {
 		return agent.GateDecision{
 			Allow: false,
 			Reason: fmt.Sprintf("loop detected: %s has fired %d times in the last %s with inputs that differ only by a counter — this is a runaway, not progress. Stop and change approach, or ask the boss.",

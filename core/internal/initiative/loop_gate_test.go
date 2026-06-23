@@ -128,18 +128,23 @@ func TestSkillSessionGetsHeavyCeiling(t *testing.T) {
 }
 
 // deploy_status / deploy_status_refresh take zero arguments, so every call
-// hashes identically and would otherwise trip the exact-repeat guard at 3.
-// The post-deploy-verify skill polls these during the push → wait → check
-// loop, and blocking ends the turn before the verify completes (same
-// principle that exempts compact_context). They must fall through the
-// repeat guard freely.
-func TestIdempotentDeployStatusToolsBypassRepeatGuard(t *testing.T) {
+// hashes identically at BOTH the exact-hash level (repeat guard) AND the
+// shape level (shape guard). The post-deploy-verify skill polls these in a
+// push → wait → check loop; blocking ends the turn before verify completes.
+// Both guards must let them through freely.
+//
+// The original commit 183ad50 only exempted the repeat guard (repeatLimit=3).
+// The shape guard (shapeLimit=10) had no corresponding exemption, so call 11+
+// would still be blocked. This test covers shapeLimit*2+1 calls to prove both
+// guards are bypassed.
+func TestIdempotentDeployStatusToolsBypassBothGuards(t *testing.T) {
 	g := newTestGate(1000)
 	sess := "s-deploy"
 	for _, tool := range []string{"deploy_status", "deploy_status_refresh"} {
-		for i := 0; i < repeatLimit*2+1; i++ {
+		for i := 0; i < shapeLimit*2+1; i++ {
 			if !authorize(g, sess, tool, nil) {
-				t.Fatalf("%s call %d wrongly blocked by repeat guard", tool, i+1)
+				t.Fatalf("%s call %d wrongly blocked (repeat guard trips at %d, shape guard at %d)",
+					tool, i+1, repeatLimit, shapeLimit)
 			}
 		}
 	}

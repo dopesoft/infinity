@@ -39,6 +39,11 @@ type sessionMessageDTO struct {
 	// curiosity question (best-effort, by artifact-title match). When set,
 	// the card renders an "Approve & fix" action.
 	CuriosityID string `json:"curiosity_id,omitempty"`
+	// Steered marks a UserPromptSubmit row that arrived as a mid-turn steer
+	// (typed while the agent was responding). Surfaced so Studio can render
+	// the "↳ steered" affordance on reload without depending on transient
+	// local state.
+	Steered bool `json:"steered,omitempty"`
 	// Tool-call reconstruction (role="tool"): rebuilt from the captured
 	// PostToolUse observation so the inline ToolCallCard survives navigation
 	// and reload instead of vanishing. ToolInput is the raw arguments JSON.
@@ -220,6 +225,14 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		switch hook {
 		case "UserPromptSubmit":
 			msg.Role = "user"
+			// Extract the steered flag so Studio can render the "↳ steered"
+			// affordance on reload. The payload is {"steered":true} when the
+			// message arrived via the steer channel; absent for normal turns.
+			var p struct {
+				Steered bool `json:"steered"`
+			}
+			_ = json.Unmarshal([]byte(payload), &p)
+			msg.Steered = p.Steered
 		case "DashboardSeed":
 			msg.Role = "user"
 			msg.Kind = "dashboard_seed"
