@@ -135,8 +135,22 @@ func isCodeWriteTool(tool string) bool {
 // the loop guard at 3 and the WHOLE TURN dies before the real task finishes —
 // the exact inbox-triage failure. They still count toward the session ceiling,
 // so a genuine spam-storm is caught there.
+//
+// deploy_status / deploy_status_refresh belong here for the same reason: both
+// take zero arguments (so every call hashes identically and trips the exact
+// repeat guard at 3) and both are read-only — `deploy_status` returns the
+// cached snapshot and `deploy_status_refresh` re-hits GitHub's commits API
+// once. The post-deploy-verify skill (migrations 087/152) explicitly tells
+// the agent to poll them after a self-improve push to confirm running_sha
+// caught up to latest_sha; a normal "push → wait → check → wait → check"
+// flow hits 3 calls in 60s and dies before the verify completes. Same
+// principle as compact_context: blocking ends the turn, which is worse than
+// letting the idempotent read fall through. The session ceiling still
+// tracks them, so a genuine infinite poll loop ends up in the Trust queue.
 var idempotentMaintenanceTools = map[string]struct{}{
-	"compact_context": {},
+	"compact_context":       {},
+	"deploy_status":         {},
+	"deploy_status_refresh": {},
 }
 
 func isIdempotentMaintenanceTool(tool string) bool {

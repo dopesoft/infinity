@@ -127,6 +127,24 @@ func TestSkillSessionGetsHeavyCeiling(t *testing.T) {
 	}
 }
 
+// deploy_status / deploy_status_refresh take zero arguments, so every call
+// hashes identically and would otherwise trip the exact-repeat guard at 3.
+// The post-deploy-verify skill polls these during the push → wait → check
+// loop, and blocking ends the turn before the verify completes (same
+// principle that exempts compact_context). They must fall through the
+// repeat guard freely.
+func TestIdempotentDeployStatusToolsBypassRepeatGuard(t *testing.T) {
+	g := newTestGate(1000)
+	sess := "s-deploy"
+	for _, tool := range []string{"deploy_status", "deploy_status_refresh"} {
+		for i := 0; i < repeatLimit*2+1; i++ {
+			if !authorize(g, sess, tool, nil) {
+				t.Fatalf("%s call %d wrongly blocked by repeat guard", tool, i+1)
+			}
+		}
+	}
+}
+
 // Denial clears grace + pending so a stale grant can't silently keep a denied
 // session running.
 func TestStopSessionClearsGrace(t *testing.T) {
