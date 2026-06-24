@@ -530,8 +530,9 @@ func (c *Cache) loadAccounts(ctx context.Context) ([]*Account, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Composio v3 authenticates with x-api-key ONLY — sending Authorization:
+	// Bearer too triggers a 401 "Multiple authentication modes" (code 10401).
 	req.Header.Set("x-api-key", key)
-	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err

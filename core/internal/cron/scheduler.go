@@ -244,6 +244,16 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// human-readable result to the boss's "Surfaced by Jarvis" inbox. All
 		// deterministic — the clear outcome is a mechanic, not skill prose.
 		outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
+		// The universal HTTP guard can mark a run Failed even when the executor
+		// returned no Go error (it swallowed the 401). Synthesize an error from the
+		// recorded failure so the status line, the ping, AND the cron_failure
+		// backlog feeder (which keys off last_run_status LIKE 'error%') all engage
+		// uniformly — a failure the boss can see and the self-improve loop can fix.
+		if outcome == OutcomeFailed && execErr == nil {
+			if he := httpFailureError(ctx, s.pool, j.RunSessionID); he != nil {
+				execErr = he
+			}
+		}
 		// Gate: when both bridges were down the agent's closing words cannot be
 		// treated as a verified result (it may have written "healthy" or "Ran it"
 		// without ever reaching the workspace). Replace the narrative so neither
