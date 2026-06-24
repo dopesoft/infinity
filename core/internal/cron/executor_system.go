@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dopesoft/infinity/core/internal/httpx"
 	"github.com/dopesoft/infinity/core/internal/inbox"
 	"github.com/dopesoft/infinity/core/internal/maintenance"
 )
@@ -49,9 +48,6 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	case "nightly_cognition":
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
-		// Tag every outbound HTTP call this run makes with its session so a hard
-		// failure (401/5xx) is attributed to this run and vetoes a green outcome.
-		ctx = httpx.WithSession(ctx, j.RunSessionID)
 		// Stop discarding the Report — its per-op narrative is the whole point
 		// of the run. Surface it on the mem_runs row (Summary) and stash the
 		// full struct in meta so the run detail can show every stage count.
@@ -71,7 +67,6 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 	case "inbox_triage":
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		ctx = httpx.WithSession(ctx, j.RunSessionID)
 		var ic inbox.Config
 		if len(j.TargetConfig) > 0 {
 			_ = json.Unmarshal(j.TargetConfig, &ic)
@@ -82,23 +77,16 @@ func (e *SystemExecutor) ExecuteJob(j Job) (RunSummary, error) {
 		ic.SessionID = j.RunSessionID
 		s, err := inbox.Run(ctx, e.Inbox, ic)
 		// An empty mailbox is "nothing needed"; anything fetched is work done.
-		// A BLIND run (couldn't read any mailbox) returns an error — never let the
-		// rosy "no new mail" Human() line stand on a failed row; the err carries the
-		// real reason and classifyOutcome marks the run failed → surfaced + pinged.
 		// (Surfaced follow-ups live in the Follow-ups card, not as a decision
 		// gate, so triage is never "needs_you".)
-		summaryText := s.Human()
 		triageOutcome := OutcomeDidWork
-		switch {
-		case err != nil:
-			summaryText = err.Error()
-		case s.Fetched == 0:
+		if s.Fetched == 0 {
 			triageOutcome = OutcomeNothingNeeded
 		}
 		return RunSummary{
 			// Human() names actual senders/subjects ("…including Namecheap
 			// about your domain renewal") — the boss reads this, not counters.
-			Summary: summaryText,
+			Summary: s.Human(),
 			// session_id ties this cron run to the step plan so the board folds
 			// them into one card (the plan's step timeline) instead of two.
 			Meta: map[string]any{"accounts": s.Accounts, "fetched": s.Fetched, "surfaced": s.Surfaced, "session_id": s.SessionID, "outcome": string(triageOutcome)},

@@ -9,7 +9,7 @@
 // skill runtimes) can call the same actions WITHOUT booting the LLM.
 //
 // Endpoint: POST https://backend.composio.dev/api/v3/tools/execute/{slug}
-//   Headers: x-api-key (v3 ApiKeyAuth — exactly one auth mode, no Bearer)
+//   Headers: x-api-key + Authorization: Bearer …
 //   Body:    { "connected_account_id": "ca_...", "user_id": "...",
 //              "arguments": {...} }
 //
@@ -108,11 +108,8 @@ func (c *ExecuteClient) Execute(ctx context.Context, req ExecuteRequest) (*Execu
 		return nil, fmt.Errorf("execute: build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	// Composio v3 authenticates with x-api-key ONLY. Sending a second mode
-	// (Authorization: Bearer, which Composio reads as ProjectJwtAuth) makes the
-	// API 401 with "Multiple authentication modes were provided" (code 10401) —
-	// that's what silently broke inbox triage for days. One mode, exactly.
 	httpReq.Header.Set("x-api-key", key)
+	httpReq.Header.Set("Authorization", "Bearer "+key)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

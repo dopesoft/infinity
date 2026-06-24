@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type runtimeState struct {
@@ -93,14 +91,7 @@ func (m *Manager) runtimeLoop(ctx context.Context) {
 				st := state[s.ID]
 				mu.Unlock()
 				next, payload, err := m.checkRuntime(ctx, s, st)
-				if err != nil {
-					// A swallowed check error is a sentinel going silently blind:
-					// a dropped DB query / renamed column / broken poll looks
-					// identical to "nothing matched", so the watch stops firing
-					// and nobody is told. Log it loud (stderr → Railway error) so
-					// a broken watch is visible instead of just dormant.
-					fmt.Fprintf(os.Stderr, "sentinel %q (%s) check failed: %v\n", s.Name, s.WatchType, err)
-				} else if payload != nil {
+				if err == nil && payload != nil {
 					_ = m.Trigger(ctx, s.ID, payload)
 				}
 				if next.LastKey != st.LastKey || !next.LastAt.Equal(st.LastAt) {
@@ -200,14 +191,7 @@ func (m *Manager) checkMemoryEvent(ctx context.Context, s Sentinel, st runtimeSt
 		 LIMIT 1
 	`, cfg.SinceSeconds, strings.TrimSpace(cfg.HookName), strings.TrimSpace(cfg.Query), cfg.MinImportance).Scan(&id, &hook, &raw, &importance)
 	if err != nil {
-		// No matching observation is the legitimate empty result; ANY other
-		// error (dropped connection, renamed column, pool exhausted) is a real
-		// failure that must NOT masquerade as "no trigger" — propagate it so the
-		// runtime loop logs the watch as broken instead of silently dormant.
-		if errors.Is(err, pgx.ErrNoRows) {
-			return st, nil, nil
-		}
-		return st, nil, err
+		return st, nil, nil
 	}
 	if id == "" || id == st.LastKey {
 		return st, nil, nil

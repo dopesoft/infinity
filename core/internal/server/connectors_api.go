@@ -241,11 +241,8 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 // one place so browse, connect, auth-config, account CRUD, and future REST
 // calls cannot drift back to the old x-consumer-api-key path.
 func applyComposioAuth(req *http.Request, key string) {
-	// Composio v3 authenticates with x-api-key ONLY. Sending Authorization:
-	// Bearer as well makes Composio see two auth modes and 401 the request
-	// ("Multiple authentication modes were provided", code 10401) — the bug
-	// that silently broke inbox triage and the Connectors UI for days.
 	req.Header.Set("x-api-key", key)
+	req.Header.Set("Authorization", "Bearer "+key)
 }
 
 // findOrCreateAuthConfig returns an auth_config_id for the given

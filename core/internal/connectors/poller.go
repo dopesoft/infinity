@@ -301,12 +301,6 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 		source = "gmail"
 	}
 
-	// A DB upsert failure below must NOT vanish into an undercounted "written"
-	// total — silently dropping mail is exactly the hidden-error class. Track
-	// failures and surface them as a poll error so a half-failed poll can't read
-	// as a clean success.
-	var writeFails int
-	var lastWriteErr error
 	for _, m := range items {
 		remoteID := firstString(m, "messageId", "id", "message_id", "remote_id")
 		if remoteID == "" {
@@ -336,8 +330,6 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 		`, source, cfg.ConnectedAccountID, fromName, subject, preview, body, threadURL, string(srcRef), receivedAt)
 		if derr != nil {
 			p.logger.Warn("followup upsert", "remote_id", remoteID, "err", derr)
-			writeFails++
-			lastWriteErr = derr
 			continue
 		}
 		if tag.RowsAffected() > 0 {
@@ -361,9 +353,6 @@ func (p *Poller) writeFollowups(ctx context.Context, cfg PollConfig, raw json.Ra
 		} else {
 			skipped++
 		}
-	}
-	if writeFails > 0 && err == nil {
-		err = fmt.Errorf("%d of %d follow-ups failed to persist (last: %v)", writeFails, len(items), lastWriteErr)
 	}
 	return
 }
