@@ -135,14 +135,18 @@ func classifyOutcome(ctx context.Context, pool *pgxpool.Pool, sessionID string, 
 	return OutcomeDidWork
 }
 
-// planIncomplete reports whether any step is still unsettled — the agent ended
-// its turn with work it never finished or skipped.
+// planIncomplete reports whether the plan did not fully succeed — either a step
+// is still unsettled (the agent stopped before finishing) or a step explicitly
+// failed (the build broke, the verify failed, etc.). A failed step is NOT
+// considered "done" even though it's terminal: a run that ended with a failed
+// build step should never classify as OutcomeDidWork.
 func planIncomplete(p *plan.Plan) bool {
 	for _, st := range p.Steps {
 		switch st.Status {
-		case plan.StepDone, plan.StepFailed, plan.StepSkipped:
-			// settled
+		case plan.StepDone, plan.StepSkipped:
+			// settled successfully
 		default:
+			// pending, in_progress, blocked, OR failed → plan did not fully succeed
 			return true
 		}
 	}

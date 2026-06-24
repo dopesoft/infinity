@@ -90,6 +90,29 @@ func TestPlanUpdate_ExecuteWithNoSession(t *testing.T) {
 	}
 }
 
+// TestPlanUpdate_StaleStepIDNoPlan verifies that when plan_update is called
+// with a UUID step id that no longer exists in the store (stale after plan
+// recreate / session switch), and no active plan is available, it returns a
+// descriptive error rather than panicking. When an active plan IS available
+// the result would also carry it (exercised by integration tests with a real pool).
+func TestPlanUpdate_StaleStepIDNoPlan(t *testing.T) {
+	tool := &planUpdate{store: nilStore}
+	out, err := tool.Execute(context.Background(), map[string]any{
+		"step_id": "550e8400-e29b-41d4-a716-446655440000", // valid UUID, not in store
+		"status":  "done",
+	})
+	// With a nil pool, GetActiveBySession + GetAnyActive both return nil, so
+	// the tool falls back to the bare error (not a panic, not plan_get guidance).
+	if err == nil && !strings.Contains(out, "550e8400") {
+		t.Fatal("expected an error or an error JSON containing the step id")
+	}
+	// Must not reference plan_get in the error path.
+	combined := out + err.Error()
+	if strings.Contains(combined, "plan_get") {
+		t.Fatalf("stale-step error still mentions plan_get: %s / %v", out, err)
+	}
+}
+
 // stubPlanGetter is a minimal planGetter for tests: returns injected plans
 // without hitting a real database. bySession is returned from
 // GetActiveBySession; anyActive from GetAnyActive.

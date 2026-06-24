@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/dopesoft/infinity/core/internal/plan"
 )
 
 // bridgeUnavailableInSession must return false when pool is nil so unit tests
@@ -34,6 +36,32 @@ func TestBridgeBlockedNarrative_Content(t *testing.T) {
 		if !strings.Contains(lowered, sig) {
 			t.Errorf("bridgeBlockedNarrative missing expected blocking signal %q", sig)
 		}
+	}
+}
+
+// planIncomplete must return true when any step has status "failed", not just
+// when steps are pending or in_progress. A nightly self-improve run where the
+// build step fails but subsequent steps are skipped/done must classify as
+// stopped_early, NOT did_work.
+func TestPlanIncomplete_FailedStepIsIncomplete(t *testing.T) {
+	p := &plan.Plan{
+		Steps: []plan.Step{
+			{Status: plan.StepFailed},  // build failed
+			{Status: plan.StepSkipped}, // push never ran
+		},
+	}
+	if !planIncomplete(p) {
+		t.Fatal("planIncomplete should return true when any step is failed")
+	}
+	// A plan with only done/skipped steps should not be flagged incomplete.
+	p2 := &plan.Plan{
+		Steps: []plan.Step{
+			{Status: plan.StepDone},
+			{Status: plan.StepSkipped},
+		},
+	}
+	if planIncomplete(p2) {
+		t.Fatal("planIncomplete should return false when all steps are done or skipped")
 	}
 }
 

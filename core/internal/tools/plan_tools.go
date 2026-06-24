@@ -235,6 +235,22 @@ func (t *planUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 		return "", err
 	}
 	if prev == nil {
+		// Step ID is stale (plan was recreated, session switched, or context
+		// compacted). Include the current active plan so the model sees the
+		// valid step IDs and can retry with the right ref immediately — no
+		// separate plan_get call needed (Rule #1b: mechanic, not prose).
+		p, _ := t.store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
+		if p == nil {
+			p, _ = t.store.GetAnyActive(ctx)
+		}
+		if p != nil {
+			b, _ := json.Marshal(map[string]any{
+				"error":       fmt.Sprintf("no plan step with id %s — the step list may be stale", stepID),
+				"active_plan": p,
+				"hint":        "Use a step id or 1-based position from active_plan.steps above.",
+			})
+			return string(b), nil
+		}
 		return "", fmt.Errorf("no plan step with id %s", stepID)
 	}
 
