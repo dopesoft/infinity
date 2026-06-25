@@ -836,7 +836,8 @@ func buildResponsesRequest(model, system, cacheKey string, messages []Message, t
 		"stream": true,
 		"store":  false,
 	}
-	if openAIModelSupportsBuiltInWebSearch(model) {
+	builtinWebSearch := openAIModelSupportsBuiltInWebSearch(model)
+	if builtinWebSearch {
 		// IMPORTANT: must be "web_search", NOT "web_search_preview".
 		// The Codex backend (chatgpt.com/backend-api/codex/responses)
 		// rejects "web_search_preview" with 400 "Unsupported tool type"
@@ -892,6 +893,15 @@ func buildResponsesRequest(model, system, cacheKey string, messages []Message, t
 	if len(tools) > 0 {
 		apiTools := make([]map[string]any, 0, len(tools))
 		for _, t := range tools {
+			// Avoid a name collision with OpenAI's built-in `web_search` hosted
+			// tool, added above for gpt-5.x. Two tools sharing the name
+			// "web_search" (the native one + our Tavily function) is ambiguous and
+			// risks a 400; the built-in supersedes ours, so drop our function when
+			// it's active. The agent reaches Tavily-class search via the built-in;
+			// paywall/transcript/Twitter-Reddit reads route to agent-reach instead.
+			if builtinWebSearch && t.Name == "web_search" {
+				continue
+			}
 			schema := t.Schema
 			if schema == nil {
 				schema = map[string]any{"type": "object"}
