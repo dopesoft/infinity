@@ -118,11 +118,34 @@ func (t *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
+// defaultRec is the recorder InstallDefault wrapped the global transport with,
+// kept so InstrumentedClient can hand the SAME recorder to SDKs that need a
+// concrete client (see below). nil before InstallDefault runs (local dev w/o DB).
+var defaultRec Recorder
+
 // InstallDefault wraps http.DefaultTransport so EVERY client using the default
 // transport (the common `&http.Client{Timeout: …}` with no custom Transport) is
 // instrumented. Idempotent in spirit — call once at boot after the pool exists.
 func InstallDefault(rec Recorder) {
+	defaultRec = rec
 	http.DefaultTransport = Wrap(http.DefaultTransport, rec, "default")
+}
+
+// InstrumentedClient returns an *http.Client carrying the same failure
+// instrumentation as the wrapped global transport, but as a CONCRETE client for
+// SDKs whose constructors do `http.DefaultTransport.(*http.Transport).Clone()`
+// and therefore PANIC once InstallDefault has replaced the global with a
+// *roundTripper (e.g. anthropic-sdk-go's defaultHTTPClient). Hand this to such an
+// SDK via its WithHTTPClient option (plus WithoutEnvironmentDefaults so it skips
+// building the panicking default) and its 4xx/5xx + transport errors are still
+// recorded — the honesty machinery covers these vendors too, with no global
+// mutation they can trip over. name tags the failures' subsystem.
+func InstrumentedClient(name string) *http.Client {
+	base := Unwrap(http.DefaultTransport) // real *http.Transport under any wrappers
+	if t, ok := base.(*http.Transport); ok {
+		base = t.Clone()
+	}
+	return &http.Client{Transport: Wrap(base, defaultRec, name)}
 }
 
 // Unwrap returns the base RoundTripper that rt wraps, following any chain of

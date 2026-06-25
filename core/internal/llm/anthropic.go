@@ -10,6 +10,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/dopesoft/infinity/core/internal/httpx"
 )
 
 type Anthropic struct {
@@ -22,7 +24,23 @@ func NewAnthropic(apiKey, model string) *Anthropic {
 	if model == "" {
 		model = "claude-sonnet-4-5-20250929"
 	}
-	c := anthropic.NewClient(option.WithAPIKey(apiKey))
+	// The SDK's DefaultClientOptions eagerly builds defaultHTTPClient(), which
+	// does http.DefaultTransport.(*http.Transport).Clone() and PANICS once
+	// httpx.InstallDefault has wrapped the global transport (a *httpx.roundTripper
+	// is not a *http.Transport — that exact panic crash-looped core on boot). Skip
+	// it with WithoutEnvironmentDefaults and supply our own instrumented client,
+	// so anthropic calls are still recorded into mem_http_failures.
+	opts := []option.RequestOption{
+		option.WithoutEnvironmentDefaults(),
+		option.WithAPIKey(apiKey),
+		option.WithHTTPClient(httpx.InstrumentedClient("anthropic")),
+	}
+	// WithoutEnvironmentDefaults also drops the SDK's ANTHROPIC_BASE_URL handling;
+	// re-add it so a configured override still applies.
+	if base := os.Getenv("ANTHROPIC_BASE_URL"); base != "" {
+		opts = append(opts, option.WithBaseURL(base))
+	}
+	c := anthropic.NewClient(opts...)
 	return &Anthropic{client: c, model: model, thinkingBudget: thinkingBudgetFromEnv()}
 }
 
