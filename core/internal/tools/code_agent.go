@@ -149,14 +149,22 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	// nil-safe, so this degrades cleanly when the pool isn't wired.
 	label := "Claude Code: " + truncateForLabel(task, 80)
 	handle := t.tracker.Begin(ctx, runs.Kind("code_agent"), "", label, runs.SourceAgent)
-	heartbeat := func(note string) { handle.Progress(ctx, 0, note) }
+	// Use context.Background() for heartbeat so progress notes persist even
+	// when ctx is cancelled (Stop button or core shutdown). The last-known
+	// progress_label survives a restart and RecoverStranded surfaces it.
+	heartbeat := func(note string) { handle.Progress(context.Background(), 0, note) }
 	jobID := handle.ID()
 	if jobID == "" {
 		jobID = fmt.Sprintf("job-%d", time.Now().UnixNano())
 	}
 
 	summary, runErr := t.run(ctx, b, jobID, task, repo, model, heartbeat)
-	handle.Finish(ctx, runErr, summary)
+	// Always close the run row on a fresh context. Using the tool ctx here
+	// means a cancelled ctx (Stop button, graceful shutdown) silently drops
+	// the Finish UPDATE and leaves the row stuck 'running' until the reaper.
+	finCtx, finCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	handle.Finish(finCtx, runErr, summary)
+	finCancel()
 	if runErr != nil {
 		// A bridge/launch failure (the Mac is unreachable — the 404 that used to
 		// stall nightly-self-improve silently) is NOT a dead end. Return it as
@@ -217,7 +225,16 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 	for {
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("code_agent: cancelled after %s (run %s still finishing on the Mac; re-attach with `claude --continue` in %s)", time.Since(started).Round(time.Second), jobID, repoOrRoot(repo))
+			// The caller's context was cancelled (Stop button or graceful
+			// shutdown). The detached `claude -p` on the Mac is unaffected —
+			// it runs independently. Return guidance so the agent can report
+			// this to the boss rather than surfacing a hard failure. The
+			// mem_runs row is closed by the fresh-ctx Finish call in Execute.
+			return fmt.Sprintf(
+				"code_agent was interrupted after %s (the Claude Code run %s is still "+
+					"finishing on the Mac — it can't be cancelled from here). "+
+					"Re-attach with `claude --continue` in %s once it completes.",
+				time.Since(started).Round(time.Second), jobID, repoOrRoot(repo)), nil
 		case <-time.After(codeAgentPollEach):
 		}
 

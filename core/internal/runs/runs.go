@@ -261,7 +261,13 @@ func (t *Tracker) RecoverStranded(ctx context.Context) (int, error) {
 		           LEAST(2147483647, GREATEST(0,
 		               EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
 		       error = COALESCE(NULLIF(error, ''), 'core restarted while run was in flight'),
-		       result_summary = COALESCE(NULLIF(result_summary, ''), '(interrupted by restart)')
+		       result_summary = COALESCE(
+		           NULLIF(result_summary, ''),
+		           CASE
+		               WHEN progress_label <> '' THEN 'Interrupted mid-run. Last checkpoint: ' || progress_label
+		               ELSE '(interrupted by restart)'
+		           END
+		       )
 		 WHERE status = 'running'
 	`)
 	if err != nil {
