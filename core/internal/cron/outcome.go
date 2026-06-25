@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -11,6 +12,12 @@ import (
 	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// hardHTTPFailureWhere is the WHERE clause selecting outbound-HTTP failures that
+// must veto a "green" run — auth, rate-limit, timeout, transport error, any 5xx.
+// Mirrors httpx.IsActionableStatus; kept as SQL so the check is a single set-based
+// query. Plain 404/400 are recorded for visibility but don't auto-fail a run.
+const hardHTTPFailureWhere = `(status = 0 OR status IN (401,403,407,408,429) OR status >= 500)`
 
 // Outcome is the boss-facing classification of a finished scheduled run. It is
 // the single field the dashboard reads to answer, at a glance, "what happened
@@ -84,6 +91,17 @@ func classifyOutcome(ctx context.Context, pool *pgxpool.Pool, sessionID string, 
 	if execErr != nil {
 		return OutcomeFailed
 	}
+	// UNIVERSAL false-green guard (the boss's law: "Jarvis MUST ALWAYS see errors
+	// he gets — no false greens that were really 401s, 404s"). If this run's
+	// session logged ANY hard outbound-HTTP failure (auth / rate-limit / timeout /
+	// transport / 5xx — captured at the transport by core/internal/httpx), it is
+	// NOT a clean success no matter what the executor stamped below. Checked BEFORE
+	// the meta.outcome honour so a deterministic task that swallowed a 401 and
+	// declared "nothing_needed" still fails → surfaces → feeds the code-proposal
+	// backlog (healing keys off last_run_status LIKE 'error%').
+	if httpHardFailureInSession(ctx, pool, sessionID) {
+		return OutcomeFailed
+	}
 	// An executor that knows its own internals (e.g. nightly cognition: changed
 	// vs. quiet) can stamp meta.outcome; honour it over the generic derivation.
 	if raw, ok := summary.Meta["outcome"].(string); ok {
@@ -133,6 +151,46 @@ func classifyOutcome(ctx context.Context, pool *pgxpool.Pool, sessionID string, 
 		}
 	}
 	return OutcomeDidWork
+}
+
+// httpHardFailureInSession reports whether the run's session logged any HARD
+// outbound-HTTP failure in mem_http_failures (the capture seam in
+// core/internal/httpx). This is the universal guard that makes a swallowed
+// 401/5xx un-hideable: even if the caller dropped the error and reported success,
+// the failure was recorded at the transport, and here it vetoes a green outcome.
+func httpHardFailureInSession(ctx context.Context, pool *pgxpool.Pool, sessionID string) bool {
+	if pool == nil || sessionID == "" {
+		return false
+	}
+	var one int
+	err := pool.QueryRow(ctx, `
+		SELECT 1 FROM mem_http_failures
+		 WHERE session_id = $1 AND `+hardHTTPFailureWhere+`
+		 LIMIT 1
+	`, sessionID).Scan(&one)
+	return err == nil
+}
+
+// httpFailureError builds a human error from the most recent hard HTTP failure in
+// a session, so a run the guard marked failed (but whose executor returned no Go
+// error) still gets a real last_run_status + ping + cron_failure backlog entry.
+func httpFailureError(ctx context.Context, pool *pgxpool.Pool, sessionID string) error {
+	if pool == nil || sessionID == "" {
+		return nil
+	}
+	var host string
+	var status int
+	if err := pool.QueryRow(ctx, `
+		SELECT host, status FROM mem_http_failures
+		 WHERE session_id = $1 AND `+hardHTTPFailureWhere+`
+		 ORDER BY occurred_at DESC LIMIT 1
+	`, sessionID).Scan(&host, &status); err != nil {
+		return nil
+	}
+	if status == 0 {
+		return fmt.Errorf("an outbound request to %s failed with no response during this run", host)
+	}
+	return fmt.Errorf("an outbound request to %s returned HTTP %d during this run", host, status)
 }
 
 // planIncomplete reports whether the plan did not fully succeed — either a step

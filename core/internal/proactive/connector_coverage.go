@@ -45,23 +45,55 @@ func ConnectorCoverageChecklist(cache *connectors.Cache, pool *pgxpool.Pool) Che
 		}
 		active := cache.ActiveAccountsByToolkit("gmail")
 		if len(active) == 0 {
+			// Empty-from-failure must never read as empty-from-truth. If the
+			// connector backend is erroring, "0 active accounts" does NOT mean the
+			// boss has no mailboxes — it means we're BLIND. Silently resolving the
+			// alarm here is exactly what let a multi-day Composio 401 hide: triage
+			// reported "no new mail" and this safety net agreed there was nothing to
+			// cover. Raise it instead, so a connector outage is loud within a tick.
+			if le := strings.TrimSpace(cache.Status().LastError); le != "" {
+				return []Finding{{
+					Kind:  "surprise",
+					Title: "I can't see your connected accounts right now",
+					Detail: strings.Join([]string{
+						"connector backend error: " + truncate(le, 240),
+						"impact: inbox triage and every connector-backed cron is running BLIND — they cannot read your mail or calendar until this clears",
+						"action: check Settings → Connectors; the Composio API may be rejecting our auth (a 401 here silently zeroes every mailbox)",
+						"why surfaced: a blind run otherwise looks identical to an empty inbox and never reaches you",
+					}, "\n"),
+					PreApproved: false,
+					Source:      "connector_backend_error",
+					SourceTag:   "connector_backend_error",
+				}}, nil
+			}
 			ResolveSourceTag(ctx, pool, "connector_coverage_gap")
+			ResolveSourceTag(ctx, pool, "connector_backend_error")
 			return nil, nil
 		}
+		// Connector backend is answering (we have active accounts) — clear any
+		// prior "can't see your accounts" alarm.
+		ResolveSourceTag(ctx, pool, "connector_backend_error")
 
-		// last_triaged_at per account for this toolkit.
-		lastTriaged := map[string]time.Time{}
+		// Per-account coverage for this toolkit: last pass time AND status, so a
+		// mailbox whose last fetch ERRORED is caught even when its timestamp is
+		// fresh (a fresh-but-failed pass is still a blind mailbox).
+		type cov struct {
+			at     time.Time
+			status string
+			errMsg string
+		}
+		covByID := map[string]cov{}
 		rows, err := pool.Query(ctx, `
-			SELECT account_id, last_triaged_at
+			SELECT account_id, last_triaged_at, last_status, COALESCE(last_error,'')
 			FROM mem_connector_coverage
 			WHERE toolkit = 'gmail'
 		`)
 		if err == nil {
 			for rows.Next() {
-				var id string
+				var id, status, emsg string
 				var at time.Time
-				if scanErr := rows.Scan(&id, &at); scanErr == nil {
-					lastTriaged[id] = at
+				if scanErr := rows.Scan(&id, &at, &status, &emsg); scanErr == nil {
+					covByID[id] = cov{at: at, status: status, errMsg: emsg}
 				}
 			}
 			rows.Close()
@@ -70,10 +102,16 @@ func ConnectorCoverageChecklist(cache *connectors.Cache, pool *pgxpool.Pool) Che
 		now := time.Now().UTC()
 		var stale []string
 		for _, a := range active {
-			last, seen := lastTriaged[a.ID]
+			c, seen := covByID[a.ID]
 			if seen {
-				if now.Sub(last) > coverageStaleAfter {
-					stale = append(stale, coverageLabel(a, now.Sub(last)))
+				// A mailbox whose last pass FAILED is blind regardless of how
+				// recent it was — flag it on status, not just on staleness.
+				if c.status == "error" {
+					stale = append(stale, coverageErrLabel(a, c.errMsg))
+					continue
+				}
+				if now.Sub(c.at) > coverageStaleAfter {
+					stale = append(stale, coverageLabel(a, now.Sub(c.at)))
 				}
 				continue
 			}
@@ -124,4 +162,20 @@ func coverageLabel(a *connectors.Account, age time.Duration) string {
 		return who + " (never)"
 	}
 	return fmt.Sprintf("%s (%dh ago)", who, int(age.Hours()))
+}
+
+// coverageErrLabel renders a mailbox whose last triage pass errored, naming the
+// upstream reason so the alarm is actionable ("…last pass failed: composio 401").
+func coverageErrLabel(a *connectors.Account, errMsg string) string {
+	who := strings.TrimSpace(a.IdentityHint)
+	if who == "" {
+		who = strings.TrimSpace(a.Alias)
+	}
+	if who == "" {
+		who = a.ID
+	}
+	if e := strings.TrimSpace(errMsg); e != "" {
+		return fmt.Sprintf("%s (last pass failed: %s)", who, truncate(e, 120))
+	}
+	return who + " (last pass failed)"
 }
