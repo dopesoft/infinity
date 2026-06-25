@@ -252,8 +252,11 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// needs_you / nothing_needed / stopped_early / did_work) and apply the
 		// deterministic post-classification adjustments. Shared with the reaper
 		// reconciler so a redeploy-killed run gets the identical treatment.
+		// Includes the both-bridges-down narrative gate (Rule #1b: a mechanic,
+		// not droppable prose) so neither mem_runs.result_summary nor the inbox
+		// card surface a misleading "healthy" / "Ran it" result when the
+		// workspace was never actually reached.
 		outcome, summary, execErr := s.finalizeOutcome(fctx, j, summary, execErr)
-
 		meta := runMetaWithAttempts(summary.Meta, attempts)
 		if meta == nil {
 			meta = map[string]any{}
@@ -268,20 +271,13 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 }
 
 // finalizeOutcome classifies a finished run into a single boss-facing Outcome
-// and applies the two deterministic post-classification adjustments: synthesize
-// an http error when the universal guard failed a run whose executor swallowed
-// the 401 (so the status line, ping, and cron_failure backlog all engage), and
-// replace the narrative when both bridges were down (so no misleading "healthy"
-// wording survives). All read queries run on the PASSED ctx — callers must hand
-// it a FRESH ctx so an expired job budget can't skip the guards (the stall bug).
+// and applies the deterministic post-classification adjustment: replace the
+// narrative when both bridges were down (so no misleading "healthy" wording
+// survives). All read queries run on the PASSED ctx — callers must hand it a
+// FRESH ctx so an expired job budget can't skip the guards (the stall bug).
 // Shared by makeFireFn and the reaper's ReconcileReaped.
 func (s *Scheduler) finalizeOutcome(ctx context.Context, j Job, summary RunSummary, execErr error) (Outcome, RunSummary, error) {
 	outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
-	if outcome == OutcomeFailed && execErr == nil {
-		if he := httpFailureError(ctx, s.pool, j.RunSessionID); he != nil {
-			execErr = he
-		}
-	}
 	if outcome == OutcomeNeedsYou && bridgeUnavailableInSession(ctx, s.pool, j.RunSessionID) {
 		summary.Summary = bridgeBlockedNarrative
 	}
