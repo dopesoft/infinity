@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -179,6 +180,17 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+
+	// The DB rows arrive already newest-first (ORDER BY started_at DESC),
+	// but the RAM-only live sessions above are appended in Go map-iteration
+	// order, which is non-deterministic. That left a brand-new session
+	// (live in RAM before its mem_sessions row commits) stranded at the end
+	// of the slice, so Studio rendered it at the BOTTOM of the "Today" group
+	// instead of the top. Re-sort the merged slice so the response is one
+	// consistent newest-first order regardless of each row's source.
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].StartedAt > out[j].StartedAt
+	})
 
 	writeJSON(w, http.StatusOK, out)
 }

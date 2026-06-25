@@ -293,7 +293,15 @@ export function SessionsDrawer({
       map.set(g, arr);
     }
     return order
-      .map((g) => ({ group: g, rows: map.get(g) ?? [] }))
+      .map((g) => ({
+        group: g,
+        // Sort each bucket newest-first so the display is always
+        // chronological, independent of the order the API hands us rows
+        // (a freshly created RAM-only session can arrive out of order).
+        rows: (map.get(g) ?? []).sort(
+          (a, b) => (Date.parse(b.started_at) || 0) - (Date.parse(a.started_at) || 0),
+        ),
+      }))
       .filter((b) => b.rows.length > 0);
   }, [filtered, now]);
 

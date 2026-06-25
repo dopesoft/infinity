@@ -85,8 +85,9 @@ func fetchComposioVerbs(ctx context.Context, hc *http.Client, key, toolkitSlug s
 		if err != nil {
 			return nil, fmt.Errorf("verbs build request: %w", err)
 		}
+		// Composio v3 rejects dual auth (code 10401). x-api-key ONLY -
+		// an Authorization: Bearer alongside it fails the request.
 		req.Header.Set("x-api-key", key)
-		req.Header.Set("Authorization", "Bearer "+key)
 		resp, err := hc.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("verbs do: %w", err)

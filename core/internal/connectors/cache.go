@@ -530,8 +530,11 @@ func (c *Cache) loadAccounts(ctx context.Context) ([]*Account, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Composio v3 rejects requests carrying TWO auth modes with code 10401
+	// ("Multiple authentication modes were provided"). It wants x-api-key
+	// ONLY - an Authorization: Bearer alongside it silently empties triage.
+	// Do NOT re-add an Authorization header here.
 	req.Header.Set("x-api-key", key)
-	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err

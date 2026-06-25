@@ -9,7 +9,7 @@
 // skill runtimes) can call the same actions WITHOUT booting the LLM.
 //
 // Endpoint: POST https://backend.composio.dev/api/v3/tools/execute/{slug}
-//   Headers: x-api-key + Authorization: Bearer …
+//   Headers: x-api-key ONLY (v3 rejects dual auth with code 10401)
 //   Body:    { "connected_account_id": "ca_...", "user_id": "...",
 //              "arguments": {...} }
 //
@@ -108,8 +108,10 @@ func (c *ExecuteClient) Execute(ctx context.Context, req ExecuteRequest) (*Execu
 		return nil, fmt.Errorf("execute: build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	// Composio v3 wants exactly ONE auth mode. Sending x-api-key AND an
+	// Authorization: Bearer trips code 10401 and the call fails silently.
+	// x-api-key only - do NOT re-add an Authorization header.
 	httpReq.Header.Set("x-api-key", key)
-	httpReq.Header.Set("Authorization", "Bearer "+key)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
