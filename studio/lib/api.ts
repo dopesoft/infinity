@@ -457,10 +457,17 @@ export async function sendBrowserInput(id: string, ev: BrowserInputEvent): Promi
 // activateExtension drives a cli extension's install + auth flow on demand so
 // the device-login URL is captured without waiting for a Core reboot. Returns
 // quickly (202) — the result lands via the mem_extensions realtime channel.
-export async function activateExtension(name: string): Promise<boolean> {
+export async function activateExtension(
+  name: string,
+  sessionId?: string,
+): Promise<boolean> {
   try {
     const res = await authedFetch(`/api/extensions/${encodeURIComponent(name)}/activate`, {
       method: "POST",
+      // Carry the originating session so the captured sign-in scopes to the
+      // conversation that asked for it (and the card stays out of others).
+      headers: sessionId ? { "Content-Type": "application/json" } : undefined,
+      body: sessionId ? JSON.stringify({ session_id: sessionId }) : undefined,
     });
     return res.ok;
   } catch {
@@ -2112,6 +2119,11 @@ export interface Extension {
   auth_url?: string;
   auth_instructions?: string;
   resume_intent?: string;
+  // Session that initiated this extension's pending sign-in. The Canvas auth
+  // card renders ONLY in this session, so a globally-pending extension can't
+  // hijack the Preview pane of an unrelated conversation. Absent ⇒ no
+  // originating session ⇒ surface in Settings, never seize a Canvas.
+  auth_session_id?: string;
   tool_name?: string;
   last_checked_at?: string;
   created_at: string;

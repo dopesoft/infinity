@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/google/uuid"
@@ -241,11 +242,57 @@ func (api *API) handleProposalDecide(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := api.m.Decide(r.Context(), id, strings.ToLower(strings.TrimSpace(body.Decision))); err != nil {
+	decision := strings.ToLower(strings.TrimSpace(body.Decision))
+
+	// A "promoted" decision RUNS the skill's verification harness (an ephemeral
+	// LLM session, up to ~90s) before it promotes — far too long to block the
+	// HTTP request on (the card "just sat there" while it ran). Book a tracked
+	// mem_runs row and do the verify+promote in the BACKGROUND, then return
+	// immediately. Studio shows a live <RunIndicator> (kind=skill.promote,
+	// target_id=proposal id) that survives navigation, and the candidate list
+	// updates via the mem_skill_proposals realtime feed when it finishes —
+	// success clears the card, failure shows why. (CLAUDE.md → "Server-tracked
+	// progress" + "verify before promote".) "rejected" is instant; keep it sync.
+	if decision == "promoted" {
+		label := promoteLabel(r.Context(), api.m, id)
+		go func() {
+			bg, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			_ = runs.Track(bg, runs.KindSkillPromote, id, label, runs.SourceManual, func(ctx context.Context) error {
+				return api.m.Decide(ctx, id, decision)
+			})
+		}()
+		writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
+		return
+	}
+
+	if err := api.m.Decide(r.Context(), id, decision); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// promoteLabel builds a plain-English run label from the proposal's target
+// skill name (readable-names rule), falling back to a generic one. Best-effort:
+// a label is cosmetic, so a failed lookup never blocks the promote.
+func promoteLabel(ctx context.Context, m *Manager, id string) string {
+	if m == nil || m.pool == nil {
+		return "promote skill"
+	}
+	var name, parent string
+	if err := m.pool.QueryRow(ctx,
+		`SELECT COALESCE(name,''), COALESCE(parent_skill,'') FROM mem_skill_proposals WHERE id = $1`,
+		id).Scan(&name, &parent); err != nil {
+		return "promote skill"
+	}
+	if t := strings.TrimSpace(parent); t != "" {
+		return "promote " + t
+	}
+	if t := strings.TrimSpace(name); t != "" {
+		return "promote " + t
+	}
+	return "promote skill"
 }
 
 func (api *API) handleCodeProposals(w http.ResponseWriter, r *http.Request) {

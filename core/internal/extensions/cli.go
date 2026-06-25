@@ -256,7 +256,7 @@ func (m *Manager) CompleteAuth(ctx context.Context, name string) error {
 	if m == nil || m.store == nil {
 		return nil
 	}
-	return m.store.SetAuthState(ctx, name, StatusActive, "", "", "")
+	return m.store.SetAuthState(ctx, name, StatusActive, "", "", "", "")
 }
 
 // shellQuoteCLI single-quotes a string for bash.

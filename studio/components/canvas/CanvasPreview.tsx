@@ -40,13 +40,14 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   const projectCtx = useProjectContext();
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A cli tool waiting on device-login surfaces here as a sign-in card.
-  const { pending: pendingAuth, refresh: refreshAuth } = usePendingAuthExtension();
+  // A pending sign-in is scoped to the session that started it (auth_session_id),
+  // so the card only appears in the conversation that triggered the sign-in —
+  // never in an unrelated one. The dismiss below is a secondary control within
+  // that originating session.
+  const { pending: pendingAuth, refresh: refreshAuth } = usePendingAuthExtension(sessionId);
 
-  // Extensions are global (not session-bound), so a still-pending sign-in would
-  // otherwise hijack the Preview pane of EVERY session — including a brand-new
-  // one unrelated to that tool. Let the boss dismiss it; remember the dismissal
-  // for this browser session (sessionStorage) so a fresh page load can re-offer
-  // it but navigating around doesn't keep shoving it back.
+  // Remember a dismissal for this browser session (sessionStorage) so a fresh
+  // page load can re-offer it but navigating around doesn't keep shoving it back.
   const [dismissedAuth, setDismissedAuth] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
     try {
@@ -294,6 +295,7 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     return (
       <CanvasAuthCard
         ext={pendingAuth}
+        sessionId={sessionId}
         onResolved={refreshAuth}
         onDismiss={() => dismissAuth(pendingAuth.name)}
       />

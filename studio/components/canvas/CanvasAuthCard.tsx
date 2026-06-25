@@ -20,27 +20,44 @@ import { cn } from "@/lib/utils";
  * and polls the extension's check_cmd so it flips to "Connected" on its own the
  * moment the boss finishes - no tab-switch to Settings, no manual refresh.
  *
- * Extensions are global (no session binding in mem_extensions), so a pending
- * sign-in shows in whichever session is looking - correct for a single boss.
+ * Isolation: a pending sign-in is scoped to the ONE session that started it
+ * (ext.auth_session_id). The card renders only in that conversation, so a
+ * globally-pending extension (e.g. higgsfield, which can't finish its
+ * browser-redirect sign-in headlessly and sat pending forever) no longer
+ * hijacks the Preview pane of an unrelated conversation. A pending row with no
+ * originating session surfaces in Settings → Extensions, never seizes a Canvas.
  */
 
 const POLL_MS = 7000;
 
-// usePendingAuthExtension returns the first cli extension awaiting sign-in (or
-// null), refreshing on the mem_extensions realtime channel so the card appears
-// the instant the gate parks one and vanishes the instant it goes active.
-export function usePendingAuthExtension(): {
+// usePendingAuthExtension returns the cli/mcp extension awaiting sign-in that
+// belongs to THIS session (matched on auth_session_id), or null. Refreshes on
+// the mem_extensions realtime channel so the card appears the instant the gate
+// parks one in this session and vanishes the instant it goes active. A pending
+// extension with no originating session — or one tied to a different session —
+// is intentionally ignored here so it can't take over an unrelated Preview.
+export function usePendingAuthExtension(sessionId?: string): {
   pending: Extension | null;
   refresh: () => void;
 } {
   const [pending, setPending] = useState<Extension | null>(null);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    const res = await fetchExtensions(signal);
-    if (Array.isArray(res)) {
-      setPending(res.find((e) => e.status === "pending_auth") ?? null);
-    }
-  }, []);
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      const res = await fetchExtensions(signal);
+      if (Array.isArray(res)) {
+        const sid = sessionId?.trim();
+        setPending(
+          sid
+            ? res.find(
+                (e) => e.status === "pending_auth" && e.auth_session_id === sid,
+              ) ?? null
+            : null,
+        );
+      }
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -55,10 +72,12 @@ export function usePendingAuthExtension(): {
 
 export function CanvasAuthCard({
   ext,
+  sessionId,
   onResolved,
   onDismiss,
 }: {
   ext: Extension;
+  sessionId?: string;
   onResolved: () => void;
   onDismiss?: () => void;
 }) {
@@ -77,8 +96,8 @@ export function CanvasAuthCard({
     if (ext.kind !== "cli" || ext.auth_url || activatedRef.current) return;
     activatedRef.current = true;
     setPreparing(true);
-    void activateExtension(ext.name);
-  }, [ext.kind, ext.auth_url, ext.name]);
+    void activateExtension(ext.name, sessionId);
+  }, [ext.kind, ext.auth_url, ext.name, sessionId]);
 
   // Once a URL arrives, we're no longer preparing.
   useEffect(() => {

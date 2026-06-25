@@ -40,6 +40,11 @@ type Kind string
 const (
 	KindCron            Kind = "cron"
 	KindSkill           Kind = "skill"
+	// KindSkillPromote is a candidate-skill promotion: it RUNS the skill's
+	// verification harness (an ephemeral LLM session, up to ~90s) before
+	// promoting, so the decide endpoint books this and works in the background
+	// while the Studio card shows a live spinner. target_id is the proposal id.
+	KindSkillPromote Kind = "skill.promote"
 	KindHeartbeat       Kind = "heartbeat"
 	KindVoyagerOptimize Kind = "voyager.optimize"
 	KindVoyagerExtract  Kind = "voyager.extract"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, GitCompare, Layers, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, GitCompare, Layers, Loader2, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -10,11 +10,13 @@ import {
 } from "@/components/ui/responsive-modal";
 import { ModalCode, ModalDiff, ModalDl, ModalSection } from "@/components/ui/modal-content";
 import { useRealtime } from "@/lib/realtime/provider";
+import { useRuns } from "@/lib/runs/useRuns";
 import { cn } from "@/lib/utils";
 import {
   decideSkillProposal,
   fetchSkillProposals,
   fetchVoyagerStatus,
+  type RunDTO,
   type SkillProposalDTO,
   type VoyagerStatusDTO,
 } from "@/lib/api";
@@ -56,6 +58,19 @@ export function CandidateSkillsPanel() {
   }, []);
 
   useRealtime("mem_skill_proposals", load);
+
+  // Promote is a long action: the server RUNS the skill's verification harness
+  // (an ephemeral LLM session, up to ~90s) before promoting, booked as a
+  // mem_runs row. Read it via useRuns so each card shows a live "verifying…"
+  // spinner that survives navigation/refresh, and a failed verification shows
+  // WHY — instead of the card just sitting there. (CLAUDE.md → "Server-tracked
+  // progress".)
+  const { runs: promoteRuns } = useRuns({ kind: "skill.promote", limit: 100 });
+  const runByProposal = useMemo(() => {
+    const m = new Map<string, RunDTO>();
+    for (const r of promoteRuns) if (!m.has(r.target_id)) m.set(r.target_id, r); // newest-first
+    return m;
+  }, [promoteRuns]);
 
   async function decide(id: string, decision: "promoted" | "rejected") {
     setBusy((b) => ({ ...b, [id]: true }));
@@ -173,6 +188,7 @@ export function CandidateSkillsPanel() {
                       key={p.id}
                       proposal={p}
                       busy={!!busy[p.id]}
+                      run={runByProposal.get(p.id) ?? null}
                       onOpen={() => setSelected(p)}
                       onDecide={decide}
                     />
@@ -189,6 +205,7 @@ export function CandidateSkillsPanel() {
           open={!!selected}
           onOpenChange={(open) => !open && setSelected(null)}
           busy={!!busy[selected.id]}
+          run={runByProposal.get(selected.id) ?? null}
           onDecide={decide}
         />
       )}
@@ -199,14 +216,21 @@ export function CandidateSkillsPanel() {
 function ProposalRow({
   proposal,
   busy,
+  run,
   onOpen,
   onDecide,
 }: {
   proposal: SkillProposalDTO;
   busy: boolean;
+  run: RunDTO | null;
   onOpen: () => void;
   onDecide: (id: string, decision: "promoted" | "rejected") => void;
 }) {
+  // verifying covers the click→server gap (busy) and the live harness run
+  // (run.status==='running'); failed surfaces a verification that didn't pass
+  // so the boss sees WHY the skill wasn't promoted instead of a silent card.
+  const verifying = busy || run?.status === "running";
+  const failed = run?.status === "error";
   return (
     <div className="rounded-lg border bg-background/40 p-2.5">
       <div className="flex items-start justify-between gap-2">
@@ -251,15 +275,33 @@ function ProposalRow({
               : "Tap to read the full skill before installing."}
           </p>
         </button>
-        <div className="flex shrink-0 gap-1">
-          <Button size="icon" variant="ghost" className="size-11 text-success hover:bg-success/10 lg:size-9" onClick={() => onDecide(proposal.id, "promoted")} disabled={busy} aria-label="Promote">
-            <Check className="size-5 lg:size-4" />
-          </Button>
-          <Button size="icon" variant="ghost" className="size-11 text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:size-9" onClick={() => onDecide(proposal.id, "rejected")} disabled={busy} aria-label="Reject">
-            <X className="size-5 lg:size-4" />
-          </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          {verifying ? (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-muted-foreground" aria-live="polite">
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+              {run?.progress_label || "Verifying…"}
+            </span>
+          ) : (
+            <>
+              <Button size="icon" variant="ghost" className="size-11 text-success hover:bg-success/10 lg:size-9" onClick={() => onDecide(proposal.id, "promoted")} aria-label="Promote">
+                <Check className="size-5 lg:size-4" />
+              </Button>
+              <Button size="icon" variant="ghost" className="size-11 text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:size-9" onClick={() => onDecide(proposal.id, "rejected")} aria-label="Reject">
+                <X className="size-5 lg:size-4" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
+      {/* A failed verification is the boss's signal that the skill didn't run
+          clean — show why, right where the buttons were, so it never just
+          "stays there" with no explanation. The buttons re-appear so he can
+          retry or reject. */}
+      {failed && (
+        <p className="mt-2 min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-danger/40 bg-danger/5 px-2 py-1 text-[11px] text-danger">
+          {run?.human_error?.title || run?.error || "Verification failed — the skill didn't run clean, so it wasn't promoted."}
+        </p>
+      )}
     </div>
   );
 }
@@ -269,14 +311,18 @@ function ProposalModal({
   open,
   onOpenChange,
   busy,
+  run,
   onDecide,
 }: {
   proposal: SkillProposalDTO;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy: boolean;
+  run: RunDTO | null;
   onDecide: (id: string, decision: "promoted" | "rejected") => void;
 }) {
+  const verifying = busy || run?.status === "running";
+  const failed = run?.status === "error";
   const isRevision = !!proposal.parent_skill;
   const targetName = proposal.parent_skill || proposal.name;
   const replacesVersion = proposal.parent_active_version || proposal.parent_version;
@@ -320,17 +366,33 @@ function ProposalModal({
         />
       }
       footer={
-        <>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
-          <Button variant="outline" onClick={() => onDecide(proposal.id, "rejected")} disabled={busy}>
-            <X className="size-4" /> Reject
-          </Button>
-          <Button onClick={() => onDecide(proposal.id, "promoted")} disabled={busy}>
-            <Check className="size-4" /> {isRevision ? "Approve & replace" : "Approve & install"}
-          </Button>
-        </>
+        verifying ? (
+          <span className="inline-flex items-center gap-2 px-1 text-sm font-medium text-muted-foreground" aria-live="polite">
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+            {run?.progress_label || "Verifying — running the skill to confirm it works…"}
+          </span>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+            <Button variant="outline" onClick={() => onDecide(proposal.id, "rejected")}>
+              <X className="size-4" /> Reject
+            </Button>
+            <Button onClick={() => onDecide(proposal.id, "promoted")}>
+              <Check className="size-4" /> {isRevision ? "Approve & replace" : "Approve & install"}
+            </Button>
+          </>
+        )
       }
     >
+      {/* If the last promote attempt failed verification, lead with WHY — the
+          skill ran but didn't return clean data, so it wasn't installed. */}
+      {failed && (
+        <div className="mb-3 min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-[12px] text-danger">
+          <span className="font-medium">Didn’t pass verification — not installed. </span>
+          {run?.human_error?.title || run?.error || "The skill ran but didn’t return clean data. Adjust it and try again."}
+        </div>
+      )}
+
       {/* 1. What's happening — plain language, first thing. */}
       <ModalSection label="What this does">
         <p className="break-words text-[13px] leading-relaxed text-foreground/90">{whatHappens}</p>

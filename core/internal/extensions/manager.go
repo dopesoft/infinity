@@ -44,6 +44,19 @@ func (m *Manager) fireAuthComplete(ctx context.Context, ext *Extension) {
 	}
 }
 
+// originatingSession returns the session that initiated a sign-in when the
+// extension lands in pending_auth — so the Canvas auth card scopes to THAT
+// conversation instead of hijacking every session's Preview pane. Returns ""
+// for any non-pending status (active/error/disabled) and for parks with no
+// session in context (boot-time MCP/cli activation), which is exactly the
+// signal the frontend uses to keep the card out of unrelated conversations.
+func originatingSession(ctx context.Context, status Status) string {
+	if status != StatusPendingAuth {
+		return ""
+	}
+	return tools.SessionIDFromContext(ctx)
+}
+
 func NewManager(store *Store, registry *tools.Registry, mcpManager *tools.MCPManager, router *bridge.Router, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
@@ -78,7 +91,10 @@ func (m *Manager) LoadAll(ctx context.Context) (int, error) {
 		// activate may have set a non-active status (cli pending_auth) plus
 		// auth fields - persist via the full upsert so they're not lost.
 		if ext.Kind == KindCLI {
-			_ = m.store.SetAuthState(ctx, ext.Name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError)
+			// Boot-time activation has no session in ctx, so originatingSession
+			// returns "" — a row parked pending_auth at boot won't hijack a random
+			// conversation; it surfaces in Settings until the boss signs in.
+			_ = m.store.SetAuthState(ctx, ext.Name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError, originatingSession(ctx, ext.Status))
 		} else {
 			_ = m.store.SetStatus(ctx, ext.Name, StatusActive, "")
 		}
@@ -115,6 +131,8 @@ func (m *Manager) Register(ctx context.Context, ext *Extension) error {
 		ext.Status = StatusActive
 		ext.LastError = ""
 	}
+	// Scope a pending sign-in to the session that registered it.
+	ext.AuthSessionID = originatingSession(ctx, ext.Status)
 	if _, err := m.store.Upsert(ctx, ext); err != nil {
 		return err
 	}
@@ -194,7 +212,7 @@ func (m *Manager) Activate(ctx context.Context, name string) (*Extension, error)
 			ext.Status = StatusActive
 			ext.LastError = ""
 		}
-		if err := m.store.SetAuthState(ctx, name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError); err != nil {
+		if err := m.store.SetAuthState(ctx, name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError, originatingSession(ctx, ext.Status)); err != nil {
 			return nil, err
 		}
 		fresh, _ := m.store.GetByName(ctx, name)
@@ -218,7 +236,7 @@ func (m *Manager) Activate(ctx context.Context, name string) (*Extension, error)
 		_ = m.store.SetStatus(ctx, name, StatusError, err.Error())
 		return nil, err
 	}
-	if err := m.store.SetAuthState(ctx, name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError); err != nil {
+	if err := m.store.SetAuthState(ctx, name, ext.Status, ext.AuthURL, ext.AuthInstructions, ext.LastError, originatingSession(ctx, ext.Status)); err != nil {
 		return nil, err
 	}
 	fresh, _ := m.store.GetByName(ctx, name)

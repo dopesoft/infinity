@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/runs"
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
 // API exposes /api/extensions for Studio's Settings → Connectors → Custom
@@ -43,6 +44,7 @@ type extensionDTO struct {
 	AuthURL          string         `json:"auth_url,omitempty"`
 	AuthInstructions string         `json:"auth_instructions,omitempty"`
 	ResumeIntent     string         `json:"resume_intent,omitempty"`
+	AuthSessionID    string         `json:"auth_session_id,omitempty"`
 	ToolName         string         `json:"tool_name,omitempty"`
 	LastCheckedAt    *string        `json:"last_checked_at,omitempty"`
 	CreatedAt        string         `json:"created_at"`
@@ -63,6 +65,7 @@ func toDTO(e *Extension) extensionDTO {
 		AuthURL:          e.AuthURL,
 		AuthInstructions: e.AuthInstructions,
 		ResumeIntent:     e.ResumeIntent,
+		AuthSessionID:    e.AuthSessionID,
 		CreatedAt:        e.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:        e.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -205,7 +208,17 @@ func (a *API) activate(w http.ResponseWriter, r *http.Request, name string) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "extensions not configured"})
 		return
 	}
+	// Carry the originating session so the captured sign-in scopes to the
+	// conversation that asked for it (the Canvas card posts its session id).
+	// Empty body (manual Settings activate) ⇒ no session ⇒ Settings-only surface.
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
 	bg := context.WithoutCancel(r.Context())
+	if sid := strings.TrimSpace(req.SessionID); sid != "" {
+		bg = tools.WithSessionID(bg, sid)
+	}
 	go func() {
 		_ = runs.Track(bg, runs.KindExtension, name, "sign-in setup: "+name, runs.SourceManual,
 			func(c context.Context) error {

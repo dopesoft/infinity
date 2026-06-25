@@ -26,7 +26,7 @@ func NewStore(pool *pgxpool.Pool, logger *slog.Logger) *Store {
 
 const extCols = `id::text, name, kind, description, config, enabled, source,
 	status, last_error, auth_url, auth_instructions, resume_intent,
-	last_checked_at, created_at, updated_at`
+	auth_session_id, last_checked_at, created_at, updated_at`
 
 // Upsert saves (or replaces) an extension by name.
 func (s *Store) Upsert(ctx context.Context, ext *Extension) (string, error) {
@@ -49,8 +49,8 @@ func (s *Store) Upsert(ctx context.Context, ext *Extension) (string, error) {
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO mem_extensions
 		  (name, kind, description, config, enabled, source, status, last_error,
-		   auth_url, auth_instructions, resume_intent)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
+		   auth_url, auth_instructions, resume_intent, auth_session_id)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (name) DO UPDATE SET
 		  kind              = EXCLUDED.kind,
 		  description       = EXCLUDED.description,
@@ -62,11 +62,12 @@ func (s *Store) Upsert(ctx context.Context, ext *Extension) (string, error) {
 		  auth_url          = EXCLUDED.auth_url,
 		  auth_instructions = EXCLUDED.auth_instructions,
 		  resume_intent     = EXCLUDED.resume_intent,
+		  auth_session_id   = EXCLUDED.auth_session_id,
 		  updated_at        = NOW()
 		RETURNING id::text
 	`, ext.Name, string(ext.Kind), ext.Description, string(cfgJSON),
 		ext.Enabled, source, string(status), ext.LastError,
-		ext.AuthURL, ext.AuthInstructions, ext.ResumeIntent).Scan(&id)
+		ext.AuthURL, ext.AuthInstructions, ext.ResumeIntent, nullIfEmpty(ext.AuthSessionID)).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("extensions: upsert: %w", err)
 	}
@@ -145,19 +146,32 @@ func (s *Store) ListByStatus(ctx context.Context, status Status) ([]*Extension, 
 }
 
 // SetAuthState records the human-in-the-loop auth fields plus status for a
-// cli extension and stamps last_checked_at. Pass empty url/instructions when
-// clearing (e.g. on transition to active).
-func (s *Store) SetAuthState(ctx context.Context, name string, status Status, authURL, authInstructions, lastErr string) error {
+// cli/mcp extension and stamps last_checked_at. Pass empty url/instructions when
+// clearing (e.g. on transition to active). authSessionID is the session that
+// initiated the sign-in — set it when parking pending_auth so the Canvas card
+// only shows in that conversation; pass "" on transition to active (or from a
+// boot-time park with no originating session) to clear it.
+func (s *Store) SetAuthState(ctx context.Context, name string, status Status, authURL, authInstructions, lastErr, authSessionID string) error {
 	if s == nil || s.pool == nil {
 		return nil
 	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE mem_extensions
 		   SET status = $2, auth_url = $3, auth_instructions = $4,
-		       last_error = $5, last_checked_at = NOW(), updated_at = NOW()
+		       last_error = $5, auth_session_id = $6,
+		       last_checked_at = NOW(), updated_at = NOW()
 		 WHERE name = $1
-	`, name, string(status), authURL, authInstructions, lastErr)
+	`, name, string(status), authURL, authInstructions, lastErr, nullIfEmpty(authSessionID))
 	return err
+}
+
+// nullIfEmpty maps "" to a SQL NULL so auth_session_id stays clean (NULL, not
+// empty string) when there's no originating session.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Disable turns an extension off so it won't load on the next boot.
@@ -193,21 +207,25 @@ func collectExtensions(rows pgx.Rows) ([]*Extension, error) {
 
 func scanExtension(row pgx.Row) (*Extension, error) {
 	var (
-		ext    Extension
-		kind   string
-		status string
-		cfgRaw []byte
+		ext       Extension
+		kind      string
+		status    string
+		cfgRaw    []byte
+		authSesID *string
 	)
 	if err := row.Scan(
 		&ext.ID, &ext.Name, &kind, &ext.Description, &cfgRaw, &ext.Enabled,
 		&ext.Source, &status, &ext.LastError,
-		&ext.AuthURL, &ext.AuthInstructions, &ext.ResumeIntent, &ext.LastCheckedAt,
-		&ext.CreatedAt, &ext.UpdatedAt,
+		&ext.AuthURL, &ext.AuthInstructions, &ext.ResumeIntent, &authSesID,
+		&ext.LastCheckedAt, &ext.CreatedAt, &ext.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
 	ext.Kind = Kind(kind)
 	ext.Status = Status(status)
+	if authSesID != nil {
+		ext.AuthSessionID = *authSesID
+	}
 	if len(cfgRaw) > 0 {
 		_ = json.Unmarshal(cfgRaw, &ext.Config)
 	}

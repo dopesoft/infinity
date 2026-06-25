@@ -60,6 +60,13 @@ type Extension struct {
 	AuthURL          string     `json:"authUrl,omitempty"`
 	AuthInstructions string     `json:"authInstructions,omitempty"`
 	ResumeIntent     string     `json:"resumeIntent,omitempty"`
+	// AuthSessionID is the session that initiated this extension's pending
+	// sign-in. The Canvas auth card renders ONLY in this session, so a globally
+	// pending extension can't hijack the Preview pane of an unrelated
+	// conversation. Empty ⇒ no originating session ⇒ the card stays out of every
+	// Canvas (it surfaces in Settings → Extensions). Cleared on transition to
+	// active.
+	AuthSessionID string `json:"authSessionId,omitempty"`
 	LastCheckedAt    *time.Time `json:"lastCheckedAt,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	UpdatedAt        time.Time  `json:"updatedAt"`
