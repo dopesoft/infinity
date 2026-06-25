@@ -11,7 +11,7 @@ import (
 // dedupSystem is the conservative duplicate-detection judge. It runs at most
 // once per skill-create attempt (a rare action), only when a drafter is wired.
 // Substrate cognition - a gate, not an assembled capability.
-const dedupSystem = `You are a deduplication gate for a skill library. Decide whether a PROPOSED skill is essentially the SAME capability as one already in the catalog - same core job, not merely related. Be conservative: only match when promoting the proposal as a new skill would create a redundant near-duplicate. Reply with EXACTLY the catalog skill name to merge into, or the single word NONE. No other text.`
+const dedupSystem = `You are a deduplication gate for a skill library. Decide whether a PROPOSED skill performs essentially the SAME CONCRETE TASK as one already in the catalog — the same core job, producing the same kind of result. Be conservative and PRECISE: match ONLY when the proposal would do the same work as the catalog skill. Do NOT match on shared THEME or domain — "resume a stalled coding run" is NOT a duplicate of "nightly self-improve", and "re-anchor on a plan before updating" is NOT a duplicate of "plan and verify", even though they touch the same area. A false match silently relabels a new skill as an update to an unrelated one and misleads the operator. When in doubt, answer NONE. Reply with EXACTLY the catalog skill name to merge into, or the single word NONE. No other text.`
 
 // FindDuplicateSkill returns the name of an active skill that a proposed new
 // skill duplicates, or "" when it is genuinely new. It is the single
