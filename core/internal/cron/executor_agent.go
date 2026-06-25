@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
-	"github.com/dopesoft/infinity/core/internal/httpx"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -140,10 +139,6 @@ func (e *AgentExecutor) ExecuteJob(j Job) (summary RunSummary, err error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Tag outbound HTTP from this turn with its session so a hard failure
-	// (401/5xx) on any tool/connector call is attributed to this run and vetoes a
-	// false-green outcome (the universal "Jarvis always sees his errors" guard).
-	ctx = httpx.WithSession(ctx, sessionID)
 	// nil steer channel: cron-driven turns aren't user-steerable.
 	// Empty model string: Loop.Run resolves to the boss's active
 	// selection via its activeModelFn, falling through to the provider

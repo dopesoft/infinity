@@ -278,16 +278,6 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 // Shared by makeFireFn and the reaper's ReconcileReaped.
 func (s *Scheduler) finalizeOutcome(ctx context.Context, j Job, summary RunSummary, execErr error) (Outcome, RunSummary, error) {
 	outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
-	// The universal HTTP guard can mark a run Failed even when the executor
-	// returned no Go error (it swallowed the 401). Synthesize an error from the
-	// recorded failure so the status line, the ping, AND the cron_failure
-	// backlog feeder (which keys off last_run_status LIKE 'error%') all engage
-	// uniformly — a failure the boss can see and the self-improve loop can fix.
-	if outcome == OutcomeFailed && execErr == nil {
-		if he := httpFailureError(ctx, s.pool, j.RunSessionID); he != nil {
-			execErr = he
-		}
-	}
 	if outcome == OutcomeNeedsYou && bridgeUnavailableInSession(ctx, s.pool, j.RunSessionID) {
 		summary.Summary = bridgeBlockedNarrative
 	}

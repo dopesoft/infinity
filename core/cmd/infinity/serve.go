@@ -29,7 +29,6 @@ import (
 	"github.com/dopesoft/infinity/core/internal/gauge"
 	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
-	"github.com/dopesoft/infinity/core/internal/httpx"
 	"github.com/dopesoft/infinity/core/internal/inbox"
 	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/intent"
@@ -140,15 +139,6 @@ func serveCmd() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "warning: db pool: %v\n", err)
 				} else {
 					pool = p
-					// Universal error visibility (the boss's law: "Jarvis MUST
-					// ALWAYS see errors he gets — no false greens that were really
-					// 401s, 404s"). Wrap the default HTTP transport ONCE so every
-					// outbound call (Composio, connectors, web fetch, …) records its
-					// 4xx/5xx + transport errors into mem_http_failures; the cron
-					// outcome classifier then vetoes any "green" run that logged a
-					// hard failure. One seam, all default-transport clients, no
-					// per-vendor wiring.
-					httpx.InstallDefault(httpx.NewDBRecorder(cmd.Context(), p))
 					embedder = embed.FromEnv()
 					store = memory.NewStore(p)
 					searcher = memory.NewSearcher(p, embedder)

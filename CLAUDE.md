@@ -156,25 +156,6 @@ These apply to every task in this project unless explicitly overridden. Bias: ca
 
 ## Hard rules (in addition to the global ones in `~/.claude/CLAUDE.md`)
 
-### Self-healing & error visibility — Jarvis must SEE and FIX his own code failures, and never lie about a dead path
-
-**This is the boss's law, and it is what makes Infinity a living machine instead of a chatbot wired to a DB.** The 2026-06-24/25 incident: a Composio v3 auth change made Infinity's own request send TWO auth headers (`x-api-key` + `Authorization: Bearer`), so every call 401'd with code `10401`. Inbox triage swallowed the error and reported a green "no new mail" for days. The boss was silently missing email. Worse: the enhancement that *fixed both the auth and the truthfulness* ([a8850a16]) was auto-reverted 8 minutes after deploy by the self-improve loop ([f064371]) — which re-broke the auth AND deleted the detector in one commit, so nothing was left to notice the failure when it recurred.
-
-The standing law, non-negotiable:
-
-- **A failure of YOUR OWN code is a first-class bug, not noise.** A 404 on a URL that never existed is fine. A 401 from a malformed request you sent, a cron that "ran clean" because it `continue`d past every error, a connector polling a dead endpoint — that is *your code failing* and it MUST be seen, named plainly, and fixed. The deadliest bug is the one that looks like success.
-- **Empty-because-broken must NEVER read as empty-because-fine.** This is the same law as the [`feedback_never_hide_errors`] memory, stated at the substrate level. Any code path that can return "nothing" must distinguish "I looked and there was nothing" from "I couldn't look." If you can't prove a real success, fail LOUD (return an error) so the run is classified failed → surfaces in "Surfaced by Jarvis" → pings → feeds the self-improve backlog. A `log.Warn` + `continue` that ends in a rosy summary is the anti-pattern.
-- **Stop retrying something dead. Diagnose the cause, fix the code, re-verify.** Repeating the same failing call is never the move. When the same request keeps failing the same way, find the actual cause (wrong header, stale token, dual auth) and patch it. This is human dev/assistant behavior and it is the bar.
-
-**The error-visibility machinery is LOAD-BEARING. Do NOT revert, disable, or "simplify away" any of it:**
-
-- `core/internal/httpx` — the instrumented `http.DefaultTransport` (`InstallDefault`, wired once at boot in [`serve.go`](core/cmd/infinity/serve.go)) records EVERY outbound `4xx/5xx`/transport error into `mem_http_failures` (migration `153`). One seam, all default-transport clients, zero per-vendor wiring.
-- `cron.classifyOutcome`'s hard-HTTP-failure veto ([`core/internal/cron/outcome.go`](core/internal/cron/outcome.go)) — a run whose session logged a hard failure (`401/403/407/429/5xx`/transport, status 0) **cannot** be classified green, no matter what the executor stamped. `scheduler.finalizeOutcome` synthesizes an `execErr` from the recorded failure so the status line, ping, and `cron_failure` backlog all engage.
-- The triage truthfulness gate ([`core/internal/inbox/triage.go`](core/internal/inbox/triage.go)) — a BLIND run (cache couldn't list accounts, or no mailbox answered) returns an error and `markCoverage`s `last_status='error'`; it never says "no new mail."
-- `proactive.ConnectorCoverageChecklist` — raises a finding when the connector backend errors, instead of silently agreeing "0 accounts = nothing to cover."
-
-**A run going RED because it correctly surfaced a real external failure is that guard WORKING — it is success, never a regression to revert.** If the self-improve loop (or any session) is tempted to revert a change because "a run went red" or "the board isn't green," that is almost always the honesty guard doing its job: fix the underlying failure, do NOT remove the guard. Reverting a whole multi-part commit because one part looked broken is what cost us this fix once already — isolate the real break, never throw out the truthfulness machinery with it.
-
 ### Migrations — NEVER claim "all migrations applied" without verifying the live DB
 
 **This bit us on 2026-05-13.** Prod was silently missing migrations 011 (AGI loops), 012 (OpenAI OAuth), 013 (session usage), and 014 (dashboard) for weeks. Dashboard handlers were spewing `relation "mem_tasks" does not exist` warnings; AGI-loop features had no tables to write to. A prior Claude session had asserted migrations were applied without checking.
