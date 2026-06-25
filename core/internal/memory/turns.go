@@ -365,7 +365,7 @@ func (s *TurnStore) Get(ctx context.Context, turnID string) (TurnRow, error) {
 		&r.ID, &r.SessionID, &r.SessionName, &r.UserText, &r.AssistantText,
 		&r.Model, &r.Status, &r.StopReason, &r.Summary, &r.Error,
 		&sa.t, &ea.t,
-		&r.InputTokens, &r.OutputTokens, &r.ToolCallCount,
+		&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.ToolCallCount,
 		&latency,
 		&r.SessionKind, &r.OriginLabel,
 	)
