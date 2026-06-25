@@ -1,0 +1,89 @@
+name: CI
+
+# Deterministic "did the change actually build?" signal.
+#
+# This does NOT gate the merge — Railway auto-deploys core on every push to main
+# in parallel, by design: the self-improve bot keeps its unattended push-to-main
+# autonomy (see CLAUDE.md "self-healing" + memory project_sentry_blind_revert).
+# CI is the post-push DETECTION signal the post-deploy-verify cron and the sentry
+# can consult instead of a fragile log-scan ("did MY change build green?"). It
+# PREVENTS nothing reaching prod; the commit-seam honesty-veto + build discipline
+# are the prevention layers. CI is the after-the-fact ground truth.
+#
+# Infinity is a polyrepo-in-a-monorepo: five independent Go modules (each its own
+# go.mod) plus the Next.js studio. Build + vet every module; run core's tests
+# (they're hermetic — no DB needed).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go build+vet (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - core
+          - docker/sentry
+          - docker/workspace
+          - docker/browser
+          - tools/mcp-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+      - name: vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+  go-test:
+    name: go test (core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: core/go.sum
+      - name: test
+        working-directory: core
+        run: go test ./...
+
+  studio:
+    name: studio build
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+      - name: install
+        working-directory: studio
+        run: pnpm install --frozen-lockfile
+      - name: build
+        working-directory: studio
+        run: pnpm build

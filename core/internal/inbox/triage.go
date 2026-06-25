@@ -1,3 +1,7 @@
+// honesty-machinery: do-not-revert — the triage truthfulness gate (blind run ≠
+// "no new mail"). See the CLAUDE.md self-healing hard rule + memory project_sentry_blind_revert.
+// Auto-rollback paths (sentry, verify cron, revert-veto) MUST never revert this.
+
 // Package inbox is the deterministic inbox-triage skill.
 //
 // This is the reference shape for every cron going forward (the boss's ask):
@@ -191,17 +195,37 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	// Step 1 — read the inboxes (broad fetch; the LLM is the filter, not the query).
 	mark(s1, plan.StepInProgress, "")
 	accounts := d.Cache.ActiveAccountsByToolkit("gmail")
+	// A BLIND run (no mailbox reachable) is NOT an empty inbox, and must never be
+	// reported as one. Returning a friendly "no new mail" when we actually
+	// couldn't see the inbox is what silently hid a multi-day Composio 401 from
+	// the boss — the run logged ok/nothing_needed and never surfaced or pinged.
+	// So we count REAL fetch successes: only when at least one mailbox answered
+	// can a zero result mean "genuinely empty". Zero successful fetches ⇒ fail
+	// loud (return an error) so classifyOutcome marks the run failed → it lands
+	// in "Surfaced by Jarvis", pings, and gives self-heal a real signal to fix.
 	var emails []email
+	fetchOK := 0
+	var lastErr string
 	for _, a := range accounts {
 		resp, err := fetchEmailBatch(ctx, d.Exec, a, cfg)
 		if err != nil {
-			log.Warn("inbox triage fetch", "account", a.ID, "err", err)
+			lastErr = err.Error()
+			log.Error("inbox triage fetch", "account", a.ID, "err", err)
+			d.markCoverage(ctx, "gmail", a, "error", err.Error())
 			continue
 		}
 		if !resp.Successful {
-			log.Warn("inbox triage fetch", "account", a.ID, "err", resp.Error)
+			lastErr = resp.Error
+			log.Error("inbox triage fetch", "account", a.ID, "err", resp.Error)
+			d.markCoverage(ctx, "gmail", a, "error", resp.Error)
 			continue
 		}
+		fetchOK++
+		// Per-MAILBOX coverage (not just per-cron status): records that THIS
+		// account was actually scanned, so ConnectorCoverageChecklist can see a
+		// silently-dropped mailbox the same day. The migration intended the recipe
+		// to write this; the deterministic Go path never did (Rule #1c).
+		d.markCoverage(ctx, "gmail", a, "ok", "")
 		emails = append(emails, parseEmails(resp.Data, a.ID)...)
 	}
 	sum.Accounts = len(accounts)
@@ -210,6 +234,25 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 	if len(accounts) > 1 {
 		mailboxes = fmt.Sprintf("your %d mailboxes", len(accounts))
 	}
+
+	// Blind: not a single mailbox could be read. Surface it as a failure, never
+	// as silence.
+	if fetchOK == 0 {
+		var reason string
+		switch {
+		case len(accounts) == 0:
+			reason = "no active Gmail connection — reconnect Gmail in Settings → Connectors"
+		case lastErr != "":
+			reason = "every mailbox fetch failed upstream: " + truncate(lastErr, 200)
+		default:
+			reason = "every mailbox fetch failed upstream"
+		}
+		mark(s1, plan.StepFailed, "I couldn't read "+mailboxes+" — "+reason+".")
+		mark(s2, plan.StepSkipped, "Skipped — I couldn't read the inbox.")
+		mark(s3, plan.StepSkipped, "Skipped — I couldn't read the inbox.")
+		return sum, fmt.Errorf("inbox triage could not reach any mailbox: %s", reason)
+	}
+
 	if len(emails) == 0 {
 		mark(s1, plan.StepDone, "No new mail in "+mailboxes+".")
 		mark(s2, plan.StepDone, "Nothing to decide.")
@@ -273,6 +316,36 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 		mark(s3, plan.StepDone, fmt.Sprintf("I put %d emails in your Follow-ups.", sum.Surfaced))
 	}
 	return sum, nil
+}
+
+// markCoverage upserts this account's triage pass into mem_connector_coverage —
+// the SAME contract the connector_coverage_mark agent tool writes — so the
+// deterministic Go triage path feeds ConnectorCoverageChecklist instead of
+// leaving the coverage table empty (which left the safety net blind). Records
+// last_status so a mailbox whose fetch ERRORED is flagged even when its
+// timestamp is fresh. Best-effort: a coverage write must never abort triage.
+func (d Deps) markCoverage(ctx context.Context, toolkit string, a *connectors.Account, status, errText string) {
+	if d.Pool == nil || a == nil {
+		return
+	}
+	identity := strings.TrimSpace(a.IdentityHint)
+	if identity == "" {
+		identity = strings.TrimSpace(a.Alias)
+	}
+	_, err := d.Pool.Exec(ctx, `
+		INSERT INTO mem_connector_coverage
+		  (toolkit, account_id, identity, last_triaged_at, last_status, last_error, updated_at)
+		VALUES ($1, $2, NULLIF($3,''), NOW(), $4, NULLIF($5,''), NOW())
+		ON CONFLICT (toolkit, account_id) DO UPDATE SET
+		  identity        = COALESCE(NULLIF(EXCLUDED.identity,''), mem_connector_coverage.identity),
+		  last_triaged_at = NOW(),
+		  last_status     = EXCLUDED.last_status,
+		  last_error      = EXCLUDED.last_error,
+		  updated_at      = NOW()
+	`, toolkit, a.ID, identity, status, strings.TrimSpace(errText))
+	if err != nil && d.Logger != nil {
+		d.Logger.Warn("inbox triage coverage mark", "account", a.ID, "err", err)
+	}
 }
 
 func fetchEmailBatch(ctx context.Context, exec *connectors.ExecuteClient, a *connectors.Account, cfg Config) (*connectors.ExecuteResponse, error) {

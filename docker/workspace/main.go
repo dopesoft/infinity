@@ -716,8 +716,84 @@ func handleGitCommit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if msg := honestyRevertVeto(r.Context(), repo); msg != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "output": msg, "exit_code": 1})
+		return
+	}
 	out, exit, _ := runGit(r.Context(), repo, "commit", "-m", req.Message)
 	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "output": out, "exit_code": exit})
+}
+
+// protectedHonestyPaths are the error-visibility / self-healing files the
+// autonomous bot must NEVER delete or gut (CLAUDE.md self-healing hard rule +
+// memory project_sentry_blind_revert). Mirrors the lists in docker/sentry/main.go
+// and tools/mcp-bridge — separate modules can't share it, so keep them in sync.
+var protectedHonestyPaths = []string{
+	"core/internal/httpx/",
+	"core/internal/cron/outcome.go",
+	"core/internal/inbox/triage.go",
+	"core/internal/proactive/connector_coverage.go",
+	"core/db/migrations/153_http_failures.sql",
+}
+
+const honestySentinel = "honesty-machinery: do-not-revert"
+
+// honestyRevertVeto inspects the STAGED diff and returns a non-empty block
+// message if the commit would delete a protected honesty file or strip its
+// do-not-revert sentinel. Deterministic guard so an autonomous revert of the
+// error-visibility machinery can never be committed via this seam. Editing a
+// protected file is allowed — only DELETING it or removing the sentinel is blocked.
+func honestyRevertVeto(ctx context.Context, repo string) string {
+	out, exit, _ := runGit(ctx, repo, "diff", "--cached", "--name-status")
+	if exit != 0 || strings.TrimSpace(out) == "" {
+		return ""
+	}
+	var hits []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		status, path := f[0], f[len(f)-1]
+		if !isProtectedHonestyPath(path) {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(status, "D"):
+			hits = append(hits, path+" (deleted)")
+		case strings.HasPrefix(status, "R") && len(f) >= 3:
+			hits = append(hits, path+" (renamed)")
+		default:
+			d, _, _ := runGit(ctx, repo, "diff", "--cached", "--", path)
+			if diffRemovesSentinel(d) {
+				hits = append(hits, path+" (do-not-revert sentinel removed)")
+			}
+		}
+	}
+	if len(hits) == 0 {
+		return ""
+	}
+	return "[honesty-veto] refusing to commit — this change reverts/deletes the error-visibility machinery, which auto-paths must never touch (CLAUDE.md self-healing hard rule):\n  - " +
+		strings.Join(hits, "\n  - ") +
+		"\nIf this is an intentional refactor, the boss must do it by hand. Unstage these files and commit the rest."
+}
+
+func isProtectedHonestyPath(path string) bool {
+	for _, p := range protectedHonestyPaths {
+		if path == p || strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func diffRemovesSentinel(diff string) bool {
+	for _, l := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---") && strings.Contains(l, honestySentinel) {
+			return true
+		}
+	}
+	return false
 }
 
 func handleGitPush(w http.ResponseWriter, r *http.Request) {
@@ -731,15 +807,79 @@ func handleGitPush(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	args := []string{"push"}
-	if req.Remote != "" {
-		args = append(args, req.Remote)
-	}
-	if req.Branch != "" {
-		args = append(args, req.Branch)
-	}
-	out, exit, _ := runGit(r.Context(), repo, args...)
+	out, exit := safePush(r.Context(), repo, req.Remote, req.Branch)
 	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "output": out, "exit_code": exit})
+}
+
+// safePush does fetch → rebase → push so a push never collides with another
+// writer's concurrent commits on a shared branch — the recurring "divergent
+// branches" footgun. It NEVER --force-pushes and NEVER rebases over a dirty
+// tree: with uncommitted changes it skips the rebase and lets a non-fast-forward
+// push fail loud rather than risk in-flight work. On a rebase conflict it
+// `--abort`s to leave the tree clean and bails. A brand-new branch (no remote
+// ref yet, e.g. jarvis/session-*) is pushed directly. Bounded retry, then bail.
+func safePush(ctx context.Context, repo, remote, branch string) (string, int) {
+	if strings.TrimSpace(remote) == "" {
+		remote = "origin"
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		if o, e, _ := runGit(ctx, repo, "rev-parse", "--abbrev-ref", "HEAD"); e == 0 {
+			branch = strings.TrimSpace(o)
+		}
+	}
+	var sb strings.Builder
+	run := func(args ...string) int {
+		o, e, _ := runGit(ctx, repo, args...)
+		fmt.Fprintf(&sb, "$ git %s\n%s\n", strings.Join(args, " "), strings.TrimRight(o, "\n"))
+		return e
+	}
+	push := func() int {
+		if branch != "" {
+			return run("push", remote, branch)
+		}
+		return run("push", remote)
+	}
+
+	dirty := false
+	if o, e, _ := runGit(ctx, repo, "status", "--porcelain"); e == 0 && strings.TrimSpace(o) != "" {
+		dirty = true
+	}
+	if branch == "" || dirty {
+		if push() != 0 {
+			if dirty {
+				sb.WriteString("\n[safe-push] push rejected with uncommitted changes present — NOT auto-rebasing over in-flight work. Commit/stash, then `git pull --rebase`, then push.\n")
+			}
+			return sb.String(), 1
+		}
+		return sb.String(), 0
+	}
+
+	// New branch (no remote ref yet) → nothing to rebase onto, just push.
+	if o, e, _ := runGit(ctx, repo, "ls-remote", "--heads", remote, branch); e == 0 && strings.TrimSpace(o) == "" {
+		if push() != 0 {
+			return sb.String(), 1
+		}
+		return sb.String(), 0
+	}
+
+	// Existing branch, clean tree: fetch → rebase → push, re-syncing once if the
+	// branch moved between rebase and push. Never --force.
+	for attempt := 0; attempt < 2; attempt++ {
+		if run("fetch", remote, branch) != 0 {
+			return sb.String(), 1
+		}
+		if run("rebase", remote+"/"+branch) != 0 {
+			run("rebase", "--abort") // leave the tree clean — never a half-rebase
+			sb.WriteString("\n[safe-push] rebase hit a conflict — aborted, tree left clean, nothing pushed. Resolve manually.\n")
+			return sb.String(), 1
+		}
+		if push() == 0 {
+			return sb.String(), 0
+		}
+	}
+	sb.WriteString("\n[safe-push] push still rejected after re-sync — bailing (no --force).\n")
+	return sb.String(), 1
 }
 
 func handleGitPull(w http.ResponseWriter, r *http.Request) {

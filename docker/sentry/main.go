@@ -13,8 +13,12 @@
 //     down (unreachable / transport error / process-level 5xx).
 //  3. On `down` sustained for SENTRY_TRIP_AFTER (default 5m) → SELF-HEAL:
 //     a. Railway rollback to the previous good deployment (instant), best-effort.
-//     b. git revert the commits since the last-known-healthy SHA + push
-//     (authoritative — fixes main so the next deploy doesn't re-break).
+//     b. git revert — ONLY the bot's own `[self-improve]` commits since the
+//     last-known-healthy SHA, never the boss's commits and never the honesty
+//     machinery (protectedPaths). Re-syncs (fetch+rebase, never --force) and
+//     re-checks health before pushing, so it never clobbers a moved main or
+//     reverts a core that already recovered. Bails to notify-only if there's
+//     nothing safe to revert.
 //     c. notify the boss (webhook + loud stderr).
 //     One action per incident, then it waits for recovery before re-arming;
 //     if still down after acting, it escalates ONCE and stops (no revert loop).
@@ -264,9 +268,34 @@ func (w *watchdog) selfHeal(downFor time.Duration) {
 	w.notify("self_heal", msg)
 }
 
-// gitRevertToGood clones the repo, reverts every commit after the last-healthy
-// SHA on the branch, and pushes. Linear-history assumption; on any error it
-// bails without pushing a partial state (notify handles escalation).
+// protectedPaths are the error-visibility / honesty / self-healing files the
+// auto-rollback must NEVER revert (CLAUDE.md self-healing hard rule + memory
+// project_sentry_blind_revert). A commit touching any of these — including the
+// ADD of them, i.e. the boss's own enhancement, whose revert would DELETE them —
+// is excluded from auto-revert. Matched by path prefix here AND, defensively, by
+// the in-file `honesty-machinery: do-not-revert` sentinel so a future rename
+// can't silently unprotect a file. The literal sentinel string is duplicated in
+// each protected source file; keep them in sync.
+var protectedPaths = []string{
+	"core/internal/httpx/",
+	"core/internal/cron/outcome.go",
+	"core/internal/inbox/triage.go",
+	"core/internal/proactive/connector_coverage.go",
+	"core/db/migrations/153_http_failures.sql",
+}
+
+const honestySentinel = "honesty-machinery: do-not-revert"
+
+// gitRevertToGood clones the repo and reverts ONLY the bot's own `[self-improve]`
+// commits made since the last-healthy SHA — never the boss's commits, never the
+// honesty machinery. This is the deterministic encoding of CLAUDE.md's rule "a
+// run going RED because it surfaced a real failure is the guard WORKING — never
+// revert it." Author CANNOT discriminate (the Mac-path bot commits under the
+// boss's own git identity), so the `[self-improve]` subject tag is the only sound
+// signal and the boss's commits don't carry it. Before pushing it re-syncs
+// (fetch + rebase, never --force) and re-checks health, so it never pushes a
+// stale revert onto a main that moved or a core that already recovered. On any
+// error it bails without pushing a partial state (notify handles escalation).
 func (w *watchdog) gitRevertToGood() error {
 	dir, err := os.MkdirTemp("", "sentry-revert-")
 	if err != nil {
@@ -280,23 +309,99 @@ func (w *watchdog) gitRevertToGood() error {
 		return fmt.Errorf("clone: %v (%s)", err, out)
 	}
 
-	// Are there commits to revert? range = <good>..HEAD
+	// Enumerate commits in <good>..HEAD, newest-first (the order `git revert`
+	// wants for a multi-commit revert).
 	rangeSpec := w.lastHealthySHA + "..HEAD"
-	out, err := w.git(repoDir, "rev-list", "--count", rangeSpec)
+	out, err := w.git(repoDir, "rev-list", rangeSpec)
 	if err != nil {
 		return fmt.Errorf("rev-list: %v (%s)", err, out)
 	}
-	if strings.TrimSpace(out) == "0" {
+	shas := strings.Fields(out)
+	if len(shas) == 0 {
 		return fmt.Errorf("HEAD is already at the last-healthy commit — outage is not from a recent push (infra?); not reverting")
 	}
 
-	if out, err := w.git(repoDir, "revert", "--no-edit", rangeSpec); err != nil {
-		return fmt.Errorf("revert %s: %v (%s)", rangeSpec, err, out)
+	// Filter to commits that are SAFE to auto-revert: tagged [self-improve] AND
+	// not touching any protected honesty path.
+	var toRevert, skipUntagged, skipProtected []string
+	for _, sha := range shas {
+		subj, _ := w.git(repoDir, "show", "-s", "--format=%s", sha)
+		if !strings.Contains(subj, "[self-improve]") {
+			skipUntagged = append(skipUntagged, short(sha))
+			continue
+		}
+		if w.commitTouchesProtected(repoDir, sha) {
+			skipProtected = append(skipProtected, short(sha))
+			continue
+		}
+		toRevert = append(toRevert, sha)
 	}
+	if len(toRevert) == 0 {
+		return fmt.Errorf("nothing safe to auto-revert in %s (%d commits: %d untagged/boss-authored [%s], %d touch protected honesty paths [%s]) — leaving main alone, notify-only",
+			rangeSpec, len(shas), len(skipUntagged), strings.Join(skipUntagged, ","), len(skipProtected), strings.Join(skipProtected, ","))
+	}
+
+	args := append([]string{"revert", "--no-edit"}, toRevert...)
+	if out, err := w.git(repoDir, args...); err != nil {
+		_, _ = w.git(repoDir, "revert", "--abort") // never push a half-done revert
+		return fmt.Errorf("revert %v: %v (%s)", toRevert, err, out)
+	}
+
+	// Re-sync before pushing: main may have moved (the boss pushed, or a redeploy
+	// landed) while we were working. Rebase our revert commits on top; on
+	// conflict, abort and bail — never --force, never push onto a stale base.
+	if out, err := w.git(repoDir, "fetch", "origin", w.cfg.repoBranch); err != nil {
+		return fmt.Errorf("fetch: %v (%s)", err, out)
+	}
+	if out, err := w.git(repoDir, "rebase", "origin/"+w.cfg.repoBranch); err != nil {
+		_, _ = w.git(repoDir, "rebase", "--abort")
+		return fmt.Errorf("rebase onto origin/%s failed (main moved under us) — bailing to notify-only: %v (%s)", w.cfg.repoBranch, err, out)
+	}
+
+	// Re-check health AFTER the re-sync: if core recovered while we prepared the
+	// revert (instant Railway rollback worked, or the boss pushed a fix), do NOT
+	// push a now-stale destructive history rewrite.
+	if st, _ := w.probe(); st == stHealthy {
+		return fmt.Errorf("core recovered while preparing revert — not pushing a stale revert")
+	}
+
 	if out, err := w.git(repoDir, "push", "origin", w.cfg.repoBranch); err != nil {
+		// One retry: main may have moved between rebase and push. Re-sync once more.
+		if _, e2 := w.git(repoDir, "fetch", "origin", w.cfg.repoBranch); e2 == nil {
+			if _, e3 := w.git(repoDir, "rebase", "origin/"+w.cfg.repoBranch); e3 == nil {
+				if out2, e4 := w.git(repoDir, "push", "origin", w.cfg.repoBranch); e4 != nil {
+					return fmt.Errorf("push after re-sync retry: %v (%s)", e4, out2)
+				}
+				return nil
+			}
+			_, _ = w.git(repoDir, "rebase", "--abort")
+		}
 		return fmt.Errorf("push: %v (%s)", err, out)
 	}
 	return nil
+}
+
+// commitTouchesProtected reports whether the given commit touches any protected
+// honesty path — by path prefix, or (defensively) by the in-file sentinel marker
+// in the file's content at that commit. The range is one night's commits, so the
+// per-file blob scan is cheap.
+func (w *watchdog) commitTouchesProtected(repoDir, sha string) bool {
+	files, err := w.git(repoDir, "show", "--name-only", "--format=", sha)
+	if err != nil {
+		// Can't inspect the commit → treat as protected (fail safe, don't revert).
+		return true
+	}
+	for _, f := range strings.Fields(files) {
+		for _, p := range protectedPaths {
+			if f == p || strings.HasPrefix(f, p) {
+				return true
+			}
+		}
+		if blob, err := w.git(repoDir, "show", sha+":"+f); err == nil && strings.Contains(blob, honestySentinel) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *watchdog) git(dir string, args ...string) (string, error) {
