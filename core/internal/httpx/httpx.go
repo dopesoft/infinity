@@ -125,6 +125,23 @@ func InstallDefault(rec Recorder) {
 	http.DefaultTransport = Wrap(http.DefaultTransport, rec, "default")
 }
 
+// Unwrap returns the base RoundTripper that rt wraps, following any chain of
+// httpx wrappers down to the underlying transport (returns rt unchanged if it is
+// not an httpx wrapper). This is the safe way for callers that need the real
+// *http.Transport — e.g. to Clone() it — to see through InstallDefault's
+// wrapping. Without it, `http.DefaultTransport.(*http.Transport)` PANICS once the
+// default transport has been instrumented (it's now *httpx.roundTripper). That
+// exact panic crash-looped core when the instrumentation first shipped.
+func Unwrap(rt http.RoundTripper) http.RoundTripper {
+	for {
+		w, ok := rt.(*roundTripper)
+		if !ok || w == nil {
+			return rt
+		}
+		rt = w.base
+	}
+}
+
 // ---- pgx-backed async recorder -------------------------------------------
 
 // DBRecorder writes failures to mem_http_failures from a single background

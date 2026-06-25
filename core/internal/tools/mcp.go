@@ -18,8 +18,22 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/dopesoft/infinity/core/config"
+	"github.com/dopesoft/infinity/core/internal/httpx"
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// cloneDefaultTransport returns a customizable clone of the process default
+// transport, unwrapping the httpx instrumentation (InstallDefault) if present.
+// A bare `http.DefaultTransport.(*http.Transport)` PANICS once httpx has wrapped
+// the default transport — that crash-looped core on boot. Unwrap first; fall
+// back to a fresh transport if the base somehow isn't an *http.Transport, so
+// this can never panic.
+func cloneDefaultTransport() *http.Transport {
+	if t, ok := httpx.Unwrap(http.DefaultTransport).(*http.Transport); ok {
+		return t.Clone()
+	}
+	return &http.Transport{}
+}
 
 // mcpInfoLog writes to stdout so Railway tags MCP recovery/success lines
 // severity=info instead of the severity=error it stamps on stderr (stdlib
@@ -306,7 +320,7 @@ func (m *MCPManager) dialSession(_ context.Context, s MCPServerConfig) (*mcp.Cli
 			// Transport (DialContext, TLS handshake, response headers).
 			// Per-call deadlines are enforced via context.WithTimeout in
 			// callers like keepAlive and CallTool.
-			httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+			httpTransport := cloneDefaultTransport()
 			httpTransport.ResponseHeaderTimeout = 30 * time.Second
 			sse.HTTPClient = &http.Client{
 				Transport: &headerRoundTripper{
@@ -335,7 +349,7 @@ func (m *MCPManager) dialSession(_ context.Context, s MCPServerConfig) (*mcp.Cli
 			return nil, err
 		}
 		if len(headers) > 0 {
-			httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+			httpTransport := cloneDefaultTransport()
 			httpTransport.ResponseHeaderTimeout = 30 * time.Second
 			streamable.HTTPClient = &http.Client{
 				Transport: &headerRoundTripper{
