@@ -45,6 +45,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/reauth"
 	"github.com/dopesoft/infinity/core/internal/runs"
+	"github.com/dopesoft/infinity/core/internal/selfheal"
 	"github.com/dopesoft/infinity/core/internal/sentinel"
 	"github.com/dopesoft/infinity/core/internal/server"
 	"github.com/dopesoft/infinity/core/internal/sessions"
@@ -1436,6 +1437,18 @@ func serveCmd() *cobra.Command {
 					bctx, bcancel := context.WithTimeout(context.Background(), 2*time.Minute)
 					defer bcancel()
 					cronScheduler.BackfillRunNarratives(bctx)
+					// Reconcile any cron run orphaned by THIS restart (a self-push
+					// redeploy SIGTERM, crash, OOM) into a clear outcome + inbox
+					// card, instead of leaving the generic boot sweep's bare
+					// '(interrupted by restart)' with no story. minAge floor avoids
+					// touching a poll that fired in the first seconds after boot;
+					// real orphans predate the restart and are far older.
+					if n, err := cronScheduler.ReconcileReaped(bctx, 2*time.Minute); err != nil {
+						log.Printf("cron reconcile (boot): %v", err)
+					} else if n > 0 {
+						infoLog := log.New(os.Stdout, "", log.LstdFlags)
+						infoLog.Printf("cron reconcile (boot): gave %d orphaned cron run(s) a clear outcome", n)
+					}
 				}()
 				cronAPI = cron.NewAPI(cronScheduler)
 				tools.RegisterCronTools(registry, cronSchedulerAdapter{s: cronScheduler}, pool)
@@ -1494,6 +1507,18 @@ func serveCmd() *cobra.Command {
 					// the same file during a session. Lands rows in
 					// mem_code_proposals for review in Studio.
 					pipeline.RegisterFunc("voyager.source_extract", voyagerMgr.OnSessionEndSource, hooks.SessionEnd)
+					// Self-heal encoder: when a reactive self-heal pass resolves
+					// (or exhausts on) a failure, write the boss-facing receipt
+					// (what happened / what I tried / how I fixed it / what I
+					// learned) AND the durable procedural guard so the same failure
+					// can't recur silently. Closes the fail → fix → LEARN → guard
+					// loop in code (Rule #1b), not in droppable prose. Model "" lets
+					// activeModel resolve the live provider+model itself.
+					selfHealEncoder := selfheal.NewEncoder(pool, procedural, activeModel, "")
+					if selfHealEncoder != nil {
+						pipeline.RegisterFunc("selfheal.encode", selfHealEncoder.OnSelfHealEvent,
+							hooks.SelfHealResolved, hooks.SelfHealExhausted)
+					}
 				}
 
 				// Routine miner: cluster repeated USER REQUEST patterns into
@@ -2053,7 +2078,7 @@ func serveCmd() *cobra.Command {
 			// the same reconcile on a short cadence so a stuck plan self-heals
 			// into "Awaiting you" within minutes, no restart required.
 			if pool != nil {
-				go runPlanReconcileTicker(ctx, pool)
+				go runPlanReconcileTicker(ctx, pool, cronScheduler)
 			}
 
 			errCh := make(chan error, 1)
@@ -2472,7 +2497,7 @@ func runMaintenanceTicker(ctx context.Context, pool *pgxpool.Pool) {
 // 'running' forever). Cheap; runs every 2 min (override via
 // INFINITY_PLAN_RECONCILE_INTERVAL). Failures log to stderr but never kill the
 // server.
-func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
+func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool, scheduler *cron.Scheduler) {
 	interval := 2 * time.Minute
 	if v := strings.TrimSpace(os.Getenv("INFINITY_PLAN_RECONCILE_INTERVAL")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
@@ -2508,6 +2533,19 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool) {
 	runOnce := func() {
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+		// Give orphaned cron runs a clear outcome + inbox card BEFORE the generic
+		// reaper flips them to a bare 'error' — a run whose container died
+		// mid-finalize (the self-push redeploy case) reads "stopped early — I was
+		// interrupted by a deploy" on the kanban instead of a silent reap. Uses
+		// the 45-min budget so a healthy in-flight run (≤30-min job timeout) is
+		// never touched. Idempotent: once it stamps meta.outcome it won't re-run.
+		if scheduler != nil {
+			if n, err := scheduler.ReconcileReaped(runCtx, reapAge); err != nil {
+				fmt.Fprintf(os.Stderr, "cron reconcile: %v\n", err)
+			} else if n > 0 {
+				infoLog.Printf("cron reconcile: gave %d stranded cron run(s) a clear outcome", n)
+			}
+		}
 		// Reap stranded runs FIRST so the steps they back flip to a terminal
 		// 'error' run, then reconcile cascades those to failed + recomputes the
 		// plan. Order matters: reconcile keys off run.status='error'.

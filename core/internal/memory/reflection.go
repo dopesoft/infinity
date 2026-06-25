@@ -278,7 +278,12 @@ func (r *Reflector) persist(ctx context.Context, sessionID string, res Reflectio
 		fix := res.Fix
 		title := strings.TrimSpace(fix.Title)
 		change := strings.TrimSpace(fix.Change)
-		if title != "" && change != "" {
+		// Deterministic floor behind the critic-prompt steer (Rule #1b): even if
+		// the model emits a fix for a behavior code already enforces, a fix whose
+		// target is a vague phrase ("delegate model routing", "the post-deploy
+		// skill") rather than a concrete code location can't become a candidate.
+		// This is what stops the false-alarm proposals the boss kept seeing.
+		if title != "" && change != "" && looksLikeCodeTarget(fix.TargetHint) {
 			risk := strings.ToLower(strings.TrimSpace(fix.Risk))
 			switch risk {
 			case "low", "medium", "high":
@@ -315,6 +320,32 @@ func (r *Reflector) persist(ctx context.Context, sessionID string, res Reflectio
 	}
 
 	return id, tx.Commit(ctx)
+}
+
+// looksLikeCodeTarget reports whether a critic's target_hint points at a
+// concrete code location (a path or symbol) rather than a vague behavioral
+// phrase. The false-alarm code proposals the boss saw all had phrase targets
+// ("delegate model routing", "post-deploy-verify skill") — the critic
+// "noticing" a behavior Go already enforces deterministically. Requiring a real
+// target is the deterministic floor: even if the model emits a fix anyway, a
+// non-code target can't become a candidate.
+func looksLikeCodeTarget(hint string) bool {
+	h := strings.TrimSpace(hint)
+	if h == "" {
+		return false
+	}
+	// A concrete code target is a SINGLE token — a path ("core/internal/x.go"),
+	// a filename ("openai_oauth.go"), or a symbol ("classifyOutcome"). A
+	// multi-word phrase is a behavior description, not a code location, and is
+	// exactly the false-alarm shape the boss kept seeing: every one of the four
+	// he flagged had a phrase target like "bridge routing / bash_run failover"
+	// or "delegate model routing / Codex auth compatibility" — note the "/" there
+	// is "A / B", NOT a file path, so a bare Contains("/") check would wrongly
+	// pass them. Requiring no whitespace catches them deterministically.
+	if strings.ContainsAny(h, " \t\n") {
+		return false
+	}
+	return true
 }
 
 // truncateReflection trims a string to n runes for the proposal columns.

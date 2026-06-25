@@ -1150,6 +1150,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// self-heal passes have we already injected. See selfheal.go.
 	toolErredThisTurn := false
 	selfHealCount := 0
+	healedThisTurn := false // a self-heal pass ran this turn; drives the resolved/exhausted hook
 	// Per-turn delegate-spawn counter. A runaway model can emit dozens of
 	// `delegate` tool calls in a single message (each spawns a sub-agent); this
 	// hard-caps spawns per turn so a storm can never happen again.
@@ -1449,10 +1450,28 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// Capped by maxSelfHealPerTurn so a genuinely-stuck turn still ends.
 			if selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
 				selfHealCount++
+				healedThisTurn = true
 				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 				s.Append(llm.Message{Role: llm.RoleUser, Content: selfHealDirective})
 				toolErredThisTurn = false // fresh slate for the heal pass
 				continue
+			}
+
+			// A self-heal pass ran this turn and we're now ending it. Fire the
+			// structural hook so the receipt + durable guard get encoded by the
+			// self-heal encoder — guaranteed by code, never dependent on the
+			// model "remembering" to write a memory (Rule #1b). Resolved when the
+			// final reply no longer reads as an unresolved failure; exhausted when
+			// the heal budget ran out and it still does.
+			if healedThisTurn {
+				healEvent := "SelfHealResolved"
+				if shouldSelfHeal(resp.Text, toolErredThisTurn) {
+					healEvent = "SelfHealExhausted"
+				}
+				l.fireHookT(turnID, healEvent, s.ID, s.Project, resp.Text, map[string]any{
+					"heal_passes": selfHealCount,
+					"resolved":    healEvent == "SelfHealResolved",
+				})
 			}
 
 			s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})

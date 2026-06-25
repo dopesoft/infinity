@@ -204,7 +204,7 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// own mem_runs rows (idx_mem_runs_target_running); generic for every
 		// cron. Manual RunOnce is deliberately NOT guarded — that's an explicit
 		// boss action and may override.
-		if s.cronInFlight(ctx, j.ID) {
+		if s.cronInFlight(ctx, j) {
 			infoLog.Printf("skipping fire of %q (%s) — prior run still in-flight", j.Name, j.ID)
 			_, _ = s.pool.Exec(ctx, `
 				UPDATE mem_crons SET last_run_at = $2, last_run_status = 'skipped (overlap)'
@@ -238,64 +238,85 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 		summary, execErr, attempts := s.executeWithRetries(ctx, j)
 
+		// Finalize on a FRESH context — never the (possibly expired/cancelled)
+		// job ctx. A run that hit its 30-min budget, or whose container is
+		// mid-SIGTERM from a self-push redeploy, must still classify + close +
+		// surface correctly. Reusing the spent job ctx here silently errored
+		// every classifyOutcome guard query and fell through to a false did_work
+		// green — the "nightly stall" with no reason. Precedent: the agent
+		// executor's finalizeSession already finalizes on context.Background().
+		fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer fcancel()
+
 		// Classify the run into a single boss-facing outcome (failed /
-		// needs_you / nothing_needed / stopped_early / did_work), stamp it on
-		// the run row so the dashboard can place + colour it, then post the
-		// human-readable result to the boss's "Surfaced by Jarvis" inbox. All
-		// deterministic — the clear outcome is a mechanic, not skill prose.
-		outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
-		// The universal HTTP guard can mark a run Failed even when the executor
-		// returned no Go error (it swallowed the 401). Synthesize an error from the
-		// recorded failure so the status line, the ping, AND the cron_failure
-		// backlog feeder (which keys off last_run_status LIKE 'error%') all engage
-		// uniformly — a failure the boss can see and the self-improve loop can fix.
-		if outcome == OutcomeFailed && execErr == nil {
-			if he := httpFailureError(ctx, s.pool, j.RunSessionID); he != nil {
-				execErr = he
-			}
-		}
-		// Gate: when both bridges were down the agent's closing words cannot be
-		// treated as a verified result (it may have written "healthy" or "Ran it"
-		// without ever reaching the workspace). Replace the narrative so neither
-		// mem_runs.result_summary nor the inbox card surface misleading success
-		// wording. Rule #1b: mechanic, not droppable prose.
-		if outcome == OutcomeNeedsYou && bridgeUnavailableInSession(ctx, s.pool, j.RunSessionID) {
-			summary.Summary = bridgeBlockedNarrative
-		}
+		// needs_you / nothing_needed / stopped_early / did_work) and apply the
+		// deterministic post-classification adjustments. Shared with the reaper
+		// reconciler so a redeploy-killed run gets the identical treatment.
+		outcome, summary, execErr := s.finalizeOutcome(fctx, j, summary, execErr)
+
 		meta := runMetaWithAttempts(summary.Meta, attempts)
 		if meta == nil {
 			meta = map[string]any{}
 		}
 		meta["outcome"] = string(outcome)
-		handle.SetMeta(ctx, meta)
-		handle.Finish(ctx, execErr, summary.Summary)
-		s.surfaceRunOutcome(ctx, j, summary, execErr, outcome)
+		handle.SetMeta(fctx, meta)
+		handle.Finish(fctx, execErr, summary.Summary)
+		s.surfaceRunOutcome(fctx, j, summary, execErr, outcome)
 
-		end := time.Now().UTC()
-		status := "ok"
-		if execErr != nil {
-			// Store the plain-language title, not the raw provider string, so
-			// the cron list reads "Your model token needs reconnecting" instead
-			// of "error: openai_oauth: status=401 body={...}". The full run
-			// detail (raw + human) still lives on the mem_runs row.
-			status = "error: " + errs.Humanize(execErr).Title
-		}
-		// Advance next_run_at to the upcoming fire so the dashboard "Queued"
-		// column rolls forward instead of showing a stale/elapsed time.
-		var nextPtr *time.Time
-		if next, nerr := s.nextFire(j.Schedule); nerr == nil {
-			nextPtr = &next
-		}
-		_, _ = s.pool.Exec(ctx, `
-			UPDATE mem_crons SET
-			  last_run_at = $2,
-			  last_run_status = $3,
-			  last_run_duration_ms = $4,
-			  failure_count = CASE WHEN $5 THEN failure_count + 1 ELSE 0 END,
-			  next_run_at = COALESCE($6, next_run_at)
-			 WHERE id = $1::uuid
-		`, j.ID, end, status, end.Sub(start).Milliseconds(), execErr != nil, nextPtr)
+		s.recordCronRun(fctx, j, execErr, time.Now().UTC().Sub(start).Milliseconds())
 	}
+}
+
+// finalizeOutcome classifies a finished run into a single boss-facing Outcome
+// and applies the two deterministic post-classification adjustments: synthesize
+// an http error when the universal guard failed a run whose executor swallowed
+// the 401 (so the status line, ping, and cron_failure backlog all engage), and
+// replace the narrative when both bridges were down (so no misleading "healthy"
+// wording survives). All read queries run on the PASSED ctx — callers must hand
+// it a FRESH ctx so an expired job budget can't skip the guards (the stall bug).
+// Shared by makeFireFn and the reaper's ReconcileReaped.
+func (s *Scheduler) finalizeOutcome(ctx context.Context, j Job, summary RunSummary, execErr error) (Outcome, RunSummary, error) {
+	outcome := classifyOutcome(ctx, s.pool, j.RunSessionID, summary, execErr)
+	if outcome == OutcomeFailed && execErr == nil {
+		if he := httpFailureError(ctx, s.pool, j.RunSessionID); he != nil {
+			execErr = he
+		}
+	}
+	if outcome == OutcomeNeedsYou && bridgeUnavailableInSession(ctx, s.pool, j.RunSessionID) {
+		summary.Summary = bridgeBlockedNarrative
+	}
+	return outcome, summary, execErr
+}
+
+// recordCronRun stamps the cron row's last-run bookkeeping (plain-language
+// status line, duration, failure count, next fire). Kept as one helper so both
+// the live fire path and the reaper reconciler write an identical row — the
+// dashboard cron list and the cron_failure backlog feeder (which keys off
+// last_run_status LIKE 'error%') stay consistent however the run finished.
+func (s *Scheduler) recordCronRun(ctx context.Context, j Job, execErr error, durationMS int64) {
+	status := "ok"
+	if execErr != nil {
+		// Store the plain-language title, not the raw provider string, so the
+		// cron list reads "Your model token needs reconnecting" instead of
+		// "error: openai_oauth: status=401 body={...}". The full run detail
+		// (raw + human) still lives on the mem_runs row.
+		status = "error: " + errs.Humanize(execErr).Title
+	}
+	// Advance next_run_at to the upcoming fire so the dashboard "Queued" column
+	// rolls forward instead of showing a stale/elapsed time.
+	var nextPtr *time.Time
+	if next, nerr := s.nextFire(j.Schedule); nerr == nil {
+		nextPtr = &next
+	}
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE mem_crons SET
+		  last_run_at = $2,
+		  last_run_status = $3,
+		  last_run_duration_ms = $4,
+		  failure_count = CASE WHEN $5 THEN failure_count + 1 ELSE 0 END,
+		  next_run_at = COALESCE($6, next_run_at)
+		 WHERE id = $1::uuid
+	`, j.ID, time.Now().UTC(), status, durationMS, execErr != nil, nextPtr)
 }
 
 func (s *Scheduler) executeWithRetries(ctx context.Context, j Job) (RunSummary, error, int) {
@@ -365,17 +386,26 @@ func (s *Scheduler) ensureSession(ctx context.Context, id string) {
 // fire path can skip an overlapping concurrent run of the same schedule. Fails
 // OPEN (returns false) on any query error — a rare overlap is better than a
 // cron that silently never fires again because one status check hiccupped.
-func (s *Scheduler) cronInFlight(ctx context.Context, cronID string) bool {
+func (s *Scheduler) cronInFlight(ctx context.Context, j Job) bool {
 	if s == nil || s.pool == nil {
 		return false
 	}
+	// Only a run YOUNGER than the job's own budget + grace counts as genuinely
+	// in-flight. A row older than that is a zombie — its container died mid-run,
+	// or finalize never closed it — and treating it as "running" would wedge the
+	// cron so it never fires again until the reaper clears it (the exact
+	// "stalled and never ran again" failure). Bounding the window can never clip
+	// a legitimately long run (the lower bound is longer than the job's own
+	// timeout) and strictly prevents a permanent wedge.
+	staleCutoff := (jobTimeout(j) + 5*time.Minute).Seconds()
 	var inFlight bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM mem_runs
 			 WHERE kind = $1 AND target_id = $2 AND status = 'running'
+			   AND started_at > NOW() - ($3 * interval '1 second')
 		)
-	`, string(runs.KindCron), cronID).Scan(&inFlight)
+	`, string(runs.KindCron), j.ID, staleCutoff).Scan(&inFlight)
 	if err != nil {
 		return false
 	}

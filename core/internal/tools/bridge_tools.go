@@ -113,11 +113,23 @@ func formatBridgeResult(b bridge.Bridge, body []byte) string {
 // failing build) is returned as-is, never retried, so we don't mask real
 // failures or storm the other bridge.
 func bridgeCall(ctx context.Context, router *bridge.Router, prefs PreferenceFetcher, tool string, fn func(bridge.Bridge) ([]byte, int, bool)) (string, error) {
+	return bridgeCallPref(ctx, router, prefs, nil, tool, fn)
+}
+
+// bridgeCallPref is bridgeCall with an optional explicit bridge override. When
+// override is non-nil it pins the call to that bridge (e.g. a cloud-resident CLI
+// tool that must run where it's installed, regardless of the session's
+// preference); otherwise it resolves the session preference exactly as before.
+// Everything downstream — failover, path normalization, the [bridge=…] prefix —
+// is identical, so this stays the one execution path.
+func bridgeCallPref(ctx context.Context, router *bridge.Router, prefs PreferenceFetcher, override *bridge.Preference, tool string, fn func(bridge.Bridge) ([]byte, int, bool)) (string, error) {
 	if router == nil {
 		return "", fmt.Errorf("%s: bridge router not configured", tool)
 	}
 	pref := bridge.PrefAuto
-	if prefs != nil {
+	if override != nil {
+		pref = *override
+	} else if prefs != nil {
 		pref = prefs(ctx, SessionIDFromContext(ctx))
 	}
 	served, body, status, failedOver, err := router.Call(ctx, pref, fn)
@@ -321,7 +333,10 @@ type bridgeBash struct {
 func (t *bridgeBash) Name() string { return "bash_run" }
 func (t *bridgeBash) Description() string {
 	return "Run a bash command on the active bridge. Output is truncated past 64KB " +
-		"and wall-time limited to 5 minutes. cwd is the workspace root unless specified."
+		"and wall-time limited to 5 minutes. cwd is the workspace root unless specified. " +
+		"Pass bridge=\"cloud\" to pin the command to the cloud workspace regardless of the " +
+		"session's bridge — required for cloud-resident CLI tools (e.g. agent-reach), whose " +
+		"install + credentials live there and aren't on the Mac."
 }
 func (t *bridgeBash) Schema() map[string]any {
 	return map[string]any{
@@ -330,6 +345,11 @@ func (t *bridgeBash) Schema() map[string]any {
 			"cmd":         map[string]any{"type": "string"},
 			"cwd":         map[string]any{"type": "string"},
 			"timeout_sec": map[string]any{"type": "integer"},
+			"bridge": map[string]any{
+				"type":        "string",
+				"enum":        []string{"auto", "mac", "cloud"},
+				"description": "Optional. Pin the command to a specific bridge. Default follows the session. Use \"cloud\" for cloud-resident CLI tools.",
+			},
 		},
 		"required": []string{"cmd"},
 	}
@@ -339,13 +359,33 @@ func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, er
 	if redirect, blocked := guardInteractiveLogin(cmd); blocked {
 		return redirect, nil
 	}
-	return bridgeCall(ctx, t.router, t.prefs, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
+	override := bridgePrefOverride(in)
+	return bridgeCallPref(ctx, t.router, t.prefs, override, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/bash", map[string]any{
 			"cmd":         cmd,
 			"cwd":         bridge.NormalizePath(b, strString(in, "cwd")),
 			"timeout_sec": intOrZero(in, "timeout_sec"),
 		})
 	})
+}
+
+// bridgePrefOverride reads an optional "bridge" arg ("mac"|"cloud"|"auto") and
+// maps it to a bridge.Preference pointer, or nil when absent/unrecognized (so
+// the call falls back to the session preference).
+func bridgePrefOverride(in map[string]any) *bridge.Preference {
+	switch strings.ToLower(strings.TrimSpace(strString(in, "bridge"))) {
+	case "cloud":
+		p := bridge.PrefCloud
+		return &p
+	case "mac":
+		p := bridge.PrefMac
+		return &p
+	case "auto":
+		p := bridge.PrefAuto
+		return &p
+	default:
+		return nil
+	}
 }
 
 // loginCmdRe matches an interactive CLI sign-in invocation — "<tool> auth login"

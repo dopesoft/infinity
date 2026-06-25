@@ -18,6 +18,14 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),                                     // Google
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+PRIVATE KEY-----.*?-----END [A-Z ]+PRIVATE KEY-----`),
 	regexp.MustCompile(`Bearer [A-Za-z0-9_\-\.=]+`),                                  // Authorization headers
+	// Browser-session cookies handed over for paywall-free reads (web-reach):
+	// these are live credentials and must never persist in plaintext memory.
+	regexp.MustCompile(`(?s)\{"url":"[^"]*cookie-editor[^"]*","version":\s*\d+,"data":"[A-Za-z0-9+/=]+"\}`), // Cookie-Editor encrypted export blob
+	regexp.MustCompile(`(?i)auth_token=[a-f0-9]{30,}`),                               // Twitter/X session
+	regexp.MustCompile(`(?i)ct0=[a-f0-9]{30,}`),                                      // Twitter/X CSRF
+	regexp.MustCompile(`(?i)reddit_session=[^\s;"']+`),                               // Reddit session
+	regexp.MustCompile(`(?i)token_v2=[^\s;"']+`),                                     // Reddit token
+	regexp.MustCompile(`(?i)(TWITTER_AUTH_TOKEN|TWITTER_CT0|REDDIT_COOKIE)=\S+`),     // env-var forms
 }
 
 var privateTagPattern = regexp.MustCompile(`(?s)<private>.*?</private>`)
