@@ -31,6 +31,7 @@ import {
   useState,
 } from "react";
 import { extractStreamingContent, extractStreamingPath } from "./streaming";
+import type { DocArtifact } from "@/lib/api";
 
 export type DevicePreset = "mobile" | "tablet" | "desktop";
 
@@ -55,6 +56,21 @@ export type DocMeta = {
   markdown?: string;
   pdfPath?: string;
 };
+
+// docMetaFromArtifact maps a server-tracked DocArtifact (mem_artifacts row) to
+// the DocMeta a tab renders. Shared by the right-pane (rehydration) and the
+// gallery (click-to-open) so the mapping lives in exactly one place.
+export function docMetaFromArtifact(a: DocArtifact): DocMeta {
+  return {
+    id: a.path, // DocMeta.id === path, matching the document_created tab convention
+    filename: a.filename,
+    format: a.format,
+    path: a.path,
+    bytes: a.bytes,
+    markdown: a.markdown,
+    pdfPath: a.pdf_path,
+  };
+}
 
 type Persisted = {
   root: string;
@@ -138,6 +154,8 @@ type CanvasStoreValue = {
   documents: DocMeta[];
   openDocument: (doc: DocMeta) => void;
   closeDocument: (id: string) => void;
+  // Rehydrate open doc tabs from server state (survives refresh / device).
+  restoreDocuments: (docs: DocMeta[], activeId?: string) => void;
 
   // Dirty tracking
   dirtyPaths: Set<string>;
@@ -350,6 +368,19 @@ export function CanvasStoreProvider({
     setActiveTabIdInternal((cur) => (cur === id ? "preview" : cur));
   }, []);
 
+  // restoreDocuments rehydrates the set of open document tabs after a refresh /
+  // device switch from server-tracked artifacts (the vanishing-tabs fix). It
+  // replaces the in-memory documents wholesale (closed-by-X tabs are simply not
+  // in the list) and optionally restores which one was active, without
+  // stealing focus when nothing was active.
+  const restoreDocuments = useCallback((docs: DocMeta[], activeId?: string) => {
+    setDocuments(docs);
+    if (activeId && docs.some((d) => d.id === activeId)) {
+      setActiveTabIdInternal(activeId);
+      setRightModeInternal("file");
+    }
+  }, []);
+
   const openFile = useCallback(
     (path: string) => {
       setOpenPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
@@ -556,6 +587,7 @@ export function CanvasStoreProvider({
       documents,
       openDocument,
       closeDocument,
+      restoreDocuments,
       dirtyPaths,
       markDirty,
       clearDirty,
@@ -595,6 +627,7 @@ export function CanvasStoreProvider({
       documents,
       openDocument,
       closeDocument,
+      restoreDocuments,
       dirtyPaths,
       markDirty,
       clearDirty,

@@ -150,8 +150,10 @@ type wsDocumentCreated struct {
 	Filename string `json:"filename"`
 	Path     string `json:"path"` // cloud workspace path (for download)
 	Bytes    int64  `json:"bytes,omitempty"`
-	Markdown string `json:"markdown,omitempty"` // rendered inline for md/report formats
-	PDFPath  string `json:"pdf_path,omitempty"` // sibling PDF for preview, when also_pdf
+	Markdown  string `json:"markdown,omitempty"`   // rendered inline for md/report formats
+	PDFPath   string `json:"pdf_path,omitempty"`   // sibling PDF for preview, when also_pdf
+	ThumbPath string `json:"thumb_path,omitempty"` // page-1 PNG for the Artifacts/Media gallery
+	ID        string `json:"id,omitempty"`         // mem_artifacts id (so Studio can dedupe vs the fetched list)
 }
 
 // wsBrowserFrame is one screencast frame for the Studio Preview pane (live browser).

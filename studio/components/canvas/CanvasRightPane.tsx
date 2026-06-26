@@ -1,18 +1,51 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { MonitorPlay, X, Lock, FileText, SquareTerminal, Sparkles } from "lucide-react";
 import { CanvasPreview } from "@/components/canvas/CanvasPreview";
 import { CanvasTerminal } from "@/components/canvas/CanvasTerminal";
 import { CanvasMediaGallery } from "@/components/canvas/CanvasMediaGallery";
 import { CanvasFileTab } from "@/components/canvas/CanvasFileTab";
 import { DocumentTab } from "@/components/canvas/DocumentTab";
-import { useCanvasStore } from "@/lib/canvas/store";
+import { useCanvasStore, docMetaFromArtifact } from "@/lib/canvas/store";
+import { useSessionArtifacts } from "@/lib/canvas/useSessionArtifacts";
+import { useRuns } from "@/lib/runs/useRuns";
 import { useWebSocket } from "@/lib/ws/provider";
 import { cn } from "@/lib/utils";
+import type { DocArtifact } from "@/lib/api";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
+
+// Open document tabs persist per session so they survive refresh / device
+// switch — the boss's "my tabs shouldn't vanish unless I click X" rule. The
+// files themselves are server-tracked (mem_artifacts); this localStorage set
+// only remembers WHICH were open (view state), keyed by session.
+const OPEN_DOCS_PREFIX = "infinity:canvas:opendocs:";
+
+function readOpenDocSet(sid: string): { openIds: string[]; activeId?: string } {
+  if (typeof window === "undefined") return { openIds: [] };
+  try {
+    const raw = window.localStorage.getItem(OPEN_DOCS_PREFIX + sid);
+    if (!raw) return { openIds: [] };
+    const p = JSON.parse(raw) as { openIds?: string[]; activeId?: string };
+    return {
+      openIds: Array.isArray(p.openIds) ? p.openIds.filter((x) => typeof x === "string") : [],
+      activeId: typeof p.activeId === "string" ? p.activeId : undefined,
+    };
+  } catch {
+    return { openIds: [] };
+  }
+}
+
+function writeOpenDocSet(sid: string, openIds: string[], activeId?: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(OPEN_DOCS_PREFIX + sid, JSON.stringify({ openIds, activeId }));
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * CanvasRightPane - VS Code-style tabbed editor group.
@@ -27,6 +60,27 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const ws = useWebSocket();
   const stripRef = useRef<HTMLDivElement>(null);
+
+  // Session repository: every generated document (server-tracked) + every
+  // generated media asset. CanvasRightPane is the single data owner — it
+  // rehydrates the open doc tabs, drives the Media tab count badge, and feeds
+  // the gallery (which is a pure renderer).
+  const { artifacts: docArtifacts, loading: docsLoading } = useSessionArtifacts(chat.sessionId);
+  const { runs: mediaRuns } = useRuns({
+    kind: "media.generate",
+    targetId: chat.sessionId || undefined,
+    limit: 50,
+  });
+
+  const mediaCount = useMemo(
+    () =>
+      mediaRuns.reduce(
+        (n, r) => n + (r.status !== "running" && r.status !== "error" ? r.meta?.media?.length ?? 0 : 0),
+        0,
+      ),
+    [mediaRuns],
+  );
+  const galleryCount = docArtifacts.length + mediaCount;
 
   // A generated document opens in a NEW tab (rendered report / download).
   // Cloud-first: markdown rides the event; binaries fetch via the
@@ -47,6 +101,37 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
       });
     });
   }, [ws, store, chat.sessionId]);
+
+  // ── Open-tab persistence (the vanishing-tabs fix) ─────────────────────────
+  // Rehydrate ONCE per session, after the artifact list is available: reopen
+  // exactly the tabs that were open (closed-by-X tabs aren't in the set).
+  const rehydratedRef = useRef<string>("");
+  useEffect(() => {
+    const sid = chat.sessionId;
+    if (!sid || docsLoading) return;
+    if (rehydratedRef.current === sid) return;
+    rehydratedRef.current = sid; // mark rehydrated even if nothing to restore
+    const { openIds, activeId } = readOpenDocSet(sid);
+    if (openIds.length === 0) return;
+    const byPath = new Map(docArtifacts.map((a) => [a.path, a] as const));
+    const docs = openIds
+      .map((p) => byPath.get(p))
+      .filter((a): a is DocArtifact => !!a)
+      .map(docMetaFromArtifact);
+    if (docs.length) store.restoreDocuments(docs, activeId);
+  }, [chat.sessionId, docsLoading, docArtifacts, store]);
+
+  // Persist the open set whenever tabs change — but only AFTER rehydration, so
+  // the empty initial state doesn't clobber the saved set on mount.
+  useEffect(() => {
+    const sid = chat.sessionId;
+    if (!sid || rehydratedRef.current !== sid) return;
+    const openIds = store.documents.map((d) => d.id);
+    const activeId = store.documents.some((d) => d.id === store.activeTabId)
+      ? store.activeTabId
+      : undefined;
+    writeOpenDocSet(sid, openIds, activeId);
+  }, [chat.sessionId, store.documents, store.activeTabId]);
 
   // When the active tab changes, scroll it into view in the strip - mobile
   // and small desktop widths can clip the strip horizontally.
@@ -131,10 +216,15 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                 )}
-                title="Media - generated images & video (pinned)"
+                title="Media - everything Jarvis made this session: images, video, documents (pinned)"
               >
                 <Sparkles className="size-3.5" />
                 <span>Media</span>
+                {galleryCount > 0 && (
+                  <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] font-semibold tabular-nums text-muted-foreground/90">
+                    {galleryCount}
+                  </span>
+                )}
                 <Lock className="size-2.5 text-muted-foreground/60" aria-hidden />
               </button>
             );
@@ -254,7 +344,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
           )}
           aria-hidden={store.activeTabId !== "media"}
         >
-          <CanvasMediaGallery sessionId={chat.sessionId} />
+          <CanvasMediaGallery documents={docArtifacts} mediaRuns={mediaRuns} loading={docsLoading} />
         </div>
         {store.tabs.map((tab) => {
           if (tab.kind !== "file") return null;

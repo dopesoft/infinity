@@ -613,6 +613,33 @@ export async function fetchRuns(opts: FetchRunsOpts = {}, signal?: AbortSignal):
   const qs = q.toString() ? `?${q.toString()}` : "";
   return (await getJSON<RunDTO[]>(`/api/runs${qs}`, signal)) ?? [];
 }
+// DocArtifact is one generated document in the session repository (the
+// Artifacts/Media gallery). Backed by mem_artifacts rows that document_create
+// writes deterministically. Survives refresh + device switch (server state).
+export type DocArtifact = {
+  id: string;
+  filename: string;
+  path: string; // cloud workspace path (download / preview source)
+  bytes?: number;
+  format: string; // xlsx | docx | pptx | pdf | md
+  pdf_path?: string; // sibling PDF for inline preview
+  thumb_path?: string; // page-1 PNG for the gallery
+  markdown?: string; // inline content for md/report docs (so they rehydrate)
+  created_at: string;
+};
+
+export async function fetchSessionArtifacts(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<DocArtifact[]> {
+  if (!sessionId) return [];
+  const data = await getJSON<{ artifacts: DocArtifact[] }>(
+    `/api/canvas/artifacts?session_id=${encodeURIComponent(sessionId)}`,
+    signal,
+  );
+  return data?.artifacts ?? [];
+}
+
 export const fetchTools = (signal?: AbortSignal) =>
   getJSON<ToolDescriptor[]>("/api/tools", signal);
 export const fetchMCP = (signal?: AbortSignal) => getJSON<MCPStatus[]>("/api/mcp", signal);

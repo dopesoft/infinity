@@ -28,9 +28,10 @@ type DocumentCreate struct {
 	token  string
 	client *http.Client
 	// Emit, when set, fires after a successful render so Studio opens the
-	// document in a new tab. Late-bound from serve.go to the server's
-	// per-session broadcaster. nil-safe (doc still generates without it).
-	Emit func(sessionID, format, filename, path, markdown, pdfPath string, bytes int64)
+	// document in a new tab AND the server persists it as a session artifact.
+	// Late-bound from serve.go to the server's per-session broadcaster.
+	// nil-safe (doc still generates without it).
+	Emit func(sessionID, format, filename, path, markdown, pdfPath, thumbPath string, bytes int64)
 }
 
 // NewDocumentCreate returns the tool, or nil when no workspace URL is
@@ -90,12 +91,13 @@ func (d *DocumentCreate) Schema() map[string]any {
 func (d *DocumentCreate) ReadOnly() bool { return true }
 
 type docgenResult struct {
-	Path     string `json:"path"`
-	Format   string `json:"format"`
-	Bytes    int64  `json:"bytes"`
-	PDFPath  string `json:"pdf_path,omitempty"`
-	PDFError string `json:"pdf_error,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Path      string `json:"path"`
+	Format    string `json:"format"`
+	Bytes     int64  `json:"bytes"`
+	PDFPath   string `json:"pdf_path,omitempty"`
+	PDFError  string `json:"pdf_error,omitempty"`
+	ThumbPath string `json:"thumb_path,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 func (d *DocumentCreate) Execute(ctx context.Context, input map[string]any) (string, error) {
@@ -173,7 +175,7 @@ func (d *DocumentCreate) Execute(ctx context.Context, input map[string]any) (str
 				markdown, _ = m["markdown"].(string)
 			}
 		}
-		d.Emit(SessionIDFromContext(ctx), res.Format, strings.TrimSpace(filename), res.Path, markdown, res.PDFPath, res.Bytes)
+		d.Emit(SessionIDFromContext(ctx), res.Format, strings.TrimSpace(filename), res.Path, markdown, res.PDFPath, res.ThumbPath, res.Bytes)
 	}
 
 	var b strings.Builder

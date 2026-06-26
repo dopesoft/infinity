@@ -425,6 +425,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// Library - mem_artifacts grouped by kind. The Files tab IS the library;
 	// this powers the collapsible section at the top.
 	mux.HandleFunc("/api/library/tree", s.handleLibraryTree)
+	// Session document repository — powers the Studio Artifacts/Media gallery
+	// and rehydrates open doc tabs after a refresh.
+	mux.HandleFunc("/api/canvas/artifacts", s.handleSessionArtifacts)
 
 	// LangSmith-style turn-by-turn traces. /api/traces lists rows; the
 	// trailing-slash variant matches /api/traces/<turn_id> for detail.

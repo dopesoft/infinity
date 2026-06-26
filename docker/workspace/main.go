@@ -92,6 +92,7 @@ func main() {
 	mux.HandleFunc("/git/pull", auth(handleGitPull))
 	mux.HandleFunc("/git/init", auth(handleGitInit))
 	mux.HandleFunc("/docgen", auth(handleDocgen))
+	mux.HandleFunc("/docpreview", auth(handleDocPreview))
 
 	// Preview supervisor — boots a project's dev server (or serves it static)
 	// and fronts the running app. Core proxies the browser-facing prefix here;
@@ -960,7 +961,10 @@ func handleDocgen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format and filename are required"})
 		return
 	}
-	out, err := resolvePath(req.Filename)
+	// Every generated deliverable lands in a dedicated artifacts/ folder (not
+	// the workspace root), so the Studio Artifacts/Media gallery and the Files
+	// tree both have one tidy home for them.
+	out, err := resolvePath(filepath.Join("artifacts", filepath.Base(strings.TrimSpace(req.Filename))))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -969,6 +973,7 @@ func handleDocgen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	out = dedupePath(out) // never overwrite a prior deliverable with the same name
 
 	dir := docgenDir()
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
@@ -1004,11 +1009,26 @@ func handleDocgen(w http.ResponseWriter, r *http.Request) {
 		resp["bytes"] = info.Size()
 	}
 	// Optional: render a sibling PDF for visual review via LibreOffice.
+	pdfPath := ""
 	if req.AlsoPDF && format != "pdf" && format != "md" {
-		if pdfPath, err := sofficeToPDF(ctx, out); err == nil {
-			resp["pdf_path"] = pdfPath
+		if p, err := sofficeToPDF(ctx, out); err == nil {
+			pdfPath = p
+			resp["pdf_path"] = p
 		} else {
 			resp["pdf_error"] = err.Error()
+		}
+	}
+	// Thumbnail (page 1 → PNG) for the Studio Artifacts/Media gallery. Source is
+	// the file itself for PDFs, otherwise the sibling preview PDF. md has none.
+	previewPDF := pdfPath
+	if format == "pdf" {
+		previewPDF = out
+	}
+	if previewPDF != "" {
+		if thumb, err := pdfThumbnail(ctx, previewPDF); err == nil {
+			resp["thumb_path"] = thumb
+		} else {
+			resp["thumb_error"] = err.Error()
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -1037,6 +1057,94 @@ func runDocgenHelper(ctx context.Context, dir, interp, script, out string, spec 
 		return fmt.Errorf("%s %s: %v: %s", interp, script, err, msg)
 	}
 	return nil
+}
+
+// handleDocPreview renders a preview PDF (for office files) + a page-1
+// thumbnail for an EXISTING document already in the workspace. Used by the
+// `infinity backfill-artifacts` one-time recovery so documents made before the
+// artifacts repository existed get the same inline preview + gallery thumbnail
+// as freshly generated ones. Reuses the same helpers as /docgen. 404 when the
+// file is gone so the caller can skip recording a broken row.
+func handleDocPreview(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	src, err := resolvePath(strings.TrimSpace(req.Path))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	info, err := os.Stat(src)
+	if err != nil || info.IsDir() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	resp := map[string]any{"path": src, "bytes": info.Size()}
+	previewPDF := ""
+	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(src), ".")) {
+	case "pdf":
+		previewPDF = src
+	case "docx", "xlsx", "pptx":
+		if p, err := sofficeToPDF(ctx, src); err == nil {
+			previewPDF = p
+			resp["pdf_path"] = p
+		} else {
+			resp["pdf_error"] = err.Error()
+		}
+	}
+	if previewPDF != "" {
+		if thumb, err := pdfThumbnail(ctx, previewPDF); err == nil {
+			resp["thumb_path"] = thumb
+		} else {
+			resp["thumb_error"] = err.Error()
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// dedupePath returns p when it's free, otherwise p with a "-N" suffix before
+// the extension, so a repeat filename in artifacts/ never overwrites a prior
+// deliverable (report.docx → report-1.docx → report-2.docx …).
+func dedupePath(p string) string {
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		return p
+	}
+	ext := filepath.Ext(p)
+	stem := strings.TrimSuffix(p, ext)
+	for i := 1; i < 10000; i++ {
+		cand := fmt.Sprintf("%s-%d%s", stem, i, ext)
+		if _, err := os.Stat(cand); os.IsNotExist(err) {
+			return cand
+		}
+	}
+	return p
+}
+
+// pdfThumbnail renders page 1 of a PDF to a ~480px-wide PNG via poppler's
+// pdftoppm (baked into the image), stored in a sibling .thumbs/ dir. Returns
+// the PNG path — used by the Studio Artifacts/Media gallery for previews.
+func pdfThumbnail(ctx context.Context, pdfPath string) (string, error) {
+	dir := filepath.Join(filepath.Dir(pdfPath), ".thumbs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	base := strings.TrimSuffix(filepath.Base(pdfPath), filepath.Ext(pdfPath))
+	prefix := filepath.Join(dir, base)
+	cmd := exec.CommandContext(ctx, "pdftoppm", "-png", "-singlefile", "-f", "1", "-l", "1", "-scale-to", "480", pdfPath, prefix)
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("pdftoppm: %v: %s", err, strings.TrimSpace(string(combined)))
+	}
+	png := prefix + ".png"
+	if _, err := os.Stat(png); err != nil {
+		return "", fmt.Errorf("pdftoppm produced no png")
+	}
+	return png, nil
 }
 
 // sofficeToPDF renders an Office file to a sibling PDF via LibreOffice

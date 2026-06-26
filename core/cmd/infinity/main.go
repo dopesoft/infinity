@@ -38,6 +38,7 @@ func main() {
 	root.AddCommand(reflectCmd())
 	root.AddCommand(gymCmd())
 	root.AddCommand(vapidCmd())
+	root.AddCommand(backfillArtifactsCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
