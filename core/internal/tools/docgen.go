@@ -72,7 +72,8 @@ func (d *DocumentCreate) Schema() map[string]any {
 				"description": "Structured content for the format:\n" +
 					"• xlsx → {\"sheets\":[{\"name\":\"Leads\",\"columns\":[\"Name\",\"Phone\"],\"rows\":[[\"ABC\",\"469-555-0142\"]]}]} (or a single {\"columns\",\"rows\"}).\n" +
 					"• docx/pdf → {\"title\":\"...\",\"subtitle\":\"...\",\"blocks\":[{\"type\":\"heading\",\"level\":1,\"text\":\"...\"},{\"type\":\"paragraph\",\"text\":\"...\"},{\"type\":\"bullets\",\"items\":[\"...\"]},{\"type\":\"table\",\"columns\":[...],\"rows\":[[...]]}]}.\n" +
-					"• pptx → {\"title\":\"...\",\"subtitle\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"]}]}.\n" +
+					"• pptx → a THEMED deck. A branded default theme (logo, brand palette, title chrome) is applied automatically — never style it yourself. Shape: {\"title\":\"...\",\"subtitle\":\"...\" (→ branded cover),\"slides\":[{\"layout\":\"<type>\", ...fields}]}. Pick the LAYOUT whose data shape matches each slide; fields are skipped when absent. Layouts: " +
+						"cover{title,subtitle,image} · agenda{title,items[]} · section{title,image} · bullets{title,tagline,bullets[]|body,image} · stats{title,tagline,bullets[],best_for,stats:[{value,label,caption}]} · statement{eyebrow,text} · number_grid{title,items:[{title,text}]} · timeline{title,steps:[{title,text}]} · metrics{title,lead,metrics:[{value,label,caption}]} · team{title,intro,members:[{name,role,photo}]} · profile{role,name,bio,skills:[{label,pct}],photo} · chart{title,lead,chart:{type:\"bar\"|\"line\",categories:[],series:[{name,values:[]}]}} · thankyou{title}.\n" +
 					"• md → {\"markdown\":\"# Report...\"}.",
 			},
 			"also_pdf": map[string]any{
