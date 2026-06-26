@@ -96,7 +96,7 @@ before the workspace deploy for rows, again after for thumbnails).`,
 
 			recorded, thumbed, skipped := 0, 0, 0
 			for _, c := range cands {
-				pdfPath, thumbPath := c.pdfPath, ""
+				pdfPath, thumbPath, htmlPath := c.pdfPath, "", ""
 				if !noThumb && !dryRun && wsURL != "" {
 					pv, err := docPreviewRender(ctx, wsURL, wsToken, c.path)
 					switch {
@@ -114,13 +114,16 @@ before the workspace deploy for rows, again after for thumbnails).`,
 							thumbPath = pv.ThumbPath
 							thumbed++
 						}
+						if pv.HTMLPath != "" {
+							htmlPath = pv.HTMLPath
+						}
 					}
 				}
 				if dryRun {
 					fmt.Printf("  [dry] %-46s %-5s session=%s pdf=%s\n", c.filename, c.format, shortID(c.session), yesNo(pdfPath))
 					continue
 				}
-				if err := upsertBackfillArtifact(ctx, pool, c, pdfPath, thumbPath); err != nil {
+				if err := upsertBackfillArtifact(ctx, pool, c, pdfPath, thumbPath, htmlPath); err != nil {
 					fmt.Printf("  insert %s: %v\n", c.filename, err)
 					continue
 				}
@@ -194,13 +197,16 @@ func loadBackfillCandidates(ctx context.Context, pool *pgxpool.Pool, session str
 	return out, nil
 }
 
-func upsertBackfillArtifact(ctx context.Context, pool *pgxpool.Pool, c backfillCand, pdfPath, thumbPath string) error {
+func upsertBackfillArtifact(ctx context.Context, pool *pgxpool.Pool, c backfillCand, pdfPath, thumbPath, htmlPath string) error {
 	meta := map[string]any{"format": c.format}
 	if pdfPath != "" {
 		meta["pdf_path"] = pdfPath
 	}
 	if thumbPath != "" {
 		meta["thumb_path"] = thumbPath
+	}
+	if htmlPath != "" {
+		meta["html_path"] = htmlPath
 	}
 	metaJSON, _ := json.Marshal(meta)
 	vpath := "/artifacts/" + filepath.Base(c.path)
@@ -222,6 +228,7 @@ func upsertBackfillArtifact(ctx context.Context, pool *pgxpool.Pool, c backfillC
 type docPreviewResult struct {
 	PDFPath   string `json:"pdf_path"`
 	ThumbPath string `json:"thumb_path"`
+	HTMLPath  string `json:"html_path"`
 }
 
 // docPreviewRender asks the workspace to render a preview PDF + thumbnail for an

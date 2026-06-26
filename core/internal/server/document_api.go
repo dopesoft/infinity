@@ -19,7 +19,7 @@ import (
 // dropped silently when none is. Cloud-first: the markdown rides the event
 // (rendered inline, no fetch) and binaries download via the cloud-direct
 // proxy below — works on any device regardless of the session's bridge.
-func (s *Server) EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, thumbPath string, bytes int64) {
+func (s *Server) EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath string, bytes int64) {
 	if s == nil || sessionID == "" || filename == "" {
 		return
 	}
@@ -27,7 +27,7 @@ func (s *Server) EmitDocumentCreated(sessionID, format, filename, path, markdown
 	// repository must NOT depend on the model remembering to call artifact_save).
 	// The id rides the event so Studio dedupes this live tab against the list it
 	// fetches on load / refresh.
-	id := s.recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, bytes)
+	id := s.recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, bytes)
 	s.sessionSender(sessionID)(wsServerEvent{
 		Type:      "document_created",
 		SessionID: sessionID,
@@ -39,6 +39,7 @@ func (s *Server) EmitDocumentCreated(sessionID, format, filename, path, markdown
 			Markdown:  markdown,
 			PDFPath:   pdfPath,
 			ThumbPath: thumbPath,
+			HTMLPath:  htmlPath,
 			ID:        id,
 		},
 	})
@@ -65,7 +66,7 @@ func mimeForFormat(format string) string {
 // generated document so it lives in the boss's session repository (the
 // Artifacts/Media gallery) regardless of whether the model called artifact_save.
 // Returns the new id, or "" on failure (non-fatal — the tab still opens).
-func (s *Server) recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath string, bytes int64) string {
+func (s *Server) recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath string, bytes int64) string {
 	if s == nil || s.pool == nil || sessionID == "" || strings.TrimSpace(path) == "" {
 		return ""
 	}
@@ -77,6 +78,9 @@ func (s *Server) recordDocumentArtifact(sessionID, format, filename, path, markd
 	}
 	if thumbPath != "" {
 		meta["thumb_path"] = thumbPath
+	}
+	if htmlPath != "" {
+		meta["html_path"] = htmlPath
 	}
 	// md/report formats render inline from markdown (no PDF/thumbnail), so keep
 	// the markdown on the row — that's what lets an md tab rehydrate on refresh.
@@ -119,6 +123,7 @@ type docArtifact struct {
 	Format    string    `json:"format"`
 	PDFPath   string    `json:"pdf_path,omitempty"`
 	ThumbPath string    `json:"thumb_path,omitempty"`
+	HTMLPath  string    `json:"html_path,omitempty"`
 	Markdown  string    `json:"markdown,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -155,6 +160,7 @@ func (s *Server) handleSessionArtifacts(w http.ResponseWriter, r *http.Request) 
 		       COALESCE(metadata->>'format','')      AS format,
 		       COALESCE(metadata->>'pdf_path','')    AS pdf_path,
 		       COALESCE(metadata->>'thumb_path','')  AS thumb_path,
+		       COALESCE(metadata->>'html_path','')   AS html_path,
 		       COALESCE(metadata->>'markdown','')    AS markdown,
 		       created_at
 		  FROM mem_artifacts
@@ -170,7 +176,7 @@ func (s *Server) handleSessionArtifacts(w http.ResponseWriter, r *http.Request) 
 	out := []docArtifact{}
 	for rows.Next() {
 		var d docArtifact
-		if err := rows.Scan(&d.ID, &d.Filename, &d.Path, &d.Bytes, &d.Format, &d.PDFPath, &d.ThumbPath, &d.Markdown, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.Filename, &d.Path, &d.Bytes, &d.Format, &d.PDFPath, &d.ThumbPath, &d.HTMLPath, &d.Markdown, &d.CreatedAt); err != nil {
 			continue
 		}
 		out = append(out, d)

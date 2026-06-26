@@ -105,6 +105,7 @@ export type WSDocumentCreated = {
   bytes?: number;
   markdown?: string; // rendered inline for md/report formats
   pdf_path?: string; // sibling PDF for preview, when also_pdf
+  html_path?: string; // side-scrollable HTML preview (spreadsheets)
 };
 
 export type WSIntent = {

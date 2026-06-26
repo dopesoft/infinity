@@ -153,6 +153,7 @@ type wsDocumentCreated struct {
 	Markdown  string `json:"markdown,omitempty"`   // rendered inline for md/report formats
 	PDFPath   string `json:"pdf_path,omitempty"`   // sibling PDF for preview, when also_pdf
 	ThumbPath string `json:"thumb_path,omitempty"` // page-1 PNG for the Artifacts/Media gallery
+	HTMLPath  string `json:"html_path,omitempty"`  // side-scrollable HTML preview for spreadsheets
 	ID        string `json:"id,omitempty"`         // mem_artifacts id (so Studio can dedupe vs the fetched list)
 }
 

@@ -42,13 +42,17 @@ function prettyBytes(n?: number): string {
 export function DocumentTab({ doc }: { doc: DocMeta }) {
   const Icon = iconFor(doc.format);
   const isReport = doc.format === "md" || (!!doc.markdown && doc.format !== "pdf");
-  const previewPath = doc.format === "pdf" ? doc.path : doc.pdfPath;
+  // Spreadsheets preview as a side-scrollable HTML grid (NOT a column-chopping
+  // PDF); everything else previews as PDF.
+  const previewPath = doc.htmlPath ? doc.htmlPath : doc.format === "pdf" ? doc.path : doc.pdfPath;
+  const previewType = doc.htmlPath ? "text/html" : "application/pdf";
 
   const [downloading, setDownloading] = useState(false);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(!!previewPath);
 
-  // Load the PDF preview as a blob object URL (iframe can't carry a bearer).
+  // Load the preview (PDF or HTML) as a blob object URL — an iframe can't carry
+  // a bearer. Force the content type so the iframe RENDERS it (not downloads).
   useEffect(() => {
     if (!previewPath) return;
     let revoked = false;
@@ -57,7 +61,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
     fetchWorkspaceBlob(previewPath).then((blob) => {
       if (revoked) return;
       if (blob) {
-        url = URL.createObjectURL(blob);
+        url = URL.createObjectURL(new Blob([blob], { type: previewType }));
         setPdfUrl(url);
       }
       setPdfLoading(false);
@@ -66,7 +70,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
       revoked = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [previewPath]);
+  }, [previewPath, previewType]);
 
   async function handleDownload() {
     setDownloading(true);

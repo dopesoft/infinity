@@ -55,6 +55,7 @@ export type DocMeta = {
   bytes?: number;
   markdown?: string;
   pdfPath?: string;
+  htmlPath?: string; // side-scrollable HTML preview (spreadsheets)
 };
 
 // docMetaFromArtifact maps a server-tracked DocArtifact (mem_artifacts row) to
@@ -69,6 +70,7 @@ export function docMetaFromArtifact(a: DocArtifact): DocMeta {
     bytes: a.bytes,
     markdown: a.markdown,
     pdfPath: a.pdf_path,
+    htmlPath: a.html_path,
   };
 }
 

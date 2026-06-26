@@ -1031,6 +1031,15 @@ func handleDocgen(w http.ResponseWriter, r *http.Request) {
 			resp["thumb_error"] = err.Error()
 		}
 	}
+	// Spreadsheets ALSO get an HTML preview — Studio shows that (a side-scrollable
+	// grid) instead of the column-chopping PDF.
+	if format == "xlsx" {
+		if h, err := xlsxToHTML(ctx, out); err == nil {
+			resp["html_path"] = h
+		} else {
+			resp["html_error"] = err.Error()
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1105,6 +1114,13 @@ func handleDocPreview(w http.ResponseWriter, r *http.Request) {
 			resp["thumb_error"] = err.Error()
 		}
 	}
+	if strings.EqualFold(strings.TrimPrefix(filepath.Ext(src), "."), "xlsx") {
+		if h, err := xlsxToHTML(ctx, src); err == nil {
+			resp["html_path"] = h
+		} else {
+			resp["html_error"] = err.Error()
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1124,6 +1140,25 @@ func dedupePath(p string) string {
 		}
 	}
 	return p
+}
+
+// xlsxToHTML renders an .xlsx into a clean, horizontally-scrollable HTML table
+// (via the baked xlsx_to_html.py helper). Spreadsheets preview AS a spreadsheet
+// — a wide grid you side-scroll — instead of a paginated PDF that chops columns
+// onto separate pages. Returns the .html path.
+func xlsxToHTML(ctx context.Context, src string) (string, error) {
+	dir := docgenDir()
+	out := strings.TrimSuffix(src, filepath.Ext(src)) + ".html"
+	cmd := exec.CommandContext(ctx, filepath.Join(dir, "venv/bin/python"),
+		filepath.Join(dir, "xlsx_to_html.py"), src, out)
+	cmd.Dir = dir
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("xlsx_to_html: %v: %s", err, strings.TrimSpace(string(combined)))
+	}
+	if _, err := os.Stat(out); err != nil {
+		return "", fmt.Errorf("xlsx_to_html produced no html")
+	}
+	return out, nil
 }
 
 // pdfThumbnail renders page 1 of a PDF to a ~480px-wide PNG via poppler's

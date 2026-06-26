@@ -31,7 +31,7 @@ type DocumentCreate struct {
 	// document in a new tab AND the server persists it as a session artifact.
 	// Late-bound from serve.go to the server's per-session broadcaster.
 	// nil-safe (doc still generates without it).
-	Emit func(sessionID, format, filename, path, markdown, pdfPath, thumbPath string, bytes int64)
+	Emit func(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath string, bytes int64)
 }
 
 // NewDocumentCreate returns the tool, or nil when no workspace URL is
@@ -97,6 +97,7 @@ type docgenResult struct {
 	PDFPath   string `json:"pdf_path,omitempty"`
 	PDFError  string `json:"pdf_error,omitempty"`
 	ThumbPath string `json:"thumb_path,omitempty"`
+	HTMLPath  string `json:"html_path,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -175,7 +176,7 @@ func (d *DocumentCreate) Execute(ctx context.Context, input map[string]any) (str
 				markdown, _ = m["markdown"].(string)
 			}
 		}
-		d.Emit(SessionIDFromContext(ctx), res.Format, strings.TrimSpace(filename), res.Path, markdown, res.PDFPath, res.ThumbPath, res.Bytes)
+		d.Emit(SessionIDFromContext(ctx), res.Format, strings.TrimSpace(filename), res.Path, markdown, res.PDFPath, res.ThumbPath, res.HTMLPath, res.Bytes)
 	}
 
 	var b strings.Builder

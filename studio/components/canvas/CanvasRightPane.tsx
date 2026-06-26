@@ -98,6 +98,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
         bytes: d.bytes,
         markdown: d.markdown,
         pdfPath: d.pdf_path,
+        htmlPath: d.html_path,
       });
     });
   }, [ws, store, chat.sessionId]);

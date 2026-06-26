@@ -624,6 +624,7 @@ export type DocArtifact = {
   format: string; // xlsx | docx | pptx | pdf | md
   pdf_path?: string; // sibling PDF for inline preview
   thumb_path?: string; // page-1 PNG for the gallery
+  html_path?: string; // side-scrollable HTML preview (spreadsheets)
   markdown?: string; // inline content for md/report docs (so they rehydrate)
   created_at: string;
 };
