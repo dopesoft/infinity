@@ -60,6 +60,12 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         ghostscript \
         tesseract-ocr \
         fonts-liberation \
+        # Carlito = metric-identical open twin of Calibri (the boss's pick for
+        # generated docs). LibreOffice auto-substitutes Calibri → Carlito, so
+        # the inline PDF preview of a .docx renders true Calibri shapes instead
+        # of falling back to a serif. Caladea = the Cambria twin (serif pair).
+        fonts-crosextra-carlito \
+        fonts-crosextra-caladea \
         # ── media + motion-graphics rendering stack ──
         # ffmpeg: cut/crop/caption/encode for shorts AND the design renderer's
         #   encode step (image-sequence -> ProRes/mp4). Also self-installs via
@@ -74,6 +80,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g pnpm \
     && rm -rf /var/lib/apt/lists/*
+
+# Extra font aliases (Calibri Light / Helvetica Neue / Aptos → Carlito) so the
+# inline LibreOffice PDF preview of generated docs always renders a clean sans,
+# on top of fontconfig's built-in Calibri→Carlito metric alias. fc-cache picks
+# up the new Carlito/Caladea faces.
+COPY fonts-local.conf /etc/fonts/conf.d/99-infinity-fonts.conf
+RUN fc-cache -f
 
 # Baked document-generation helpers. document_create (core tool) dispatches
 # the structured spec to these via the /docgen endpoint, so the agent never

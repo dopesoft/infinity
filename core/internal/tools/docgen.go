@@ -77,7 +77,7 @@ func (d *DocumentCreate) Schema() map[string]any {
 			},
 			"also_pdf": map[string]any{
 				"type":        "boolean",
-				"description": "For docx/pptx/xlsx: also render a sibling .pdf (via LibreOffice) for easy viewing. Default false.",
+				"description": "Office formats (xlsx/docx/pptx) ALREADY render inline in the boss's canvas column via an auto-generated sibling PDF — you do NOT need to set this. Only pass false to skip the PDF render (e.g. a throwaway sheet you don't need to preview).",
 			},
 		},
 		"required": []string{"format", "filename", "content"},
@@ -111,10 +111,25 @@ func (d *DocumentCreate) Execute(ctx context.Context, input map[string]any) (str
 	if err != nil {
 		return "", fmt.Errorf("content must be a JSON object: %w", err)
 	}
-	alsoPDF, _ := input["also_pdf"].(bool)
+
+	// Inline preview in the boss's canvas column is a MECHANIC, not a model
+	// choice (Rule #1b). An office file with no sibling PDF falls back to a bare
+	// download card — NOT the inline render the boss expects (and the whole
+	// reason the canvas column exists). So default also_pdf=true for every
+	// office format: LibreOffice renders a sibling .pdf that DocumentTab shows
+	// inline. The model used to have to remember this per-format and the skill
+	// only ever named docx/pptx — so spreadsheets silently shipped as a 404-ish
+	// download card. Now it's guaranteed in code. pdf/md need no sibling (they
+	// already render inline). An explicit also_pdf:false is still honored as an
+	// escape hatch for callers that want the raw file without the conversion.
+	fmtLower := strings.ToLower(strings.TrimSpace(format))
+	alsoPDF := fmtLower == "xlsx" || fmtLower == "docx" || fmtLower == "pptx"
+	if v, ok := input["also_pdf"].(bool); ok {
+		alsoPDF = v
+	}
 
 	body, _ := json.Marshal(map[string]any{
-		"format":   strings.ToLower(strings.TrimSpace(format)),
+		"format":   fmtLower,
 		"filename": strings.TrimSpace(filename),
 		"content":  json.RawMessage(contentJSON),
 		"also_pdf": alsoPDF,
@@ -165,7 +180,8 @@ func (d *DocumentCreate) Execute(ctx context.Context, input map[string]any) (str
 	if res.PDFPath != "" {
 		fmt.Fprintf(&b, "PDF preview: %s\n", res.PDFPath)
 	}
-	b.WriteString("The file is in the workspace and available to view/download in Studio. " +
-		"Index it with artifact_save (kind=\"document\") so it shows in the boss's artifacts.")
+	b.WriteString("It is ALREADY OPEN and rendering inline in the boss's canvas column (a new document tab) — that is the deliverable. " +
+		"Do NOT write a file path or a download link in your chat reply: there is no public URL and any link you invent will 404. " +
+		"Just tell him in one line what you made. Then index it with artifact_save (kind=\"document\") so it also shows in his artifacts.")
 	return b.String(), nil
 }
