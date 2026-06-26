@@ -244,7 +244,14 @@ func docPreviewRender(ctx context.Context, wsURL, token, path string) (docPrevie
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode == http.StatusNotFound {
-		return res, errFileGone
+		// Only OUR handler's 404 means the file is gone; a route-missing 404
+		// (workspace not deployed with /docpreview) must NOT be mistaken for it,
+		// or we'd skip every doc. Fall through to a generic error in that case
+		// so the row is still recorded (just without a thumbnail).
+		if bytes.Contains(raw, []byte("file not found")) {
+			return res, errFileGone
+		}
+		return res, errors.New("docpreview endpoint unavailable (404) — workspace may not be deployed")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return res, fmt.Errorf("docpreview HTTP %d", resp.StatusCode)
