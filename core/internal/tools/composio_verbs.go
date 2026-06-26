@@ -47,7 +47,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/connectors"
 )
 
-const composioToolsBase = "https://backend.composio.dev/api/v3"
+const composioToolsBase = "https://backend.composio.dev/api/v3.1"
 
 // composioVerbDef is the relevant subset of Composio's /api/v3/tools row.
 type composioVerbDef struct {

@@ -103,7 +103,7 @@ func New(pool *pgxpool.Pool, adminKey func() string) *Cache {
 	return &Cache{
 		pool:       pool,
 		adminKey:   adminKey,
-		apiBaseURL: "https://backend.composio.dev/api/v3",
+		apiBaseURL: "https://backend.composio.dev/api/v3.1",
 		httpClient: &http.Client{Timeout: 20 * time.Second},
 		refresh:    60 * time.Second,
 		byToolkit:  make(map[string][]*Account),

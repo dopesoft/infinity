@@ -30,7 +30,7 @@ import (
 // All four pass through Composio's JSON response untouched so Studio can
 // evolve with their schema without server-side re-shaping.
 
-const composioAPIBase = "https://backend.composio.dev/api/v3"
+const composioAPIBase = "https://backend.composio.dev/api/v3.1"
 
 // composioHTTP is the shared upstream client. Longer-than-default response
 // timeout because Composio's catalog endpoint occasionally takes ~2s.

@@ -2,10 +2,13 @@ package inbox
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/surface"
 )
 
 type fakeProvider struct {
@@ -73,5 +76,24 @@ func TestSenderName(t *testing.T) {
 	}
 	if got := senderName("<bare@addr.com>"); got != "bare@addr.com" {
 		t.Errorf("senderName bare = %q", got)
+	}
+}
+
+func TestRunFailsLoudWhenNoMailboxReachable(t *testing.T) {
+	sum, err := Run(context.Background(), Deps{
+		Exec:    connectors.NewExecuteClient(func() string { return "project-key" }),
+		Cache:   connectors.New(nil, func() string { return "project-key" }),
+		Surface: surface.NewStore(nil, nil),
+	}, Config{})
+
+	if err == nil {
+		t.Fatal("Run returned nil error, want blind-run failure")
+	}
+	if !strings.Contains(err.Error(), "could not reach any mailbox") ||
+		!strings.Contains(err.Error(), "no active Gmail connection") {
+		t.Fatalf("error = %q, want no-active-Gmail blind-run failure", err.Error())
+	}
+	if sum.Fetched != 0 || sum.Surfaced != 0 {
+		t.Fatalf("summary = %#v, want no fetched/surfaced mail", sum)
 	}
 }

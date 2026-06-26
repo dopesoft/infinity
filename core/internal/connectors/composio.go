@@ -8,7 +8,7 @@
 // client exists so deterministic flows (cron polling, sentinels,
 // skill runtimes) can call the same actions WITHOUT booting the LLM.
 //
-// Endpoint: POST https://backend.composio.dev/api/v3/tools/execute/{slug}
+// Endpoint: POST https://backend.composio.dev/api/v3.1/tools/execute/{slug}
 //   Headers: x-api-key ONLY (v3 rejects dual auth with code 10401)
 //   Body:    { "connected_account_id": "ca_...", "user_id": "...",
 //              "arguments": {...} }
@@ -31,7 +31,7 @@ import (
 	"time"
 )
 
-const composioExecuteBase = "https://backend.composio.dev/api/v3"
+const composioExecuteBase = "https://backend.composio.dev/api/v3.1"
 
 // ExecuteRequest is what callers hand to Client.Execute. ConnectedAccountID
 // is required for any action that hits an authenticated upstream (every

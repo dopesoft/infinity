@@ -137,7 +137,7 @@ export function SavedCard({
         </div>
       ) : null}
       <div className="-mx-3 px-3 sm:mx-0 sm:px-0">
-        <div className="flex snap-x snap-mandatory items-stretch gap-3 overflow-x-auto pb-2 scroll-touch no-scrollbar">
+        <div className="flex snap-x snap-mandatory items-stretch gap-3 overflow-x-auto pt-2 pb-3 scroll-touch no-scrollbar">
           {shown.map((e) => (
             <ShelfTile key={e.id} e={e} />
           ))}
