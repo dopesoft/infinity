@@ -1470,7 +1470,7 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 	}
 
 	refRows, err := a.Pool.Query(ctx, `
-		SELECT id::text, critique, created_at
+		SELECT id::text, critique, lessons, created_at
 		FROM mem_reflections
 		ORDER BY created_at DESC
 		LIMIT 10
@@ -1479,18 +1479,27 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 		for refRows.Next() {
 			var (
 				id, critique string
+				lessonsRaw   []byte
 				createdAt    time.Time
 			)
-			if err := refRows.Scan(&id, &critique, &createdAt); err != nil {
+			if err := refRows.Scan(&id, &critique, &lessonsRaw, &createdAt); err != nil {
 				refRows.Close()
 				return nil, err
 			}
 			title, _ := splitTitleBody(critique)
+			// Body = the FULL critique (prose) + lessons as a labeled block, so
+			// the expanded card is rich and uniform with every other kind (which
+			// all set Detail). Previously the body was discarded → empty card.
+			detail := strings.TrimSpace(critique)
+			if ls := joinLessons(lessonsRaw); ls != "" {
+				detail += "\n\nlessons: " + ls
+			}
 			out = append(out, ActivityEvent{
-				ID:    "ref-" + id,
-				Kind:  "reflection",
-				Title: "Reflection: " + title,
-				At:    createdAt,
+				ID:     "ref-" + id,
+				Kind:   "reflection",
+				Title:  "Reflection: " + title,
+				Detail: detail,
+				At:     createdAt,
 			})
 		}
 		refRows.Close()
@@ -1532,6 +1541,13 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 		sysRows.Close()
 	}
 
+	// Uniform titles: every activity card gets a clean one-liner header — no
+	// runaway sentences (a reflection's first sentence can run long). The full
+	// content always lives in Detail (the body), never the title.
+	for i := range out {
+		out[i].Title = capTitle(out[i].Title, 80)
+	}
+
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].At.After(out[j].At)
 	})
@@ -1539,6 +1555,46 @@ func (a *API) loadActivity(ctx context.Context) ([]ActivityEvent, error) {
 		out = out[:40]
 	}
 	return out, nil
+}
+
+// capTitle collapses newlines and trims a title to a clean single line of at
+// most max runes (rune-safe so it never splits a multibyte char).
+func capTitle(s string, max int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return strings.TrimSpace(string(r[:max-1])) + "…"
+}
+
+// joinLessons flattens a reflection's lessons jsonb (array of strings or
+// {lesson|text} objects) into a " · "-separated string for the activity body.
+func joinLessons(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var arr []any
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(arr))
+	for _, v := range arr {
+		switch x := v.(type) {
+		case string:
+			if s := strings.TrimSpace(x); s != "" {
+				parts = append(parts, s)
+			}
+		case map[string]any:
+			for _, k := range []string{"lesson", "text", "summary"} {
+				if s, _ := x[k].(string); strings.TrimSpace(s) != "" {
+					parts = append(parts, strings.TrimSpace(s))
+					break
+				}
+			}
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 // loadWork unions live cron/sentinel/skill-run/trust/code-proposal rows

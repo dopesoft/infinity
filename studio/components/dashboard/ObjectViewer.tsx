@@ -2600,18 +2600,144 @@ function workflowStepText(status: string): string {
 
 
 // ── Activity ──────────────────────────────────────────────────────────────
+// One universal layout for EVERY activity kind. A detail is a set of newline
+// segments; a "label: value" segment renders as a labeled block (the
+// action/why/result/safety shape heartbeat findings emit), "- x" lines render
+// as bullets, and everything else is clean prose. Backticked spans render as
+// inline code. Reflections, runs, system notes — all read the same way.
+
+type ActivityBlock = { label?: string; value?: string; bullets?: string[] };
+
+const ACTIVITY_LABEL_RE = /^([a-zA-Z][a-zA-Z /]{0,22}):\s+(.+)$/;
+
+function parseActivityDetail(detail: string): ActivityBlock[] {
+  const blocks: ActivityBlock[] = [];
+  let prose: string[] = [];
+  let bullets: string[] = [];
+  const flushProse = () => {
+    if (prose.length) blocks.push({ value: prose.join(" ") });
+    prose = [];
+  };
+  const flushBullets = () => {
+    if (bullets.length) blocks.push({ bullets });
+    bullets = [];
+  };
+  for (const raw of detail.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) {
+      flushProse();
+      flushBullets();
+      continue;
+    }
+    const bm = line.match(/^[-•]\s+(.*)$/);
+    if (bm) {
+      flushProse();
+      bullets.push(bm[1]);
+      continue;
+    }
+    flushBullets();
+    const lm = line.match(ACTIVITY_LABEL_RE);
+    if (lm) {
+      flushProse();
+      blocks.push({ label: lm[1], value: lm[2] });
+      continue;
+    }
+    prose.push(line);
+  }
+  flushProse();
+  flushBullets();
+  return blocks;
+}
+
+// renderInline turns `backticked` spans into inline code. React escapes the
+// rest, so literal angle-bracket tokens like <connected_accounts> survive.
+function renderActivityInline(text: string): React.ReactNode {
+  return text.split(/(`[^`]+`)/g).map((p, i) =>
+    p.length > 1 && p.startsWith("`") && p.endsWith("`") ? (
+      <code
+        key={i}
+        className="rounded bg-muted px-1 py-0.5 font-mono text-[11.5px] text-foreground/90"
+      >
+        {p.slice(1, -1)}
+      </code>
+    ) : (
+      <span key={i}>{p}</span>
+    ),
+  );
+}
+
+function activityChipCls(kind: string): string {
+  switch (kind) {
+    case "completed":
+      return "border-success/40 bg-success/10 text-success";
+    case "reflection":
+      return "border-tier-procedural/40 bg-tier-procedural/10 text-tier-procedural";
+    case "alert":
+      return "border-rose-400/40 bg-rose-400/10 text-rose-400";
+    case "memory":
+      return "border-info/40 bg-info/10 text-info";
+    default: // scheduled | system
+      return "border-border bg-muted text-muted-foreground";
+  }
+}
+
 function ActivityBody({ e }: { e: ActivityEv }) {
+  const blocks = parseActivityDetail(e.detail || "");
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
+    <div className="space-y-4 pt-3">
+      {/* Meta row — tone-colored kind chip + when. */}
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        <span
+          className={cn(
+            "rounded-full border px-2 py-0.5 font-mono uppercase tracking-wider",
+            activityChipCls(e.kind),
+          )}
+        >
           {e.kind}
         </span>
-        <span className="font-mono" suppressHydrationWarning>
-          · {e.future ? `in ${dayLabel(e.at).toLowerCase()}` : relTime(e.at)}
+        <span className="font-mono text-muted-foreground" suppressHydrationWarning>
+          {e.future ? `in ${dayLabel(e.at).toLowerCase()}` : relTime(e.at)}
+        </span>
+        <span className="text-muted-foreground/40">·</span>
+        <span className="font-mono text-muted-foreground/70" suppressHydrationWarning>
+          {fullDateTime(e.at)}
         </span>
       </div>
-      {e.detail ? <p className="text-[13px] leading-relaxed text-foreground/85">{e.detail}</p> : null}
+
+      {/* Body — uniform labeled / bullet / prose blocks. */}
+      {blocks.length > 0 ? (
+        <div className="space-y-3">
+          {blocks.map((b, i) =>
+            b.label ? (
+              <div key={i} className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  {b.label}
+                </div>
+                <div className="text-[13px] leading-relaxed text-foreground/90">
+                  {renderActivityInline(b.value || "")}
+                </div>
+              </div>
+            ) : b.bullets ? (
+              <ul
+                key={i}
+                className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-foreground/90"
+              >
+                {b.bullets.map((x, j) => (
+                  <li key={j}>{renderActivityInline(x)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p key={i} className="text-[13px] leading-relaxed text-foreground/85">
+                {renderActivityInline(b.value || "")}
+              </p>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="text-[13px] italic leading-relaxed text-muted-foreground">
+          No further detail.
+        </p>
+      )}
     </div>
   );
 }
