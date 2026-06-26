@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,5 +43,15 @@ func TestParseDueAtEmptyClearsDate(t *testing.T) {
 func TestParseDueAtRejectsInvalidDate(t *testing.T) {
 	if got, err := parseDueAt("June 10"); err == nil || got != nil {
 		t.Fatalf("parseDueAt invalid = %#v, %v; want nil error", got, err)
+	}
+}
+
+func TestFollowupSurfaceSQLLimitsByRecencyNotImportance(t *testing.T) {
+	sql := strings.ToLower(followupSurfaceSQL)
+	if !strings.Contains(sql, "order by created_at desc") {
+		t.Fatalf("followup surface query must order by recency before limit:\n%s", followupSurfaceSQL)
+	}
+	if strings.Contains(sql, "order by importance") {
+		t.Fatalf("followup surface query must not rank before limit:\n%s", followupSurfaceSQL)
 	}
 }

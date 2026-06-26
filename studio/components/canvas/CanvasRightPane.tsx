@@ -7,7 +7,7 @@ import { CanvasTerminal } from "@/components/canvas/CanvasTerminal";
 import { CanvasMediaGallery } from "@/components/canvas/CanvasMediaGallery";
 import { CanvasFileTab } from "@/components/canvas/CanvasFileTab";
 import { DocumentTab } from "@/components/canvas/DocumentTab";
-import { useCanvasStore, docMetaFromArtifact } from "@/lib/canvas/store";
+import { useCanvasStore, docMetaFromArtifact, takePendingDoc } from "@/lib/canvas/store";
 import { useSessionArtifacts } from "@/lib/canvas/useSessionArtifacts";
 import { useRuns } from "@/lib/runs/useRuns";
 import { useWebSocket } from "@/lib/ws/provider";
@@ -102,6 +102,19 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
       });
     });
   }, [ws, store, chat.sessionId]);
+
+  // Pending-doc handoff: a document opened from outside the canvas (the
+  // dashboard's Saved card) stashes its DocMeta and routes here. Drain it once
+  // on mount and open the tab focused, so the boss lands ON the document rather
+  // than at the Library root. Runs independent of session — the DocMeta carries
+  // everything DocumentTab needs (path + preview fields).
+  const pendingDrainedRef = useRef(false);
+  useEffect(() => {
+    if (pendingDrainedRef.current) return;
+    pendingDrainedRef.current = true;
+    const doc = takePendingDoc();
+    if (doc) store.openDocument(doc);
+  }, [store]);
 
   // ── Open-tab persistence (the vanishing-tabs fix) ─────────────────────────
   // Rehydrate ONCE per session, after the artifact list is available: reopen

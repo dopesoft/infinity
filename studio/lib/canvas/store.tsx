@@ -74,6 +74,35 @@ export function docMetaFromArtifact(a: DocArtifact): DocMeta {
   };
 }
 
+// Pending-doc handoff: when a generated document is opened from OUTSIDE the
+// canvas (e.g. the dashboard's Saved card), the opener stashes the DocMeta here
+// and routes to /live. CanvasRightPane drains it on mount and opens the tab
+// focused. sessionStorage (not state) because it must survive the cross-page
+// navigation; one-shot because the consumer clears it immediately.
+const PENDING_DOC_KEY = "infinity:canvas:pendingDoc";
+
+export function stashPendingDoc(doc: DocMeta) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(PENDING_DOC_KEY, JSON.stringify(doc));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function takePendingDoc(): DocMeta | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_DOC_KEY);
+    if (!raw) return null;
+    window.sessionStorage.removeItem(PENDING_DOC_KEY);
+    const d = JSON.parse(raw) as DocMeta;
+    return d && d.path ? d : null;
+  } catch {
+    return null;
+  }
+}
+
 type Persisted = {
   root: string;
   previewUrl: string;

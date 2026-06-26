@@ -284,6 +284,14 @@ type Artifact struct {
 	GithubURL   string    `json:"githubUrl,omitempty"`
 	SourceTool  string    `json:"sourceTool,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
+	// Document-preview fields (from metadata JSONB) so the viewer can open a
+	// generated doc straight into a fully-rendered canvas tab — not a bare
+	// download card. Mirror the DocMeta shape the canvas store consumes.
+	Format   string `json:"format,omitempty"`
+	Bytes    int64  `json:"bytes,omitempty"`
+	PDFPath  string `json:"pdfPath,omitempty"`
+	HTMLPath string `json:"htmlPath,omitempty"`
+	Markdown string `json:"markdown,omitempty"`
 }
 
 type MemoryStats struct {
@@ -868,17 +876,8 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 	//     no source filter. loadSurface excludes this surface set from the
 	//     generic-card path and loadActivity no longer ingests it, so there's
 	//     no double-render and nothing spills into Activity.
-	srows, err := a.Pool.Query(ctx, `
-		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
-		       title, subtitle, body, COALESCE(url,''),
-		       COALESCE(metadata, '{}'::jsonb), COALESCE(actions, '[]'::jsonb), created_at
-		FROM mem_surface_items
-		WHERE surface = ANY($1::text[])
-		  AND kind = 'email'
-		  AND (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
-		ORDER BY importance DESC NULLS LAST, created_at DESC
-		LIMIT 50
-	`, followupSurfaceKeys)
+	srows, err := a.Pool.Query(ctx, followupSurfaceSQL, followupSurfaceKeys)
+
 	if err != nil {
 		// Best-effort: connector rows alone are still useful.
 		a.Logger.Warn("dashboard: followups surface merge", "err", err)
@@ -948,6 +947,22 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 	sortFollowUpsNewest(out)
 	return out, nil
 }
+
+const followupSurfaceSQL = `
+		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
+		       title, subtitle, body, COALESCE(url,''),
+		       COALESCE(metadata, '{}'::jsonb), COALESCE(actions, '[]'::jsonb), created_at
+		FROM mem_surface_items
+		WHERE surface = ANY($1::text[])
+		  AND kind = 'email'
+		  AND (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
+		-- Follow-ups are an inbox, not a leaderboard. If we rank before the
+		-- LIMIT, old high-importance rows can hide brand-new triage results
+		-- (the 2026-06-26 inbox run wrote 10 open emails, but only two reached
+		-- the card because stale Railway alerts occupied the top-importance 50).
+		ORDER BY created_at DESC
+		LIMIT 50
+	`
 
 func sortFollowUpsNewest(items []FollowUp) {
 	sort.SliceStable(items, func(i, j int) bool {
@@ -1142,7 +1157,10 @@ func (a *API) loadArtifacts(ctx context.Context) ([]Artifact, error) {
 	rows, err := a.Pool.Query(ctx, `
 		SELECT id::text, kind, name, COALESCE(description,''), virtual_path, storage_kind,
 		       COALESCE(storage_path,''), COALESCE(storage_mime,''), COALESCE(bridge,''),
-		       COALESCE(github_url,''), COALESCE(source_tool,''), created_at
+		       COALESCE(github_url,''), COALESCE(source_tool,''), created_at,
+		       COALESCE(metadata->>'format',''), COALESCE(storage_size,0),
+		       COALESCE(metadata->>'pdf_path',''), COALESCE(metadata->>'html_path',''),
+		       COALESCE(metadata->>'markdown','')
 		FROM mem_artifacts
 		WHERE deleted_at IS NULL
 		  AND kind IN ('project', 'document', 'dataset', 'other')
@@ -1157,7 +1175,8 @@ func (a *API) loadArtifacts(ctx context.Context) ([]Artifact, error) {
 	for rows.Next() {
 		var a Artifact
 		if err := rows.Scan(&a.ID, &a.Kind, &a.Name, &a.Description, &a.VirtualPath, &a.StorageKind,
-			&a.StoragePath, &a.StorageMime, &a.Bridge, &a.GithubURL, &a.SourceTool, &a.CreatedAt); err != nil {
+			&a.StoragePath, &a.StorageMime, &a.Bridge, &a.GithubURL, &a.SourceTool, &a.CreatedAt,
+			&a.Format, &a.Bytes, &a.PDFPath, &a.HTMLPath, &a.Markdown); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

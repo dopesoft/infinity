@@ -411,6 +411,13 @@ export type Artifact = {
   githubUrl?: string;
   sourceTool?: string; // 'project_create' | 'document_create' | …
   createdAt: string;
+  // Document-preview fields (mirror the canvas DocMeta) so a generated doc
+  // opens straight into a fully-rendered canvas tab, not a download card.
+  format?: string;
+  bytes?: number;
+  pdfPath?: string;
+  htmlPath?: string;
+  markdown?: string;
 };
 
 // ── Activity feed ────────────────────────────────────────────────────────────

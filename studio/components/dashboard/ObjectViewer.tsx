@@ -38,6 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { authedFetch, triggerCron, cancelWork, postSurfaceAction, canvasProjectActivate } from "@/lib/api";
+import { stashPendingDoc } from "@/lib/canvas/store";
 import { RunIndicator, useRuns } from "@/lib/runs";
 import { useWebSocket } from "@/lib/ws/provider";
 import {
@@ -909,7 +910,25 @@ async function openArtifact(
     window.open(a.githubUrl, "_blank", "noopener,noreferrer");
     return;
   }
-  // Anything else (a filesystem doc/dataset) lives in the canvas Library.
+  // A generated document (doc/sheet/slides/report) opens straight into its own
+  // canvas tab, focused and previewed — not dumped at the Library root. We hand
+  // the DocMeta to the canvas via the pending-doc handoff, then route to /live.
+  if (a.kind === "document" && a.storagePath) {
+    stashPendingDoc({
+      id: a.storagePath,
+      filename: a.name,
+      format: a.format ?? "",
+      path: a.storagePath,
+      bytes: a.bytes,
+      markdown: a.markdown,
+      pdfPath: a.pdfPath,
+      htmlPath: a.htmlPath,
+    });
+    router.push("/live");
+    onClose?.();
+    return;
+  }
+  // Anything else (a filesystem dataset/other) lives in the canvas Library.
   router.push("/live");
   onClose?.();
 }
