@@ -396,8 +396,19 @@ export function CanvasStoreProvider({
 
   const closeDocument = useCallback((id: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
-    setActiveTabIdInternal((cur) => (cur === id ? "preview" : cur));
-  }, []);
+    // If the closed tab was the active one, retarget — never dump on Preview.
+    // Switch to an adjacent open document if any remain, otherwise back to the
+    // Media tab (the documents' home, where they were opened from).
+    if (activeTabId === id) {
+      const idx = documents.findIndex((d) => d.id === id);
+      const remaining = documents.filter((d) => d.id !== id);
+      const target =
+        remaining.length === 0
+          ? "media"
+          : remaining[Math.min(idx, remaining.length - 1)]?.id ?? "media";
+      setActiveTabId(target);
+    }
+  }, [documents, activeTabId, setActiveTabId]);
 
   // restoreDocuments rehydrates the set of open document tabs after a refresh /
   // device switch from server-tracked artifacts (the vanishing-tabs fix). It
