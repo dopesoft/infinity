@@ -233,6 +233,134 @@ func (s *Server) handleWorkspaceDownload(w http.ResponseWriter, r *http.Request)
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// handleArtifactDelete removes a generated artifact (document OR media) the boss
+// deleted from the Media tab: it soft-deletes the mem_artifacts row (so it
+// leaves the gallery — realtime pushes the change) AND erases the actual files
+// from the workspace volume (native file + sibling PDF + thumbnail + HTML + page
+// renders). For media (image/video), it ALSO strips the asset from its
+// media.generate run's meta.media — that run, not the artifact row, is what the
+// Media gallery renders for images/videos, so the strip is what makes a deleted
+// image actually disappear. File deletion is skipped if another live artifact
+// references the same bytes (defensive — never orphan a still-listed item).
+// Best-effort on each file so a missing derivative doesn't block the row delete.
+//
+//	POST /api/canvas/artifact/delete { "id": "<mem_artifacts id>" }
+func (s *Server) handleArtifactDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.pool == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "db unavailable"})
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	var storagePath, metaRaw, kind string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(storage_path,''), COALESCE(metadata::text,'{}'), kind
+		  FROM mem_artifacts WHERE id::text = $1 AND deleted_at IS NULL
+	`, id).Scan(&storagePath, &metaRaw, &kind)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact not found"})
+		return
+	}
+
+	// Erase files only when no OTHER live artifact points at the same bytes.
+	shared := 0
+	if storagePath != "" {
+		_ = s.pool.QueryRow(ctx, `
+			SELECT count(*) FROM mem_artifacts
+			 WHERE deleted_at IS NULL AND id::text <> $1 AND storage_path = $2
+		`, id, storagePath).Scan(&shared)
+	}
+
+	deletedFiles := 0
+	if shared == 0 {
+		var meta struct {
+			PDFPath   string `json:"pdf_path"`
+			ThumbPath string `json:"thumb_path"`
+			HTMLPath  string `json:"html_path"`
+		}
+		_ = json.Unmarshal([]byte(metaRaw), &meta)
+		paths := []string{storagePath, meta.PDFPath, meta.ThumbPath, meta.HTMLPath}
+		// Derive the .pages/<base> render dir (from /docpages) so it's cleaned too.
+		base := meta.PDFPath
+		if base == "" {
+			base = storagePath
+		}
+		if base != "" {
+			stem := strings.TrimSuffix(filepath.Base(base), filepath.Ext(base))
+			paths = append(paths, filepath.Join(filepath.Dir(base), ".pages", stem))
+		}
+		for _, p := range paths {
+			if strings.TrimSpace(p) == "" {
+				continue
+			}
+			if s.deleteWorkspaceFile(ctx, p) {
+				deletedFiles++
+			}
+		}
+	}
+
+	// For media, also remove the asset from its run's meta.media — that's the
+	// gallery's actual data source for images/videos, and mem_runs is realtime so
+	// the tile vanishes live.
+	if kind == "image" || kind == "video" {
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE mem_runs
+			   SET meta = jsonb_set(meta, '{media}', COALESCE((
+			         SELECT jsonb_agg(elem)
+			           FROM jsonb_array_elements(meta->'media') elem
+			          WHERE elem->>'id' <> $1
+			       ), '[]'::jsonb))
+			 WHERE kind = 'media.generate'
+			   AND meta->'media' @> jsonb_build_array(jsonb_build_object('id', $1::text))
+		`, id)
+	}
+
+	if _, err := s.pool.Exec(ctx, `UPDATE mem_artifacts SET deleted_at = NOW() WHERE id::text = $1 AND deleted_at IS NULL`, id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "files_removed": deletedFiles})
+}
+
+// deleteWorkspaceFile asks the workspace bridge to remove one path. Best-effort:
+// returns true on a 2xx, false otherwise (a missing derivative must not abort
+// the overall delete). 404/no-base are treated as "nothing to remove".
+func (s *Server) deleteWorkspaceFile(ctx context.Context, path string) bool {
+	base := strings.TrimRight(s.cfg.WorkspaceRawBase, "/")
+	if base == "" {
+		return false
+	}
+	body, _ := json.Marshal(map[string]string{"path": path})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/fs/delete", strings.NewReader(string(body)))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.cfg.WorkspaceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.cfg.WorkspaceToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
 // handleWorkspaceDocPages proxies a page-rasterization request to the workspace
 // bridge's /docpages, which renders a document's pages to individual PNGs so
 // Studio can show ONE slide at a time (a proper page-by-page viewer) instead of

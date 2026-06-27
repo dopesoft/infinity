@@ -65,7 +65,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   // generated media asset. CanvasRightPane is the single data owner — it
   // rehydrates the open doc tabs, drives the Media tab count badge, and feeds
   // the gallery (which is a pure renderer).
-  const { artifacts: docArtifacts, loading: docsLoading } = useSessionArtifacts(chat.sessionId);
+  const { artifacts: docArtifacts, loading: docsLoading, refresh: refreshDocs } = useSessionArtifacts(chat.sessionId);
   const { runs: mediaRuns } = useRuns({
     kind: "media.generate",
     targetId: chat.sessionId || undefined,
@@ -358,7 +358,7 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
           )}
           aria-hidden={store.activeTabId !== "media"}
         >
-          <CanvasMediaGallery documents={docArtifacts} mediaRuns={mediaRuns} loading={docsLoading} />
+          <CanvasMediaGallery documents={docArtifacts} mediaRuns={mediaRuns} loading={docsLoading} onRefresh={refreshDocs} />
         </div>
         {store.tabs.map((tab) => {
           if (tab.kind !== "file") return null;

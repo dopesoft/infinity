@@ -67,7 +67,7 @@ export function PdfDeckViewer({ pages, filename }: { pages: string[]; filename: 
   return (
     <div className="flex h-full min-h-0 w-full">
       {/* Desktop: vertical thumbnail rail. */}
-      <div className="scroll-touch hidden w-28 shrink-0 flex-col gap-2 overflow-y-auto border-r bg-muted/20 p-2 sm:flex dark:bg-zinc-900/40">
+      <div className="scroll-touch hidden w-44 shrink-0 flex-col gap-3 overflow-y-auto border-r bg-muted/20 p-3 sm:flex dark:bg-zinc-900/40">
         {pages.map((p, i) => (
           <Thumb
             key={p}
@@ -184,9 +184,11 @@ function Thumb({
       type="button"
       onClick={onClick}
       className={cn(
-        "group relative shrink-0 overflow-hidden rounded-sm border bg-white transition",
-        horizontal ? "h-14 w-24" : "aspect-video w-full",
-        active ? "border-primary ring-2 ring-primary" : "border-border hover:border-muted-foreground/40",
+        "group relative shrink-0 overflow-hidden rounded-md bg-white transition-all",
+        horizontal ? "h-20 w-32" : "aspect-[4/3] w-full",
+        active
+          ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/20 shadow-lg dark:ring-offset-zinc-900/40"
+          : "opacity-65 ring-1 ring-border hover:opacity-100 hover:ring-muted-foreground/40",
       )}
       aria-label={`Go to page ${index + 1}`}
       aria-current={active ? "page" : undefined}
@@ -197,7 +199,12 @@ function Thumb({
       ) : (
         <div className="size-full animate-pulse bg-muted" />
       )}
-      <span className="absolute bottom-0 right-0 rounded-tl-sm bg-black/55 px-1 text-[10px] font-medium tabular-nums text-white">
+      <span
+        className={cn(
+          "absolute bottom-0 right-0 rounded-tl-md px-1.5 text-[11px] font-semibold tabular-nums",
+          active ? "bg-primary text-primary-foreground" : "bg-black/55 text-white",
+        )}
+      >
         {index + 1}
       </span>
     </button>

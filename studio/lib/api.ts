@@ -510,6 +510,23 @@ export async function fetchDocPages(path: string): Promise<string[]> {
   }
 }
 
+// deleteArtifact removes a generated artifact (document OR media) the boss
+// deleted from the Media tab — soft-deletes the artifact row, erases the
+// underlying files from the workspace, and (for media) strips it from its run.
+// Returns true on success; the gallery updates live via realtime.
+export async function deleteArtifact(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/canvas/artifact/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // downloadWorkspaceFile triggers a browser "save as" for a workspace file.
 export async function downloadWorkspaceFile(path: string, filename: string): Promise<boolean> {
   const blob = await fetchWorkspaceBlob(path);

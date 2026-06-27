@@ -1,12 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
-  AlertCircle, ChevronLeft, ChevronRight, FileSpreadsheet, FileText, FileType2,
-  Film, ImageIcon, Loader2, Play, Presentation, Sparkles,
+  AlertCircle, ChevronLeft, ChevronRight, Download, FileSpreadsheet, FileText, FileType2,
+  Film, ImageIcon, Loader2, MessageSquare, MoreVertical, Play, Presentation, Sparkles, Trash2,
 } from "lucide-react";
 import { useCanvasStore, docMetaFromArtifact } from "@/lib/canvas/store";
-import { fetchWorkspaceBlob, type DocArtifact, type MediaItem, type RunDTO } from "@/lib/api";
+import {
+  fetchWorkspaceBlob, downloadWorkspaceFile, deleteArtifact,
+  type DocArtifact, type MediaItem, type RunDTO,
+} from "@/lib/api";
+import { seedSession } from "@/lib/dashboard/seed";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { ModalMedia, ModalDl } from "@/components/ui/modal-content";
 
@@ -25,7 +34,14 @@ import { ModalMedia, ModalDl } from "@/components/ui/modal-content";
  *     just the session's media (the pager keeps working because docs never
  *     enter it — they get tabs).
  */
-type Props = { documents: DocArtifact[]; mediaRuns: RunDTO[]; loading: boolean };
+type Props = {
+  documents: DocArtifact[];
+  mediaRuns: RunDTO[];
+  loading: boolean;
+  /** Re-fetch the document list after a delete (realtime also fires; this makes
+   *  the removal instant). */
+  onRefresh?: () => void;
+};
 
 type GalleryItem =
   | { type: "doc"; at: number; doc: DocArtifact }
@@ -73,9 +89,63 @@ function DocThumb({ doc }: { doc: DocArtifact }) {
   );
 }
 
-export function CanvasMediaGallery({ documents, mediaRuns, loading }: Props) {
+export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh }: Props) {
   const store = useCanvasStore();
+  const router = useRouter();
   const [selected, setSelected] = useState<number | null>(null);
+  const [seedingId, setSeedingId] = useState<string | null>(null);
+  // Pending delete works for any artifact (document OR media) — both are
+  // mem_artifacts rows, so they share one delete path.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Discuss: hydrate the document into a fresh seeded chat so Jarvis has it as
+  // context (the same "Discuss with Jarvis" path the dashboard uses).
+  async function discuss(doc: DocArtifact) {
+    setSeedingId(doc.id);
+    try {
+      const sid = await seedSession("artifact", doc.id, {
+        kind: "document", id: doc.id, name: doc.filename, format: doc.format, path: doc.path,
+      });
+      router.push(sid ? `/live?session=${encodeURIComponent(sid)}` : "/live");
+    } finally {
+      setSeedingId(null);
+    }
+  }
+
+  function downloadNative(doc: DocArtifact) {
+    void downloadWorkspaceFile(doc.path, doc.filename);
+  }
+  function downloadPdf(doc: DocArtifact) {
+    if (!doc.pdf_path) return;
+    void downloadWorkspaceFile(doc.pdf_path, doc.filename.replace(/\.[^./]+$/, "") + ".pdf");
+  }
+  // Media bytes usually live in the workspace (path); fall back to the URL for
+  // externally-hosted assets.
+  function downloadMedia(m: MediaItem) {
+    const name = m.name || `${m.kind}-${(m.id || "asset").slice(0, 8)}`;
+    if (m.path) {
+      void downloadWorkspaceFile(m.path, name);
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = m.url;
+    a.download = name;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    const ok = await deleteArtifact(pendingDelete.id);
+    setDeleting(false);
+    setPendingDelete(null);
+    if (ok) onRefresh?.(); // docs refresh here; media updates via mem_runs realtime
+  }
 
   const { pending, failed, mediaItems } = useMemo(() => {
     const pending: RunDTO[] = [];
@@ -168,46 +238,77 @@ export function CanvasMediaGallery({ documents, mediaRuns, loading }: Props) {
               </div>
             ))}
 
-            {/* The unified grid. */}
+            {/* The unified grid — macOS Finder style: roomy tiles, the name on
+                its own line underneath, and a per-item action menu. */}
             {total > 0 && (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {items.map((it, i) => (
-                  <button
-                    key={it.type === "doc" ? `d:${it.doc.id}` : `m:${(it.media.id || it.media.url) + i}`}
-                    type="button"
-                    onClick={() => openItem(it, i)}
-                    className="group relative aspect-square min-w-0 overflow-hidden rounded-lg border bg-black/40 text-left transition-shadow hover:shadow-md"
-                    title={it.type === "doc" ? it.doc.filename : it.media.name || it.media.kind}
-                  >
-                    {it.type === "doc" ? (
-                      <>
-                        <DocThumb doc={it.doc} />
-                        <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-3 text-[10px] font-medium text-white">
-                          {it.doc.filename}
-                        </span>
-                      </>
-                    ) : it.media.kind === "video" ? (
-                      <>
-                        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                        <video src={it.media.url} muted playsInline preload="metadata" className="size-full object-cover" />
-                        <span className="absolute inset-0 flex items-center justify-center">
-                          <span className="flex size-9 items-center justify-center rounded-full bg-black/55 text-white">
-                            <Play className="size-4 translate-x-px" aria-hidden />
-                          </span>
-                        </span>
-                        <Film className="absolute right-1.5 top-1.5 size-3.5 text-white/80 drop-shadow" aria-hidden />
-                      </>
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={it.media.url}
-                        alt={it.media.name || "Generated image"}
-                        loading="lazy"
-                        className="size-full object-cover transition-transform group-hover:scale-[1.02]"
-                      />
-                    )}
-                  </button>
-                ))}
+              <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3">
+                {items.map((it, i) => {
+                  const label = it.type === "doc" ? it.doc.filename : it.media.name || it.media.kind;
+                  return (
+                    <div key={it.type === "doc" ? `d:${it.doc.id}` : `m:${(it.media.id || it.media.url) + i}`} className="group flex min-w-0 flex-col">
+                      {/* Thumbnail tile */}
+                      <div className="relative aspect-square overflow-hidden rounded-lg border bg-black/40">
+                        <button
+                          type="button"
+                          onClick={() => openItem(it, i)}
+                          className="absolute inset-0 size-full text-left transition-shadow hover:shadow-md"
+                          title={label}
+                        >
+                          {it.type === "doc" ? (
+                            <DocThumb doc={it.doc} />
+                          ) : it.media.kind === "video" ? (
+                            <>
+                              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                              <video src={it.media.url} muted playsInline preload="metadata" className="size-full object-cover" />
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <span className="flex size-9 items-center justify-center rounded-full bg-black/55 text-white">
+                                  <Play className="size-4 translate-x-px" aria-hidden />
+                                </span>
+                              </span>
+                              <Film className="absolute left-1.5 top-1.5 size-3.5 text-white/80 drop-shadow" aria-hidden />
+                            </>
+                          ) : (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={it.media.url}
+                              alt={it.media.name || "Generated image"}
+                              loading="lazy"
+                              className="size-full object-cover transition-transform group-hover:scale-[1.02]"
+                            />
+                          )}
+                        </button>
+
+                        {/* Per-item action menu. Documents get Discuss + both
+                            downloads; media gets Download + Delete. */}
+                        {it.type === "doc" ? (
+                          <DocActionMenu
+                            doc={it.doc}
+                            seeding={seedingId === it.doc.id}
+                            onDiscuss={() => void discuss(it.doc)}
+                            onDownloadNative={() => downloadNative(it.doc)}
+                            onDownloadPdf={() => downloadPdf(it.doc)}
+                            onDelete={() => setPendingDelete({ id: it.doc.id, name: it.doc.filename })}
+                          />
+                        ) : it.media.id ? (
+                          <MediaActionMenu
+                            onDownload={() => downloadMedia(it.media)}
+                            onDelete={() => setPendingDelete({ id: it.media.id as string, name: it.media.name || it.media.kind })}
+                          />
+                        ) : null}
+                      </div>
+
+                      {/* Name underneath (macOS Finder), wraps to 2 lines then ellipsis. */}
+                      <button
+                        type="button"
+                        onClick={() => openItem(it, i)}
+                        title={label}
+                        className="mt-1.5 line-clamp-2 px-1 text-center text-[11px] leading-snug text-foreground/80 hover:text-foreground"
+                      >
+                        {label}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -259,6 +360,114 @@ export function CanvasMediaGallery({ documents, mediaRuns, loading }: Props) {
           </div>
         )}
       </ResponsiveModal>
+
+      {/* Delete confirmation — destructive, so confirm before erasing. */}
+      <ResponsiveModal
+        open={pendingDelete !== null}
+        onOpenChange={(o) => !o && !deleting && setPendingDelete(null)}
+        title="Delete this item?"
+        description={pendingDelete?.name}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void confirmDelete()} disabled={deleting}>
+              {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              Delete
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          This removes it from Media and permanently deletes the file from your system. This
+          can&apos;t be undone.
+        </p>
+      </ResponsiveModal>
     </div>
+  );
+}
+
+// DocActionMenu — the round 3-dot button + menu on a document tile.
+// Discuss (feed back to Jarvis as context), Download (native + PDF), Delete.
+function DocActionMenu({
+  doc, seeding, onDiscuss, onDownloadNative, onDownloadPdf, onDelete,
+}: {
+  doc: DocArtifact;
+  seeding: boolean;
+  onDiscuss: () => void;
+  onDownloadNative: () => void;
+  onDownloadPdf: () => void;
+  onDelete: () => void;
+}) {
+  const hasPdf = !!doc.pdf_path && doc.format !== "pdf";
+  const nativeLabel = `Download ${doc.format ? `.${doc.format}` : "original"}`;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          aria-label="Document actions"
+          className="absolute right-1.5 top-1.5 z-10 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-90 backdrop-blur-sm transition hover:bg-black/75 hover:opacity-100 focus-visible:opacity-100"
+        >
+          {seeding ? <Loader2 className="size-4 animate-spin" /> : <MoreVertical className="size-4" />}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem onSelect={onDiscuss}>
+          <MessageSquare className="size-4" />
+          Discuss with Jarvis
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onDownloadNative}>
+          <Download className="size-4" />
+          {nativeLabel}
+        </DropdownMenuItem>
+        {hasPdf && (
+          <DropdownMenuItem onSelect={onDownloadPdf}>
+            <FileType2 className="size-4" />
+            Download PDF
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={onDelete}
+          className="text-destructive focus:text-destructive"
+        >
+          <Trash2 className="size-4" />
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// MediaActionMenu — the round 3-dot menu on an image/video tile (Download / Delete).
+function MediaActionMenu({ onDownload, onDelete }: { onDownload: () => void; onDelete: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          aria-label="Media actions"
+          className="absolute right-1.5 top-1.5 z-10 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-90 backdrop-blur-sm transition hover:bg-black/75 hover:opacity-100 focus-visible:opacity-100"
+        >
+          <MoreVertical className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuItem onSelect={onDownload}>
+          <Download className="size-4" />
+          Download
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onDelete} className="text-destructive focus:text-destructive">
+          <Trash2 className="size-4" />
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

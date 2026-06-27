@@ -83,6 +83,7 @@ func main() {
 	mux.HandleFunc("/fs/raw", auth(handleFSRaw))
 	mux.HandleFunc("/fs/save", auth(handleFSSave))
 	mux.HandleFunc("/fs/edit", auth(handleFSEdit))
+	mux.HandleFunc("/fs/delete", auth(handleFSDelete))
 	mux.HandleFunc("/bash", auth(handleBash))
 	mux.HandleFunc("/pty/", auth(routePTY)) // interactive terminal (start/stream/input/resize/close)
 	mux.HandleFunc("/git/status", auth(handleGitStatus))
@@ -485,6 +486,37 @@ func handleFSSave(w http.ResponseWriter, r *http.Request) {
 		"path":  resolved,
 		"bytes": len(req.Content),
 	})
+}
+
+// handleFSDelete removes a file (or a directory, recursively) from the
+// workspace volume. Used by Core's document-delete flow to actually erase a
+// generated deliverable + its derivatives (sibling PDF, thumbnail, page
+// renders) when the boss deletes it from the Media tab. Missing path is a
+// no-op success (idempotent — deleting an already-gone derivative shouldn't
+// fail the whole delete).
+func handleFSDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	resolved, err := resolvePath(req.Path)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// Never let a delete target the workspace root — only files/dirs inside it.
+	if resolved == filepath.Clean(workspaceRoot) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "refusing to delete workspace root"})
+		return
+	}
+	if err := os.RemoveAll(resolved); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": resolved, "deleted": true})
 }
 
 type fsEditRequest struct {
