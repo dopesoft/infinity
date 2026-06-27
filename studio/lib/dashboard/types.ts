@@ -418,6 +418,10 @@ export type Artifact = {
   pdfPath?: string;
   htmlPath?: string;
   markdown?: string;
+  // Origin chat: reopen the doc in its own session (with history) when it still
+  // exists, or seed a fresh one with the doc dropped in when it was deleted.
+  sourceSessionId?: string;
+  sessionAlive?: boolean;
 };
 
 // ── Activity feed ────────────────────────────────────────────────────────────

@@ -1089,7 +1089,9 @@ export function useChat() {
           /* steal C: the per-turn reasoning level Jarvis chose for this turn.
            * Surface it to the Composer chip ("Auto · <level>") so the boss sees
            * how hard it's thinking. */
-          if (ev.effort?.level) setAppliedEffort(ev.effort.level);
+          // Always reflect THIS turn's level (empty = omit/model-default ->
+          // chip shows "Auto"), so a prior turn's level can't go stale.
+          setAppliedEffort(ev.effort?.level ?? "");
           break;
         }
         case "proactive_message": {

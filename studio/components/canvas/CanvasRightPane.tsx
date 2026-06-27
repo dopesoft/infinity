@@ -358,7 +358,20 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
           )}
           aria-hidden={store.activeTabId !== "media"}
         >
-          <CanvasMediaGallery documents={docArtifacts} mediaRuns={mediaRuns} loading={docsLoading} onRefresh={refreshDocs} />
+          <CanvasMediaGallery
+            documents={docArtifacts}
+            mediaRuns={mediaRuns}
+            loading={docsLoading}
+            onRefresh={refreshDocs}
+            onDiscuss={(doc) => {
+              // Drop the doc into THIS chat (the Media tab belongs to this
+              // session): tell Jarvis to re-read it for context and ask what's
+              // next. Reuses the normal message path, so Jarvis replies.
+              void chat.send(
+                `I want to discuss the document **${doc.filename}**. Open and read it from \`${doc.path}\` for context, then ask me what I'd like to do with it.`,
+              );
+            }}
+          />
         </div>
         {store.tabs.map((tab) => {
           if (tab.kind !== "file") return null;

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   AlertCircle, ChevronLeft, ChevronRight, Download, FileSpreadsheet, FileText, FileType2,
   Film, ImageIcon, Loader2, MessageSquare, MoreVertical, Play, Presentation, Sparkles, Trash2,
@@ -11,7 +10,6 @@ import {
   fetchWorkspaceBlob, downloadWorkspaceFile, deleteArtifact,
   type DocArtifact, type MediaItem, type RunDTO,
 } from "@/lib/api";
-import { seedSession } from "@/lib/dashboard/seed";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -41,6 +39,9 @@ type Props = {
   /** Re-fetch the document list after a delete (realtime also fires; this makes
    *  the removal instant). */
   onRefresh?: () => void;
+  /** Discuss a document in the CURRENT chat — the parent owns the chat, so it
+   *  drops the doc into this session's stream and Jarvis responds. */
+  onDiscuss?: (doc: DocArtifact) => void;
 };
 
 type GalleryItem =
@@ -89,29 +90,13 @@ function DocThumb({ doc }: { doc: DocArtifact }) {
   );
 }
 
-export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh }: Props) {
+export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh, onDiscuss }: Props) {
   const store = useCanvasStore();
-  const router = useRouter();
   const [selected, setSelected] = useState<number | null>(null);
-  const [seedingId, setSeedingId] = useState<string | null>(null);
   // Pending delete works for any artifact (document OR media) — both are
   // mem_artifacts rows, so they share one delete path.
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  // Discuss: hydrate the document into a fresh seeded chat so Jarvis has it as
-  // context (the same "Discuss with Jarvis" path the dashboard uses).
-  async function discuss(doc: DocArtifact) {
-    setSeedingId(doc.id);
-    try {
-      const sid = await seedSession("artifact", doc.id, {
-        kind: "document", id: doc.id, name: doc.filename, format: doc.format, path: doc.path,
-      });
-      router.push(sid ? `/live?session=${encodeURIComponent(sid)}` : "/live");
-    } finally {
-      setSeedingId(null);
-    }
-  }
 
   function downloadNative(doc: DocArtifact) {
     void downloadWorkspaceFile(doc.path, doc.filename);
@@ -283,8 +268,8 @@ export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh }:
                         {it.type === "doc" ? (
                           <DocActionMenu
                             doc={it.doc}
-                            seeding={seedingId === it.doc.id}
-                            onDiscuss={() => void discuss(it.doc)}
+                            canDiscuss={!!onDiscuss}
+                            onDiscuss={() => onDiscuss?.(it.doc)}
                             onDownloadNative={() => downloadNative(it.doc)}
                             onDownloadPdf={() => downloadPdf(it.doc)}
                             onDelete={() => setPendingDelete({ id: it.doc.id, name: it.doc.filename })}
@@ -392,10 +377,10 @@ export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh }:
 // DocActionMenu — the round 3-dot button + menu on a document tile.
 // Discuss (feed back to Jarvis as context), Download (native + PDF), Delete.
 function DocActionMenu({
-  doc, seeding, onDiscuss, onDownloadNative, onDownloadPdf, onDelete,
+  doc, canDiscuss, onDiscuss, onDownloadNative, onDownloadPdf, onDelete,
 }: {
   doc: DocArtifact;
-  seeding: boolean;
+  canDiscuss: boolean;
   onDiscuss: () => void;
   onDownloadNative: () => void;
   onDownloadPdf: () => void;
@@ -412,14 +397,16 @@ function DocActionMenu({
           aria-label="Document actions"
           className="absolute right-1.5 top-1.5 z-10 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-90 backdrop-blur-sm transition hover:bg-black/75 hover:opacity-100 focus-visible:opacity-100"
         >
-          {seeding ? <Loader2 className="size-4 animate-spin" /> : <MoreVertical className="size-4" />}
+          <MoreVertical className="size-4" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem onSelect={onDiscuss}>
-          <MessageSquare className="size-4" />
-          Discuss with Jarvis
-        </DropdownMenuItem>
+        {canDiscuss && (
+          <DropdownMenuItem onSelect={onDiscuss}>
+            <MessageSquare className="size-4" />
+            Discuss with Jarvis
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={onDownloadNative}>
           <Download className="size-4" />
           {nativeLabel}

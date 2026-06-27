@@ -292,6 +292,12 @@ type Artifact struct {
 	PDFPath  string `json:"pdfPath,omitempty"`
 	HTMLPath string `json:"htmlPath,omitempty"`
 	Markdown string `json:"markdown,omitempty"`
+	// Origin session — lets a Saved click reopen the doc in its own chat (with
+	// history) when that chat still exists, or start a fresh one with the doc
+	// dropped in when it was deleted. SessionAlive is false when the source
+	// session is gone (soft-deleted) or was never set.
+	SourceSessionID string `json:"sourceSessionId,omitempty"`
+	SessionAlive    bool   `json:"sessionAlive"`
 }
 
 type MemoryStats struct {
@@ -1160,7 +1166,10 @@ func (a *API) loadArtifacts(ctx context.Context) ([]Artifact, error) {
 		       COALESCE(github_url,''), COALESCE(source_tool,''), created_at,
 		       COALESCE(metadata->>'format',''), COALESCE(storage_size,0),
 		       COALESCE(metadata->>'pdf_path',''), COALESCE(metadata->>'html_path',''),
-		       COALESCE(metadata->>'markdown','')
+		       COALESCE(metadata->>'markdown',''),
+		       COALESCE(source_session_id::text,''),
+		       EXISTS (SELECT 1 FROM mem_sessions s
+		                WHERE s.id = mem_artifacts.source_session_id AND s.deleted_at IS NULL) AS session_alive
 		FROM mem_artifacts
 		WHERE deleted_at IS NULL
 		  AND kind IN ('project', 'document', 'dataset', 'other')
@@ -1176,7 +1185,8 @@ func (a *API) loadArtifacts(ctx context.Context) ([]Artifact, error) {
 		var a Artifact
 		if err := rows.Scan(&a.ID, &a.Kind, &a.Name, &a.Description, &a.VirtualPath, &a.StorageKind,
 			&a.StoragePath, &a.StorageMime, &a.Bridge, &a.GithubURL, &a.SourceTool, &a.CreatedAt,
-			&a.Format, &a.Bytes, &a.PDFPath, &a.HTMLPath, &a.Markdown); err != nil {
+			&a.Format, &a.Bytes, &a.PDFPath, &a.HTMLPath, &a.Markdown,
+			&a.SourceSessionID, &a.SessionAlive); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

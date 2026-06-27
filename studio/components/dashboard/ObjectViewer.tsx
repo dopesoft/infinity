@@ -932,7 +932,16 @@ async function openArtifact(
       pdfPath: a.pdfPath,
       htmlPath: a.htmlPath,
     });
-    router.push("/live");
+    // If the chat this doc was made in still exists, reopen THAT chat (full
+    // history) with the file open. If it was deleted, start a fresh chat with
+    // the doc dropped in as context (Jarvis auto-greets via the seeded kick) so
+    // the boss can pick up where the work left off without the old session.
+    if (a.sessionAlive && a.sourceSessionId) {
+      router.push(`/live?session=${encodeURIComponent(a.sourceSessionId)}`);
+    } else {
+      const seeded = await seedSession("artifact", a.id, a);
+      router.push(seeded ? `/live?session=${encodeURIComponent(seeded)}` : "/live");
+    }
     onClose?.();
     return;
   }
