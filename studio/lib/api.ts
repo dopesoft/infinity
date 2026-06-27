@@ -489,6 +489,27 @@ export async function fetchWorkspaceBlob(path: string): Promise<Blob | null> {
   }
 }
 
+// fetchDocPages asks the workspace to rasterize a document's pages to images so
+// Studio can show ONE slide at a time (a real page-by-page viewer) instead of
+// the browser's continuous-scroll PDF iframe. `path` is the preview path (the
+// sibling PDF for office files, or the PDF itself). Returns the ordered page
+// image paths; null/empty when the workspace can't render (caller falls back to
+// the native iframe so the preview never regresses below today).
+export async function fetchDocPages(path: string): Promise<string[]> {
+  try {
+    const res = await authedFetch(`/api/workspace/docpages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { pages?: string[] };
+    return Array.isArray(data.pages) ? data.pages : [];
+  } catch {
+    return [];
+  }
+}
+
 // downloadWorkspaceFile triggers a browser "save as" for a workspace file.
 export async function downloadWorkspaceFile(path: string, filename: string): Promise<boolean> {
   const blob = await fetchWorkspaceBlob(path);

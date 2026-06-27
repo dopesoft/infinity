@@ -47,6 +47,11 @@ type wsClientMessage struct {
 	// back as `voice_audio` frames. This is the whole of voice parity: voice
 	// is just a text turn with a mic on the front and TTS on the back.
 	Voice bool `json:"voice,omitempty"`
+	// Effort is the boss's per-turn thinking-level override from the Composer
+	// ThinkingChip: "" / "auto" = let steal C decide; or a level (none|low|
+	// medium|high|xhigh). Stamped onto the turn ctx so the effort router honors
+	// it ahead of any auto signal.
+	Effort string `json:"effort,omitempty"`
 }
 
 type wsServerEvent struct {
@@ -80,6 +85,10 @@ type wsServerEvent struct {
 	// present on type="gauge" frames. Studio renders it as a chip beside the
 	// intent chip; the transcript ignores it.
 	Gauge *wsGauge `json:"gauge,omitempty"`
+	// Effort carries the per-turn reasoning level steal C chose for this turn.
+	// Present on type="effort" frames; the Composer ThinkingChip renders it as
+	// "Auto · <level>" so the boss sees how hard Jarvis is thinking.
+	Effort *wsEffort `json:"effort,omitempty"`
 	// FindingKind is set on type="proactive_message" frames so Studio can
 	// render an icon + tone consistent with the Heartbeat tab - e.g.
 	// "surprise" gets a lightbulb, "security" gets a shield.
@@ -120,6 +129,14 @@ type wsServerEvent struct {
 	Audio *wsVoiceAudio `json:"audio,omitempty"`
 }
 
+// wsEffort is the per-turn reasoning level chosen by steal C, surfaced so the
+// Composer ThinkingChip can show "Auto · <level>". Source is the audit reason
+// (boss_pinned / coding_floor / gauge_deep / high_surprise / call_rate / ...).
+type wsEffort struct {
+	Level  string `json:"level"`
+	Source string `json:"source,omitempty"`
+}
+
 // wsVoiceAudio is one TTS clip. Data is base64-encoded audio bytes of MimeType
 // (audio/mpeg). Seq orders clips within a turn so the browser plays them in the
 // order Jarvis said them even if synthesis latency varies.
@@ -146,10 +163,10 @@ type wsToolInputDelta struct {
 
 // wsDocumentCreated tells Studio to open a generated document in a new tab.
 type wsDocumentCreated struct {
-	Format   string `json:"format"`
-	Filename string `json:"filename"`
-	Path     string `json:"path"` // cloud workspace path (for download)
-	Bytes    int64  `json:"bytes,omitempty"`
+	Format    string `json:"format"`
+	Filename  string `json:"filename"`
+	Path      string `json:"path"` // cloud workspace path (for download)
+	Bytes     int64  `json:"bytes,omitempty"`
 	Markdown  string `json:"markdown,omitempty"`   // rendered inline for md/report formats
 	PDFPath   string `json:"pdf_path,omitempty"`   // sibling PDF for preview, when also_pdf
 	ThumbPath string `json:"thumb_path,omitempty"` // page-1 PNG for the Artifacts/Media gallery
@@ -420,7 +437,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, send)
+			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, msg.Effort, send)
 			continue
 		case "message":
 			sessionID := msg.SessionID
@@ -459,7 +476,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, send)
+			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, msg.Effort, send)
 		case "resume":
 			// Run one agent turn against a session's existing history
 			// without a fresh user message. Discuss-with-Jarvis uses this:
@@ -497,7 +514,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume - session has no history"})
 				continue
 			}
-			s.startTurn(connCtx, userID, sessionID, "", false, send)
+			s.startTurn(connCtx, userID, sessionID, "", false, "", send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
@@ -527,7 +544,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // page) rather than carried on the WS frame - that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
-func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, voiceTurn bool, _ func(wsServerEvent)) {
+func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, voiceTurn bool, effortPin string, _ func(wsServerEvent)) {
 	// Use a fresh background context so the WS dying doesn't cancel this
 	// turn. The 5-minute timeout below is the only deadline that applies.
 	base := context.Background()
@@ -543,6 +560,11 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	// text + voice share the session id.
 	if voiceTurn {
 		ctxWithUser = agent.WithVoiceMode(ctxWithUser)
+	}
+	// steal C: carry the boss's per-turn thinking-level override into the turn.
+	// "" / "auto" means let the effort router decide.
+	if pin := strings.TrimSpace(effortPin); pin != "" && pin != "auto" {
+		ctxWithUser = agent.WithEffortPin(ctxWithUser, pin)
 	}
 	turnCtx, cancel := context.WithTimeout(ctxWithUser, 5*time.Minute)
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
@@ -731,6 +753,8 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 			Usage:      usage,
 			StopReason: ev.StopReason,
 		})
+	case agent.EventEffort:
+		send(wsServerEvent{Type: "effort", SessionID: sessionID, Effort: &wsEffort{Level: ev.EffortLevel, Source: ev.EffortSource}})
 	case agent.EventError:
 		send(wsServerEvent{Type: "error", SessionID: sessionID, Message: ev.Error})
 	}

@@ -409,6 +409,10 @@ func (o *OpenAIOAuth) StreamCached(
 	var resp Response
 	system := sys.Render()
 	cacheKey := CacheKeyFromContext(ctx)
+	// steal C: per-turn reasoning effort. ctx hint wins; else the env fallback.
+	// dropEffort is flipped by the 400 handler below if the backend rejects the
+	// level, so we retry once with effort omitted instead of tanking the turn.
+	ctxEffort := string(EffortFromContext(ctx))
 
 	tok, err := o.refreshIfNeeded(ctx)
 	if err != nil {
@@ -441,10 +445,21 @@ func (o *OpenAIOAuth) StreamCached(
 	maxAttempts := transientMaxAttempts()
 	backoff := transientBackoffBase()
 	triedModelFallback := false
+	triedEffortDrop := false
+	dropEffort := false
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, cacheKey, messages, tools)
+		// Resolve the effort to send THIS attempt: ctx hint > env fallback, unless
+		// a prior 400 told us the backend rejects it (dropEffort -> omit).
+		effortToSend := ctxEffort
+		if effortToSend == "" {
+			effortToSend = strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_EFFORT"))
+		}
+		if dropEffort {
+			effortToSend = ""
+		}
+		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, cacheKey, effortToSend, messages, tools)
 
 		// Network-level failure (no usable response).
 		if attemptErr != nil {
@@ -466,11 +481,11 @@ func (o *OpenAIOAuth) StreamCached(
 		// model, not the same request again). Covers a per-call override the
 		// plan doesn't expose AND the configured default itself being rejected
 		// (oauthFallbackModel(), override via LLM_OPENAI_OAUTH_FALLBACK_MODEL).
-		if httpResp.StatusCode == 400 && !triedModelFallback {
+		if httpResp.StatusCode == 400 {
 			raw, _ := io.ReadAll(httpResp.Body)
 			httpResp.Body.Close()
 			bodyStr := string(raw)
-			if looksLikeModelRejection(bodyStr) {
+			if !triedModelFallback && looksLikeModelRejection(bodyStr) {
 				fallback := o.model
 				if fallback == "" || fallback == effectiveModel {
 					fallback = oauthFallbackModel()
@@ -482,6 +497,18 @@ func (o *OpenAIOAuth) StreamCached(
 					triedModelFallback = true
 					continue
 				}
+			}
+			// steal C: the Codex backend rejected the reasoning.effort value (its
+			// accepted enum is model-dependent and not a published contract). Retry
+			// ONCE with effort omitted (model default) rather than failing the turn.
+			// Gated on a body that specifically implicates the effort/reasoning
+			// param so an unrelated 400 still surfaces as a real error (never-hide).
+			if !triedEffortDrop && effortToSend != "" && looksLikeEffortRejection(bodyStr) {
+				unknownOAIEventLog.Printf("openai_oauth: reasoning.effort %q rejected, retrying with effort omitted (reason: %s)",
+					effortToSend, truncateOAuth(bodyStr, 200))
+				dropEffort = true
+				triedEffortDrop = true
+				continue
 			}
 			statusErr := fmt.Errorf("openai_oauth: status=400 body=%s", truncateOAuth(bodyStr, 400))
 			emit(out, StreamEvent{Kind: StreamError, Err: statusErr.Error()})
@@ -651,11 +678,11 @@ func isTransientNetErr(err error) bool {
 func (o *OpenAIOAuth) attemptStream(
 	ctx context.Context,
 	tok OAuthToken,
-	model, system, cacheKey string,
+	model, system, cacheKey, effort string,
 	messages []Message,
 	tools []ToolDef,
 ) (*http.Response, error) {
-	body := buildResponsesRequest(model, system, cacheKey, messages, tools)
+	body := buildResponsesRequest(model, system, cacheKey, effort, messages, tools)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -829,7 +856,7 @@ func buildResponsesInput(messages []Message) []any {
 // passed through unchanged. Tool calls and tool results round-trip via
 // `function_call` / `function_call_output` items, the same shape the upstream
 // API documents.
-func buildResponsesRequest(model, system, cacheKey string, messages []Message, tools []ToolDef) map[string]any {
+func buildResponsesRequest(model, system, cacheKey, effort string, messages []Message, tools []ToolDef) map[string]any {
 	body := map[string]any{
 		"model":  model,
 		"input":  buildResponsesInput(messages),
@@ -872,11 +899,16 @@ func buildResponsesRequest(model, system, cacheKey string, messages []Message, t
 	// streamed reasoning at all. "auto" is the documented way to get the
 	// fullest available summary and is what actually streams. Override with
 	// INFINITY_OPENAI_REASONING_SUMMARY (auto|concise|detailed) if needed.
-	// effort is sent only when explicitly configured
-	// (INFINITY_OPENAI_REASONING_EFFORT: minimal|low|medium|high|xhigh) so we
-	// don't silently change reasoning depth/cost; note that very low effort
-	// can suppress summaries. Skipped entirely for non-reasoning models
-	// (gpt-4o, gpt-4.1) where `reasoning` would error.
+	//
+	// reasoning.effort (steal C): the caller passes the FINAL resolved level via
+	// `effort` (per-turn ctx hint > INFINITY_OPENAI_REASONING_EFFORT env, resolved
+	// in StreamCached). When "" we OMIT the field so the model keeps its own
+	// default - omit === default - so an un-escalated turn costs exactly what it
+	// did before C existed ("never silently change reasoning depth/cost"). The
+	// accepted enum (none|low|medium|high|xhigh) is MODEL-DEPENDENT on the Codex
+	// backend and not a published contract; a level the backend rejects is caught
+	// by the effort-drop 400 fallback in StreamCached. Skipped for non-reasoning
+	// models (gpt-4o/4.1) where `reasoning` would error.
 	if modelSupportsReasoning(model) {
 		summary := strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_SUMMARY"))
 		if summary == "" {
@@ -885,8 +917,8 @@ func buildResponsesRequest(model, system, cacheKey string, messages []Message, t
 		reasoning := map[string]any{
 			"summary": summary,
 		}
-		if effort := strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_EFFORT")); effort != "" {
-			reasoning["effort"] = effort
+		if lvl := strings.TrimSpace(effort); lvl != "" {
+			reasoning["effort"] = lvl
 		}
 		body["reasoning"] = reasoning
 	}
@@ -953,6 +985,28 @@ func modelSupportsReasoning(model string) bool {
 	}
 	if strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o1") {
 		return true
+	}
+	return false
+}
+
+// ModelSupportsReasoning is the exported capability check used by the steal-C
+// effort router (in serve.go) to clamp: a non-reasoning model gets no effort
+// hint, and is NEVER swapped for a reasoning-capable one to satisfy a level.
+func ModelSupportsReasoning(model string) bool { return modelSupportsReasoning(model) }
+
+// looksLikeEffortRejection reports whether a 400 body specifically implicates
+// the reasoning.effort parameter, so steal C can retry once with effort omitted
+// WITHOUT masking unrelated 400s (never-hide-errors). It requires the param name
+// (effort/reasoning) AND a rejection verb, so a generic 400 still surfaces.
+func looksLikeEffortRejection(body string) bool {
+	b := strings.ToLower(body)
+	if !strings.Contains(b, "effort") && !strings.Contains(b, "reasoning") {
+		return false
+	}
+	for _, verb := range []string{"unsupported", "invalid", "not supported", "not allowed", "must be one of", "unknown", "unexpected"} {
+		if strings.Contains(b, verb) {
+			return true
+		}
 	}
 	return false
 }

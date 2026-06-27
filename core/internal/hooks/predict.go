@@ -21,6 +21,12 @@ type PredictionRecorder struct {
 	store   *memory.PredictionStore
 	drafter PredictionDrafter
 	model   string
+	// worldCtxFn (steal B) returns a short world-model causal-context string for
+	// a pending tool call - the relevant entities and how they relate - so the
+	// pre-act prediction is a genuine forward simulation of consequences, not
+	// just a guess from the tool name. Injected from serve.go (closure over the
+	// worldmodel.Store) so this package stays decoupled. Nil -> plain prediction.
+	worldCtxFn func(ctx context.Context, toolName string, input map[string]any) string
 }
 
 type PredictionDrafter interface {
@@ -29,6 +35,16 @@ type PredictionDrafter interface {
 
 func NewPredictionRecorderWithDrafter(store *memory.PredictionStore, drafter PredictionDrafter, model string) *PredictionRecorder {
 	return &PredictionRecorder{store: store, drafter: drafter, model: model}
+}
+
+// SetWorldContext wires the steal-B world-model context provider so high-risk
+// predictions become forward simulations grounded in the agent's world model.
+// Nil-safe; pass nil (or never call) to keep plain predictions.
+func (p *PredictionRecorder) SetWorldContext(fn func(ctx context.Context, toolName string, input map[string]any) string) {
+	if p == nil {
+		return
+	}
+	p.worldCtxFn = fn
 }
 
 // Register wires both ends. Call from RegisterDefaults or serve.go after the
@@ -167,15 +183,26 @@ func shouldDraftPrediction(toolName string) bool {
 		strings.Contains(lower, "exec")
 }
 
-const predictionSystem = `You predict the likely result of one high-risk tool call.
+const predictionSystem = `You are rehearsing one high-risk tool call BEFORE it runs: predict its most likely concrete outcome.
 
-Return one short sentence only. State the concrete expected success condition.
-Do not include markdown or caveats.`
+When world-model context is provided (entities and how they relate), use it to reason about downstream CONSEQUENCES, not just the immediate return value.
+Return ONE short sentence only: the concrete expected success condition (or the most likely failure). No markdown, no caveats.`
 
 func (p *PredictionRecorder) draftPrediction(ctx context.Context, toolName string, input map[string]any) (string, error) {
 	// p.model is usually "" → the active-model drafter resolves the boss's
 	// set model. An explicit INFINITY_PREDICTION_MODEL still passes through.
-	prompt := fmt.Sprintf("Tool: %s\nInput: %s\nExpected result:", toolName, jsonShort(input))
+	// steal B: fold in world-model causal context so the prediction is a forward
+	// simulation of consequences, grounded in what the agent knows.
+	var worldCtx string
+	if p.worldCtxFn != nil {
+		worldCtx = strings.TrimSpace(p.worldCtxFn(ctx, toolName, input))
+	}
+	var prompt string
+	if worldCtx != "" {
+		prompt = fmt.Sprintf("Tool: %s\nInput: %s\nWorld-model context:\n%s\n\nExpected result:", toolName, jsonShort(input), worldCtx)
+	} else {
+		prompt = fmt.Sprintf("Tool: %s\nInput: %s\nExpected result:", toolName, jsonShort(input))
+	}
 	return p.drafter.Draft(ctx, p.model, predictionSystem, prompt, 120)
 }
 

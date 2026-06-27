@@ -367,6 +367,13 @@ def main():
         }]
 
     wb = Workbook()
+    # Core metadata → the file's own name, so a downloaded sheet (and any PDF
+    # render) carries the native doc name rather than a renderer default.
+    import os
+    doc_title = os.path.splitext(os.path.basename(out))[0] or "Spreadsheet"
+    wb.properties.title = doc_title
+    wb.properties.subject = doc_title
+    wb.properties.creator = "dopesoft"
     for i, s in enumerate(sheets):
         add_sheet(wb, s, first=(i == 0))
     wb.save(out)

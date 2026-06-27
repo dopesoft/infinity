@@ -2638,6 +2638,39 @@ func (a *API) FullEmailText(ctx context.Context, id, origin string) (string, err
 	return body, nil
 }
 
+// FullArtifactText resolves a generated document/artifact id to the best
+// plain-text rendering we can put in front of the agent for a "Discuss with
+// Jarvis" turn-1 hydration: the stored markdown for written docs, the
+// HTML-preview path for spreadsheets (the caller flattens it through the
+// workspace proxy with HTMLToText), and the raw storage path for office/PDF
+// binaries the agent must open with its file tools. Mirrors FullEmailText —
+// best-effort, all empties + nil error when the row carries nothing. Shared by
+// the seed enrichment so a discussed document is actually IN context, not just
+// named. No-row / bad-id surfaces as a non-nil error the caller degrades on.
+func (a *API) FullArtifactText(ctx context.Context, id string) (markdown, htmlPath, storagePath, format string, err error) {
+	if a == nil || a.Pool == nil || strings.TrimSpace(id) == "" {
+		return "", "", "", "", nil
+	}
+	err = a.Pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'markdown',''),
+		       COALESCE(metadata->>'html_path',''),
+		       COALESCE(storage_path,''),
+		       COALESCE(metadata->>'format','')
+		  FROM mem_artifacts
+		 WHERE id = $1::uuid AND deleted_at IS NULL
+	`, id).Scan(&markdown, &htmlPath, &storagePath, &format)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return strings.TrimSpace(markdown), strings.TrimSpace(htmlPath),
+		strings.TrimSpace(storagePath), strings.TrimSpace(format), nil
+}
+
+// HTMLToText exposes the package's HTML→plain-text flattener (used for email
+// bodies) so callers outside the package can render an HTML document preview —
+// e.g. a spreadsheet's html_path — into legible text for the agent.
+func HTMLToText(h string) string { return stripHTML(h) }
+
 // looksHTML is a cheap check for whether a body is HTML markup rather than
 // plain text, so we only run the tag-stripper when there's something to strip.
 func looksHTML(s string) bool {

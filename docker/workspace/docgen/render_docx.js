@@ -22,6 +22,7 @@
 //   ] }
 
 const fs = require("fs");
+const path = require("path");
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
   Table, TableRow, TableCell, WidthType, AlignmentType,
@@ -223,7 +224,17 @@ const STYLES = {
 (async () => {
   const out = process.argv[2];
   const spec = readSpec();
+  // Core metadata → the file's own name, so the inline PDF preview's title (and
+  // Word's title bar) read the native doc name, not a renderer default.
+  const docTitle = (() => {
+    try { return path.basename(String(out), path.extname(String(out))) || "Document"; }
+    catch (_) { return "Document"; }
+  })();
   const doc = new Document({
+    title: docTitle,
+    subject: docTitle,
+    creator: "dopesoft",
+    description: docTitle,
     styles: STYLES,
     numbering: {
       config: [{

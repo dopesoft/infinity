@@ -398,6 +398,20 @@ type Loop struct {
 	// every turn alongside the live provider.
 	activeModelFn func(ctx context.Context) string
 
+	// effortFn resolves the per-turn reasoning-effort level (steal C) from the
+	// session's live signals. Guarded by providerMu like activeModelFn. Nil ->
+	// no per-turn effort (every turn keeps the model default, i.e. today's
+	// behavior). Returns the level to apply ("" = omit) and a short source
+	// string for the audit trail / Composer display. NEVER returns or changes a
+	// model id - only the compute the same model spends.
+	effortFn func(ctx context.Context, req EffortRequest) (llm.Effort, string)
+
+	// verifyDirective is the Lever-3 adversarial-verify recipe text (steal C).
+	// DATA, not a Go const (Rule #1b): seeded in infinity_meta, set via
+	// SetVerifyDirective, hot-swappable under providerMu. Empty -> the verify
+	// pass never fires (fail-safe when the seed migration hasn't run).
+	verifyDirective string
+
 	// bridgeRouter lets a failed claude_code__* (Mac-only) tool call fail OVER
 	// to the cloud bridge instead of spinning retries to the iteration cap. When
 	// a claude_code call errors and the Mac bridge is unhealthy, the loop
@@ -1021,6 +1035,11 @@ type RunEvent struct {
 	Usage      *llm.TokenUsage `json:"usage,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	StopReason string          `json:"stop_reason,omitempty"`
+	// Set on EventEffort (steal C): the per-turn reasoning-effort level chosen
+	// and why. Drives the Composer ThinkingChip "Auto · <level>" display. Level
+	// "" means the model default (omit) was used.
+	EffortLevel  string `json:"effort_level,omitempty"`
+	EffortSource string `json:"effort_source,omitempty"`
 }
 
 type ToolEvent struct {
@@ -1047,6 +1066,7 @@ const (
 	EventToolCall       EventKind = "tool_call"
 	EventToolInputDelta EventKind = "tool_input_delta"
 	EventToolResult     EventKind = "tool_result"
+	EventEffort         EventKind = "effort"
 	EventComplete       EventKind = "complete"
 	EventError          EventKind = "error"
 )
@@ -1151,6 +1171,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	toolErredThisTurn := false
 	selfHealCount := 0
 	healedThisTurn := false // a self-heal pass ran this turn; drives the resolved/exhausted hook
+	verifyCount := 0        // steal C Lever 3: bounded adversarial-verify passes this turn
 	// Per-turn delegate-spawn counter. A runaway model can emit dozens of
 	// `delegate` tool calls in a single message (each spawns a sub-agent); this
 	// hard-caps spawns per turn so a storm can never happen again.
@@ -1235,6 +1256,23 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	segment := 0
 	segmentSuccesses := 0
 	windDownAt := l.maxToolIterations - l.maxToolIterations/5
+
+	// steal C: size the per-turn reasoning effort ONCE, from the session's live
+	// signals (resolver wired in serve.go). Same model, variable compute.
+	// perTurnEffort rides streamCtx into every iteration's LLM call below; "" =
+	// omit (model default), so an un-escalated turn costs exactly what it did
+	// before C existed. Surfaced live as EventEffort so the Composer can show
+	// "Auto · <level>".
+	perTurnEffort, effortSource := l.resolveEffort(ctx, EffortRequest{
+		SessionID: s.ID,
+		Model:     model,
+		Project:   s.Project,
+		Pinned:    EffortPinFromContext(ctx),
+	})
+	if perTurnEffort != "" || effortSource != "" {
+		emit(out, RunEvent{Kind: EventEffort, SessionID: s.ID, EffortLevel: string(perTurnEffort), EffortSource: effortSource})
+	}
+
 	for iter := 0; ; iter++ {
 		if iter >= l.maxToolIterations {
 			// Segment budget exhausted. Continue into a fresh segment only with
@@ -1314,8 +1352,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			}
 		}
 		sys := llm.SystemPrompt{Stable: stableSystem, Volatile: sysVolatile}
-		// Stamp the session id so OpenAI/OAuth forward it as prompt_cache_key.
-		streamCtx := llm.WithCacheKey(ctx, s.ID)
+		// Stamp the session id so OpenAI/OAuth forward it as prompt_cache_key,
+		// and the steal-C per-turn effort so each provider sizes reasoning inside
+		// its own gate (WithEffort is a no-op when perTurnEffort is "").
+		streamCtx := llm.WithEffort(llm.WithCacheKey(ctx, s.ID), perTurnEffort)
 		go func() {
 			defer close(streamDone)
 			if cp, ok := provider.(llm.CachingProvider); ok {
@@ -1455,6 +1495,28 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				s.Append(llm.Message{Role: llm.RoleUser, Content: selfHealDirective})
 				toolErredThisTurn = false // fresh slate for the heal pass
 				continue
+			}
+
+			// STEAL C — LEVER 3: adversarial-verify pass. On the hardest turns
+			// (effort resolved to high/xhigh) that are ending cleanly, run ONE
+			// bounded pass where the model red-teams its own answer before the
+			// turn ends. Never stacks on a self-heal pass (!healedThisTurn). The
+			// directive is DATA (verifyDirectiveText, seeded in infinity_meta) —
+			// Rule #1b — so empty directive / migration-not-applied = inert. This
+			// mirrors the self-heal mechanic exactly: it's one extra iteration
+			// INSIDE this already-tracked turn, so it rides the turn's hooks +
+			// emits an EventEffort{verify_pass} signal rather than booking a
+			// separate mem_runs row.
+			if verifyCount < maxVerifyPerTurn && !healedThisTurn && !verifyDisabled() &&
+				(perTurnEffort == llm.EffortHigh || perTurnEffort == llm.EffortXHigh) &&
+				shouldVerify(resp.Text) {
+				if directive := l.verifyDirectiveText(); directive != "" {
+					verifyCount++
+					s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+					s.Append(llm.Message{Role: llm.RoleUser, Content: directive})
+					emit(out, RunEvent{Kind: EventEffort, SessionID: s.ID, EffortLevel: string(perTurnEffort), EffortSource: "verify_pass"})
+					continue
+				}
 			}
 
 			// A self-heal pass ran this turn and we're now ending it. Fire the

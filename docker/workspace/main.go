@@ -46,6 +46,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +94,7 @@ func main() {
 	mux.HandleFunc("/git/init", auth(handleGitInit))
 	mux.HandleFunc("/docgen", auth(handleDocgen))
 	mux.HandleFunc("/docpreview", auth(handleDocPreview))
+	mux.HandleFunc("/docpages", auth(handleDocPages))
 
 	// Preview supervisor — boots a project's dev server (or serves it static)
 	// and fronts the running app. Core proxies the browser-facing prefix here;
@@ -1122,6 +1124,130 @@ func handleDocPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleDocPages renders a document's pages to individual PNGs so Studio can
+// show ONE page at a time (a real slide-by-slide viewer) instead of the
+// browser's native continuous-scroll PDF iframe — which showed multiple slides
+// at once and made thumbnail clicks land on the wrong page. Input is the
+// preview path (a .pdf, or an office file we convert first); output is the
+// ordered list of page-image paths + the count. Cached: re-renders only when
+// the source PDF is newer than the existing page images.
+//
+//	POST /docpages { "path": "<workspace path>" } → { count, pages: [paths] }
+func handleDocPages(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	src, err := resolvePath(strings.TrimSpace(req.Path))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	info, err := os.Stat(src)
+	if err != nil || info.IsDir() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	// Resolve to a PDF we can rasterize (convert office files on the fly).
+	previewPDF := src
+	if strings.ToLower(strings.TrimPrefix(filepath.Ext(src), ".")) != "pdf" {
+		p, err := sofficeToPDF(ctx, src)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "convert to pdf: " + err.Error()})
+			return
+		}
+		previewPDF = p
+	}
+
+	pages, err := pdfPages(ctx, previewPDF)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(pages), "pages": pages})
+}
+
+// pdfPages rasterizes every page of a PDF to a ~1400px PNG via poppler's
+// pdftoppm (baked into the image), stored in a sibling .pages/<base>/ dir, and
+// returns the page-image paths in order. Cached: reuses an existing render when
+// it's at least as new as the source PDF, so re-opening a doc is instant.
+func pdfPages(ctx context.Context, pdfPath string) ([]string, error) {
+	base := strings.TrimSuffix(filepath.Base(pdfPath), filepath.Ext(pdfPath))
+	dir := filepath.Join(filepath.Dir(pdfPath), ".pages", base)
+
+	pdfInfo, _ := os.Stat(pdfPath)
+	if existing, err := listPagePNGs(dir); err == nil && len(existing) > 0 {
+		if pdfInfo == nil {
+			return existing, nil
+		}
+		if di, err := os.Stat(existing[0]); err == nil && !di.ModTime().Before(pdfInfo.ModTime()) {
+			return existing, nil // cache hit
+		}
+		// stale: clear old pages before re-rendering (a regenerated PDF may have
+		// fewer pages, so orphans must not linger).
+		for _, p := range existing {
+			_ = os.Remove(p)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	prefix := filepath.Join(dir, "page")
+	cmd := exec.CommandContext(ctx, "pdftoppm", "-png", "-scale-to", "1400", pdfPath, prefix)
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("pdftoppm: %v: %s", err, strings.TrimSpace(string(combined)))
+	}
+	pages, err := listPagePNGs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("pdftoppm produced no pages")
+	}
+	return pages, nil
+}
+
+// listPagePNGs returns the page-N.png files in dir, ordered by page number.
+// pdftoppm zero-pads the suffix to the page count's width (page-1.png for <10
+// pages, page-01.png for 10-99), so we parse the integer to sort correctly.
+func listPagePNGs(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	type pg struct {
+		n    int
+		path string
+	}
+	var pgs []pg
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "page-") || !strings.HasSuffix(name, ".png") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "page-"), ".png"))
+		if err != nil {
+			continue
+		}
+		pgs = append(pgs, pg{n: n, path: filepath.Join(dir, name)})
+	}
+	sort.Slice(pgs, func(i, j int) bool { return pgs[i].n < pgs[j].n })
+	out := make([]string, len(pgs))
+	for i, p := range pgs {
+		out[i] = p.path
+	}
+	return out, nil
 }
 
 // dedupePath returns p when it's free, otherwise p with a "-N" suffix before

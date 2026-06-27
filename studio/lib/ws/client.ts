@@ -53,6 +53,10 @@ export type WSEvent =
   // like intent; the Intent/effort panel reads it via its own DB fetch path,
   // and the chat transcript ignores it.
   | { type: "gauge"; session_id: string; gauge: WSGauge }
+  // effort is the per-turn reasoning level steal C chose (none|low|medium|high|
+  // xhigh). The Composer chip renders it as "Auto · <level>" so the boss sees
+  // how hard Jarvis is thinking. Per-turn, not persisted in the transcript.
+  | { type: "effort"; session_id: string; effort: WSEffort }
   // proactive_message is an unprompted assistant turn - broadcast by the
   // heartbeat when a finding crosses the surface threshold (surprise,
   // curiosity, security, or any pre-approved finding). useChat renders
@@ -118,6 +122,11 @@ export type WSIntent = {
 export type WSGauge = {
   tier: "glance" | "standard" | "deep";
   reason?: string;
+};
+
+export type WSEffort = {
+  level: string; // none | low | medium | high | xhigh ("" = model default)
+  source?: string; // audit reason: boss_pinned | coding_floor | gauge_deep | ...
 };
 
 export type WSToolInputDelta = {

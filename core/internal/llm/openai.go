@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/openai/openai-go"
@@ -117,13 +118,25 @@ func (o *OpenAI) StreamCached(
 	if key := CacheKeyFromContext(ctx); key != "" {
 		params.PromptCacheKey = openai.String(key)
 	}
+	// steal C: per-turn reasoning effort (ctx hint > env fallback > omit). Only
+	// on reasoning-capable models; "" omits the field (model default), so an
+	// un-escalated turn is unchanged.
+	if modelSupportsReasoning(effectiveModel) {
+		lvl := string(EffortFromContext(ctx))
+		if lvl == "" {
+			lvl = strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_EFFORT"))
+		}
+		if lvl != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(lvl)
+		}
+	}
 
 	stream := o.client.Chat.Completions.NewStreaming(ctx, params)
 	defer stream.Close()
 
 	var (
-		acc     openai.ChatCompletionAccumulator
-		resp    Response
+		acc       openai.ChatCompletionAccumulator
+		resp      Response
 		streamErr error
 	)
 

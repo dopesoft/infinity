@@ -14,6 +14,7 @@ metric-identical open twin of Calibri, installed in the workspace image — as
 Helvetica so rendering never breaks.
 """
 import json
+import os
 import sys
 
 from reportlab.lib import colors
@@ -141,9 +142,14 @@ def main():
     if not story:
         story = [Paragraph("", styles["BodyText"])]
 
+    # PDF /Title metadata → the file's own name, so the canvas preview's title
+    # reads the native doc name instead of an empty/default title.
+    doc_title = os.path.splitext(os.path.basename(out))[0] or "Document"
+
     SimpleDocTemplate(
         out, pagesize=LETTER, topMargin=0.8 * inch, bottomMargin=0.8 * inch,
         leftMargin=0.8 * inch, rightMargin=0.8 * inch,
+        title=doc_title, author="dopesoft",
     ).build(story)
 
 

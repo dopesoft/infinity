@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { BackgroundJobDock } from "@/components/BackgroundJobDock";
@@ -27,6 +28,28 @@ export function WorkspaceChatColumn({
   minimalComposer?: boolean;
 }) {
   const { setting, setModel } = useGlobalModel();
+
+  // steal C: the boss's effort pin ("auto" = let Jarvis size each turn, or a
+  // level). Persisted to localStorage so it survives reload / navigation on this
+  // device; "auto" by default so nothing costs more out of the box. Hydrated
+  // after mount to keep SSR markup deterministic.
+  const [effort, setEffort] = useState<string>("auto");
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("infinity:effort");
+      if (stored) setEffort(stored);
+    } catch {
+      /* private mode / quota — best-effort only */
+    }
+  }, []);
+  const changeEffort = (level: string) => {
+    setEffort(level);
+    try {
+      window.localStorage.setItem("infinity:effort", level);
+    } catch {
+      /* best-effort */
+    }
+  };
 
   return (
     // overflow-x-hidden here is the page-level guard: even if a child
@@ -66,7 +89,7 @@ export function WorkspaceChatColumn({
             // turn runs against is resolved server-side from the
             // settings store (driven by this chip + the Settings page),
             // so the WS frame stays a plain {type, session, content}.
-            void chat.send(t, files);
+            void chat.send(t, files, { effort });
           }}
           onSlash={(cmd) => {
             const c = cmd.toLowerCase();
@@ -86,6 +109,9 @@ export function WorkspaceChatColumn({
           placeholder="ask me anything.."
           modelId={setting?.model ?? ""}
           vendorId={setting?.provider ?? ""}
+          effort={effort}
+          appliedEffort={chat.appliedEffort}
+          onEffortChange={changeEffort}
           sessionId={chat.sessionId}
           onModelChange={(nextId) => {
             // The chip pushes back a full model id; we PUT it straight
@@ -94,7 +120,7 @@ export function WorkspaceChatColumn({
             // a roundtrip on its end.
             void setModel(nextId);
           }}
-          onVoiceSend={(t) => void chat.send(t, undefined, { voice: true })}
+          onVoiceSend={(t) => void chat.send(t, undefined, { voice: true, effort })}
           minimal={minimalComposer}
         />
       </div>

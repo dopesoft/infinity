@@ -46,13 +46,20 @@ const BODY_TOP = 1.55;     // where a slide's title sits below the header
 // A theme is a flat token bag. "dopesoft" is the default; a spec may pass a
 // string key OR an object that is merged over the default, so a one-off deck
 // can recolor without a code change.
+// To ADD a theme: drop a new entry in this bag with the same token keys. The
+// agent picks one via the spec's top-level `theme` ("midnight", "emerald", …)
+// or by passing a partial object that merges over dopesoft (e.g.
+// {"theme":{"primary":"FF5A1F"}}) — see resolveTheme. Every layout reads ONLY
+// these tokens (no hardcoded colors), so a new theme recolors the whole deck.
 const THEMES = {
   dopesoft: {
+    dark: false,            // dark-mode theme? (drives logo + slide backgrounds)
     primary: "1E8CFF",      // brand azure — accents, stat numbers, marker, links
     primaryLight: "A9D2FF", // marker second segment / light fills
     ink: "1A1A1A",          // near-black headings / dark logo
     body: "5A5A5A",         // gray body copy
     muted: "9AA0A6",        // eyebrows, captions, labels
+    slideBg: "FFFFFF",      // content-slide background (white in light themes)
     lightBg: "ECEFF1",      // cover / section / thankyou cool-gray field
     darkBg: "4D4D4D",       // statement-slide charcoal
     panel: "F4F6F8",        // soft card fill
@@ -60,10 +67,26 @@ const THEMES = {
     badge: "4D4D4D",        // numbered-circle fill
     barTrack: "ECEFF1",     // skill-bar track
     barFill: "5B9BD5",      // skill-bar fill (desaturated brand blue)
+    accent2: "1B9E8F",      // secondary chart series
     headFont: "Calibri",    // Carlito twin baked in the workspace image
     bodyFont: "Calibri",
     logoLight: "dopesoft-black.png", // logo used ON light backgrounds
     logoDark: "dopesoft-white.png",  // logo used ON dark backgrounds
+  },
+  // ── light recolors: same chrome, different accent. Zero layout risk. ──
+  emerald: { primary: "0F9D6A", primaryLight: "A7E8CE", barFill: "3DB587", accent2: "1E8CFF" },
+  royal:   { primary: "4F46E5", primaryLight: "C7C4F5", barFill: "7C75ED", accent2: "F59E0B" },
+  crimson: { primary: "DC2626", primaryLight: "F6B9B9", barFill: "E06A6A", accent2: "1F6FEB" },
+  amber:   { primary: "D97706", primaryLight: "F6D8A8", barFill: "E0A24A", accent2: "1B9E8F" },
+  slate:   { primary: "475569", primaryLight: "CBD5E1", barFill: "7689A1", accent2: "0EA5E9", lightBg: "F1F5F9" },
+  // ── a full dark theme: dark fields + light ink + white logo. ──
+  midnight: {
+    dark: true,
+    primary: "4FA3FF", primaryLight: "2C5C99",
+    ink: "FFFFFF", body: "C7CDD6", muted: "8A93A3",
+    slideBg: "0B0E14", lightBg: "11151D", darkBg: "0B0E14",
+    panel: "1A2030", rule: "2A3142", badge: "4FA3FF",
+    barTrack: "1A2030", barFill: "4FA3FF", accent2: "1FB6A6",
   },
 };
 
@@ -71,9 +94,20 @@ function resolveTheme(spec) {
   const base = THEMES.dopesoft;
   const t = spec && spec.theme;
   if (!t) return { ...base };
-  if (typeof t === "string") return { ...(THEMES[t] || base) };
+  // a named theme is merged OVER dopesoft so partial entries (the light
+  // recolors above) inherit every unspecified token.
+  if (typeof t === "string") return { ...base, ...(THEMES[t] || {}) };
   if (typeof t === "object") return { ...base, ...t }; // object overrides merge
   return { ...base };
+}
+
+// Document title for core metadata — the native doc's filename (no extension),
+// e.g. "dfw-business-opportunity-deck". This is what the boss sees as the file
+// name, and what the PDF preview must show — NOT pptxgenjs's "PptxGenJS
+// Presentation" default that LibreOffice otherwise carries into the PDF title.
+function docTitleFrom(outPath) {
+  try { return path.basename(String(outPath), path.extname(String(outPath))) || "Presentation"; }
+  catch (_) { return "Presentation"; }
 }
 
 // ── logo resolution ──────────────────────────────────────────────────────────
@@ -116,10 +150,30 @@ function addMarker(s, t, x, y) {
   s.addShape("rect", { x: x + 0.55, y, w: 0.45, h: 0.07, fill: { color: t.primaryLight }, line: { type: "none" } });
 }
 
+// titleFit estimates a font size + box height for a heading so a long title
+// wraps inside `box` inches instead of overflowing onto whatever sits below or
+// beside it. ~1717/size chars fit per line at the bold head font in a 11.93"
+// box; we scale that to the actual box width. Returns the chosen size, the
+// estimated line count, and a box height that fits them.
+function titleFit(text, { box = CONTENT_W, max = 32, mid, min } = {}) {
+  const len = String(text || "").length;
+  const cplAt = (sz) => Math.max(6, Math.floor((1717 / sz) * (box / CONTENT_W)));
+  const sizes = [max, mid, min].filter((v) => typeof v === "number");
+  let size = sizes[sizes.length - 1] || max;
+  // pick the largest candidate size that keeps the title to ≤2 lines.
+  for (const sz of sizes) { if (Math.ceil(len / cplAt(sz)) <= 2) { size = sz; break; } }
+  const lines = Math.max(1, Math.ceil(len / cplAt(size)));
+  const lineH = size * 0.0167; // ~inches per line
+  return { size, lines, h: Math.max(0.8, lines * lineH + 0.1) };
+}
+
 // Marker + bold title — the standard slide header for content layouts.
 function addTitle(s, t, text, { x = MX, y = BODY_TOP, w = CONTENT_W, color, size = 32 } = {}) {
   addMarker(s, t, x, y - 0.25);
-  s.addText(String(text || ""), { x, y, w, h: 0.8, fontSize: size, bold: true, color: color || t.ink, fontFace: t.headFont, valign: "top" });
+  // auto-shrink + grow the box so a long title wraps in-place instead of
+  // running under sibling content (the metrics/chart "lead" overlap bug).
+  const fit = titleFit(text, { box: w, max: size, min: Math.max(20, size - 12) });
+  s.addText(String(text || ""), { x, y, w, h: fit.h, fontSize: fit.size, bold: true, color: color || t.ink, fontFace: t.headFont, valign: "top", lineSpacingMultiple: 1.04 });
 }
 
 function addBullets(s, t, items, { x, y, w, h, fontSize = 16, color } = {}) {
@@ -162,30 +216,35 @@ function asStats(arr) {
 function layoutCover(pptx, t, sl) {
   const s = pptx.addSlide();
   s.background = { color: t.lightBg };
-  addChrome(s, t, { dark: false });
+  addChrome(s, t, { dark: !!t.dark });
   // Optional hero image as a bottom band.
   const img = imgSrc(sl.image);
   if (img) {
     try { s.addImage({ ...img, x: 0, y: 4.6, w: W, h: H - 4.6, sizing: { type: "cover", w: W, h: H - 4.6 } }); } catch (_) {}
   }
-  addMarker(s, t, MX, 2.0);
   // Two-tone title — first word in brand blue, rest in ink (the "Agent Factory"
-  // treatment), done generically so any deck title gets the brand look.
+  // treatment), done generically so any deck title gets the brand look. The font
+  // auto-shrinks for long titles and the subtitle is positioned BELOW the
+  // measured title height, so a long cover title can never overlap the subtitle
+  // (the bug on the DFW cover). See titleFit().
   const title = String(sl.title || "");
+  const fit = titleFit(title, { box: CONTENT_W, max: 60, mid: 48, min: 40 });
+  const titleY = 2.15;
+  addMarker(s, t, MX, titleY - 0.25);
   const sp = title.indexOf(" ");
   const runs = sp > 0
     ? [{ text: title.slice(0, sp) + " ", options: { color: t.primary } }, { text: title.slice(sp + 1), options: { color: t.ink } }]
     : [{ text: title, options: { color: t.ink } }];
-  s.addText(runs, { x: MX, y: 2.25, w: CONTENT_W, h: 1.6, fontSize: 60, bold: true, fontFace: t.headFont, valign: "top" });
+  s.addText(runs, { x: MX, y: titleY, w: CONTENT_W, h: fit.h, fontSize: fit.size, bold: true, fontFace: t.headFont, valign: "top", lineSpacingMultiple: 1.05 });
   if (sl.subtitle) {
-    s.addText(String(sl.subtitle), { x: MX, y: 3.85, w: CONTENT_W, h: 0.6, fontSize: 20, bold: true, color: t.body, fontFace: t.bodyFont });
+    s.addText(String(sl.subtitle), { x: MX, y: titleY + fit.h + 0.12, w: CONTENT_W, h: 0.6, fontSize: 20, bold: true, color: t.body, fontFace: t.bodyFont });
   }
 }
 
 function layoutAgenda(pptx, t, sl) {
   const s = pptx.addSlide();
   s.background = { color: t.lightBg };
-  addChrome(s, t);
+  addChrome(s, t, { dark: !!t.dark });
   addTitle(s, t, sl.title || "agenda", { color: t.primary, size: 36 });
   const items = (sl.items || []).map((v, i) => (typeof v === "object" ? v : { text: String(v), n: i + 1 }));
   const mid = Math.ceil(items.length / 2);
@@ -205,7 +264,7 @@ function layoutAgenda(pptx, t, sl) {
 function layoutSection(pptx, t, sl) {
   const s = pptx.addSlide();
   s.background = { color: t.lightBg };
-  addChrome(s, t);
+  addChrome(s, t, { dark: !!t.dark });
   const img = imgSrc(sl.image);
   const hasImg = !!img;
   if (hasImg) {
@@ -219,15 +278,15 @@ function layoutSection(pptx, t, sl) {
 
 function layoutBullets(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
   const img = imgSrc(sl.image);
   const hasImg = !!img;
   if (hasImg) {
     try { s.addImage({ ...img, x: W * 0.55, y: 1.7, w: W * 0.45 - 0.3, h: 4.6, sizing: { type: "cover", w: W * 0.45 - 0.3, h: 4.6 } }); } catch (_) {}
   }
   const w = hasImg ? W * 0.55 - MX - 0.3 : CONTENT_W;
-  addTitle(s, t, sl.title);
+  addTitle(s, t, sl.title, hasImg ? { w } : {}); // keep title clear of the side image
   let y = 2.55;
   if (sl.tagline) {
     s.addText(String(sl.tagline), { x: MX, y, w, h: 0.6, fontSize: 22, bold: true, italic: true, color: t.primary, fontFace: t.headFont });
@@ -245,12 +304,12 @@ function layoutBullets(pptx, t, sl) {
 // callouts. Matches the Voice/Chat agent pages.
 function layoutStats(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
   const stats = asStats(sl.stats);
   const hasStats = stats.length > 0;
   const leftW = hasStats ? 8.4 : CONTENT_W;
-  addTitle(s, t, sl.title);
+  addTitle(s, t, sl.title, { w: leftW }); // keep title clear of the right stat rail
   let y = 2.5;
   if (sl.tagline) {
     s.addText(String(sl.tagline), { x: MX, y, w: leftW, h: 0.6, fontSize: 22, bold: true, italic: true, color: t.primary, fontFace: t.headFont });
@@ -298,8 +357,8 @@ function layoutStatement(pptx, t, sl) {
 // Numbered points with circle badges, 1 or 2 columns.
 function layoutNumberGrid(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
   addTitle(s, t, sl.title);
   const items = (sl.items || []).map((v, i) => (typeof v === "object" ? v : { text: String(v) }));
   const twoCol = items.length > 2;
@@ -322,8 +381,8 @@ function layoutNumberGrid(pptx, t, sl) {
 // Horizontal process timeline; steps alternate above/below the line.
 function layoutTimeline(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
   addTitle(s, t, sl.title || "Process");
   const steps = (sl.steps || []).map((v, i) => (typeof v === "object" ? v : { title: `Step ${i + 1}`, text: String(v) }));
   const n = steps.length || 1;
@@ -345,10 +404,14 @@ function layoutTimeline(pptx, t, sl) {
 // Row of headline numbers with captions, dotted vertical dividers.
 function layoutMetrics(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
-  addTitle(s, t, sl.title || "Deliverables");
-  if (sl.lead) s.addText(String(sl.lead), { x: 5.3, y: 1.5, w: W - 5.3 - MX, h: 1.5, fontSize: 14, color: t.body, fontFace: t.bodyFont, valign: "top", lineSpacingMultiple: 1.3 });
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
+  // Title on the left, optional lead paragraph on the right — constrain the
+  // title so it can't slide under the lead (the "Best Opportunity, Economics at
+  // a Glance" / "The numbers are not bargain-basement…" overlap).
+  const hasLead = !!sl.lead;
+  addTitle(s, t, sl.title || "Deliverables", hasLead ? { w: 4.4 } : {});
+  if (hasLead) s.addText(String(sl.lead), { x: 5.4, y: 1.55, w: W - 5.4 - MX, h: 1.6, fontSize: 14, color: t.body, fontFace: t.bodyFont, valign: "top", lineSpacingMultiple: 1.3 });
   const metrics = asStats(sl.metrics || sl.stats);
   const n = metrics.length || 1;
   const colW = CONTENT_W / n;
@@ -364,9 +427,9 @@ function layoutMetrics(pptx, t, sl) {
 // Intro text + row of member photo cards with name/role overlay.
 function layoutTeam(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
-  addTitle(s, t, sl.title || "Team");
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
+  addTitle(s, t, sl.title || "Team", { w: 3.6 }); // keep title clear of the photo cards
   const members = sl.members || [];
   if (sl.intro) s.addText(String(sl.intro), { x: MX, y: 2.6, w: 3.4, h: 3, fontSize: 14, color: t.body, fontFace: t.bodyFont, valign: "top", lineSpacingMultiple: 1.3 });
   const gx = MX + 3.9, gw = W - gx - 0.5;
@@ -386,8 +449,8 @@ function layoutTeam(pptx, t, sl) {
 // Single person: role eyebrow + name + bio + skill bars; photo on the right.
 function layoutProfile(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
   addMarker(s, t, MX, 1.5);
   if (sl.role) s.addText(String(sl.role), { x: MX, y: 1.7, w: 6, h: 0.4, fontSize: 14, color: t.muted, fontFace: t.headFont });
   s.addText(String(sl.name || sl.title || ""), { x: MX, y: 2.1, w: 6, h: 0.9, fontSize: 40, bold: true, color: t.ink, fontFace: t.headFont });
@@ -410,11 +473,12 @@ function layoutProfile(pptx, t, sl) {
 // Native chart (bar/line) + optional lead paragraph. categories + series.
 function layoutChart(pptx, t, sl) {
   const s = pptx.addSlide();
-  s.background = { color: "FFFFFF" };
-  addChrome(s, t);
-  addTitle(s, t, sl.title || "Trend analysis");
+  s.background = { color: t.slideBg };
+  addChrome(s, t, { dark: !!t.dark });
+  const hasLead = !!sl.lead;
+  addTitle(s, t, sl.title || "Trend analysis", hasLead ? { w: 4.4 } : {}); // clear of the lead
   const c = sl.chart || {};
-  if (sl.lead) s.addText(String(sl.lead), { x: 5.3, y: 1.5, w: W - 5.3 - MX, h: 1.4, fontSize: 13, color: t.body, fontFace: t.bodyFont, valign: "top", lineSpacingMultiple: 1.3 });
+  if (hasLead) s.addText(String(sl.lead), { x: 5.4, y: 1.55, w: W - 5.4 - MX, h: 1.4, fontSize: 13, color: t.body, fontFace: t.bodyFont, valign: "top", lineSpacingMultiple: 1.3 });
   const cats = c.categories || [];
   const series = (c.series || []).map((sr) => ({ name: String(sr.name || ""), labels: cats, values: (sr.values || []).map(Number) }));
   if (!series.length) return;
@@ -435,7 +499,7 @@ function layoutChart(pptx, t, sl) {
 function layoutThankyou(pptx, t, sl) {
   const s = pptx.addSlide();
   s.background = { color: t.lightBg };
-  addChrome(s, t);
+  addChrome(s, t, { dark: !!t.dark });
   const img = imgSrc(sl.image);
   if (img) { try { s.addImage({ ...img, x: 0, y: 4.4, w: W, h: H - 4.4, sizing: { type: "cover", w: W, h: H - 4.4 } }); } catch (_) {} }
   addMarker(s, t, MX, 2.2);
@@ -462,6 +526,22 @@ const LAYOUTS = {
   thankyou: layoutThankyou,
 };
 
+// A slide with NO renderable content produces a blank page (the boss's "empty
+// pages"). The model occasionally over-generates these — an `integrations`
+// section header with nothing after it, or a stray `{}`. We drop them in code
+// (Rule #1b mechanic) so a forgotten line of the recipe can't ship blank
+// slides. A slide counts as content if it has ANY text, list, chart, or image.
+function slideHasContent(sl) {
+  if (!sl || typeof sl !== "object") return false;
+  const TEXT = ["title", "subtitle", "text", "eyebrow", "tagline", "body", "lead", "intro", "name", "role", "bio"];
+  for (const f of TEXT) if (sl[f] != null && String(sl[f]).trim() !== "") return true;
+  const LIST = ["items", "bullets", "features", "stats", "metrics", "steps", "members", "skills"];
+  for (const f of LIST) if (Array.isArray(sl[f]) && sl[f].length) return true;
+  if (sl.chart && Array.isArray(sl.chart.series) && sl.chart.series.length) return true;
+  if (sl.image && String(sl.image).trim() !== "") return true;
+  return false;
+}
+
 // Infer a layout from whichever data field is present so a slide without an
 // explicit `layout` still renders correctly (mechanic-in-code, not prose).
 function inferLayout(sl) {
@@ -486,10 +566,23 @@ const pptx = new PptxGenJS();
 pptx.layout = "LAYOUT_WIDE"; // 13.333 × 7.5in, 16:9
 pptx.theme = { headFontFace: t.headFont, bodyFontFace: t.bodyFont };
 
+// Core metadata → the file's own name, so the inline PDF preview's title reads
+// "dfw-business-opportunity-deck" (the native doc), not pptxgenjs's default
+// "PptxGenJS Presentation" that LibreOffice would otherwise carry into the PDF.
+const docTitle = docTitleFrom(out);
+pptx.title = docTitle;
+pptx.subject = docTitle;
+pptx.author = "dopesoft";
+pptx.company = "dopesoft";
+
 // Top-level title/subtitle → a branded cover slide.
 if (spec.title) layoutCover(pptx, t, { title: spec.title, subtitle: spec.subtitle, image: spec.image });
 
 for (const sl of spec.slides || []) {
+  if (!slideHasContent(sl)) {
+    process.stderr.write(`render_pptx: skipped an empty slide\n`);
+    continue;
+  }
   const layout = inferLayout(sl);
   const fn = LAYOUTS[layout] || layoutBullets;
   try {
@@ -498,7 +591,7 @@ for (const sl of spec.slides || []) {
     // Never let one bad slide kill the whole deck — render a minimal fallback.
     process.stderr.write(`render_pptx: slide (${layout}) failed: ${(e && e.message) || e}\n`);
     const s = pptx.addSlide();
-    addChrome(s, t);
+    addChrome(s, t, { dark: !!t.dark });
     if (sl.title) addTitle(s, t, sl.title);
     if (sl.body) s.addText(String(sl.body), { x: MX, y: 2.6, w: CONTENT_W, h: 4, fontSize: 16, color: t.body, fontFace: t.bodyFont, valign: "top" });
   }

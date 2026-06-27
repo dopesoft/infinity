@@ -313,6 +313,14 @@ func (s *Store) Get(ctx context.Context, planID string) (*Plan, error) {
 
 // ListByStatuses returns plans (with steps) whose status is in the set,
 // most-recently-updated first.
+//
+// Batched on purpose: it issues exactly TWO queries (one for the plan rows,
+// one for every step across all of them via plan_id = ANY(...)) and assembles
+// the graph in Go. The previous shape selected the ids then looped Get(id),
+// which fanned out to 1 + 2N serial round-trips (81 for a 40-plan dashboard
+// poll) — at ~70ms per pooler round-trip that was the entire ~5.6s
+// "dashboard: slow assembly". Same ANY($1::uuid[]) batch the dashboard already
+// uses for workflow steps; do not re-introduce the per-plan Get loop here.
 func (s *Store) ListByStatuses(ctx context.Context, statuses []string, limit int) ([]Plan, error) {
 	if s == nil || s.pool == nil {
 		return nil, nil
@@ -321,7 +329,8 @@ func (s *Store) ListByStatuses(ctx context.Context, statuses []string, limit int
 		limit = 50
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::text FROM mem_plans
+		SELECT id::text, session_id::text, goal_id::text, title, goal, status, current_step, created_at, updated_at
+		  FROM mem_plans
 		 WHERE status = ANY($1)
 		 ORDER BY updated_at DESC
 		 LIMIT $2
@@ -329,24 +338,78 @@ func (s *Store) ListByStatuses(ctx context.Context, statuses []string, limit int
 	if err != nil {
 		return nil, err
 	}
-	ids := []string{}
+	out := make([]Plan, 0, limit)
+	indexByID := make(map[string]int) // plan id -> position in out, for step fan-in
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
+		var p Plan
+		var sessionID, goalID *string
+		if err := rows.Scan(&p.ID, &sessionID, &goalID, &p.Title, &p.Goal,
+			&p.Status, &p.CurrentStep, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, err
 		}
+		if sessionID != nil {
+			p.SessionID = *sessionID
+		}
+		if goalID != nil {
+			p.GoalID = *goalID
+		}
+		p.Steps = []Step{}
+		indexByID[p.ID] = len(out)
+		out = append(out, p)
 	}
 	rows.Close()
-
-	out := make([]Plan, 0, len(ids))
-	for _, id := range ids {
-		p, err := s.Get(ctx, id)
-		if err != nil || p == nil {
-			continue
-		}
-		out = append(out, *p)
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return out, nil
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	ids := make([]string, 0, len(out))
+	for i := range out {
+		ids = append(ids, out[i].ID)
+	}
+	stepRows, err := s.pool.Query(ctx, `
+		SELECT id::text, plan_id::text, idx, title, detail, status,
+		       is_checkpoint, verify_required, verify_result::text,
+		       result_summary, run_id::text, recovery_attempted,
+		       started_at, ended_at
+		  FROM mem_plan_steps
+		 WHERE plan_id = ANY($1::uuid[])
+		 ORDER BY plan_id, idx ASC
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer stepRows.Close()
+	for stepRows.Next() {
+		var (
+			st        Step
+			verifyRaw *string
+			runID     *string
+			started   *time.Time
+			ended     *time.Time
+		)
+		if err := stepRows.Scan(&st.ID, &st.PlanID, &st.Idx, &st.Title, &st.Detail, &st.Status,
+			&st.IsCheckpoint, &st.VerifyRequired, &verifyRaw,
+			&st.ResultSummary, &runID, &st.RecoveryAttempted,
+			&started, &ended); err != nil {
+			return nil, err
+		}
+		if verifyRaw != nil && *verifyRaw != "" {
+			_ = json.Unmarshal([]byte(*verifyRaw), &st.VerifyResult)
+		}
+		if runID != nil {
+			st.RunID = *runID
+		}
+		st.StartedAt = started
+		st.EndedAt = ended
+		if i, ok := indexByID[st.PlanID]; ok {
+			out[i].Steps = append(out[i].Steps, st)
+		}
+	}
+	return out, stepRows.Err()
 }
 
 func (s *Store) steps(ctx context.Context, planID string) ([]Step, error) {

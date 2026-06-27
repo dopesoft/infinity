@@ -610,9 +610,11 @@ function ViewerActions({
       // proposal only re-surfaces if Voyager's source extractor re-detects
       // the same file-fight in a future session - a fresh signal, not a
       // resurrected row.
+      // Order (left→right): destructive Dismiss is kept furthest from the
+      // rightmost primary (Discuss) to avoid mis-taps; neutral "Open in Lab"
+      // sits between them.
       return (
         <>
-          <OpenInButton href="/lab?tab=open" label="Open in Lab" />
           <button
             type="button"
             onClick={dismissCodeProposal}
@@ -622,6 +624,7 @@ function ViewerActions({
             <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
             {dismissing ? "Dismissing..." : "Dismiss"}
           </button>
+          <OpenInButton href="/lab?tab=open" label="Open in Lab" />
         </>
       );
     }
@@ -680,13 +683,13 @@ function ViewerActions({
       return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
     }
     if (item.kind === "followup") {
-      // Dismiss sits next to Discuss for follow-ups so the boss can
-      // drop a row in one tap. Persistence is server-side (status =
-      // 'dismissed' on mem_followups or mem_surface_items); the poller
-      // re-poll path won't resurface it.
+      // Order (left→right): destructive Dismiss is kept furthest from the
+      // rightmost primary (Discuss); the email's own action cluster (Draft /
+      // Archive / Snooze) sits between them. Persistence is server-side
+      // (status = 'dismissed' on mem_followups or mem_surface_items); the
+      // poller re-poll path won't resurface it.
       return (
         <>
-          <FollowupFooterActions followup={item.data} />
           <button
             type="button"
             onClick={dismissFollowup}
@@ -696,6 +699,7 @@ function ViewerActions({
             <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
             {dismissing ? "Dismissing..." : "Dismiss"}
           </button>
+          <FollowupFooterActions followup={item.data} />
         </>
       );
     }
@@ -730,9 +734,10 @@ function ViewerActions({
       // own durable decide endpoints — drop them in one tap from the board, same
       // as their canonical surface, alongside an "Open in" deep-link.
       if (w.kind === "code_proposal") {
+        // Destructive Dismiss leftmost, neutral "Open in Code" between it and
+        // the rightmost primary (Discuss).
         return (
           <>
-            <OpenInButton href="/code-proposals" label="Open in Code" />
             <button
               type="button"
               onClick={dismissWorkItem}
@@ -742,13 +747,15 @@ function ViewerActions({
               <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
               {dismissing ? "Dismissing..." : "Dismiss"}
             </button>
+            <OpenInButton href="/code-proposals" label="Open in Code" />
           </>
         );
       }
       if (w.kind === "trust") {
+        // Destructive Deny leftmost, neutral "Open in Trust" between it and the
+        // rightmost primary (Discuss).
         return (
           <>
-            <OpenInButton href="/settings?section=trust" label="Open in Trust" />
             <button
               type="button"
               onClick={dismissWorkItem}
@@ -759,6 +766,7 @@ function ViewerActions({
               <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
               {dismissing ? "Denying..." : "Deny"}
             </button>
+            <OpenInButton href="/settings?section=trust" label="Open in Trust" />
           </>
         );
       }
@@ -824,7 +832,7 @@ function ViewerActions({
         type="button"
         onClick={discuss}
         disabled={seeding}
-        className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-md bg-foreground px-4 text-sm font-medium text-background transition-all hover:opacity-90 disabled:opacity-60"
+        className="inline-flex h-10 items-center gap-1.5 rounded-md bg-foreground px-4 text-sm font-medium text-background transition-all hover:opacity-90 disabled:opacity-60"
       >
         <Sparkles className={cn("size-3.5", seeding && "animate-pulse")} aria-hidden />
         Discuss with Jarvis

@@ -3,7 +3,19 @@
 import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw, FileText } from "lucide-react";
+import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw, FileText, ChevronDown, ChevronRight, Check } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+} from "@/components/ui/dropdown-menu";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
@@ -139,14 +151,51 @@ import {
   type VendorId,
 } from "@/lib/models-catalog";
 
+// Effort levels (steal C). Mirror the GPT reasoning.effort enum plus an "auto"
+// option (let Jarvis size each turn). The chip shows the active level beside the
+// model name ("Opus 4.8  High") and the dropdown's Effort submenu changes it.
+const EFFORT_LEVELS = ["auto", "none", "low", "medium", "high", "xhigh"] as const;
+const EFFORT_LABELS: Record<string, string> = {
+  auto: "Auto",
+  none: "None",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "X-High",
+};
+const EFFORT_DESCRIPTIONS: Record<string, string> = {
+  auto: "Jarvis sizes each turn",
+  none: "Fastest — no extra thinking",
+  low: "A little reasoning",
+  medium: "Balanced reasoning",
+  high: "Deep reasoning",
+  xhigh: "Maximum reasoning",
+};
+
+// effortDisplay is the short label on the chip. A pinned level shows verbatim;
+// on Auto it shows the level Jarvis actually chose for the in-flight turn (from
+// the EventEffort frame), falling back to "Auto" before the first turn resolves.
+function effortDisplay(effort?: string, applied?: string): string {
+  const pin = (effort || "auto").toLowerCase();
+  if (pin !== "auto") return EFFORT_LABELS[pin] ?? pin;
+  if (applied) return EFFORT_LABELS[applied.toLowerCase()] ?? applied;
+  return "Auto";
+}
+
 function ModelChip({
   modelId,
   vendorId,
-  onCycle,
+  onSelect,
+  effort,
+  appliedEffort,
+  onEffortChange,
 }: {
   modelId: string;
   vendorId?: string;
-  onCycle: (nextModelId: string) => void;
+  onSelect: (nextModelId: string) => void;
+  effort?: string;
+  appliedEffort?: string;
+  onEffortChange?: (level: string) => void;
 }) {
   // The active vendor wins over whatever vendor the model id happens to
   // belong to in the global catalog. Otherwise a stale model override
@@ -159,27 +208,83 @@ function ModelChip({
     vendor.models.find((m) => m.id === modelId) ??
     vendor.models.find((m) => m.id === defaultModelFor(vendor)) ??
     vendor.models[0];
-
-  const cycle = () => {
-    const idx = vendor.models.findIndex((m) => m.id === current.id);
-    const next = vendor.models[(idx + 1) % vendor.models.length];
-    onCycle(next.id);
-  };
+  const pin = (effort || "auto").toLowerCase();
+  const showEffort = Boolean(onEffortChange);
 
   return (
-    <button
-      type="button"
-      onClick={cycle}
-      title={`${vendor.label} · click to cycle`}
-      className={cn(
-        "inline-flex h-8 items-center rounded-full border px-3 text-xs font-medium",
-        "border-border bg-muted/50 text-foreground/90 transition-colors",
-        "hover:bg-muted hover:text-foreground active:scale-[0.98]",
-      )}
-    >
-      <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-success" aria-hidden />
-      {current.label}
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={`${vendor.label} · model & effort`}
+          className={cn(
+            "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium",
+            "border-border bg-muted/50 text-foreground/90 transition-colors",
+            "hover:bg-muted hover:text-foreground active:scale-[0.98]",
+          )}
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden />
+          <span>{current.label}</span>
+          {showEffort ? (
+            <span className="text-muted-foreground">{effortDisplay(effort, appliedEffort)}</span>
+          ) : null}
+          <ChevronDown className="size-3 opacity-60" aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {vendor.models.map((m) => (
+          <DropdownMenuItem
+            key={m.id}
+            onSelect={() => onSelect(m.id)}
+            className="flex-col items-start gap-0.5 py-2"
+          >
+            <span className="flex w-full items-center justify-between gap-2">
+              <span className="font-medium">{m.label}</span>
+              {m.id === current.id ? <Check className="size-4 shrink-0 text-info" /> : null}
+            </span>
+            {m.tagline ? (
+              <span className="text-xs text-muted-foreground">{m.tagline}</span>
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+        {showEffort ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <span>Effort</span>
+                <span className="ml-auto text-muted-foreground">
+                  {effortDisplay(effort, appliedEffort)}
+                </span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56">
+                <DropdownMenuRadioGroup value={pin} onValueChange={(v) => onEffortChange?.(v)}>
+                  {EFFORT_LEVELS.map((lvl) => (
+                    <DropdownMenuRadioItem
+                      key={lvl}
+                      value={lvl}
+                      className="flex-col items-start gap-0.5 py-2 pl-7"
+                    >
+                      <span className="font-medium">{EFFORT_LABELS[lvl]}</span>
+                      <span className="text-xs text-muted-foreground">{EFFORT_DESCRIPTIONS[lvl]}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          </>
+        ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={() => {
+            if (typeof window !== "undefined") window.location.href = "/settings";
+          }}
+        >
+          <span>More models</span>
+          <ChevronRight className="ml-auto size-4 opacity-60" />
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -287,8 +392,17 @@ export interface PromptInputBoxProps {
    *  When omitted the chip infers it from the model id, falling back to
    *  the first vendor in the catalog. */
   vendorId?: string;
-  /** Called with the next full model id when the user cycles the chip. */
+  /** Called with the next full model id when the user picks one in the chip. */
   onModelChange?: (modelId: string) => void;
+  /** Per-turn thinking-effort pin (steal C): "auto" | none|low|medium|high|xhigh.
+   *  "auto"/undefined lets Jarvis size each turn. */
+  effort?: string;
+  /** The level Jarvis auto-chose for the in-flight turn (from the EventEffort
+   *  frame). Shown on the chip when effort is "auto" so the boss sees the level. */
+  appliedEffort?: string;
+  /** Called when the boss changes the effort level in the chip's Effort submenu.
+   *  Omit to hide the effort UI entirely (chip reverts to model-only). */
+  onEffortChange?: (level: string) => void;
   /** Active session id - drives the context meter's per-session query. */
   sessionId?: string;
   /** Hide the attachment + voice affordances. Defaults to false. */
@@ -323,6 +437,9 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       modelId: controlledModelId,
       vendorId,
       onModelChange,
+      effort,
+      appliedEffort,
+      onEffortChange,
       sessionId,
       minimal = false,
       onSlash,
@@ -696,7 +813,14 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                 </Tooltip>
               ) : (
                 <>
-                  <ModelChip modelId={modelId} vendorId={vendorId} onCycle={cycleModel} />
+                  <ModelChip
+                    modelId={modelId}
+                    vendorId={vendorId}
+                    onSelect={cycleModel}
+                    effort={effort}
+                    appliedEffort={appliedEffort}
+                    onEffortChange={onEffortChange}
+                  />
                   <ContextMeter sessionId={sessionId} />
 
                   {!minimal && (

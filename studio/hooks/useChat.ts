@@ -530,6 +530,10 @@ export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [usage, setUsage] = useState<Usage>({ input: 0, output: 0 });
   const [isStreaming, setIsStreaming] = useState(false);
+  // steal C: the reasoning-effort level Jarvis chose for the latest turn (from
+  // the EventEffort frame). Drives the Composer chip's "Auto · <level>" display.
+  // Per-turn, not durable.
+  const [appliedEffort, setAppliedEffort] = useState<string>("");
   const turnStartRef = useRef<number | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Discuss-with-Jarvis opens a session whose only row is a DashboardSeed
@@ -1081,6 +1085,13 @@ export function useChat() {
            * transcript. Acknowledged for switch exhaustiveness. */
           break;
         }
+        case "effort": {
+          /* steal C: the per-turn reasoning level Jarvis chose for this turn.
+           * Surface it to the Composer chip ("Auto · <level>") so the boss sees
+           * how hard it's thinking. */
+          if (ev.effort?.level) setAppliedEffort(ev.effort.level);
+          break;
+        }
         case "proactive_message": {
           /* Unprompted assistant turn pushed by the heartbeat. Render it
            * as a regular assistant bubble so the transcript reads
@@ -1125,7 +1136,7 @@ export function useChat() {
   }, [ws, sessionId, armWatchdog, clearWatchdog]);
 
   const send = useCallback(
-    async (content: string, files?: File[], opts?: { voice?: boolean }) => {
+    async (content: string, files?: File[], opts?: { voice?: boolean; effort?: string }) => {
       const trimmed = content.trim();
       const attachments = await Promise.all((files ?? []).map(fileToAttachmentPayload));
       const usableAttachments = attachments.filter(isUsableAttachment);
@@ -1162,6 +1173,9 @@ export function useChat() {
           session_id: sessionId,
           content: trimmed,
           attachments: usableAttachments.map(toSendAttachment),
+          // steal C: carry the boss's effort pin on the steer too, so mid-turn
+          // input keeps the same thinking level. "auto" omits (let C decide).
+          ...(opts?.effort && opts.effort !== "auto" ? { effort: opts.effort } : {}),
         });
         if (!ok) {
           setMessages((prev) => [
@@ -1209,6 +1223,9 @@ export function useChat() {
         // Voice turns run the SAME Loop.Run as text; the flag just tells Core
         // to also speak the reply (TTS) and add the spoken-delivery overlay.
         ...(opts?.voice ? { voice: true } : {}),
+        // steal C: the boss's per-turn effort pin. "auto" / undefined omits so
+        // the effort router decides; a level pins it for this turn.
+        ...(opts?.effort && opts.effort !== "auto" ? { effort: opts.effort } : {}),
       });
       if (!ok) {
         clearWatchdog();
@@ -1399,6 +1416,7 @@ export function useChat() {
       messages,
       usage,
       isStreaming,
+      appliedEffort,
       send,
       interrupt,
       newSession,
@@ -1413,6 +1431,7 @@ export function useChat() {
       messages,
       usage,
       isStreaming,
+      appliedEffort,
       send,
       interrupt,
       newSession,

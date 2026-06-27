@@ -15,9 +15,9 @@ import (
 )
 
 type Anthropic struct {
-	client          anthropic.Client
-	model           string
-	thinkingBudget  int64 // 0 = disabled. ≥1024 enables extended thinking with that token budget.
+	client         anthropic.Client
+	model          string
+	thinkingBudget int64 // 0 = disabled. ≥1024 enables extended thinking with that token budget.
 }
 
 func NewAnthropic(apiKey, model string) *Anthropic {
@@ -57,6 +57,42 @@ func thinkingBudgetFromEnv() int64 {
 		return 0
 	}
 	return n
+}
+
+// effortToBudget maps a steal-C per-turn effort level to an Anthropic extended-
+// thinking budget, treating the boss's ANTHROPIC_THINKING_BUDGET (envCeil) as a
+// CEILING the ladder scales within - auto-routing never exceeds a budget the
+// boss set. When no budget is configured (envCeil<=0) a default ceiling lets the
+// feature still work; the floor (none) is always 0 = thinking disabled, so an
+// un-escalated turn is unchanged. Respects Anthropic's >=1024 minimum.
+func effortToBudget(level Effort, envCeil int64) int64 {
+	var frac float64
+	switch level {
+	case EffortNone:
+		return 0
+	case EffortLow:
+		frac = 0.25
+	case EffortMedium:
+		frac = 0.5
+	case EffortHigh:
+		frac = 0.75
+	case EffortXHigh:
+		frac = 1.0
+	default:
+		return envCeil // unknown level -> leave the env budget untouched
+	}
+	ceil := envCeil
+	if ceil <= 0 {
+		ceil = 32768
+	}
+	b := int64(float64(ceil) * frac)
+	if b > 0 && b < 1024 { // Anthropic minimum
+		b = 1024
+	}
+	if envCeil > 0 && b > envCeil { // never exceed the boss's configured ceiling
+		b = envCeil
+	}
+	return b
 }
 
 func (a *Anthropic) Name() string  { return "anthropic" }
@@ -194,9 +230,17 @@ func (a *Anthropic) StreamCached(
 		apiTools[n-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 
+	// steal C: a per-turn effort hint overrides the thinking budget for THIS call
+	// only, scaled WITHIN the boss's configured ANTHROPIC_THINKING_BUDGET as a
+	// ceiling (auto-routing never exceeds a budget the boss set). ctx unset ->
+	// the env budget, exactly as before.
+	budget := a.thinkingBudget
+	if lvl := EffortFromContext(ctx); lvl != "" {
+		budget = effortToBudget(lvl, a.thinkingBudget)
+	}
 	maxTokens := int64(4096)
-	if a.thinkingBudget > 0 && a.thinkingBudget+1024 > maxTokens {
-		maxTokens = a.thinkingBudget + 1024
+	if budget > 0 && budget+1024 > maxTokens {
+		maxTokens = budget + 1024
 	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(effectiveModel),
@@ -220,8 +264,8 @@ func (a *Anthropic) StreamCached(
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
 	}
-	if a.thinkingBudget > 0 {
-		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(a.thinkingBudget)
+	if budget > 0 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
 
 	stream := a.client.Messages.NewStreaming(ctx, params)

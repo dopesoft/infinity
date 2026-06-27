@@ -22,6 +22,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/crosscheck"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
+	"github.com/dopesoft/infinity/core/internal/effort"
 	"github.com/dopesoft/infinity/core/internal/embed"
 	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/eval"
@@ -356,7 +357,19 @@ func serveCmd() *cobra.Command {
 					// Predict-then-act drafts run on the boss's active model too,
 					// not Anthropic-only — so surprise scoring keeps feeding
 					// curiosity + Voyager curriculum under any brain.
-					hooks.NewPredictionRecorderWithDrafter(predictions, activeModel, os.Getenv("INFINITY_PREDICTION_MODEL")).Register(pipeline)
+					predRecorder := hooks.NewPredictionRecorderWithDrafter(predictions, activeModel, os.Getenv("INFINITY_PREDICTION_MODEL"))
+					// steal B: forward-simulate high-risk calls using the world
+					// model. The closure pulls entities named in the tool input +
+					// their causal links so the prediction reasons about
+					// consequences, closing on the SAME mem_predictions row. Stays
+					// decoupled — hooks never imports worldmodel.
+					{
+						wmStore := worldmodel.NewStore(p, slog.Default())
+						predRecorder.SetWorldContext(func(ctx context.Context, toolName string, input map[string]any) string {
+							return worldmodel.PredictionContext(ctx, wmStore, toolName, input)
+						})
+					}
+					predRecorder.Register(pipeline)
 
 					tools.RegisterMemoryTools(registry, p, embedder, searcher)
 					// LangSmith-style trace tools - read mem_turns +
@@ -1062,6 +1075,12 @@ func serveCmd() *cobra.Command {
 				if pool != nil {
 					modelSettings := settings.New(pool)
 					loop.SetActiveModelFn(modelSettings.GetModel)
+					// steal C Lever 3: load the seeded adversarial-verify directive
+					// (DATA, not a Go const — Rule #1b). Unseeded/empty -> the
+					// verify pass stays inert, so this is fail-safe.
+					if v, ok, _ := modelSettings.Get(context.Background(), "verify_directive"); ok {
+						loop.SetVerifyDirective(v)
+					}
 					// Route session auto-naming through the same active-model
 					// resolver so titles are drafted with the boss's Studio
 					// selection instead of being pinned to Haiku. Falls back
@@ -1234,6 +1253,38 @@ func serveCmd() *cobra.Command {
 					// off the hot path. Store is the durable record + chip source.
 					gaugeDetector = gauge.NewDetector(activeModel)
 					gaugeStore = gauge.NewStore(pool)
+
+					// steal C: wire the per-turn reasoning-effort router. Same
+					// model, variable compute. Signals: the gauge (NL difficulty,
+					// already async), loop-gate call-rate, the coding flag,
+					// capability, and the boss's Composer pin. PriorSurprise /
+					// ToolErrorRate / ContextFill are left neutral for now (deferred
+					// to avoid per-turn DB queries on the hot path); the router
+					// escalates on the wired signals and stays at the floor (omit)
+					// otherwise, so an un-escalated turn costs exactly as today.
+					if loop != nil {
+						effortRouter := effort.NewRouter(nil)
+						lg, gs := loopGate, gaugeStore
+						loop.SetEffortFn(func(ctx context.Context, req agent.EffortRequest) (llm.Effort, string) {
+							in := effort.Inputs{
+								Pinned:    req.Pinned,
+								Supported: llm.ModelSupportsReasoning(req.Model),
+								Coding:    strings.TrimSpace(req.Project) != "",
+							}
+							if gs != nil {
+								if r, ok := gs.Latest(ctx, req.SessionID); ok {
+									in.Gauge = string(r.Tier)
+								}
+							}
+							if lg != nil {
+								st := lg.StatsFor(req.SessionID)
+								in.CallRate, in.Ceiling = st.CallsInWindow, st.Ceiling
+							}
+							d := effortRouter.Resolve(ctx, in)
+							return d.Level, d.Source
+						})
+						fmt.Printf("  effort: per-turn reasoning router wired (gauge+callrate+coding+pin)\n")
+					}
 				}
 				/* WAL + WorkingBuffer are the durable substrates for
 				 * compaction-recovery and load-bearing-fragment capture.

@@ -239,4 +239,56 @@ func CacheKeyFromContext(ctx context.Context) string {
 	return ""
 }
 
+// Effort is a per-turn reasoning-effort hint. It is the ONLY thing steal C
+// varies; the model id it rides alongside is never changed. The five levels map
+// to GPT's reasoning.effort enum (none|low|medium|high|xhigh) and to Anthropic's
+// thinking budget. The zero value "" means "unset" - providers omit the field
+// entirely and the model keeps its own default, so an un-stamped call (every
+// non-loop caller) behaves exactly as it did before this existed.
+type Effort string
+
+const (
+	EffortNone   Effort = "none"
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+	EffortXHigh  Effort = "xhigh"
+)
+
+// Valid reports whether e is one of the five known levels. "" is NOT valid here
+// (it is the deliberate "omit" sentinel, handled by WithEffort as a no-op).
+func (e Effort) Valid() bool {
+	switch e {
+	case EffortNone, EffortLow, EffortMedium, EffortHigh, EffortXHigh:
+		return true
+	}
+	return false
+}
+
+type effortCtxType struct{}
+
+// WithEffort stamps a per-call reasoning-effort hint onto the context. It is an
+// exact mirror of WithCacheKey: a context value, NOT a Stream signature change,
+// so every non-loop Stream/StreamCached caller and the noDashesProvider wrapper
+// pass it through verbatim and simply never set it - preserving the boss default
+// on aux calls (gauge/critic/summarizer/namer run under their own ctx). An empty
+// or invalid level is a no-op (omit -> model default), which is what guarantees
+// "never silently change reasoning depth/cost" out of the box.
+func WithEffort(ctx context.Context, level Effort) context.Context {
+	if !level.Valid() {
+		return ctx
+	}
+	return context.WithValue(ctx, effortCtxType{}, level)
+}
+
+// EffortFromContext returns the level set by WithEffort, or "" when unset. A
+// provider reads this INSIDE its existing reasoning gate and omits the field
+// when it is "".
+func EffortFromContext(ctx context.Context) Effort {
+	if v, ok := ctx.Value(effortCtxType{}).(Effort); ok {
+		return v
+	}
+	return ""
+}
+
 var ErrNotImplemented = errors.New("provider not implemented")

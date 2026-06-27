@@ -2,11 +2,16 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
+	"github.com/dopesoft/infinity/core/internal/dashboard"
 	"github.com/google/uuid"
 )
 
@@ -99,6 +104,28 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// For a generated document/artifact, hydrate the actual CONTENT into turn-1
+	// context so "Discuss with Jarvis" lands the boss in a chat that can answer
+	// questions about the doc immediately — not one holding a bare file path.
+	// Written docs carry markdown; spreadsheets carry an HTML preview we flatten
+	// through the workspace proxy; office/PDF binaries get a clear path plus an
+	// instruction to open them. Best-effort: degrade silently if unavailable.
+	if body.Kind == "artifact" && s.cfg.DashboardAPI != nil {
+		if md, htmlPath, storagePath, format, aerr := s.cfg.DashboardAPI.FullArtifactText(r.Context(), body.ID); aerr == nil {
+			switch {
+			case md != "":
+				rawText += "\n\nFull document content:\n" + clampSeedDoc(md)
+			case htmlPath != "":
+				if text := strings.TrimSpace(dashboard.HTMLToText(s.fetchWorkspaceRaw(r.Context(), htmlPath))); text != "" {
+					rawText += "\n\nFull document content (rendered from preview):\n" + clampSeedDoc(text)
+				} else if storagePath != "" {
+					rawText += "\n\n" + openDocNote(storagePath, format)
+				}
+			case storagePath != "":
+				rawText += "\n\n" + openDocNote(storagePath, format)
+			}
+		}
+	}
 	if _, err := s.pool.Exec(r.Context(), `
 		INSERT INTO mem_observations (session_id, hook_name, payload, raw_text, importance, created_at)
 		VALUES ($1::uuid, 'DashboardSeed', $2::jsonb, $3, 8, NOW())
@@ -160,6 +187,63 @@ func formatSeedContext(kind, artifactID string, snapshot json.RawMessage) string
 	}
 	b.WriteString("\n\nI want to discuss this with Jarvis.")
 	return b.String()
+}
+
+// maxSeedDocChars caps a hydrated document so a large file can't blow the
+// agent's turn-1 context. Matches the spirit of FullEmailText's 12k cap, a
+// touch higher since written docs run longer than emails.
+const maxSeedDocChars = 16000
+
+// clampSeedDoc trims and truncates hydrated document text for the seed context.
+func clampSeedDoc(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxSeedDocChars {
+		return s[:maxSeedDocChars] + "\n…[truncated]"
+	}
+	return s
+}
+
+// openDocNote is the fallback for office/PDF binaries we can't flatten to text:
+// hand the agent the concrete path and tell it to open the file rather than
+// answer from the metadata, so "Discuss" never degrades into a guess.
+func openDocNote(storagePath, format string) string {
+	suffix := ""
+	if f := strings.TrimSpace(format); f != "" {
+		suffix = " (" + f + ")"
+	}
+	return "The document file" + suffix + " is stored at " + storagePath +
+		". Open or read it with your file/canvas tools before answering any question " +
+		"about its contents — do not guess from the metadata above."
+}
+
+// fetchWorkspaceRaw pulls a file's raw text from the cloud workspace bridge —
+// the same proxy handleWorkspaceDownload streams through. Best-effort: returns
+// "" on any failure so seed enrichment degrades silently. Capped so a giant
+// preview can't blow the agent's context before it's even flattened.
+func (s *Server) fetchWorkspaceRaw(ctx context.Context, path string) string {
+	base := strings.TrimRight(s.cfg.WorkspaceRawBase, "/")
+	if base == "" || strings.TrimSpace(path) == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/fs/raw?path="+url.QueryEscape(path), nil)
+	if err != nil {
+		return ""
+	}
+	if s.cfg.WorkspaceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.cfg.WorkspaceToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ""
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return string(b)
 }
 
 // Local helpers - server.go has its own writeJSON/writeErr but they're

@@ -232,3 +232,53 @@ func (s *Server) handleWorkspaceDownload(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
+
+// handleWorkspaceDocPages proxies a page-rasterization request to the workspace
+// bridge's /docpages, which renders a document's pages to individual PNGs so
+// Studio can show ONE slide at a time (a proper page-by-page viewer) instead of
+// the browser's native continuous-scroll PDF iframe. Studio POSTs the preview
+// path; the response is { count, pages: [workspace paths] }, and each page image
+// is then fetched through /api/workspace/download like the PDF/thumbnail.
+//
+//	POST /api/workspace/docpages { "path": "<cloud workspace path>" }
+func (s *Server) handleWorkspaceDocPages(w http.ResponseWriter, r *http.Request) {
+	base := strings.TrimRight(s.cfg.WorkspaceRawBase, "/")
+	if base == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "workspace not configured"})
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path required"})
+		return
+	}
+	// docpages can rasterize many pages (or convert an office file first), so
+	// allow a generous timeout — first render of a big deck is the slow case.
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	body, _ := json.Marshal(map[string]string{"path": strings.TrimSpace(req.Path)})
+	preq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/docpages", strings.NewReader(string(body)))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	preq.Header.Set("Content-Type", "application/json")
+	if s.cfg.WorkspaceToken != "" {
+		preq.Header.Set("Authorization", "Bearer "+s.cfg.WorkspaceToken)
+	}
+	resp, err := http.DefaultClient.Do(preq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "workspace fetch failed: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
+}

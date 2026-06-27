@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/chat/Markdown";
-import { fetchWorkspaceBlob, downloadWorkspaceFile } from "@/lib/api";
+import { fetchWorkspaceBlob, downloadWorkspaceFile, fetchDocPages } from "@/lib/api";
+import { PdfDeckViewer } from "@/components/canvas/PdfDeckViewer";
 import type { DocMeta } from "@/lib/canvas/store";
 
 /**
@@ -46,15 +47,40 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
   // PDF); everything else previews as PDF.
   const previewPath = doc.htmlPath ? doc.htmlPath : doc.format === "pdf" ? doc.path : doc.pdfPath;
   const previewType = doc.htmlPath ? "text/html" : "application/pdf";
+  const isPdfPreview = !!previewPath && previewType === "application/pdf";
 
   const [downloading, setDownloading] = useState(false);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(!!previewPath);
 
-  // Load the preview (PDF or HTML) as a blob object URL — an iframe can't carry
-  // a bearer. Force the content type so the iframe RENDERS it (not downloads).
+  // PDF previews render page-by-page (one slide at a time) via the workspace's
+  // rasterized page images; pages=null while loading, [] when unavailable (then
+  // we fall back to the native iframe so the preview never regresses).
+  const [pages, setPages] = useState<string[] | null>(isPdfPreview ? null : []);
   useEffect(() => {
-    if (!previewPath) return;
+    if (!isPdfPreview || !previewPath) {
+      setPages([]);
+      return;
+    }
+    let cancelled = false;
+    setPages(null);
+    fetchDocPages(previewPath).then((p) => {
+      if (!cancelled) setPages(p);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPdfPreview, previewPath]);
+
+  // The blob/iframe path is only needed for HTML previews and as the PDF
+  // fallback (when page rasterization isn't available). Don't fetch it while
+  // the deck viewer is in play.
+  const needIframe = !!previewPath && (previewType === "text/html" || (isPdfPreview && pages?.length === 0));
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+
+  // Load the iframe preview (HTML, or the PDF fallback) as a blob object URL —
+  // an iframe can't carry a bearer. Force the content type so it RENDERS.
+  useEffect(() => {
+    if (!needIframe || !previewPath) return;
     let revoked = false;
     let url: string | null = null;
     setPdfLoading(true);
@@ -70,7 +96,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
       revoked = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [previewPath, previewType]);
+  }, [needIframe, previewPath, previewType]);
 
   async function handleDownload() {
     setDownloading(true);
@@ -111,6 +137,12 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
           <div className="scroll-touch h-full overflow-y-auto px-5 py-4 sm:px-8">
             <Markdown text={doc.markdown ?? ""} className="max-w-3xl" />
           </div>
+        ) : isPdfPreview && pages === null ? (
+          <div className="flex h-full items-center justify-center text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : isPdfPreview && pages && pages.length > 0 ? (
+          <PdfDeckViewer pages={pages} filename={doc.filename} />
         ) : previewPath ? (
           pdfLoading ? (
             <div className="flex h-full items-center justify-center text-muted-foreground">
