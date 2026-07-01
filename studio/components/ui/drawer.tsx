@@ -15,9 +15,27 @@ import { cn } from "@/lib/utils";
 
 const Drawer = ({
   shouldScaleBackground = true,
+  repositionInputs = false,
   ...props
 }: React.ComponentProps<typeof VaulPrimitive.Root>) => (
-  <VaulPrimitive.Root shouldScaleBackground={shouldScaleBackground} {...props} />
+  // repositionInputs=false is NON-NEGOTIABLE for this app. vaul's default
+  // (true) installs a visualViewport resize handler that imperatively rewrites
+  // drawer.style.height/bottom on every keyboard move, computing keyboard
+  // height as `window.innerHeight - visualViewport.height`. But our layout sets
+  // `interactiveWidget: "resizes-content"` (layout.tsx), so window.innerHeight
+  // ALSO shrinks with the keyboard — vaul's math goes to ~0 and its inline
+  // mutations fight the browser's viewport resize. The result was a drawer that
+  // opened at a random height every time, jumped while dragging, and got stuck
+  // showing only its header. With repositioning off, the browser's
+  // resizes-content shrinks the layout viewport so a `fixed bottom-0` drawer
+  // naturally sits above the keyboard and `max-h-[92dvh]` reflects the space
+  // above it — our CSS governs the height deterministically. Callers may still
+  // override per-drawer, but no drawer in this app should re-enable it.
+  <VaulPrimitive.Root
+    shouldScaleBackground={shouldScaleBackground}
+    repositionInputs={repositionInputs}
+    {...props}
+  />
 );
 Drawer.displayName = "Drawer";
 
