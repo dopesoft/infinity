@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { updateTodo } from "@/lib/api";
+import { useIsDesktop } from "@/lib/use-media-query";
 import type { Todo } from "@/lib/dashboard/types";
 
 const PRIORITIES: { value: Todo["priority"]; label: string; tone: string }[] = [
@@ -48,6 +49,7 @@ export function EditTodoModal({
   const [status, setStatus] = useState<"open" | "done" | "dropped">("open");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isDesktop = useIsDesktop();
 
   useEffect(() => {
     if (!open || !todo) return;
@@ -120,7 +122,7 @@ export function EditTodoModal({
           <Label htmlFor="edit-todo-title">Title</Label>
           <Input
             id="edit-todo-title"
-            autoFocus
+            autoFocus={isDesktop}
             inputMode="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}

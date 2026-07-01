@@ -13,7 +13,7 @@ import {
   DrawerDescription,
   DrawerTitle,
 } from "@/components/ui/drawer";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
@@ -111,6 +111,7 @@ export function ResponsiveModal({
   children,
 }: ResponsiveModalProps) {
   const isDesktop = useIsDesktop();
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   // LOCK the Dialog-vs-Drawer choice for the duration the modal is open.
   // Otherwise, when the window crosses the lg breakpoint mid-decision
   // (boss widens / narrows the chat column past 1024px), useIsDesktop
@@ -128,6 +129,25 @@ export function ResponsiveModal({
     }
   }, [open, isDesktop, lockedDesktop]);
   const effectiveIsDesktop = lockedDesktop ?? isDesktop;
+
+  useEffect(() => {
+    if (!open || effectiveIsDesktop) return;
+
+    const resetBodyScroll = () => {
+      if (bodyRef.current) {
+        bodyRef.current.scrollTop = 0;
+      }
+    };
+
+    resetBodyScroll();
+    const frame = window.requestAnimationFrame(resetBodyScroll);
+    const settleTimer = window.setTimeout(resetBodyScroll, 180);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+    };
+  }, [open, effectiveIsDesktop]);
 
   // Should the shell GROW to fill its wrapper, or size to its own content?
   // - "tall" desktop dialogs pin a DEFINITE height (`h-[85dvh]`) — the shell
@@ -154,13 +174,14 @@ export function ResponsiveModal({
     >
       {header ?? <DefaultHeader title={title} description={description} />}
       <div
+        ref={bodyRef}
         className={cn(
           // Body is always the scroll container. min-w-0 + overflow-x-hidden
           // prevent long unbroken content (URLs, JSON, diff) from pushing
           // the modal frame past the viewport. pt-4 gives content breathing
           // room under the header — without it every modal's first row hugs
           // the header border.
-          "min-h-0 min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto scroll-touch",
+          "min-h-0 min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto scroll-touch [overflow-anchor:none]",
           "px-4 pb-4 pt-4 sm:px-5",
           bodyClassName,
         )}

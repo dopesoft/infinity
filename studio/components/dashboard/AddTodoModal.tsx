@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { createTodo } from "@/lib/api";
+import { useIsDesktop } from "@/lib/use-media-query";
 import type { Todo } from "@/lib/dashboard/types";
 
 /* AddTodoModal - the boss-facing "Add todo" form.
@@ -63,6 +64,7 @@ export function AddTodoModal({
   const [due, setDue] = useState(""); // YYYY-MM-DD or ""
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isDesktop = useIsDesktop();
 
   // Reset the form each time the modal opens so a previous draft never
   // bleeds into a fresh todo.
@@ -142,7 +144,7 @@ export function AddTodoModal({
           <Label htmlFor="todo-title">Title</Label>
           <Input
             id="todo-title"
-            autoFocus
+            autoFocus={isDesktop}
             inputMode="text"
             placeholder="Call insurance about the claim"
             value={title}
