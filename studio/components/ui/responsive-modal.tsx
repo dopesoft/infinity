@@ -133,7 +133,15 @@ export function ResponsiveModal({
   // header / footer behave identically across breakpoints - the ONLY
   // delta is which primitive wraps the shell.
   const shell = (
-    <div className="flex h-full min-h-0 min-w-0 max-h-full max-w-full flex-col">
+    // `flex-1 min-h-0` — NOT `h-full`. The Dialog/Drawer wrappers are height:auto
+    // capped by max-h (90/92dvh), so a percentage height (`h-full`) resolves
+    // against an indefinite parent and collapses to auto — which breaks the
+    // flex chain the moment the viewport shrinks (iOS keyboard opens on an
+    // autoFocus field): the body can't claim a bounded track, the form
+    // collapses, and the footer detaches into empty space. `flex-1 min-h-0`
+    // gives the shell a definite share of the (capped) drawer height so the
+    // body below can be the scroller and the footer stays pinned.
+    <div className="flex flex-1 min-h-0 min-w-0 max-h-full max-w-full flex-col">
       {header ?? <DefaultHeader title={title} description={description} />}
       <div
         className={cn(
