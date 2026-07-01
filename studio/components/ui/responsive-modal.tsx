@@ -129,19 +129,29 @@ export function ResponsiveModal({
   }, [open, isDesktop, lockedDesktop]);
   const effectiveIsDesktop = lockedDesktop ?? isDesktop;
 
+  // Should the shell GROW to fill its wrapper, or size to its own content?
+  // - "tall" desktop dialogs pin a DEFINITE height (`h-[85dvh]`) — the shell
+  //   must fill it (`flex-1`) or its footer floats in the middle.
+  // - Everything else (mobile Drawer, "auto" dialog) is height:auto capped by
+  //   max-h (92/90dvh). There the shell must size to CONTENT so a short form
+  //   makes a short sheet — never a 92dvh balloon with dead space above the
+  //   keyboard. It still SCROLLS when content exceeds the cap, because the
+  //   body is `flex-1 min-h-0 overflow-y-auto` inside a shrinkable shell.
+  // Never `h-full`: a percentage height against an indefinite parent collapses
+  // to auto and breaks the flex chain when the iOS keyboard shrinks the
+  // viewport (the original blank-drawer bug).
+  const fillHeight = effectiveIsDesktop && desktopHeight === "tall";
+
   // Shared inner shell. Same JSX tree for Dialog and Drawer so the body /
   // header / footer behave identically across breakpoints - the ONLY
   // delta is which primitive wraps the shell.
   const shell = (
-    // `flex-1 min-h-0` — NOT `h-full`. The Dialog/Drawer wrappers are height:auto
-    // capped by max-h (90/92dvh), so a percentage height (`h-full`) resolves
-    // against an indefinite parent and collapses to auto — which breaks the
-    // flex chain the moment the viewport shrinks (iOS keyboard opens on an
-    // autoFocus field): the body can't claim a bounded track, the form
-    // collapses, and the footer detaches into empty space. `flex-1 min-h-0`
-    // gives the shell a definite share of the (capped) drawer height so the
-    // body below can be the scroller and the footer stays pinned.
-    <div className="flex flex-1 min-h-0 min-w-0 max-h-full max-w-full flex-col">
+    <div
+      className={cn(
+        "flex min-h-0 min-w-0 max-h-full max-w-full flex-col",
+        fillHeight && "flex-1",
+      )}
+    >
       {header ?? <DefaultHeader title={title} description={description} />}
       <div
         className={cn(
