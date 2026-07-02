@@ -40,3 +40,28 @@ func shouldVerify(text string) bool {
 	}
 	return true
 }
+
+// mergeVerifyText reconciles the pre-verify deliverable with the post-verify
+// reply so a terse caveat can't erase the actual answer. The verify directive
+// instructs the model to be terse and NOT restate the answer, so the post-verify
+// reply is usually a short caveat ("the weak spot is the citation layer…") that,
+// stamped alone into the turn record, is all the boss sees on reload. Rule:
+//   - no verify ran (original empty)      → keep the post-verify reply as-is
+//   - post-verify is a SUBSTANTIAL rewrite → trust it (it replaced the answer)
+//   - post-verify is a short caveat        → show the deliverable + the caveat
+// "Substantial" = at least 60% the length of the original; below that it's a
+// note, not a replacement. Pure deterministic text merge (Rule #1b).
+func mergeVerifyText(preVerify, postVerify string) string {
+	orig := strings.TrimSpace(preVerify)
+	post := strings.TrimSpace(postVerify)
+	if orig == "" {
+		return postVerify
+	}
+	if post == "" {
+		return preVerify
+	}
+	if len([]rune(post)) >= len([]rune(orig))*3/5 {
+		return postVerify // genuine rewrite
+	}
+	return orig + "\n\n" + post // deliverable + trailing caveat
+}

@@ -10,7 +10,6 @@ import { DocumentTab } from "@/components/canvas/DocumentTab";
 import { useCanvasStore, docMetaFromArtifact, takePendingDoc } from "@/lib/canvas/store";
 import { useSessionArtifacts } from "@/lib/canvas/useSessionArtifacts";
 import { useRuns } from "@/lib/runs/useRuns";
-import { useWebSocket } from "@/lib/ws/provider";
 import { cn } from "@/lib/utils";
 import type { DocArtifact } from "@/lib/api";
 import type { useChat } from "@/hooks/useChat";
@@ -58,7 +57,6 @@ function writeOpenDocSet(sid: string, openIds: string[], activeId?: string) {
  */
 export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
-  const ws = useWebSocket();
   const stripRef = useRef<HTMLDivElement>(null);
 
   // Session repository: every generated document (server-tracked) + every
@@ -82,26 +80,10 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   );
   const galleryCount = docArtifacts.length + mediaCount;
 
-  // A generated document opens in a NEW tab (rendered report / download).
-  // Cloud-first: markdown rides the event; binaries fetch via the
-  // cloud-direct proxy. Filter to this chat session.
-  useEffect(() => {
-    return ws.subscribe((ev) => {
-      if (ev.type !== "document_created") return;
-      if (chat.sessionId && ev.session_id && ev.session_id !== chat.sessionId) return;
-      const d = ev.document_created;
-      store.openDocument({
-        id: d.path,
-        filename: d.filename,
-        format: d.format,
-        path: d.path,
-        bytes: d.bytes,
-        markdown: d.markdown,
-        pdfPath: d.pdf_path,
-        htmlPath: d.html_path,
-      });
-    });
-  }, [ws, store, chat.sessionId]);
+  // NOTE: document_created is handled at the ALWAYS-MOUNTED Workspace seam
+  // (components/workspace/Workspace.tsx), not here — this pane is unmounted on
+  // mobile Chat mode, so subscribing here dropped the tab + PDF on the phone.
+  // openDocument dedupes by id, so there is exactly one receiver now.
 
   // Pending-doc handoff: a document opened from outside the canvas (the
   // dashboard's Saved card) stashes its DocMeta and routes here. Drain it once

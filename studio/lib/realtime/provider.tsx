@@ -62,6 +62,10 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
     const supabase = getSupabaseBrowserClient();
 
+    // Build (or rebuild) the schema-wide realtime channel. Extracted into a
+    // closure so the wake handler below can re-subscribe after a backgrounded
+    // browser (iOS Safari especially) kills the socket.
+    //
     // Authenticate the realtime SOCKET with the user's JWT before subscribing.
     // Every mem_* table's realtime read policy is `TO authenticated` (migration
     // 083), so an anon socket — which is what @supabase/ssr's cookie-recovered
@@ -69,47 +73,88 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     // filtered out by RLS. Without this, nothing updates live without a manual
     // refresh (session name, background dock, dashboard, runs, …). The separate
     // effect below keeps the token fresh across refreshes.
-    if (tokenRef.current) supabase.realtime.setAuth(tokenRef.current);
-
+    //
     // ONE schema-wide subscription instead of a hand-maintained per-table
-    // list. The old approach required a table to appear in BOTH a hardcoded
-    // TABLES array here AND in each consumer's useRealtime() list before a
-    // change would push — so any new table (or any table someone forgot to
-    // add, e.g. mem_calendar_events) silently never went live, and the boss
-    // had to refresh. Subscribing to the whole `public` schema means the
-    // channel hears EVERY published table automatically, forever — add a
-    // table to the realtime publication and it's covered with zero frontend
-    // edits. Per-table RLS (`TO authenticated`, migration 083) still scopes
-    // what the socket receives, and consumers still filter by their own table
-    // list (or "*" to react to anything — see useRealtime).
-    const channel = supabase
-      .channel("infinity-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public" },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (payload: RealtimePostgresChangesPayload<any>) => {
-          // payload.table is the changed table. Dispatch to every listener
-          // that targets it — or that subscribed with "*" (react to anything).
-          const tbl = (payload as { table?: string }).table ?? "";
-          const evt = payload.eventType as Event;
-          for (const l of listenersRef.current) {
-            if (l.table !== "*" && l.table !== tbl) continue;
-            if (!l.events.includes("*") && !l.events.includes(evt)) continue;
-            try {
-              l.handler(payload);
-            } catch (err) {
-              console.error("realtime handler error", err);
+    // list. Subscribing to the whole `public` schema means the channel hears
+    // EVERY published table automatically — add a table to the realtime
+    // publication and it's covered with zero frontend edits. Per-table RLS
+    // (`TO authenticated`, migration 083) still scopes what the socket
+    // receives, and consumers still filter by their own table list.
+    const buildChannel = () => {
+      if (tokenRef.current) supabase.realtime.setAuth(tokenRef.current);
+      const channel = supabase
+        .channel("infinity-realtime")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public" },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (payload: RealtimePostgresChangesPayload<any>) => {
+            // payload.table is the changed table. Dispatch to every listener
+            // that targets it — or that subscribed with "*" (react to anything).
+            const tbl = (payload as { table?: string }).table ?? "";
+            const evt = payload.eventType as Event;
+            for (const l of listenersRef.current) {
+              if (l.table !== "*" && l.table !== tbl) continue;
+              if (!l.events.includes("*") && !l.events.includes(evt)) continue;
+              try {
+                l.handler(payload);
+              } catch (err) {
+                console.error("realtime handler error", err);
+              }
             }
-          }
-        },
-      );
+          },
+        );
+      channel.subscribe();
+      channelRef.current = channel;
+    };
 
-    channel.subscribe();
-    channelRef.current = channel;
+    buildChannel();
+
+    // REALTIME ACROSS FOCUS / BACKGROUND — the boss's standing rule
+    // ("REALTIME + PERSISTENCE ACROSS FOCUS AND EVERYTHING ELSE"). iOS Safari
+    // (and any browser that suspends a backgrounded tab) KILLS this Supabase
+    // websocket while the app is out of focus, and nothing here re-subscribed
+    // or re-fetched on return. So the Agent Work plan, run spinners, dashboard,
+    // and nav badges all stayed frozen on their pre-background snapshot until a
+    // stray event or a manual pull-to-refresh — the boss saw the plan/tool
+    // stream "jump" to a late state on refocus instead of staying live. The
+    // chat stream already recovers on its own (WS reconnect + useChat
+    // foreground reconcile); this is the OTHER transport. This wake handler is
+    // the single chokepoint that fixes it for EVERY realtime consumer at once
+    // (they all flow through this provider): on returning to the foreground we
+    // (a) re-auth + rebuild the socket if it dropped, and (b) re-dispatch the
+    // existing pull-to-refresh fan-out — the exact event every useRealtime()
+    // consumer already listens for — so each one re-reads server truth
+    // instantly, with zero per-consumer edits.
+    let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+    const onWake = () => {
+      if (document.visibilityState !== "visible") return;
+      // Debounce: pageshow + focus + visibilitychange can all fire on one
+      // foreground; coalesce into a single resync.
+      if (wakeTimer) return;
+      wakeTimer = setTimeout(() => {
+        wakeTimer = null;
+        if (tokenRef.current) supabase.realtime.setAuth(tokenRef.current);
+        const ch = channelRef.current;
+        // Only rebuild the socket when it actually dropped, to avoid churn.
+        if (!ch || ch.state !== "joined") {
+          if (ch) supabase.removeChannel(ch);
+          buildChannel();
+        }
+        // Re-sync every consumer through the fan-out they already subscribe to.
+        window.dispatchEvent(new Event("infinity:pull-to-refresh"));
+      }, 250);
+    };
+    window.addEventListener("pageshow", onWake);
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
 
     return () => {
-      supabase.removeChannel(channel);
+      window.removeEventListener("pageshow", onWake);
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+      if (wakeTimer) clearTimeout(wakeTimer);
+      if (channelRef.current) supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     };
   }, [userId]);

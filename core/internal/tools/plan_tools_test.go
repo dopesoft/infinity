@@ -129,21 +129,42 @@ func (s *stubPlanGetter) GetAnyActive(_ context.Context) (*plan.Plan, error) {
 	return s.anyActive, nil
 }
 
-// TestPlanGet_FallsBackToGlobalWhenSessionMisses is the regression test for the
-// 2026-06-14 curiosity item. When plan_get is called in a new session (after
-// context loss), GetActiveBySession returns nil because the plan lives under the
-// old session ID. plan_get must fall back to GetAnyActive and return that plan,
-// not null — so the agent can resume a multi-step task without a spurious error.
-func TestPlanGet_FallsBackToGlobalWhenSessionMisses(t *testing.T) {
+// TestPlanGet_FallsBackToGlobalWhenAutonomous: for AUTONOMOUS turns (cron,
+// heartbeat, resumed background runs) that mint a fresh session UUID per run,
+// plan_get must still fall back to GetAnyActive so the run can reach the plan it
+// is executing. This preserves the 2026-06-14 resume behavior — but ONLY when
+// autonomous.
+func TestPlanGet_FallsBackToGlobalWhenAutonomous(t *testing.T) {
 	activePlan := &plan.Plan{ID: "plan-abc", Status: plan.PlanActive, Steps: []plan.Step{}}
 	stub := &stubPlanGetter{bySession: nil, anyActive: activePlan}
+	tool := &planGet{store: stub}
+	out, err := tool.Execute(WithAutonomous(context.Background()), map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "plan-abc") {
+		t.Fatalf("autonomous plan_get should return the cross-session active plan, got: %s", out)
+	}
+}
+
+// TestPlanGet_NoCrossSessionBleedWhenInteractive is the 2026-07-02 regression
+// guard. An INTERACTIVE chat turn (not marked autonomous) whose own session has
+// no plan MUST NOT inherit another session's active plan — that bleed made a
+// fresh "make me a report" session grab a stranger's plan c03495f5 and mutate
+// it. plan_get returns null so the model correctly plan_creates its own.
+func TestPlanGet_NoCrossSessionBleedWhenInteractive(t *testing.T) {
+	otherPlan := &plan.Plan{ID: "plan-stranger", Status: plan.PlanActive, Steps: []plan.Step{}}
+	stub := &stubPlanGetter{bySession: nil, anyActive: otherPlan}
 	tool := &planGet{store: stub}
 	out, err := tool.Execute(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "plan-abc") {
-		t.Fatalf("plan_get should return the cross-session active plan, got: %s", out)
+	if strings.Contains(out, "plan-stranger") {
+		t.Fatalf("interactive plan_get must NOT bleed a stranger's plan, got: %s", out)
+	}
+	if !strings.Contains(out, "null") {
+		t.Fatalf("interactive plan_get with no own plan should return null, got: %s", out)
 	}
 }
 

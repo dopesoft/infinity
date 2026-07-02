@@ -69,9 +69,13 @@ func resolvePositionalStep(ctx context.Context, store *plan.Store, n int) (strin
 	if err != nil {
 		return "", err
 	}
-	if p == nil {
-		// No plan for this session — fall back to the most recent active plan
-		// globally so cross-session positional refs keep working.
+	if p == nil && IsAutonomous(ctx) {
+		// AUTONOMOUS ONLY (cron/heartbeat/background mint a fresh session UUID per
+		// run and legitimately need to reach the plan they're executing). For
+		// INTERACTIVE chat this fallback is the bug: a brand-new chat session with
+		// no plan of its own would grab ANOTHER session's active plan and start
+		// mutating it (the 2026-07-02 bleed onto c03495f5). Interactive → no
+		// fallback; a missing plan correctly forces plan_create.
 		p, err = store.GetAnyActive(ctx)
 		if err != nil {
 			return "", err
@@ -240,7 +244,7 @@ func (t *planUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 		// valid step IDs and can retry with the right ref immediately — no
 		// separate plan_get call needed (Rule #1b: mechanic, not prose).
 		p, _ := t.store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
-		if p == nil {
+		if p == nil && IsAutonomous(ctx) {
 			p, _ = t.store.GetAnyActive(ctx)
 		}
 		if p != nil {
@@ -376,11 +380,13 @@ func (t *planGet) Execute(ctx context.Context, in map[string]any) (string, error
 	if err != nil {
 		return "", err
 	}
-	// Cross-session fallback: after context loss the caller may have a new
-	// session ID that doesn't match the plan's original session. Mirror the
-	// same recovery resolvePositionalStep already uses so plan_get returns the
-	// active plan (not null) when the session ID mismatches.
-	if p == nil {
+	// Cross-session fallback — AUTONOMOUS ONLY. Cron/heartbeat mint a fresh
+	// session UUID per run and need to reach the plan they're executing. But for
+	// INTERACTIVE chat this is the bleed bug: a fresh chat session with no plan
+	// grabbed a STRANGER's active plan (2026-07-02, session 6b4eef2b pulled
+	// c03495f5 from c33de995 and wasted a minute mutating it). Interactive → no
+	// fallback: return null so the model correctly plan_creates its own.
+	if p == nil && IsAutonomous(ctx) {
 		p, err = t.store.GetAnyActive(ctx)
 		if err != nil {
 			return "", err

@@ -966,6 +966,11 @@ func serveCmd() *cobra.Command {
 					//                                     toolkits - pattern-based
 					//                                     write-verb detection)
 					cfg.Gate = agent.NewGateChain(
+						// FIRST: redirect claude_code file/shell calls that target the
+						// cloud-only /workspace path — claude_code runs on the Mac,
+						// which has no /workspace, so those always fail. Deterministic,
+						// no Trust store needed; wins before the gates below.
+						agent.CloudPathRedirectGate{},
 						proactive.NewClaudeCodeGate(earlyTrust),
 						proactive.NewGitHubGate(earlyTrust),
 						proactive.NewComposioGate(earlyTrust),
@@ -1045,6 +1050,10 @@ func serveCmd() *cobra.Command {
 					// it drafted instead of stopping cold after laying it out. The
 					// *plan.Store satisfies agent.PlanContinuationChecker directly.
 					loop.SetPlanChecker(plan.NewStore(pool))
+					// Settle-on-turn-end: closes the foreground plan the instant a
+					// turn ends so an in_progress step is 'skipped'/'done', never
+					// left to be false-failed by the plan-step reaper.
+					loop.SetPlanSettler(plan.NewStore(pool))
 				}
 				// Tool visibility - hide claude_code__* on Cloud-routed
 				// sessions so the model can't accidentally edit the Mac

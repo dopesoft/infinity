@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,16 +57,15 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 			 ORDER BY updated_at DESC LIMIT 1
 		`, sessionID).Scan(&planID, &title, &goal, &status)
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Cross-session fallback: cron and resumed sessions get a fresh session
-		// ID each run. Without this fallback the agent never sees the plan it
-		// should continue, calls plan_update with a positional step ref ("5"),
-		// and gets "no active plan to resolve step 5 against" because
-		// resolvePositionalStep's own GetAnyActive call is the ONLY thing that
-		// can match — and that only works if the plan is still active/paused.
-		// Showing the plan here keeps the agent informed so it uses the right
-		// plan (or calls plan_create when it genuinely wants a new one).
-		// Mirrors the GetAnyActive fallback in resolvePositionalStep exactly.
+	if errors.Is(err, pgx.ErrNoRows) && turnctx.IsAutonomous(ctx) {
+		// Cross-session fallback — AUTONOMOUS ONLY. Cron and resumed autonomous
+		// runs get a fresh session ID each run, so without this fallback the
+		// agent never sees the plan it should continue. But for an INTERACTIVE
+		// chat session with no plan of its own, showing a STRANGER's plan is the
+		// bleed bug (2026-07-02: session 6b4eef2b was shown c33de995's plan
+		// c03495f5 and started mutating it). Interactive → no fallback; the empty
+		// result correctly leads the model to plan_create its own. Mirrors the
+		// gate on resolvePositionalStep / plan_get in tools/plan_tools.go.
 		err = p.pool.QueryRow(ctx, `
 			SELECT id::text, title, goal, status
 			  FROM mem_plans

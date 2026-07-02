@@ -325,11 +325,13 @@ type Loop struct {
 	turnsMu sync.RWMutex
 	turns   TurnRecorder
 
-	// planMu guards planChecker — the active-plan probe behind the
-	// plan-continuation backstop (keep executing a drafted plan instead of
-	// stopping cold). Hot-swappable via SetPlanChecker; nil-safe (feature off).
+	// planMu guards planChecker + planSettler — the plan-continuation backstop
+	// (keep executing a drafted plan instead of stopping cold) and the
+	// settle-on-turn-end mechanic (close the foreground plan the instant the turn
+	// ends so the reaper never false-fails a step). Hot-swappable; nil-safe.
 	planMu      sync.RWMutex
 	planChecker PlanContinuationChecker
+	planSettler PlanSettler
 
 	// reauthMu guards reauth. When the active brain hits a credential failure
 	// the loop parks the turn via this hook (instead of dumping a raw 401) and
@@ -1184,6 +1186,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// an earlier turn never hijacks an unrelated reply. See plan_continue.go.
 	planTouchedThisTurn := false
 	planContinueCount := 0
+	// Snapshot of the model's substantive reply taken RIGHT BEFORE an
+	// adversarial verify pass runs. The verify directive tells the model to be
+	// terse and NOT restate the answer, so the post-verify reply is often just a
+	// short caveat — which would otherwise REPLACE the whole deliverable in the
+	// boss's chat + on reload (the "it only showed a one-line hedge, never the
+	// report" complaint). We keep this to merge the two at turn-end.
+	var preVerifyText string
 	// Per-turn delegate-spawn counter. A runaway model can emit dozens of
 	// `delegate` tool calls in a single message (each spawns a sub-agent); this
 	// hard-caps spawns per turn so a storm can never happen again.
@@ -1467,6 +1476,9 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					ToolCallCount:    toolCallCount,
 					Summary:          summarizeReply(partial, toolCallCount),
 				})
+				// Settle the foreground plan so a step left in_progress at the
+				// budget/interrupt boundary is closed cleanly, not reaper-failed.
+				l.settlePlanOnTurnEnd(s.ID)
 				// A turn that did real work then hit its budget still deserves a
 				// session title — the namer otherwise only runs on the clean-end
 				// path, so a long-but-timed-out session stayed nameless (part of
@@ -1570,6 +1582,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				shouldVerify(resp.Text) {
 				if directive := l.verifyDirectiveText(); directive != "" {
 					verifyCount++
+					// Remember the deliverable so a terse post-verify caveat can't
+					// erase it (issue: the boss got "the weak spot is the citation
+					// layer…" INSTEAD of his report summary).
+					preVerifyText = resp.Text
 					s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 					s.Append(llm.Message{Role: llm.RoleUser, Content: directive})
 					emit(out, RunEvent{Kind: EventEffort, SessionID: s.ID, EffortLevel: string(perTurnEffort), EffortSource: "verify_pass"})
@@ -1594,9 +1610,18 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				})
 			}
 
-			s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+			// VERIFY-PASS MERGE (Rule #1b mechanic): if an adversarial verify
+			// pass ran, the model was told to be terse and NOT restate the
+			// answer, so resp.Text is often a bare caveat. Persisting that alone
+			// makes the chat RELOAD (rebuilt from TaskCompleted) show only the
+			// hedge — the boss's "it never told me it was done, just a one-liner"
+			// complaint. Keep the deliverable: a substantial post-verify reply is
+			// a genuine rewrite (use it); a much-shorter one is a caveat (show the
+			// original answer with the caveat appended).
+			finalText := mergeVerifyText(preVerifyText, resp.Text)
+			s.Append(llm.Message{Role: llm.RoleAssistant, Content: finalText})
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, Usage: &resp.Usage, StopReason: resp.StopReason})
-			l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, resp.Text, map[string]any{
+			l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, finalText, map[string]any{
 				"input_tokens":  resp.Usage.PromptTokens(),
 				"output_tokens": resp.Usage.Output,
 			})
@@ -1604,11 +1629,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// work is a confused decode; empty reply with tool work is a
 			// "did stuff but didn't summarise" path; non-empty is ok.
 			status := "ok"
-			if strings.TrimSpace(resp.Text) == "" {
+			if strings.TrimSpace(finalText) == "" {
 				status = "empty"
 			}
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{
-				AssistantText:    resp.Text,
+				AssistantText:    finalText,
 				StopReason:       resp.StopReason,
 				Status:           status,
 				InputTokens:      resp.Usage.PromptTokens(),
@@ -1616,8 +1641,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				CacheReadTokens:  resp.Usage.CacheRead,
 				CacheWriteTokens: resp.Usage.CacheWrite,
 				ToolCallCount:    toolCallCount,
-				Summary:          summarizeReply(resp.Text, toolCallCount),
+				Summary:          summarizeReply(finalText, toolCallCount),
 			})
+			// Settle the foreground plan the instant the turn ends, so an
+			// in_progress step is closed cleanly ('skipped'/'done') instead of
+			// dead-spinning until the reaper FALSELY fails it. FinalizeSession is
+			// idempotent + detached-context. See plan_continue.go.
+			l.settlePlanOnTurnEnd(s.ID)
 			// Auto-name the session after the first complete exchange.
 			// MaybeName is cheap when the session is already named (one
 			// indexed lookup); it drafts a title async only when we need a
@@ -1627,7 +1657,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// opening message, so those sessions get a title too instead of
 			// staying nameless in the sessions drawer.
 			if l.namer != nil {
-				l.namer.MaybeName(s.ID, turnText, resp.Text)
+				l.namer.MaybeName(s.ID, turnText, finalText)
 			}
 			// Auto-compaction: if this turn's reported input crossed the
 			// threshold, run compaction in the background so the *next*
@@ -1835,6 +1865,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		Error:         err.Error(),
 		Summary:       summarizeReply("", toolCallCount),
 	})
+	// Settle the plan + title the session even on a segment-capped turn — a
+	// long, tool-heavy turn that hits the cap did real work and should not be
+	// left with a spinning step or a nameless session. No assistant text is in
+	// scope here (partialText is per-iteration); the namer drafts from turnText.
+	l.settlePlanOnTurnEnd(s.ID)
+	if l.namer != nil {
+		l.namer.MaybeName(s.ID, turnText, "")
+	}
 	return err
 }
 

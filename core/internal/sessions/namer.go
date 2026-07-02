@@ -138,7 +138,7 @@ func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
 		}
 
 		if _, err := n.pool.Exec(ctx,
-			`UPDATE mem_sessions SET name = $2 WHERE id = $1::uuid AND name IS NULL`,
+			`UPDATE mem_sessions SET name = $2, auto_named = TRUE WHERE id = $1::uuid AND name IS NULL`,
 			sessionID, name); err != nil {
 			log.Printf("sessions.namer: update err session=%s: %v", sessionID, err)
 			return
@@ -157,14 +157,15 @@ func (n *Namer) Rename(ctx context.Context, sessionID, name string) error {
 	if name == "" {
 		// Empty = clear, so auto-name will fire again on next exchange.
 		_, err := n.pool.Exec(ctx,
-			`UPDATE mem_sessions SET name = NULL WHERE id = $1::uuid`, sessionID)
+			`UPDATE mem_sessions SET name = NULL, auto_named = FALSE WHERE id = $1::uuid`, sessionID)
 		return err
 	}
 	if len(name) > 80 {
 		name = name[:80]
 	}
+	// Boss-chosen title: mark auto_named FALSE so nothing overwrites it.
 	_, err := n.pool.Exec(ctx,
-		`UPDATE mem_sessions SET name = $2 WHERE id = $1::uuid`, sessionID, name)
+		`UPDATE mem_sessions SET name = $2, auto_named = FALSE WHERE id = $1::uuid`, sessionID, name)
 	return err
 }
 

@@ -98,14 +98,21 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
     };
   }, [needIframe, previewPath, previewType]);
 
-  async function handleDownload() {
+  async function handleDownload(path: string, filename: string) {
     setDownloading(true);
     try {
-      await downloadWorkspaceFile(doc.path, doc.filename);
+      await downloadWorkspaceFile(path, filename);
     } finally {
       setDownloading(false);
     }
   }
+
+  // A rendered sibling PDF (docx/pptx/xlsx → also_pdf) is the portable,
+  // share-anywhere version — the boss wants to grab THAT, not just the source
+  // .docx. Offer it as its own button whenever a pdfPath exists and the file
+  // isn't already a PDF.
+  const pdfDownloadPath = doc.format !== "pdf" ? doc.pdfPath : null;
+  const pdfDownloadName = doc.filename.replace(/\.[^./]+$/, "") + ".pdf";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -118,16 +125,29 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
         {doc.bytes ? (
           <span className="shrink-0 text-[11px] text-muted-foreground">{prettyBytes(doc.bytes)}</span>
         ) : null}
+        {pdfDownloadPath ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+            onClick={() => void handleDownload(pdfDownloadPath, pdfDownloadName)}
+            disabled={downloading}
+            title={`Download ${pdfDownloadName}`}
+          >
+            {downloading ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+            PDF
+          </Button>
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
           className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-          onClick={() => void handleDownload()}
+          onClick={() => void handleDownload(doc.path, doc.filename)}
           disabled={downloading}
           title={`Download ${doc.filename}`}
         >
           {downloading ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-          Download
+          {pdfDownloadPath ? doc.format.toUpperCase() : "Download"}
         </Button>
       </div>
 
@@ -151,10 +171,10 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
           ) : pdfUrl ? (
             <iframe src={pdfUrl} title={doc.filename} className="block size-full border-0 bg-white" />
           ) : (
-            <DownloadCard doc={doc} Icon={Icon} onDownload={handleDownload} downloading={downloading} />
+            <DownloadCard doc={doc} Icon={Icon} onDownload={() => void handleDownload(doc.path, doc.filename)} downloading={downloading} />
           )
         ) : (
-          <DownloadCard doc={doc} Icon={Icon} onDownload={handleDownload} downloading={downloading} />
+          <DownloadCard doc={doc} Icon={Icon} onDownload={() => void handleDownload(doc.path, doc.filename)} downloading={downloading} />
         )}
       </div>
     </div>

@@ -328,8 +328,19 @@ func (t *Tracker) ReapTimedOut(ctx context.Context, maxAge time.Duration) (int, 
 // ReapTimedOutKind is ReapTimedOut scoped to a single kind, so a class of run
 // with a tighter SLA than the global 45-min budget can be reaped faster. Used
 // for 'plan.step' spinners: a step stranded by a crashed turn (the OnDone settle
-// is the normal close path) should surface within minutes, not 45. Age-bounded
-// so a step still legitimately executing (run younger than maxAge) is untouched.
+// is the normal close path) should surface within minutes, not 45.
+//
+// TURN-CLOSED GATE (not just age): a plan.step run whose owning session STILL
+// has an in-flight turn is NOT reaped, no matter how old it is. Age alone is a
+// lie here — a legitimate multi-minute (even 20-minute) hosted web_search inside
+// a live turn kept getting FALSELY reaped as "stalled — no result recorded",
+// which cascaded into ReconcileStranded failing the step and pausing the whole
+// plan (the 2026-07-02 "Research the market ❌ while the turn was still working"
+// incident). mem_runs has no session_id, so we join through the plan graph
+// (run → mem_plan_steps.run_id → mem_plans → mem_turns on session_id) and only
+// reap when NO turn on that session is 'in_flight'. A run with no plan-step
+// backing (any other kind) doesn't match the join, so NOT EXISTS is trivially
+// true and the reap proceeds exactly as before — backward compatible.
 // Returns rows closed.
 func (t *Tracker) ReapTimedOutKind(ctx context.Context, kind Kind, maxAge time.Duration) (int, error) {
 	if t == nil || t.pool == nil {
@@ -358,6 +369,14 @@ func (t *Tracker) ReapTimedOutKind(ctx context.Context, kind Kind, maxAge time.D
 		 WHERE status = 'running'
 		   AND kind = $3
 		   AND started_at < NOW() - ($1 * interval '1 second')
+		   AND NOT EXISTS (
+		       SELECT 1
+		         FROM mem_plan_steps st
+		         JOIN mem_plans p ON p.id = st.plan_id
+		         JOIN mem_turns tn ON tn.session_id = p.session_id
+		        WHERE st.run_id = mem_runs.id
+		          AND tn.status = 'in_flight'
+		   )
 	`, maxAge.Seconds(), humanJSON, string(kind))
 	if err != nil {
 		return 0, fmt.Errorf("reap timed-out %s runs: %w", kind, err)

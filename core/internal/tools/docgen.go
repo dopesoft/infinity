@@ -184,8 +184,10 @@ func (d *DocumentCreate) Execute(ctx context.Context, input map[string]any) (str
 	if res.PDFPath != "" {
 		fmt.Fprintf(&b, "PDF preview: %s\n", res.PDFPath)
 	}
-	b.WriteString("It is ALREADY OPEN and rendering inline in the boss's canvas column (a new document tab) — that is the deliverable. " +
-		"Do NOT write a file path or a download link in your chat reply: there is no public URL and any link you invent will 404. " +
-		"Just tell him in one line what you made. Then index it with artifact_save (kind=\"document\") so it also shows in his artifacts.")
+	b.WriteString("DONE — this file EXISTS and is verified; the tool wrote it and confirmed the byte count above. It is ALREADY OPEN and rendering inline in the boss's canvas column (a new document tab) with a PDF download — that is the deliverable.\n" +
+		"• Do NOT create it again. One document_create call = one finished deliverable; calling it a second time just makes a duplicate.\n" +
+		"• Do NOT verify it with claude_code (Read/Bash/LS) — those run on the MAC, whose working dir is ~/Dev, and CANNOT see this file. It lives on your CLOUD workspace (/workspace/artifacts). No verification is needed, but if you insist, use bash_run / fs_read (they run on the cloud) — never claude_code for a /workspace path.\n" +
+		"• Do NOT paste a file path or download link in chat — there is no public URL and any link you invent will 404.\n" +
+		"Next: index it once with artifact_save (kind=\"document\") so it also shows in his artifacts, then tell him in ONE line what you made. The task is complete.")
 	return b.String(), nil
 }

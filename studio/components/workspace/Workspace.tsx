@@ -128,6 +128,29 @@ export function Workspace({ chat }: { chat: ChatHook }) {
         return;
       }
 
+      // A document_create finished: open it as its OWN document tab (with the
+      // sibling PDF for download) here at the ALWAYS-MOUNTED seam. This used to
+      // live only in CanvasRightPane, which is UNMOUNTED on mobile whenever the
+      // boss is on the Chat pill — so on the phone the report never popped a tab
+      // and its PDF download went missing (he found it only via the Media
+      // count). openDocument dedupes by id, so this + rehydration never double-
+      // add. The mobile auto-reveal below (widened to `document`) then surfaces
+      // the Canvas once per burst, exactly like a code edit does.
+      if (ev.type === "document_created") {
+        const d = ev.document_created;
+        store.openDocument({
+          id: d.path,
+          filename: d.filename,
+          format: d.format,
+          path: d.path,
+          bytes: d.bytes,
+          markdown: d.markdown,
+          pdfPath: d.pdf_path,
+          htmlPath: d.html_path,
+        });
+        return;
+      }
+
       // Active project switched (agent ran project_open/create/clone) — re-scope
       // the canvas to the new project instantly instead of waiting on the 1.5s
       // session poll. Empty path = back to Jarvis's own code (the disk/self).
@@ -230,7 +253,11 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   // Desktop ignores `mode`, so this is a harmless no-op there.
   const hadFileTabRef = useRef(false);
   useEffect(() => {
-    const hasFileTab = store.tabs.some((t) => t.kind === "file");
+    // Files AND documents both auto-reveal the Canvas — a generated report/doc
+    // should pop the pane on the phone exactly like a code edit does.
+    const hasFileTab = store.tabs.some(
+      (t) => t.kind === "file" || t.kind === "document",
+    );
     if (hasFileTab && !hadFileTabRef.current) {
       hadFileTabRef.current = true;
       if (typeof window !== "undefined") {

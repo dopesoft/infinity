@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 // Plan-continuation backstop — the STRUCTURAL fix for the "drafts a plan, then
@@ -37,6 +38,19 @@ const maxPlanContinuePerTurn = 3
 // after drafting, reaper cleans up later) stands.
 type PlanContinuationChecker interface {
 	HasUnfinishedPlan(ctx context.Context, sessionID string) (bool, error)
+}
+
+// PlanSettler closes out a session's plan the instant a FOREGROUND turn ends,
+// mirroring what cron already does on its path (executor_agent FinalizeSession)
+// and what background builds do via OnDone. Without it, a foreground chat plan
+// left with an in_progress step just sat there until the 10-min plan-step reaper
+// FALSELY failed it ("stalled — no result recorded") — the 2026-07-02 incident
+// where the report was written but the plan showed "Research the market ❌".
+// Implemented by *plan.Store.FinalizeSession: an in_progress step whose run is
+// still 'running' at turn-end becomes 'skipped' ("I stopped here"), NOT failed;
+// a step whose run already errored stays failed. Nil-safe + hot-swap.
+type PlanSettler interface {
+	FinalizeSession(ctx context.Context, sessionID string) (int, error)
 }
 
 // planContinueDisabled lets the boss kill the reflex (INFINITY_PLAN_CONTINUE=off).
@@ -96,6 +110,44 @@ func (l *Loop) SetPlanChecker(c PlanContinuationChecker) {
 	l.planMu.Lock()
 	l.planChecker = c
 	l.planMu.Unlock()
+}
+
+// SetPlanSettler installs (or replaces) the foreground plan settle-on-turn-end
+// mechanic. Safe to call after agent.New(); nil is fine (feature off).
+func (l *Loop) SetPlanSettler(s PlanSettler) {
+	if l == nil {
+		return
+	}
+	l.planMu.Lock()
+	l.planSettler = s
+	l.planMu.Unlock()
+}
+
+func (l *Loop) planSettlerFn() PlanSettler {
+	if l == nil {
+		return nil
+	}
+	l.planMu.RLock()
+	defer l.planMu.RUnlock()
+	return l.planSettler
+}
+
+// settlePlanOnTurnEnd closes out the session's plan the instant a foreground
+// turn ends, so an in_progress step is settled cleanly ('skipped'/'done' — see
+// FinalizeSession) instead of dead-spinning until the reaper false-fails it.
+// Runs on a DETACHED context (the turn ctx may already be canceled/expired on
+// the timeout/interrupt paths) with a short budget, mirroring cron's settle.
+// Best-effort + nil-safe; skips synthetic session ids.
+func (l *Loop) settlePlanOnTurnEnd(sessionID string) {
+	settler := l.planSettlerFn()
+	if settler == nil || IsSyntheticSessionID(sessionID) || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if _, err := settler.FinalizeSession(ctx, sessionID); err != nil {
+		log.Printf("plan settle on turn-end: session=%s err=%v", sessionID, err)
+	}
 }
 
 // hasUnfinishedPlan reports whether the loop should nudge the model to keep

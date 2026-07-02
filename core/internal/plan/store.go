@@ -263,10 +263,15 @@ func (s *Store) GetActiveBySession(ctx context.Context, sessionID string) (*Plan
 // after only laying it out (the 2026-07-02 "made a plan, marked step 0
 // in_progress, then quit" report failure).
 //
-// Only status='active' counts: a 'paused' plan is deliberately parked awaiting
-// the boss (a failed/blocked step), and 'completed'/'failed'/'cancelled' plans
-// are done — none of those should be force-continued. One EXISTS query, no full
-// plan hydrate. UUID-guarded so non-UUID system-cron session ids no-op cleanly.
+// Both 'active' AND 'paused' count: a plan pauses when recompute hits a
+// failed/blocked step (store.go recompute), but if later steps are still
+// pending the work isn't done — that's EXACTLY the stall the backstop exists
+// to break (the 2026-07-02 report: step 0 failed → plan paused → nudge silently
+// no-op'd → nothing continued). 'completed'/'failed'/'cancelled' plans are done
+// and never counted. The nudge is bounded (maxPlanContinuePerTurn +
+// planTouchedThisTurn + !shouldSelfHeal) so a genuinely-stuck paused plan can't
+// loop. One EXISTS query, no full plan hydrate. UUID-guarded so non-UUID
+// system-cron session ids no-op cleanly.
 func (s *Store) HasUnfinishedPlan(ctx context.Context, sessionID string) (bool, error) {
 	if s == nil || s.pool == nil || sessionID == "" {
 		return false, nil
@@ -281,7 +286,7 @@ func (s *Store) HasUnfinishedPlan(ctx context.Context, sessionID string) (bool, 
 		      FROM mem_plans p
 		      JOIN mem_plan_steps st ON st.plan_id = p.id
 		     WHERE p.session_id = $1::uuid
-		       AND p.status = 'active'
+		       AND p.status IN ('active','paused')
 		       AND st.status IN ('pending','in_progress')
 		)
 	`, sessionID).Scan(&exists)
