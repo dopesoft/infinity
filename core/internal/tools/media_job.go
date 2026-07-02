@@ -52,11 +52,14 @@ type mediaJob struct {
 func (t *mediaJob) Name() string { return "media_job" }
 
 func (t *mediaJob) Description() string {
-	return "Produce media (image/video) by running a media-generating command on the active bridge, " +
-		"then capture, download, index, and surface every asset it makes. Use this for ALL media output " +
-		"— higgsfield generation, an HTML→video render, an ffmpeg cut. The command is yours to craft; " +
+	return "Produce VISUAL or AUDIO media — an image, video, or audio clip — by running a media-generating " +
+		"command on the active bridge, then capture, index, and surface every asset it makes. Use this for ALL " +
+		"media output — higgsfield generation, an HTML→video render, an ffmpeg cut. " +
+		"NOT for documents: a report, spreadsheet, deck, PDF, Word/Excel/PowerPoint, or markdown deliverable is " +
+		"a DOCUMENT — use `document_create` for those, never this, even when the ask says 'downloadable'. " +
+		"The command is yours to craft; " +
 		"this tool tracks it as a live job (the Media tab shows a spinner that survives refresh), pulls " +
-		"the resulting files into the workspace, saves each as a Library artifact, and reports the assets. " +
+		"the resulting files into the workspace, saves each as a Library artifact, and returns the assets. " +
 		"`result=stdout_urls` extracts result URLs the command prints (e.g. higgsfield --json); " +
 		"`result=output_files` globs files the command wrote (e.g. a rendered .mov)."
 }

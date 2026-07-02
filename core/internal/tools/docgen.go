@@ -52,7 +52,7 @@ func NewDocumentCreate(workspaceURL, token string) *DocumentCreate {
 func (d *DocumentCreate) Name() string { return "document_create" }
 
 func (d *DocumentCreate) Description() string {
-	return "Generate a real document file — Excel (.xlsx), Word (.docx), PowerPoint (.pptx), PDF (.pdf), or Markdown (.md) — from structured content. Pass `format`, a `filename`, and a `content` object shaped for that format (see below). The file is written to the cloud workspace and a rendered/downloadable view opens in Studio. Use this for any 'make me a spreadsheet/report/deck/doc' task; pair it with web-browsing to turn scraped data into a deliverable."
+	return "Generate a real document file — Excel (.xlsx), Word (.docx), PowerPoint (.pptx), PDF (.pdf), or Markdown (.md) — from structured content. Pass `format`, a `filename`, and a `content` object shaped for that format (see below). The file is written to the cloud workspace and a rendered/downloadable view opens in Studio. This is THE tool for any 'make me a report / spreadsheet / deck / doc / downloadable report' task — a report is a DOCUMENT, so use this, never media_job (that only makes images/video). Pair it with web-browsing to turn scraped data into a deliverable."
 }
 
 func (d *DocumentCreate) Schema() map[string]any {
