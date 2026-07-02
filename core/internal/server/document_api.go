@@ -19,15 +19,15 @@ import (
 // dropped silently when none is. Cloud-first: the markdown rides the event
 // (rendered inline, no fetch) and binaries download via the cloud-direct
 // proxy below — works on any device regardless of the session's bridge.
-func (s *Server) EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath string, bytes int64) {
+func (s *Server) EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, description string, bytes int64) {
 	if s == nil || sessionID == "" || filename == "" {
 		return
 	}
 	// Deterministically record the doc as a session artifact (Rule #1b: the
-	// repository must NOT depend on the model remembering to call artifact_save).
-	// The id rides the event so Studio dedupes this live tab against the list it
-	// fetches on load / refresh.
-	id := s.recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, bytes)
+	// repository must NOT depend on the model remembering to call artifact_save
+	// — and it must NOT, or we get a duplicate card). The id rides the event so
+	// Studio dedupes this live tab against the list it fetches on load / refresh.
+	id := s.recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, description, bytes)
 	s.sessionSender(sessionID)(wsServerEvent{
 		Type:      "document_created",
 		SessionID: sessionID,
@@ -66,7 +66,7 @@ func mimeForFormat(format string) string {
 // generated document so it lives in the boss's session repository (the
 // Artifacts/Media gallery) regardless of whether the model called artifact_save.
 // Returns the new id, or "" on failure (non-fatal — the tab still opens).
-func (s *Server) recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath string, bytes int64) string {
+func (s *Server) recordDocumentArtifact(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, description string, bytes int64) string {
 	if s == nil || s.pool == nil || sessionID == "" || strings.TrimSpace(path) == "" {
 		return ""
 	}
@@ -94,19 +94,20 @@ func (s *Server) recordDocumentArtifact(sessionID, format, filename, path, markd
 	var id string
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO mem_artifacts
-			(kind, name, storage_kind, storage_path, storage_size, storage_mime,
+			(kind, name, description, storage_kind, storage_path, storage_size, storage_mime,
 			 virtual_path, bridge, source_session_id, source_tool, metadata)
 		VALUES
-			('document', $1, 'filesystem', $2, NULLIF($3,0), NULLIF($4,''),
+			('document', $1, NULLIF($8,''), 'filesystem', $2, NULLIF($3,0), NULLIF($4,''),
 			 $5, 'cloud', $6, 'document_create', $7::jsonb)
 		ON CONFLICT (virtual_path) WHERE deleted_at IS NULL DO UPDATE
 			SET storage_path = EXCLUDED.storage_path,
 			    storage_size = EXCLUDED.storage_size,
 			    storage_mime = EXCLUDED.storage_mime,
+			    description  = COALESCE(NULLIF(EXCLUDED.description,''), mem_artifacts.description),
 			    metadata     = EXCLUDED.metadata,
 			    updated_at   = NOW()
 		RETURNING id::text
-	`, filename, path, bytes, mimeForFormat(format), vpath, sessionID, string(metaJSON)).Scan(&id)
+	`, filename, path, bytes, mimeForFormat(format), vpath, sessionID, string(metaJSON), description).Scan(&id)
 	if err != nil {
 		log.Printf("recordDocumentArtifact: %v", err)
 		return ""

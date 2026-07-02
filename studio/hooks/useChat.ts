@@ -755,24 +755,43 @@ export function useChat() {
     return () => revokeMessageAttachmentUrls(messages);
   }, [messages]);
 
-  // Browser lifecycle rehydration. Some mobile/PWA resumes keep the
-  // WebSocket object in OPEN state even though the stream died while the
-  // app was backgrounded; in that case ws.status never changes and the
-  // reconnect-only effect below would not run. On every foreground signal,
-  // force a fresh socket and reconcile against Core's persisted transcript.
+  // Browser lifecycle rehydration. Some mobile/PWA resumes keep the WebSocket
+  // object in OPEN state even though the stream died while the app was
+  // BACKGROUNDED; in that case ws.status never changes and the reconnect-only
+  // effect below would not run — so on returning from a real background we force
+  // a fresh socket + reconcile against Core's persisted transcript.
+  //
+  // CRITICAL: only do this when the page actually went HIDDEN. Switching to
+  // another desktop app leaves Studio's tab "visible" and its socket alive and
+  // streaming — it only fires a window `focus`, not a visibilitychange. Forcing
+  // a reconnect + full transcript reconcile on that plain focus is exactly the
+  // jarring "it sits there, then a thousand things move the moment I click it"
+  // the boss hates: the updates were arriving live the whole time, and the
+  // reconcile just re-slams the entire conversation at once. If we never went
+  // hidden, do NOTHING — let the live stream keep flowing.
+  const wasHiddenRef = useRef(false);
   useEffect(() => {
     if (!sessionId) return;
+    const onHide = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        wasHiddenRef.current = true;
+      }
+    };
     const onForeground = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (!wasHiddenRef.current) return; // plain blur/focus — socket stayed live
+      wasHiddenRef.current = false;
       ws.reconnect();
       void reconcileFromCore().catch(() => {
         /* Core may still be waking; WS reconnect will retry independently. */
       });
     };
+    document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pageshow", onForeground);
     window.addEventListener("focus", onForeground);
     document.addEventListener("visibilitychange", onForeground);
     return () => {
+      document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pageshow", onForeground);
       window.removeEventListener("focus", onForeground);
       document.removeEventListener("visibilitychange", onForeground);

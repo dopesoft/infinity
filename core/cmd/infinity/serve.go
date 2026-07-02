@@ -2045,8 +2045,8 @@ func serveCmd() *cobra.Command {
 			// Late-bind document_create's "open in a new tab" emitter to the
 			// server's per-session broadcaster.
 			if docCreate != nil {
-				docCreate.Emit = func(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath string, bytes int64) {
-					srv.EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, bytes)
+				docCreate.Emit = func(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, description string, bytes int64) {
+					srv.EmitDocumentCreated(sessionID, format, filename, path, markdown, pdfPath, thumbPath, htmlPath, description, bytes)
 				}
 			}
 			// Late-bind the project-switch WS push so the canvas re-scopes

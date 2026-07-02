@@ -110,38 +110,33 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
     buildChannel();
 
-    // REALTIME ACROSS FOCUS / BACKGROUND — the boss's standing rule
-    // ("REALTIME + PERSISTENCE ACROSS FOCUS AND EVERYTHING ELSE"). iOS Safari
-    // (and any browser that suspends a backgrounded tab) KILLS this Supabase
-    // websocket while the app is out of focus, and nothing here re-subscribed
-    // or re-fetched on return. So the Agent Work plan, run spinners, dashboard,
-    // and nav badges all stayed frozen on their pre-background snapshot until a
-    // stray event or a manual pull-to-refresh — the boss saw the plan/tool
-    // stream "jump" to a late state on refocus instead of staying live. The
-    // chat stream already recovers on its own (WS reconnect + useChat
-    // foreground reconcile); this is the OTHER transport. This wake handler is
-    // the single chokepoint that fixes it for EVERY realtime consumer at once
-    // (they all flow through this provider): on returning to the foreground we
-    // (a) re-auth + rebuild the socket if it dropped, and (b) re-dispatch the
-    // existing pull-to-refresh fan-out — the exact event every useRealtime()
-    // consumer already listens for — so each one re-reads server truth
-    // instantly, with zero per-consumer edits.
+    // KEEP LIVE ACROSS FOCUS — the boss's rule is that data updates CONTINUOUSLY
+    // while the window is visible (even if it's not the focused app), never a
+    // batch "catch-up" that all moves at once when he clicks back in. This is
+    // event-driven (postgres_changes push straight to the handlers above), so a
+    // visible-but-unfocused desktop window already updates live and needs NOTHING
+    // here. The ONLY thing this wake handler does is REPAIR a socket that a
+    // browser actually KILLED while suspended (iOS Safari backgrounding) — and
+    // even then it does NOT fire a blanket refetch on every focus (that blanket
+    // refetch is exactly the jarring "a thousand things move when I click it"
+    // the boss hates). We rebuild the socket only when it's genuinely dropped,
+    // and only then catch up the consumers that missed events while it was dead.
     let wakeTimer: ReturnType<typeof setTimeout> | null = null;
     const onWake = () => {
       if (document.visibilityState !== "visible") return;
-      // Debounce: pageshow + focus + visibilitychange can all fire on one
-      // foreground; coalesce into a single resync.
+      const ch = channelRef.current;
+      // Socket still joined → updates never stopped → do NOTHING (no flush).
+      if (ch && ch.state === "joined") return;
+      // Debounce: pageshow + focus + visibilitychange can all fire on one wake.
       if (wakeTimer) return;
       wakeTimer = setTimeout(() => {
         wakeTimer = null;
+        const cur = channelRef.current;
+        if (cur && cur.state === "joined") return; // recovered on its own
         if (tokenRef.current) supabase.realtime.setAuth(tokenRef.current);
-        const ch = channelRef.current;
-        // Only rebuild the socket when it actually dropped, to avoid churn.
-        if (!ch || ch.state !== "joined") {
-          if (ch) supabase.removeChannel(ch);
-          buildChannel();
-        }
-        // Re-sync every consumer through the fan-out they already subscribe to.
+        if (cur) supabase.removeChannel(cur);
+        buildChannel();
+        // The socket WAS dead, so consumers missed events — catch them up once.
         window.dispatchEvent(new Event("infinity:pull-to-refresh"));
       }, 250);
     };
