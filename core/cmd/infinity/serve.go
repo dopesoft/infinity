@@ -1041,6 +1041,10 @@ func serveCmd() *cobra.Command {
 				// closes the row on TaskCompleted / interrupt / error.
 				if pool != nil {
 					loop.SetTurnRecorder(turnRecorderAdapter{store: memory.NewTurnStore(pool)})
+					// Plan-continuation backstop: keeps the agent executing a plan
+					// it drafted instead of stopping cold after laying it out. The
+					// *plan.Store satisfies agent.PlanContinuationChecker directly.
+					loop.SetPlanChecker(plan.NewStore(pool))
 				}
 				// Tool visibility - hide claude_code__* on Cloud-routed
 				// sessions so the model can't accidentally edit the Mac

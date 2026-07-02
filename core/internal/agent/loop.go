@@ -325,6 +325,12 @@ type Loop struct {
 	turnsMu sync.RWMutex
 	turns   TurnRecorder
 
+	// planMu guards planChecker — the active-plan probe behind the
+	// plan-continuation backstop (keep executing a drafted plan instead of
+	// stopping cold). Hot-swappable via SetPlanChecker; nil-safe (feature off).
+	planMu      sync.RWMutex
+	planChecker PlanContinuationChecker
+
 	// reauthMu guards reauth. When the active brain hits a credential failure
 	// the loop parks the turn via this hook (instead of dumping a raw 401) and
 	// the reauth poller replays it once the credential is healthy. Nil-safe +
@@ -1172,6 +1178,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	selfHealCount := 0
 	healedThisTurn := false // a self-heal pass ran this turn; drives the resolved/exhausted hook
 	verifyCount := 0        // steal C Lever 3: bounded adversarial-verify passes this turn
+	// Plan-continuation backstop trackers: did this turn touch the durable plan
+	// (plan_create/plan_update/todo_write), and how many keep-going nudges we've
+	// already injected. planTouchedThisTurn gates the nudge so a stale plan from
+	// an earlier turn never hijacks an unrelated reply. See plan_continue.go.
+	planTouchedThisTurn := false
+	planContinueCount := 0
 	// Per-turn delegate-spawn counter. A runaway model can emit dozens of
 	// `delegate` tool calls in a single message (each spawns a sub-agent); this
 	// hard-caps spawns per turn so a storm can never happen again.
@@ -1497,6 +1509,25 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				continue
 			}
 
+			// PLAN-CONTINUATION BACKSTOP: the model is ending the turn cleanly,
+			// but it drafted/advanced a plan THIS turn and that plan still has
+			// unfinished steps. That's the "made a plan, then quit" pathology —
+			// don't let it stop after only laying out the work. Keep its draft,
+			// inject the keep-going directive, and run another pass so it actually
+			// EXECUTES the plan. Gated on planTouchedThisTurn (a stale plan from an
+			// earlier turn can't hijack an unrelated reply), skipped while a
+			// failure is in play (self-heal owns that), and bounded per turn so a
+			// genuinely-blocked plan still ends. See plan_continue.go.
+			if planContinueCount < maxPlanContinuePerTurn && planTouchedThisTurn &&
+				!shouldSelfHeal(resp.Text, toolErredThisTurn) &&
+				l.hasUnfinishedPlan(ctx, s.ID) {
+				planContinueCount++
+				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+				s.Append(llm.Message{Role: llm.RoleUser, Content: planContinueDirective})
+				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: "Plan still has open steps — continuing instead of stopping.\n"})
+				continue
+			}
+
 			// STEAL C — LEVER 3: adversarial-verify pass. On the hardest turns
 			// (effort resolved to high/xhigh) that are ending cleanly, run ONE
 			// bounded pass where the model red-teams its own answer before the
@@ -1584,6 +1615,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()
 			toolCallCount++
+
+			// Mark that this turn is doing plan work, so a premature stop with an
+			// unfinished plan triggers the keep-going nudge (plan_continue.go).
+			if isPlanTool(tc.Name) {
+				planTouchedThisTurn = true
+			}
 
 			// Delegate fan-out cap. Spawning a sub-agent is expensive and a
 			// confused model can fire dozens in one turn (the "100 spinning

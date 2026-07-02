@@ -257,6 +257,40 @@ func (s *Store) GetActiveBySession(ctx context.Context, sessionID string) (*Plan
 	return s.Get(ctx, id)
 }
 
+// HasUnfinishedPlan reports whether the session has an ACTIVE plan with at
+// least one step still to do (pending or in_progress). This is the signal the
+// agent loop uses to keep executing a plan it just drafted instead of stopping
+// after only laying it out (the 2026-07-02 "made a plan, marked step 0
+// in_progress, then quit" report failure).
+//
+// Only status='active' counts: a 'paused' plan is deliberately parked awaiting
+// the boss (a failed/blocked step), and 'completed'/'failed'/'cancelled' plans
+// are done — none of those should be force-continued. One EXISTS query, no full
+// plan hydrate. UUID-guarded so non-UUID system-cron session ids no-op cleanly.
+func (s *Store) HasUnfinishedPlan(ctx context.Context, sessionID string) (bool, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return false, nil
+	}
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return false, nil
+	}
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1
+		      FROM mem_plans p
+		      JOIN mem_plan_steps st ON st.plan_id = p.id
+		     WHERE p.session_id = $1::uuid
+		       AND p.status = 'active'
+		       AND st.status IN ('pending','in_progress')
+		)
+	`, sessionID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // GetAnyActive returns the most recently updated active/paused plan regardless
 // of session. Used as a fallback when positional step resolution fails to find
 // a plan for the current session (e.g. cross-session continuation, cron fires

@@ -27,12 +27,31 @@ func NewTurnStore(pool *pgxpool.Pool) *TurnStore {
 }
 
 // Open inserts a new mem_turns row and returns its id. sessionID must be a
-// real UUID (the caller is expected to have already EnsureSession'd it).
-// userText may be empty on the resume path - the row is still created so
-// every turn has a trace, even ones that didn't start with a fresh prompt.
+// real UUID. userText may be empty on the resume path - the row is still
+// created so every turn has a trace, even ones that didn't start with a fresh
+// prompt.
+//
+// The session row is normally created by the ASYNC UserPromptSubmit capture
+// chain (hooks/capture.go → EnsureSession), which races this synchronous
+// turn-open. If the turn insert wins that race the mem_turns_session_id_fkey
+// foreign key fires (SQLSTATE 23503) and the turn is silently lost — the whole
+// session then shows ZERO turn history and /logs is a black hole (the exact
+// 2026-07-02 report-failure symptom). So we upsert the parent session row here
+// FIRST, in the same synchronous call, making the FK un-raceable. The later
+// async EnsureSession fills in project via ON CONFLICT DO UPDATE; kind/etc.
+// come from column defaults, identical to what EnsureSession would set. This is
+// the Rule #1b mechanic: the guarantee lives in code at the chokepoint, not in
+// "the caller should EnsureSession first" prose.
 func (s *TurnStore) Open(ctx context.Context, sessionID, userText, model string) (string, error) {
 	if s == nil || s.pool == nil {
 		return "", nil
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO mem_sessions (id, started_at)
+		VALUES ($1::uuid, NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, sessionID); err != nil {
+		return "", err
 	}
 	id := uuid.NewString()
 	_, err := s.pool.Exec(ctx, `
