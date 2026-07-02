@@ -1033,6 +1033,11 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 	// has been emitted, a retry would duplicate it, so we surface instead.
 	var sawThinking bool
 
+	// Dedup the hosted web_search activity banner: in_progress + searching both
+	// fire for one search. Announce once, reset on completed so a SECOND search
+	// in the same turn re-announces.
+	var webSearchAnnounced bool
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -1163,6 +1168,23 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			"response.reasoning_summary_text.done",
 			"response.reasoning.done":
 			// no-op
+		case "response.web_search_call.in_progress",
+			"response.web_search_call.searching":
+			// The hosted web_search tool runs SERVER-SIDE, so NOTHING streams to
+			// the UI while it works — often 20s+ per search. That's the boss's
+			// "doesn't look like it's still working, then sits there" complaint:
+			// the composer had no signal during the silent search. Surface a
+			// lightweight activity line so the turn visibly progresses. (These
+			// were previously logged once as "unhandled stream event".)
+			if !webSearchAnnounced {
+				webSearchAnnounced = true
+				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: "\nSearching the web…\n"})
+			}
+		case "response.web_search_call.completed":
+			if webSearchAnnounced {
+				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: "\nWeb search done — reading results…\n"})
+			}
+			webSearchAnnounced = false
 		case "response.completed":
 			if usage := decodeUsage(evt.Response); usage != nil {
 				resp.Usage = *usage

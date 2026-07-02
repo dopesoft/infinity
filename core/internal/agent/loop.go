@@ -1427,12 +1427,32 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		l.recordLLMCost(provider, model, resp.Usage)
 
 		if streamErr != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
+			// A canceled/expired TURN CONTEXT is not a provider failure. It fires
+			// on the Stop button (context.Canceled) and on the per-turn wall-clock
+			// budget (context.DeadlineExceeded) — the latter used to fall through
+			// to the error path and mark the turn 'errored' with a raw "context
+			// deadline exceeded" that ALSO never fired TaskCompleted, so the chat
+			// RELOAD (rebuilt from UserPromptSubmit + TaskCompleted) showed NOTHING
+			// on the assistant side. That is the boss's "it never even showed
+			// anything / I never saw an error persisted, and it just sits there"
+			// complaint. Handle BOTH here: fire TaskCompleted so the partial turn
+			// persists + renders on reload, close cleanly as interrupted (not
+			// errored), and on a budget timeout append a resumable note (the plan
+			// is durable; the deployed plan-continuation backstop resumes it when
+			// he says "continue").
+			if ctx.Err() != nil {
 				partial := strings.TrimSpace(partialText.String())
+				timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+				if timedOut {
+					note := "\n\n_(I hit my time budget for this one turn — but everything I set up, including the plan, is saved. Say 'continue' and I'll pick up where I left off.)_"
+					emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: note})
+					partial = strings.TrimSpace(partial + note)
+				}
 				if partial != "" {
 					s.Append(llm.Message{Role: llm.RoleAssistant, Content: partial})
 					l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, partial, map[string]any{
 						"interrupted": true,
+						"timed_out":   timedOut,
 					})
 				}
 				emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
@@ -1447,6 +1467,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					ToolCallCount:    toolCallCount,
 					Summary:          summarizeReply(partial, toolCallCount),
 				})
+				// A turn that did real work then hit its budget still deserves a
+				// session title — the namer otherwise only runs on the clean-end
+				// path, so a long-but-timed-out session stayed nameless (part of
+				// the "naming seems broken" report). Best-effort, async, cheap.
+				if l.namer != nil {
+					l.namer.MaybeName(s.ID, turnText, partial)
+				}
 				return nil
 			}
 			// Credential failure (revoked OAuth token, invalid API key)? Don't

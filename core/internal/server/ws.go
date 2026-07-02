@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -539,6 +540,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // frame, the per-turn 5-minute timeout, or a new turn for the same
 // session evicting it.
 //
+// interactiveTurnTimeout is the wall-clock ceiling for a single live-chat turn.
+// The old 5-minute cap was too short for legitimate long work: a "scour the web
+// and write me a report" turn does several SERVER-SIDE web searches (~20s each)
+// plus reasoning and easily needs 10+ minutes — it was getting guillotined
+// mid-work with an opaque "context deadline exceeded" (the 2026-07-02 report
+// failures), which then also blocked the session from ever being auto-named
+// (the namer only runs on a turn that completes). The Stop button
+// (interruptTurn) and the LoopGate (50 calls / 5 min) remain the real backstops
+// against a genuinely wedged turn, so a generous ceiling is safe. Override with
+// INFINITY_TURN_TIMEOUT (Go duration, e.g. "20m").
+func interactiveTurnTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("INFINITY_TURN_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 15 * time.Minute
+}
+
 // startTurn spawns the agent loop for one turn. The model is resolved
 // server-side from the settings store (set by Studio's chip + Settings
 // page) rather than carried on the WS frame - that way a single source
@@ -546,7 +566,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // hostile client can't smuggle an arbitrary model id through the wire.
 func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, voiceTurn bool, effortPin string, _ func(wsServerEvent)) {
 	// Use a fresh background context so the WS dying doesn't cancel this
-	// turn. The 5-minute timeout below is the only deadline that applies.
+	// turn. The interactiveTurnTimeout() below is the only deadline that applies.
 	base := context.Background()
 	// Resolve effective model from the persisted setting; empty string
 	// means the agent loop falls back to the provider's boot default.
@@ -566,7 +586,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	if pin := strings.TrimSpace(effortPin); pin != "" && pin != "auto" {
 		ctxWithUser = agent.WithEffortPin(ctxWithUser, pin)
 	}
-	turnCtx, cancel := context.WithTimeout(ctxWithUser, 5*time.Minute)
+	turnCtx, cancel := context.WithTimeout(ctxWithUser, interactiveTurnTimeout())
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
 	// Route every WS frame through the live session binding rather than
 	// the connection-bound closure the handler captured. See
