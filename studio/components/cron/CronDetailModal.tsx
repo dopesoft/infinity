@@ -7,7 +7,7 @@ import { ModalSection, ModalPre, ModalDl } from "@/components/ui/modal-content";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RunIndicator, useRuns } from "@/lib/runs";
-import { previewCron, triggerCron, type CronJobDTO } from "@/lib/api";
+import { previewCron, triggerCron, setCronEnabled, type CronJobDTO } from "@/lib/api";
 import { cronKindMeta, casualTime, localTzAbbrev, cronToHuman } from "./cronMeta";
 
 /* The full cron, on click. Closes the boss's "I can't even read the entire
@@ -93,6 +93,21 @@ export function CronDetailModal({
               await triggerCron(cron.id);
             }}
           />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              await setCronEnabled(cron.id, !cron.enabled);
+              onOpenChange(false);
+            }}
+            title={
+              cron.enabled
+                ? "Pause this cron. It stops running on its schedule but keeps its history and config."
+                : "Resume this cron. It re-arms on its schedule immediately."
+            }
+          >
+            {cron.enabled ? "Disable" : "Enable"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Close
           </Button>

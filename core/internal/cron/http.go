@@ -2,6 +2,7 @@ package cron
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -119,6 +120,39 @@ func (a *API) handleScoped(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	// /api/crons/:id/enabled → pause / resume without deleting. Body:
+	// {"enabled": true|false}. Flips the flag and reloads the scheduler so a
+	// disabled cron drops off the schedule immediately (its row, history, and
+	// config are preserved) and an enabled one re-arms. This is the "disable"
+	// path the boss asked for — the alternative to run-or-delete.
+	if strings.HasSuffix(tail, "/enabled") {
+		if r.Method != http.MethodPost && r.Method != http.MethodPatch {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimSuffix(tail, "/enabled")
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.scheduler.SetEnabled(r.Context(), id, body.Enabled); err != nil {
+			if errors.Is(err, errNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": body.Enabled})
 		return
 	}
 	id := tail

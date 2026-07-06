@@ -1538,6 +1538,27 @@ export async function deleteCron(id: string): Promise<boolean> {
   }
 }
 
+// setCronEnabled pauses (enabled=false) or resumes (enabled=true) a cron
+// WITHOUT deleting it. A disabled cron keeps its row, run history, and config
+// but drops off the schedule until re-enabled — the "pause" the boss wanted
+// instead of the run-or-delete binary. The server reloads the scheduler so the
+// change takes effect immediately. Returns true on success.
+export async function setCronEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/crons/${id}/enabled`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // triggerCron fires a cron job immediately, regardless of its schedule.
 // The next regular fire still happens at the cron-expression's next
 // tick. Use this to test a freshly-edited job before its schedule rolls

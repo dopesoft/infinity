@@ -27,6 +27,10 @@ import (
 // "Logging — severity must match reality".
 var infoLog = log.New(os.Stdout, "cron: ", log.LstdFlags)
 
+// errNotFound is returned when an id-scoped operation (e.g. SetEnabled) matches
+// no row, so the HTTP layer can answer 404 instead of a bare 500.
+var errNotFound = errors.New("cron not found")
+
 // Scheduler wraps robfig/cron/v3 with DB-backed job state.
 type Scheduler struct {
 	pool     *pgxpool.Pool
@@ -514,6 +518,26 @@ func (s *Scheduler) deriveToolScope(ctx context.Context, target, cfg string) str
 	}
 	infoLog.Printf("derived tool_scope for cron running skill %q from its declared allowed_tools", m[1])
 	return string(out)
+}
+
+// SetEnabled flips a cron's enabled flag and reloads the scheduler so the
+// change takes effect immediately: disabling drops the job from the in-memory
+// schedule (Reload only loads enabled=TRUE rows), enabling re-adds it and
+// re-computes next_run_at. This is the "pause without deleting" path — the row,
+// its history, and its config are all preserved, so a disabled cron can be
+// switched back on later with one call.
+func (s *Scheduler) SetEnabled(ctx context.Context, id string, enabled bool) error {
+	if s == nil || s.pool == nil {
+		return errors.New("scheduler unconfigured")
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE mem_crons SET enabled = $2 WHERE id = $1::uuid`, id, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
+	}
+	return s.Reload(ctx)
 }
 
 // Delete removes a cron row by id.

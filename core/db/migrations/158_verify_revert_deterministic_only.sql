@@ -96,8 +96,9 @@ When `running_sha == latest_sha`:
    tonight (status='approved', note starts with '[auto] committed:').
 2. For each one call:
    `code_proposal_decide(id, "applied", "[auto] applied: deploy booted, running_sha=<sha>")`.
+   Then record the same set in the verifier output so the closure is visible, not merely implied.
    The tool gate enforces that running_sha == latest_sha before it allows this
-   stamp — if it refuses, DO NOT retry; surface a system item explaining why.
+   stamp, if it refuses, surface a system item explaining why.
 3. Write a success observation (`verdict: healthy`) and stop.
 
 ## 4. Revert — ONLY when the new build failed to boot

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Plus, Trash2, Zap } from "lucide-react";
+import { Clock, Pause, Play, Plus, Trash2, Zap } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ import {
   deleteSentinel,
   previewCron,
   triggerCron,
+  setCronEnabled,
   type CronJobDTO,
   type SentinelDTO,
 } from "@/lib/api";
@@ -92,6 +93,15 @@ function CronSection() {
     await triggerCron(id);
     // The server's row write also updates last_run_at / last_run_status,
     // which is read from mem_crons; reload to refresh those fields too.
+    void load();
+  }
+
+  // Pause (disable) or resume (enable) without deleting. The row keeps its
+  // history and config; a disabled cron simply drops off the schedule until
+  // switched back on. Server reloads the scheduler; realtime + load() refresh
+  // the badge.
+  async function toggleEnabled(j: CronJobDTO) {
+    await setCronEnabled(j.id, !j.enabled);
     void load();
   }
 
@@ -175,6 +185,22 @@ function CronSection() {
                     in CronDetailModal, so the row stays quiet. */}
                 <RunIndicator kind="cron" targetId={j.id} mode="inline" />
                 <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      await toggleEnabled(j);
+                    }}
+                    aria-label={j.enabled ? "Disable cron" : "Enable cron"}
+                    title={
+                      j.enabled
+                        ? "Pause this cron. It stops running on its schedule but keeps its history and config — re-enable anytime."
+                        : "Resume this cron. It re-arms on its schedule immediately."
+                    }
+                  >
+                    {j.enabled ? <Pause className="size-4" /> : <Play className="size-4" />}
+                  </Button>
                   <RunIndicator
                     kind="cron"
                     targetId={j.id}
