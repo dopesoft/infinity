@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Pause, Play, Plus, Trash2, Zap } from "lucide-react";
+import { Clock, Pause, Power, Plus, Trash2, Zap } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -199,7 +199,7 @@ function CronSection() {
                         : "Resume this cron. It re-arms on its schedule immediately."
                     }
                   >
-                    {j.enabled ? <Pause className="size-4" /> : <Play className="size-4" />}
+                    {j.enabled ? <Pause className="size-4" /> : <Power className="size-4" />}
                   </Button>
                   <RunIndicator
                     kind="cron"
