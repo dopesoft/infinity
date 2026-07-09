@@ -63,11 +63,19 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   // generated media asset. CanvasRightPane is the single data owner — it
   // rehydrates the open doc tabs, drives the Media tab count badge, and feeds
   // the gallery (which is a pure renderer).
-  const { artifacts: docArtifacts, loading: docsLoading, refresh: refreshDocs } = useSessionArtifacts(chat.sessionId);
+  const {
+    artifacts: docArtifacts,
+    loading: docsLoading,
+    forSession: docsForSession,
+    refresh: refreshDocs,
+  } = useSessionArtifacts(chat.sessionId);
+  // Session-scoped: with no session there is nothing to show. `enabled` keeps
+  // an empty targetId from widening the query to every session's media.
   const { runs: mediaRuns } = useRuns({
     kind: "media.generate",
-    targetId: chat.sessionId || undefined,
+    targetId: chat.sessionId,
     limit: 50,
+    enabled: !!chat.sessionId,
   });
 
   const mediaCount = useMemo(
@@ -85,40 +93,49 @@ export function CanvasRightPane({ chat }: { chat: ChatHook }) {
   // mobile Chat mode, so subscribing here dropped the tab + PDF on the phone.
   // openDocument dedupes by id, so there is exactly one receiver now.
 
-  // Pending-doc handoff: a document opened from outside the canvas (the
-  // dashboard's Saved card) stashes its DocMeta and routes here. Drain it once
-  // on mount and open the tab focused, so the boss lands ON the document rather
-  // than at the Library root. Runs independent of session — the DocMeta carries
-  // everything DocumentTab needs (path + preview fields).
+  // ── Open-tab rehydration (the vanishing-tabs fix) ─────────────────────────
+  // Rehydrate ONCE per session, from the artifact list for THAT session: reopen
+  // exactly the tabs that were open (closed-by-X tabs aren't in the set).
+  //
+  // `restoreDocuments` is called UNCONDITIONALLY. An empty set is the correct,
+  // meaningful answer for a fresh conversation — skipping the call is what used
+  // to leave the previous session's tabs stranded on screen. Eviction on the id
+  // change itself lives in <Workspace>, which unlike this pane is always
+  // mounted; this is the second half of the same contract, and it is what makes
+  // a remount converge on the right set too.
+  const rehydratedRef = useRef<string>("");
   const pendingDrainedRef = useRef(false);
   useEffect(() => {
-    if (pendingDrainedRef.current) return;
-    pendingDrainedRef.current = true;
-    const doc = takePendingDoc();
-    if (doc) store.openDocument(doc);
-  }, [store]);
-
-  // ── Open-tab persistence (the vanishing-tabs fix) ─────────────────────────
-  // Rehydrate ONCE per session, after the artifact list is available: reopen
-  // exactly the tabs that were open (closed-by-X tabs aren't in the set).
-  const rehydratedRef = useRef<string>("");
-  useEffect(() => {
     const sid = chat.sessionId;
-    if (!sid || docsLoading) return;
+    // docsForSession, not docsLoading: during the changeover render the loading
+    // flag still reads false while docArtifacts holds the OLD session's rows.
+    if (!sid || docsForSession !== sid) return;
     if (rehydratedRef.current === sid) return;
-    rehydratedRef.current = sid; // mark rehydrated even if nothing to restore
+    rehydratedRef.current = sid;
     const { openIds, activeId } = readOpenDocSet(sid);
-    if (openIds.length === 0) return;
     const byPath = new Map(docArtifacts.map((a) => [a.path, a] as const));
     const docs = openIds
       .map((p) => byPath.get(p))
       .filter((a): a is DocArtifact => !!a)
       .map(docMetaFromArtifact);
-    if (docs.length) store.restoreDocuments(docs, activeId);
-  }, [chat.sessionId, docsLoading, docArtifacts, store]);
+    store.restoreDocuments(docs, activeId);
+
+    // Pending-doc handoff: a document opened from outside the canvas (the
+    // dashboard's Saved card) stashes its DocMeta and routes here. Drain it
+    // AFTER the restore, because restoreDocuments replaces the open set
+    // wholesale and would otherwise clobber the very tab the boss asked for.
+    // Opening it last means he lands ON the document, focused.
+    if (!pendingDrainedRef.current) {
+      pendingDrainedRef.current = true;
+      const doc = takePendingDoc();
+      if (doc) store.openDocument(doc);
+    }
+  }, [chat.sessionId, docsForSession, docArtifacts, store]);
 
   // Persist the open set whenever tabs change — but only AFTER rehydration, so
-  // the empty initial state doesn't clobber the saved set on mount.
+  // neither the empty initial state nor a mid-switch state clobbers the saved
+  // set (that is how one session's tabs used to get written under another
+  // session's key).
   useEffect(() => {
     const sid = chat.sessionId;
     if (!sid || rehydratedRef.current !== sid) return;

@@ -76,6 +76,28 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     // root flips to that bridge's filesystem.
   }, [chat.sessionId, store.bridgeEpoch]);
 
+  // Documents = session lifecycle. A generated document belongs to the
+  // conversation that produced it, but the canvas store outlives any one
+  // session (CanvasStoreProvider wraps /live, above useChat), so a new chat
+  // inherits the previous chat's open document tabs unless something evicts
+  // them. Nothing did.
+  //
+  // This lives here rather than in <CanvasRightPane> because THIS component is
+  // always mounted — the right pane is unmounted whenever the boss is on the
+  // mobile Chat pill, which is exactly when he starts a new conversation. The
+  // pane's rehydration effect then refills the set from the new session's
+  // artifacts (empty for a fresh chat), so both halves agree.
+  //
+  // Skip the ""→sid transition: that is first-mount hydration, not a switch.
+  const prevSessionRef = useRef<string>("");
+  useEffect(() => {
+    const sid = chat.sessionId;
+    if (prevSessionRef.current === sid) return;
+    const switched = prevSessionRef.current !== "";
+    prevSessionRef.current = sid;
+    if (switched) store.restoreDocuments([]);
+  }, [chat.sessionId, store]);
+
   // Project = session lifecycle. When the active session changes its
   // project_path, re-scope the canvas store. When the session has no
   // project AND no configured default, blank the root so the file tree

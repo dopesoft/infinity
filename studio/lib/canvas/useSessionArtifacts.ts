@@ -14,9 +14,16 @@ import { fetchSessionArtifacts, type DocArtifact } from "@/lib/api";
 export function useSessionArtifacts(sessionId: string): {
   artifacts: DocArtifact[];
   loading: boolean;
+  /** The session the current `artifacts` snapshot belongs to. "" while a new
+   *  session's fetch is still in flight. Consumers that key behaviour off the
+   *  session (open-tab rehydration) MUST compare this against their own
+   *  sessionId rather than trusting `artifacts` — otherwise they act on the
+   *  previous conversation's documents during the changeover render. */
+  forSession: string;
   refresh: () => void;
 } {
   const [artifacts, setArtifacts] = useState<DocArtifact[]>([]);
+  const [forSession, setForSession] = useState("");
   const [loading, setLoading] = useState(true);
   const sidRef = useRef(sessionId);
   sidRef.current = sessionId;
@@ -25,6 +32,7 @@ export function useSessionArtifacts(sessionId: string): {
     const sid = sidRef.current;
     if (!sid) {
       setArtifacts([]);
+      setForSession("");
       setLoading(false);
       return;
     }
@@ -32,11 +40,17 @@ export function useSessionArtifacts(sessionId: string): {
     // Guard against a stale response landing after the session changed.
     if (sidRef.current === sid) {
       setArtifacts(next);
+      setForSession(sid);
       setLoading(false);
     }
   }, []);
 
+  // A session change invalidates the snapshot immediately — documents belong to
+  // the conversation that produced them, so the gallery must never render the
+  // previous session's artifacts while the new fetch is in flight.
   useEffect(() => {
+    setArtifacts([]);
+    setForSession("");
     setLoading(true);
     void reload();
   }, [sessionId, reload]);
@@ -46,5 +60,5 @@ export function useSessionArtifacts(sessionId: string): {
     void reload();
   });
 
-  return { artifacts, loading, refresh: reload };
+  return { artifacts, loading, forSession, refresh: reload };
 }

@@ -38,8 +38,9 @@ export type UseRunsResult = {
   // All matching runs ordered by started_at DESC (most recent first).
   // Read this for history-style views.
   runs: RunDTO[];
-  // True for the very first load only. After that, realtime + manual
-  // refreshes keep the snapshot fresh without re-toggling loading.
+  // True while a fetch for the current filter is outstanding — on first
+  // load and again whenever the filter changes (a session switch). Realtime
+  // + manual refreshes keep the snapshot fresh without re-toggling loading.
   loading: boolean;
   // Force a re-fetch. Most callers don't need this - realtime handles
   // updates automatically - but it's available for "pull to refresh"
@@ -47,27 +48,54 @@ export type UseRunsResult = {
   refresh: () => void;
 };
 
-export function useRuns(opts: FetchRunsOpts = {}): UseRunsResult {
+export type UseRunsOpts = FetchRunsOpts & {
+  // When false the hook holds an empty snapshot and issues no request.
+  // This is what a session-scoped consumer passes while its session id is
+  // still empty: `fetchRuns` drops a falsy targetId from the query string,
+  // so an un-gated call would silently widen the filter to EVERY session's
+  // runs. Absent filter must never mean "show everything".
+  enabled?: boolean;
+};
+
+export function useRuns(opts: UseRunsOpts = {}): UseRunsResult {
+  const { enabled = true, ...filter } = opts;
   const [runs, setRuns] = useState<RunDTO[]>([]);
   const [loading, setLoading] = useState(true);
-  // Keep opts in a ref so the realtime subscription doesn't churn on
+  // Keep the filter in a ref so the realtime subscription doesn't churn on
   // every render. Consumers typically pass an inline object literal,
   // which would otherwise trigger a re-subscription each render.
-  const optsRef = useRef(opts);
-  optsRef.current = opts;
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  // Monotonic request token: a response for a superseded filter must never
+  // overwrite the snapshot of the current one.
+  const seqRef = useRef(0);
 
   const reload = useCallback(async () => {
-    const next = await fetchRuns(optsRef.current);
+    const seq = seqRef.current;
+    if (!enabledRef.current) {
+      setRuns([]);
+      setLoading(false);
+      return;
+    }
+    const next = await fetchRuns(filterRef.current);
+    if (seq !== seqRef.current) return; // filter moved on; drop the stale answer
     setRuns(next);
     setLoading(false);
   }, []);
 
   useEffect(() => {
+    // The filter changed, so the snapshot in hand answers a different question.
+    // Drop it rather than render another session's runs until the fetch lands.
+    seqRef.current++;
+    setRuns([]);
+    setLoading(true);
     void reload();
-    // The opts dependency uses a JSON.stringify so inline literals
+    // The dependency uses a JSON.stringify so inline literals
     // don't trigger spurious reloads when the shape is identical.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(opts)]);
+  }, [JSON.stringify(filter), enabled, reload]);
 
   // Realtime: any change to mem_runs re-fetches the filtered snapshot.
   // This is intentionally simple - the payload may not match the

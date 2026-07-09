@@ -410,18 +410,35 @@ export function CanvasStoreProvider({
     }
   }, [documents, activeTabId, setActiveTabId]);
 
-  // restoreDocuments rehydrates the set of open document tabs after a refresh /
-  // device switch from server-tracked artifacts (the vanishing-tabs fix). It
-  // replaces the in-memory documents wholesale (closed-by-X tabs are simply not
-  // in the list) and optionally restores which one was active, without
-  // stealing focus when nothing was active.
-  const restoreDocuments = useCallback((docs: DocMeta[], activeId?: string) => {
-    setDocuments(docs);
-    if (activeId && docs.some((d) => d.id === activeId)) {
-      setActiveTabIdInternal(activeId);
-      setRightModeInternal("file");
-    }
-  }, []);
+  // restoreDocuments makes the open document tabs match a given set, exactly.
+  // It is the ONLY authority on which docs are open: it rehydrates after a
+  // refresh / device switch (the vanishing-tabs fix) AND clears on a session
+  // switch (docs belong to the conversation that made them — an empty list is
+  // a legitimate, meaningful argument, not a no-op).
+  //
+  // Because it can remove the active tab, it retargets activeTabId whenever the
+  // tab it points at is a document that no longer exists.
+  const restoreDocuments = useCallback(
+    (docs: DocMeta[], activeId?: string) => {
+      setDocuments(docs);
+      const stillOpen = (id: string) => docs.some((d) => d.id === id);
+
+      // A caller-supplied active tab wins, when it survived the restore.
+      if (activeId && stillOpen(activeId)) {
+        setActiveTabId(activeId);
+        return;
+      }
+      // Otherwise only intervene when the tab in focus was a document that just
+      // disappeared — never steal focus from Preview / Terminal / a file tab.
+      const activeWasDoc = documents.some((d) => d.id === activeTabId);
+      if (!activeWasDoc || stillOpen(activeTabId)) return;
+      // Adjacent document if any survive, else Preview — the first tab, and the
+      // canvas's resting state. (Distinct from closeDocument, which returns to
+      // Media because that's where the boss clicked the document open from.)
+      setActiveTabId(docs.length ? docs[docs.length - 1].id : "preview");
+    },
+    [documents, activeTabId, setActiveTabId],
+  );
 
   const openFile = useCallback(
     (path: string) => {
