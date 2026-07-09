@@ -361,21 +361,24 @@ func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, er
 	}
 	override := bridgePrefOverride(in)
 
-	// A command that invokes an installed cli extension (yt-dlp, ffmpeg, …) is
-	// pinned to the cloud workspace and gets the persistent env sourced, whether
-	// or not the caller remembered to ask. Those binaries live ONLY on the
-	// volume, and only on PATH once env.sh runs — so "bridge":"cloud" and the
-	// `source …/env.sh &&` prefix are not preferences to be negotiated, they are
-	// the sole conditions under which the command can succeed at all. Leaving
-	// them to the model cost us a working yt-dlp for a day.
+	// A command that invokes an installed cli extension (yt-dlp, ffmpeg, …)
+	// DEFAULTS to the cloud workspace with the persistent env sourced — the
+	// extension installs there, and "which machine / which PATH" must never
+	// depend on the model remembering flags. Leaving that to prose cost us a
+	// working yt-dlp for a day.
 	//
-	// This overrides an explicit "mac" too: the extension record is the source
-	// of truth that the binary is cloud-resident, and running it on the Mac can
-	// only produce "command not found" or, worse, a different binary.
-	if prelude, cloudCLI := CloudCLICommand(ctx, cmd); cloudCLI {
-		cmd = prelude + cmd
-		p := bridge.PrefCloud
-		override = &p
+	// An EXPLICIT "mac" pin is respected, un-prefixed: that is the recipe's
+	// escape hatch for IP-walled fetches. YouTube (and friends) bot-wall
+	// datacenter egress but accept the Mac's residential IP — verified
+	// 2026-07-09: the identical yt-dlp transcript command that got "confirm
+	// you're not a bot" on the cloud succeeded instantly from the Mac. The
+	// /workspace env.sh doesn't exist on the Mac, so no prelude there.
+	if override == nil || *override != bridge.PrefMac {
+		if prelude, cloudCLI := CloudCLICommand(ctx, cmd); cloudCLI {
+			cmd = prelude + cmd
+			p := bridge.PrefCloud
+			override = &p
+		}
 	}
 
 	return bridgeCallPref(ctx, t.router, t.prefs, override, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
