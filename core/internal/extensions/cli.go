@@ -212,6 +212,58 @@ func (m *Manager) activateCLI(ctx context.Context, ext *Extension, doInstall boo
 // window site operators tolerate, without re-installing on every restart.
 const cliRefreshAfter = 7 * 24 * time.Hour
 
+// Mac-availability cache TTLs. Positive answers are stable (an installed brew
+// binary doesn't vanish); negative answers re-probe sooner because "absent"
+// often just means "the Mac was asleep when we asked".
+const (
+	macProbeTTLPresent = 10 * time.Minute
+	macProbeTTLAbsent  = 2 * time.Minute
+)
+
+// MacHasBinary reports whether the boss's Mac also has this binary on PATH,
+// probing over the Mac bridge with a TTL cache. This is what makes per-bridge
+// tool availability a live FACT in the agent's catalog instead of a guess:
+// the extension registry only knows about the manager's own cloud installs,
+// but the Mac's residential IP is the standing answer to bot-walled sites, so
+// the agent must be able to see when a tool exists there too. False when the
+// Mac bridge is down or unconfigured — never an error; absence of knowledge
+// degrades to the cloud-only behavior.
+func (m *Manager) MacHasBinary(ctx context.Context, binary string) bool {
+	binary = strings.TrimSpace(binary)
+	if m == nil || m.router == nil || binary == "" {
+		return false
+	}
+	m.macAvailMu.Lock()
+	if p, ok := m.macAvail[binary]; ok {
+		ttl := macProbeTTLAbsent
+		if p.present {
+			ttl = macProbeTTLPresent
+		}
+		if time.Since(p.at) < ttl {
+			m.macAvailMu.Unlock()
+			return p.present
+		}
+	}
+	m.macAvailMu.Unlock()
+
+	present := false
+	if b, _, err := m.router.For(ctx, bridge.PrefMac); err == nil && b != nil {
+		// The Mac bridge shell may not source brew's profile; include the
+		// standard Homebrew locations alongside PATH. cliBash's cloud env.sh
+		// prefix no-ops on the Mac (2>/dev/null + `;`), so it's safe here.
+		cmd := `PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" command -v ` + shellQuoteCLI(binary) + ` >/dev/null 2>&1`
+		_, code, ok := m.cliBash(ctx, b, cmd, "", 10)
+		present = ok && code == 0
+	}
+	m.macAvailMu.Lock()
+	if m.macAvail == nil {
+		m.macAvail = make(map[string]macProbe)
+	}
+	m.macAvail[binary] = macProbe{present: present, at: time.Now()}
+	m.macAvailMu.Unlock()
+	return present
+}
+
 // cliStale reports whether this extension's install hasn't been freshened
 // within cliRefreshAfter. LastCheckedAt is bumped by SetChecked on activation,
 // so it tracks "last time the manager touched the real binary".

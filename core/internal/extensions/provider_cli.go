@@ -75,6 +75,15 @@ func (p *CLIProvider) BuildSystemPrefix(ctx context.Context, _ string, _ string)
 		} else if cfg.Binary != "" {
 			line += " | binary: " + cfg.Binary
 		}
+		// Live per-bridge availability. The boss's own installs (brew) are
+		// invisible to the registry, so probe the Mac and SAY so — the Mac's
+		// residential IP is the standing answer when a site bot-walls the
+		// cloud's datacenter IP, and the agent can only route there if the
+		// catalog tells him the binary exists there. (2026-07-09: a working
+		// Mac yt-dlp sat unknown while the cloud copy got bot-walled.)
+		if p.mgr.MacHasBinary(ctx, cfg.Binary) {
+			line += ` | ALSO on the boss's Mac: rerun via bash_run with "bridge":"mac" when a site blocks or bot-walls the cloud IP — the Mac's home IP passes.`
+		}
 		b.WriteString(line + "\n")
 	}
 	for _, e := range pending {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -27,6 +29,23 @@ type Manager struct {
 	// layer to broadcast the resume as an unprompted turn (same path the
 	// heartbeat ExtensionAuthChecklist uses). Nil-safe.
 	onAuthComplete func(context.Context, *Extension)
+
+	// macAvail caches "does the boss's Mac ALSO have this binary?" per cli
+	// extension. The registry only tracks what the MANAGER installed (cloud
+	// volume); anything the boss installed himself (brew) was invisible to the
+	// agent — which is exactly how a working yt-dlp sat on the Mac while the
+	// agent declared YouTube unreachable (2026-07-09: the cloud copy was
+	// bot-walled, the Mac copy would have worked, and nothing told him it
+	// existed). The CLIProvider reads this to print live per-bridge
+	// availability into the system prompt.
+	macAvailMu sync.Mutex
+	macAvail   map[string]macProbe
+}
+
+// macProbe is one cached Mac-availability answer.
+type macProbe struct {
+	present bool
+	at      time.Time
 }
 
 // SetOnAuthComplete registers the resume callback (server wiring). Mirrors the

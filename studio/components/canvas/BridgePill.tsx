@@ -281,18 +281,30 @@ function renderPill({
     };
   }
 
+  // On "auto" the label shows the RESOLVED bridge prefixed with Auto — the
+  // boss must be able to tell "auto picked the Mac right now" from "I pinned
+  // the Mac". A bare "Mac" on auto reads as a pin, and it isn't one: auto can
+  // flip when the Mac sleeps, and an individual tool call can still pin
+  // itself elsewhere (a cloud-resident CLI runs on the cloud regardless —
+  // that's per-call, by design, and the call's output names its bridge).
+  const isAuto = (session.preference ?? "auto") === "auto";
+
   if (session.active_kind === "mac") {
     return {
-      label: "Mac",
-      title: session.why_active || "Mac bridge active",
+      label: isAuto ? "Auto · Mac" : "Mac",
+      title:
+        session.why_active ||
+        (isAuto ? "Auto routing — Mac is up, so it's preferred" : "Mac bridge active"),
       spin: false,
       toneClasses: toneToClasses("success"),
     };
   }
 
   return {
-    label: "Cloud",
-    title: session.why_active || "Cloud bridge active",
+    label: isAuto ? "Auto · Cloud" : "Cloud",
+    title:
+      session.why_active ||
+      (isAuto ? "Auto routing — using the cloud workspace" : "Cloud bridge active"),
     spin: false,
     toneClasses: toneToClasses("info"),
   };
