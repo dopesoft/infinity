@@ -37,6 +37,8 @@ type ToolGate interface {
 //     the synthesized denied output goes back to the model.
 //   - Allow=false, WaitForApproval=false          → synthesize Reason as
 //     the tool result, never run.
+//   - Allow=false, Redirect=true                  → same, but the block is a
+//     CORRECTION, not a question for the boss. See Redirect.
 //
 // Preview is a short human-readable summary of what the gated action is
 // going to do (rendered next to the inline Approve/Deny buttons in
@@ -48,6 +50,43 @@ type GateDecision struct {
 	WaitForApproval bool
 	WaitTimeout     time.Duration
 	Preview         string
+
+	// Redirect marks a denial that the AGENT must resolve, not the boss: the
+	// call was wrong (wrong bridge, wrong tool) and Reason names the right way
+	// to do it. Without this flag every Allow=false renders as "requires the
+	// boss's approval", and a redirect — which has no Trust contract by
+	// design — additionally renders as "the Trust store is misconfigured, the
+	// action was simply refused". The model then reports a broken system to the
+	// boss and gives up, instead of retrying with the tool it was just handed.
+	// That is exactly what happened on 2026-07-09: a yt-dlp transcript pull was
+	// redirected off claude_code__Bash, and Jarvis told the boss the bridge was
+	// the snag rather than calling bash_run.
+	//
+	// A redirect NEVER queues a contract and NEVER asks for approval.
+	Redirect bool
+}
+
+// turnIntentKey carries the boss's CURRENT request through ctx to the gates.
+// When a gate books a Trust contract, the single most useful thing it can put
+// on the approval card is the boss's own words — "why does he want this?" is
+// almost always "because you asked for X this turn". Stamped once at the top
+// of Loop.Run; read by buildPreview in the proactive gates. Deterministic
+// plumbing, no model cooperation required (Rule #1b).
+type turnIntentKey struct{}
+
+// WithTurnIntent records the user message that started this turn.
+func WithTurnIntent(ctx context.Context, userMsg string) context.Context {
+	userMsg = strings.TrimSpace(userMsg)
+	if userMsg == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, turnIntentKey{}, userMsg)
+}
+
+// TurnIntentFromContext returns the boss's request for the current turn, or "".
+func TurnIntentFromContext(ctx context.Context) string {
+	s, _ := ctx.Value(turnIntentKey{}).(string)
+	return s
 }
 
 // AllowAll is the default gate. Used when no Trust store is configured.

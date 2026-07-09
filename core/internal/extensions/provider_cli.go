@@ -46,10 +46,15 @@ func (p *CLIProvider) BuildSystemPrefix(ctx context.Context, _ string, _ string)
 	}
 
 	b.WriteString("<installed_cli_tools>\n")
-	b.WriteString(fmt.Sprintf(
-		"Command-line tools installed in your cloud workspace. Run them via bash_run; "+
-			"prefix the command with `source %s && ` so they use the persistent install + saved credentials.\n",
-		EnvFilePath))
+	// Deliberately does NOT tell the model to source the env or pass
+	// bridge="cloud". bash_run now does both itself for any binary in this
+	// catalog (tools.CloudCLICommand), and a mechanic stated as prose is a
+	// mechanic that gets dropped — this overlay said "prefix with `source
+	// env.sh &&`" for months while the model skipped it. Pass the bare command.
+	b.WriteString(
+		"Command-line tools installed and ready in your cloud workspace. Run one by passing the bare " +
+			"command to bash_run — it is already on PATH with its saved credentials, on the right machine. " +
+			"You do not need to install, source, or route anything.\n")
 	b.WriteString(
 		"SIGN-IN RULE (always): to authenticate any of these, call extension_activate \"<name>\" then " +
 			"browser_open the auth_url it returns, so the sign-in page is LIVE in the boss's Preview pane and he " +

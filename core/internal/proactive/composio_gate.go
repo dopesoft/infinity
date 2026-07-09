@@ -167,7 +167,7 @@ func (g *ComposioGate) Authorize(ctx context.Context, sessionID, project, toolNa
 		title = fmt.Sprintf("Run %s on %s via Composio", suffix, toolkit)
 	}
 
-	preview := buildPreview(toolName, input)
+	preview := buildPreview(ctx, toolName, input)
 	id, err := g.trust.Queue(ctx, &TrustContract{
 		Title:     title,
 		RiskLevel: "high",

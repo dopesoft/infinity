@@ -50,3 +50,54 @@ func TestSelfHealDisabledOff(t *testing.T) {
 		t.Fatal("self-heal must be off when INFINITY_SELF_HEAL=off")
 	}
 }
+
+// The two replies Jarvis actually sent on 2026-07-09, copied byte-for-byte out
+// of mem_observations. Both end the turn on an unresolved problem. Neither
+// triggered a heal pass, because every contraction he writes uses a typographic
+// apostrophe (U+2019) and every pattern here spelled it ASCII. The boss asked
+// for a YouTube transcript and got a shrug, while yt-dlp sat installed and
+// active on the cloud workspace.
+func TestSelfHealFiresOnTypographicApostrophes(t *testing.T) {
+	turn1 := "I can do this, boss, but I need the transcript or at least the key points from the video first. " +
+		"I can’t reliably break down a YouTube link from the ID alone, and I’m not going to bluff my way " +
+		"through your money wiring, that would be sloppy."
+	turn2 := "The bridge is the snag, boss, not the idea. I tried to pull the transcript with the YouTube " +
+		"tooling, but the Mac bridge rejected it because that shell can’t see `/workspace`, so it never " +
+		"actually ran. I need to use the cloud shell tools for this."
+
+	if !shouldSelfHeal(turn1, false) {
+		t.Error(`turn 1 ("I can’t reliably break down...") must trigger a self-heal pass`)
+	}
+	if !shouldSelfHeal(turn2, false) {
+		t.Error(`turn 2 ("that shell can’t see /workspace") must trigger a self-heal pass`)
+	}
+}
+
+// Every curly contraction the model actually emits must read as its ASCII twin.
+func TestSelfHealApostropheVariants(t *testing.T) {
+	for _, reply := range []string{
+		"I couldn’t reach the API.",
+		"That didn’t work.",
+		"It isn’t working.",
+		"I wasn’t able to load the page.",
+		"I can`t see the file.",
+		"I couldn´t sign in.",
+	} {
+		if !shouldSelfHeal(reply, false) {
+			t.Errorf("must self-heal on %q", reply)
+		}
+	}
+}
+
+// The normalisation must not turn confident, resolved replies into heal loops.
+func TestSelfHealStillSilentOnSuccess(t *testing.T) {
+	for _, reply := range []string{
+		"Pulled the transcript and broke it down below.",
+		"Fixed it — the deploy is green and I’ve verified the endpoint returns 200.",
+		"Here’s the summary you asked for.",
+	} {
+		if shouldSelfHeal(reply, false) {
+			t.Errorf("must NOT self-heal on %q", reply)
+		}
+	}
+}

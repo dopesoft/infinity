@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
 // CloudPathRedirectGate stops the wrong-bridge thrash: the model produces a
@@ -39,15 +41,32 @@ var claudeCodeFileTools = map[string]bool{
 
 const cloudPathRedirectReason = "WRONG BRIDGE — this call was NOT run. %s executes on the HOME MAC (working directory ~/Dev), which has NO /workspace directory; that path exists only on your CLOUD workspace, so this would fail with \"No such file or directory\". Use the cloud tools instead: bash_run for a shell command, fs_read to read a file — they run on the cloud where /workspace lives. And note: files created by document_create / media_job already EXIST and are indexed, so you usually don't need to verify them at all."
 
-func (CloudPathRedirectGate) Authorize(_ context.Context, _, _, toolName string, input map[string]any) GateDecision {
+const cloudCLIRedirectReason = "WRONG BRIDGE — this call was NOT run. %s executes on the HOME MAC, but this command invokes a tool that is installed on your CLOUD workspace and exists nowhere else. Run it with bash_run instead: bash_run puts the tool on PATH and pins it to the cloud for you, so pass the bare command — no `source`, no bridge argument."
+
+func (CloudPathRedirectGate) Authorize(ctx context.Context, _, _, toolName string, input map[string]any) GateDecision {
 	if !claudeCodeFileTools[toolName] {
 		return GateDecision{Allow: true}
 	}
 	for _, k := range []string{"file_path", "path", "command", "pattern"} {
 		if v, ok := input[k].(string); ok && referencesCloudWorkspace(v) {
 			return GateDecision{
-				Allow:  false,
-				Reason: strings.Replace(cloudPathRedirectReason, "%s", toolName, 1),
+				Allow:    false,
+				Redirect: true,
+				Reason:   strings.Replace(cloudPathRedirectReason, "%s", toolName, 1),
+			}
+		}
+	}
+	// A shell command that invokes an installed cli extension is bound for the
+	// cloud even when it names no /workspace path — `yt-dlp <url>` reads as an
+	// ordinary command, so the path check above sails right past it and the call
+	// lands on the Mac, where the binary does not exist. The catalog is the only
+	// thing that knows which binaries are cloud-resident, so ask it.
+	if cmd, ok := input["command"].(string); ok {
+		if _, cloudCLI := tools.CloudCLICommand(ctx, cmd); cloudCLI {
+			return GateDecision{
+				Allow:    false,
+				Redirect: true,
+				Reason:   strings.Replace(cloudCLIRedirectReason, "%s", toolName, 1),
 			}
 		}
 	}

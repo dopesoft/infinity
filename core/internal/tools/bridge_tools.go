@@ -334,9 +334,9 @@ func (t *bridgeBash) Name() string { return "bash_run" }
 func (t *bridgeBash) Description() string {
 	return "Run a bash command on the active bridge. Output is truncated past 64KB " +
 		"and wall-time limited to 5 minutes. cwd is the workspace root unless specified. " +
-		"Pass bridge=\"cloud\" to pin the command to the cloud workspace regardless of the " +
-		"session's bridge — required for cloud-resident CLI tools (e.g. agent-reach), whose " +
-		"install + credentials live there and aren't on the Mac."
+		"Installed CLI tools (yt-dlp, ffmpeg, …) work with the bare command: this tool puts " +
+		"them on PATH and runs them on the cloud workspace where they live, automatically. " +
+		"bridge=\"cloud\"|\"mac\" pins an ordinary command to a specific machine."
 }
 func (t *bridgeBash) Schema() map[string]any {
 	return map[string]any{
@@ -360,6 +360,24 @@ func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, er
 		return redirect, nil
 	}
 	override := bridgePrefOverride(in)
+
+	// A command that invokes an installed cli extension (yt-dlp, ffmpeg, …) is
+	// pinned to the cloud workspace and gets the persistent env sourced, whether
+	// or not the caller remembered to ask. Those binaries live ONLY on the
+	// volume, and only on PATH once env.sh runs — so "bridge":"cloud" and the
+	// `source …/env.sh &&` prefix are not preferences to be negotiated, they are
+	// the sole conditions under which the command can succeed at all. Leaving
+	// them to the model cost us a working yt-dlp for a day.
+	//
+	// This overrides an explicit "mac" too: the extension record is the source
+	// of truth that the binary is cloud-resident, and running it on the Mac can
+	// only produce "command not found" or, worse, a different binary.
+	if prelude, cloudCLI := CloudCLICommand(ctx, cmd); cloudCLI {
+		cmd = prelude + cmd
+		p := bridge.PrefCloud
+		override = &p
+	}
+
 	return bridgeCallPref(ctx, t.router, t.prefs, override, "bash_run", func(b bridge.Bridge) ([]byte, int, bool) {
 		return b.Post(ctx, "/bash", map[string]any{
 			"cmd":         cmd,

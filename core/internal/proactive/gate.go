@@ -438,7 +438,7 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 			"home Mac. Gated because INFINITY_CLAUDE_CODE_BLOCK includes this verb."
 	}
 
-	preview := buildPreview(toolName, input)
+	preview := buildPreview(ctx, toolName, input)
 	id, err := g.trust.Queue(ctx, &TrustContract{
 		Title:     title,
 		RiskLevel: "high",
@@ -536,16 +536,164 @@ func (g *ClaudeCodeGate) WaitForDecision(ctx context.Context, contractID string,
 	}
 }
 
-func buildPreview(toolName string, input map[string]any) string {
-	b, err := json.MarshalIndent(map[string]any{
-		"tool":  toolName,
-		"input": input,
-	}, "", "  ")
-	if err != nil {
-		return toolName
+// buildPreview renders what the boss actually reads on the Approve/Deny card.
+// The boss's law, stated twice and meant: he does not know or care what "bash"
+// is. A card must read like a friend asking permission — his own request first
+// (why), then what will actually happen to his stuff in everyday words, then
+// whether it can be undone. The tool JSON survives at the bottom for anyone who
+// wants exactness; it is never the message.
+//
+//	You asked me to: "clean out my old builds"
+//	So I want to: permanently delete the folder ~/Dev/scratch/old-build (on your Mac)
+//	This can't be undone.
+//
+//	--- technical details ---
+//	{ ... }
+func buildPreview(ctx context.Context, toolName string, input map[string]any) string {
+	var b strings.Builder
+	lead := "I want to: "
+	if intent := agent.TurnIntentFromContext(ctx); intent != "" {
+		if len(intent) > 160 {
+			intent = intent[:157] + "..."
+		}
+		b.WriteString("You asked me to: “" + intent + "”\n")
+		lead = "So I want to: "
 	}
-	if len(b) > 4096 {
-		b = append(b[:4093], []byte("...")...)
+	effect, consequence := humanEffect(toolName, input)
+	b.WriteString(lead + effect)
+	if consequence != "" {
+		b.WriteString("\n" + consequence)
 	}
-	return string(b)
+	if raw, err := json.MarshalIndent(map[string]any{"tool": toolName, "input": input}, "", "  "); err == nil {
+		if len(raw) > 3584 {
+			raw = append(raw[:3581], []byte("...")...)
+		}
+		b.WriteString("\n\n--- technical details ---\n")
+		b.Write(raw)
+	}
+	return b.String()
+}
+
+// shellVerbEffects translates the command word of a shell invocation into what
+// it DOES to the boss's stuff. Generic shell knowledge, not per-vendor wiring.
+// The consequence string is the "can I take this back?" answer — the single
+// most important fact on a permission card.
+var shellVerbEffects = map[string]struct{ effect, consequence string }{
+	"rm":    {"permanently delete", "This can't be undone."},
+	"rmdir": {"permanently delete the folder", "This can't be undone."},
+	"shred": {"permanently destroy", "This can't be undone."},
+	"dd":    {"overwrite disk data with", "This can destroy data and can't be undone."},
+	"mkfs":  {"wipe and reformat", "This erases everything on it and can't be undone."},
+	"mv":       {"move or rename", ""},
+	"cp":       {"copy", ""},
+	"mkdir":    {"create a folder", ""},
+	"touch":    {"create the file", ""},
+	"curl":     {"download or send data over the internet:", ""},
+	"wget":     {"download from the internet:", ""},
+	"git":      {"run a git action on your code:", ""},
+	"npm":      {"run a package task:", ""},
+	"pip":      {"install a Python package:", ""},
+	"pip3":     {"install a Python package:", ""},
+	"brew":     {"install or manage software:", ""},
+	"kill":     {"stop a running program:", ""},
+	"chmod":    {"change who can access", ""},
+	"chown":    {"change who owns", ""},
+	"truncate": {"empty out the file", "Its contents are lost."},
+}
+
+// humanEffect turns (toolName, input) into a plain-English statement of what
+// will happen, plus an undo-ability consequence when one applies. Structural
+// translation only (prefix strip, verb dictionary, snake_case→words) — zero
+// per-vendor branches, per Rule #1.
+func humanEffect(toolName string, input map[string]any) (effect, consequence string) {
+	where := ""
+	action := toolName
+	if s, ok := strings.CutPrefix(toolName, "claude_code__"); ok {
+		action, where = s, " (on your Mac)"
+	} else if s, ok := strings.CutPrefix(toolName, "composio__"); ok {
+		// composio__GMAIL_SEND_EMAIL → "send email (through your Gmail account)"
+		toolkit, verb, found := strings.Cut(s, "_")
+		if found {
+			words := strings.ToLower(strings.ReplaceAll(verb, "_", " "))
+			return words + " (through your " + capitalize(strings.ToLower(toolkit)) + " account)", ""
+		}
+		action = s
+	}
+
+	switch strings.ToLower(action) {
+	case "bash", "bash_run":
+		cmd := firstNonEmpty(input, "command", "cmd")
+		if cmd == "" {
+			return "run a command" + where + ".", ""
+		}
+		word, target := commandWordAndTarget(cmd)
+		if v, ok := shellVerbEffects[word]; ok {
+			eff := v.effect
+			if target != "" {
+				eff += " " + target
+			}
+			return eff + where, v.consequence
+		}
+		return "run this command" + where + ":\n  " + truncateArg(cmd), ""
+	case "write":
+		return "create or overwrite the file " + firstNonEmpty(input, "file_path", "path") + where, "If the file already exists, its old contents are replaced."
+	case "edit":
+		return "edit the file " + firstNonEmpty(input, "file_path", "path") + where, ""
+	case "read":
+		return "read the file " + firstNonEmpty(input, "file_path", "path") + where, ""
+	}
+
+	// Generic fallback: snake/camel tool name → words, salient arg appended.
+	name := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(action, "__", " "), "_", " "))
+	if arg := firstNonEmpty(input, "url", "recipient", "to", "subject", "query", "path", "file_path", "name", "title", "prompt"); arg != "" {
+		return name + where + ":\n  " + truncateArg(arg), ""
+	}
+	return name + where + ".", ""
+}
+
+// commandWordAndTarget pulls the first real command word out of a shell line
+// (skipping sudo/env-assignment prefixes) plus its most salient argument, so
+// "sudo rm -rf ~/x" reads as ("rm", "~/x").
+func commandWordAndTarget(cmd string) (word, target string) {
+	fields := strings.Fields(cmd)
+	for i, f := range fields {
+		if f == "sudo" || f == "command" || f == "exec" || (strings.Contains(f, "=") && !strings.HasPrefix(f, "-")) {
+			continue
+		}
+		if j := strings.LastIndex(f, "/"); j >= 0 {
+			f = f[j+1:]
+		}
+		word = f
+		for _, a := range fields[i+1:] {
+			if !strings.HasPrefix(a, "-") {
+				target = truncateArg(a)
+				break
+			}
+		}
+		return word, target
+	}
+	return "", ""
+}
+
+func firstNonEmpty(input map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := input[k].(string); ok && strings.TrimSpace(v) != "" {
+			return truncateArg(strings.TrimSpace(v))
+		}
+	}
+	return ""
+}
+
+func truncateArg(s string) string {
+	if len(s) > 220 {
+		return s[:217] + "..."
+	}
+	return s
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }

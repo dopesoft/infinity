@@ -1097,6 +1097,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		return errors.New("agent loop has no LLM provider configured")
 	}
 
+	// Carry the boss's request to the Trust gates: when a gated call books an
+	// approval card, the card leads with HIS OWN WORDS ("You asked me to: …"),
+	// so he can tell what he's approving without reading tool JSON. ctx flows
+	// from here to every gate.Authorize call this turn.
+	ctx = WithTurnIntent(ctx, userMsg)
+
 	// Central model resolution. An empty model means "use defaults" -
 	// honor the boss's active selection from Studio first; only fall
 	// through to the provider boot default when no setting exists. This
@@ -1740,6 +1746,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				output  string
 				execErr error
 				endedAt time.Time
+				// gateRefused: the gate blocked this call and it never ran, with
+				// no Trust contract pending. A wrong-bridge redirect, or a hard
+				// refusal. Distinct from a boss denial (he answered; respect it).
+				gateRefused bool
+				// bossDenied: the boss explicitly declined the Trust contract.
+				// Not progress (nothing ran), but ALSO not an error to self-heal
+				// around — the agent must never treat the boss's "no" as a
+				// failure to be worked around.
+				bossDenied bool
 			)
 
 			switch {
@@ -1777,12 +1792,19 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					if reason == "" {
 						reason = "denied or expired"
 					}
-					output = "BLOCKED: " + tc.Name + " " + reason + "\nThe boss did not approve this call; do not retry without a fresh request."
+					output = "BLOCKED: " + tc.Name + " " + reason + "\n" +
+						"The boss did not approve this call. Do NOT retry it on your own. Instead, in your reply: " +
+						"say in ONE plain sentence what you were trying to do and why (no tool names, no JSON — " +
+						"describe it like you'd say it out loud), and tell him that if he wants it after all, " +
+						"saying so will bring the approval card back. His denial may mean 'no', or it may mean " +
+						"'I couldn't tell what this was' — give him the words to tell you which."
+					bossDenied = true
 				}
 				endedAt = time.Now().UTC()
 
 			default:
 				endedAt = time.Now().UTC()
+				gateRefused = true
 				output = formatGatedOutput(tc.Name, decision)
 				l.fireHookT(turnID, "ToolGated", s.ID, s.Project, tc.Name+": "+decision.Reason, map[string]any{
 					"name":        tc.Name,
@@ -1806,10 +1828,23 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			}
 
 			isErr := execErr != nil
-			if isErr {
+			switch {
+			case isErr:
 				output = fmt.Sprintf("ERROR: %v", execErr)
 				toolErredThisTurn = true // feeds the reactive self-heal check
-			} else {
+			case gateRefused:
+				// A refused call NEVER RAN. Counting it as forward progress was
+				// how a turn could end on "the bridge rejected it" while the
+				// loop believed the segment had succeeded — no self-heal, no
+				// continuation, just a shrug handed to the boss. It is the
+				// opposite of progress: something the agent must work around.
+				toolErredThisTurn = true
+			case bossDenied:
+				// The boss said no. Nothing ran, so it isn't progress — but it
+				// isn't a failure either: self-heal must never be pointed at
+				// working around the boss's explicit decision. Neither counter
+				// moves.
+			default:
 				// Forward progress for the continuation gate: a segment with
 				// zero successful tool results is thrash and won't be continued.
 				segmentSuccesses++
@@ -2064,8 +2099,30 @@ func macBridgeDownFallback(toolName string, cloudHealthy bool) string {
 // success-or-failure honesty matters here because the model will paraphrase
 // the result to the user, and if we lie ("queued") when the row was never
 // persisted the user gets a phantom Trust contract that never appears.
+//
+// A Redirect decision is a different animal from an approval gate: the call was
+// simply WRONG and Reason says how to do it right. It must never mention the
+// boss, approval, or the Trust store - the model's job is to retry, in this
+// same turn, with the tool it was just pointed at.
 func formatGatedOutput(toolName string, d GateDecision) string {
 	var b strings.Builder
+	if d.Redirect {
+		b.WriteString("NOT RUN: the call to ")
+		b.WriteString(toolName)
+		b.WriteString(" was wrong, and was corrected before it executed.\n")
+		if d.Reason != "" {
+			b.WriteString(d.Reason)
+			b.WriteString("\n")
+		}
+		// Deliberately never names the concepts it is trying to rule out
+		// ("approval", "Trust store", "queued"): a negated concept is still a
+		// concept, and this model reliably drops the negation and keeps the
+		// noun. Say only what to do.
+		b.WriteString("This is a correction to you, not a fault in the system. Nothing is pending and nothing ")
+		b.WriteString("needs the boss. Say nothing about it to him, report no failure, and retry NOW with the ")
+		b.WriteString("tool named above.")
+		return b.String()
+	}
 	b.WriteString("BLOCKED: tool ")
 	b.WriteString(toolName)
 	b.WriteString(" requires the boss's approval before running.\n")

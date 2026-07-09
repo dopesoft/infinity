@@ -2,8 +2,10 @@ package proactive
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
@@ -216,5 +218,69 @@ func TestForcePushBlockedOnlyWhenAutonomous(t *testing.T) {
 	// A normal autonomous push (no force) is NOT blocked by this rule.
 	if dec := g.Authorize(actx, "s", "p", "claude_code__bash", map[string]any{"command": "git push origin main"}); !dec.Allow {
 		t.Errorf("autonomous normal push should be allowed, got blocked: %s", dec.Reason)
+	}
+}
+
+// The Approve/Deny card must LEAD with plain language. The boss's complaint,
+// verbatim: approval requests were "very vague, not written in human language
+// so I know what I'm accepting or declining" — because buildPreview was raw
+// marshalled JSON. The human line comes first; the exact call stays below for
+// anyone who wants it.
+// It must read like a friend asking permission, in words anyone understands.
+// The boss, verbatim: "WHAT THE FUCK IS BASH... I want to run bash because it
+// will allow me to do X". So: what happens to his stuff (delete/send/download,
+// never the tool name), whether it can be undone, and his own request as the
+// why. Machinery stays below the fold.
+func TestPreviewSpeaksHumanNotMachinery(t *testing.T) {
+	ctx := agent.WithTurnIntent(context.Background(), "clean out my old builds")
+	p := buildPreview(ctx, "claude_code__Bash", map[string]any{"command": "rm -rf ~/Dev/scratch/old-build"})
+
+	// His own request leads the card — that IS the "why".
+	if !strings.Contains(p, "You asked me to: “clean out my old builds”") {
+		t.Fatalf("card must lead with the boss's own request, got:\n%s", p)
+	}
+	// The effect in plain words, not the mechanism.
+	if !strings.Contains(p, "permanently delete") {
+		t.Fatalf("card must say what happens in plain words, got:\n%s", p)
+	}
+	// The single most important fact on a permission card: can I take it back?
+	if !strings.Contains(p, "can't be undone") {
+		t.Fatalf("a destructive action must say it can't be undone, got:\n%s", p)
+	}
+	if !strings.Contains(p, "(on your Mac)") {
+		t.Fatalf("card must name whose machine is touched, got:\n%s", p)
+	}
+	// "Bash" is machinery; above the fold it must not appear.
+	human := strings.SplitN(p, "--- technical details ---", 2)[0]
+	if strings.Contains(strings.ToLower(human), "bash") {
+		t.Fatalf("the human half must not name the tool, got:\n%s", human)
+	}
+	if !strings.Contains(p, "--- technical details ---") {
+		t.Fatalf("exact call must remain below the fold, got:\n%s", p)
+	}
+}
+
+// Composio verbs translate structurally: GMAIL_FETCH_EMAILS reads as an action
+// on his account, never as a verb id.
+func TestPreviewTranslatesComposioVerbs(t *testing.T) {
+	p := buildPreview(context.Background(), "composio__GMAIL_FETCH_EMAILS", map[string]any{"max_results": 5})
+	human := strings.SplitN(p, "--- technical details ---", 2)[0]
+	if !strings.Contains(human, "fetch emails (through your Gmail account)") {
+		t.Fatalf("verb id must translate to plain words, got:\n%s", human)
+	}
+	if strings.Contains(human, "GMAIL_FETCH_EMAILS") {
+		t.Fatalf("raw verb id must stay below the fold, got:\n%s", human)
+	}
+}
+
+// No turn intent (autonomous cron fire) → the card still speaks human, just
+// without the "You asked me to" line.
+func TestPreviewWithoutIntentStillHuman(t *testing.T) {
+	p := buildPreview(context.Background(), "claude_code__Bash", map[string]any{"command": "rm -rf /workspace/tmp"})
+	if strings.Contains(p, "You asked me to") {
+		t.Fatalf("no intent in ctx must mean no intent line, got:\n%s", p)
+	}
+	if !strings.HasPrefix(p, "I want to: permanently delete") {
+		t.Fatalf("card must open with the plain effect, got:\n%s", p)
 	}
 }

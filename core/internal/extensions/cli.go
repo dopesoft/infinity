@@ -290,3 +290,39 @@ func (m *Manager) touchChecked(ctx context.Context, name string) {
 	_, _ = m.store.pool.Exec(ctx,
 		`UPDATE mem_extensions SET last_checked_at = NOW() WHERE name = $1`, name)
 }
+
+// CloudCLIBinaries implements tools.CLICatalog: the binary names of every
+// active cli extension. These live on the cloud workspace volume and nowhere
+// else, which is what lets bash_run and the wrong-bridge gate route a bare
+// `yt-dlp <url>` correctly without the model having to say so.
+//
+// Errors return nil, never an error: a catalog miss must degrade to "route as
+// usual", never fail the boss's tool call.
+func (m *Manager) CloudCLIBinaries(ctx context.Context) []string {
+	if m == nil {
+		return nil
+	}
+	active, err := m.ListActive(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range active {
+		if e.Kind != KindCLI {
+			continue
+		}
+		cfg, perr := parseCLIConfig(e.Config)
+		if perr != nil || strings.TrimSpace(cfg.Binary) == "" {
+			continue
+		}
+		out = append(out, strings.TrimSpace(cfg.Binary))
+	}
+	return out
+}
+
+// CloudEnvPrelude implements tools.CLICatalog: the shell prefix that puts the
+// volume-resident installs on PATH. Mirrors cliBash's own wrapper, so the agent
+// and the Manager share one definition of "the persistent environment".
+func (m *Manager) CloudEnvPrelude() string {
+	return "source " + EnvFilePath + " 2>/dev/null && "
+}

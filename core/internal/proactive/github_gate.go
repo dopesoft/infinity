@@ -103,7 +103,7 @@ func (g *GitHubGate) Authorize(ctx context.Context, sessionID, project, toolName
 		}
 	}
 
-	preview := buildPreview(toolName, input)
+	preview := buildPreview(ctx, toolName, input)
 	id, err := g.trust.Queue(ctx, &TrustContract{
 		Title:     fmt.Sprintf("Run %s on github.com", toolName),
 		RiskLevel: "high",

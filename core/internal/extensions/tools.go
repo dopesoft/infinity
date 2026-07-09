@@ -128,8 +128,8 @@ func (t *extensionRegisterTool) Execute(ctx context.Context, in map[string]any) 
 	case kind == KindCLI:
 		result["message"] = fmt.Sprintf(
 			"%q is installed and ready in the cloud workspace. Run it via bash_run "+
-				"(source %s first so it uses the persistent install + credentials).",
-			name, EnvFilePath)
+				"with the bare command - PATH, credentials and machine are handled for you.",
+			name)
 	default:
 		result["message"] = fmt.Sprintf("MCP server %q connected - its tools are live now.", name)
 	}
@@ -253,7 +253,7 @@ func (t *extensionCheckTool) Execute(ctx context.Context, in map[string]any) (st
 	if ready {
 		_ = t.mgr.CompleteAuth(ctx, name)
 		res["status"] = string(StatusActive)
-		res["message"] = fmt.Sprintf("%q is authenticated and ready. Run it via bash_run (source %s first).", name, EnvFilePath)
+		res["message"] = fmt.Sprintf("%q is authenticated and ready. Run it via bash_run with the bare command.", name)
 		if ext.ResumeIntent != "" {
 			res["resume_intent"] = ext.ResumeIntent
 		}
@@ -323,8 +323,8 @@ func (t *extensionActivateTool) Execute(ctx context.Context, in map[string]any) 
 		}
 	case StatusActive:
 		res["message"] = fmt.Sprintf(
-			"%q is authenticated and ready. Run it via bash_run (source %s first), or continue what you were doing.",
-			name, EnvFilePath)
+			"%q is authenticated and ready. Run it via bash_run with the bare command, or continue what you were doing.",
+			name)
 		if ext.ResumeIntent != "" {
 			res["resume_intent"] = ext.ResumeIntent
 		}

@@ -50,16 +50,36 @@ var browserPuntSignal = regexp.MustCompile(`(?i)(in the preview.{0,120}?\bopen\b
 // so a success that merely MENTIONS a past failure isn't re-healed.
 var resolvedSignal = regexp.MustCompile(`(?i)(fixed it|now works|works now|confirmed|verified|sorted (it )?out|\bresolved\b|got it working|up and running|all set|all done)`)
 
+// typographicApostrophes are the non-ASCII characters a model reaches for when
+// it writes "can’t". EVERY pattern in this file spells its contractions with an
+// ASCII apostrophe, so without this normalisation `can'?t` simply does not
+// match `can’t` — and the whole reflex is blind to the replies it exists to
+// catch. Jarvis's own soul tells him to write like a refined British butler, so
+// in production essentially every contraction he emits is curly.
+//
+// This is what silently disarmed the self-heal loop: on 2026-07-09 he ended two
+// consecutive turns with "I can’t reliably break down a YouTube link" and "that
+// shell can’t see /workspace" — both textbook triggers, neither detected, no
+// heal pass, and the boss got a shrug instead of a transcript.
+var typographicApostrophes = strings.NewReplacer(
+	"’", "'", // ’ right single quotation mark (what LLMs emit)
+	"‘", "'", // ‘ left single quotation mark
+	"ʼ", "'", // ʼ modifier letter apostrophe
+	"´", "'", // ´ acute accent
+	"`", "'", // ` grave accent
+	"＇", "'", // ＇ fullwidth apostrophe
+)
+
 // shouldSelfHeal reports whether the loop should inject a self-heal pass before
 // completing the turn. Conservative: fires on a clear failure signal the reply
-// doesn't also claim to have resolved. toolErred (a tool errored this turn) is
-// a booster: an empty reply or a failure-flavored one after a tool error is a
-// strong "didn't finish" signal.
+// doesn't also claim to have resolved. toolErred (a tool errored, or a gate
+// refused a call, this turn) is a booster: an empty reply or a failure-flavored
+// one after a tool error is a strong "didn't finish" signal.
 func shouldSelfHeal(replyText string, toolErred bool) bool {
 	if selfHealDisabled() {
 		return false
 	}
-	t := strings.TrimSpace(replyText)
+	t := typographicApostrophes.Replace(strings.TrimSpace(replyText))
 	if t == "" {
 		// Empty final reply with no tool calls = confused decode; a nudge often
 		// recovers it, but only bother if something actually errored.

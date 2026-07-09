@@ -689,6 +689,12 @@ func serveCmd() *cobra.Command {
 				// The management tools (extension_register/check/...) are cheap
 				// and must be live immediately, so register them synchronously.
 				extensions.RegisterTools(registry, extManager)
+				// Publish the installed-CLI catalog to the tool layer. This is
+				// what lets bash_run auto-source the workspace env and pin the
+				// cloud bridge for a bare `yt-dlp <url>`, and what lets the
+				// wrong-bridge gate catch the same command aimed at the Mac.
+				// Without this line those two mechanics silently no-op.
+				tools.AttachCLICatalog(extManager)
 				// Re-activating previously-registered runtime extensions does
 				// network I/O — each one dials its MCP endpoint or probes the
 				// cloud-workspace bridge — SERIALLY and with no per-call deadline.

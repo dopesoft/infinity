@@ -234,7 +234,7 @@ func (g *WardGate) Authorize(ctx context.Context, sessionID, project, toolName s
 			"ward":       glob,
 		},
 		Reasoning: fmt.Sprintf("Jarvis wants to read a path you marked sensitive (%q). Approve to allow this read.", glob),
-		Preview:   buildPreview(toolName, input),
+		Preview:   buildPreview(ctx, toolName, input),
 	})
 	if err != nil || id == "" {
 		return agent.GateDecision{Allow: false, Reason: "could not queue trust contract for sensitive ward"}

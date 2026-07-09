@@ -96,6 +96,10 @@ func DefaultLoadedTools() []string {
 		// workspace bridge's baked helpers; no-op if no workspace wired.
 		"document_create",
 		// Claude Code bridge - most boss sessions touch the home Mac.
+		// NOTE: claude_code__* is ALWAYS the Mac, whatever the session's bridge
+		// preference says. Its cloud counterparts are directly below and are
+		// NOT optional: shipping the Mac shell without the cloud shell means the
+		// only shell in hand runs on the wrong machine.
 		"claude_code__Read",
 		"claude_code__Write",
 		"claude_code__Edit",
@@ -103,6 +107,24 @@ func DefaultLoadedTools() []string {
 		"claude_code__Grep",
 		"claude_code__Glob",
 		"claude_code__LS",
+		// Cloud workspace shell + reader, routed by the session's bridge
+		// preference. Everything that lives on the volume is reachable ONLY
+		// through these: every seeded cli extension (yt-dlp, ffmpeg), the
+		// persistent env at /workspace/.jarvis/env.sh, and every artifact
+		// document_create / media_job writes.
+		//
+		// These MUST be loaded by default. Two things in the system already
+		// tell the model to call bash_run by name - the <installed_cli_tools>
+		// overlay ("Run them via bash_run") and CloudPathRedirectGate ("Use
+		// bash_run instead") - and both were pointing at a tool whose schema
+		// the session had never been shipped. tool_search doesn't rescue it:
+		// searching "youtube transcript yt-dlp" does not surface a tool whose
+		// description is about running shell commands. So the model reached for
+		// the one shell it could see, claude_code__Bash, hit the Mac, got
+		// blocked, and told the boss it couldn't pull a YouTube transcript -
+		// while yt-dlp sat installed and active on the cloud workspace.
+		"bash_run",
+		"fs_read",
 		// Skill self-authoring. These let the agent crystallize repeated
 		// multi-step recipes into named skills mid-conversation. The
 		// SkillProposalCard component in Studio pattern-matches these

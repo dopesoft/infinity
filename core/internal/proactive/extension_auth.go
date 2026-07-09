@@ -46,8 +46,8 @@ func ExtensionAuthChecklist(mgr *extensions.Manager) Checklist {
 				ResolveSourceTag(ctx, h.pool, tag)
 			}
 			detail := fmt.Sprintf(
-				"The %q tool is installed and authenticated in the cloud workspace - run it via bash_run (source %s first so it uses the saved credentials).",
-				ext.Name, extensions.EnvFilePath)
+				"The %q tool is installed and authenticated in the cloud workspace - run it via bash_run with the bare command.",
+				ext.Name)
 			if ext.ResumeIntent != "" {
 				detail += "\nResume what you set it up for: " + ext.ResumeIntent
 			}
