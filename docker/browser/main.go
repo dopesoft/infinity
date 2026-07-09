@@ -107,6 +107,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/version", handleVersion)
 	mux.HandleFunc("/session", auth(handleSessionCreate)) // POST
+	mux.HandleFunc("/sessions", auth(handleSessionList))  // GET — core reconciles zombies against this
 	mux.HandleFunc("/session/", auth(routeSession))       // POST/GET /session/{id}/...
 
 	addr := ":" + envDefault("PORT", "8080")
@@ -203,6 +204,28 @@ func (m *Manager) put(s *Session) {
 	m.mu.Lock()
 	m.sessions[s.id] = s
 	m.mu.Unlock()
+}
+
+// sessionDTO is one row of GET /sessions — just enough for Core to name and
+// age a session it doesn't recognise.
+type sessionDTO struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+	LastUsed  string `json:"last_used"` // RFC3339
+}
+
+func (m *Manager) list() []sessionDTO {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]sessionDTO, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		out = append(out, sessionDTO{
+			SessionID: id,
+			URL:       s.url(),
+			LastUsed:  s.lastUsed().UTC().Format(time.RFC3339),
+		})
+	}
+	return out
 }
 
 func (m *Manager) remove(id string) {
@@ -455,6 +478,21 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"sessions": mgr.count(),
 		"max":      maxSessions,
 	})
+}
+
+// handleSessionList names every live session so Core can reconcile its own
+// registry against ours. The two registries WILL diverge — a relay stream
+// drops, or Core redeploys and forgets everything while we keep holding
+// sessions against maxSessions. Without this endpoint that divergence is a
+// deadlock: Core can't close what it can't name, and creates bounce off the
+// cap for the full idleTimeout (2026-07-09: the agent burned a whole turn
+// walled off from its own browser). GET only.
+func handleSessionList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errBody("GET only"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": mgr.list()})
 }
 
 func handleVersion(w http.ResponseWriter, r *http.Request) {

@@ -51,6 +51,11 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 export PIP_USER=1
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$HOME/.local/bin" "$HOME/bin" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" 2>/dev/null || true
+# Site cookies for scraper CLIs (yt-dlp etc). Sites bot-wall datacenter IPs;
+# a one-time cookie export from the boss's logged-in browser, saved here in
+# Netscape format as <site>.txt, is the standing workaround. Persistent: on
+# the volume, survives redeploys, one export lasts months.
+mkdir -p "$HOME/cookies" 2>/dev/null || true
 `
 
 // urlRe pulls the first http(s) URL out of an auth command's stdout - the
@@ -151,6 +156,21 @@ func (m *Manager) activateCLI(ctx context.Context, ext *Extension, doInstall boo
 		if !m.binaryPresent(ctx, b, cfg.Binary) {
 			return fmt.Errorf("%q still not on PATH after install - does the installer honor $HOME/.local/bin? (HOME is pinned to %s)", cfg.Binary, persistDir)
 		}
+	} else if doInstall && m.cliStale(ext) && strings.TrimSpace(cfg.Install) != "" {
+		// Present but STALE: re-run the install (idempotent — the seeded
+		// commands are `pip install -U ...` / re-fetch shapes). Install-once-
+		// never-update is how yt-dlp sat at a 4-month-old build until YouTube's
+		// bot checks stopped accepting its client signatures (2026-07-09) and
+		// the boss's transcript request died on a tool that "was installed".
+		// Scraper-facing CLIs rot on a timescale of weeks; boot is the natural,
+		// already-serialized place to freshen them. Best-effort: a failed
+		// update never takes down a working binary.
+		if out, code, ok := m.cliBash(ctx, b, cfg.Install, cfg.Cwd, 600); ok && code == 0 {
+			m.logger.Info("refreshed stale cli extension", "name", ext.Name)
+		} else if ok {
+			m.logger.Warn("stale cli refresh failed; keeping current version",
+				"name", ext.Name, "exit", code, "tail", tailLines(out, 4))
+		}
 	}
 
 	// Ready? (installed + authed)
@@ -185,6 +205,25 @@ func (m *Manager) activateCLI(ctx context.Context, ext *Extension, doInstall boo
 	}
 
 	return fmt.Errorf("%q is installed but its check command failed and no auth_cmd is configured to fix it", cfg.Binary)
+}
+
+// cliRefreshAfter is how old a cli install may grow before boot re-runs its
+// install command. A week keeps scraper-facing tools (yt-dlp) inside the
+// window site operators tolerate, without re-installing on every restart.
+const cliRefreshAfter = 7 * 24 * time.Hour
+
+// cliStale reports whether this extension's install hasn't been freshened
+// within cliRefreshAfter. LastCheckedAt is bumped by SetChecked on activation,
+// so it tracks "last time the manager touched the real binary".
+func (m *Manager) cliStale(ext *Extension) bool {
+	if ext == nil {
+		return false
+	}
+	t := ext.UpdatedAt
+	if ext.LastCheckedAt != nil && ext.LastCheckedAt.After(t) {
+		t = *ext.LastCheckedAt
+	}
+	return !t.IsZero() && time.Since(t) > cliRefreshAfter
 }
 
 // startDetachedAuth launches a cli's auth_cmd as a DETACHED, long-lived

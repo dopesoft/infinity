@@ -215,6 +215,42 @@ func (c *Client) Close(ctx context.Context, sessionID string) error {
 	return c.post(ctx, "/session/"+sessionID+"/close", map[string]any{}, nil)
 }
 
+// RemoteSession is one live session as the sidecar reports it (GET /sessions).
+type RemoteSession struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+	LastUsed  string `json:"last_used"`
+}
+
+// ListSessions names every session the sidecar currently holds. This is the
+// reconcile primitive: the registry's view is in-memory, so a core redeploy
+// (or a dropped relay) leaves the sidecar holding sessions core cannot name —
+// and at BROWSER_MAX_SESSIONS that's a deadlock, not a leak. Implements the
+// registry's optional sessionLister capability; the camofox backend doesn't,
+// and reconcile simply skips there.
+func (c *Client) ListSessions(ctx context.Context) ([]RemoteSession, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/sessions", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.auth(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("browser sidecar sessions: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		Sessions []RemoteSession `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Sessions, nil
+}
+
 // SubscribeScreencast opens the sidecar SSE stream and returns a channel of
 // frames. The channel closes when ctx is cancelled or the stream ends. The
 // caller owns ctx cancellation (used by the registry's relay goroutine,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,10 +82,33 @@ func (r *Registry) emit(chatID string, f Frame) {
 	}
 }
 
+// sessionLister is the optional backend capability behind zombie reconcile.
+// The chromedp sidecar client implements it; camofox doesn't (its engine owns
+// its own session lifecycle), and every reconcile path degrades to a no-op.
+type sessionLister interface {
+	ListSessions(ctx context.Context) ([]RemoteSession, error)
+}
+
 // Open creates a browser session, books a mem_runs row, and starts the
 // screencast relay. chatID is the Studio chat session the frames route to.
+//
+// If the sidecar refuses because its concurrent-session cap is full, that is
+// almost never the boss actually running that many browsers — it is registry
+// divergence: sessions the sidecar holds that core no longer tracks (a core
+// redeploy wipes this in-memory registry; a dropped relay used to forget
+// without closing). Those zombies are unusable by definition — nothing can
+// name them — so reconcile closes them and the create retries once. The agent
+// never sees the deadlock. (2026-07-09: without this, the agent spent a turn
+// bouncing off "max 2 concurrent sessions" while browser_close insisted there
+// was nothing to close, then wandered off toward scraper sites.)
 func (r *Registry) Open(ctx context.Context, chatID, url string) (*SessionInfo, error) {
 	info, err := r.backend.CreateSession(ctx, url)
+	if err != nil && strings.Contains(err.Error(), "concurrent browser sessions") {
+		if n := r.reconcileZombies(ctx); n > 0 {
+			infoLog.Printf("browser: closed %d zombie session(s) at capacity, retrying open", n)
+			info, err = r.backend.CreateSession(ctx, url)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -121,10 +145,21 @@ func (r *Registry) Open(ctx context.Context, chatID, url string) (*SessionInfo, 
 
 // relay streams frames from the sidecar to the chat session until ctx ends
 // or the sidecar stream closes.
+//
+// Teardown here MUST be symmetric: if this side forgets the session (finish),
+// the sidecar side must be closed too. The old shape forgot without closing —
+// core's registry emptied while the sidecar kept the session against its
+// concurrency cap for the full idle timeout, which is how the agent ended up
+// walled off from a browser it couldn't close ("max 2 concurrent" vs "no open
+// browser session to close", 30 minutes apart from any fix).
 func (r *Registry) relay(ctx context.Context, e *entry) {
 	frames, err := r.backend.SubscribeScreencast(ctx, e.browserID)
 	if err != nil {
+		// Never subscribed: the entry would otherwise sit here untouched with
+		// its mem_runs row 'running' until the idle janitor. Same rule as the
+		// stream-end path — forget AND close, together.
 		log.Printf("browser: screencast subscribe failed for %s: %v", e.browserID, err)
+		r.closeAndFinish(e.browserID, err)
 		return
 	}
 	for f := range frames {
@@ -134,8 +169,51 @@ func (r *Registry) relay(ctx context.Context, e *entry) {
 		f.BrowserID = e.browserID
 		r.emit(e.chatID, f)
 	}
-	// Stream ended (sidecar session gone). Close out the run if still open.
-	r.finish(context.Background(), e.browserID, nil)
+	// Stream ended. Whatever ended it (sidecar session died, SSE dropped, core
+	// shutting down), this session is no longer drivable from core — Resolve
+	// forgets it the moment finish runs. Close the sidecar half as well so it
+	// can't linger as an unnameable zombie holding the cap.
+	r.closeAndFinish(e.browserID, nil)
+}
+
+// closeAndFinish tears down both halves of a session — sidecar first
+// (best-effort; it may already be gone), then the core bookkeeping. The one
+// invariant: no path may finish without also closing.
+func (r *Registry) closeAndFinish(browserID string, runErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = r.backend.Close(ctx, browserID)
+	r.finish(ctx, browserID, runErr)
+}
+
+// reconcileZombies closes every sidecar session core doesn't track. Returns
+// how many were closed. Requires the backend to support listing; otherwise 0.
+func (r *Registry) reconcileZombies(ctx context.Context) int {
+	lister, ok := r.backend.(sessionLister)
+	if !ok {
+		return 0
+	}
+	remote, err := lister.ListSessions(ctx)
+	if err != nil {
+		log.Printf("browser: zombie reconcile list failed: %v", err)
+		return 0
+	}
+	r.mu.Lock()
+	var zombies []string
+	for _, s := range remote {
+		if _, tracked := r.sessions[s.SessionID]; !tracked {
+			zombies = append(zombies, s.SessionID)
+		}
+	}
+	r.mu.Unlock()
+	closed := 0
+	for _, id := range zombies {
+		if err := r.backend.Close(ctx, id); err == nil {
+			closed++
+			infoLog.Printf("browser: reconciled zombie session %s", id)
+		}
+	}
+	return closed
 }
 
 // Resolve returns the browser session id a tool should act on: the explicit
