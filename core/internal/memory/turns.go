@@ -46,10 +46,14 @@ func (s *TurnStore) Open(ctx context.Context, sessionID, userText, model string)
 	if s == nil || s.pool == nil {
 		return "", nil
 	}
+	// last_run_at is stamped on EVERY turn open (new or existing session) -
+	// it's what lets the sessions drawer order by real activity, so a chat
+	// continued today (voice or text) surfaces at the top with its title
+	// instead of staying buried at its started_at position.
 	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO mem_sessions (id, started_at)
-		VALUES ($1::uuid, NOW())
-		ON CONFLICT (id) DO NOTHING
+		INSERT INTO mem_sessions (id, started_at, last_run_at)
+		VALUES ($1::uuid, NOW(), NOW())
+		ON CONFLICT (id) DO UPDATE SET last_run_at = NOW()
 	`, sessionID); err != nil {
 		return "", err
 	}

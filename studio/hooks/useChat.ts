@@ -81,6 +81,18 @@ const SESSION_KEY = "infinity:sessionId";
 // returns rows for the session, those overwrite the cache entirely.
 const MESSAGES_KEY_PREFIX = "infinity:messages:";
 const MESSAGES_CACHE_LIMIT = 200;
+// Last time the boss actually exchanged messages, stamped on every transcript
+// change. Used by the stale-session rotation below.
+const LAST_ACTIVE_KEY = "infinity:lastActiveAt";
+// A session restored from storage (NOT explicitly opened) whose last activity
+// is older than this is a finished conversation: rotate to a fresh session so
+// the new exchange becomes its own chat with its own auto-generated title.
+// Without this, the wake-word/voice flow especially talks into whatever
+// weeks-old session localStorage was holding - the 2026-07-10 voice chat
+// landed in a 17-day-old Discuss session, so no new titled chat ever appeared
+// ("voice chats don't generate a title"). Memory continuity is unaffected:
+// cross-session recall is the mem_* substrate's job, not the transcript's.
+const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
 // If the agent goes silent for this long after a send, surface a timeout
 // so the UI can never get stuck on "thinking" forever.
 const TURN_WATCHDOG_MS = 90_000;
@@ -234,6 +246,36 @@ function writeStoredSessionId(id: string) {
   } catch {
     /* private mode / quota */
   }
+}
+
+function readLastActiveAt(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    return Number(window.localStorage.getItem(LAST_ACTIVE_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeLastActiveAt(t: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LAST_ACTIVE_KEY, String(t));
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+// lastActivityFor estimates when a stored session was last used: the global
+// activity stamp or the newest cached message for that session, whichever is
+// later. 0 when unknown (fresh device / cleared storage) - callers treat
+// unknown as NOT stale so we never rotate away from a session blind.
+function lastActivityFor(sessionId: string): number {
+  let last = readLastActiveAt();
+  for (const m of readCachedMessages(sessionId)) {
+    if (m.createdAt > last) last = m.createdAt;
+  }
+  return last;
 }
 
 // Pending / in-flight messages aren't worth caching - they'd hydrate as
@@ -701,7 +743,18 @@ export function useChat() {
   // once auth is wired so multiple tabs / devices stay in sync.
   useEffect(() => {
     const stored = readStoredSessionId();
-    const id = requestedSessionId || stored || newSessionId();
+    let id = requestedSessionId || stored || newSessionId();
+    // Stale-session rotation: a restored (never an explicitly requested)
+    // session idle past the window is a finished conversation - start fresh
+    // so this exchange gets its own chat + title. Synchronous on purpose:
+    // it must win the race against the ?voice=1 auto-start, which otherwise
+    // pipes a whole voice conversation into the stale session.
+    if (!requestedSessionId && stored) {
+      const last = lastActivityFor(stored);
+      if (last > 0 && Date.now() - last > STALE_SESSION_MS) {
+        id = newSessionId();
+      }
+    }
     setSessionId(id);
     writeStoredSessionId(id);
 
@@ -743,10 +796,12 @@ export function useChat() {
 
   // Mirror the visible transcript into localStorage whenever it changes.
   // Pending / thinking messages are filtered out by writeCachedMessages
-  // so the cache only contains finalized turns.
+  // so the cache only contains finalized turns. The activity stamp feeds
+  // the stale-session rotation.
   useEffect(() => {
     if (!sessionId) return;
     writeCachedMessages(sessionId, messages);
+    if (messages.length > 0) writeLastActiveAt(Date.now());
   }, [sessionId, messages]);
 
   useEffect(() => () => clearWatchdog(), [clearWatchdog]);
@@ -770,6 +825,27 @@ export function useChat() {
   // reconcile just re-slams the entire conversation at once. If we never went
   // hidden, do NOTHING — let the live stream keep flowing.
   const wasHiddenRef = useRef(false);
+  // Refs for the foreground handler below - it must read the CURRENT
+  // transcript/streaming state without re-binding listeners on every render.
+  const messagesLenRef = useRef(0);
+  messagesLenRef.current = messages.length;
+  const isStreamingRef = useRef(false);
+  isStreamingRef.current = isStreaming;
+
+  // rotateToFreshSession is the resume-time half of stale-session rotation
+  // (the mount path handles reloads). Unlike newSession it does NOT wipe the
+  // previous session's cache - that conversation is finished, not discarded.
+  const rotateToFreshSession = useCallback(() => {
+    clearWatchdog();
+    const id = newSessionId();
+    setSessionId(id);
+    writeStoredSessionId(id);
+    setMessages([]);
+    turnStartRef.current = null;
+    setIsStreaming(false);
+    writeLastActiveAt(Date.now()); // the fresh session is "active now"
+  }, [clearWatchdog]);
+
   useEffect(() => {
     if (!sessionId) return;
     const onHide = () => {
@@ -781,6 +857,19 @@ export function useChat() {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (!wasHiddenRef.current) return; // plain blur/focus — socket stayed live
       wasHiddenRef.current = false;
+      // Stale-session rotation on resume: an installed PWA can stay mounted
+      // for days, so the mount-time staleness check never re-runs. Returning
+      // to a conversation idle past the window starts a fresh chat (with its
+      // own title) instead of resuming it - never for explicitly requested
+      // sessions, never mid-stream, never when there's nothing to rotate from.
+      if (!requestedSessionId && !isStreamingRef.current && messagesLenRef.current > 0) {
+        const last = readLastActiveAt();
+        if (last > 0 && Date.now() - last > STALE_SESSION_MS) {
+          rotateToFreshSession();
+          ws.reconnect();
+          return; // nothing to reconcile - the fresh session is empty
+        }
+      }
       ws.reconnect();
       void reconcileFromCore().catch(() => {
         /* Core may still be waking; WS reconnect will retry independently. */
@@ -796,7 +885,7 @@ export function useChat() {
       window.removeEventListener("focus", onForeground);
       document.removeEventListener("visibilitychange", onForeground);
     };
-  }, [sessionId, ws, reconcileFromCore]);
+  }, [sessionId, ws, reconcileFromCore, requestedSessionId, rotateToFreshSession]);
 
   // WS-reconnect rehydration. iOS Safari (and any flaky network) can kill
   // the WebSocket mid-turn. The agent finishes the turn and writes to

@@ -131,7 +131,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			  FROM mem_sessions s
 			 WHERE s.deleted_at IS NULL
 			   AND COALESCE(s.kind, 'user') = 'user'
-			 ORDER BY s.started_at DESC
+			 ORDER BY COALESCE(s.last_run_at, s.started_at) DESC
 			 LIMIT $1
 		`, limit)
 		if err != nil {
@@ -181,15 +181,25 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The DB rows arrive already newest-first (ORDER BY started_at DESC),
-	// but the RAM-only live sessions above are appended in Go map-iteration
+	// The DB rows arrive already newest-first (ORDER BY activity DESC), but
+	// the RAM-only live sessions above are appended in Go map-iteration
 	// order, which is non-deterministic. That left a brand-new session
 	// (live in RAM before its mem_sessions row commits) stranded at the end
 	// of the slice, so Studio rendered it at the BOTTOM of the "Today" group
 	// instead of the top. Re-sort the merged slice so the response is one
-	// consistent newest-first order regardless of each row's source.
+	// consistent order regardless of each row's source. Latest ACTIVITY
+	// first (last turn, falling back to creation) - a session continued
+	// today must surface at the top even if it was created weeks ago, or
+	// its fresh auto-title stays buried (the "voice chats don't get a
+	// title" report). RFC3339 UTC strings compare correctly as strings.
+	activity := func(d sessionDTO) string {
+		if d.LastRunAt != "" {
+			return d.LastRunAt
+		}
+		return d.StartedAt
+	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].StartedAt > out[j].StartedAt
+		return activity(out[i]) > activity(out[j])
 	})
 
 	writeJSON(w, http.StatusOK, out)

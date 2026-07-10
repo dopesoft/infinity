@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"hash/fnv"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,9 +33,16 @@ type speakPump struct {
 	chunker voice.SentenceChunker
 	q       chan speakClip
 	drained chan struct{}
-	seq     int
-	lastAt  time.Time
 	narrate bool
+
+	// mu guards seq/lastAt/closed and the channel send. Two producers exist:
+	// the turn's event goroutine (onDelta/onToolCall/finish) and the
+	// turn-start ack timer - without the lock the timer could race finish()'s
+	// close(q) and panic on a closed-channel send.
+	mu     sync.Mutex
+	seq    int
+	lastAt time.Time
+	closed bool
 
 	// squelched is the server half of barge-in. The client cuts local
 	// playback the instant VAD fires, but Core would otherwise keep
@@ -58,6 +67,32 @@ type speakClip struct {
 // check…") suppresses the filler, but a silent tool call never leaves dead air.
 const narrationGap = 1200 * time.Millisecond
 
+// turnStartAckDelay is how long the brain may stay silent at the START of a
+// voice turn before the pump speaks a one-word ack. This is the perceived-
+// latency killer: the boss hears Jarvis engage within ~a second (the ack clip
+// is prewarmed - zero TTS round-trip) while the model is still producing its
+// first sentence. A brain that answers faster than this never triggers it.
+const turnStartAckDelay = 900 * time.Millisecond
+
+// turnStartAcks are the spoken acks. Short, dry, Jarvis. Rotated per turn so
+// back-to-back slow turns don't repeat the same word.
+var turnStartAcks = []string{
+	"Mm, one moment.",
+	"Right.",
+	"One sec, boss.",
+}
+
+// ackLine picks a turn-start ack, varying by session and wall clock.
+func ackLine(sessionID string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sessionID))
+	idx := (int(h.Sum32()) + int(time.Now().Unix()/7)) % len(turnStartAcks)
+	if idx < 0 {
+		idx = -idx
+	}
+	return turnStartAcks[idx]
+}
+
 // newSpeakPump returns a pump for a voice turn, or nil when this isn't a voice
 // turn or no Speaker is configured (voice degrades to captions-only). When
 // non-nil it has already started its synthesis goroutine.
@@ -75,7 +110,28 @@ func (s *Server) newSpeakPump(ctx context.Context, sessionID string, voiceTurn b
 		narrate:   voiceToolNarrationEnabled(),
 	}
 	go p.run()
+	// No-dead-air at turn START: if the brain hasn't produced a speakable
+	// sentence by the deadline, speak a prewarmed one-word ack. Firing after
+	// the pump closed/squelched is a guarded no-op.
+	if p.narrate {
+		time.AfterFunc(turnStartAckDelay, p.maybeTurnStartAck)
+	}
 	return p
+}
+
+// maybeTurnStartAck speaks a short ack iff nothing has been queued for speech
+// yet. Runs on the timer goroutine - all state behind mu / atomics.
+func (p *speakPump) maybeTurnStartAck() {
+	if p == nil || p.ctx.Err() != nil || p.squelched.Load() {
+		return
+	}
+	p.mu.Lock()
+	spoke := !p.lastAt.IsZero()
+	p.mu.Unlock()
+	if spoke {
+		return
+	}
+	p.enqueue(ackLine(p.sessionID))
 }
 
 // onDelta feeds streamed assistant text; any newly-complete sentences are
@@ -95,7 +151,10 @@ func (p *speakPump) onToolCall(name string) {
 	if p == nil || !p.narrate {
 		return
 	}
-	if !p.lastAt.IsZero() && time.Since(p.lastAt) < narrationGap {
+	p.mu.Lock()
+	last := p.lastAt
+	p.mu.Unlock()
+	if !last.IsZero() && time.Since(last) < narrationGap {
 		return // the model already narrated; don't talk over it
 	}
 	p.enqueue(voiceToolNarration(name))
@@ -111,6 +170,11 @@ func (p *speakPump) finish() {
 	for _, sentence := range p.chunker.Flush() {
 		p.enqueue(sentence)
 	}
+	// closed-before-close ordering: once the flag is set no producer (event
+	// goroutine or ack timer) can reach the channel send, so close is safe.
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
 	close(p.q)
 	<-p.drained
 }
@@ -143,6 +207,11 @@ func (p *speakPump) enqueue(text string) {
 	}
 	if p.squelched.Load() {
 		return // barge-in: the boss cut this reply off; caption-only from here
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return // turn already finished (e.g. ack timer fired late)
 	}
 	p.seq++
 	p.lastAt = time.Now()
@@ -221,4 +290,16 @@ func voiceToolNarration(name string) string {
 // for anyone who finds it chatty. Default on.
 func voiceToolNarrationEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv("INFINITY_VOICE_NARRATION")), "false")
+}
+
+// voicePrewarmLines is every fixed short line the pump can speak - fed to
+// Speaker.Prewarm at boot so their clips are cached before first use. The
+// narration lines are enumerated through voiceToolNarration itself (one
+// representative key per branch) so this list can never drift from the switch.
+func voicePrewarmLines() []string {
+	lines := append([]string{}, turnStartAcks...)
+	for _, key := range []string{"code", "mail", "calendar", "memory", "search", "skill", "delegate", ""} {
+		lines = append(lines, voiceToolNarration(key))
+	}
+	return lines
 }

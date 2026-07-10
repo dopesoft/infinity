@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -50,14 +51,18 @@ const (
 	// with the TTS, not the brain (it used to be a line in the realtime
 	// model's frozen prompt, britishAccentLine).
 	//
-	// Pacing: "brisk" on purpose. The earlier "measured pacing" wording
-	// produced a delivery the boss flagged as "hella slow"; brisk + the
-	// `speed` request param below are the two levers that fixed it.
-	ttsDeliveryInstructions = "Speak in a clearly British Received Pronunciation accent - non-rhotic vowels, crisp consonants, warm Jarvis-style restraint. Brisk, energetic conversational pace - never slow, never drawn out, no long pauses. Refined and dry, never American. Sound like a real person talking, not a narrator reading."
+	// Pacing: PACE COMES FIRST in the instruction, and it is the strongest
+	// directive in it. gpt-4o-mini-tts steers delivery via `instructions`
+	// (the `speed` request param is accepted but effectively ignored by this
+	// model - verified live 2026-07-10: 1.15 deployed, boss still heard
+	// "slow"). Burying the pace ask behind accent directives produced a
+	// narrator-y drawl; leading with it is what actually moves the model.
+	ttsDeliveryInstructions = "Talk fast. A quick, snappy, energetic conversational pace - clearly quicker than normal narration, clipped and lively, no drawn-out vowels, no long pauses between phrases. British Received Pronunciation accent: non-rhotic vowels, crisp consonants, warm Jarvis-style restraint, refined and dry, never American. A real person talking quickly to a friend, never a narrator reading."
 
-	// defaultTTSSpeed nudges playback above 1.0 because the boss found the
-	// default delivery too slow. /v1/audio/speech accepts 0.25-4.0 (verified
-	// against OpenAI's API spec). Override with INFINITY_VOICE_TTS_SPEED.
+	// defaultTTSSpeed rides along on the request for TTS models that honour
+	// it (tts-1/tts-1-hd via INFINITY_VOICE_TTS_MODEL). gpt-4o-mini-tts, the
+	// default, takes its pace from the instructions above instead. Override
+	// with INFINITY_VOICE_TTS_SPEED.
 	defaultTTSSpeed = 1.15
 )
 
@@ -71,7 +76,21 @@ type Speaker struct {
 	instructions string
 	speed        float64
 	httpClient   *http.Client
+
+	// clipCache holds synthesized audio for SHORT texts (acks, tool
+	// narration fillers, repeated one-liners) so they play with zero TTS
+	// round-trip. Voice + instructions are fixed per process, so text is a
+	// complete cache key. Bounded (cacheMaxClips); reset on restart.
+	cacheMu   sync.Mutex
+	clipCache map[string][]byte
 }
+
+const (
+	// cacheableClipChars caps which clips are cache-eligible. Short lines
+	// repeat (acks, narration); real content sentences rarely do.
+	cacheableClipChars = 64
+	cacheMaxClips      = 128
+)
 
 // NewSpeaker constructs a Speaker from env. Returns nil when OPENAI_API_KEY is
 // unset. Shares INFINITY_VOICE_NAME with the realtime Minter so the spoken
@@ -101,6 +120,7 @@ func NewSpeaker() *Speaker {
 		voice:        voice,
 		instructions: ttsDeliveryInstructions,
 		speed:        speed,
+		clipCache:    make(map[string][]byte),
 		// TTS for a single sentence is fast; keep a generous ceiling so a
 		// slow network doesn't truncate a clip mid-word.
 		httpClient: &http.Client{Timeout: 30 * time.Second},
@@ -122,6 +142,18 @@ func (sp *Speaker) Synthesize(ctx context.Context, text string) ([]byte, string,
 	text = strings.TrimSpace(StripSpokenMarkup(text))
 	if text == "" {
 		return nil, "", nil
+	}
+
+	// Short repeated lines (acks, narration fillers) play from cache with
+	// zero TTS round-trip - that's what keeps the instant-ack instant.
+	cacheable := len(text) <= cacheableClipChars
+	if cacheable {
+		sp.cacheMu.Lock()
+		cached := sp.clipCache[text]
+		sp.cacheMu.Unlock()
+		if len(cached) > 0 {
+			return cached, audioMIME, nil
+		}
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -156,7 +188,30 @@ func (sp *Speaker) Synthesize(ctx context.Context, text string) ([]byte, string,
 	if resp.StatusCode/100 != 2 {
 		return nil, "", fmt.Errorf("tts %d: %s", resp.StatusCode, truncateForErr(string(audio)))
 	}
+	if cacheable && len(audio) > 0 {
+		sp.cacheMu.Lock()
+		if len(sp.clipCache) < cacheMaxClips {
+			sp.clipCache[text] = audio
+		}
+		sp.cacheMu.Unlock()
+	}
 	return audio, audioMIME, nil
+}
+
+// Prewarm synthesizes the given short lines into the clip cache so their
+// first live use plays instantly instead of paying a TTS round-trip. Call in
+// a goroutine at boot with the ack + narration sets; failures are silently
+// skipped (the live path just synthesizes on demand as before).
+func (sp *Speaker) Prewarm(ctx context.Context, lines []string) {
+	if sp == nil {
+		return
+	}
+	for _, line := range lines {
+		if ctx.Err() != nil {
+			return
+		}
+		_, _, _ = sp.Synthesize(ctx, line)
+	}
 }
 
 // spokenMarkupPatterns are the markdown constructs that must never reach the

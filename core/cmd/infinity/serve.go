@@ -1323,6 +1323,18 @@ func serveCmd() *cobra.Command {
 						effortRouter := effort.NewRouter(nil)
 						lg, gs := loopGate, gaugeStore
 						loop.SetEffortFn(func(ctx context.Context, req agent.EffortRequest) (llm.Effort, string) {
+							// Voice turns are conversational: latency IS the product.
+							// Unless the boss explicitly pinned a level, cap reasoning
+							// at low so Jarvis answers at speaking pace instead of
+							// deliberating 4-5s before the first word (2026-07-10
+							// report: "whats up jarvis" → 5s of thinking). Spoken
+							// asks that need deep work can be pinned via the
+							// Composer, or moved to text where thinking reads fine.
+							if agent.VoiceModeFromContext(ctx) && llm.ModelSupportsReasoning(req.Model) {
+								if p := strings.TrimSpace(req.Pinned); p == "" || strings.EqualFold(p, "auto") {
+									return llm.EffortLow, "voice"
+								}
+							}
 							in := effort.Inputs{
 								Pinned:    req.Pinned,
 								Supported: llm.ModelSupportsReasoning(req.Model),

@@ -39,9 +39,16 @@ import { useIsDesktop } from "@/lib/use-media-query";
  */
 type Group = "Today" | "Yesterday" | "This week" | "Older";
 
+// activityAt is the timestamp a session should be listed under: its last
+// turn (last_run_at) when it has one, else its creation. Without this a
+// session continued today - the voice-chat case especially - stays buried at
+// its started_at position and its fresh title never surfaces.
+function activityAt(s: SessionDTO): number {
+  return Date.parse(s.last_run_at || s.started_at) || Date.parse(s.started_at) || 0;
+}
+
 function bucketize(s: SessionDTO, now: number): Group {
-  const t = Date.parse(s.started_at) || 0;
-  const d = now - t;
+  const d = now - activityAt(s);
   const ONE_DAY = 86_400_000;
   if (d < ONE_DAY) return "Today";
   if (d < 2 * ONE_DAY) return "Yesterday";
@@ -295,12 +302,10 @@ export function SessionsDrawer({
     return order
       .map((g) => ({
         group: g,
-        // Sort each bucket newest-first so the display is always
+        // Sort each bucket by latest activity so the display is always
         // chronological, independent of the order the API hands us rows
         // (a freshly created RAM-only session can arrive out of order).
-        rows: (map.get(g) ?? []).sort(
-          (a, b) => (Date.parse(b.started_at) || 0) - (Date.parse(a.started_at) || 0),
-        ),
+        rows: (map.get(g) ?? []).sort((a, b) => activityAt(b) - activityAt(a)),
       }))
       .filter((b) => b.rows.length > 0);
   }, [filtered, now]);
@@ -422,7 +427,9 @@ export function SessionsDrawer({
                           )}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <span suppressHydrationWarning>{formatRowDate(s.started_at, now)}</span>
+                          <span suppressHydrationWarning>
+                            {formatRowDate(s.last_run_at || s.started_at, now)}
+                          </span>
                           {s.live && (
                             <span className="inline-flex items-center gap-1">
                               <span className="size-1.5 rounded-full bg-success" /> live

@@ -265,6 +265,15 @@ func New(cfg Config) *Server {
 		s.heartbeat.SetOnFinding(s.onHeartbeatFinding)
 	}
 
+	// Prewarm the TTS clip cache with every fixed short line the voice pump
+	// can speak (turn-start acks + tool narration fillers) so the FIRST live
+	// use plays instantly - the instant-ack only kills perceived latency if
+	// the ack itself has no synthesis round-trip. Async: boot never blocks
+	// on OpenAI, and a failure just means on-demand synthesis as before.
+	if s.speaker != nil {
+		go s.speaker.Prewarm(context.Background(), voicePrewarmLines())
+	}
+
 	// Apply the persisted provider override at boot. The agent loop was
 	// constructed with the LLM_PROVIDER env value; if Studio's last save
 	// flipped it elsewhere, honor that - Settings is the source of truth

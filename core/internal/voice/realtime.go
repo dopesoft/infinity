@@ -213,12 +213,16 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 					"type": "near_field",
 				},
 				"turn_detection": map[string]any{
-					"type":                "server_vad",
-					"create_response":     false,
-					"interrupt_response":  false,
-					"threshold":           0.65,
-					"prefix_padding_ms":   300,
-					"silence_duration_ms": 700,
+					"type":               "server_vad",
+					"create_response":    false,
+					"interrupt_response": false,
+					"threshold":          0.65,
+					"prefix_padding_ms":  300,
+					// 500ms of silence ends the utterance. 700 was a fifth of
+					// a second of dead air on EVERY exchange - the single
+					// cheapest latency win in the whole voice chain. Below
+					// ~500 the VAD starts splitting mid-sentence pauses.
+					"silence_duration_ms": 500,
 				},
 				"transcription": map[string]any{
 					"model":    transcriptionModel,
