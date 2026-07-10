@@ -64,7 +64,7 @@ export function UpcomingCard({
 
   return (
     <Section
-      title="Upcoming"
+      title="Calendar"
       Icon={CalendarRange}
       delay={0.15}
       action={{ label: "next 6 months", href: "/cron" }}

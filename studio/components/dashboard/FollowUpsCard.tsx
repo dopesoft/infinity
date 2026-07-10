@@ -62,7 +62,7 @@ export function FollowUpsCard({
 }) {
   return (
     <Section
-      title="Follow-ups"
+      title="Email"
       Icon={Inbox}
       delay={0.3}
       badge={followUps.length}

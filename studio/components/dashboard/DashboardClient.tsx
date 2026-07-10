@@ -8,6 +8,7 @@ import { TodosCard } from "./TodosCard";
 import { UpcomingCard } from "./UpcomingCard";
 import { ReflectionCard } from "./ReflectionCard";
 import { SurfacedCard } from "./SurfacedCard";
+import { PhoneCard } from "./PhoneCard";
 import { FollowUpsCard } from "./FollowUpsCard";
 import { AgentWorkBoard } from "./AgentWorkBoard";
 import { SavedCard } from "./SavedCard";
@@ -193,11 +194,6 @@ export function DashboardClient() {
   useRealtime("*", debouncedRefetch);
 
   const [search, setSearch] = useState("");
-  // Follow-ups is the reference card height for the Upcoming/Follow-ups
-  // row: it reports its measured 4-row scroll height here, and Upcoming
-  // consumes it so both fade lines sit on the same y. setListHeight is a
-  // stable useState setter, safe to pass straight into onMeasure.
-  const [listHeight, setListHeight] = useState<number | null>(null);
   const [addingTodo, setAddingTodo] = useState(false);
   const [viewing, setViewing] = useState<DashboardItem | null>(null);
   const { prefs } = useDashboardPrefs();
@@ -399,8 +395,11 @@ export function DashboardClient() {
   const surfaced = useMemo<DashboardItem[]>(() => {
     const merged: DashboardItem[] = [
       ...filtered.approvals.map((a) => ({ kind: "approval", data: a }) as DashboardItem),
-      ...Object.values(filtered.surfaceItems)
-        .flat()
+      ...Object.entries(filtered.surfaceItems)
+        // Calls get their own PhoneCard; excluding the key here is what
+        // keeps a call from rendering twice.
+        .filter(([key]) => key !== "calls")
+        .flatMap(([, items]) => items)
         .map((it) => ({ kind: "surface", data: it }) as DashboardItem),
     ];
     merged.sort((a, b) => {
@@ -409,6 +408,15 @@ export function DashboardClient() {
     });
     return merged;
   }, [filtered.approvals, filtered.surfaceItems]);
+
+  // Jarvis's phone line: the surface='calls' group, newest first.
+  const calls = useMemo<DashboardItem[]>(() => {
+    const items = (filtered.surfaceItems["calls"] ?? []).map(
+      (it) => ({ kind: "surface", data: it }) as DashboardItem,
+    );
+    items.sort((a, b) => surfacedCreatedAt(b) - surfacedCreatedAt(a));
+    return items;
+  }, [filtered.surfaceItems]);
 
   // Counter for the "need you" badge in the header - anything actionable.
   // High-importance surfaced items (80+) count too.
@@ -436,46 +444,25 @@ export function DashboardClient() {
         />
 
         <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
-          {/* Row 1 - Agent Work first under the search. It's the live picture
-              of what Jarvis is doing right now (crons, plans, skills, …), so it
-              leads. Plans surface here as their own column kind with a
-              step-progress bar; tapping one opens the full timeline. */}
-          {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
-
-          {/* Row 2 - Upcoming (your calendar) beside Follow-ups (people waiting
-              on you). `grid-cols-1` default is REQUIRED so an implicit
-              max-content track can't blow the column past the viewport on
-              mobile; lg splits to two. */}
-          {(s.upcoming || s.followups) && (
-            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-2">
-              {s.upcoming && (
-                <UpcomingCard
-                  events={filtered.events}
-                  onOpen={openViewer}
-                  matchHeight={listHeight}
-                />
-              )}
+          {/* Row 1 - what's being raised TO the boss: Surfaced by Jarvis,
+              the Phone line, and Email (follow-ups). `grid-cols-1` default is
+              REQUIRED so an implicit max-content track can't blow the column
+              past the viewport on mobile; lg splits to three. */}
+          {(s.approvals || s.followups) && (
+            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
+              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
+              <PhoneCard items={calls} onOpen={openViewer} />
               {s.followups && (
-                <FollowUpsCard
-                  followUps={filtered.followUps}
-                  onOpen={openViewer}
-                  onMeasure={setListHeight}
-                />
+                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
               )}
             </div>
           )}
 
-          {/* Row 3 - Surfaced by Jarvis (everything the agent raises) beside
-              your Pursuits and Todos. Three columns on lg, stacked on mobile. */}
-          {(s.approvals || s.pursuits || s.todos) && (
+          {/* Row 2 - the boss's own commitments: Calendar, Todos, Pursuits. */}
+          {(s.upcoming || s.todos || s.pursuits) && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
-              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
-              {s.pursuits && (
-                <PursuitsCard
-                  pursuits={filtered.pursuits}
-                  onOpen={openViewer}
-                  onToggleHabit={toggleHabit}
-                />
+              {s.upcoming && (
+                <UpcomingCard events={filtered.events} onOpen={openViewer} />
               )}
               {s.todos && (
                 <TodosCard
@@ -485,8 +472,19 @@ export function DashboardClient() {
                   onAdd={() => setAddingTodo(true)}
                 />
               )}
+              {s.pursuits && (
+                <PursuitsCard
+                  pursuits={filtered.pursuits}
+                  onOpen={openViewer}
+                  onToggleHabit={toggleHabit}
+                />
+              )}
             </div>
           )}
+
+          {/* Row 3 - Agent Work: the live picture of what Jarvis is doing
+              right now (crons, plans, skills, …). Kanban unchanged. */}
+          {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
 
           {s.reflection && reflection && (
             <ReflectionCard reflection={reflection} onOpen={openViewer} />
