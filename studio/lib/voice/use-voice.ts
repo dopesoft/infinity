@@ -8,8 +8,8 @@ import { VoiceClient, type VoiceStatus } from "./client";
 
 /**
  * useVoice owns one realtime voice session at a time. After the parity rewrite
- * the realtime/WebRTC session is INPUT ONLY - mic capture, whisper
- * transcription, and VAD barge-in. It does NOT think and does NOT speak.
+ * the realtime/WebRTC session is INPUT ONLY - mic capture, gpt-4o-transcribe
+ * STT, and VAD barge-in. It does NOT think and does NOT speak.
  *
  * The flow:
  *   1. /api/voice/session   → input-only ephemeral key

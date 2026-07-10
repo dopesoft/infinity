@@ -1,5 +1,5 @@
 // Package voice integrates OpenAI's Realtime API as the EARS of voice mode:
-// low-latency mic capture + whisper transcription + VAD barge-in, nothing
+// low-latency mic capture + gpt-4o-transcribe STT + VAD barge-in, nothing
 // more. The realtime model is deliberately demoted - it does NOT think, hold
 // the conversation, or run tools. Cognition runs through the SAME agent loop
 // (Loop.Run) that text uses, so voice Jarvis IS text Jarvis - same memory,
@@ -15,7 +15,7 @@
 //
 //  1. Browser taps mic → POST /api/voice/session { session_id }.
 //  2. Core mints an ephemeral realtime key configured for INPUT ONLY:
-//     whisper transcription + server-VAD, output_modalities=["text"], no
+//     gpt-4o-transcribe STT + server-VAD, output_modalities=["text"], no
 //     tools, no auto-response. The model never speaks.
 //  3. Browser does the WebRTC SDP exchange directly with api.openai.com.
 //  4. On a finalized user transcript the browser sends a `message` frame
@@ -40,11 +40,26 @@ import (
 
 const (
 	// defaultRealtimeModel is the model used unless the boss overrides via
-	// INFINITY_VOICE_MODEL. The boss explicitly asked for gpt-realtime-1.5;
-	// keep it as the documented default so a stale env var doesn't silently
-	// downgrade them.
-	defaultRealtimeModel = "gpt-realtime-1.5"
+	// INFINITY_VOICE_MODEL. The boss explicitly asked for gpt-realtime-2.1-mini
+	// (released 2026-07-06 — adds reasoning + tool use at the mini price tier,
+	// plus improved alphanumeric recognition and interruption behavior over
+	// 1.5); keep it as the documented default so a stale env var doesn't
+	// silently downgrade them.
+	defaultRealtimeModel = "gpt-realtime-2.1-mini"
 	defaultVoice         = "ash"
+
+	// transcriptionModel is the STT sub-model plugged into the realtime
+	// session's audio.input.transcription. gpt-4o-transcribe is a current
+	// OpenAI model that (unlike gpt-realtime-whisper) keeps server_vad, so
+	// barge-in + auto-commit need no client-side rebuild. It's a large
+	// accuracy jump over the legacy whisper-1 we used to run.
+	transcriptionModel = "gpt-4o-transcribe"
+
+	// defaultTranscriptionPrompt primes gpt-4o-transcribe with proper nouns
+	// it would otherwise mishear. Kept short (a keyword list, not prose) per
+	// OpenAI's guidance. Override with INFINITY_VOICE_VOCAB when the boss's
+	// active vocabulary shifts (new project names, people, tools).
+	defaultTranscriptionPrompt = "Jarvis, Kai, DopeSoft, Infinity, Studio, Railway, Supabase, Composio"
 
 	// voiceInputModeInstructions is all the demoted realtime model needs. It
 	// never generates the reply (the agent loop does) and never speaks (the
@@ -93,6 +108,7 @@ type Minter struct {
 	apiKey     string
 	model      string
 	voice      string
+	vocab      string
 	httpClient *http.Client
 }
 
@@ -112,10 +128,15 @@ func New() *Minter {
 	if voice == "" {
 		voice = defaultVoice
 	}
+	vocab := strings.TrimSpace(os.Getenv("INFINITY_VOICE_VOCAB"))
+	if vocab == "" {
+		vocab = defaultTranscriptionPrompt
+	}
 	return &Minter{
 		apiKey:     key,
 		model:      model,
 		voice:      voice,
+		vocab:      vocab,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -142,8 +163,15 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	//     but never makes the model answer on its own. The browser drives
 	//     the conversation by sending finalized transcripts to the agent loop
 	//     over the chat WebSocket - it no longer sends response.create at all.
-	//   - whisper transcription + near-field noise reduction stay: that's the
+	//   - gpt-4o-transcribe + near-field noise reduction stay: that's the
 	//     whole point of keeping the realtime session (low-latency STT + VAD).
+	//     gpt-4o-transcribe is a straight upgrade over the legacy whisper-1
+	//     (lower WER, far better with accents/noise/alphanumerics) AND it
+	//     keeps server_vad — so barge-in + auto-commit are unchanged. The
+	//     `prompt` primes the model with proper nouns it would otherwise
+	//     mangle. Do NOT switch to gpt-realtime-whisper here: that model
+	//     forbids server_vad (turn_detection must be null + manual commit),
+	//     which would force a client-side VAD rebuild of barge-in.
 	session := map[string]any{
 		"type":              "realtime",
 		"model":             m.model,
@@ -163,7 +191,8 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 					"silence_duration_ms": 700,
 				},
 				"transcription": map[string]any{
-					"model": "whisper-1",
+					"model":  transcriptionModel,
+					"prompt": m.vocab,
 				},
 			},
 		},
