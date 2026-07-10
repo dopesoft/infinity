@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { useVoice } from "@/lib/voice/use-voice";
+import { emitVoiceActive, onWakeDetected } from "@/lib/voice/wake-bus";
 
 /**
  * AI prompt box - adapted from 21st.dev/r/easemize/ai-prompt-box.
@@ -498,6 +499,47 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
     });
     const voiceActive = voice.active;
 
+    // Wake-word contract with the header's WakeNavButton (which owns the
+    // "hey Jarvis" engine): announce when this composer's voice session
+    // holds the mic so the wake listener suspends, and start the session
+    // when the wake word fires while we're mounted.
+    const voiceStartRef = React.useRef(voice.start);
+    voiceStartRef.current = voice.start;
+    const voiceActiveRef = React.useRef(voiceActive);
+    voiceActiveRef.current = voiceActive;
+    React.useEffect(() => {
+      emitVoiceActive(voiceActive);
+      // Release the suspension if this composer unmounts mid-session.
+      return () => emitVoiceActive(false);
+    }, [voiceActive]);
+    React.useEffect(() => {
+      if (minimal) return;
+      return onWakeDetected(() => {
+        if (voiceActiveRef.current) return;
+        void voiceStartRef.current();
+      });
+    }, [minimal]);
+
+    // Deep-link entry: /live?voice=1 (the "Talk to Jarvis" PWA shortcut and
+    // the Siri Shortcut both land here) auto-starts listening. If the
+    // browser blocks mic acquisition without a fresh gesture (iOS cold
+    // start), useVoice surfaces its normal error card with a one-tap Retry -
+    // the deep link degrades to one tap instead of failing silently.
+    const autoVoiceFired = React.useRef(false);
+    React.useEffect(() => {
+      if (autoVoiceFired.current || minimal) return;
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("voice") === "1") {
+          autoVoiceFired.current = true;
+          void voiceStartRef.current();
+        }
+      } catch {
+        // No window/search - SSR guard; the effect reruns client-side.
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [minimal]);
+
     const uploadRef = React.useRef<HTMLInputElement>(null);
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -823,6 +865,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                   />
                   <ContextMeter sessionId={sessionId} />
 
+  
                   {!minimal && (
                     <Tooltip>
                       <TooltipTrigger asChild>

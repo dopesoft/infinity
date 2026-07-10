@@ -46,7 +46,15 @@ const (
 	// 1.5); keep it as the documented default so a stale env var doesn't
 	// silently downgrade them.
 	defaultRealtimeModel = "gpt-realtime-2.1-mini"
-	defaultVoice         = "ash"
+
+	// defaultVoice is the TTS voice for Jarvis's spoken replies (the realtime
+	// session is input-only, so this only meaningfully affects the Speaker in
+	// tts.go). It's `fable` — OpenAI's natively BRITISH male voice — because a
+	// voice's base accent dominates: an `instructions` string steers tone and
+	// pacing but does NOT reliably override an American base voice's accent.
+	// That's why the British delivery "never worked" on the old `ash` voice.
+	// Override with INFINITY_VOICE_NAME (e.g. `ballad` for another UK lean).
+	defaultVoice = "fable"
 
 	// transcriptionModel is the STT sub-model plugged into the realtime
 	// session's audio.input.transcription. gpt-4o-transcribe is a current

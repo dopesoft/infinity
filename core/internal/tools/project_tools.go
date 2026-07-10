@@ -541,9 +541,24 @@ func buildScaffoldCommand(template, root, slug, description, displayName string)
 	mkRoot := fmt.Sprintf("mkdir -p %s && cd %s", shellSingleQuote(root), shellSingleQuote(root))
 	switch template {
 	case "nextjs":
+		// create-next-app doesn't wire basePath, but the preview supervisor
+		// serves dev projects under /api/canvas/preview and launches next
+		// with NEXT_PUBLIC_BASE_PATH set (docker/workspace/supervisor.go
+		// devCommand). Without a basePath-aware config every asset 404s
+		// behind the proxy - so replace the generated config with one that
+		// honors the env. Empty env = "" = no basePath, so `next dev` at
+		// the root still works identically.
+		nextConfig := "const basePath = process.env.NEXT_PUBLIC_BASE_PATH || \"\";\n\n" +
+			"/** @type {import('next').NextConfig} */\n" +
+			"const nextConfig = {\n" +
+			"  basePath,\n" +
+			"  assetPrefix: basePath || undefined,\n" +
+			"};\n\n" +
+			"export default nextConfig;\n"
 		return mkRoot + " && " + fmt.Sprintf(
-			"pnpx --yes create-next-app@latest %s --typescript --tailwind --app --no-eslint --no-src-dir --no-import-alias --use-pnpm --yes",
-			shellSingleQuote(slug),
+			"pnpx --yes create-next-app@latest %s --typescript --tailwind --app --no-eslint --no-src-dir --no-import-alias --use-pnpm --yes && "+
+				"cd %s && rm -f next.config.ts next.config.js next.config.mjs && printf %%s %s > next.config.mjs",
+			shellSingleQuote(slug), shellSingleQuote(slug), shellSingleQuote(nextConfig),
 		)
 	case "vite-react":
 		return mkRoot + " && " + fmt.Sprintf(

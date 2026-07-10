@@ -8,6 +8,7 @@ import { AutoStatusPill } from "@/components/AutoStatusPill";
 import { FooterStatus } from "@/components/FooterStatus";
 import { MobileNav } from "@/components/MobileNav";
 import { NavOverflow } from "@/components/NavOverflow";
+import { WakeNavButton } from "@/components/WakeNavButton";
 
 /* Layout shell. On mobile (<lg) the header shows a logo on the left and a
  * hamburger on the right that opens MobileNav (bottom drawer). On desktop
@@ -43,8 +44,13 @@ export function TabFrame({
           </div>
         </div>
 
-        {/* Right cluster: theme + sign out on desktop, hamburger on mobile. */}
+        {/* Right cluster: theme + sign out on desktop, hamburger on mobile.
+         * WakeNavButton renders ONCE, first in the cluster - the hidden
+         * desktop span between it and MobileNav means it sits left of the
+         * kebab on desktop and left of the hamburger on mobile, without
+         * mounting a second wake-word engine. */}
         <div className="flex items-center gap-1">
+          <WakeNavButton />
           <span className="hidden items-center gap-1 lg:inline-flex">
             <NavOverflow />
             <ThemeToggle />

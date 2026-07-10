@@ -78,7 +78,7 @@ func (m *Manager) Start(ctx context.Context) {
 func (m *Manager) runtimeLoop(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	state := map[string]runtimeState{}
+	state := m.loadRuntimeState(ctx)
 	var mu sync.Mutex
 	for {
 		select {
@@ -107,9 +107,58 @@ func (m *Manager) runtimeLoop(ctx context.Context) {
 					mu.Lock()
 					state[s.ID] = next
 					mu.Unlock()
+					// Persist the baseline only when the KEY moves (LastAt
+					// ticks every due poll; writing it would hammer the DB
+					// for nothing). The key is what makes fire_on_change /
+					// file_change survive a restart without re-baselining.
+					if next.LastKey != st.LastKey {
+						m.persistRuntimeState(ctx, s.ID, next.LastKey)
+					}
 				}
 			}
 		}
+	}
+}
+
+// loadRuntimeState hydrates the poll baselines persisted by
+// persistRuntimeState so fire_on_change / file_change sentinels keep their
+// "last seen" key across restarts. Before migration 167 the baseline lived
+// only in this process's map, so every deploy silently re-baselined and a
+// change that happened while the process was down never fired.
+func (m *Manager) loadRuntimeState(ctx context.Context) map[string]runtimeState {
+	state := map[string]runtimeState{}
+	rows, err := m.pool.Query(ctx, `
+		SELECT id, COALESCE(runtime_state->>'last_key', '')
+		FROM mem_sentinels
+		WHERE runtime_state <> '{}'::jsonb
+	`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sentinel: load runtime state: %v\n", err)
+		return state
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, lastKey string
+		if err := rows.Scan(&id, &lastKey); err != nil {
+			continue
+		}
+		if lastKey != "" {
+			state[id] = runtimeState{LastKey: lastKey}
+		}
+	}
+	return state
+}
+
+// persistRuntimeState writes a sentinel's poll baseline through to
+// mem_sentinels.runtime_state. Best-effort: a failed write costs one
+// restart's worth of baseline, and the loud log keeps it from failing
+// silently forever.
+func (m *Manager) persistRuntimeState(ctx context.Context, id, lastKey string) {
+	payload, _ := json.Marshal(map[string]string{"last_key": lastKey})
+	if _, err := m.pool.Exec(ctx, `
+		UPDATE mem_sentinels SET runtime_state = $2::jsonb WHERE id = $1
+	`, id, string(payload)); err != nil {
+		fmt.Fprintf(os.Stderr, "sentinel %s: persist runtime state: %v\n", id, err)
 	}
 }
 

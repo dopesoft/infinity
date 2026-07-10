@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/mandate"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/surface"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // mandateAnnouncer is the concrete mandate.Announcer — it pings the boss's
@@ -41,6 +46,7 @@ func (a *mandateAnnouncer) Announce(ctx context.Context, m *mandate.Mandate) {
 type initiativeDeliverer struct {
 	sender  *push.Sender
 	surface *surface.Store
+	pool    *pgxpool.Pool
 }
 
 type costRecorder struct {
@@ -75,6 +81,57 @@ func (d *initiativeDeliverer) Push(ctx context.Context, n initiative.Notificatio
 		Tag:   "initiative-" + n.Source,
 	})
 	return nil
+}
+
+// Converse opens a two-way reach-out: a fresh real session (kind='user' -
+// the boss replies into it, so it belongs in his sessions list) whose
+// opening assistant message is the notification, persisted as a
+// 'TaskCompleted' observation - the same durable row a normal assistant
+// turn leaves, so the transcript API renders it and the loop hydrates it
+// as prior context when the reply arrives. The push deep-links into
+// /live?session=<id>; the SW's notificationclick already navigates there.
+func (d *initiativeDeliverer) Converse(ctx context.Context, n initiative.Notification) (string, error) {
+	if d == nil || d.pool == nil {
+		return "", errors.New("no database for conversation delivery")
+	}
+	source := n.Source
+	if source == "" {
+		source = "agent"
+	}
+	originRef, _ := json.Marshal(map[string]string{"kind": "reach_out", "source": source})
+	id := uuid.New()
+	if _, err := d.pool.Exec(ctx, `
+		INSERT INTO mem_sessions (id, kind, origin_ref, started_at)
+		VALUES ($1, 'user', $2::jsonb, NOW())
+	`, id, string(originRef)); err != nil {
+		return "", err
+	}
+
+	text := strings.TrimSpace(n.Title)
+	if body := strings.TrimSpace(n.Body); body != "" {
+		text += "\n\n" + body
+	}
+	if u := strings.TrimSpace(n.URL); u != "" {
+		text += "\n\n" + u
+	}
+	payload, _ := json.Marshal(map[string]any{"reach_out": true, "source": source})
+	if _, err := d.pool.Exec(ctx, `
+		INSERT INTO mem_observations (session_id, hook_name, payload, raw_text, importance, created_at)
+		VALUES ($1::uuid, 'TaskCompleted', $2::jsonb, $3, 7, NOW())
+	`, id, string(payload), text); err != nil {
+		return "", err
+	}
+
+	if d.sender != nil {
+		d.sender.Notify(ctx, push.Notification{
+			Title: n.Title,
+			Body:  n.Body,
+			URL:   "/live?session=" + id.String(),
+			Kind:  "reach_out",
+			Tag:   "reach-out-" + source,
+		})
+	}
+	return id.String(), nil
 }
 
 // Surface puts a normal notification on the dashboard as a generic surface

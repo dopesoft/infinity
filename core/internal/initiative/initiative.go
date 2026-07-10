@@ -49,10 +49,17 @@ type Notification struct {
 	Body        string     `json:"body,omitempty"`
 	URL         string     `json:"url,omitempty"`
 	Source      string     `json:"source"`
-	Channel     string     `json:"channel"` // push | surface | digest
+	Channel     string     `json:"channel"` // push | surface | digest | conversation
 	Status      string     `json:"status"`  // sent | batched
 	CreatedAt   time.Time  `json:"createdAt"`
 	DeliveredAt *time.Time `json:"deliveredAt,omitempty"`
+	// Conversation asks the deliverer to open a real chat session whose
+	// opening message is this notification, and deep-link the push into it -
+	// so the boss can reply instead of just reading a card. Set by the
+	// notify tool when the agent judges the boss will want to talk back.
+	Conversation bool `json:"conversation,omitempty"`
+	// SessionID is the conversation session the deliverer opened (output).
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // CostEvent is one recorded cost-incurring event.
@@ -139,6 +146,11 @@ func ScoreIntervention(in Intervention) InterventionDecision {
 type Deliverer interface {
 	Push(ctx context.Context, n Notification) error
 	Surface(ctx context.Context, n Notification) error
+	// Converse opens a real chat session whose opening assistant message is
+	// the notification, pushes a deep link into it, and returns the new
+	// session id. This is the two-way reach-out: the boss taps the push,
+	// lands in the conversation, and replies through the normal turn loop.
+	Converse(ctx context.Context, n Notification) (string, error)
 }
 
 // Store is the persistence boundary for mem_notifications + mem_cost_events.
@@ -332,6 +344,29 @@ func (n *Notifier) Send(ctx context.Context, notif *Notification) error {
 	}
 	if notif.Source == "" {
 		notif.Source = "agent"
+	}
+
+	// A conversational reach-out overrides the urgency routing: the point
+	// is a reply, so it always opens a session and pushes a deep link into
+	// it. Falls back to a plain push if the session can't be created, so
+	// the reach-out is never silently lost.
+	if notif.Conversation {
+		notif.Channel, notif.Status = "conversation", "sent"
+		if n.deliverer != nil {
+			sid, err := n.deliverer.Converse(ctx, *notif)
+			if err != nil {
+				n.logger.Error("initiative: converse failed, falling back to push", "err", err)
+				notif.Channel = "push"
+				if perr := n.deliverer.Push(ctx, *notif); perr != nil {
+					n.logger.Error("initiative: fallback push failed", "err", perr)
+					notif.Channel, notif.Status = "surface", "sent"
+					_ = n.deliverer.Surface(ctx, *notif)
+				}
+			} else {
+				notif.SessionID = sid
+			}
+		}
+		return n.store.recordNotification(ctx, notif)
 	}
 
 	switch notif.Urgency {

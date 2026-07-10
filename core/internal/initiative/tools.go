@@ -84,6 +84,10 @@ func (t *notifyTool) Description() string {
 		"  • normal → a dashboard card the boss sees next time they look.\n" +
 		"  • low → batched into the next digest, so small updates don't " +
 		"interrupt.\n" +
+		"Set conversation=true when the boss will want to reply or decide - " +
+		"it opens a real chat with your message as the opener and the push " +
+		"lands him directly in it. Use it for 'I noticed X, want me to Y?' " +
+		"moments, not one-way FYIs.\n" +
 		"Every notification is logged. Default urgency is normal - reserve " +
 		"urgent for things that genuinely can't wait."
 }
@@ -93,9 +97,10 @@ func (t *notifyTool) Schema() map[string]any {
 		"properties": map[string]any{
 			"title":   map[string]any{"type": "string", "description": "The headline - what the boss needs to know."},
 			"body":    map[string]any{"type": "string", "description": "Optional detail."},
-			"urgency": map[string]any{"type": "string", "enum": []string{"urgent", "normal", "low"}, "description": "urgent = push now · normal = dashboard card · low = batched digest. Default normal."},
-			"url":     map[string]any{"type": "string", "description": "Optional deep link to the relevant Studio surface."},
-			"source":  map[string]any{"type": "string", "description": "What's reaching out - a skill name, workflow name, cron name. Default 'agent'."},
+			"urgency":      map[string]any{"type": "string", "enum": []string{"urgent", "normal", "low"}, "description": "urgent = push now · normal = dashboard card · low = batched digest. Default normal."},
+			"url":          map[string]any{"type": "string", "description": "Optional deep link to the relevant Studio surface."},
+			"source":       map[string]any{"type": "string", "description": "What's reaching out - a skill name, workflow name, cron name. Default 'agent'."},
+			"conversation": map[string]any{"type": "boolean", "description": "Open a chat session with this message as the opener and deep-link the push into it, so the boss can reply. Use when you're asking a question or proposing action - not for one-way FYIs."},
 		},
 		"required": []string{"title"},
 	}
@@ -108,13 +113,21 @@ func (t *notifyTool) Execute(ctx context.Context, in map[string]any) (string, er
 		Source:  initStr(in, "source"),
 		Urgency: Urgency(initStr(in, "urgency")),
 	}
+	if v, ok := in["conversation"].(bool); ok {
+		n.Conversation = v
+	}
 	if err := t.notifier.Send(ctx, n); err != nil {
 		return "", err
 	}
-	out, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"ok": true, "id": n.ID, "urgency": string(n.Urgency), "channel": n.Channel, "status": n.Status,
-	})
-	return string(out), nil
+	}
+	if n.SessionID != "" {
+		out["session_id"] = n.SessionID
+		out["note"] = "Conversation opened - the boss's push deep-links into it. His reply arrives as a normal turn in that session."
+	}
+	b, _ := json.Marshal(out)
+	return string(b), nil
 }
 
 // ── notification_digest ─────────────────────────────────────────────────────

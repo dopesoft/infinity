@@ -49,6 +49,12 @@
   ],
   "shortcuts": [
     {
+      "name": "Talk to Jarvis",
+      "short_name": "Talk",
+      "url": "/live?voice=1",
+      "description": "Open a voice conversation - Jarvis starts listening"
+    },
+    {
       "name": "Live conversation",
       "short_name": "Live",
       "url": "/live",

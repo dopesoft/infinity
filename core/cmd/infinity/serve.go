@@ -111,6 +111,7 @@ func serveCmd() *cobra.Command {
 				browserReg          *browser.Registry
 				docCreate           *tools.DocumentCreate
 				projectTools        *tools.ProjectTools
+				previewTools        *tools.PreviewTools
 				projectProvider     *projects.Provider
 				workspaceRawBase    string // cloud workspace URL for the doc download proxy
 				workspaceToken      string
@@ -447,7 +448,20 @@ func serveCmd() *cobra.Command {
 					// app-bootstrap tool; it routes through the bridge
 					// internally and indexes itself into mem_artifacts.
 					tools.RegisterArtifactTools(registry, p)
+					// Keyed state cells (mem_agent_state) — the generic
+					// "what did I see last time?" building block. Standing
+					// watches diff against their previous snapshot with
+					// state_get/state_set; any recurring recipe can
+					// checkpoint the same way.
+					tools.RegisterStateTools(registry, p)
 					projectTools = tools.RegisterProjectTools(registry, p, activeBridgeRouter, activeBridgePrefs)
+					// Agent-callable preview control - boots a project's dev
+					// server on its bridge and returns the tappable URL, so
+					// an autonomous build can END with a live link instead of
+					// waiting for the boss to open Studio. Controller
+					// late-binds to the server below (same pattern as
+					// projectTools.SetNotify).
+					previewTools = tools.RegisterPreviewTools(registry, p)
 					// media_job — the ONE generic media-producing runner. Runs
 					// any media command (higgsfield gen now; html→video / ffmpeg
 					// later) on the active bridge, tracks it as a live mem_runs
@@ -1772,6 +1786,7 @@ func serveCmd() *cobra.Command {
 				initDeliverer := &initiativeDeliverer{
 					sender:  pushSender,
 					surface: surface.NewStore(pool, slog.Default()),
+					pool:    pool,
 				}
 				initNotifier := initiative.NewNotifier(initStore, initDeliverer, slog.Default())
 				initiative.RegisterTools(registry, initNotifier, initStore)
@@ -2062,6 +2077,12 @@ func serveCmd() *cobra.Command {
 				projectTools.SetNotify(func(sessionID, projectPath string) {
 					srv.EmitProjectChanged(sessionID, projectPath)
 				})
+			}
+			// Late-bind the preview tools to the server's supervisor seam so
+			// preview_start/stop/status route through the same bridge logic
+			// (and preview-proxy cache) as the Studio UI.
+			if previewTools != nil {
+				previewTools.SetController(srv)
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

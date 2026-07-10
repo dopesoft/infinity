@@ -2055,6 +2055,50 @@ func (s *Server) supervisorGet(ctx context.Context, sessionID, path string) ([]b
 	return directBridgeGet(ctx, path)
 }
 
+// StartPreview / StopPreview / PreviewStatus implement tools.PreviewController -
+// the agent-callable seam over the same supervisor routing the Studio UI uses.
+// Until these existed the preview could only boot while Studio was open
+// (useCurrentProject's activate poll), so an autonomous "build me X" run had
+// no way to hand back a live link. /supervisor/active POST is set+start, the
+// same call Studio's activate makes, so agent-started previews and UI state
+// stay consistent.
+func (s *Server) StartPreview(ctx context.Context, sessionID, projectPath, template string) (json.RawMessage, string, error) {
+	bridgeName := "mac"
+	if _, ok := s.canvasCloudFS(ctx, sessionID); ok {
+		bridgeName = "cloud"
+	}
+	respBody, status, ok := s.supervisorPost(ctx, sessionID, "/supervisor/active", map[string]any{
+		"project_path": projectPath,
+		"template":     template,
+	})
+	if !ok {
+		return nil, bridgeName, errors.New("bridge unreachable")
+	}
+	if status >= 400 {
+		return nil, bridgeName, fmt.Errorf("supervisor start failed (%d): %s", status, truncate(string(respBody), 400))
+	}
+	return respBody, bridgeName, nil
+}
+
+func (s *Server) StopPreview(ctx context.Context, sessionID string) (json.RawMessage, error) {
+	respBody, status, ok := s.supervisorPost(ctx, sessionID, "/supervisor/stop", map[string]any{})
+	if !ok {
+		return nil, errors.New("bridge unreachable")
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("supervisor stop failed (%d): %s", status, truncate(string(respBody), 400))
+	}
+	return respBody, nil
+}
+
+func (s *Server) PreviewStatus(ctx context.Context, sessionID string) (json.RawMessage, error) {
+	respBody, ok := s.supervisorGet(ctx, sessionID, "/supervisor/active")
+	if !ok {
+		return nil, errors.New("bridge unreachable")
+	}
+	return respBody, nil
+}
+
 // handleCanvasProjectStart POSTs to the session's bridge supervisor to bring a
 // project's dev server up. Body shape:
 //

@@ -38,10 +38,15 @@ const (
 	// speechURL is the OpenAI text-to-speech endpoint.
 	speechURL = "https://api.openai.com/v1/audio/speech"
 
-	// ttsDeliveryInstructions is the spoken-delivery guidance handed to
-	// gpt-4o-mini-tts. This is where the British-RP voice lives now - it
-	// used to be a line baked into the realtime model's frozen prompt
-	// (britishAccentLine); delivery belongs with the TTS, not the brain.
+	// ttsDeliveryInstructions is the spoken-delivery guidance handed to the
+	// TTS model. The BRITISH accent itself comes from the `fable` voice
+	// (defaultVoice) - a base voice's accent dominates and an instructions
+	// string can't reliably override an American voice, which is why this
+	// line alone never produced a British accent on the old `ash` voice.
+	// With `fable` doing the accent, this now just reinforces the RP
+	// delivery and sets the dry, restrained Jarvis tone. Delivery belongs
+	// with the TTS, not the brain (it used to be a line in the realtime
+	// model's frozen prompt, britishAccentLine).
 	ttsDeliveryInstructions = "Speak in a clearly British Received Pronunciation accent - non-rhotic vowels, crisp consonants, measured pacing, warm Jarvis-style restraint. Refined and dry, never American. Sound like a real person talking, not a narrator reading."
 )
 

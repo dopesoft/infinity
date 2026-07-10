@@ -4,4 +4,7 @@ onlyBuiltDependencies: []
 ignoredBuiltDependencies:
   - unrs-resolver
 allowBuilds:
+  # protobufjs (via onnxruntime-web) has a postinstall that only generates
+  # optional CLI helpers - not needed for bundled browser use, keep it off.
+  protobufjs: false
   unrs-resolver: false
