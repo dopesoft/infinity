@@ -119,6 +119,7 @@ func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 		Number    string `json:"number"`
 		Name      string `json:"name,omitempty"`
 		Last      string `json:"last"`
+		History   string `json:"history"`
 		UpdatedAt string `json:"updated_at"`
 	}
 	out := []contact{}
@@ -138,6 +139,7 @@ func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 			c.Name = first[:i]
 		}
 		c.Last = first
+		c.History = hist
 		out = append(out, c)
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -155,14 +155,8 @@ export function PhoneCard({
             <button
               type="button"
               onClick={() => {
-                setBookOpen((v) => {
-                  const next = !v;
-                  if (next) {
-                    setOpen(true);
-                    if (contacts === null) void phoneContacts().then(setContacts);
-                  }
-                  return next;
-                });
+                setBookOpen(true);
+                if (contacts === null) void phoneContacts().then(setContacts);
               }}
               aria-label="Contact book - call someone back"
               aria-expanded={bookOpen}
@@ -204,32 +198,7 @@ export function PhoneCard({
               transition={{ duration: 0.2, ease: [0.2, 0.7, 0.2, 1] }}
               className="overflow-hidden"
             >
-              {bookOpen && contacts !== null ? (
-              <div className="mb-3 max-h-44 space-y-1 overflow-y-auto rounded-xl border bg-card/40 p-1.5 scroll-touch">
-                {contacts.length === 0 ? (
-                  <p className="p-2 text-center text-xs text-muted-foreground">No call history yet.</p>
-                ) : (
-                  contacts.map((c) => (
-                    <button
-                      key={c.number}
-                      type="button"
-                      onClick={() => {
-                        setPrompt(`Call ${c.name ?? c.number} at ${c.number}: `);
-                        setBookOpen(false);
-                      }}
-                      className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
-                    >
-                      <Phone className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                        {c.name ?? c.number}
-                        {c.name ? <span className="ml-1.5 font-normal text-muted-foreground">{c.number}</span> : null}
-                      </span>
-                    </button>
-                  ))
-                )}
-              </div>
-            ) : null}
-            {state === "sent" ? (
+              {state === "sent" ? (
                 <div className="mb-3 flex min-h-11 items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 text-xs text-success">
                   <Phone className="size-3.5 shrink-0" aria-hidden />
                   On it — the outcome will land here and on your phone.
@@ -253,7 +222,7 @@ export function PhoneCard({
                     autoCorrect="on"
                     className={cn(
                       "h-11 w-full rounded-xl border border-input bg-background pl-3 pr-11 text-sm",
-                      "transition-colors focus:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ring-offset-background",
+                      "transition-colors focus:border-foreground/40 focus:outline-none",
                     )}
                   />
                   <button
@@ -299,6 +268,17 @@ export function PhoneCard({
           </ScrollList>
         )}
       </Section>
+
+      <ContactBookModal
+        open={bookOpen}
+        onOpenChange={setBookOpen}
+        contacts={contacts}
+        onCall={(c) => {
+          setBookOpen(false);
+          setPrompt(`Call ${c.name ?? c.number} at ${c.number}: `);
+          setOpen(true);
+        }}
+      />
 
       {/* Live-call modal: the transcript view, but streaming. When the call
           ends the outcome summary slots in on top - same shape as the
@@ -348,5 +328,131 @@ export function PhoneCard({
         </div>
       </ResponsiveModal>
     </>
+  );
+}
+
+/* ContactBookModal - the dial-back book. ResponsiveModal owns the
+ * dialog-vs-drawer split (drawer on mobile, per the house rule). Desktop:
+ * master-detail - searchable name list left, selected contact's call
+ * history right. Mobile: the same two panes stacked as list → detail
+ * (tap a name, back arrow returns).
+ */
+function ContactBookModal({
+  open,
+  onOpenChange,
+  contacts,
+  onCall,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  contacts: PhoneContact[] | null;
+  onCall: (c: PhoneContact) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<PhoneContact | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const all = contacts ?? [];
+    if (!q) return all;
+    return all.filter(
+      (c) => (c.name ?? "").toLowerCase().includes(q) || c.number.includes(q),
+    );
+  }, [contacts, query]);
+
+  // History entries: newest first, split on the rolling separator.
+  const entries = useMemo(
+    () => (selected?.history ?? selected?.last ?? "").split(" | Previously: ").filter(Boolean),
+    [selected],
+  );
+
+  return (
+    <ResponsiveModal open={open} onOpenChange={onOpenChange} title="Contacts" size="lg">
+      <div className="grid min-h-[40dvh] grid-cols-1 gap-3 lg:grid-cols-[240px_1fr]">
+        {/* Left: search + names. On mobile this pane hides once a contact is
+            selected (detail takes over with a back control). */}
+        <div className={cn("min-w-0 space-y-2", selected && "hidden lg:block")}>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search contacts…"
+            inputMode="search"
+            autoCapitalize="none"
+            className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm transition-colors focus:border-foreground/40 focus:outline-none"
+          />
+          <div className="max-h-[45dvh] space-y-0.5 overflow-y-auto scroll-touch">
+            {contacts === null ? (
+              <div className="flex items-center justify-center p-4">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <p className="p-3 text-center text-xs text-muted-foreground">
+                {query ? "No matches." : "No call history yet."}
+              </p>
+            ) : (
+              filtered.map((c) => (
+                <button
+                  key={c.number}
+                  type="button"
+                  onClick={() => setSelected(c)}
+                  className={cn(
+                    "flex w-full min-w-0 flex-col rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent",
+                    selected?.number === c.number && "bg-accent",
+                  )}
+                >
+                  <span className="truncate text-sm font-medium">{c.name ?? c.number}</span>
+                  {c.name ? (
+                    <span className="truncate text-[11px] text-muted-foreground">{c.number}</span>
+                  ) : null}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Right: the selected contact's story. */}
+        <div className={cn("min-w-0", !selected && "hidden lg:block")}>
+          {selected ? (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(null)}
+                    className="mb-1 text-[11px] font-medium text-muted-foreground hover:text-foreground lg:hidden"
+                  >
+                    ← All contacts
+                  </button>
+                  <h3 className="truncate text-base font-semibold tracking-tight">
+                    {selected.name ?? selected.number}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">{selected.number}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onCall(selected)}
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:opacity-90"
+                >
+                  <Phone className="size-3.5" />
+                  Call
+                </button>
+              </div>
+              <div className="max-h-[40dvh] space-y-2 overflow-y-auto scroll-touch">
+                {entries.map((e, i) => (
+                  <div key={i} className="rounded-xl border bg-card/40 p-3">
+                    <p className="break-words text-xs leading-relaxed">{e}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full min-h-32 items-center justify-center rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
+              Pick a contact to see your history with them.
+            </div>
+          )}
+        </div>
+      </div>
+    </ResponsiveModal>
   );
 }

@@ -471,7 +471,7 @@ export async function phoneAsk(prompt: string): Promise<boolean> {
   }
 }
 
-export type PhoneContact = { number: string; name?: string; last: string; updated_at: string };
+export type PhoneContact = { number: string; name?: string; last: string; history?: string; updated_at: string };
 
 // phoneContacts lists every number Jarvis has call history with (named when
 // the call was named) - the dial-back book on the Phone card.
