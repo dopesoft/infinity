@@ -5,6 +5,7 @@ import { Loader2, Lock, Plus, Shield, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { getMeta, setMeta } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 import { deleteWard, fetchWards, putWard, type WardDTO } from "@/lib/api";
 
@@ -151,6 +152,95 @@ export function PrivacySection() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* PhoneVaultCard - the two call-borne secrets, stored as infinity_meta keys
+ * the agent can never read (they're released server-side only: the card is
+ * attached to a brief by the phone_call tool when an errand authorizes
+ * payment; the passphrase is checked in Go against inbound-call transcripts
+ * and scrubbed from every stored line). Rendered by the Privacy section in
+ * settings/page.tsx below the wards list.
+ */
+export function PhoneVaultCard() {
+  const [passphrase, setPassphrase] = useState("");
+  const [card, setCard] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void Promise.all([getMeta("vault.phone_passphrase"), getMeta("vault.payment_card")]).then(
+      ([p, c]) => {
+        setPassphrase(p ?? "");
+        setCard(c ?? "");
+        setLoaded(true);
+      },
+    );
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setErr(null);
+    const ok =
+      (await setMeta("vault.phone_passphrase", passphrase.trim())) &&
+      (await setMeta("vault.payment_card", card.trim()));
+    setSaving(false);
+    if (!ok) {
+      setErr("Save failed.");
+      return;
+    }
+    setSavedAt(Date.now());
+  }
+
+  return (
+    <div className="mt-4 space-y-3 rounded-md border bg-background p-3">
+      <div className="flex items-center gap-2">
+        <Lock className="size-4 text-muted-foreground" aria-hidden />
+        <h3 className="text-sm font-semibold tracking-tight">Phone vault</h3>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">Passphrase</span> — say it when you
+        call Jarvis&apos;s line and your spoken instructions execute for real (verified in
+        code, from any phone, and scrubbed from transcripts).{" "}
+        <span className="font-medium text-foreground">Payment card</span> — released only
+        into a call you commissioned that requires prepayment; Jarvis&apos;s brain never
+        sees the number and transcripts scrub it. Format it how you&apos;d read it to a
+        merchant (number, expiry, CVC, zip).
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Spoken passphrase
+          <Input
+            type="password"
+            autoComplete="off"
+            placeholder="e.g. blue falcon 22"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            disabled={!loaded}
+          />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Payment card
+          <Input
+            type="password"
+            autoComplete="off"
+            placeholder="4242 4242 4242 4242, exp 12/28, CVC 123, zip 75034"
+            value={card}
+            onChange={(e) => setCard(e.target.value)}
+            disabled={!loaded}
+          />
+        </label>
+      </div>
+      {err && <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>}
+      <div className="flex items-center justify-end gap-2">
+        {savedAt && <span className="text-xs text-muted-foreground">Saved</span>}
+        <Button onClick={save} disabled={saving || !loaded}>
+          {saving ? "Saving…" : "Save vault"}
+        </Button>
+      </div>
     </div>
   );
 }

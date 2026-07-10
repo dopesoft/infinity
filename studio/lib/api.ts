@@ -454,6 +454,37 @@ export async function sendBrowserInput(id: string, ev: BrowserInputEvent): Promi
   }
 }
 
+// phoneAsk fires a natural-language call errand ("call Sanson's Pizza in
+// Frisco and order a pepperoni for pickup") as a detached background agent
+// turn. The call's outcome comes back on its own via push + the Phone card;
+// this returns as soon as the errand is accepted.
+export async function phoneAsk(prompt: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/phone/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    return res.status === 202 || res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type PhoneContact = { number: string; name?: string; last: string; updated_at: string };
+
+// phoneContacts lists every number Jarvis has call history with (named when
+// the call was named) - the dial-back book on the Phone card.
+export async function phoneContacts(): Promise<PhoneContact[]> {
+  try {
+    const res = await authedFetch(`/api/phone/contacts`);
+    if (!res.ok) return [];
+    return (await res.json()) as PhoneContact[];
+  } catch {
+    return [];
+  }
+}
+
 // setBrowserControl flips who is driving the live browser session. "agent"
 // is the Hand-back button after a takeover; manual input claims "human"
 // implicitly server-side, so Studio mostly calls this to hand back.

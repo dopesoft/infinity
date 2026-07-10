@@ -64,6 +64,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/watch"
 	"github.com/dopesoft/infinity/core/internal/workflow"
 	"github.com/dopesoft/infinity/core/internal/worldmodel"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
@@ -977,6 +978,20 @@ func serveCmd() *cobra.Command {
 					cfg.Hooks = &hooks.PipelineAdapter{P: pipeline}
 				}
 				if earlyTrust != nil {
+					// Channel-based phone trust: boss-interactive sessions
+					// (mem_sessions.kind='user') place calls freely — his
+					// ask IS the approval. Non-UUID / unknown session ids
+					// fail closed to the Trust queue.
+					phoneGate := proactive.NewPhoneGate(earlyTrust)
+					if pool != nil {
+						phoneGate.SetBossSessionCheck(func(ctx context.Context, sessionID string) bool {
+							var kind string
+							if err := pool.QueryRow(ctx, `SELECT kind FROM mem_sessions WHERE id = $1::uuid`, sessionID).Scan(&kind); err != nil {
+								return false
+							}
+							return kind == "user"
+						})
+					}
 					// Gate chain: per-MCP authorization policies, all sharing
 					// the same TrustStore so the boss sees a single approval
 					// queue in Studio. Order matters only for tools that match
@@ -1002,11 +1017,12 @@ func serveCmd() *cobra.Command {
 						// unattended; only transactional acts (buy/pay/
 						// checkout/delete-account) queue a Trust contract.
 						proactive.NewBrowserGate(earlyTrust),
-						// PhoneGate → phone_call. EVERY outbound call queues
-						// a Trust contract (a live human answers in the
-						// boss's name); INFINITY_PHONE_AUTOAPPROVE=true is
-						// the only bypass.
-						proactive.NewPhoneGate(earlyTrust),
+						// PhoneGate → phone_call. Channel-based: a call the
+						// boss commissioned from inside the app (session
+						// kind='user') flows free — his ask IS the approval.
+						// Autonomous calls (cron/sentinel/self-initiated)
+						// still queue a Trust contract.
+						phoneGate,
 						// WardGate enforces structural PRIVACY zones (mem_wards):
 						// a 'private' ward denies a file read outright, a
 						// 'sensitive' one routes it through Trust. Inspects
@@ -1812,10 +1828,20 @@ func serveCmd() *cobra.Command {
 			// an X-Jarvis-Brief header. Transcripts land on surface='calls'
 			// plus a push when the call ends.
 			var phoneWebhook http.HandlerFunc
+			var phoneManager *phone.Manager
 			if pool != nil {
-				phoneManager := phone.NewManager(pool, surface.NewStore(pool, slog.Default()), pushSender)
+				phoneManager = phone.NewManager(pool, surface.NewStore(pool, slog.Default()), pushSender)
 				phoneWebhook = phoneManager.HandleWebhook
 				phone.RegisterPhoneTools(registry, phoneManager)
+				// Post-call outcome digest ("pizza ready in 20 min, 2:50pm")
+				// runs on the boss's active model, same adapter as every
+				// auxiliary LLM task. Nil-safe: without it the raw
+				// transcript still ships.
+				if activeModel != nil {
+					phoneManager.SetSummarizer(func(ctx context.Context, system, prompt string) (string, error) {
+						return activeModel.Draft(ctx, "", system, prompt, 300)
+					})
+				}
 				switch {
 				case phoneManager.Enabled() && len(phoneManager.MissingOutboundEnvs()) == 0:
 					fmt.Println("  phone: inbound webhook + phone_call wired")
@@ -2161,6 +2187,31 @@ func serveCmd() *cobra.Command {
 			// (and preview-proxy cache) as the Studio UI.
 			if previewTools != nil {
 				previewTools.SetController(srv)
+			}
+			// Late-bind the live-call streamer: each transcript line (and
+			// the final outcome summary) broadcasts to every tab so the
+			// Phone card's live indicator + modal update in real time.
+			if phoneManager != nil {
+				phoneManager.SetLiveNotify(func(ev phone.LiveEvent) {
+					srv.EmitPhoneLive(ev.CallID, ev.Direction, ev.Number, ev.Speaker, ev.Text, ev.Done, ev.Summary)
+				})
+				// The drive-home loop: a passphrase-verified inbound caller's
+				// asks run as a detached agent turn with the boss's FULL
+				// memory - the phone agent was just the messenger.
+				if loop != nil {
+					phoneManager.SetExecuteAsk(func(transcript string) {
+						sessionID := "phone-boss-" + uuid.NewString()
+						prompt := "The boss just called your phone line and was VERIFIED by passphrase. " +
+							"He asked for the following (his words, transcribed):\n\n" + transcript +
+							"\n\nExecute these asks now. When done, notify him with the outcome (he is " +
+							"likely driving - a push he reads on arrival beats a question he can't answer)."
+						_ = runs.Track(context.Background(), runs.KindPhoneAsk, sessionID, "Boss called with instructions", runs.SourceAgent, func(ctx context.Context) error {
+							ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+							defer cancel()
+							return loop.Run(ctx, sessionID, prompt, "", nil, nil)
+						})
+					})
+				}
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

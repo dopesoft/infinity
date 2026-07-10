@@ -92,7 +92,14 @@ export class WakeWordListener {
       )) as typeof import("onnxruntime-web");
       // Self-hosted runtime; single-threaded because Studio doesn't ship
       // COOP/COEP headers (threaded wasm needs cross-origin isolation).
-      ort.env.wasm.wasmPaths = `${WAKE_BASE}/ort/`;
+      // wasmPaths MUST be the object form: a bare string only prefixes the
+      // .wasm binary, leaving the .mjs glue to resolve against the document
+      // root (404 on ort-wasm-simd-threaded.jsep.mjs). ort.min.mjs pulls the
+      // JSEP variant, so both files are the self-hosted jsep build.
+      ort.env.wasm.wasmPaths = {
+        mjs: `${WAKE_BASE}/ort/ort-wasm-simd-threaded.jsep.mjs`,
+        wasm: `${WAKE_BASE}/ort/ort-wasm-simd-threaded.jsep.wasm`,
+      };
       ort.env.wasm.numThreads = 1;
       const [mel, emb, head] = await Promise.all([
         ort.InferenceSession.create(`${WAKE_BASE}/melspectrogram.onnx`),

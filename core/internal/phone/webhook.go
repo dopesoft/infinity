@@ -146,6 +146,17 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 	if callerNote != "" {
 		infoLog.Printf("phone: recognized caller on %s call %s", direction, callID)
 	}
+	// Call memory: if we've spoken with this number recently (either
+	// direction), the agent answers KNOWING it — "yes, the pepperoni for
+	// pickup under Kai" instead of amnesia when the pizza place calls back.
+	if digits := lastDigits(callerID, 10); digits != "" && m.pool != nil {
+		var recall string
+		if err := m.pool.QueryRow(ctx, `
+			SELECT value #>> '{}' FROM mem_agent_state WHERE key = $1
+		`, "phone:history:"+digits).Scan(&recall); err == nil && strings.TrimSpace(recall) != "" {
+			callerNote = strings.TrimSpace(callerNote + "\n\nYour call history with this number, newest first (dates included - if the last call was recent they are likely calling back about it; either way, speak like the same assistant who made those calls): " + recall)
+		}
+	}
 	instructions := buildInstructions(persona, brief, callerID, callerNote)
 	if err := m.acceptCall(ctx, callID, instructions); err != nil {
 		m.failCall(ctx, callID, direction, err)
@@ -153,9 +164,10 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 	}
 	infoLog.Printf("phone: accepted %s call %s (model=%s voice=%s)", direction, callID, m.cfg.Model, m.cfg.Voice)
 
-	// Monitor blocks until the call ends; it owns transcript capture and
-	// outcome delivery (surface + push) and books the mem_runs row.
-	go m.Monitor(callID, direction, brief)
+	// Monitor blocks until the call ends; it owns transcript capture,
+	// live streaming to Studio, and outcome delivery (surface + push),
+	// and books the mem_runs row.
+	go m.Monitor(callID, direction, brief, callerID)
 }
 
 // failCall is the loud path for a call we could not run: reject the SIP leg

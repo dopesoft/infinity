@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Clock, Link as LinkIcon, Search } from "lucide-react";
+import { Clock, Link as LinkIcon, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TierBadge } from "@/components/TierBadge";
 import type { SearchResult, ObservationDTO, MemoryDTO } from "@/lib/api";
@@ -97,8 +97,9 @@ export function MemoryCard({
           </time>
         </div>
       </div>
-      {item.title && <p className="mt-1 line-clamp-1 font-semibold">{item.title}</p>}
-      <p className="mt-1 line-clamp-2 break-words text-sm">{item.text || "-"}</p>
+      {item.title && <p className="mt-1 line-clamp-1 text-[13px] font-semibold">{item.title}</p>}
+      <p className="mt-1 line-clamp-2 break-words text-xs leading-relaxed text-muted-foreground">{item.text || "-"}</p>
+      {(item.streams?.length || typeof item.score === "number" || item.sessionId) && (
       <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
         {item.streams?.map((s) => (
           <span
@@ -118,8 +119,8 @@ export function MemoryCard({
             {item.sessionId.slice(0, 8)}
           </span>
         )}
-        <ChevronRight className="size-3 text-muted-foreground" aria-hidden />
       </div>
+      )}
     </button>
   );
 }

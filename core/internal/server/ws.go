@@ -108,6 +108,11 @@ type wsServerEvent struct {
 	// BrowserControl is set on type="browser_control" frames — who is
 	// driving the live browser (takeover coordination).
 	BrowserControl *wsBrowserControl `json:"browser_control,omitempty"`
+	// PhoneLive is set on type="phone_live" frames — one streamed
+	// transcript line from a call in flight, or the final done event
+	// carrying the outcome summary. Broadcast to every tab (the Phone
+	// card lives on the dashboard, not in a chat session).
+	PhoneLive *wsPhoneLive `json:"phone_live,omitempty"`
 	// DocumentCreated fires when document_create produces a file, so Studio
 	// opens a NEW tab with the rendered report + download. Rides the
 	// per-session broadcaster like browser frames. Cloud-first: the markdown
@@ -185,6 +190,18 @@ type wsBrowserControl struct {
 	BrowserSessionID string `json:"browser_session_id"`
 	Controller       string `json:"controller"`
 	Reason           string `json:"reason,omitempty"`
+}
+
+// wsPhoneLive mirrors phone.LiveEvent (mirrored, not imported, to keep the
+// wire types self-contained in this file like the other ws* structs).
+type wsPhoneLive struct {
+	CallID    string `json:"call_id"`
+	Direction string `json:"direction"`
+	Number    string `json:"number,omitempty"`
+	Speaker   string `json:"speaker,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Done      bool   `json:"done,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 type wsBrowserFrame struct {

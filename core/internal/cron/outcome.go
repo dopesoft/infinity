@@ -267,6 +267,24 @@ func (s *Scheduler) surfaceRunOutcome(ctx context.Context, j Job, summary RunSum
 	if body == "" {
 		body = floor
 	}
+	// On a failure, tell the boss what he can do about it — in words, at the
+	// end of the body — instead of handing him a "Run it again now" chore
+	// button. errs.Humanize already classifies the cause (auth, rate-limit,
+	// bridge, …) and produces a plain-English next step ("Reconnect ChatGPT in
+	// Settings"). A generic retry re-runs the same job against the same unfixed
+	// cause and just fails again; a companion either fixes it himself (self-heal
+	// + the next scheduled run already do) or names the specific fix. Only
+	// append when the guidance adds something the reason line didn't say.
+	if outcome == OutcomeFailed && execErr != nil {
+		if act := strings.TrimSpace(errs.Humanize(execErr).Action); act != "" &&
+			!strings.EqualFold(act, strings.TrimSpace(reason)) {
+			if strings.TrimSpace(body) == "" {
+				body = act
+			} else {
+				body = strings.TrimRight(body, "\n") + "\n\n" + act
+			}
+		}
+	}
 
 	imp := outcomeImportance(outcome)
 	item := &surface.Item{
@@ -296,17 +314,12 @@ func (s *Scheduler) surfaceRunOutcome(ctx context.Context, j Job, summary RunSum
 		exp := time.Now().UTC().Add(36 * time.Hour)
 		item.ExpiresAt = &exp
 	}
-	// A failed run gets a one-tap "run it again" so the boss can retry from the
-	// inbox without hunting for the cron. Generic surface action: tapping it
-	// runs the intent as an agent turn (POST /api/surface/action).
-	if outcome == OutcomeFailed {
-		item.Actions = []surface.Action{{
-			ID:     "retry",
-			Label:  "Run it again now",
-			Intent: "Re-run the scheduled job \"" + j.Name + "\" now and tell me what happens.",
-			Style:  "primary",
-		}}
-	}
+	// Deliberately NO action button on a failed run. "Run it again now" shifted
+	// the fix back to the boss and re-ran the same job against the same unfixed
+	// cause. Jarvis retries himself (self-heal + the next scheduled fire); the
+	// body already names the specific next step when there is one. A card only
+	// carries a button when it's a genuine BOSS decision (needs-you), never for
+	// a failure the system should be handling.
 
 	if _, err := s.surface.Upsert(ctx, item); err != nil {
 		log.Printf("cron surface outcome %s: %v", j.Name, err)

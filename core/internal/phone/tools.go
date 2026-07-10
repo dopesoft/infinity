@@ -60,6 +60,10 @@ func (t *phoneCall) Schema() map[string]any {
 				"type":        "string",
 				"description": "Callee number in E.164 format, e.g. +14155550123.",
 			},
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Who you're calling - the business or person's name (e.g. \"Goodfellas Pizza\"). Stamped into the call history so future calls with this number know the relationship by name.",
+			},
 			"goal": map[string]any{
 				"type": "string",
 				"description": "The full brief: exact objective, facts the call agent may share, " +
@@ -68,6 +72,13 @@ func (t *phoneCall) Schema() map[string]any {
 			"constraints": map[string]any{
 				"type":        "string",
 				"description": "Optional hard boundaries, e.g. spend ceiling, topics to avoid, when to bail out.",
+			},
+			"include_payment": map[string]any{
+				"type": "boolean",
+				"description": "Set true ONLY when the boss's errand requires paying over the phone AND " +
+					"paying on arrival/pickup isn't an option. The stored card is attached to the brief " +
+					"server-side - you never see the number. Prefer 'pay when Kai arrives' whenever the " +
+					"merchant allows it.",
 			},
 		},
 		"required": []string{"to", "goal"},
@@ -91,10 +102,24 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 		return "", errors.New("'goal' is required - the call agent knows only what the brief says")
 	}
 
+	// Payment vault: when the errand requires paying by phone, the card is
+	// fetched from infinity_meta and appended to the brief HERE, server-side
+	// — the main agent's context never contains the number, only this
+	// boolean. The field agent reads it to the merchant; the monitor scrubs
+	// card digits from the stored transcript.
+	if b, _ := in["include_payment"].(bool); b {
+		card, err := m.vaultPaymentCard(ctx)
+		if err != nil {
+			return "", err
+		}
+		constraints = strings.TrimSpace(constraints + "\nPayment (authorized by the boss for THIS errand only - never volunteer it unprompted, only to complete the agreed purchase): " + card)
+	}
+
 	// Store the brief FIRST: the incoming-call webhook rehydrates it by id,
 	// so it must exist before Twilio bridges the leg.
 	briefID := uuid.NewString()
 	brief := &Brief{
+		Name:        strings.TrimSpace(str(in, "name")),
 		To:          to,
 		Goal:        goal,
 		Constraints: constraints,

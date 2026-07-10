@@ -65,6 +65,11 @@ const (
 	// is live for the whole call so Studio shows an "on a call" spinner that
 	// survives navigation.
 	KindPhoneCall Kind = "phone.call"
+	// KindPhoneAsk is a boss-typed call errand from the dashboard header
+	// ("call Sanson's and order a pepperoni"): the background agent turn
+	// that finds the number, writes the brief, and places the call. The
+	// resulting call itself is a separate KindPhoneCall row.
+	KindPhoneAsk Kind = "phone.ask"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

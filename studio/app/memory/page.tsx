@@ -294,7 +294,7 @@ export default function MemoryPage() {
             <>
               <aside
                 className={cn(
-                  "min-h-0 flex-1 flex-col overflow-y-auto bg-background scroll-touch lg:w-80 lg:border-r",
+                  "min-h-0 flex-1 flex-col overflow-y-auto bg-background scroll-touch lg:w-80 lg:flex-none lg:shrink-0 lg:border-r",
                   (view === "reflections" || view === "predictions")
                     ? "lg:w-full lg:border-r-0"
                     : showDetail
@@ -393,7 +393,7 @@ export default function MemoryPage() {
               {view !== "reflections" && view !== "chains" && view !== "predictions" && (
                 <section
                   className={cn(
-                    "min-h-0 flex-1 flex-col bg-background",
+                    "min-h-0 min-w-0 flex-1 flex-col bg-background",
                     showDetail ? "flex" : "hidden lg:flex",
                   )}
                 >

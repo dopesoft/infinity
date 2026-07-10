@@ -88,6 +88,10 @@ export type WSEvent =
   // "human" (takeover). Flips when the agent requests a hand (captcha/login),
   // when the boss's first manual input claims control, and when he hands back.
   | { type: "browser_control"; session_id: string; browser_control: WSBrowserControl }
+  // phone_live streams a call in flight: one event per transcript line,
+  // then a final done event carrying the outcome summary. Broadcast to all
+  // tabs (the Phone card lives on the dashboard, not in a chat session).
+  | { type: "phone_live"; session_id: string; phone_live: WSPhoneLive }
   // document_created fires when document_create produces a file. Studio opens
   // a NEW tab: rendered markdown inline for reports, a download card for
   // binaries. Cloud-first — markdown rides the event, binaries fetch via the
@@ -110,6 +114,16 @@ export type WSBrowserControl = {
   browser_session_id: string;
   controller: "agent" | "human";
   reason?: string;
+};
+
+export type WSPhoneLive = {
+  call_id: string;
+  direction: "inbound" | "outbound";
+  number?: string;
+  speaker?: string;
+  text?: string;
+  done?: boolean;
+  summary?: string;
 };
 
 export type WSDocumentCreated = {

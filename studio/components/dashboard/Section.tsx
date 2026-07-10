@@ -35,6 +35,7 @@ export function Section({
   Icon,
   badge,
   action,
+  headerExtra,
   delay = 0,
   className,
   contentClassName,
@@ -45,6 +46,9 @@ export function Section({
   Icon?: LucideIcon;
   badge?: number | string;
   action?: { label: string; href: string };
+  /** Arbitrary right-aligned header control (e.g. the Phone card's dial
+   *  button). Renders after `action` when both are present. */
+  headerExtra?: React.ReactNode;
   delay?: number;
   className?: string;
   contentClassName?: string;
@@ -86,18 +90,21 @@ export function Section({
             </Badge>
           ) : null}
         </div>
-        {action ? (
-          <Link
-            href={action.href}
-            className="group inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            {action.label}
-            <ArrowRight
-              className="size-3 transition-transform group-hover:translate-x-0.5"
-              aria-hidden
-            />
-          </Link>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-1">
+          {action ? (
+            <Link
+              href={action.href}
+              className="group inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              {action.label}
+              <ArrowRight
+                className="size-3 transition-transform group-hover:translate-x-0.5"
+                aria-hidden
+              />
+            </Link>
+          ) : null}
+          {headerExtra}
+        </div>
       </header>
       <div
         className={cn(

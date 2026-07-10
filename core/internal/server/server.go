@@ -363,6 +363,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/gauge/recent", s.handleGaugeRecent)
 	mux.HandleFunc("/api/gym", s.handleGym)
 	mux.HandleFunc("/api/surface/action", s.handleSurfaceAction)
+	mux.HandleFunc("/api/phone/ask", s.handlePhoneAsk)
+	mux.HandleFunc("/api/phone/contacts", s.handlePhoneContacts)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
 	mux.HandleFunc("/api/browser/session/", s.handleBrowserSession)
 	mux.HandleFunc("/api/workspace/download", s.handleWorkspaceDownload)

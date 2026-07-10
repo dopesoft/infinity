@@ -11,20 +11,27 @@ import (
 	"github.com/dopesoft/infinity/core/internal/agent"
 )
 
-// PhoneGate gates the `phone_call` tool. A phone call is the highest-touch
-// thing Jarvis can do — a real human answers, and whatever the call agent
-// says is said in the boss's name. Unlike browsing (where only transactional
-// acts stop), EVERY outbound call queues a Trust contract and waits for the
-// boss's explicit approval before Twilio dials. There is deliberately no
-// per-session standing-approval shortcut: approving one call must never
-// silently authorize the next one to a different number.
+// PhoneGate gates the `phone_call` tool with CHANNEL-BASED trust:
+//
+//   - Boss-commissioned calls flow FREE. A request typed/spoken inside the
+//     authenticated app (a normal chat/voice session, the dashboard call
+//     button) IS the approval — the boss asking is the authorization, and
+//     interrupting his own errand with a Trust card breaks the experience
+//     (his words). Session kind 'user' = the boss is literally driving.
+//   - AUTONOMOUS calls still stop. A cron/sentinel/heartbeat/self-initiated
+//     turn deciding to dial a human queues a Trust contract and waits —
+//     nobody commissioned that call, so somebody must approve it.
 //
 // Override:
 //
-//	$INFINITY_PHONE_AUTOAPPROVE=true   place calls unattended (full trust)
+//	$INFINITY_PHONE_AUTOAPPROVE=true   place ALL calls unattended (full trust)
 type PhoneGate struct {
 	trust       *TrustStore
 	autoApprove bool
+	// bossSession reports whether a session id is a boss-interactive
+	// session (mem_sessions.kind='user') vs an autonomous one. Wired from
+	// serve.go; nil = treat everything as autonomous (fail closed).
+	bossSession func(ctx context.Context, sessionID string) bool
 }
 
 func NewPhoneGate(trust *TrustStore) *PhoneGate {
@@ -34,11 +41,24 @@ func NewPhoneGate(trust *TrustStore) *PhoneGate {
 	}
 }
 
+// SetBossSessionCheck wires the session-kind lookup (serve.go).
+func (g *PhoneGate) SetBossSessionCheck(fn func(ctx context.Context, sessionID string) bool) {
+	if g != nil {
+		g.bossSession = fn
+	}
+}
+
 func (g *PhoneGate) Authorize(ctx context.Context, sessionID, project, toolName string, input map[string]any) agent.GateDecision {
 	if g == nil || toolName != "phone_call" {
 		return agent.GateDecision{Allow: true}
 	}
 	if g.autoApprove {
+		return agent.GateDecision{Allow: true}
+	}
+	// The boss asked for this call himself, inside the authenticated app —
+	// that IS the approval. (Dashboard call-button sessions are covered by
+	// their PreApproveTools grant before this check is ever consulted.)
+	if g.bossSession != nil && g.bossSession(ctx, sessionID) {
 		return agent.GateDecision{Allow: true}
 	}
 	if g.trust == nil {

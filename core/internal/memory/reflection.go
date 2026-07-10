@@ -334,19 +334,36 @@ func looksLikeCodeTarget(hint string) bool {
 	if h == "" {
 		return false
 	}
-	// A concrete code target is a SINGLE token — a path ("core/internal/x.go"),
-	// a filename ("openai_oauth.go"), or a symbol ("classifyOutcome"). A
-	// multi-word phrase is a behavior description, not a code location, and is
-	// exactly the false-alarm shape the boss kept seeing: every one of the four
-	// he flagged had a phrase target like "bridge routing / bash_run failover"
-	// or "delegate model routing / Codex auth compatibility" — note the "/" there
-	// is "A / B", NOT a file path, so a bare Contains("/") check would wrongly
-	// pass them. Requiring no whitespace catches them deterministically.
+	// A multi-word phrase is a behavior description, not a code location, and is
+	// exactly the false-alarm shape the boss kept seeing: every one he flagged
+	// had a phrase target like "bridge routing / bash_run failover" or "delegate
+	// model routing / Codex auth compatibility" — note the "/" there is "A / B",
+	// NOT a file path, so a bare Contains("/") check would wrongly pass them.
+	// Requiring no whitespace catches them deterministically.
 	if strings.ContainsAny(h, " \t\n") {
 		return false
 	}
-	return true
+	// It must also be an addressable file, not a bare identifier. A tool name
+	// like "media_job" passed the no-whitespace check and produced a "code
+	// issue" card no agent could act on — there's no such file. A real target
+	// carries a path separator ("core/internal/x.go") or a source-file
+	// extension ("openai_oauth.go"). Symbols alone ("classifyOutcome") are too
+	// ambiguous to route a fix to, so they no longer qualify either.
+	if strings.Contains(h, "/") {
+		return true
+	}
+	for _, ext := range codeTargetExtensions {
+		if strings.HasSuffix(h, ext) {
+			return true
+		}
+	}
+	return false
 }
+
+// codeTargetExtensions are the source-file suffixes a reflection fix may name
+// as a target. A hint ending in one is treated as an addressable file even
+// without a directory prefix (the self-improve loop resolves it in-repo).
+var codeTargetExtensions = []string{".go", ".ts", ".tsx", ".js", ".jsx", ".sql", ".py", ".sh", ".css", ".md", ".yaml", ".yml"}
 
 // truncateReflection trims a string to n runes for the proposal columns.
 func truncateReflection(s string, n int) string {

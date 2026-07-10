@@ -1370,11 +1370,22 @@ func (a *API) loadApprovals(ctx context.Context) ([]Approval, error) {
 	trustRows.Close()
 
 	// Code proposals candidate.
+	//
+	// Only proposals that are a genuine BOSS DECISION reach the inbox: a
+	// concrete change to a real file from the source extractor's file-fight
+	// evidence. Reflection-fix candidates are the agent's own self-critique
+	// from a failed session (origin='reflection_fix', quality<0.5) — an
+	// internal self-improve backlog item, not a decision the boss can make on a
+	// vague target with no diff. Surfacing them here dumped low-quality "code
+	// issue" cards into the inbox at high weight, which is the pile-up the boss
+	// flagged. They remain in mem_code_proposals and the /code-proposals tab;
+	// they just no longer ambush the main inbox.
 	codeRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, title, target_path, rationale, proposed_change,
 		       risk_level, created_at
 		FROM mem_code_proposals
 		WHERE status = 'candidate'
+		  AND COALESCE(evidence->>'origin', '') <> 'reflection_fix'
 		ORDER BY created_at DESC
 		LIMIT 30
 	`)
@@ -1892,10 +1903,14 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		trustRows.Close()
 	}
 
+	// Reflection-fix candidates are internal self-improve backlog, not boss-
+	// facing work "awaiting" a decision — same reasoning as loadApprovals. They
+	// stay in the /code-proposals tab; they don't clutter the work board.
 	codeRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, title, target_path, rationale, proposed_change, risk_level, created_at
 		FROM mem_code_proposals
 		WHERE status = 'candidate'
+		  AND COALESCE(evidence->>'origin', '') <> 'reflection_fix'
 		ORDER BY created_at DESC
 		LIMIT $1
 	`, perCol)

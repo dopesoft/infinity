@@ -84,6 +84,109 @@ type Manager struct {
 	surface    *surface.Store
 	push       *push.Sender
 	httpClient *http.Client
+	// summarize distills a finished call's transcript into the 1-2 sentence
+	// outcome the boss actually wants ("pizza ready in 20 min, 2:50pm").
+	// Late-bound in serve.go to the active-model drafter; nil = raw
+	// transcript only (fail-open, the record still lands).
+	summarize Summarizer
+	// liveNotify streams call progress to Studio (the Phone card's live
+	// indicator + transcript modal): one event per transcript line, one
+	// final done event carrying the outcome summary. Late-bound in
+	// serve.go to the WS broadcaster; nil = no live view, the durable
+	// surface item still lands.
+	liveNotify func(ev LiveEvent)
+	// executeAsk runs a passphrase-VERIFIED inbound caller's request as a
+	// detached agent turn (the "call Jarvis on the drive home, it's done
+	// when you arrive" loop). Wired in serve.go to the main loop — the
+	// executor has the boss's full memory; the phone agent never needed it.
+	executeAsk func(transcript string)
+}
+
+// SetExecuteAsk late-binds the verified-boss execution seam (serve.go).
+func (m *Manager) SetExecuteAsk(fn func(transcript string)) {
+	if m != nil {
+		m.executeAsk = fn
+	}
+}
+
+// LiveEvent is one streaming update from a call in flight.
+type LiveEvent struct {
+	CallID    string `json:"call_id"`
+	Direction string `json:"direction"`      // inbound | outbound
+	Number    string `json:"number"`         // callee (outbound) or caller id (inbound)
+	Speaker   string `json:"speaker"`        // Jarvis | Caller | Callee ("" on the done event)
+	Text      string `json:"text"`           // transcript line ("" on the done event)
+	Done      bool   `json:"done"`           // true exactly once, when the call ends
+	Summary   string `json:"summary"`        // outcome digest, only on the done event
+}
+
+// SetLiveNotify late-binds the live-call streamer (serve.go).
+func (m *Manager) SetLiveNotify(fn func(ev LiveEvent)) {
+	if m != nil {
+		m.liveNotify = fn
+	}
+}
+
+func (m *Manager) emitLive(ev LiveEvent) {
+	if m != nil && m.liveNotify != nil {
+		m.liveNotify(ev)
+	}
+}
+
+// ── vault ────────────────────────────────────────────────────────────────
+// Sensitive call material lives in infinity_meta (set once via Studio
+// Settings → Privacy), NEVER in agent-readable state or the memory graph:
+//   vault.payment_card     - card details the phone tool attaches to a brief
+//                            server-side when include_payment=true; the main
+//                            agent's context never contains the number.
+//   vault.phone_passphrase - the spoken phrase that verifies the boss on
+//                            INBOUND calls; checked in Go (monitor), never
+//                            given to the call agent, scrubbed from stored
+//                            transcripts.
+
+const (
+	vaultCardKey       = "vault.payment_card"
+	vaultPassphraseKey = "vault.phone_passphrase"
+)
+
+func (m *Manager) metaValue(ctx context.Context, key string) (string, error) {
+	if m == nil || m.pool == nil {
+		return "", fmt.Errorf("phone: no database pool")
+	}
+	var v string
+	err := m.pool.QueryRow(ctx, `SELECT value FROM infinity_meta WHERE key = $1`, key).Scan(&v)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(v), nil
+}
+
+func (m *Manager) vaultPaymentCard(ctx context.Context) (string, error) {
+	card, err := m.metaValue(ctx, vaultCardKey)
+	if err != nil || card == "" {
+		return "", fmt.Errorf("no payment card is stored - the boss adds one in Settings → Privacy → Phone vault. Place the call without payment (arrange pay-on-arrival) or tell him it's missing")
+	}
+	return card, nil
+}
+
+// phonePassphrase returns the boss-verification phrase, or "" when unset.
+func (m *Manager) phonePassphrase(ctx context.Context) string {
+	v, err := m.metaValue(ctx, vaultPassphraseKey)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+// Summarizer is the LLM seam for post-call outcome digests.
+type Summarizer func(ctx context.Context, system, prompt string) (string, error)
+
+// SetSummarizer late-binds the outcome digester (serve.go, once the
+// active-model drafter exists).
+func (m *Manager) SetSummarizer(fn Summarizer) {
+	if m != nil {
+		m.summarize = fn
+	}
 }
 
 // NewManager reads the phone envs and binds the delivery channels. Always
@@ -155,6 +258,9 @@ func (m *Manager) MissingOutboundEnvs() []string {
 // "phone:brief:<uuid>" so the incoming-call webhook (which sees only SIP
 // headers) can rehydrate it by id.
 type Brief struct {
+	// Name is who/what is being called ("Goodfellas Pizza") - flows into
+	// the call history, card titles, and future calls with this number.
+	Name string `json:"name,omitempty"`
 	To          string `json:"to"`
 	Goal        string `json:"goal"`
 	Constraints string `json:"constraints,omitempty"`
@@ -306,7 +412,24 @@ func (m *Manager) acceptCall(ctx context.Context, callID, instructions string) e
 		"type":         "realtime",
 		"model":        m.cfg.Model,
 		"instructions": instructions,
+		// hangup_call gives the call agent a way to END the call - without
+		// it he waits politely forever after goodbyes and the other side
+		// has to hang up on him. WHEN to use it is persona judgment (data);
+		// the monitor watches for the function call and drops the line.
+		"tools": []map[string]any{{
+			"type":        "function",
+			"name":        "hangup_call",
+			"description": "End the phone call. Call this after goodbyes are exchanged or when the conversation is clearly over.",
+			"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
 		"audio": map[string]any{
+			// Input transcription is OFF by default on realtime sessions —
+			// without asking for it the caller's words never appear in the
+			// transcript (only Jarvis's own lines, which are free). This is
+			// what makes the call log a real two-sided record.
+			"input": map[string]any{
+				"transcription": map[string]any{"model": "gpt-4o-mini-transcribe"},
+			},
 			"output": map[string]any{"voice": m.cfg.Voice},
 		},
 	})
@@ -321,6 +444,12 @@ func (m *Manager) acceptCall(ctx context.Context, callID, instructions string) e
 // than a call answered by an unbriefed model.
 func (m *Manager) rejectCall(ctx context.Context, callID string) error {
 	return m.callControl(ctx, callID, "reject", nil)
+}
+
+// hangupCall ends a live call — the agent side of "bye". Triggered by the
+// call agent's hangup_call function call (see acceptCall tools).
+func (m *Manager) hangupCall(ctx context.Context, callID string) error {
+	return m.callControl(ctx, callID, "hangup", nil)
 }
 
 // callControl is the shared POST for accept/reject/hangup.

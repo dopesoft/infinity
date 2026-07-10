@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/resizable";
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { CompassSection } from "@/components/settings/CompassSection";
-import { PrivacySection } from "@/components/settings/PrivacySection";
+import { PrivacySection, PhoneVaultCard } from "@/components/settings/PrivacySection";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { DashboardSettings } from "@/components/settings/DashboardSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
@@ -290,7 +290,12 @@ function SectionContent({
     case "compass":
       return <CompassSection />;
     case "privacy":
-      return <PrivacySection />;
+      return (
+        <>
+          <PrivacySection />
+          <PhoneVaultCard />
+        </>
+      );
     case "trust":
       return <TrustSection />;
     case "dashboard":

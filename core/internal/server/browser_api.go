@@ -104,6 +104,28 @@ func (s *Server) browserControl(w http.ResponseWriter, r *http.Request, id strin
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "controller": body.Controller})
 }
 
+// EmitPhoneLive broadcasts one live-call update (a transcript line, or the
+// final done+summary) to every connected tab. Calls aren't bound to a chat
+// session — the Phone card lives on the dashboard — so this rides
+// broadcastAll rather than the per-session sender.
+func (s *Server) EmitPhoneLive(callID, direction, number, speaker, text string, done bool, summary string) {
+	if s == nil || callID == "" {
+		return
+	}
+	s.broadcastAll(wsServerEvent{
+		Type: "phone_live",
+		PhoneLive: &wsPhoneLive{
+			CallID:    callID,
+			Direction: direction,
+			Number:    number,
+			Speaker:   speaker,
+			Text:      text,
+			Done:      done,
+			Summary:   summary,
+		},
+	})
+}
+
 // EmitBrowserControl broadcasts a takeover state change to the session's
 // Studio tab so the Preview pane can render "you're driving / hand back"
 // the moment control flips - whether the flip came from the agent
