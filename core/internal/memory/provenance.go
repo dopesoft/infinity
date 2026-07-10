@@ -32,7 +32,7 @@ func Cite(ctx context.Context, pool *pgxpool.Pool, memoryID string) (*Provenance
 	}
 	defer rows.Close()
 
-	out := &ProvenanceChain{Memory: *mem}
+	out := &ProvenanceChain{Memory: *mem, Sources: []Provenance{}}
 	var sumConf float64
 	for rows.Next() {
 		var p Provenance

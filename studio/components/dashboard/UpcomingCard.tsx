@@ -115,7 +115,7 @@ function EventRow({ e, onClick }: { e: CalendarEvent; onClick: () => void }) {
   // Day-of-month for the date tile (e.g. "13" for May 13th). All-day events
   // resolve by calendar date so a June 6 birthday tiles "6", not "5".
   const day = eventDate(e.startsAt, e.allDay).getDate();
-  const openPrep = e.prep.filter((p) => !p.done).length;
+  const openPrep = (e.prep ?? []).filter((p) => !p.done).length;
   // Conference / video provider for the optional 'meet' / 'zoom' chip.
   const videoSolution = (
     e.conference?.solutionName ??

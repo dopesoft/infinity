@@ -97,10 +97,11 @@ export function KnowledgeGraphPanel() {
     const cx = size.w / 2;
     const cy = size.h / 2;
     const nodesById = new Map<string, SimNode>();
-    const nodes: SimNode[] = data.nodes.map((n, i) => {
+    const dataNodes = data.nodes ?? [];
+    const nodes: SimNode[] = dataNodes.map((n, i) => {
       // Spread initial positions on a circle so the sim doesn't start with
       // every node stacked at center - that produces stable, consistent layout.
-      const angle = (i / Math.max(data.nodes.length, 1)) * Math.PI * 2;
+      const angle = (i / Math.max(dataNodes.length, 1)) * Math.PI * 2;
       const radius = 6 + Math.min(14, n.degree * 1.2);
       const sn: SimNode = {
         ...n,
@@ -117,7 +118,7 @@ export function KnowledgeGraphPanel() {
       return sn;
     });
     const edges: SimEdge[] = [];
-    for (const e of data.edges) {
+    for (const e of data.edges ?? []) {
       const s = nodesById.get(e.source);
       const t = nodesById.get(e.target);
       if (!s || !t) continue;
@@ -354,7 +355,7 @@ export function KnowledgeGraphPanel() {
       </div>
 
       {/* Type filter chips */}
-      {data && data.node_types.length > 0 && (
+      {data && (data.node_types ?? []).length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2">
           <button
             onClick={() => setFilterType("")}
@@ -367,7 +368,7 @@ export function KnowledgeGraphPanel() {
           >
             all
           </button>
-          {data.node_types.map((t) => (
+          {(data.node_types ?? []).map((t) => (
             <button
               key={t}
               onClick={() => setFilterType(t)}

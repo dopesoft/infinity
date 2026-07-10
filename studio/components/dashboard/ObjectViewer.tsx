@@ -1267,7 +1267,8 @@ function todoDueLabel(iso: string): string {
 
 // ── CalendarEvent ─────────────────────────────────────────────────────────
 function EventBody({ e }: { e: CalendarEvent }) {
-  const openPrep = e.prep.filter((p) => !p.done);
+  const prep = e.prep ?? [];
+  const openPrep = prep.filter((p) => !p.done);
   const attendees = e.attendees ?? [];
   const counts = attendees.reduce(
     (acc, a) => {
@@ -1378,10 +1379,10 @@ function EventBody({ e }: { e: CalendarEvent }) {
         </EventMetaRow>
       ) : null}
 
-      {e.prep.length > 0 ? (
-        <ModalSection meta={`${openPrep.length}/${e.prep.length} prep open`}>
+      {prep.length > 0 ? (
+        <ModalSection meta={`${openPrep.length}/${prep.length} prep open`}>
           <ul className="space-y-2">
-            {e.prep.map((p) => (
+            {prep.map((p) => (
               <li key={p.id} className="flex items-start gap-2">
                 {p.done ? (
                   <CheckCircle2

@@ -298,21 +298,25 @@ func clusterTopic(texts []string) string {
 }
 
 func normalizeLessonsJSON(raw string) []Lesson {
+	// Always return a non-nil slice: a nil result marshals as
+	// `"lessons": null` on the reflections API and breaks array reads
+	// in Studio. Stored `null` columns (critic returned no lessons) hit
+	// the type-assertion path below.
 	var decoded any
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return nil
+		return []Lesson{}
 	}
 	arr, ok := decoded.([]any)
 	if !ok {
-		return nil
+		return []Lesson{}
 	}
 	buf, err := json.Marshal(arr)
 	if err != nil {
-		return nil
+		return []Lesson{}
 	}
-	var lessons []Lesson
+	lessons := []Lesson{}
 	if err := json.Unmarshal(buf, &lessons); err != nil {
-		return nil
+		return []Lesson{}
 	}
 	return lessons
 }

@@ -507,6 +507,11 @@ func scanWorkflow(row pgx.Row) (*Workflow, error) {
 	if len(inputsRaw) > 0 {
 		_ = json.Unmarshal(inputsRaw, &wf.Inputs)
 	}
+	// A stored JSON `null` column unmarshals to a nil slice, which would
+	// serve `"steps": null` to Studio and crash its step renderer.
+	if wf.Steps == nil {
+		wf.Steps = []StepDef{}
+	}
 	return &wf, nil
 }
 

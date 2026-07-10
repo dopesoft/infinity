@@ -148,12 +148,12 @@ function UsageBody({ data }: { data: ContextUsageDTO | null }) {
             {Math.round(pct * 100)}%
           </p>
         </div>
-        <SegmentedBar categories={data.categories} total={data.context_window} />
+        <SegmentedBar categories={data.categories ?? []} total={data.context_window} />
       </div>
 
       <table className="w-full text-[12px]">
         <tbody>
-          {data.categories.map((c) => {
+          {(data.categories ?? []).map((c) => {
             const p =
               data.context_window > 0 ? (c.tokens / data.context_window) * 100 : 0;
             const isFree = c.id === "free";

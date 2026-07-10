@@ -175,6 +175,11 @@ func (h *Heartbeat) RunOnce(ctx context.Context) (RunSummary, error) {
 	findings, err := h.checklist(cctx, h)
 	end := h.clock()
 	dur := end.Sub(start)
+	// A zero-finding tick returns a nil slice, which the run-now API would
+	// marshal as `"findings": null` and crash the Studio heartbeat page.
+	if findings == nil {
+		findings = []Finding{}
+	}
 
 	status := "ok"
 	if err != nil {

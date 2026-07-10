@@ -447,8 +447,22 @@ func (s *Store) EmbedPending(ctx context.Context, embedder embed.Embedder, limit
 	return n, nil
 }
 
+// EmptySnapshot returns a Snapshot with every slice initialized so the
+// degraded paths (no pool, pre-migration-022 schema) still marshal `[]`
+// instead of `null` — Studio's Gym tab reads these fields as arrays.
+func EmptySnapshot() Snapshot {
+	return Snapshot{
+		Examples: []Example{},
+		Datasets: []Dataset{},
+		Runs:     []Run{},
+		Adapters: []Adapter{},
+		Evals:    []Eval{},
+		Routes:   []Route{},
+	}
+}
+
 func (s *Store) Snapshot(ctx context.Context, limit int) (Snapshot, error) {
-	var snap Snapshot
+	snap := EmptySnapshot()
 	if s == nil || s.pool == nil {
 		return snap, nil
 	}

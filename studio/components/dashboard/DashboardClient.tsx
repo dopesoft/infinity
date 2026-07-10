@@ -357,7 +357,7 @@ export function DashboardClient() {
       pursuits: pursuits.filter((p) => match(p.title, p.cadence)),
       todos: todos.filter((t) => match(t.title, t.priority, t.source)),
       events: events.filter((e) =>
-        match(e.title, e.classification, e.location, ...e.prep.map((p) => p.label)),
+        match(e.title, e.classification, e.location, ...(e.prep ?? []).map((p) => p.label)),
       ),
       approvals: approvals.filter((a) =>
         match(a.title, a.subtitle, a.rationale, a.question),

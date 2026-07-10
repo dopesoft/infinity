@@ -142,8 +142,14 @@ func (s *Server) handleLab(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusOK, labResponse{
 			Proposals: []labProposal{},
+			Resolved:  []labResolved{},
 			Lessons:   []labLesson{},
 			Skills:    []labSkill{},
+			Gym: labGymSnapshot{
+				Candidates:   []labGymCandidate{},
+				AdapterEvals: []labAdapterEval{},
+				Routes:       []labPolicyRoute{},
+			},
 		})
 		return
 	}

@@ -676,7 +676,10 @@ function GymPane({
   loading: boolean;
   snapshot: GymSnapshot;
 }) {
-  if (loading && snapshot.candidates.length === 0) {
+  // Degraded core states (pre-migration schema, no pool) serve the gym
+  // slices as null — never trust the wire shape.
+  const candidates = snapshot.candidates ?? [];
+  if (loading && candidates.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" /> Loading
@@ -698,7 +701,7 @@ function GymPane({
             for the rationale.
           </p>
         </div>
-        {snapshot.candidates.length === 0 ? (
+        {candidates.length === 0 ? (
           <EmptyState
             icon={Sparkles}
             title="No training examples yet"
@@ -706,7 +709,7 @@ function GymPane({
           />
         ) : (
           <ul className="space-y-2">
-            {snapshot.candidates.map((c, i) => (
+            {candidates.map((c, i) => (
               <li
                 key={`${c.source_kind}:${c.task_kind}:${i}`}
                 className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"

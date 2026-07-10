@@ -87,7 +87,7 @@ export function WorkflowsSection() {
 
               {/* Step pipeline — kind badges in order. */}
               <div className="mt-2 flex flex-wrap items-center gap-1 text-[10px]">
-                {wf.steps.map((s, i) => (
+                {(wf.steps ?? []).map((s, i) => (
                   <span key={i} className="flex items-center gap-1">
                     <span
                       className={cn(
@@ -98,7 +98,7 @@ export function WorkflowsSection() {
                     >
                       {s.name || s.kind}
                     </span>
-                    {i < wf.steps.length - 1 && (
+                    {i < (wf.steps ?? []).length - 1 && (
                       <ArrowRight className="size-2.5 text-muted-foreground/50" aria-hidden />
                     )}
                   </span>

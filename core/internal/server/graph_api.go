@@ -45,7 +45,7 @@ type graphResponse struct {
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
-		writeJSON(w, http.StatusOK, graphResponse{Nodes: []graphNodeDTO{}, Edges: []graphEdgeDTO{}})
+		writeJSON(w, http.StatusOK, graphResponse{Nodes: []graphNodeDTO{}, Edges: []graphEdgeDTO{}, NodeTypes: []string{}})
 		return
 	}
 

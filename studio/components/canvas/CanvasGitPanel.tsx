@@ -348,7 +348,7 @@ export function CanvasGitPanel({
             onOpen={openFile}
           />
         )}
-        {store.root && status && status.entries.length === 0 && sessionWrites.length === 0 && (
+        {store.root && status && (status.entries ?? []).length === 0 && sessionWrites.length === 0 && (
           <div className="px-3 py-6 text-xs text-muted-foreground">
             Working tree clean.
           </div>

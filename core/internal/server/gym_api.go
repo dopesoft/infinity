@@ -20,7 +20,7 @@ func (s *Server) handleGym(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.pool == nil {
-		writeJSON(w, http.StatusOK, plasticity.Snapshot{})
+		writeJSON(w, http.StatusOK, plasticity.EmptySnapshot())
 		return
 	}
 	limit := 50

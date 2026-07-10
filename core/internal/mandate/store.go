@@ -348,6 +348,12 @@ func scanInto(row scanner) (*Mandate, error) {
 	if len(critRaw) > 0 {
 		_ = json.Unmarshal(critRaw, &m.Criteria)
 	}
+	// A stored JSON `null` (mandate opened with no criteria) unmarshals to a
+	// nil slice, which would re-marshal as `"criteria": null` and crash array
+	// reads in Studio. Always serve [].
+	if m.Criteria == nil {
+		m.Criteria = []Criterion{}
+	}
 	if len(crossRaw) > 0 {
 		_ = json.Unmarshal(crossRaw, &m.Crosscheck)
 	}

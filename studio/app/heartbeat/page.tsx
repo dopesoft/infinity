@@ -354,14 +354,14 @@ export default function HeartbeatPage() {
               {/* Live last-run findings banner. Shown only right after a
                   manual run, before the realtime push has merged them
                   into the persisted feed. */}
-              {last && last.findings.length > 0 && (
+              {last && (last.findings ?? []).length > 0 && (
                 <div className="mb-4 rounded-xl border border-success/40 bg-success/5 p-3">
                   <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider text-success">
                     <Sparkles className="size-3" aria-hidden />
-                    Latest pulse · {last.findings.length} findings
+                    Latest pulse · {(last.findings ?? []).length} findings
                   </div>
                   <ul className="space-y-1.5">
-                    {last.findings.map((f, i) => (
+                    {(last.findings ?? []).map((f, i) => (
                       <li key={i} className="text-sm">
                         <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                           {f.kind}

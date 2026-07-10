@@ -53,8 +53,9 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
     setDetail(r);
     setSelected((prev) => {
       if (!r) return null;
-      if (prev && r.events.some((e) => e.id === prev.id)) return prev;
-      return r.events[0] ?? null;
+      const evts = r.events ?? [];
+      if (prev && evts.some((e) => e.id === prev.id)) return prev;
+      return evts[0] ?? null;
     });
     setLoading(false);
   }, [turnId]);

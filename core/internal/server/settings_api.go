@@ -95,6 +95,11 @@ func (s *Server) buildSettingsModelResponse(ctx context.Context) settingsModelRe
 	if s.llmReg != nil {
 		resp.AvailableProviders = s.llmReg.Available()
 	}
+	// Nil marshals as `"available_providers": null`; Studio treats this
+	// field as an array.
+	if resp.AvailableProviders == nil {
+		resp.AvailableProviders = []string{}
+	}
 	return resp
 }
 

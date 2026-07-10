@@ -32,24 +32,28 @@ export function ProvenanceChain({ memoryId }: { memoryId: string }) {
     return null;
   }
 
+  // Older core builds marshal a memory with zero source rows as
+  // `"sources": null` rather than `[]` — never trust the wire shape.
+  const sources = chain.sources ?? [];
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
-          {chain.sources.length} source{chain.sources.length === 1 ? "" : "s"}
+          {sources.length} source{sources.length === 1 ? "" : "s"}
         </p>
         <span className="font-mono text-[11px] text-muted-foreground">
           confidence {chain.confidence.toFixed(2)}
         </span>
       </div>
-      {chain.sources.length === 0 ? (
+      {sources.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           No source observations linked. This memory was created directly (e.g. by the{" "}
           <code className="font-mono">remember</code> tool).
         </p>
       ) : (
         <ol className="space-y-2">
-          {chain.sources.map((src) => (
+          {sources.map((src) => (
             <li
               key={src.observation_id}
               className="rounded-md border bg-background p-2 text-xs"
