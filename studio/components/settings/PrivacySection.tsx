@@ -165,7 +165,7 @@ export function PrivacySection() {
  */
 export function PhoneVaultCard() {
   const [passphrase, setPassphrase] = useState("");
-  const [card, setCard] = useState("");
+  const [card, setCard] = useState({ name: "", number: "", exp: "", cvc: "", zip: "" });
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -175,7 +175,12 @@ export function PhoneVaultCard() {
     void Promise.all([getMeta("vault.phone_passphrase"), getMeta("vault.payment_card")]).then(
       ([p, c]) => {
         setPassphrase(p ?? "");
-        setCard(c ?? "");
+        try {
+          const parsed = JSON.parse(c ?? "");
+          setCard({ name: parsed.name ?? "", number: parsed.number ?? "", exp: parsed.exp ?? "", cvc: parsed.cvc ?? "", zip: parsed.zip ?? "" });
+        } catch {
+          // Legacy single-string value (or unset) - start fresh fields.
+        }
         setLoaded(true);
       },
     );
@@ -186,7 +191,10 @@ export function PhoneVaultCard() {
     setErr(null);
     const ok =
       (await setMeta("vault.phone_passphrase", passphrase.trim())) &&
-      (await setMeta("vault.payment_card", card.trim()));
+      (await setMeta(
+        "vault.payment_card",
+        card.number.trim() ? JSON.stringify(card) : "",
+      ));
     setSaving(false);
     if (!ok) {
       setErr("Save failed.");
@@ -222,17 +230,35 @@ export function PhoneVaultCard() {
             disabled={!loaded}
           />
         </label>
-        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
-          Payment card
-          <Input
-            type="password"
-            autoComplete="off"
-            placeholder="4242 4242 4242 4242, exp 12/28, CVC 123, zip 75034"
-            value={card}
-            onChange={(e) => setCard(e.target.value)}
-            disabled={!loaded}
-          />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground sm:col-span-2">
+          Card number
+          <Input type="password" inputMode="numeric" autoComplete="off" placeholder="4242 4242 4242 4242"
+            value={card.number} onChange={(e) => setCard({ ...card, number: e.target.value })} disabled={!loaded} />
         </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Name on card
+          <Input type="text" autoComplete="off" placeholder="Khaya Malabie"
+            value={card.name} onChange={(e) => setCard({ ...card, name: e.target.value })} disabled={!loaded} />
+        </label>
+        <div className="grid grid-cols-3 gap-2">
+          <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+            Expiry
+            <Input type="text" inputMode="numeric" autoComplete="off" placeholder="12/28"
+              value={card.exp} onChange={(e) => setCard({ ...card, exp: e.target.value })} disabled={!loaded} />
+          </label>
+          <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+            CVC
+            <Input type="password" inputMode="numeric" autoComplete="off" placeholder="123"
+              value={card.cvc} onChange={(e) => setCard({ ...card, cvc: e.target.value })} disabled={!loaded} />
+          </label>
+          <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+            Zip
+            <Input type="text" inputMode="numeric" autoComplete="off" placeholder="75034"
+              value={card.zip} onChange={(e) => setCard({ ...card, zip: e.target.value })} disabled={!loaded} />
+          </label>
+        </div>
       </div>
       {err && <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>}
       <div className="flex items-center justify-end gap-2">

@@ -166,6 +166,31 @@ func (m *Manager) vaultPaymentCard(ctx context.Context) (string, error) {
 	if err != nil || card == "" {
 		return "", fmt.Errorf("no payment card is stored - the boss adds one in Settings → Privacy → Phone vault. Place the call without payment (arrange pay-on-arrival) or tell him it's missing")
 	}
+	// Structured form (Settings stores JSON fields); legacy free-text
+	// values pass through untouched.
+	var c struct {
+		Name   string `json:"name"`
+		Number string `json:"number"`
+		Exp    string `json:"exp"`
+		CVC    string `json:"cvc"`
+		Zip    string `json:"zip"`
+	}
+	if json.Unmarshal([]byte(card), &c) == nil && c.Number != "" {
+		out := "Card number " + c.Number
+		if c.Exp != "" {
+			out += ", expiry " + c.Exp
+		}
+		if c.CVC != "" {
+			out += ", security code " + c.CVC
+		}
+		if c.Name != "" {
+			out += ", name on card " + c.Name
+		}
+		if c.Zip != "" {
+			out += ", billing zip " + c.Zip
+		}
+		return out, nil
+	}
 	return card, nil
 }
 
