@@ -11,6 +11,7 @@ package phone
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -18,10 +19,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
 
@@ -127,7 +130,7 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 			// The leg we ourselves placed has lost its brief — running the
 			// call unbriefed would violate the whole producer/field-agent
 			// contract. Reject and surface.
-			m.failCall(ctx, callID, direction, fmt.Errorf("brief %s could not be loaded: %w", briefID, err))
+			m.failCall(ctx, callID, briefID, direction, fmt.Errorf("brief %s could not be loaded: %w", briefID, err))
 			return
 		}
 		brief = b
@@ -135,7 +138,7 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 
 	persona, err := m.loadPersona(ctx, direction)
 	if err != nil {
-		m.failCall(ctx, callID, direction, err)
+		m.failCall(ctx, callID, briefID, direction, err)
 		return
 	}
 
@@ -159,7 +162,7 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 	}
 	instructions := buildInstructions(persona, brief, callerID, callerNote)
 	if err := m.acceptCall(ctx, callID, instructions); err != nil {
-		m.failCall(ctx, callID, direction, err)
+		m.failCall(ctx, callID, briefID, direction, err)
 		return
 	}
 	infoLog.Printf("phone: accepted %s call %s (model=%s voice=%s)", direction, callID, m.cfg.Model, m.cfg.Voice)
@@ -167,14 +170,14 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 	// Monitor blocks until the call ends; it owns transcript capture,
 	// live streaming to Studio, and outcome delivery (surface + push),
 	// and books the mem_runs row.
-	go m.Monitor(callID, direction, brief, callerID)
+	go m.Monitor(callID, direction, brief, callerID, briefID)
 }
 
 // failCall is the loud path for a call we could not run: reject the SIP leg
 // (fast busy beats an unbriefed model answering), log to stderr, and put a
 // card on the calls surface so the boss sees the missed call — an inbound
 // call that silently vanished would be the classic empty-because-broken lie.
-func (m *Manager) failCall(ctx context.Context, callID, direction string, cause error) {
+func (m *Manager) failCall(ctx context.Context, callID, briefID, direction string, cause error) {
 	log.Printf("phone: %s call %s failed before connect: %v", direction, callID, cause)
 	if err := m.rejectCall(ctx, callID); err != nil {
 		log.Printf("phone: reject call %s also failed: %v", callID, err)
@@ -185,7 +188,7 @@ func (m *Manager) failCall(ctx context.Context, callID, direction string, cause 
 			Surface:    "calls",
 			Kind:       "call",
 			Source:     "phone",
-			ExternalID: callID,
+			ExternalID: callSurfaceKey(briefID, callID),
 			Title:      "Missed " + direction + " call — could not connect",
 			Body:       "I had to decline this call: " + cause.Error(),
 			Importance: &importance,
@@ -240,4 +243,123 @@ func writeOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// HandleStatusCallback is the http.HandlerFunc for /webhooks/twilio-status.
+// Twilio POSTs the outbound call's lifecycle here (initiated, ringing,
+// answered, completed) plus the terminal disposition. A call that never
+// connects (no-answer, busy, failed, canceled) only ever fires this, so it
+// is the single guarantee that an unanswered call is never silent. The
+// /webhooks/ prefix is auth-exempt; this handler verifies Twilio's own
+// SHA1 X-Twilio-Signature instead.
+func (m *Manager) HandleStatusCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	// Verify Twilio's signature (SHA1, distinct from OpenAI's Standard
+	// Webhooks SHA256). Reconstruct the exact URL we handed Twilio.
+	if m.cfg.TwilioToken != "" && m.cfg.PublicBaseURL != "" {
+		full := m.cfg.PublicBaseURL + "/webhooks/twilio-status"
+		if r.URL.RawQuery != "" {
+			full += "?" + r.URL.RawQuery
+		}
+		if !twilioSignatureValid(m.cfg.TwilioToken, full, r.Header.Get("X-Twilio-Signature"), r.PostForm) {
+			log.Printf("phone: twilio status callback signature invalid")
+			http.Error(w, "invalid signature", http.StatusForbidden)
+			return
+		}
+	}
+	briefID := strings.TrimSpace(r.URL.Query().Get("brief"))
+	status := strings.TrimSpace(r.PostFormValue("CallStatus"))
+	to := strings.TrimSpace(r.PostFormValue("To"))
+	// Only the terminal FAILURE states need a card: a call that connected is
+	// handled by the OpenAI monitor's richer outcome. "completed" here just
+	// means the leg ended (the monitor owns the transcript), so skip it.
+	switch status {
+	case "no-answer", "busy":
+		m.deliverCallStatus(r.Context(), briefID, status, to)
+		// Auto-retry a call that rang out or hit a busy line (capped, backed
+		// off, snapped into calling hours).
+		m.enqueueRetry(r.Context(), briefID, 10*time.Minute)
+	case "failed", "canceled":
+		m.deliverCallStatus(r.Context(), briefID, status, to)
+	}
+	writeOK(w)
+}
+
+// deliverCallStatus writes/updates the call's surface card for a terminal
+// failure and pushes the boss. Keyed on briefID so it collapses into the
+// same evolving card the monitor would have written had the call connected.
+func (m *Manager) deliverCallStatus(ctx context.Context, briefID, status, to string) {
+	human := map[string]string{
+		"no-answer": "No answer",
+		"busy":      "Line was busy",
+		"failed":    "Call failed to connect",
+		"canceled":  "Call canceled",
+	}[status]
+	if human == "" {
+		human = "Call did not connect (" + status + ")"
+	}
+	title := "Outbound call"
+	if to != "" {
+		title += " to " + to
+	}
+	if m.surface != nil {
+		importance := 78
+		if _, err := m.surface.Upsert(ctx, &surface.Item{
+			Surface:    "calls",
+			Kind:       "call",
+			Source:     "phone",
+			ExternalID: callSurfaceKey(briefID, ""),
+			Title:      title,
+			Subtitle:   human,
+			Body:       "The call did not go through: " + human + ". You can ask me to try again.",
+			Importance: &importance,
+		}); err != nil {
+			log.Printf("phone: surface call-status %s: %v", briefID, err)
+		}
+	}
+	if m.push != nil {
+		m.push.Notify(ctx, push.Notification{
+			Title: human,
+			Body:  strings.TrimPrefix(title, "Outbound call to "),
+			Kind:  "phone_call",
+			URL:   "/",
+			Tag:   "phone-" + briefID,
+		})
+	}
+	// Live view: reflect the terminal status so a watching modal/chip flips
+	// from "ringing" to the outcome instead of hanging.
+	m.emitLive(LiveEvent{CallID: "brief:" + briefID, Direction: "outbound", Number: to, Done: true, Summary: human, Status: status})
+}
+
+// twilioSignatureValid checks Twilio's X-Twilio-Signature: base64(HMAC-SHA1(
+// authToken, fullURL + each POST param key+value, sorted by key, concatenated)).
+func twilioSignatureValid(authToken, fullURL, sig string, form map[string][]string) bool {
+	if strings.TrimSpace(sig) == "" {
+		return false
+	}
+	keys := make([]string, 0, len(form))
+	for k := range form {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(fullURL)
+	for _, k := range keys {
+		for _, v := range form[k] {
+			b.WriteString(k)
+			b.WriteString(v)
+		}
+	}
+	mac := hmac.New(sha1.New, []byte(authToken))
+	mac.Write([]byte(b.String()))
+	want := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(strings.TrimSpace(sig)), []byte(want))
 }

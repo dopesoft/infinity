@@ -142,6 +142,10 @@ type Config struct {
 	// own Standard-Webhooks signature verification. Nil-safe: unset (no
 	// DB pool) → the route isn't registered.
 	PhoneWebhook http.HandlerFunc
+	// PhoneStatusWebhook handles Twilio call status callbacks at
+	// /webhooks/twilio-status (no-answer/busy/failed). Auth-exempt via the
+	// /webhooks/ prefix; the handler verifies Twilio's SHA1 signature.
+	PhoneStatusWebhook http.HandlerFunc
 	// BrowserClose tears down a live cloud-browser session (Studio's "Stop"
 	// button on the live browser in the Preview pane). Provided as a closure so the server stays
 	// decoupled from the browser package. Nil-safe: the route 503s when
@@ -420,6 +424,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// the handler; /webhooks/ is exempt from the auth middleware.
 	if s.cfg.PhoneWebhook != nil {
 		mux.HandleFunc("/webhooks/openai-realtime", s.cfg.PhoneWebhook)
+	}
+	if s.cfg.PhoneStatusWebhook != nil {
+		mux.HandleFunc("/webhooks/twilio-status", s.cfg.PhoneStatusWebhook)
 	}
 
 	// Voice - the realtime session is mic + transcription only; cognition

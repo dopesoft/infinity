@@ -74,6 +74,7 @@ type Config struct {
 	TwilioNumber  string // TWILIO_PHONE_NUMBER - the From for outbound legs
 	Voice         string // INFINITY_PHONE_VOICE (default "ash")
 	Model         string // INFINITY_PHONE_MODEL (default "gpt-realtime-2.1-mini")
+	PublicBaseURL string // INFINITY_PUBLIC_URL - Core's public origin, for Twilio status callbacks
 }
 
 // Manager owns the substrate: webhook handling, call accept, transcript
@@ -100,6 +101,16 @@ type Manager struct {
 	// when you arrive" loop). Wired in serve.go to the main loop — the
 	// executor has the boss's full memory; the phone agent never needed it.
 	executeAsk func(transcript string)
+	// followupCreator persists a promised action from a finished call as a
+	// task/follow-up (Rule #1b: Go always persists what the summarizer flags).
+	followupCreator func(ctx context.Context, title, body string)
+}
+
+// SetFollowupCreator late-binds the follow-through seam (serve.go).
+func (m *Manager) SetFollowupCreator(fn func(ctx context.Context, title, body string)) {
+	if m != nil {
+		m.followupCreator = fn
+	}
 }
 
 // SetExecuteAsk late-binds the verified-boss execution seam (serve.go).
@@ -118,6 +129,7 @@ type LiveEvent struct {
 	Text      string `json:"text"`           // transcript line ("" on the done event)
 	Done      bool   `json:"done"`           // true exactly once, when the call ends
 	Summary   string `json:"summary"`        // outcome digest, only on the done event
+	Status    string `json:"status"`         // terminal disposition: no-answer|busy|failed|canceled|completed ("" mid-call)
 }
 
 // SetLiveNotify late-binds the live-call streamer (serve.go).
@@ -147,6 +159,8 @@ func (m *Manager) emitLive(ev LiveEvent) {
 const (
 	vaultCardKey       = "vault.payment_card"
 	vaultPassphraseKey = "vault.phone_passphrase"
+	vaultIdentityKey   = "vault.identity"
+	vaultBossCellKey   = "vault.boss_cell"
 )
 
 func (m *Manager) metaValue(ctx context.Context, key string) (string, error) {
@@ -194,6 +208,60 @@ func (m *Manager) vaultPaymentCard(ctx context.Context) (string, error) {
 	return card, nil
 }
 
+// vaultIdentity formats the boss's stored identity details for a call that
+// needs them (verifying with a bank/utility). Never in the agent's context,
+// only released server-side into the brief, same guarantee as the card.
+func (m *Manager) vaultIdentity(ctx context.Context) (string, error) {
+	raw, err := m.metaValue(ctx, vaultIdentityKey)
+	if err != nil || raw == "" {
+		return "", fmt.Errorf("no identity details are stored - the boss adds them in Settings, Privacy, Phone vault. Proceed without them or tell him they're missing")
+	}
+	var id struct {
+		DOB     string `json:"dob"`
+		Account string `json:"account"`
+		Last4   string `json:"last4"`
+		Zip     string `json:"zip"`
+	}
+	if json.Unmarshal([]byte(raw), &id) == nil && (id.DOB != "" || id.Account != "" || id.Last4 != "" || id.Zip != "") {
+		var parts []string
+		if id.DOB != "" {
+			parts = append(parts, "date of birth "+id.DOB)
+		}
+		if id.Account != "" {
+			parts = append(parts, "account number "+id.Account)
+		}
+		if id.Last4 != "" {
+			parts = append(parts, "last four "+id.Last4)
+		}
+		if id.Zip != "" {
+			parts = append(parts, "billing zip "+id.Zip)
+		}
+		return strings.Join(parts, ", "), nil
+	}
+	return raw, nil
+}
+
+// vaultBossCell returns the boss's cell (E.164) for patch-in / callback, or "".
+func (m *Manager) vaultBossCell(ctx context.Context) string {
+	v, err := m.metaValue(ctx, vaultBossCellKey)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+// referToBoss hands the live call to the boss's cell (OpenAI blind transfer):
+// the AI leg drops and the caller is connected to Mr. Kai directly. Used by
+// the patch_in_boss function tool.
+func (m *Manager) referToBoss(ctx context.Context, callID string) error {
+	cell := m.vaultBossCell(ctx)
+	if cell == "" {
+		return fmt.Errorf("no boss cell stored (Settings, Privacy, Phone vault)")
+	}
+	body, _ := json.Marshal(map[string]any{"target_uri": "tel:" + cell})
+	return m.callControl(ctx, callID, "refer", body)
+}
+
 // phonePassphrase returns the boss-verification phrase, or "" when unset.
 func (m *Manager) phonePassphrase(ctx context.Context) string {
 	v, err := m.metaValue(ctx, vaultPassphraseKey)
@@ -227,6 +295,7 @@ func NewManager(pool *pgxpool.Pool, surf *surface.Store, sender *push.Sender) *M
 		TwilioNumber:  strings.TrimSpace(os.Getenv("TWILIO_PHONE_NUMBER")),
 		Voice:         strings.TrimSpace(os.Getenv("INFINITY_PHONE_VOICE")),
 		Model:         strings.TrimSpace(os.Getenv("INFINITY_PHONE_MODEL")),
+		PublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("INFINITY_PUBLIC_URL")), "/"),
 	}
 	if cfg.Voice == "" {
 		cfg.Voice = defaultVoice
@@ -333,6 +402,16 @@ func (m *Manager) loadBrief(ctx context.Context, id string) (*Brief, error) {
 		return nil, fmt.Errorf("phone: brief %q is not valid JSON: %w", id, err)
 	}
 	return &b, nil
+}
+
+// loadBriefRaw returns the stored brief JSON string (for retry re-scheduling).
+func (m *Manager) loadBriefRaw(ctx context.Context, id string) (string, error) {
+	if m.pool == nil {
+		return "", fmt.Errorf("phone: no database pool")
+	}
+	var raw string
+	err := m.pool.QueryRow(ctx, `SELECT value::text FROM mem_agent_state WHERE key = $1`, briefKeyPrefix+id).Scan(&raw)
+	return raw, err
 }
 
 // loadPersona reads the base persona for a call direction ("inbound" |
@@ -447,12 +526,20 @@ func (m *Manager) acceptCall(ctx context.Context, callID, instructions string) e
 		// it he waits politely forever after goodbyes and the other side
 		// has to hang up on him. WHEN to use it is persona judgment (data);
 		// the monitor watches for the function call and drops the line.
-		"tools": []map[string]any{{
-			"type":        "function",
-			"name":        "hangup_call",
-			"description": "End the phone call. Call this after goodbyes are exchanged or when the conversation is clearly over.",
-			"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
-		}},
+		"tools": []map[string]any{
+			{
+				"type":        "function",
+				"name":        "hangup_call",
+				"description": "End the phone call. Call this after goodbyes are exchanged or when the conversation is clearly over.",
+				"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
+			},
+			{
+				"type":        "function",
+				"name":        "patch_in_boss",
+				"description": "Connect the caller directly to Mr. Kai on his own phone when they genuinely need to speak with him personally. This hands the call to him and ends your part. Use sparingly, only when relaying a message will not do.",
+				"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
+			},
+		},
 		"audio": map[string]any{
 			// Input transcription is OFF by default on realtime sessions —
 			// without asking for it the caller's words never appear in the

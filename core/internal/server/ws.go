@@ -202,6 +202,7 @@ type wsPhoneLive struct {
 	Text      string `json:"text,omitempty"`
 	Done      bool   `json:"done,omitempty"`
 	Summary   string `json:"summary,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 type wsBrowserFrame struct {

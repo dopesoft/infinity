@@ -166,15 +166,28 @@ export function PrivacySection() {
 export function PhoneVaultCard() {
   const [passphrase, setPassphrase] = useState("");
   const [card, setCard] = useState({ name: "", number: "", exp: "", cvc: "", zip: "" });
+  const [bossCell, setBossCell] = useState("");
+  const [identity, setIdentity] = useState({ dob: "", account: "", last4: "", zip: "" });
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    void Promise.all([getMeta("vault.phone_passphrase"), getMeta("vault.payment_card")]).then(
-      ([p, c]) => {
+    void Promise.all([
+      getMeta("vault.phone_passphrase"),
+      getMeta("vault.payment_card"),
+      getMeta("vault.boss_cell"),
+      getMeta("vault.identity"),
+    ]).then(([p, c, bc, idn]) => {
         setPassphrase(p ?? "");
+        setBossCell(bc ?? "");
+        try {
+          const pid = JSON.parse(idn ?? "");
+          setIdentity({ dob: pid.dob ?? "", account: pid.account ?? "", last4: pid.last4 ?? "", zip: pid.zip ?? "" });
+        } catch {
+          // unset
+        }
         try {
           const parsed = JSON.parse(c ?? "");
           setCard({ name: parsed.name ?? "", number: parsed.number ?? "", exp: parsed.exp ?? "", cvc: parsed.cvc ?? "", zip: parsed.zip ?? "" });
@@ -194,6 +207,13 @@ export function PhoneVaultCard() {
       (await setMeta(
         "vault.payment_card",
         card.number.trim() ? JSON.stringify(card) : "",
+      )) &&
+      (await setMeta("vault.boss_cell", bossCell.trim())) &&
+      (await setMeta(
+        "vault.identity",
+        identity.dob.trim() || identity.account.trim() || identity.last4.trim()
+          ? JSON.stringify(identity)
+          : "",
       ));
     setSaving(false);
     if (!ok) {
@@ -259,6 +279,40 @@ export function PhoneVaultCard() {
               value={card.zip} onChange={(e) => setCard({ ...card, zip: e.target.value })} disabled={!loaded} />
           </label>
         </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Your cell (for patch-in and callbacks)
+          <Input type="tel" inputMode="tel" autoComplete="off" placeholder="+16095551234"
+            value={bossCell} onChange={(e) => setBossCell(e.target.value)} disabled={!loaded} />
+        </label>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">Identity</span>, released only into a call
+        that must verify you (a bank, a utility) and only the specific detail they ask for. Same
+        server-side-only guarantee as the card; never in Jarvis&apos;s context, scrubbed from transcripts.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Date of birth
+          <Input type="password" autoComplete="off" placeholder="MM/DD/YYYY"
+            value={identity.dob} onChange={(e) => setIdentity({ ...identity, dob: e.target.value })} disabled={!loaded} />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Account number
+          <Input type="password" autoComplete="off" placeholder="optional"
+            value={identity.account} onChange={(e) => setIdentity({ ...identity, account: e.target.value })} disabled={!loaded} />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Last 4 (SSN)
+          <Input type="password" inputMode="numeric" autoComplete="off" placeholder="optional"
+            value={identity.last4} onChange={(e) => setIdentity({ ...identity, last4: e.target.value })} disabled={!loaded} />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Billing zip
+          <Input type="text" inputMode="numeric" autoComplete="off" placeholder="optional"
+            value={identity.zip} onChange={(e) => setIdentity({ ...identity, zip: e.target.value })} disabled={!loaded} />
+        </label>
       </div>
       {err && <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>}
       <div className="flex items-center justify-end gap-2">

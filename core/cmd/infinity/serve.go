@@ -1828,10 +1828,12 @@ func serveCmd() *cobra.Command {
 			// an X-Jarvis-Brief header. Transcripts land on surface='calls'
 			// plus a push when the call ends.
 			var phoneWebhook http.HandlerFunc
+			var phoneStatusWebhook http.HandlerFunc
 			var phoneManager *phone.Manager
 			if pool != nil {
 				phoneManager = phone.NewManager(pool, surface.NewStore(pool, slog.Default()), pushSender)
 				phoneWebhook = phoneManager.HandleWebhook
+				phoneStatusWebhook = phoneManager.HandleStatusCallback
 				phone.RegisterPhoneTools(registry, phoneManager)
 				// Post-call outcome digest ("pizza ready in 20 min, 2:50pm")
 				// runs on the boss's active model, same adapter as every
@@ -1967,7 +1969,8 @@ func serveCmd() *cobra.Command {
 				Turns:            turnStore,
 				RunsAPI:          runs.NewAPI(pool),
 				CalendarAPI:      calendarAPI,
-				PhoneWebhook:     phoneWebhook,
+				PhoneWebhook:       phoneWebhook,
+				PhoneStatusWebhook: phoneStatusWebhook,
 				BrowserClose:     browserClose,
 				BrowserNavigate:  browserNavigate,
 				BrowserInput:     browserInput,
@@ -2193,8 +2196,20 @@ func serveCmd() *cobra.Command {
 			// Phone card's live indicator + modal update in real time.
 			if phoneManager != nil {
 				phoneManager.SetLiveNotify(func(ev phone.LiveEvent) {
-					srv.EmitPhoneLive(ev.CallID, ev.Direction, ev.Number, ev.Speaker, ev.Text, ev.Done, ev.Summary)
+					srv.EmitPhoneLive(ev.CallID, ev.Direction, ev.Number, ev.Speaker, ev.Text, ev.Done, ev.Summary, ev.Status)
 				})
+				// One-shot scheduled-call poller (fire-once, restart-safe).
+				phoneManager.StartScheduler(cmd.Context())
+				// Follow-through: a call that promised an action (send a
+				// form, call back, a deadline) lands a task on the boss's
+				// board, so it never dies inside a transcript.
+				if pool != nil {
+					phoneManager.SetFollowupCreator(func(ctx context.Context, title, body string) {
+						_, _ = pool.Exec(ctx, `
+							INSERT INTO mem_tasks (id, title, body, source, priority, status, created_at, updated_at)
+							VALUES (gen_random_uuid(), $1, $2, 'agent', 2, 'open', NOW(), NOW())`, title, body)
+					})
+				}
 				// The drive-home loop: a passphrase-verified inbound caller's
 				// asks run as a detached agent turn with the boss's FULL
 				// memory - the phone agent was just the messenger.

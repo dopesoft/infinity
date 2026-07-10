@@ -124,6 +124,7 @@ export type WSPhoneLive = {
   text?: string;
   done?: boolean;
   summary?: string;
+  status?: string;
 };
 
 export type WSDocumentCreated = {

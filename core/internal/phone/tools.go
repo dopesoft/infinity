@@ -82,6 +82,14 @@ func (t *phoneCall) Schema() map[string]any {
 				"type":        "string",
 				"description": "Optional hard boundaries, e.g. spend ceiling, topics to avoid, when to bail out.",
 			},
+			"at": map[string]any{
+				"type":        "string",
+				"description": "Optional RFC3339 time to place this call LATER (e.g. 2026-07-11T15:00:00-05:00). Omit to call now. Scheduled calls are snapped into 8am-9pm boss-local hours.",
+			},
+			"include_identity": map[string]any{
+				"type": "boolean",
+				"description": "Set true ONLY when the call requires verifying Mr. Kai's identity (a bank, utility, doctor) AND the boss's errand authorizes it. The stored details are attached server-side; you never see them.",
+			},
 			"include_payment": map[string]any{
 				"type": "boolean",
 				"description": "Set true ONLY when the boss's errand requires paying over the phone AND " +
@@ -123,6 +131,13 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 		}
 		constraints = strings.TrimSpace(constraints + "\nPayment (authorized by the boss for THIS errand only - never volunteer it unprompted, only to complete the agreed purchase): " + card)
 	}
+	if b, _ := in["include_identity"].(bool); b {
+		id, err := m.vaultIdentity(ctx)
+		if err != nil {
+			return "", err
+		}
+		constraints = strings.TrimSpace(constraints + "\nIdentity verification (authorized for THIS errand only - give only the specific detail they ask for, never volunteer the rest): " + id)
+	}
 
 	// Store the brief FIRST: the incoming-call webhook rehydrates it by id,
 	// so it must exist before Twilio bridges the leg.
@@ -136,6 +151,25 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 		Constraints: constraints,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
+	// Scheduled path: stash the whole brief in the one-shot table and let the
+	// poller dial at the target time (snapped into calling hours). Reuses the
+	// identical brief/dial path, just later.
+	if atStr := strings.TrimSpace(str(in, "at")); atStr != "" {
+		at, perr := time.Parse(time.RFC3339, atStr)
+		if perr != nil {
+			return "", fmt.Errorf("'at' must be RFC3339 (e.g. 2026-07-11T15:00:00-05:00); got %q", atStr)
+		}
+		fireAt, serr := m.ScheduleCall(ctx, brief, at, "scheduled by agent")
+		if serr != nil {
+			return "", fmt.Errorf("could not schedule the call: %w", serr)
+		}
+		out, _ := json.Marshal(map[string]any{
+			"ok": true, "scheduled_for": fireAt.Format(time.RFC3339),
+			"note": "Call scheduled - I'll place it at " + fireAt.In(bossLocation()).Format("Jan 2 3:04pm") + " and report the outcome.",
+		})
+		return string(out), nil
+	}
+
 	if err := m.storeBrief(ctx, briefID, brief); err != nil {
 		return "", fmt.Errorf("could not store the call brief: %w", err)
 	}
@@ -167,6 +201,15 @@ func (m *Manager) createTwilioCall(ctx context.Context, to, briefID string) (str
 	form.Set("To", to)
 	form.Set("From", m.cfg.TwilioNumber)
 	form.Set("Twiml", twiml)
+	// Status callbacks are the ONLY signal for a call that never connects
+	// (no answer, busy, failed): the <Dial><Sip> TwiML never runs and OpenAI
+	// never fires our incoming webhook, so without this such a call vanishes
+	// silently. Needs a public origin; degrade quietly if unset.
+	if m.cfg.PublicBaseURL != "" {
+		form.Set("StatusCallback", m.cfg.PublicBaseURL+"/webhooks/twilio-status?brief="+url.QueryEscape(briefID))
+		form.Set("StatusCallbackEvent", "initiated ringing answered completed")
+		form.Set("StatusCallbackMethod", "POST")
+	}
 
 	endpoint := fmt.Sprintf(twilioCallsURL, m.cfg.TwilioSID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))

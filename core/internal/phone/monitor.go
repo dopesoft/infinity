@@ -46,14 +46,17 @@ const (
 		"confirmed, or learned - keeping every concrete detail: times, prices, " +
 		"names, addresses, confirmation numbers. If the goal wasn't achieved, say " +
 		"what happened and what's still open. No preamble, no restating the transcript. " +
-		"Never use em dashes or en dashes; use commas or colons."
+		"Never use em dashes or en dashes; use commas or colons. " +
+		"If the call promised a follow-up action the boss must do or be reminded of " +
+		"(send a form, call back, a deadline), append a final separate line starting " +
+		"exactly with 'FOLLOWUP:' and a short description. Otherwise do not add that line."
 )
 
 // Monitor attaches to the live call, collects + streams the transcript, and
 // delivers the outcome when the call ends. Blocking — callers run it in a
 // goroutine. brief is nil for inbound calls; callerNumber is the SIP From
 // (inbound) and may be empty.
-func (m *Manager) Monitor(callID, direction string, brief *Brief, callerNumber string) {
+func (m *Manager) Monitor(callID, direction string, brief *Brief, callerNumber, briefID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), maxCallDuration)
 	defer cancel()
 
@@ -65,7 +68,7 @@ func (m *Manager) Monitor(callID, direction string, brief *Brief, callerNumber s
 	// call shows as live work in Studio and a monitor failure is classified
 	// red, not silently dropped.
 	_ = runs.Track(ctx, runs.KindPhoneCall, callID, label, runs.SourceAgent, func(ctx context.Context) error {
-		return m.monitorOnce(ctx, callID, direction, brief, callerNumber)
+		return m.monitorOnce(ctx, callID, direction, brief, callerNumber, briefID)
 	})
 }
 
@@ -80,7 +83,7 @@ type transcriptEvent struct {
 	Transcript string `json:"transcript"`
 }
 
-func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, brief *Brief, callerNumber string) error {
+func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, brief *Brief, callerNumber, briefID string) error {
 	start := time.Now()
 
 	// The number Studio's live view shows: who Jarvis dialed (outbound) or
@@ -179,6 +182,20 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 			continue
 		}
 
+		// The call agent asked to hand the caller to the boss. Blind
+		// transfer via OpenAI refer: the AI leg drops, the caller is
+		// connected to Mr. Kai directly.
+		if bytes.Contains(raw, []byte(`"patch_in_boss"`)) && bytes.Contains(raw, []byte(`function_call`)) {
+			go func() {
+				if err := m.referToBoss(context.Background(), callID); err != nil {
+					log.Printf("phone: patch_in_boss for call %s failed: %v", callID, err)
+				} else {
+					infoLog.Printf("phone: call %s handed to the boss (patch_in_boss)", callID)
+				}
+			}()
+			continue
+		}
+
 		var ev transcriptEvent
 		if json.Unmarshal(raw, &ev) != nil || strings.TrimSpace(ev.Transcript) == "" {
 			continue
@@ -226,7 +243,7 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		go m.executeAsk(strings.Join(bossAsk, "\n"))
 	}
 
-	m.deliverOutcome(callID, direction, brief, number, lines, time.Since(start))
+	m.deliverOutcome(callID, briefID, direction, brief, number, lines, time.Since(start))
 	return nil
 }
 
@@ -280,11 +297,23 @@ func replaceFold(s, old, repl string) string {
 	}
 }
 
+// callSurfaceKey is the dedup key for a call's surface card. Outbound calls
+// key on the briefID (the ONLY id shared between the OpenAI monitor path and
+// the Twilio status-callback path, so "placed -> ringing -> answered+outcome"
+// collapse into one evolving card). Inbound has no brief, so it keys on the
+// OpenAI call id.
+func callSurfaceKey(briefID, callID string) string {
+	if briefID != "" {
+		return "brief:" + briefID
+	}
+	return callID
+}
+
 // deliverOutcome writes the ONE durable record of the call — a generic
 // surface item on the "calls" surface — and pushes the boss's phone for
 // outbound calls or substantive inbound ones. Uses a fresh ctx: the call
 // ctx may already be expired and the outcome must land regardless.
-func (m *Manager) deliverOutcome(callID, direction string, brief *Brief, number string, lines []string, dur time.Duration) {
+func (m *Manager) deliverOutcome(callID, briefID, direction string, brief *Brief, number string, lines []string, dur time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -319,6 +348,27 @@ func (m *Manager) deliverOutcome(callID, direction string, brief *Brief, number 
 			log.Printf("phone: outcome summary for call %s failed (shipping raw transcript): %v", callID, err)
 		} else if out = strings.TrimSpace(out); out != "" {
 			summary = out
+		}
+	}
+	// Follow-through: the summarizer appends a "FOLLOWUP:" line when the call
+	// promised an action or callback. Go ALWAYS persists it (the only
+	// judgment is whether one exists), then strips it from the shown summary.
+	if m.followupCreator != nil && summary != "" {
+		if idx := strings.Index(summary, "FOLLOWUP:"); idx >= 0 {
+			task := strings.TrimSpace(summary[idx+len("FOLLOWUP:"):])
+			summary = strings.TrimSpace(strings.TrimRight(summary[:idx], "\n -"))
+			if task != "" {
+				title := task
+				if len(title) > 80 {
+					title = title[:80]
+				}
+				body := "From your " + direction + " call"
+				if brief != nil && brief.Name != "" {
+					body += " with " + brief.Name
+				}
+				body += ": " + task
+				go m.followupCreator(context.Background(), title, body)
+			}
 		}
 	}
 	body := clip(transcript, maxTranscriptChars)
@@ -375,7 +425,7 @@ func (m *Manager) deliverOutcome(callID, direction string, brief *Brief, number 
 			Surface:    "calls",
 			Kind:       "call",
 			Source:     "phone",
-			ExternalID: callID,
+			ExternalID: callSurfaceKey(briefID, callID),
 			Title:      title,
 			Subtitle: func() string {
 				if brief != nil && brief.Topic != "" {

@@ -37,6 +37,7 @@ type LiveCall = {
   lines: LiveLine[];
   done: boolean;
   summary: string;
+  status: string;
 };
 
 export function PhoneCard({
@@ -76,11 +77,12 @@ export function PhoneCard({
         const fresh: LiveCall =
           cur && cur.callId === p.call_id
             ? { ...cur }
-            : { callId: p.call_id, direction: p.direction, number: "", lines: [], done: false, summary: "" };
+            : { callId: p.call_id, direction: p.direction, number: "", lines: [], done: false, summary: "", status: "" };
         if (p.number) fresh.number = p.number;
         if (p.done) {
           fresh.done = true;
           fresh.summary = p.summary ?? "";
+          fresh.status = p.status ?? "";
         } else if (p.text) {
           fresh.lines = [...fresh.lines, { speaker: p.speaker ?? "?", text: p.text }];
         }
@@ -316,7 +318,13 @@ export function PhoneCard({
           (direction === "outbound" ? "Outgoing call" : "Incoming call") +
           (live?.number ? " · " + live.number : "")
         }
-        description={callRunning ? `Live · ${elapsed}` : "Call ended"}
+        description={
+          callRunning
+            ? `Live · ${elapsed}`
+            : live?.status && live.status !== "completed"
+              ? cleanCallStatus(live.status)
+              : "Call ended"
+        }
         size="md"
       >
         <div className="space-y-3">
@@ -354,6 +362,18 @@ export function PhoneCard({
         </div>
       </ResponsiveModal>
     </>
+  );
+}
+
+function cleanCallStatus(status: string): string {
+  return (
+    {
+      "no-answer": "No answer",
+      busy: "Line was busy",
+      failed: "Call failed to connect",
+      canceled: "Call canceled",
+      completed: "Call ended",
+    }[status] ?? "Call ended"
   );
 }
 
