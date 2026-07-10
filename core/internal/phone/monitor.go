@@ -360,7 +360,15 @@ func (m *Manager) deliverOutcome(callID, direction string, brief *Brief, number 
 			Source:     "phone",
 			ExternalID: callID,
 			Title:      title,
-			Subtitle:   fmt.Sprintf("%s · %d exchanges", dur.Round(time.Second), len(lines)),
+			Subtitle: func() string {
+				if brief != nil && brief.Topic != "" {
+					return fmt.Sprintf("%s · %s", dur.Round(time.Second), brief.Topic)
+				}
+				if summary != "" {
+					return fmt.Sprintf("%s · %s", dur.Round(time.Second), clip(summary, 90))
+				}
+				return fmt.Sprintf("%s · %d exchanges", dur.Round(time.Second), len(lines))
+			}(),
 			Body:       body,
 			Importance: &importance,
 		}); err != nil {

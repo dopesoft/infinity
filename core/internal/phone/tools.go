@@ -60,6 +60,10 @@ func (t *phoneCall) Schema() map[string]any {
 				"type":        "string",
 				"description": "Callee number in E.164 format, e.g. +14155550123.",
 			},
+			"topic": map[string]any{
+				"type":        "string",
+				"description": "3-5 word label for what this call is about, e.g. \"pizza pickup order\" or \"congratulating cousin Lerato\". Shown as the call's subtitle on the dashboard.",
+			},
 			"name": map[string]any{
 				"type":        "string",
 				"description": "Who you're calling - the business or person's name (e.g. \"Goodfellas Pizza\"). Stamped into the call history so future calls with this number know the relationship by name.",
@@ -119,6 +123,7 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 	// so it must exist before Twilio bridges the leg.
 	briefID := uuid.NewString()
 	brief := &Brief{
+		Topic:       strings.TrimSpace(str(in, "topic")),
 		Name:        strings.TrimSpace(str(in, "name")),
 		To:          to,
 		Goal:        goal,

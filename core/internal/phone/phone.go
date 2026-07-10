@@ -258,6 +258,9 @@ func (m *Manager) MissingOutboundEnvs() []string {
 // "phone:brief:<uuid>" so the incoming-call webhook (which sees only SIP
 // headers) can rehydrate it by id.
 type Brief struct {
+	// Topic is the 3-5 word "point of the call" ("pizza pickup order") -
+	// the dashboard card's subtitle.
+	Topic string `json:"topic,omitempty"`
 	// Name is who/what is being called ("Goodfellas Pizza") - flows into
 	// the call history, card titles, and future calls with this number.
 	Name string `json:"name,omitempty"`
