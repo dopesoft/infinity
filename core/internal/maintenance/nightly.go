@@ -80,8 +80,12 @@ type Report struct {
 	TrainingExamples       plasticity.ExtractResult `json:"training_examples"`
 	TrainingEmbedded       int                      `json:"training_embedded"`
 	WorldModel             worldmodel.ExtractReport `json:"world_model"`
-	Errors                 []StageError             `json:"errors,omitempty"`
-	Options                Options                  `json:"options"`
+	// SurfaceExpired counts inbox cards dismissed because their TTL passed —
+	// the informational run outcomes and self-heal receipts that carry a 36h
+	// expiry precisely so they don't accumulate in "Surfaced by Jarvis".
+	SurfaceExpired int         `json:"surface_expired"`
+	Errors         []StageError `json:"errors,omitempty"`
+	Options        Options      `json:"options"`
 	// Highlights carries the run's REAL artifacts (lesson texts, memory
 	// titles, entity names) so the boss-facing digest quotes what was
 	// actually learned instead of counter soup.
@@ -207,6 +211,20 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 			addErr("compress", err)
 		} else {
 			report.CompressedObservations = n
+		}
+	}
+
+	// Retire inbox cards whose TTL has passed. Informational outcomes ("run
+	// done", "self-heal fixed it") are written with a 36h expiry so the boss's
+	// inbox stays decisions-only; without this call they never clear and the
+	// TTL is decorative. Follow-up emails are boss-owned and exempt inside
+	// SweepExpired itself.
+	if deps.Surface != nil {
+		n, err := deps.Surface.SweepExpired(ctx)
+		if err != nil {
+			addErr("surface_expire", err)
+		} else {
+			report.SurfaceExpired = n
 		}
 	}
 

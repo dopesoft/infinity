@@ -84,6 +84,10 @@ export type WSEvent =
   // ride the per-session broadcaster (not the turn stream), so they flow
   // continuously for the whole browser session.
   | { type: "browser_frame"; session_id: string; browser_frame: WSBrowserFrame }
+  // browser_control announces who is driving the live browser — "agent" or
+  // "human" (takeover). Flips when the agent requests a hand (captcha/login),
+  // when the boss's first manual input claims control, and when he hands back.
+  | { type: "browser_control"; session_id: string; browser_control: WSBrowserControl }
   // document_created fires when document_create produces a file. Studio opens
   // a NEW tab: rendered markdown inline for reports, a download card for
   // binaries. Cloud-first — markdown rides the event, binaries fetch via the
@@ -100,6 +104,12 @@ export type WSBrowserFrame = {
   frame: string; // data:image/jpeg;base64,...
   url?: string;
   browser_session_id?: string;
+};
+
+export type WSBrowserControl = {
+  browser_session_id: string;
+  controller: "agent" | "human";
+  reason?: string;
 };
 
 export type WSDocumentCreated = {

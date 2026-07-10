@@ -60,6 +60,11 @@ const (
 	// Studio Media tab can filter media.generate runs to the current session,
 	// and the produced assets ride mem_runs.meta.media for live display.
 	KindMediaGenerate Kind = "media.generate"
+	// KindPhoneCall is a live SIP call (inbound or outbound) monitored by
+	// the phone substrate. target_id is the OpenAI realtime call id; the row
+	// is live for the whole call so Studio shows an "on a call" spinner that
+	// survives navigation.
+	KindPhoneCall Kind = "phone.call"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

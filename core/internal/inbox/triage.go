@@ -263,7 +263,15 @@ func Run(ctx context.Context, d Deps, cfg Config) (Summary, error) {
 
 	// Step 2 — the one judgment: which need the boss's reply? One batched LLM call.
 	mark(s2, plan.StepInProgress, "")
-	decisions := d.classify(ctx, emails)
+	decisions, cerr := d.classify(ctx, emails)
+	if cerr != nil {
+		// The model itself was unreachable (dead credential, rate limit, 5xx).
+		// Name it: the wrapped provider error is what llm.IsAuthFailure reads at
+		// the cron boundary to park the run and prompt a reconnect.
+		mark(s2, plan.StepFailed, "I couldn't reach the model to judge the mail — "+truncate(cerr.Error(), 200)+".")
+		mark(s3, plan.StepSkipped, "Skipped — I never got a decision back.")
+		return sum, cerr
+	}
 	if len(decisions) == 0 {
 		mark(s2, plan.StepFailed, "The model didn't return a usable decision — surfaced nothing rather than guess.")
 		// Close out the last step so the plan reaches a terminal state (failed)
@@ -395,12 +403,18 @@ func (d Deps) sweepStalePlans(ctx context.Context) {
 }
 
 // classify makes ONE call to the Settings model and returns index→decision.
-// Robust JSON extraction (the model may wrap in prose/fences). On any failure
-// it returns an empty map — the run surfaces nothing rather than dumping junk.
-func (d Deps) classify(ctx context.Context, emails []email) map[int]decision {
+// Robust JSON extraction (the model may wrap in prose/fences).
+//
+// The provider error is RETURNED, never swallowed. A dropped error here reads
+// downstream as "the model had no opinion" when the truth was "the model's
+// credential is dead" — the exact empty-because-broken/empty-because-fine
+// collapse the self-healing rule forbids. Propagating it lets the cron
+// executor's llm.IsAuthFailure check park the run and tell the boss to
+// reconnect, instead of logging an anonymous "no decisions" every fire.
+func (d Deps) classify(ctx context.Context, emails []email) (map[int]decision, error) {
 	out := map[int]decision{}
 	if d.LLM == nil || len(emails) == 0 {
-		return out
+		return out, nil
 	}
 	var b strings.Builder
 	for i, em := range emails {
@@ -411,7 +425,7 @@ func (d Deps) classify(ctx context.Context, emails []email) map[int]decision {
 	model := d.LLM.Model()
 	text, err := llm.Complete(ctx, d.LLM, model, classifySystemPrompt, b.String())
 	if err != nil {
-		return out
+		return out, fmt.Errorf("triage classify: %w", err)
 	}
 
 	decisions := parseDecisions(text)
@@ -420,7 +434,7 @@ func (d Deps) classify(ctx context.Context, emails []email) map[int]decision {
 			out[dec.Index] = dec
 		}
 	}
-	return out
+	return out, nil
 }
 
 const classifySystemPrompt = `You are the boss's inbox triage. You are given a numbered list of recent emails (FROM, SUBJECT, SNIPPET).

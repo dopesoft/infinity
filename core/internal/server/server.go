@@ -136,6 +136,12 @@ type Config struct {
 	// the routes and Studio renders a "no calendar connected" empty
 	// state in the Upcoming card.
 	CalendarAPI *calendar.API
+	// PhoneWebhook handles OpenAI Realtime SIP deliveries
+	// (realtime.call.incoming) at /webhooks/openai-realtime. Lives under
+	// /webhooks/ so the auth middleware exempts it; the handler does its
+	// own Standard-Webhooks signature verification. Nil-safe: unset (no
+	// DB pool) → the route isn't registered.
+	PhoneWebhook http.HandlerFunc
 	// BrowserClose tears down a live cloud-browser session (Studio's "Stop"
 	// button on the live browser in the Preview pane). Provided as a closure so the server stays
 	// decoupled from the browser package. Nil-safe: the route 503s when
@@ -148,6 +154,10 @@ type Config struct {
 	// live cloud-browser session - the boss's manual takeover of the
 	// screencast. Nil-safe: the route 503s when unset.
 	BrowserInput func(ctx context.Context, sessionID string, ev browser.InputEvent) error
+	// BrowserControl flips who is driving a live browser session
+	// ("agent" | "human") - the Hand-back button on the Preview pane and
+	// the explicit take-over affordance. Nil-safe: the route 503s when unset.
+	BrowserControl func(sessionID, controller, reason string) error
 	// BrowserOpen opens a live cloud-browser session at a URL, routed to the
 	// given chat session so it appears in that session's Preview pane. Used for
 	// self-contained device-OAuth: a cli's sign-in link opens in Jarvis's own
@@ -402,6 +412,13 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/connectors/composio/aliases", s.handleComposioAliases)
 	mux.HandleFunc("/api/connectors/composio/cache", s.handleComposioCacheStatus)
 	mux.HandleFunc("/webhooks/composio", s.handleComposioWebhook)
+
+	// Phone - OpenAI Realtime SIP webhook (realtime.call.incoming and
+	// friends). Signature verification (Standard Webhooks) happens inside
+	// the handler; /webhooks/ is exempt from the auth middleware.
+	if s.cfg.PhoneWebhook != nil {
+		mux.HandleFunc("/webhooks/openai-realtime", s.cfg.PhoneWebhook)
+	}
 
 	// Voice - the realtime session is mic + transcription only; cognition
 	// runs through Loop.Run (a voice utterance is a `message` frame with

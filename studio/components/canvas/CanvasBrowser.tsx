@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Globe, Square, Loader2, ArrowRight, MousePointerClick } from "lucide-react";
+import { Globe, Square, Loader2, ArrowRight, MousePointerClick, Hand } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { navigateBrowserSession, sendBrowserInput, type BrowserInputEvent } from "@/lib/api";
+import { navigateBrowserSession, sendBrowserInput, setBrowserControl, type BrowserInputEvent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // Named keys forwarded as key events; everything else printable goes as text.
@@ -37,6 +37,7 @@ export function CanvasBrowserView({
   running,
   stopping,
   sessionId,
+  controller = "agent",
   onStop,
 }: {
   frame: string | null;
@@ -44,6 +45,8 @@ export function CanvasBrowserView({
   running: boolean;
   stopping: boolean;
   sessionId: string;
+  /** Who is driving: "agent" (Jarvis) or "human" (takeover in progress). */
+  controller?: "agent" | "human";
   onStop: () => void;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
@@ -196,7 +199,26 @@ export function CanvasBrowserView({
             </Button>
           ) : null}
         </form>
-        {running ? (
+        {running && controller === "human" ? (
+          // Takeover in progress: the boss is driving; Jarvis waits. The
+          // hand-back button is the ONLY explicit action — taking over
+          // happens implicitly on his first click/keystroke.
+          <>
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
+              <Hand className="size-3" />
+              you&apos;re driving
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 shrink-0 gap-1 px-2 text-[11px] text-warning hover:bg-warning/10"
+              onClick={() => void setBrowserControl(sessionId, "agent")}
+              title="Give control back to Jarvis"
+            >
+              Hand back
+            </Button>
+          </>
+        ) : running ? (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
             <span className="size-1.5 animate-pulse rounded-full bg-success" />
             live

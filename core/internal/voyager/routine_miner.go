@@ -62,6 +62,8 @@ const (
 	routineMinHits             = 3
 	routineMinDistinctSessions = 2
 	routineMinDistinctDays     = 2
+	// Two different wordings of the same ask. Verbatim repeats are retries.
+	routineMinDistinctPhrasings = 2
 	routineMaxObservations     = 2000
 	routineKeywordsPerPrompt   = 4
 	routineSurfaceKey          = "routines"
@@ -86,6 +88,7 @@ type RoutineMiner struct {
 	logger   *slog.Logger
 	notifyMu sync.RWMutex
 	notify   Notifier
+	reachOut func(title, body string)
 
 	// recentNotify is a process-local de-dup: don't push the same routine
 	// signature into the same session more than once per process lifetime
@@ -119,6 +122,20 @@ func (m *RoutineMiner) SetNotifier(n Notifier) {
 	m.notifyMu.Unlock()
 }
 
+// SetReachOut wires the nightly path's conversational delivery: when a sweep
+// CREATES routine proposals (not merges), the boss gets one reach-out he can
+// reply to - "I've noticed you do X repeatedly, want me to own it?" - instead
+// of cards silently accumulating on a dashboard he has to remember to check.
+// serve.go binds this to the initiative notifier's conversation channel.
+func (m *RoutineMiner) SetReachOut(fn func(title, body string)) {
+	if m == nil {
+		return
+	}
+	m.notifyMu.Lock()
+	m.reachOut = fn
+	m.notifyMu.Unlock()
+}
+
 // MineReport summarises one sweep. Returned for tests + observability.
 type MineReport struct {
 	ClustersDetected int      `json:"clusters_detected"`
@@ -127,6 +144,25 @@ type MineReport struct {
 	SurfacedItems    int      `json:"surfaced_items"`
 	Skipped          int      `json:"skipped_already_skilled"`
 	ProposalIDs      []string `json:"proposal_ids,omitempty"`
+	// NewRoutines carries the human-readable identity of each proposal
+	// CREATED this sweep (not merges) so the nightly path can reach out
+	// conversationally: "I've noticed you do X repeatedly - want me to own
+	// it?" Merges stay silent - the boss was already asked once.
+	NewRoutines []newRoutine `json:"new_routines,omitempty"`
+}
+
+// newRoutine is one freshly-proposed routine, shaped for the reach-out body.
+type newRoutine struct {
+	Name    string `json:"name"`
+	Example string `json:"example,omitempty"`
+	Hits    int    `json:"hits"`
+}
+
+func firstExample(cl Cluster) string {
+	if len(cl.Examples) > 0 {
+		return cl.Examples[0]
+	}
+	return ""
 }
 
 // RunNightly is the memory.RegisterConsolidateHook signature: best-effort
@@ -160,6 +196,40 @@ func (m *RoutineMiner) RunNightly(ctx context.Context, pool *pgxpool.Pool) {
 			"surfaced", rep.SurfacedItems,
 			"skipped_already_skilled", rep.Skipped)
 	}
+	// Chore takeover: freshly-created proposals get ONE bundled
+	// conversational reach-out (never one per routine - it's a nightly
+	// sweep, not an alarm clock). Merges stay silent; the boss was asked
+	// when the proposal was first created.
+	m.notifyMu.RLock()
+	reach := m.reachOut
+	m.notifyMu.RUnlock()
+	if reach != nil && len(rep.NewRoutines) > 0 {
+		reach(reachOutTitle(rep.NewRoutines), reachOutBody(rep.NewRoutines))
+	}
+}
+
+func reachOutTitle(routines []newRoutine) string {
+	if len(routines) == 1 {
+		return "I can take a chore off your plate"
+	}
+	return fmt.Sprintf("I can take %d chores off your plate", len(routines))
+}
+
+func reachOutBody(routines []newRoutine) string {
+	var b strings.Builder
+	b.WriteString("I've been watching how you work, and a few asks keep coming back:\n")
+	for _, r := range routines {
+		fmt.Fprintf(&b, "\n- **%s** — you've asked %d times", r.Name, r.Hits)
+		if r.Example != "" {
+			ex := r.Example
+			if len(ex) > 90 {
+				ex = ex[:90] + "…"
+			}
+			fmt.Fprintf(&b, " (e.g. “%s”)", ex)
+		}
+	}
+	b.WriteString("\n\nWant me to own any of these? Reply here and I'll set it up to run on its own — or review them on the Skills board.")
+	return b.String()
 }
 
 // MineAndPropose is the exported core. Exposed for tests and an optional CLI.
@@ -211,6 +281,11 @@ func (m *RoutineMiner) mineAndPropose(ctx context.Context, pool *pgxpool.Pool, s
 		}
 		if isNew {
 			rep.ProposalsCreated++
+			rep.NewRoutines = append(rep.NewRoutines, newRoutine{
+				Name:    cl.proposedName(),
+				Example: firstExample(cl),
+				Hits:    cl.Hits,
+			})
 		} else {
 			rep.ProposalsMerged++
 		}
@@ -358,6 +433,11 @@ type Cluster struct {
 	Hits             int       // total prompt observations in this cluster
 	DistinctSessions int       // distinct session ids
 	DistinctDays     int       // distinct UTC days the cluster fired on
+	// DistinctPhrasings counts distinct normalized prompt texts. A routine is a
+	// recurring INTENT, which the boss words differently each time. The same
+	// message re-sent verbatim is a RETRY — usually because a run just failed —
+	// and mining that as a routine turns our own outages into skill proposals.
+	DistinctPhrasings int
 	FirstAt          time.Time // earliest observation
 	LastAt           time.Time // most recent observation
 	SessionIDs       []string  // up to 12 for provenance display
@@ -411,6 +491,7 @@ func ClusterPrompts(prompts []promptRow) []Cluster {
 		hits           int
 		sessions       map[string]struct{}
 		days           map[string]struct{}
+		texts          map[string]struct{}
 		firstAt        time.Time
 		lastAt         time.Time
 		sessionList    []string
@@ -438,12 +519,14 @@ func ClusterPrompts(prompts []promptRow) []Cluster {
 				keys:     keys,
 				sessions: map[string]struct{}{},
 				days:     map[string]struct{}{},
+				texts:    map[string]struct{}{},
 				firstAt:  p.At,
 				lastAt:   p.At,
 			}
 			groups[sig] = g
 		}
 		g.hits++
+		g.texts[normalizePromptText(p.Text)] = struct{}{}
 		if p.SessionID != "" {
 			if _, seen := g.sessions[p.SessionID]; !seen {
 				g.sessions[p.SessionID] = struct{}{}
@@ -470,11 +553,12 @@ func ClusterPrompts(prompts []promptRow) []Cluster {
 	out := make([]Cluster, 0, len(groups))
 	for sig, g := range groups {
 		out = append(out, Cluster{
-			Signature:        sig,
-			Keywords:         g.keys,
-			Hits:             g.hits,
-			DistinctSessions: len(g.sessions),
-			DistinctDays:     len(g.days),
+			Signature:         sig,
+			Keywords:          g.keys,
+			Hits:              g.hits,
+			DistinctSessions:  len(g.sessions),
+			DistinctDays:      len(g.days),
+			DistinctPhrasings: len(g.texts),
 			FirstAt:          g.firstAt,
 			LastAt:           g.lastAt,
 			SessionIDs:       g.sessionList,
@@ -503,7 +587,20 @@ func (c Cluster) meetsThreshold() bool {
 	if c.DistinctDays < routineMinDistinctDays {
 		return false
 	}
+	// Verbatim repeats are retries, not routines. Require the boss to have
+	// asked for the same thing in at least two different ways before we call
+	// it a habit worth a skill.
+	if c.DistinctPhrasings < routineMinDistinctPhrasings {
+		return false
+	}
 	return true
+}
+
+// normalizePromptText collapses a prompt to a comparison key so a re-sent
+// message (retry after a failed run) folds into one phrasing rather than
+// counting once per attempt.
+func normalizePromptText(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
 }
 
 // Confidence returns a 0-100 strategic-value score. Combines hit count

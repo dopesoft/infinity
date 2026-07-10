@@ -75,13 +75,25 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   const [browserFrame, setBrowserFrame] = useState<string | null>(null);
   const [browserUrl, setBrowserUrl] = useState<string>("");
   const [stoppingBrowser, setStoppingBrowser] = useState(false);
+  // Takeover coordination: who is driving the live browser. Flips to
+  // "human" when the agent requests a hand (or the boss's first manual
+  // input claims control) and back to "agent" on hand-back.
+  const [browserController, setBrowserController] = useState<"agent" | "human">("agent");
   const { latest: browserRun } = useRuns({ kind: "browser.session", limit: 5 });
   const browserRunning = browserRun?.status === "running";
 
   useEffect(() => {
     return ws.subscribe((ev) => {
-      if (ev.type !== "browser_frame") return;
       if (sessionId && ev.session_id && ev.session_id !== sessionId) return;
+      if (ev.type === "browser_control") {
+        setBrowserController(ev.browser_control.controller);
+        // A takeover request must be seen: pull focus to Preview.
+        if (ev.browser_control.controller === "human" && store.activeTabId !== "preview") {
+          store.setActiveTabId("preview");
+        }
+        return;
+      }
+      if (ev.type !== "browser_frame") return;
       const f = ev.browser_frame;
       setBrowserFrame(f.frame);
       if (f.url) setBrowserUrl(f.url);
@@ -282,6 +294,7 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
         running={browserRunning}
         stopping={stoppingBrowser}
         sessionId={store.browserSessionId ?? ""}
+        controller={browserController}
         onStop={() => void handleStopBrowser()}
       />
     );

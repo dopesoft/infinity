@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
@@ -134,6 +135,9 @@ func (t *NavigateTool) Execute(ctx context.Context, input map[string]any) (strin
 			out += "\nNote: " + info.Error
 		}
 		return out, nil
+	}
+	if err := t.Reg.yieldToHuman(id); err != nil {
+		return "", err
 	}
 	res, err := t.Reg.backend.Navigate(ctx, id, url)
 	if err != nil {
@@ -275,6 +279,9 @@ func (t *ActTool) Execute(ctx context.Context, input map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
+	if err := t.Reg.yieldToHuman(id); err != nil {
+		return "", err
+	}
 	idx, ok := asInt(input["index"])
 	if !ok {
 		return "", errors.New("index is required (integer from browser_observe)")
@@ -361,7 +368,74 @@ func (t *CloseTool) Execute(ctx context.Context, input map[string]any) (string, 
 	return "Browser session closed.", nil
 }
 
-// AllTools returns the six browser tools bound to the registry, for
+// yieldToHuman guards the write verbs (act/navigate): while the boss is
+// driving a takeover, the agent's mutations refuse instead of clobbering
+// him mid-captcha. Read verbs (observe/extract/screenshot) stay allowed.
+func (r *Registry) yieldToHuman(browserID string) error {
+	if r.Controller(browserID) == ControllerHuman {
+		return errors.New("the boss is driving this browser right now (takeover in progress) — do not act on the page. Call browser_request_takeover to wait for him to hand control back, or continue other work")
+	}
+	return nil
+}
+
+// ── browser_request_takeover ───────────────────────────────────────────────
+
+// requestTakeoverWait is how long the agent parks waiting for the boss to
+// clear the blocker before reclaiming control. Long enough to grab a phone
+// off a desk, short enough that a no-show doesn't strand the turn.
+const requestTakeoverWait = 5 * time.Minute
+
+type RequestTakeoverTool struct{ Reg *Registry }
+
+func (t *RequestTakeoverTool) Name() string { return "browser_request_takeover" }
+func (t *RequestTakeoverTool) Description() string {
+	return "Hand the live browser to the boss and wait. Use when you hit something " +
+		"only a human can clear: a CAPTCHA, a login/2FA prompt, a consent wall. " +
+		"His phone gets pinged, the Preview pane becomes his to click and type in, " +
+		"and this call blocks until he hands control back (or ~5 minutes pass). " +
+		"When it returns after a handback, ALWAYS browser_observe before acting — " +
+		"the page will have changed. Also call this to wait if he took over on his own."
+}
+func (t *RequestTakeoverTool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string", "description": sessionIDDesc},
+			"reason":     map[string]any{"type": "string", "description": "One short line the boss sees on his phone: what you need him to do (e.g. \"CAPTCHA on united.com checkout\")."},
+		},
+		"required": []string{"reason"},
+	}
+}
+func (t *RequestTakeoverTool) Execute(ctx context.Context, input map[string]any) (string, error) {
+	id, err := t.Reg.resolveSession(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	reason := strings.TrimSpace(strAny(input["reason"]))
+	if reason == "" {
+		return "", errors.New("reason is required — the boss needs to know what to do")
+	}
+	// If he's already driving (implicit takeover via manual input), don't
+	// re-ping — just wait for the handback.
+	if t.Reg.Controller(id) != ControllerHuman {
+		if err := t.Reg.RequestTakeover(id, reason); err != nil {
+			return "", err
+		}
+	}
+	if t.Reg.AwaitAgentControl(ctx, id, requestTakeoverWait) {
+		return "The boss handed control back. The page state has likely changed — call browser_observe before your next action.", nil
+	}
+	return "The boss didn't respond within the wait window; control has returned to you but the blocker (" + reason + ") is likely still there. Don't spin on it — park this task, notify him what's blocked, and move on.", nil
+}
+
+func strAny(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// AllTools returns the browser tools bound to the registry, for
 // registration in serve.go.
 func (r *Registry) AllTools() []tools.Tool {
 	return []tools.Tool{
@@ -371,6 +445,7 @@ func (r *Registry) AllTools() []tools.Tool {
 		&ActTool{Reg: r},
 		&ExtractTool{Reg: r},
 		&CloseTool{Reg: r},
+		&RequestTakeoverTool{Reg: r},
 	}
 }
 

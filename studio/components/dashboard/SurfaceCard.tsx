@@ -76,7 +76,7 @@ export function SurfaceRow({
               className="shrink-0 font-mono text-[10px] text-muted-foreground"
               suppressHydrationWarning
             >
-              {relTime(item.createdAt)}
+              {relTime(item.updatedAt ?? item.createdAt)}
             </span>
           </div>
           {why ? (

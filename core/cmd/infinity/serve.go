@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,6 +40,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/maintenance"
 	"github.com/dopesoft/infinity/core/internal/mandate"
 	"github.com/dopesoft/infinity/core/internal/memory"
+	"github.com/dopesoft/infinity/core/internal/phone"
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
@@ -999,6 +1002,11 @@ func serveCmd() *cobra.Command {
 						// unattended; only transactional acts (buy/pay/
 						// checkout/delete-account) queue a Trust contract.
 						proactive.NewBrowserGate(earlyTrust),
+						// PhoneGate → phone_call. EVERY outbound call queues
+						// a Trust contract (a live human answers in the
+						// boss's name); INFINITY_PHONE_AUTOAPPROVE=true is
+						// the only bypass.
+						proactive.NewPhoneGate(earlyTrust),
 						// WardGate enforces structural PRIVACY zones (mem_wards):
 						// a 'private' ward denies a file read outright, a
 						// 'sensitive' one routes it through Trust. Inspects
@@ -1782,15 +1790,41 @@ func serveCmd() *cobra.Command {
 			// low-priority updates (notification_digest), and tracks what it
 			// spends (cost_record / budget_status). Wired here, after the
 			// push Sender exists, so urgent notifications can reach the phone.
+			var initNotifier *initiative.Notifier
 			if pool != nil && initStore != nil {
 				initDeliverer := &initiativeDeliverer{
 					sender:  pushSender,
 					surface: surface.NewStore(pool, slog.Default()),
 					pool:    pool,
 				}
-				initNotifier := initiative.NewNotifier(initStore, initDeliverer, slog.Default())
+				initNotifier = initiative.NewNotifier(initStore, initDeliverer, slog.Default())
 				initiative.RegisterTools(registry, initNotifier, initStore)
 				fmt.Println("  initiative: notify + cost tools wired")
+			}
+
+			// Phone substrate: a real number (Twilio SIP trunk) fronting
+			// OpenAI Realtime's native SIP integration. Inbound calls hit
+			// /webhooks/openai-realtime (Standard-Webhooks signature
+			// verified) and are answered with the persona seeded in
+			// mem_agent_state (migration 172); outbound calls go through
+			// the Trust-gated phone_call tool, which asks Twilio to bridge
+			// the callee to OpenAI's SIP endpoint with the brief id riding
+			// an X-Jarvis-Brief header. Transcripts land on surface='calls'
+			// plus a push when the call ends.
+			var phoneWebhook http.HandlerFunc
+			if pool != nil {
+				phoneManager := phone.NewManager(pool, surface.NewStore(pool, slog.Default()), pushSender)
+				phoneWebhook = phoneManager.HandleWebhook
+				phone.RegisterPhoneTools(registry, phoneManager)
+				switch {
+				case phoneManager.Enabled() && len(phoneManager.MissingOutboundEnvs()) == 0:
+					fmt.Println("  phone: inbound webhook + phone_call wired")
+				case phoneManager.Enabled():
+					fmt.Printf("  phone: inbound webhook wired; outbound needs %s\n",
+						strings.Join(phoneManager.MissingOutboundEnvs(), ", "))
+				default:
+					fmt.Println("  phone: not configured (OPENAI_WEBHOOK_SECRET unset; webhook 503s, phone_call explains)")
+				}
 			}
 
 			// Mandate + Crosscheck: per-task definitions of done with binary
@@ -1864,10 +1898,12 @@ func serveCmd() *cobra.Command {
 			var browserClose func(ctx context.Context, sessionID string) error
 			var browserNavigate func(ctx context.Context, sessionID, url string) error
 			var browserInput func(ctx context.Context, sessionID string, ev browser.InputEvent) error
+			var browserControl func(sessionID, controller, reason string) error
 			if browserReg != nil {
 				browserClose = browserReg.Close
 				browserNavigate = browserReg.Navigate
 				browserInput = browserReg.Input
+				browserControl = browserReg.SetController
 			}
 			srv := server.New(server.Config{
 				Addr:             addr,
@@ -1905,9 +1941,11 @@ func serveCmd() *cobra.Command {
 				Turns:            turnStore,
 				RunsAPI:          runs.NewAPI(pool),
 				CalendarAPI:      calendarAPI,
+				PhoneWebhook:     phoneWebhook,
 				BrowserClose:     browserClose,
 				BrowserNavigate:  browserNavigate,
 				BrowserInput:     browserInput,
+				BrowserControl:   browserControl,
 				WorkspaceRawBase: workspaceRawBase,
 				WorkspaceToken:   workspaceToken,
 			})
@@ -1932,6 +1970,21 @@ func serveCmd() *cobra.Command {
 			// detection into a visible chat bubble.
 			if routineMiner != nil {
 				routineMiner.SetNotifier(srv.BroadcastRoutineProposed)
+				// Chore takeover: when the NIGHTLY sweep creates fresh
+				// routine proposals, reach out conversationally (one
+				// bundled session the boss can reply to) instead of
+				// leaving cards to be discovered on the dashboard.
+				if initNotifier != nil {
+					routineMiner.SetReachOut(func(title, body string) {
+						_ = initNotifier.Send(context.Background(), &initiative.Notification{
+							Title:        title,
+							Body:         body,
+							Source:       "routine-miner",
+							Urgency:      initiative.UrgencyNormal,
+							Conversation: true,
+						})
+					})
+				}
 			}
 
 			// Late-bind background_build's completion notifier now that the
@@ -2062,6 +2115,31 @@ func serveCmd() *cobra.Command {
 				browserReg.SetSink(func(chatID string, f browser.Frame) {
 					srv.EmitBrowserFrame(chatID, f.Seq, f.Frame, f.URL, f.BrowserID)
 				})
+				// Takeover coordination: controller flips (agent↔human)
+				// broadcast to Studio so the Preview pane shows who's
+				// driving, and agent-requested takeovers ping the boss's
+				// phone with a deep link into the session's live view.
+				browserReg.SetControlNotify(func(chatID, browserID, controller, reason string) {
+					srv.EmitBrowserControl(chatID, browserID, controller, reason)
+				})
+				if pushSender != nil {
+					browserReg.SetHelpNotify(func(chatID, browserID, reason string) {
+						url := "/live"
+						if chatID != "" {
+							url = "/live?session=" + chatID
+						}
+						pushSender.Notify(context.Background(), push.Notification{
+							Title: "Jarvis needs a hand in the browser",
+							Body:  reason,
+							URL:   url,
+							Kind:  "browser_takeover",
+							// Tag varies by reason so a second blocker in the
+							// same session isn't coalesced away by the
+							// per-tag push cooldown.
+							Tag: fmt.Sprintf("browser-takeover-%s-%x", browserID, sha256.Sum256([]byte(reason)))[:48],
+						})
+					})
+				}
 			}
 			// Late-bind document_create's "open in a new tab" emitter to the
 			// server's per-session broadcaster.

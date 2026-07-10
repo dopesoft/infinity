@@ -254,6 +254,16 @@ type SurfaceItem struct {
 	Metadata         map[string]any `json:"metadata"`
 	Status           string         `json:"status"`
 	CreatedAt        time.Time      `json:"createdAt"`
+	// UpdatedAt is when this card last SAID something new. Rolling cards (one
+	// per cron, keyed on external_id) keep their original created_at forever,
+	// so tonight's failure would otherwise render with the date the card was
+	// first opened — months stale. The UI times and sorts on this.
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Actions are the boss-tappable controls (Run it again / Not a routine /
+	// Review proposal). They live on every surface item, not just follow-ups:
+	// without them a card can be read but never cleared, which is how the
+	// inbox silts up. The server-side `intent` never leaves the server.
+	Actions []FollowUpAction `json:"actions,omitempty"`
 }
 
 type Saved struct {
@@ -1082,11 +1092,13 @@ func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error)
 		SELECT id::text, surface,
 		       kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''), importance,
-		       importance_reason, metadata, status, created_at
+		       importance_reason, metadata, status, created_at,
+		       updated_at, COALESCE(actions, '[]'::jsonb)
 		FROM mem_surface_items
 		WHERE (status = 'open' OR (status = 'snoozed' AND snoozed_until < NOW()))
 		  AND surface <> ALL($1::text[])
 		  AND surface <> 'system'
+		  AND (expires_at IS NULL OR expires_at > NOW())
 		ORDER BY surface, importance DESC NULLS LAST, created_at DESC
 		LIMIT 200
 	`, followupSurfaceKeys)
@@ -1097,14 +1109,16 @@ func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error)
 	out := map[string][]SurfaceItem{}
 	for rows.Next() {
 		var (
-			it      SurfaceItem
-			imp     *int16
-			metaRaw []byte
+			it         SurfaceItem
+			imp        *int16
+			metaRaw    []byte
+			actionsRaw []byte
 		)
 		if err := rows.Scan(
 			&it.ID, &it.Surface, &it.Kind, &it.Source, &it.ExternalID,
 			&it.Title, &it.Subtitle, &it.Body, &it.URL, &imp,
 			&it.ImportanceReason, &metaRaw, &it.Status, &it.CreatedAt,
+			&it.UpdatedAt, &actionsRaw,
 		); err != nil {
 			return nil, err
 		}
@@ -1117,6 +1131,12 @@ func (a *API) loadSurface(ctx context.Context) (map[string][]SurfaceItem, error)
 		}
 		if it.Metadata == nil {
 			it.Metadata = map[string]any{}
+		}
+		if len(actionsRaw) > 0 {
+			var acts []FollowUpAction
+			if err := json.Unmarshal(actionsRaw, &acts); err == nil {
+				it.Actions = acts
+			}
 		}
 		out[it.Surface] = append(out[it.Surface], it)
 	}

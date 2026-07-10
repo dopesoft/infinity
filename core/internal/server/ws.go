@@ -105,6 +105,9 @@ type wsServerEvent struct {
 	// stream, so it streams continuously across every observe/act/extract
 	// call for the whole browser session.
 	BrowserFrame *wsBrowserFrame `json:"browser_frame,omitempty"`
+	// BrowserControl is set on type="browser_control" frames — who is
+	// driving the live browser (takeover coordination).
+	BrowserControl *wsBrowserControl `json:"browser_control,omitempty"`
 	// DocumentCreated fires when document_create produces a file, so Studio
 	// opens a NEW tab with the rendered report + download. Rides the
 	// per-session broadcaster like browser frames. Cloud-first: the markdown
@@ -176,6 +179,14 @@ type wsDocumentCreated struct {
 }
 
 // wsBrowserFrame is one screencast frame for the Studio Preview pane (live browser).
+// wsBrowserControl announces who is driving a live browser session -
+// "agent" or "human" - so the Preview pane renders the takeover state.
+type wsBrowserControl struct {
+	BrowserSessionID string `json:"browser_session_id"`
+	Controller       string `json:"controller"`
+	Reason           string `json:"reason,omitempty"`
+}
+
 type wsBrowserFrame struct {
 	Seq              int    `json:"seq"`
 	Frame            string `json:"frame"`                        // data:image/jpeg;base64,...

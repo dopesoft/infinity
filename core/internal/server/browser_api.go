@@ -65,9 +65,63 @@ func (s *Server) handleBrowserSession(w http.ResponseWriter, r *http.Request) {
 		s.browserNavigate(w, r, id)
 	case "input":
 		s.browserInput(w, r, id)
+	case "control":
+		s.browserControl(w, r, id)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown verb: " + verb})
 	}
+}
+
+// browserControl flips the session's driver. Body: {"controller":"agent"|"human"}.
+// "agent" is the Hand-back button after a takeover; "human" is the explicit
+// take-over affordance (manual input also claims control implicitly, so this
+// is mostly the hand-back path).
+func (s *Server) browserControl(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cfg.BrowserControl == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser not configured"})
+		return
+	}
+	var body struct {
+		Controller string `json:"controller"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if reason == "" {
+		if body.Controller == "agent" {
+			reason = "handed back"
+		} else {
+			reason = "took over"
+		}
+	}
+	if err := s.cfg.BrowserControl(id, body.Controller, reason); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "controller": body.Controller})
+}
+
+// EmitBrowserControl broadcasts a takeover state change to the session's
+// Studio tab so the Preview pane can render "you're driving / hand back"
+// the moment control flips - whether the flip came from the agent
+// (browser_request_takeover), the boss's first manual input, or the
+// explicit control endpoint above.
+func (s *Server) EmitBrowserControl(chatSessionID, browserSessionID, controller, reason string) {
+	if s == nil || chatSessionID == "" {
+		return
+	}
+	s.sessionSender(chatSessionID)(wsServerEvent{
+		Type:      "browser_control",
+		SessionID: chatSessionID,
+		BrowserControl: &wsBrowserControl{
+			BrowserSessionID: browserSessionID,
+			Controller:       controller,
+			Reason:           reason,
+		},
+	})
 }
 
 func (s *Server) browserClose(w http.ResponseWriter, r *http.Request, id string) {

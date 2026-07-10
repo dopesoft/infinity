@@ -60,20 +60,38 @@ const ZERO_MEMORY_STATS: MemoryStats = {
 
 // surfacedWeight ranks the merged "Surfaced by Jarvis" list so genuine
 // decisions (tool-permission + code-change approvals) sit at the top and a
-// time-sensitive yes/no never hides under low-importance FYIs. Surface
-// items fall back to their own importance (0-100, undefined → 40).
+// time-sensitive yes/no never hides under low-importance FYIs.
+//
+// For surface items the question "does this ask me for something?" beats raw
+// importance: a card carrying actions needs a decision, one without is an FYI.
+// Ranking on importance alone buried a routine proposal (importance 23, two
+// buttons) under self-heal receipts (importance 28, nothing to do). So an
+// actionable item always outranks any FYI, and importance orders within each
+// band rather than across them.
+const SURFACE_ACTIONABLE_FLOOR = 50;
+
 function surfacedWeight(it: DashboardItem): number {
   if (it.kind === "approval") {
     if (it.data.kind.startsWith("trust_")) return 100;
     if (it.data.kind === "code_proposal") return 85;
     return 55; // curiosity
   }
-  if (it.kind === "surface") return it.data.importance ?? 40;
+  if (it.kind === "surface") {
+    const importance = it.data.importance ?? 40;
+    const actionable = (it.data.actions?.length ?? 0) > 0;
+    return (actionable ? SURFACE_ACTIONABLE_FLOOR : 0) + importance / 2;
+  }
   return 0;
 }
 
+// Sort on when the card last said something new. A rolling surface card (one
+// per cron) keeps its original createdAt, so sorting on that pins tonight's
+// failure to the bottom under the date it first appeared.
 function surfacedCreatedAt(it: DashboardItem): number {
-  if (it.kind === "approval" || it.kind === "surface") {
+  if (it.kind === "surface") {
+    return new Date(it.data.updatedAt ?? it.data.createdAt).getTime();
+  }
+  if (it.kind === "approval") {
     return new Date(it.data.createdAt).getTime();
   }
   return 0;

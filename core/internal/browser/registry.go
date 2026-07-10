@@ -37,7 +37,21 @@ type Registry struct {
 	sessions     map[string]*entry // browser session id → entry
 	latestByChat map[string]string // chat session id → most-recent browser session id
 	sink         FrameSink
+	// controlNotify broadcasts controller changes (agent↔human) so Studio
+	// can render "you're driving / hand back". Wired from serve.go.
+	controlNotify func(chatID, browserID, controller, reason string)
+	// helpNotify pings the boss when the agent requests a takeover
+	// (captcha, login wall, 2FA). Wired from serve.go to Web Push.
+	helpNotify func(chatID, browserID, reason string)
 }
+
+// Controller values for a session. Exactly one actor drives at a time:
+// the agent's write verbs (act/navigate) yield while a human is driving,
+// and manual input implicitly claims control (see Input).
+const (
+	ControllerAgent = "agent"
+	ControllerHuman = "human"
+)
 
 type entry struct {
 	browserID string
@@ -47,6 +61,9 @@ type entry struct {
 	url       string
 	lastUsed  time.Time
 	done      bool
+	// controller is who is driving: ControllerAgent (default) or
+	// ControllerHuman during a takeover. Guarded by Registry.mu.
+	controller string
 }
 
 func NewRegistry(backend Backend, tracker *runs.Tracker) *Registry {
@@ -282,12 +299,132 @@ func (r *Registry) Navigate(ctx context.Context, browserID, url string) error {
 }
 
 // Input forwards one raw human interaction (click/type/scroll) to a live
-// session - the boss's manual takeover of the screencast.
+// session - the boss's manual takeover of the screencast. The first manual
+// event IMPLICITLY claims control (controller=human) so the agent's write
+// verbs yield instead of clobbering the boss mid-captcha; he hands back
+// explicitly via the Studio button (SetController) or by going idle.
 func (r *Registry) Input(ctx context.Context, browserID string, ev InputEvent) error {
 	if !r.isLive(browserID) {
 		return fmt.Errorf("browser session not found or already closed")
 	}
+	r.claimHumanControl(browserID)
 	return r.backend.Input(ctx, browserID, ev)
+}
+
+// SetControlNotify wires the controller-change broadcaster (WS event so
+// Studio renders the takeover state live). Called once from serve.go.
+func (r *Registry) SetControlNotify(fn func(chatID, browserID, controller, reason string)) {
+	r.mu.Lock()
+	r.controlNotify = fn
+	r.mu.Unlock()
+}
+
+// SetHelpNotify wires the "agent needs a human" pinger (Web Push). Called
+// once from serve.go.
+func (r *Registry) SetHelpNotify(fn func(chatID, browserID, reason string)) {
+	r.mu.Lock()
+	r.helpNotify = fn
+	r.mu.Unlock()
+}
+
+// Controller reports who is driving a session. Unknown sessions read as
+// agent-controlled (the zero value) so read verbs never block on stale ids.
+func (r *Registry) Controller(browserID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e := r.sessions[browserID]; e != nil && e.controller != "" {
+		return e.controller
+	}
+	return ControllerAgent
+}
+
+// SetController flips who is driving and broadcasts the change. reason is a
+// short human phrase shown in Studio ("captcha", "manual input", "handed
+// back").
+func (r *Registry) SetController(browserID, controller, reason string) error {
+	if controller != ControllerAgent && controller != ControllerHuman {
+		return fmt.Errorf("controller must be %q or %q", ControllerAgent, ControllerHuman)
+	}
+	r.mu.Lock()
+	e := r.sessions[browserID]
+	var notify func(chatID, browserID, controller, reason string)
+	var chatID string
+	if e != nil && !e.done && e.controller != controller {
+		e.controller = controller
+		e.lastUsed = time.Now()
+		notify = r.controlNotify
+		chatID = e.chatID
+	}
+	r.mu.Unlock()
+	if e == nil {
+		return fmt.Errorf("browser session not found or already closed")
+	}
+	if notify != nil {
+		notify(chatID, browserID, controller, reason)
+	}
+	return nil
+}
+
+// claimHumanControl is Input's implicit takeover: first manual event flips
+// the session to human control (no-op if already human).
+func (r *Registry) claimHumanControl(browserID string) {
+	r.mu.Lock()
+	e := r.sessions[browserID]
+	var notify func(chatID, browserID, controller, reason string)
+	var chatID string
+	if e != nil && !e.done && e.controller != ControllerHuman {
+		e.controller = ControllerHuman
+		notify = r.controlNotify
+		chatID = e.chatID
+	}
+	r.mu.Unlock()
+	if notify != nil {
+		notify(chatID, browserID, ControllerHuman, "manual input")
+	}
+}
+
+// RequestTakeover is the agent-initiated half: flip to human control and
+// ping the boss's phone with why. The paired AwaitAgentControl blocks the
+// calling tool until he hands back (or times out).
+func (r *Registry) RequestTakeover(browserID, reason string) error {
+	if err := r.SetController(browserID, ControllerHuman, reason); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	help := r.helpNotify
+	var chatID string
+	if e := r.sessions[browserID]; e != nil {
+		chatID = e.chatID
+	}
+	r.mu.Unlock()
+	if help != nil {
+		help(chatID, browserID, reason)
+	}
+	return nil
+}
+
+// AwaitAgentControl blocks until the session is agent-controlled again, the
+// timeout lapses, or ctx cancels. On timeout it reclaims control for the
+// agent so a no-show never strands the session in human mode. Returns true
+// if the human actually handed back, false on timeout/cancel.
+func (r *Registry) AwaitAgentControl(ctx context.Context, browserID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		if r.Controller(browserID) == ControllerAgent {
+			return true
+		}
+		if time.Now().After(deadline) {
+			_ = r.SetController(browserID, ControllerAgent, "takeover timed out")
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
 }
 
 // isLive reports whether a browser session id maps to a live entry and bumps

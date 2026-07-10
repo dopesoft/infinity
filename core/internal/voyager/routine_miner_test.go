@@ -81,21 +81,48 @@ func TestClusterPrompts_GroupsByFingerprint(t *testing.T) {
 }
 
 func TestClusterMeetsThreshold(t *testing.T) {
-	c := Cluster{Hits: 3, DistinctSessions: 2, DistinctDays: 2}
+	c := Cluster{Hits: 3, DistinctSessions: 2, DistinctDays: 2, DistinctPhrasings: 2}
 	if !c.meetsThreshold() {
 		t.Fatal("cluster at exact threshold should pass")
 	}
-	c = Cluster{Hits: 2, DistinctSessions: 2, DistinctDays: 2}
+	c = Cluster{Hits: 2, DistinctSessions: 2, DistinctDays: 2, DistinctPhrasings: 2}
 	if c.meetsThreshold() {
 		t.Fatal("cluster below min hits should fail")
 	}
-	c = Cluster{Hits: 5, DistinctSessions: 1, DistinctDays: 5}
+	c = Cluster{Hits: 5, DistinctSessions: 1, DistinctDays: 5, DistinctPhrasings: 3}
 	if c.meetsThreshold() {
 		t.Fatal("cluster from single session should fail breadth check")
 	}
-	c = Cluster{Hits: 5, DistinctSessions: 3, DistinctDays: 1}
+	c = Cluster{Hits: 5, DistinctSessions: 3, DistinctDays: 1, DistinctPhrasings: 3}
 	if c.meetsThreshold() {
 		t.Fatal("cluster on single day should fail breadth check")
+	}
+	// The 2026-07-10 false positive: the boss re-sent one identical message
+	// three times because two runs had failed. Every breadth check passed —
+	// 3 hits, 3 sessions, 2 days — and the miner proposed a "routine".
+	c = Cluster{Hits: 3, DistinctSessions: 3, DistinctDays: 2, DistinctPhrasings: 1}
+	if c.meetsThreshold() {
+		t.Fatal("verbatim re-sends are retries, not a routine")
+	}
+}
+
+// ClusterPrompts must count a re-sent message once, no matter how many
+// sessions the retries spawned.
+func TestClusterPromptsFoldsVerbatimRetries(t *testing.T) {
+	const same = "break down this video about rewiring money thoughts and write daily affirmations"
+	base := time.Now().UTC().Add(-48 * time.Hour)
+	prompts := []promptRow{
+		{ID: "1", SessionID: "s1", Text: same, At: base},
+		{ID: "2", SessionID: "s2", Text: same + "  ", At: base.Add(2 * time.Hour)},
+		{ID: "3", SessionID: "s3", Text: strings.ToUpper(same), At: base.Add(26 * time.Hour)},
+	}
+	for _, c := range ClusterPrompts(prompts) {
+		if c.DistinctPhrasings != 1 {
+			t.Fatalf("verbatim retries must fold to one phrasing, got %d", c.DistinctPhrasings)
+		}
+		if c.meetsThreshold() {
+			t.Fatal("a re-sent message must not surface as a routine proposal")
+		}
 	}
 }
 

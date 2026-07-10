@@ -119,6 +119,7 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("surface: marshal actions: %w", err)
 	}
+	applyDefaultTTL(it)
 	var scored *time.Time
 	if it.Importance != nil {
 		now := time.Now().UTC()
@@ -311,6 +312,55 @@ func (s *Store) Get(ctx context.Context, id string) (*Item, error) {
 		return nil, nil
 	}
 	return it, err
+}
+
+// defaultInfoTTL is how long an informational inbox card lives before it
+// self-clears. Three days: long enough that the boss sees it across a weekend,
+// short enough that the inbox never becomes an archive. Deliberately longer
+// than the 36h the cron/self-heal producers stamp on their own rows — those
+// know they're transient; an agent-authored FYI might not be.
+const defaultInfoTTL = 72 * time.Hour
+
+// bossOwnedSurfaces never receive an automatic TTL. Follow-up mail is the
+// boss's own inbox (nothing automated resolves it), and 'system' is the
+// Activity stream, which reads status='open' — expiring those would silently
+// erase his activity history rather than tidy his inbox.
+var bossOwnedSurfaces = map[string]struct{}{
+	"followups": {}, "inbox": {}, "email": {}, "system": {},
+}
+
+// applyDefaultTTL gives action-less informational cards an expiry so they can't
+// accumulate forever in "Surfaced by Jarvis".
+//
+// This is a MECHANIC, so it lives here at the single write chokepoint rather
+// than as a sentence in a skill telling the agent to "remember to set
+// expires_at" — an instruction the runtime LLM drops routinely. Every producer
+// (surface_item tool, routine miner, cron outcomes, self-heal) flows through
+// Upsert, so all of them inherit it by construction.
+//
+// Three carve-outs, in order:
+//   - An explicit ExpiresAt from the producer always wins.
+//   - A card carrying actions is a DECISION, not an FYI. It waits for the boss
+//     however long that takes; auto-dismissing it would be the system deciding
+//     on his behalf.
+//   - Boss-owned surfaces (see above) are never touched.
+//
+// This does NOT hide errors, and the reason is load-bearing: a persistent
+// condition is re-upserted by its producer under a stable external_id (the
+// extension/connector/health checklists all do this), which refreshes the TTL
+// on every detection. A card therefore only expires once its producer has
+// STOPPED reporting the problem — i.e. it resolved. An alert whose producer
+// emits once and never again is the one shape this can drop, so producers of
+// durable alerts must carry an external_id or an action.
+func applyDefaultTTL(it *Item) {
+	if it == nil || it.ExpiresAt != nil || len(it.Actions) > 0 {
+		return
+	}
+	if _, boss := bossOwnedSurfaces[it.Surface]; boss {
+		return
+	}
+	exp := time.Now().UTC().Add(defaultInfoTTL)
+	it.ExpiresAt = &exp
 }
 
 // SweepExpired dismisses open items whose TTL has passed. Returns the

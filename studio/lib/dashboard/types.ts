@@ -227,6 +227,10 @@ export type SurfaceItem = {
   actions?: SurfaceAction[];
   status: "open" | "snoozed" | "done" | "dismissed";
   createdAt: string;
+  // When the card last said something new. Rolling cards (one per cron, keyed
+  // on externalId) keep their original createdAt forever, so always time and
+  // sort on this — otherwise tonight's failure renders with a months-old date.
+  updatedAt: string;
 };
 
 export type SurfaceAction = {

@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,12 +14,16 @@ import (
 
 type fakeProvider struct {
 	text string
+	err  error
 }
 
 func (f fakeProvider) Name() string  { return "fake" }
 func (f fakeProvider) Model() string { return "fake-model" }
 
 func (f fakeProvider) Stream(_ context.Context, _ string, _ string, _ []llm.Message, _ []llm.ToolDef, out chan<- llm.StreamEvent) (llm.Response, error) {
+	if f.err != nil {
+		return llm.Response{}, f.err
+	}
 	if out != nil {
 		out <- llm.StreamEvent{Kind: llm.StreamText, TextDelta: f.text}
 	}
@@ -32,7 +37,11 @@ func TestClassifyDoesNotWaitForProviderToCloseStream(t *testing.T) {
 
 	done := make(chan map[int]decision, 1)
 	go func() {
-		done <- d.classify(context.Background(), emails)
+		got, err := d.classify(context.Background(), emails)
+		if err != nil {
+			t.Errorf("classify: unexpected error: %v", err)
+		}
+		done <- got
 	}()
 
 	select {
@@ -42,6 +51,27 @@ func TestClassifyDoesNotWaitForProviderToCloseStream(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("classify hung waiting for the provider to close the stream")
+	}
+}
+
+// A dead model credential must surface AS a credential failure, not as an
+// empty decision set. If classify swallows the provider error, triage reports
+// the anonymous "classify returned no decisions" and llm.IsAuthFailure never
+// fires — so the boss is never told to reconnect, and the inbox silently
+// stops working. This test fails the moment that error is dropped again.
+func TestClassifyPropagatesProviderAuthError(t *testing.T) {
+	d := Deps{LLM: fakeProvider{err: errors.New("openai_oauth: status=401 body={\"error\":{\"code\":\"token_invalidated\"}}")}}
+	emails := []email{{from: "Alice <alice@example.com>", subject: "Hi", snippet: "?"}}
+
+	got, err := d.classify(context.Background(), emails)
+	if err == nil {
+		t.Fatal("classify swallowed a provider 401 — the reconnect prompt will never fire")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no decisions on provider failure, got %#v", got)
+	}
+	if !llm.IsAuthFailure(err.Error()) {
+		t.Fatalf("wrapped error must stay recognizable to llm.IsAuthFailure, got %q", err)
 	}
 }
 

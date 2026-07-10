@@ -454,6 +454,25 @@ export async function sendBrowserInput(id: string, ev: BrowserInputEvent): Promi
   }
 }
 
+// setBrowserControl flips who is driving the live browser session. "agent"
+// is the Hand-back button after a takeover; manual input claims "human"
+// implicitly server-side, so Studio mostly calls this to hand back.
+export async function setBrowserControl(
+  id: string,
+  controller: "agent" | "human",
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/browser/session/${encodeURIComponent(id)}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ controller }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // activateExtension drives a cli extension's install + auth flow on demand so
 // the device-login URL is captured without waiting for a Core reboot. Returns
 // quickly (202) — the result lands via the mem_extensions realtime channel.
