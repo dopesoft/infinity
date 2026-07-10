@@ -21,7 +21,7 @@ const PLACEHOLDERS: Record<string, string> = {
   goals: "Your top 3-5 goals right now. What 'winning' looks like this quarter.",
   challenges: "The real obstacles in the way. What's hard, what's blocked.",
   principles: "How you want Jarvis to operate. Standing rules, taste, non-negotiables.",
-  fronts: "The active fronts you're pushing on — projects, deals, threads in flight.",
+ fronts: "The active fronts you're pushing on, projects, deals, threads in flight.",
 };
 
 export function CompassSection() {
@@ -79,7 +79,7 @@ export function CompassSection() {
         </h2>
         <p className="text-xs text-muted-foreground">
           Your north-star, in your words. Jarvis reads this on every turn and lets it frame what
-          matters — it&apos;s authored by you, not inferred. Leave a field blank to skip it.
+     matters, it&apos;s authored by you, not inferred. Leave a field blank to skip it.
         </p>
       </div>
 

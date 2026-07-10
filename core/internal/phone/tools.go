@@ -60,6 +60,11 @@ func (t *phoneCall) Schema() map[string]any {
 				"type":        "string",
 				"description": "Callee number in E.164 format, e.g. +14155550123.",
 			},
+			"contact_kind": map[string]any{
+				"type":        "string",
+				"enum":        []any{"person", "org"},
+				"description": "Is this a person (cousin, friend) or an organization (business, restaurant, office)? Sets the contact-book icon.",
+			},
 			"topic": map[string]any{
 				"type":        "string",
 				"description": "3-5 word label for what this call is about, e.g. \"pizza pickup order\" or \"congratulating cousin Lerato\". Shown as the call's subtitle on the dashboard.",
@@ -124,6 +129,7 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 	briefID := uuid.NewString()
 	brief := &Brief{
 		Topic:       strings.TrimSpace(str(in, "topic")),
+		Kind:        strings.TrimSpace(str(in, "contact_kind")),
 		Name:        strings.TrimSpace(str(in, "name")),
 		To:          to,
 		Goal:        goal,

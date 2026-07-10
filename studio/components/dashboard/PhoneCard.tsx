@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, BookUser, Grip, Loader2, Phone, PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { ArrowUp, BookUser, Building2, Grip, Loader2, Phone, PhoneIncoming, PhoneOutgoing, User } from "lucide-react";
 import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
 import { SurfaceRow } from "./SurfaceCard";
@@ -118,6 +118,14 @@ export function PhoneCard({
     live && !live.done ? live.direction : liveRun?.label?.startsWith("outbound") ? "outbound" : "inbound";
   const DirIcon = direction === "outbound" ? PhoneOutgoing : PhoneIncoming;
 
+  // Keep the contact book fresh in realtime: a completed call updates the
+  // history, and the call list (items) is realtime-published, so refetch
+  // whenever it changes (and the book is open).
+  useEffect(() => {
+    if (bookOpen) void phoneContacts().then(setContacts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length, bookOpen]);
+
   async function submit() {
     const p = prompt.trim();
     if (!p || busy) return;
@@ -160,7 +168,7 @@ export function PhoneCard({
               type="button"
               onClick={() => {
                 setBookOpen(true);
-                if (contacts === null) void phoneContacts().then(setContacts);
+                void phoneContacts().then(setContacts);
               }}
               aria-label="Contact book - call someone back"
               aria-expanded={bookOpen}
@@ -201,7 +209,7 @@ export function PhoneCard({
         ) : askRun?.status === "running" && !callRunning ? (
           <div className="mb-3 flex items-center gap-2 rounded-xl border bg-card/40 px-3 py-2 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
-            Working your call errand — finding the number and briefing the call…
+      Working your call errand, finding the number and briefing the call…
           </div>
         ) : null}
 
@@ -219,7 +227,7 @@ export function PhoneCard({
               {state === "sent" ? (
                 <div className="mb-3 flex min-h-11 items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 text-xs text-success">
                   <Phone className="size-3.5 shrink-0" aria-hidden />
-                  On it — the outcome will land here and on your phone.
+         On it, the outcome will land here and on your phone.
                 </div>
               ) : (
                 <form
@@ -259,7 +267,7 @@ export function PhoneCard({
                   </button>
                   {state === "error" ? (
                     <p className="mt-1.5 text-xs text-danger">
-                      That didn&apos;t go through — try again in a moment.
+           That didn&apos;t go through, try again in a moment.
                     </p>
                   ) : null}
                 </form>
@@ -270,7 +278,7 @@ export function PhoneCard({
 
         {items.length === 0 ? (
           <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-            No calls yet — Jarvis answers his line and logs every call here.
+      No calls yet, Jarvis answers his line and logs every call here.
           </div>
         ) : (
           <ScrollList max={4}>
@@ -339,7 +347,7 @@ export function PhoneCard({
           ) : (
             <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
               {callRunning
-                ? "Connected — the transcript streams in as they talk."
+        ? "Connected, the transcript streams in as they talk."
                 : "No transcript captured for this call."}
             </div>
           )}
@@ -347,6 +355,12 @@ export function PhoneCard({
       </ResponsiveModal>
     </>
   );
+}
+
+function ContactIcon({ kind, className }: { kind?: string; className?: string }) {
+  if (kind === "org") return <Building2 className={className} aria-hidden />;
+  if (kind === "person") return <User className={className} aria-hidden />;
+  return <Phone className={className} aria-hidden />;
 }
 
 /* ContactBookModal - the dial-back book. ResponsiveModal owns the
@@ -415,14 +429,17 @@ function ContactBookModal({
                   type="button"
                   onClick={() => setSelected(c)}
                   className={cn(
-                    "flex w-full min-w-0 flex-col rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent",
+                    "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent",
                     selected?.number === c.number && "bg-accent",
                   )}
                 >
-                  <span className="truncate text-sm font-medium">{c.name ?? c.number}</span>
-                  {c.name ? (
-                    <span className="truncate text-[11px] text-muted-foreground">{c.number}</span>
-                  ) : null}
+                  <ContactIcon kind={c.kind} className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-sm font-medium">{c.name ?? c.number}</span>
+                    {c.name ? (
+                      <span className="truncate text-[11px] text-muted-foreground">{c.number}</span>
+                    ) : null}
+                  </span>
                 </button>
               ))
             )}
@@ -442,7 +459,8 @@ function ContactBookModal({
                   >
                     ← All contacts
                   </button>
-                  <h3 className="truncate text-base font-semibold tracking-tight">
+                  <h3 className="flex items-center gap-2 truncate text-base font-semibold tracking-tight">
+                    <ContactIcon kind={selected.kind} className="size-4 shrink-0 text-muted-foreground" />
                     {selected.name ?? selected.number}
                   </h3>
                   <p className="text-xs text-muted-foreground">{selected.number}</p>

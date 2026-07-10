@@ -88,9 +88,9 @@ type SectionMeta = {
 const SECTIONS: SectionMeta[] = [
   { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
   { id: "chat", label: "Chat", description: "Live chat behavior, agent teams, budgets", icon: MessageSquare },
-  { id: "compass", label: "Compass", description: "Your mission, goals + principles — Jarvis reads this every turn", icon: Compass },
+ { id: "compass", label: "Compass", description: "Your mission, goals + principles, Jarvis reads this every turn", icon: Compass },
   { id: "trust", label: "Trust", description: "Approve high-risk actions Jarvis is asking for + audit what you've already trusted", icon: ShieldCheck },
-  { id: "privacy", label: "Privacy", description: "Wards — paths Jarvis must not freely read", icon: Shield },
+ { id: "privacy", label: "Privacy", description: "Wards, paths Jarvis must not freely read", icon: Shield },
   { id: "dashboard", label: "Dashboard", description: "Pick which Dashboard sections show on /", icon: LayoutDashboard },
   { id: "notifications", label: "Notifications", description: "iOS-style push notifications on iPhone + Mac", icon: Bell },
   { id: "mcp", label: "Connectors", description: "MCP servers + Composio integrations the agent can call", icon: Plug },

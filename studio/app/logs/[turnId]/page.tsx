@@ -133,13 +133,13 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
         return {
           label: `stalled (${Math.round(STALL_SECONDS / 60)}m+)`,
           title:
-            "Turn has been in_flight longer than the 5-minute server timeout — the agent loop almost certainly died and the row never got closed. Boot recovery will finalize it on the next core restart.",
+      "Turn has been in_flight longer than the 5-minute server timeout, the agent loop almost certainly died and the row never got closed. Boot recovery will finalize it on the next core restart.",
           tone: "stalled",
         };
       }
       return {
         label: `running ${formatElapsed(s)}`,
-        title: "Time elapsed since the turn started — still in flight",
+    title: "Time elapsed since the turn started, still in flight",
         tone: "default",
       };
     }
@@ -153,7 +153,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Header strip — three rows of decreasing visual weight:
-              1. Toolbar (back + status pill + actions) — single-row chrome
+       1. Toolbar (back + status pill + actions), single-row chrome
               2. Title (the user's prompt, full prominence)
               3. Metadata chips (id, model, session, tools, tokens, latency)
             The old layout crowded id + status pip + uppercase status badge
@@ -200,7 +200,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
               {/* Row 2 — the prompt itself, the most important text on the page. */}
               <h1 className="line-clamp-2 break-words text-base font-semibold leading-snug text-foreground sm:text-lg">
                 {turn.user_text || (
-                  <span className="text-muted-foreground">(resumed turn — no fresh prompt)</span>
+         <span className="text-muted-foreground">(resumed turn, no fresh prompt)</span>
                 )}
               </h1>
               {/* Row 3 — metadata chips. Turn-id chip leads so the boss

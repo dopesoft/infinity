@@ -128,9 +128,20 @@ func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 	type contact struct {
 		Number    string `json:"number"`
 		Name      string `json:"name,omitempty"`
+		Kind      string `json:"kind,omitempty"`
 		Last      string `json:"last"`
 		History   string `json:"history"`
 		UpdatedAt string `json:"updated_at"`
+	}
+	kinds := map[string]string{}
+	if krows, kerr := s.pool.Query(r.Context(), `SELECT key, value #>> '{}' FROM mem_agent_state WHERE key LIKE 'phone:kind:%'`); kerr == nil {
+		for krows.Next() {
+			var kk, kv string
+			if krows.Scan(&kk, &kv) == nil {
+				kinds[strings.TrimPrefix(kk, "phone:kind:")] = kv
+			}
+		}
+		krows.Close()
 	}
 	out := []contact{}
 	for rows.Next() {
@@ -149,6 +160,7 @@ func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 			c.Name = first[:i]
 		}
 		c.Last = first
+		c.Kind = kinds[strings.TrimPrefix(key, "phone:history:")]
 		c.History = hist
 		out = append(out, c)
 	}

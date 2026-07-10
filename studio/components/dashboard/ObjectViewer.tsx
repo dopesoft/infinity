@@ -760,7 +760,7 @@ function ViewerActions({
               type="button"
               onClick={dismissWorkItem}
               disabled={dismissing}
-              title="Deny this pending approval — the gated action won't run. The agent can re-request it later."
+       title="Deny this pending approval, the gated action won't run. The agent can re-request it later."
               className="inline-flex h-10 items-center gap-1.5 rounded-md border border-danger/40 bg-background px-3 text-[13px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
             >
               <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
@@ -1776,7 +1776,7 @@ function FollowUpBody({ f }: { f: FollowUp }) {
         ))}
         <span className="ml-auto font-mono text-[11px] text-muted-foreground" suppressHydrationWarning>
           {/* Modal shows the OFFICIAL received date in full (received_at from
-              the real inbox), falling back to the full found-date — never the
+       the real inbox), falling back to the full found-date, never the
               listing's relative "Nd ago". */}
           {receivedReal || fullDateTime(f.receivedAt)}
         </span>
@@ -2560,7 +2560,7 @@ function WorkBody({ w }: { w: WorkItem }) {
           <ModalDl
             entries={[
               { k: "Verdict", v: w.crosscheck.overall === "pass" ? "Passed" : "Failed" },
-              { k: "Verified by", v: w.crosscheck.auditor ?? "—" },
+       { k: "Verified by", v: w.crosscheck.auditor ?? "n/a" },
               ...(typeof w.crosscheck.confidence === "number"
                 ? [{ k: "Confidence", v: `${Math.round(w.crosscheck.confidence * 100)}%` }]
                 : []),

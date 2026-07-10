@@ -45,7 +45,8 @@ const (
 		"In 1-2 short sentences, state the OUTCOME - what was agreed, arranged, " +
 		"confirmed, or learned - keeping every concrete detail: times, prices, " +
 		"names, addresses, confirmation numbers. If the goal wasn't achieved, say " +
-		"what happened and what's still open. No preamble, no restating the transcript."
+		"what happened and what's still open. No preamble, no restating the transcript. " +
+		"Never use em dashes or en dashes; use commas or colons."
 )
 
 // Monitor attaches to the live call, collects + streams the transcript, and
@@ -201,6 +202,15 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		}
 
 		text = scrubSensitive(text, passphrase)
+		// Collapse internal whitespace/newlines to single spaces so each
+		// stored entry is exactly ONE "Speaker: text" line. Without this, a
+		// transcript with embedded newlines (a relayed message with line
+		// breaks) splits into continuation lines the renderer re-parses,
+		// mis-attributing e.g. "Kai says: ..." as its own speaker.
+		text = strings.Join(strings.Fields(text), " ")
+		if text == "" {
+			continue
+		}
 		lines = append(lines, speaker+": "+text)
 		// Stream the line to Studio's live call view (Phone card modal).
 		m.emitLive(LiveEvent{
@@ -342,6 +352,13 @@ func (m *Manager) deliverOutcome(callID, direction string, brief *Brief, number 
 			    updated_at = NOW()
 		`, "phone:history:"+digits, recall); err != nil {
 			log.Printf("phone: store call recall for %s: %v", number, err)
+		}
+		if brief != nil && brief.Kind != "" {
+			_, _ = m.pool.Exec(ctx, `
+				INSERT INTO mem_agent_state (key, value, note, updated_at)
+				VALUES ($1, to_jsonb($2::text), 'phone: contact kind', NOW())
+				ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+			`, "phone:kind:"+digits, brief.Kind)
 		}
 	}
 

@@ -122,7 +122,7 @@ export function PrivacySection() {
                 <code className="truncate text-sm">{w.glob}</code>
                 {w.note ? (
                   <span className="hidden truncate text-xs text-muted-foreground sm:inline">
-                    — {w.note}
+          , {w.note}
                   </span>
                 ) : null}
               </div>
@@ -210,10 +210,10 @@ export function PhoneVaultCard() {
         <h3 className="text-sm font-semibold tracking-tight">Phone vault</h3>
       </div>
       <p className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Passphrase</span> — say it when you
+    <span className="font-medium text-foreground">Passphrase</span>, say it when you
         call Jarvis&apos;s line and your spoken instructions execute for real (verified in
         code, from any phone, and scrubbed from transcripts).{" "}
-        <span className="font-medium text-foreground">Payment card</span> — released only
+    <span className="font-medium text-foreground">Payment card</span>, released only
         into a call you commissioned that requires prepayment; Jarvis&apos;s brain never
         sees the number and transcripts scrub it. Format it how you&apos;d read it to a
         merchant (number, expiry, CVC, zip).

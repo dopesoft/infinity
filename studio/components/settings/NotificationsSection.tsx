@@ -525,7 +525,7 @@ function WhyBlock() {
         </Bullet>
       </ul>
       <p className="mt-2 text-[11px] text-muted-foreground">
-        Each kind has its own toggle above — defaults are quiet (every-email + run-started are off until you flip them).
+    Each kind has its own toggle above, defaults are quiet (every-email + run-started are off until you flip them).
       </p>
       <p className="mt-2 text-[11px] italic text-muted-foreground">
         Tap a notification to deep-link to the matching record in Studio.

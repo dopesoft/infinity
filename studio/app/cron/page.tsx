@@ -195,7 +195,7 @@ function CronSection() {
                     aria-label={j.enabled ? "Disable cron" : "Enable cron"}
                     title={
                       j.enabled
-                        ? "Pause this cron. It stops running on its schedule but keeps its history and config — re-enable anytime."
+            ? "Pause this cron. It stops running on its schedule but keeps its history and config, re-enable anytime."
                         : "Resume this cron. It re-arms on its schedule immediately."
                     }
                   >
@@ -478,11 +478,11 @@ function SentinelEmptyState() {
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
         A sentinel watches for an <span className="text-foreground">event</span> and acts when it
-        happens — the event-driven sibling of a cron, which fires at a fixed{" "}
+    happens, the event-driven sibling of a cron, which fires at a fixed{" "}
         <span className="text-foreground">time</span>. When it trips, it runs a skill.
       </p>
       <p className="mt-3 text-xs font-medium text-foreground">
-        Easiest way: just ask Jarvis in chat —
+    Easiest way: just ask Jarvis in chat,
       </p>
       <ul className="mt-1.5 flex flex-col gap-1.5">
         {examples.map((e) => (
@@ -539,7 +539,7 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="space-y-2 rounded-xl border bg-card p-3">
       <p className="text-[11px] text-muted-foreground">
-        Tip: you can skip this form — ask Jarvis “ping me when …” in chat and he&apos;ll set it up.
+    Tip: you can skip this form, ask Jarvis “ping me when …” in chat and he&apos;ll set it up.
         This manual form is for wiring the watch config + action chain by hand.
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

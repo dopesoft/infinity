@@ -289,6 +289,9 @@ type Brief struct {
 	// Name is who/what is being called ("Goodfellas Pizza") - flows into
 	// the call history, card titles, and future calls with this number.
 	Name string `json:"name,omitempty"`
+	// Kind is "person" or "org", set when Jarvis dials, so the contact
+	// book shows the right icon.
+	Kind        string `json:"kind,omitempty"`
 	To          string `json:"to"`
 	Goal        string `json:"goal"`
 	Constraints string `json:"constraints,omitempty"`

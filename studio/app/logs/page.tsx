@@ -151,7 +151,7 @@ export default function LogsPage() {
                 onValueChange={setQuery}
                 placeholder={
                   lens === "runs"
-                    ? "Search runs — nightly cognition, self-improve, skills…"
+          ? "Search runs, nightly cognition, self-improve, skills…"
                     : "Search prompts, replies, sessions…"
                 }
               />
@@ -159,7 +159,7 @@ export default function LogsPage() {
           </form>
 
           {/* Primary lens (Turns vs the durable Runs record) sits below the
-              search as a full-width chip rail — same shape + placement as the
+       search as a full-width chip rail, same shape + placement as the
               view switcher on /memory, so the pages read as one family. */}
           <PageTabs value={lens} onValueChange={(v) => setLens(v as Lens)} className="w-full">
             <PageTabsList scrollable>
