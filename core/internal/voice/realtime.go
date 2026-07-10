@@ -64,10 +64,22 @@ const (
 	transcriptionModel = "gpt-4o-transcribe"
 
 	// defaultTranscriptionPrompt primes gpt-4o-transcribe with proper nouns
-	// it would otherwise mishear. Kept short (a keyword list, not prose) per
-	// OpenAI's guidance. Override with INFINITY_VOICE_VOCAB when the boss's
-	// active vocabulary shifts (new project names, people, tools).
-	defaultTranscriptionPrompt = "Jarvis, Kai, DopeSoft, Infinity, Studio, Railway, Supabase, Composio"
+	// it would otherwise mishear. Per OpenAI's docs, for gpt-4o-transcribe
+	// models "the prompt is a free text string, for example 'expect words
+	// related to technology'" — NOT a whisper-1-style keyword list. The
+	// distinction is load-bearing: a bare comma-list gets regurgitated
+	// VERBATIM as a hallucinated transcript on silence/echo (2026-07-10:
+	// "Jarvis, Kai, DopeSoft, Infinity, Studio, Railway, Supabase, Composio"
+	// landed in the boss's transcript as if he'd said it). Override with
+	// INFINITY_VOICE_VOCAB when the boss's active vocabulary shifts.
+	defaultTranscriptionPrompt = "The speaker may mention names like Jarvis, Kai, DopeSoft, Infinity, Studio, Railway, Supabase, or Composio."
+
+	// defaultTranscriptionLanguage pins the STT model to the boss's spoken
+	// language (ISO-639-1). Per OpenAI's docs, supplying it "will improve
+	// accuracy and latency" — and it's the primary guard against the
+	// hallucinated CJK output ("멋진") gpt-4o-transcribe produced on
+	// silence. Override with INFINITY_VOICE_LANGUAGE.
+	defaultTranscriptionLanguage = "en"
 
 	// voiceInputModeInstructions is all the demoted realtime model needs. It
 	// never generates the reply (the agent loop does) and never speaks (the
@@ -108,6 +120,10 @@ type SessionResponse struct {
 	Model        string `json:"model"`
 	Voice        string `json:"voice"`
 	SDPURL       string `json:"sdp_url"`
+	// TranscriptionHint is the prompt primed into the STT model. The client
+	// uses it to drop hallucinated transcripts that regurgitate the prompt
+	// itself (a known gpt-4o-transcribe failure mode on silence/echo).
+	TranscriptionHint string `json:"transcription_hint"`
 }
 
 // Minter holds the OpenAI API key + HTTP client. Stateless; safe to
@@ -117,6 +133,7 @@ type Minter struct {
 	model      string
 	voice      string
 	vocab      string
+	language   string
 	httpClient *http.Client
 }
 
@@ -140,11 +157,16 @@ func New() *Minter {
 	if vocab == "" {
 		vocab = defaultTranscriptionPrompt
 	}
+	language := strings.TrimSpace(os.Getenv("INFINITY_VOICE_LANGUAGE"))
+	if language == "" {
+		language = defaultTranscriptionLanguage
+	}
 	return &Minter{
 		apiKey:     key,
 		model:      model,
 		voice:      voice,
 		vocab:      vocab,
+		language:   language,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -199,8 +221,9 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 					"silence_duration_ms": 700,
 				},
 				"transcription": map[string]any{
-					"model":  transcriptionModel,
-					"prompt": m.vocab,
+					"model":    transcriptionModel,
+					"prompt":   m.vocab,
+					"language": m.language,
 				},
 			},
 		},
@@ -260,11 +283,12 @@ func (m *Minter) Mint(ctx context.Context, req SessionRequest) (*SessionResponse
 	}
 
 	return &SessionResponse{
-		ClientSecret: value,
-		ExpiresAt:    expires,
-		Model:        m.model,
-		Voice:        m.voice,
-		SDPURL:       realtimeSDPURL,
+		ClientSecret:      value,
+		ExpiresAt:         expires,
+		Model:             m.model,
+		Voice:             m.voice,
+		SDPURL:            realtimeSDPURL,
+		TranscriptionHint: m.vocab,
 	}, nil
 }
 

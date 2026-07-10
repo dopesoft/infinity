@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,7 +49,16 @@ const (
 	// delivery and sets the dry, restrained Jarvis tone. Delivery belongs
 	// with the TTS, not the brain (it used to be a line in the realtime
 	// model's frozen prompt, britishAccentLine).
-	ttsDeliveryInstructions = "Speak in a clearly British Received Pronunciation accent - non-rhotic vowels, crisp consonants, measured pacing, warm Jarvis-style restraint. Refined and dry, never American. Sound like a real person talking, not a narrator reading."
+	//
+	// Pacing: "brisk" on purpose. The earlier "measured pacing" wording
+	// produced a delivery the boss flagged as "hella slow"; brisk + the
+	// `speed` request param below are the two levers that fixed it.
+	ttsDeliveryInstructions = "Speak in a clearly British Received Pronunciation accent - non-rhotic vowels, crisp consonants, warm Jarvis-style restraint. Brisk, energetic conversational pace - never slow, never drawn out, no long pauses. Refined and dry, never American. Sound like a real person talking, not a narrator reading."
+
+	// defaultTTSSpeed nudges playback above 1.0 because the boss found the
+	// default delivery too slow. /v1/audio/speech accepts 0.25-4.0 (verified
+	// against OpenAI's API spec). Override with INFINITY_VOICE_TTS_SPEED.
+	defaultTTSSpeed = 1.15
 )
 
 // Speaker holds the OpenAI key + TTS config. Stateless; safe to share. Build
@@ -58,6 +69,7 @@ type Speaker struct {
 	model        string
 	voice        string
 	instructions string
+	speed        float64
 	httpClient   *http.Client
 }
 
@@ -77,11 +89,18 @@ func NewSpeaker() *Speaker {
 	if voice == "" {
 		voice = defaultVoice
 	}
+	speed := defaultTTSSpeed
+	if v := strings.TrimSpace(os.Getenv("INFINITY_VOICE_TTS_SPEED")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0.25 && f <= 4.0 {
+			speed = f
+		}
+	}
 	return &Speaker{
 		apiKey:       key,
 		model:        model,
 		voice:        voice,
 		instructions: ttsDeliveryInstructions,
+		speed:        speed,
 		// TTS for a single sentence is fast; keep a generous ceiling so a
 		// slow network doesn't truncate a clip mid-word.
 		httpClient: &http.Client{Timeout: 30 * time.Second},
@@ -96,7 +115,11 @@ func (sp *Speaker) Synthesize(ctx context.Context, text string) ([]byte, string,
 	if sp == nil {
 		return nil, "", fmt.Errorf("voice: speaker not configured (OPENAI_API_KEY unset)")
 	}
-	text = strings.TrimSpace(text)
+	// Mechanic, not prose (Rule #1b): the voice overlay ASKS the brain for
+	// no markdown, but a model drops instructions - so the mouth guarantees
+	// it. Strip markup here, at the single synthesis chokepoint, so
+	// "**Aldeez**" is spoken as "Aldeez" no matter what the brain emitted.
+	text = strings.TrimSpace(StripSpokenMarkup(text))
 	if text == "" {
 		return nil, "", nil
 	}
@@ -106,6 +129,7 @@ func (sp *Speaker) Synthesize(ctx context.Context, text string) ([]byte, string,
 		"voice":           sp.voice,
 		"input":           text,
 		"instructions":    sp.instructions,
+		"speed":           sp.speed,
 		"response_format": ttsAudioFormat,
 	})
 	if err != nil {
@@ -133,6 +157,26 @@ func (sp *Speaker) Synthesize(ctx context.Context, text string) ([]byte, string,
 		return nil, "", fmt.Errorf("tts %d: %s", resp.StatusCode, truncateForErr(string(audio)))
 	}
 	return audio, audioMIME, nil
+}
+
+// spokenMarkupPatterns are the markdown constructs that must never reach the
+// TTS model - they get read aloud as symbols ("asterisk asterisk Aldeez") or
+// warp the delivery. Ordered: links first (their text survives, the URL
+// doesn't), then emphasis/code wrappers, then structural line prefixes.
+var (
+	reMarkdownLink   = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	reMarkdownEmph   = regexp.MustCompile("(\\*\\*|__|\\*|_|`{1,3}|~~)")
+	reMarkdownPrefix = regexp.MustCompile(`(?m)^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)`)
+)
+
+// StripSpokenMarkup converts markdown-ish brain output into plain speakable
+// text. Deterministic and conservative: it only removes markup characters,
+// never words. Exported for the ws voice pump's tests.
+func StripSpokenMarkup(s string) string {
+	s = reMarkdownLink.ReplaceAllString(s, "$1")
+	s = reMarkdownPrefix.ReplaceAllString(s, "")
+	s = reMarkdownEmph.ReplaceAllString(s, "")
+	return s
 }
 
 // SentenceChunker accumulates streamed text deltas and emits complete

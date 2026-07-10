@@ -1077,6 +1077,13 @@ const (
 	EventEffort         EventKind = "effort"
 	EventComplete       EventKind = "complete"
 	EventError          EventKind = "error"
+	// EventSteered fires when the loop drains ≥1 mid-turn steer message at an
+	// iteration boundary - i.e. the moment the boss's interjection has been
+	// absorbed and everything the model says next is a response to it. The ws
+	// voice pump uses this to un-squelch speech after a barge-in: the tail of
+	// the interrupted reply stays caption-only, the answer to the steer is
+	// spoken.
+	EventSteered EventKind = "steered"
 )
 
 // Run drives one turn of the agent loop. steerCh is optional - when non-nil,
@@ -1342,8 +1349,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// Drain steered messages so the next LLM call sees them as fresh user
 		// input. Each drained message is persisted via the UserPromptSubmit
 		// hook (with steered=true payload) so transcript reload renders them
-		// in order with the rest of the conversation.
-		l.drainSteer(steerCh, s)
+		// in order with the rest of the conversation. EventSteered tells the
+		// ws voice pump the steer is absorbed (see EventKind doc).
+		if l.drainSteer(steerCh, s) > 0 {
+			emit(out, RunEvent{Kind: EventSteered, SessionID: s.ID})
+		}
 
 		llmEvents := make(chan llm.StreamEvent, 64)
 		var resp llm.Response
@@ -1923,23 +1933,25 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 // without waiting for the next iteration boundary, so a navigation/reload
 // that arrives while the turn is still in flight will find the steer in
 // fetchSessionMessages instead of losing it.
-func (l *Loop) drainSteer(ch <-chan string, s *Session) {
+func (l *Loop) drainSteer(ch <-chan string, s *Session) int {
 	if ch == nil || s == nil {
-		return
+		return 0
 	}
+	drained := 0
 	for {
 		select {
 		case msg, ok := <-ch:
 			if !ok {
-				return
+				return drained
 			}
 			text := strings.TrimSpace(msg)
 			if text == "" {
 				continue
 			}
 			s.Append(llm.Message{Role: llm.RoleUser, Content: text})
+			drained++
 		default:
-			return
+			return drained
 		}
 	}
 }

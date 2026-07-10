@@ -58,6 +58,11 @@ export type VoiceClientArgs = {
   sdpUrl: string;
   clientSecret: string;
   callbacks?: VoiceCallbacks;
+  // The prompt primed into the STT model (Core returns it from the mint).
+  // gpt-4o-transcribe's classic hallucination on silence/echo is to emit its
+  // own priming prompt verbatim as a "transcript" - with the hint text in
+  // hand we can drop those before they reach the brain.
+  transcriptionHint?: string;
 };
 
 export class VoiceClient {
@@ -281,6 +286,7 @@ export class VoiceClient {
     this.assistantSeq.clear();
     this.finalizedResponses.clear();
     this.lastAssistantAudioAt = 0;
+    this.recentFinalized = [];
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -313,32 +319,88 @@ export class VoiceClient {
   }
 
 
+  // Recently accepted finalized transcripts, for dedupe. gpt-4o-transcribe
+  // over server_vad sometimes emits TWO `completed` passes for the same
+  // audio ~1s apart (observed live 2026-07-10: "It's spelled A-L-D-E-E-Z, I
+  // think." twice, punctuation differing) - without this guard both copies
+  // hit the brain and the boss's transcript shows his sentence twice.
+  private recentFinalized: Array<{ words: string[]; at: number }> = [];
+
+  /** The host calls this whenever Jarvis's TTS audio is arriving/playing.
+   * The realtime session is input-only, so the assistant-audio events that
+   * used to feed the echo window never fire - without this note the echo
+   * guard below is dead code and Jarvis's own speaker audio gets transcribed
+   * as the boss (the "he heard himself" failure). */
+  noteAssistantAudio(): void {
+    this.lastAssistantAudioAt = Date.now();
+  }
+
   private shouldIgnoreUserTranscript(text: string): boolean {
     const normalized = text.trim().toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
     if (!normalized) return true;
-
-    const sinceAssistantAudio = Date.now() - this.lastAssistantAudioAt;
-    if (sinceAssistantAudio > 2500) return false;
-
-    // The broken path shows up as tiny ASR fragments produced by Jarvis's
-    // own speaker audio ("you" in the screenshot). Keep real barge-in:
-    // speech_started still interrupts the provider immediately, and any
-    // substantive transcript below will request the next response.
     const words = normalized.split(/\s+/).filter(Boolean);
-    if (words.length === 1 && words[0].length <= 3) return true;
 
-    const echoFragments = new Set([
-      "you",
-      "your",
-      "boss",
-      "good",
-      "morning",
-      "service",
-      "systems",
-      "stable",
-    ]);
-    if (words.length <= 2 && words.every((w) => echoFragments.has(w))) return true;
+    // Hallucination guard 1: language. The boss speaks English; a transcript
+    // that is majority non-Latin letters ("멋진" landed in the live trace) is
+    // STT hallucinating on silence, not speech. The session also pins
+    // language=en server-side; this is the client backstop.
+    const letters = normalized.replace(/[^\p{L}]/gu, "");
+    if (letters) {
+      const latin = letters.replace(/[^\p{Script=Latin}]/gu, "");
+      if (latin.length < letters.length / 2) return true;
+    }
 
+    // Hallucination guard 2: prompt bleed. gpt-4o-transcribe regurgitates
+    // its own priming prompt on silence (the live trace shows the exact
+    // vocab list - "Jarvis, Kai, DopeSoft, ..." - as a "user message").
+    // Drop a transcript wholly contained in the hint: either a literal
+    // substring of it, or a short utterance made only of hint words.
+    const hint = (this.args.transcriptionHint ?? "").toLowerCase();
+    if (hint) {
+      const hintWords = new Set(hint.replace(/[^\p{L}\p{N}' ]/gu, " ").split(/\s+/).filter(Boolean));
+      if (words.length >= 3 && hint.includes(normalized)) return true;
+      if (words.length <= 3 && words.every((w) => hintWords.has(w))) return true;
+    }
+
+    // Dedupe: a second `completed` pass for the same audio arrives within a
+    // few seconds and shares nearly all its words with the accepted one.
+    // Keep the first, drop the repeat (word-set containment either way, so
+    // "What's the menu..." also swallows the fuller "What's up, can you pull
+    // up the menu..." re-pass).
+    const now = Date.now();
+    this.recentFinalized = this.recentFinalized.filter((r) => now - r.at < 4000);
+    const wordSet = new Set(words);
+    for (const recent of this.recentFinalized) {
+      const recentSet = new Set(recent.words);
+      const smaller = wordSet.size <= recentSet.size ? wordSet : recentSet;
+      const larger = smaller === wordSet ? recentSet : wordSet;
+      let contained = 0;
+      for (const w of smaller) if (larger.has(w)) contained++;
+      if (smaller.size > 0 && contained / smaller.size >= 0.8) return true;
+    }
+
+    // Echo guard: tiny ASR fragments produced by Jarvis's own speaker audio
+    // while he's talking ("you", "boss"). Real barge-in is unaffected -
+    // speech_started already cut playback, and a substantive utterance is
+    // longer than these fragments.
+    const sinceAssistantAudio = now - this.lastAssistantAudioAt;
+    if (sinceAssistantAudio <= 2500) {
+      if (words.length === 1 && words[0].length <= 3) return true;
+      const echoFragments = new Set([
+        "you",
+        "your",
+        "boss",
+        "good",
+        "morning",
+        "service",
+        "systems",
+        "stable",
+      ]);
+      if (words.length <= 2 && words.every((w) => echoFragments.has(w))) return true;
+    }
+
+    // Accepted: remember it for the dedupe window.
+    this.recentFinalized.push({ words, at: now });
     return false;
   }
 

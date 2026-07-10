@@ -2104,6 +2104,9 @@ export type VoiceSessionDTO = {
   model: string;
   voice: string;
   sdp_url: string;
+  /** STT priming prompt - the client drops hallucinated transcripts that
+   *  regurgitate this text (gpt-4o-transcribe prompt-bleed on silence). */
+  transcription_hint?: string;
 };
 
 export type VoiceToolResult = {

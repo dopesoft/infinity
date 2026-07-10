@@ -439,6 +439,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// client sees a clean turn end (not an error).
 			s.interruptTurn(msg.SessionID)
 			continue
+		case "voice_interrupt":
+			// Barge-in: the boss is talking over Jarvis. NOT a turn cancel -
+			// the turn keeps running (his utterance arrives as a steer) - but
+			// the mouth goes quiet server-side: without this, Core keeps
+			// synthesizing + shipping the rest of the interrupted reply and
+			// Jarvis "keeps jabbing on" after the client's local audio cut.
+			// Speech resumes on EventSteered (see runTurn).
+			s.turnsMu.Lock()
+			if st, ok := s.turns[msg.SessionID]; ok && st != nil {
+				st.speak.Squelch()
+			}
+			s.turnsMu.Unlock()
+			continue
 		case "steer":
 			// Mid-turn user input. If a turn is in flight for this
 			// session, the agent loop drains the steer channel between
@@ -624,6 +637,11 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	state := &turnState{
 		cancel: cancel,
 		steer:  make(chan string, 8),
+		// Voice turns get their speak pump minted here (not inside runTurn)
+		// so it's reachable from the turns registry - that's what lets a
+		// `voice_interrupt` frame squelch synthesis mid-reply. nil for text
+		// turns and when no Speaker is configured.
+		speak: s.newSpeakPump(turnCtx, sessionID, voiceTurn, send),
 	}
 
 	s.turnsMu.Lock()
@@ -645,7 +663,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 			}
 			s.turnsMu.Unlock()
 		}()
-		s.runTurn(turnCtx, sessionID, runContent, model, voiceTurn, state.steer, send)
+		s.runTurn(turnCtx, sessionID, runContent, model, state.speak, state.steer, send)
 		if recovered && s.buffer != nil {
 			_ = s.buffer.Clear(context.Background(), sessionID)
 		}
@@ -814,7 +832,7 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 // receive the steer channel as a receive-only param so the agent loop can
 // drain it between iterations. ctx is already wrapped with the per-turn
 // 5-minute timeout, so we don't re-wrap it here.
-func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, voiceTurn bool, steer <-chan string, send func(wsServerEvent)) {
+func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, speak *speakPump, steer <-chan string, send func(wsServerEvent)) {
 	events := make(chan agent.RunEvent, 128)
 	done := make(chan struct{})
 
@@ -826,10 +844,10 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 		close(events)
 	}()
 
-	// Voice turns speak the brain's streamed text via TTS. nil for text
-	// turns (and voice turns when no Speaker is configured) - then this is
-	// the exact text path, captions only.
-	speak := s.newSpeakPump(ctx, sessionID, voiceTurn, send)
+	// speak is the voice pump minted in startTurn (nil for text turns and
+	// voice turns without a Speaker configured - then this is the exact text
+	// path, captions only). It lives on the turnState so barge-in frames can
+	// squelch it from the WS read loop.
 
 	/* Accumulate the assistant's streamed text so on EventComplete we can
 	 * write the full user/assistant pair into the WorkingBuffer when the
@@ -845,6 +863,12 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 		}
 		if ev.Kind == agent.EventToolCall && ev.ToolCall != nil {
 			speak.onToolCall(ev.ToolCall.Name)
+		}
+		if ev.Kind == agent.EventSteered {
+			// The loop absorbed the boss's mid-turn interjection - whatever
+			// streams next answers it, so the mouth comes back on after a
+			// barge-in squelch.
+			speak.Unsquelch()
 		}
 		sendRunEventToWS(send, ev)
 		if ev.Kind == agent.EventComplete {

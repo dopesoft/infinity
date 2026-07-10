@@ -42,6 +42,11 @@ import (
 type turnState struct {
 	cancel context.CancelFunc
 	steer  chan string
+	// speak is the voice pump for this turn (nil on text turns). Held here so
+	// a `voice_interrupt` frame - the browser reporting a barge-in - can
+	// squelch server-side synthesis for the rest of the interrupted reply.
+	// Set once in startTurn before the state is registered; read-only after.
+	speak *speakPump
 }
 
 type Config struct {

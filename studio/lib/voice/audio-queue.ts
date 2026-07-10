@@ -22,6 +22,11 @@ export class AudioQueue {
   private epoch = 0;
   private closed = false;
 
+  // Fired each time a clip actually starts playing. The voice hook uses it
+  // to keep the STT client's "Jarvis is audible right now" echo window fresh
+  // for the whole duration of playback, not just while frames arrive.
+  onClipStart?: () => void;
+
   constructor() {
     try {
       const Ctx =
@@ -106,6 +111,7 @@ export class AudioQueue {
     };
     try {
       src.start();
+      this.onClipStart?.();
     } catch {
       this.playing = false;
       void this.pump();

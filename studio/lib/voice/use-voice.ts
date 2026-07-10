@@ -161,13 +161,19 @@ export function useVoice(sessionId: string | undefined, callbacks?: UseVoiceCall
 
     // Spoken-reply playback. Construct now - inside the mic-tap gesture - so
     // iOS Safari lets the AudioContext start. Subscribe to this session's
-    // voice_audio frames and feed them in.
+    // voice_audio frames and feed them in. Every frame arrival AND every clip
+    // start notes "Jarvis is audible" on the STT client so its echo guard
+    // (drop fragments of Jarvis's own voice re-entering the mic) stays armed
+    // for the whole playback window - the input-only realtime session emits
+    // no assistant-audio events, so this note is the ONLY thing feeding it.
     const audio = new AudioQueue();
     audioRef.current = audio;
+    audio.onClipStart = () => clientRef.current?.noteAssistantAudio();
     unsubRef.current = ws.subscribe((ev) => {
       const e = ev as { type?: string; session_id?: string; audio?: { data?: string } };
       if (e.type !== "voice_audio") return;
       if (e.session_id && e.session_id !== sessionId) return;
+      clientRef.current?.noteAssistantAudio();
       if (Date.now() < suppressUntilRef.current) return; // swallow stale post-barge-in tail
       if (e.audio?.data) audio.enqueue(e.audio.data);
     });
@@ -175,6 +181,7 @@ export function useVoice(sessionId: string | undefined, callbacks?: UseVoiceCall
     const client = new VoiceClient({
       sdpUrl: minted.sdp_url,
       clientSecret: minted.client_secret,
+      transcriptionHint: minted.transcription_hint,
       callbacks: {
         onStatus: (status, detail) => {
           setState((s) => ({ ...s, status }));
@@ -206,10 +213,14 @@ export function useVoice(sessionId: string | undefined, callbacks?: UseVoiceCall
         },
         // Barge-in: the boss is talking over Jarvis. Cut playback instantly
         // and briefly ignore in-flight clips so his current sentence's tail
-        // doesn't resume. The new utterance steers/starts a turn on its own.
+        // doesn't resume. ALSO tell Core - it keeps synthesizing the rest of
+        // the interrupted reply otherwise, and those clips land after the
+        // local suppress window ("kept jabbing on"). Server-side the pump
+        // squelches until the boss's utterance is absorbed by the loop.
         onBargeIn: () => {
           suppressUntilRef.current = Date.now() + SUPPRESS_AFTER_BARGE_IN_MS;
           audioRef.current?.stop();
+          ws.send({ type: "voice_interrupt", session_id: sessionId });
         },
       },
     });

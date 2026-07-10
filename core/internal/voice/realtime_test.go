@@ -50,3 +50,22 @@ func TestSentenceChunkerSplitsOnNewline(t *testing.T) {
 		t.Fatalf("newline should break a spoken chunk, got %v", got)
 	}
 }
+
+// StripSpokenMarkup is the code guarantee behind the voice overlay's "no
+// markdown" ask (Rule #1b): the brain drops prose instructions, so the mouth
+// must never receive markup. If this fails, TTS reads "asterisk asterisk"
+// aloud - the exact 2026-07-10 "**Aldeez**" incident.
+func TestStripSpokenMarkupRemovesMarkupNeverWords(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"You meant **Aldeez**, boss.", "You meant Aldeez, boss."},
+		{"See [the menu](https://example.com/menu) here.", "See the menu here."},
+		{"# Heading\n- point one\n1. point two", "Heading\npoint one\npoint two"},
+		{"`code` and ```blocks``` and _emphasis_ and ~~strike~~", "code and blocks and emphasis and strike"},
+		{"plain sentence stays untouched", "plain sentence stays untouched"},
+	}
+	for _, c := range cases {
+		if got := StripSpokenMarkup(c.in); got != c.want {
+			t.Errorf("StripSpokenMarkup(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

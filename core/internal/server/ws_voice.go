@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/voice"
@@ -33,11 +34,23 @@ type speakPump struct {
 	seq     int
 	lastAt  time.Time
 	narrate bool
+
+	// squelched is the server half of barge-in. The client cuts local
+	// playback the instant VAD fires, but Core would otherwise keep
+	// synthesizing and shipping the REST of the interrupted reply - which is
+	// exactly the "kept jabbing on" failure. Squelch() flips this on (clips
+	// are dropped at both enqueue and synthesis time; captions unaffected);
+	// EventSteered - the boss's interjection being absorbed by the loop -
+	// flips it off so the answer to the steer is spoken. epoch invalidates
+	// clips already sitting in the channel when the squelch landed.
+	squelched atomic.Bool
+	epoch     atomic.Int64
 }
 
 type speakClip struct {
-	seq  int
-	text string
+	seq   int
+	text  string
+	epoch int64
 }
 
 // narrationGap is how long the model can be silent during work before the
@@ -102,15 +115,39 @@ func (p *speakPump) finish() {
 	<-p.drained
 }
 
+// Squelch drops everything queued for speech and suppresses new clips until
+// Unsquelch. Called (via the turns registry) when the browser reports a
+// barge-in. Captions are untouched - only the mouth goes quiet. Safe from any
+// goroutine.
+func (p *speakPump) Squelch() {
+	if p == nil {
+		return
+	}
+	p.epoch.Add(1) // invalidate clips already in the channel
+	p.squelched.Store(true)
+}
+
+// Unsquelch re-enables speech. Called on EventSteered - the loop has absorbed
+// the boss's interjection, so what streams next is the answer to it.
+func (p *speakPump) Unsquelch() {
+	if p == nil {
+		return
+	}
+	p.squelched.Store(false)
+}
+
 func (p *speakPump) enqueue(text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
+	if p.squelched.Load() {
+		return // barge-in: the boss cut this reply off; caption-only from here
+	}
 	p.seq++
 	p.lastAt = time.Now()
 	select {
-	case p.q <- speakClip{seq: p.seq, text: text}:
+	case p.q <- speakClip{seq: p.seq, text: text, epoch: p.epoch.Load()}:
 	default:
 		// Queue full (model dumping text far faster than TTS can speak it).
 		// Dropping a clip is better than blocking the turn's event loop; the
@@ -126,7 +163,10 @@ func (p *speakPump) run() {
 	defer close(p.drained)
 	for clip := range p.q {
 		if p.ctx.Err() != nil {
-			continue // barge-in/interrupt: skip remaining clips
+			continue // interrupt/timeout: skip remaining clips
+		}
+		if clip.epoch != p.epoch.Load() {
+			continue // enqueued before a barge-in: stale, never speak it
 		}
 		audio, mime, err := p.speaker.Synthesize(p.ctx, clip.text)
 		if err != nil {
