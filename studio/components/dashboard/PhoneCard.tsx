@@ -59,6 +59,10 @@ export function PhoneCard({
   // ── live call ────────────────────────────────────────────────────────
   const ws = useWebSocket();
   const { latest: liveRun } = useRuns({ kind: "phone.call", limit: 3 });
+  // The errand turn itself (find number → brief → dial). "On it" is only
+  // an acceptance; THIS is what succeeded or died - and a dead errand must
+  // be loudly visible, never silence (the never-hide-errors law).
+  const { latest: askRun } = useRuns({ kind: "phone.ask", limit: 3 });
   const callRunning = liveRun?.status === "running";
   const [live, setLive] = useState<LiveCall | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -187,6 +191,20 @@ export function PhoneCard({
           )
         }
       >
+        {askRun?.status === "error" ? (
+          <div className="mb-3 rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs">
+            <p className="font-semibold text-danger">Your call errand failed</p>
+            <p className="mt-0.5 break-words text-muted-foreground">
+              {askRun.human_error?.summary ?? askRun.error ?? "The run died before dialing."}
+            </p>
+          </div>
+        ) : askRun?.status === "running" && !callRunning ? (
+          <div className="mb-3 flex items-center gap-2 rounded-xl border bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            Working your call errand — finding the number and briefing the call…
+          </div>
+        ) : null}
+
         {/* Slide-down call errand field (the dialpad button toggles it). */}
         <AnimatePresence initial={false}>
           {open && !callRunning ? (

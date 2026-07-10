@@ -46,7 +46,17 @@ func (s *Server) handlePhoneAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := "phone-ask-" + uuid.NewString()
+	// A REAL uuid session with a mem_sessions row (kind='user' - the boss
+	// commissioned this from inside the app). A prefixed pseudo-id here
+	// poisons every mem_* hook write with uuid-cast errors (SQLSTATE 22P02)
+	// and the turn runs memory-blind - the known non-UUID-session bug class.
+	sessionID := uuid.NewString()
+	if s.pool != nil {
+		_, _ = s.pool.Exec(r.Context(), `
+			INSERT INTO mem_sessions (id, kind, origin_ref, started_at)
+			VALUES ($1::uuid, 'user', '{"kind":"phone_ask"}'::jsonb, NOW())
+			ON CONFLICT (id) DO NOTHING`, sessionID)
+	}
 	if s.trust != nil {
 		s.trust.PreApproveTools(r.Context(), sessionID, []string{"phone_call"})
 	}

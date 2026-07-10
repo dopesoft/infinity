@@ -2200,7 +2200,15 @@ func serveCmd() *cobra.Command {
 				// memory - the phone agent was just the messenger.
 				if loop != nil {
 					phoneManager.SetExecuteAsk(func(transcript string) {
-						sessionID := "phone-boss-" + uuid.NewString()
+						// Real uuid + session row: prefixed pseudo-ids break
+						// every mem_* hook write (uuid cast, SQLSTATE 22P02).
+						sessionID := uuid.NewString()
+						if pool != nil {
+							_, _ = pool.Exec(context.Background(), `
+								INSERT INTO mem_sessions (id, kind, origin_ref, started_at)
+								VALUES ($1::uuid, 'user', '{"kind":"phone_boss_ask"}'::jsonb, NOW())
+								ON CONFLICT (id) DO NOTHING`, sessionID)
+						}
 						prompt := "The boss just called your phone line and was VERIFIED by passphrase. " +
 							"He asked for the following (his words, transcribed):\n\n" + transcript +
 							"\n\nExecute these asks now. When done, notify him with the outcome (he is " +
