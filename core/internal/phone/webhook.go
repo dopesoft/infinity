@@ -139,7 +139,14 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 		return
 	}
 
-	instructions := buildInstructions(persona, brief, callerID)
+	// Recognize the caller: known numbers (the boss, family, regulars) get
+	// their stored identity note injected so Jarvis greets them BY NAME
+	// instead of screening them like a stranger.
+	callerNote := m.lookupCaller(ctx, callerID)
+	if callerNote != "" {
+		infoLog.Printf("phone: recognized caller on %s call %s", direction, callID)
+	}
+	instructions := buildInstructions(persona, brief, callerID, callerNote)
 	if err := m.acceptCall(ctx, callID, instructions); err != nil {
 		m.failCall(ctx, callID, direction, err)
 		return

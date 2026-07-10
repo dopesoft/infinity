@@ -226,8 +226,11 @@ func (m *Manager) loadPersona(ctx context.Context, direction string) (string, er
 
 // buildInstructions assembles the per-call system instructions: the stored
 // persona plus deterministic facts (the brief for outbound, the caller id
-// for inbound). Assembly only — zero judgment text originates here.
-func buildInstructions(persona string, brief *Brief, callerID string) string {
+// for inbound, and the caller's recognized identity when their number is in
+// phone:known_numbers). Assembly only — zero judgment text originates here;
+// even the "how to treat this caller" line is the VALUE stored against
+// their number.
+func buildInstructions(persona string, brief *Brief, callerID, callerNote string) string {
 	var sb strings.Builder
 	sb.WriteString(strings.TrimSpace(persona))
 	if brief != nil {
@@ -241,7 +244,58 @@ func buildInstructions(persona string, brief *Brief, callerID string) string {
 	if callerID != "" {
 		sb.WriteString("\n\nCaller ID: " + callerID)
 	}
+	if callerNote != "" {
+		sb.WriteString("\n\n## You KNOW this caller\n" + callerNote)
+	}
 	return sb.String()
+}
+
+// lookupCaller matches the SIP From header against the boss-editable
+// phone:known_numbers map in mem_agent_state (JSON object: E.164-ish number
+// → a note describing who it is and how to treat them). Matching is on the
+// last 10 digits so "sip:+16095550123@x", "+1 (609) 555-0123", and
+// "6095550123" all hit the same entry. Empty note = unknown caller (the
+// screening persona handles them).
+func (m *Manager) lookupCaller(ctx context.Context, callerID string) string {
+	digits := lastDigits(callerID, 10)
+	if m.pool == nil || digits == "" {
+		return ""
+	}
+	var raw string
+	err := m.pool.QueryRow(ctx, `
+		SELECT value::text FROM mem_agent_state WHERE key = 'phone:known_numbers'
+	`).Scan(&raw)
+	if err != nil {
+		return "" // no list yet - every caller is a stranger
+	}
+	known := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &known); err != nil {
+		log.Printf("phone: phone:known_numbers is not a JSON object: %v", err)
+		return ""
+	}
+	for number, note := range known {
+		if lastDigits(number, 10) == digits {
+			return strings.TrimSpace(note)
+		}
+	}
+	return ""
+}
+
+// lastDigits extracts the trailing n digits of any phone-ish string.
+func lastDigits(s string, n int) string {
+	var b []rune
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b = append(b, r)
+		}
+	}
+	if len(b) < n {
+		if len(b) == 0 {
+			return ""
+		}
+		return string(b)
+	}
+	return string(b[len(b)-n:])
 }
 
 // acceptCall POSTs the accept endpoint with the realtime session config so

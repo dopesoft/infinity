@@ -87,6 +87,18 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 	defer conn.Close()
 	infoLog.Printf("phone: monitoring %s call %s", direction, callID)
 
+	// Make Jarvis speak FIRST. A realtime session waits for user audio and
+	// never opens its mouth unprompted, so without this the caller hears
+	// silence until *they* say hello (and an outbound callee gets dead air
+	// after picking up). One response.create on connect kicks the initial
+	// greeting; WHAT he says is the persona's judgment (mem_agent_state),
+	// not ours — this is purely the "go" signal.
+	if err := conn.WriteJSON(map[string]any{"type": "response.create"}); err != nil {
+		// Non-fatal: the call still works, just greeting-less. Log loud so
+		// a silent pickup is diagnosable rather than mysterious.
+		log.Printf("phone: initial greeting response.create for call %s failed: %v", callID, err)
+	}
+
 	// Cap the whole read loop at the ctx deadline (maxCallDuration) so a
 	// half-dead socket can't leak this goroutine forever. NOTE: gorilla
 	// treats any ReadMessage error — including a deadline timeout — as
