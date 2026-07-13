@@ -142,17 +142,32 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 		return
 	}
 
+	// The From header is a SIP ADDRESS, not a number. Parse the caller out of
+	// it ONCE, here, and hand the same clean number to every consumer below —
+	// digit-scraping the raw header picked up the ;tag= random instead, which
+	// is how a call from the boss's own cell failed to match his known-number
+	// entry and got filed under a number he has never owned.
+	callerNumber := parseCallerNumber(callerID)
+	if callerNumber == "" && strings.TrimSpace(callerID) != "" {
+		// An address we could not read a number out of. Log the raw header
+		// (only in this failure case) so an unhandled SIP shape is diagnosable
+		// on sight instead of silently becoming an unrecognized stranger.
+		log.Printf("phone: call %s: could not parse a caller number from From header %q", callID, callerID)
+	} else if callerNumber != "" {
+		infoLog.Printf("phone: %s call %s from %s", direction, callID, callerNumber)
+	}
+
 	// Recognize the caller: known numbers (the boss, family, regulars) get
 	// their stored identity note injected so Jarvis greets them BY NAME
 	// instead of screening them like a stranger.
-	callerNote := m.lookupCaller(ctx, callerID)
+	callerNote := m.lookupCaller(ctx, callerNumber)
 	if callerNote != "" {
 		infoLog.Printf("phone: recognized caller on %s call %s", direction, callID)
 	}
 	// Call memory: if we've spoken with this number recently (either
 	// direction), the agent answers KNOWING it — "yes, the pepperoni for
 	// pickup under Kai" instead of amnesia when the pizza place calls back.
-	if digits := lastDigits(callerID, 10); digits != "" && m.pool != nil {
+	if digits := lastDigits(callerNumber, 10); digits != "" && m.pool != nil {
 		var recall string
 		if err := m.pool.QueryRow(ctx, `
 			SELECT value #>> '{}' FROM mem_agent_state WHERE key = $1
@@ -160,7 +175,7 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 			callerNote = strings.TrimSpace(callerNote + "\n\nYour call history with this number, newest first (dates included - if the last call was recent they are likely calling back about it; either way, speak like the same assistant who made those calls): " + recall)
 		}
 	}
-	instructions := buildInstructions(persona, brief, callerID, callerNote)
+	instructions := buildInstructions(persona, brief, callerNumber, callerNote)
 	if err := m.acceptCall(ctx, callID, instructions); err != nil {
 		m.failCall(ctx, callID, briefID, direction, err)
 		return
@@ -170,7 +185,7 @@ func (m *Manager) handleIncoming(callID, briefID, callerID string) {
 	// Monitor blocks until the call ends; it owns transcript capture,
 	// live streaming to Studio, and outcome delivery (surface + push),
 	// and books the mem_runs row.
-	go m.Monitor(callID, direction, brief, callerID, briefID)
+	go m.Monitor(callID, direction, brief, callerNumber, briefID)
 }
 
 // failCall is the loud path for a call we could not run: reject the SIP leg

@@ -145,9 +145,19 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 	// Boss verification (inbound): the spoken passphrase is checked HERE in
 	// code — never handed to the call agent, so it can't be sweet-talked
 	// out, and a match from ANY phone verifies the boss (spoofed caller ID
-	// is irrelevant; the secret is the identity).
+	// is irrelevant; the secret is the identity). Matching tolerates the
+	// transcription drift a phone line guarantees (see passphrase.go); it does
+	// not tolerate a different phrase.
 	passphrase := m.phonePassphrase(ctx)
+	if direction == "inbound" && passphrase == "" {
+		// Loud, because the failure is invisible otherwise: with no phrase
+		// stored NOBODY can verify, so every instruction the boss gives by
+		// voice is discarded and the call still looks like it went fine.
+		log.Printf("phone: call %s: no passphrase stored (infinity_meta vault.phone_passphrase); the boss CANNOT be verified on this call", callID)
+	}
 	bossVerified := false
+	verifyAttempted := false // someone reached for the phrase and missed
+	challenged := false      // Jarvis asked for it, i.e. someone commanded this line
 	var bossAsk []string
 
 	var lines []string
@@ -162,6 +172,14 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 				log.Printf("phone: monitor for call %s stopped at the %s cap: %v", callID, maxCallDuration, err)
 			}
 			break
+		}
+
+		// A realtime error event means OUR session config or an event we
+		// injected was rejected. Never swallow it: a call that quietly
+		// misbehaves is the exact failure this whole file is guarding against.
+		if bytes.Contains(raw, []byte(`"type":"error"`)) {
+			log.Printf("phone: call %s: realtime error event: %s", callID, clip(string(raw), 500))
+			continue
 		}
 
 		// The call agent asked to hang up (goodbyes exchanged). Lenient
@@ -206,19 +224,41 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		}
 		text := strings.TrimSpace(ev.Transcript)
 
-		// Verification + collection happen BEFORE scrubbing (the raw line
-		// is what carries the phrase); storage and streaming only ever see
-		// the scrubbed form.
+		// Verification + ask collection happen on the raw line (it is what
+		// carries the phrase); storage and streaming only ever see the
+		// redacted form, so the secret never reaches the transcript, the
+		// summarizer, a push, or call history.
+		redacted, verified, attempted := matchPassphrase(text, passphrase)
 		if direction == "inbound" && speaker != "Jarvis" {
-			if !bossVerified && passphrase != "" && speechContains(text, passphrase) {
+			switch {
+			case verified && !bossVerified:
 				bossVerified = true
 				infoLog.Printf("phone: inbound call %s verified as the boss (passphrase)", callID)
-			} else if bossVerified {
-				bossAsk = append(bossAsk, text)
+				// Tell the LIVE agent he is now talking to the boss and that
+				// his asks WILL be carried out when the call ends. Without
+				// this he knows only the two functions in his hand, so he
+				// tells the boss "I'm unable to make calls" — a lie about the
+				// system he lives in, and exactly what happened on Jul 11.
+				m.notifyVerified(ctx, conn, callID)
+				// An instruction given in the SAME BREATH as the phrase ("It's
+				// Glock 17, call my wife") must not be lost to the redaction.
+				if ask := spokenAsk(redacted); ask != "" {
+					bossAsk = append(bossAsk, ask)
+				}
+			case bossVerified:
+				bossAsk = append(bossAsk, redacted)
+			case attempted:
+				verifyAttempted = true
 			}
 		}
+		// The persona only reaches for the passphrase when a caller claims to
+		// BE the boss or starts giving orders, which makes Jarvis's own word
+		// the deterministic marker that this line was commanded.
+		if speaker == "Jarvis" && strings.Contains(strings.ToLower(text), "passphrase") {
+			challenged = true
+		}
 
-		text = scrubSensitive(text, passphrase)
+		text = cardPattern.ReplaceAllString(redacted, "[card]")
 		// Collapse internal whitespace/newlines to single spaces so each
 		// stored entry is exactly ONE "Speaker: text" line. Without this, a
 		// transcript with embedded newlines (a relayed message with line
@@ -243,59 +283,99 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		go m.executeAsk(strings.Join(bossAsk, "\n"))
 	}
 
+	// The honesty guard. Someone commanded this line and was not verified.
+	// REFUSING them is correct; refusing them SILENTLY is not: that is how a
+	// call where the boss asked for something real gets filed green and he
+	// discovers days later that nothing ever happened.
+	if direction == "inbound" && !bossVerified && (challenged || verifyAttempted) {
+		m.alertUnverifiedCommand(callID, number, passphrase == "", lines)
+	}
+
 	m.deliverOutcome(callID, briefID, direction, brief, number, lines, time.Since(start))
 	return nil
 }
 
-// speechContains reports whether spoken text contains the phrase, tolerant
-// of transcription formatting only (case, spacing, punctuation): both sides
-// are lowercased and stripped to letters+digits before the substring check.
-// "Blue Falcon 22!" matches "blue falcon 22" — pick a passphrase whose
-// words transcribe unambiguously.
-func speechContains(text, phrase string) bool {
-	n := func(s string) string {
-		var b []rune
-		for _, r := range strings.ToLower(s) {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-				b = append(b, r)
-			}
-		}
-		return string(b)
+// notifyVerified tells the LIVE call agent, mid-call, that the caller just
+// verified as the boss.
+//
+// The MECHANIC (inject the moment verification lands) is here in code so it
+// cannot be forgotten or dropped. The WORDS are data (mem_agent_state
+// phone:persona:verified): what Jarvis should DO once he knows is judgment, and
+// judgment never belongs in a Go const.
+//
+// Injected as a system message on the live realtime session, with no
+// response.create: he should not interrupt the boss, only know the truth by the
+// time he next opens his mouth.
+func (m *Manager) notifyVerified(ctx context.Context, conn *websocket.Conn, callID string) {
+	note, err := m.loadPersona(ctx, "verified")
+	if err != nil {
+		// Loud: without the note he keeps insisting he is unable to act.
+		log.Printf("phone: call %s: the verified note is missing, so the call agent will not know he can act: %v", callID, err)
+		return
 	}
-	p := n(phrase)
-	return p != "" && strings.Contains(n(text), p)
+	if err := conn.WriteJSON(map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type": "message",
+			"role": "system",
+			"content": []map[string]any{
+				{"type": "input_text", "text": note},
+			},
+		},
+	}); err != nil {
+		log.Printf("phone: call %s: injecting the verified note failed: %v", callID, err)
+	}
 }
 
-// scrubSensitive removes call-borne secrets from a transcript line before it
-// is stored, streamed, or summarized: the boss's passphrase and anything
-// card-number-shaped (13-19 digits with optional spaces/dashes).
-func scrubSensitive(text, passphrase string) string {
-	if passphrase != "" {
-		text = replaceFold(text, passphrase, "[passphrase]")
+// alertUnverifiedCommand surfaces a call where someone gave orders and could not
+// be verified. Card + push, in the boss's own voice, because the alternative is
+// the failure that produced this function: he asked for something on the phone,
+// was told "I can't do that", and nothing anywhere said so.
+func (m *Manager) alertUnverifiedCommand(callID, number string, noPassphrase bool, lines []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var body string
+	if noPassphrase {
+		body = "Someone rang your line and gave me instructions as though they were you. There is no passphrase stored at all, so I cannot verify anyone by voice, and nothing asked of me on the phone will be carried out until one is set (Settings, Privacy, Phone vault). If that was you, that is why nothing happened."
+	} else {
+		body = "Someone rang your line, spoke as though they were you, and gave me instructions. The phrase they gave did not match the one in your vault, so I did not act on any of it. If that was you, say the phrase again and I will carry out what you ask the moment we hang up."
 	}
-	return cardPattern.ReplaceAllString(text, "[card]")
+	if number != "" {
+		body += "\n\nThey called from " + number + "."
+	}
+	body += "\n\n---\n\n" + clip(strings.Join(lines, "\n"), maxTranscriptChars)
+
+	if m.surface != nil {
+		importance := 90
+		if _, err := m.surface.Upsert(ctx, &surface.Item{
+			Surface: "calls",
+			Kind:    "call",
+			Source:  "phone",
+			// Distinct from the call's own card: the outcome and the refusal
+			// are two different things the boss needs to see.
+			ExternalID: callID + ":unverified",
+			Title:      "I refused instructions from a caller I could not verify",
+			Subtitle:   "The passphrase did not match, so I acted on nothing",
+			Body:       body,
+			Importance: &importance,
+		}); err != nil {
+			log.Printf("phone: surface unverified-command alert for call %s: %v", callID, err)
+		}
+	}
+	if m.push != nil {
+		m.push.Notify(ctx, push.Notification{
+			Title: "Someone gave me orders I could not verify",
+			Body:  "The passphrase did not match, so I acted on nothing. Open to see what they asked for.",
+			Kind:  "phone_call",
+			URL:   "/",
+			Tag:   "phone-unverified-" + callID,
+		})
+	}
+	log.Printf("phone: call %s: instructions from an UNVERIFIED caller were refused (no passphrase match)", callID)
 }
 
 var cardPattern = regexp.MustCompile(`\b(?:\d[ -]?){13,19}\b`)
-
-// replaceFold is a case-insensitive strings.ReplaceAll.
-func replaceFold(s, old, repl string) string {
-	if old == "" {
-		return s
-	}
-	lower, lowerOld := strings.ToLower(s), strings.ToLower(old)
-	var b strings.Builder
-	for {
-		i := strings.Index(lower, lowerOld)
-		if i < 0 {
-			b.WriteString(s)
-			return b.String()
-		}
-		b.WriteString(s[:i])
-		b.WriteString(repl)
-		s, lower = s[i+len(old):], lower[i+len(old):]
-	}
-}
 
 // callSurfaceKey is the dedup key for a call's surface card. Outbound calls
 // key on the briefID (the ONLY id shared between the OpenAI monitor path and

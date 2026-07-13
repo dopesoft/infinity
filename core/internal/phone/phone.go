@@ -428,7 +428,7 @@ func (m *Manager) loadPersona(ctx context.Context, direction string) (string, er
 		SELECT value::text FROM mem_agent_state WHERE key = $1
 	`, personaKeyPrefix+direction).Scan(&raw)
 	if err != nil {
-		return "", fmt.Errorf("phone: persona %q missing (run migration 172): %w", direction, err)
+		return "", fmt.Errorf("phone: persona %q missing (run migrations 172 and 175): %w", direction, err)
 	}
 	var persona string
 	if err := json.Unmarshal([]byte(raw), &persona); err != nil {
