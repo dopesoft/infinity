@@ -36,6 +36,7 @@ import {
   Users,
   Video,
   X,
+  MessagesSquare,
 } from "lucide-react";
 import { authedFetch, triggerCron, cancelWork, postSurfaceAction, canvasProjectActivate } from "@/lib/api";
 import { stashPendingDoc } from "@/lib/canvas/store";
@@ -2312,6 +2313,12 @@ function SurfaceBody({ item }: { item: SurfaceItem }) {
   // A message is mail, not a surfaced FYI. It gets its own shape.
   if (item.surface === "messages") return <MessageBody item={item} />;
 
+  // When an item was PRODUCED by a session (a phone errand Jarvis ran after the
+  // boss hung up, a cron's nightly run), he should be able to see the work, not
+  // just the summary of it. One tap, straight into the conversation.
+  const sessionId =
+    typeof item.metadata?.session_id === "string" ? item.metadata.session_id : "";
+
   const body = dedupeSurfaceBody(item.body, item.importanceReason);
   const fields = parseLabeledBody(body);
   // When the body parses cleanly into fields, drop the "Why it matters"
@@ -2347,6 +2354,16 @@ function SurfaceBody({ item }: { item: SurfaceItem }) {
         <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground/90">
           {body}
         </p>
+      ) : null}
+
+      {sessionId ? (
+        <a
+          href={`/live?session=${encodeURIComponent(sessionId)}`}
+          className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-3 text-xs font-medium transition-colors hover:bg-accent"
+        >
+          <MessagesSquare className="size-3.5" aria-hidden />
+          See what he did
+        </a>
       ) : null}
 
       {item.url ? (

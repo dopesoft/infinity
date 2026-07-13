@@ -65,7 +65,6 @@ import (
 	"github.com/dopesoft/infinity/core/internal/watch"
 	"github.com/dopesoft/infinity/core/internal/workflow"
 	"github.com/dopesoft/infinity/core/internal/worldmodel"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
@@ -2263,29 +2262,36 @@ func serveCmd() *cobra.Command {
 							VALUES (gen_random_uuid(), $1, $2, 'agent', 2, 'open', NOW(), NOW())`, title, body)
 					})
 				}
-				// The drive-home loop: a passphrase-verified inbound caller's
-				// asks run as a detached agent turn with the boss's FULL
-				// memory - the phone agent was just the messenger.
+				// The drive-home loop: a passphrase-verified boss's spoken asks
+				// run as a detached agent turn with his FULL memory, skills and
+				// tools - the phone agent was only ever the messenger.
+				//
+				// This seam hands back what Jarvis FINALLY SAID. The phone
+				// package turns that into the report he gets (inbox card + push
+				// + a link to this very session), because delivery is a mechanic
+				// and must not depend on the model remembering to do it. The
+				// session row, run tracking, and reporting all live in
+				// phone/errand.go.
 				if loop != nil {
-					phoneManager.SetExecuteAsk(func(transcript string) {
-						// Real uuid + session row: prefixed pseudo-ids break
-						// every mem_* hook write (uuid cast, SQLSTATE 22P02).
-						sessionID := uuid.NewString()
-						if pool != nil {
-							_, _ = pool.Exec(context.Background(), `
-								INSERT INTO mem_sessions (id, kind, origin_ref, started_at)
-								VALUES ($1::uuid, 'user', '{"kind":"phone_boss_ask"}'::jsonb, NOW())
-								ON CONFLICT (id) DO NOTHING`, sessionID)
-						}
-						prompt := "The boss just called your phone line and was VERIFIED by passphrase. " +
-							"He asked for the following (his words, transcribed):\n\n" + transcript +
-							"\n\nExecute these asks now. When done, notify him with the outcome (he is " +
-							"likely driving - a push he reads on arrival beats a question he can't answer)."
-						_ = runs.Track(context.Background(), runs.KindPhoneAsk, sessionID, "Boss called with instructions", runs.SourceAgent, func(ctx context.Context) error {
-							ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-							defer cancel()
-							return loop.Run(ctx, sessionID, prompt, "", nil, nil)
-						})
+					phoneManager.SetErrandRunner(func(ctx context.Context, sessionID, prompt string) (string, error) {
+						// Drain the run's events to capture the assistant's final
+						// words. Buffered + fully consumed in a goroutine so the
+						// loop never blocks on a slow reader.
+						events := make(chan agent.RunEvent, 256)
+						var text strings.Builder
+						done := make(chan struct{})
+						go func() {
+							defer close(done)
+							for ev := range events {
+								if ev.Kind == agent.EventDelta {
+									text.WriteString(ev.TextDelta)
+								}
+							}
+						}()
+						err := loop.Run(ctx, sessionID, prompt, "", nil, events)
+						close(events)
+						<-done
+						return text.String(), err
 					})
 				}
 			}

@@ -422,11 +422,12 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		})
 	}
 
-	// The drive-home loop: a verified boss's spoken asks execute as a
-	// detached agent turn with his full memory the moment the call ends.
-	if bossVerified && len(bossAsk) > 0 && m.executeAsk != nil {
+	// The drive-home loop: a verified boss's spoken asks execute as a full agent
+	// turn the moment the call ends, and the result is REPORTED to him whatever
+	// happens (errand.go). He never has to go looking for work he commissioned.
+	if bossVerified && len(bossAsk) > 0 {
 		infoLog.Printf("phone: executing verified boss ask from call %s (%d lines)", callID, len(bossAsk))
-		go m.executeAsk(strings.Join(bossAsk, "\n"))
+		go m.runErrand(strings.Join(bossAsk, "\n"))
 	}
 
 	// The honesty guard. Someone commanded this line and was not verified.

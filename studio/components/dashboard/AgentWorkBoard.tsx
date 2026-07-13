@@ -21,6 +21,7 @@ import {
   Terminal,
   type LucideIcon,
   Workflow,
+  PhoneCall,
 } from "lucide-react";
 import { Section } from "./Section";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,10 @@ const KIND_ICON: Record<WorkItemKind, LucideIcon> = {
   curiosity: HelpCircle,
   memory_op: Brain,
   reflection: Sparkles,
+  // An errand he gave by phone is an agent task like any other, so it sits on
+  // the board with the crons and the skills, wearing a phone.
+  phone_errand: PhoneCall,
+  phone_call: PhoneCall,
 };
 
 const COLUMNS: { key: WorkColumn; label: string; tone: string; Icon: LucideIcon }[] = [

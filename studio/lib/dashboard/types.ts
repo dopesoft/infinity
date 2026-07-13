@@ -243,6 +243,9 @@ export type SurfaceAction = {
 export type WorkColumn = "queued" | "running" | "awaiting" | "done";
 
 export type WorkItemKind =
+  // An errand the boss gave by phone: the full agent, his tools, his memory.
+  | "phone_errand"
+  | "phone_call"
   | "cron_run"
   | "voyager_opt"
   | "sentinel"

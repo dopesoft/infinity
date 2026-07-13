@@ -107,11 +107,11 @@ type Manager struct {
 	// serve.go to the WS broadcaster; nil = no live view, the durable
 	// surface item still lands.
 	liveNotify func(ev LiveEvent)
-	// executeAsk runs a passphrase-VERIFIED inbound caller's request as a
-	// detached agent turn (the "call Jarvis on the drive home, it's done
-	// when you arrive" loop). Wired in serve.go to the main loop — the
-	// executor has the boss's full memory; the phone agent never needed it.
-	executeAsk func(transcript string)
+	// errand executes a passphrase-VERIFIED boss's spoken instruction as a full
+	// agent turn (the "call Jarvis on the drive home, it's done when you arrive"
+	// loop) and hands back what Jarvis finally said, which becomes the report.
+	// See errand.go: the REPORT is a mechanic, not a prompt sentence.
+	errand ErrandRunner
 	// followupCreator persists a promised action from a finished call as a
 	// task/follow-up (Rule #1b: Go always persists what the summarizer flags).
 	followupCreator func(ctx context.Context, title, body string)
@@ -161,13 +161,6 @@ func (m *Manager) liveCall(briefID string) *safeConn {
 func (m *Manager) SetFollowupCreator(fn func(ctx context.Context, title, body string)) {
 	if m != nil {
 		m.followupCreator = fn
-	}
-}
-
-// SetExecuteAsk late-binds the verified-boss execution seam (serve.go).
-func (m *Manager) SetExecuteAsk(fn func(transcript string)) {
-	if m != nil {
-		m.executeAsk = fn
 	}
 }
 

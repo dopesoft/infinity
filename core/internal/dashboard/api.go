@@ -1668,6 +1668,13 @@ func runWorkKind(kind string) (workKind, href, engine string) {
 		return "voyager_opt", "/skills", "Voyager"
 	case "heartbeat":
 		return "memory_op", "/heartbeat", "Heartbeat"
+	// An errand the boss gave by phone is an AGENT TASK like any other: the full
+	// loop, his tools, his memory. It belongs on the board next to the crons and
+	// the skills, not hidden inside the Phone card.
+	case "phone.ask":
+		return "phone_errand", "/", "Phone"
+	case "phone.call":
+		return "phone_call", "/", "Phone"
 	default:
 		return "skill_run", "/logs", "Agent"
 	}
@@ -2069,6 +2076,61 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			})
 		}
 		skillDoneRows.Close()
+	}
+
+	// ── done: errands the boss gave by phone ──────────────────────────
+	// He rang, gave an instruction, hung up, and the full agent ran it. That is
+	// an agent task and it belongs on the board: the card carries the REPORT as
+	// its narrative (the same words the inbox card and the push carry), and its
+	// session id, so one tap opens the work itself.
+	phoneDoneRows, err := a.Pool.Query(ctx, `
+		SELECT id::text, COALESCE(NULLIF(label,''), 'Errand from your call'), ended_at,
+		       COALESCE(duration_ms, 0), status,
+		       COALESCE(result_summary, ''), COALESCE(meta->>'session_id', '')
+		FROM mem_runs
+		WHERE kind = 'phone.ask'
+		  AND ended_at IS NOT NULL
+		  AND ended_at >= date_trunc('day', NOW())
+		ORDER BY ended_at DESC
+		LIMIT $1
+	`, perCol)
+	if err == nil {
+		for phoneDoneRows.Next() {
+			var (
+				id, label, status string
+				endedAt           time.Time
+				durationMs        int
+				summary           string
+				sessionID         string
+			)
+			if err := phoneDoneRows.Scan(&id, &label, &endedAt, &durationMs, &status, &summary, &sessionID); err != nil {
+				phoneDoneRows.Close()
+				return nil, err
+			}
+			if planSessions[sessionID] {
+				continue
+			}
+			sub := "done"
+			if status == "error" {
+				sub = "failed"
+			}
+			fa := endedAt
+			d := durationMs
+			out = append(out, WorkItem{
+				ID:         "phone-d-" + id,
+				Kind:       "phone_errand",
+				Title:      label,
+				Subtitle:   sub,
+				Summary:    summary,
+				Engine:     "Phone",
+				Column:     "done",
+				SessionID:  sessionID,
+				FinishedAt: &fa,
+				DurationMs: &d,
+				DetailHref: "/",
+			})
+		}
+		phoneDoneRows.Close()
 	}
 
 	// ── workflow runs - span columns by run status ────────────────────
