@@ -164,13 +164,40 @@ func (s *Server) broadcastProactive(ev wsServerEvent) {
 // connection without rewriting SessionID. Use this for non-chat work streams
 // such as surface actions, where Studio filters by the run's synthetic
 // session id from the event payload.
+// registerBroadcast binds a WS connection to the broadcast fan-out for its
+// whole lifetime, chatting or not.
+//
+// This is deliberately NOT registerSession. A session binding only exists once
+// the boss sends a message, which means the dashboard, the one screen where he
+// watches a live call, was never a broadcast target at all.
+func (s *Server) registerBroadcast(connID string, send func(wsServerEvent)) {
+	if s == nil || connID == "" || send == nil {
+		return
+	}
+	s.activeMu.Lock()
+	s.broadcastConns[connID] = send
+	s.activeMu.Unlock()
+}
+
+// unregisterBroadcast drops a closed connection from the fan-out.
+func (s *Server) unregisterBroadcast(connID string) {
+	if s == nil || connID == "" {
+		return
+	}
+	s.activeMu.Lock()
+	delete(s.broadcastConns, connID)
+	s.activeMu.Unlock()
+}
+
+// broadcastAll pushes an event to EVERY open tab: the live phone transcript,
+// browser takeover state, anything not addressed to one chat session.
 func (s *Server) broadcastAll(ev wsServerEvent) {
 	if s == nil {
 		return
 	}
 	s.activeMu.Lock()
-	sends := make([]func(wsServerEvent), 0, len(s.activeSessions))
-	for _, fn := range s.activeSessions {
+	sends := make([]func(wsServerEvent), 0, len(s.broadcastConns))
+	for _, fn := range s.broadcastConns {
 		sends = append(sends, fn)
 	}
 	s.activeMu.Unlock()

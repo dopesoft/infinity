@@ -308,6 +308,79 @@ func (m *Manager) HandleStatusCallback(w http.ResponseWriter, r *http.Request) {
 	writeOK(w)
 }
 
+// HandleAmdCallback is the http.HandlerFunc for /webhooks/twilio-amd.
+//
+// Twilio tells us WHO picked up: a human, or a machine (and, with
+// DetectMessageEnd, the moment its greeting finished). That is a fact, and it is
+// the fact Jarvis was getting wrong: left to judge it from the audio, he
+// explained the whole errand to Ariana's iPhone screening service instead of
+// leaving the message he was sent to leave.
+//
+// So the fact is delivered into the live call, in code. WHAT he then says to a
+// machine is judgment, and lives in the persona (phone:persona:machine).
+func (m *Manager) HandleAmdCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	if m.cfg.TwilioToken != "" && m.cfg.PublicBaseURL != "" {
+		full := m.cfg.PublicBaseURL + "/webhooks/twilio-amd"
+		if r.URL.RawQuery != "" {
+			full += "?" + r.URL.RawQuery
+		}
+		if !twilioSignatureValid(m.cfg.TwilioToken, full, r.Header.Get("X-Twilio-Signature"), r.PostForm) {
+			log.Printf("phone: twilio AMD callback signature invalid")
+			http.Error(w, "invalid signature", http.StatusForbidden)
+			return
+		}
+	}
+
+	briefID := strings.TrimSpace(r.URL.Query().Get("brief"))
+	answeredBy := strings.TrimSpace(r.PostFormValue("AnsweredBy"))
+	writeOK(w) // acknowledge fast; the work below is ours, not Twilio's
+
+	// human / unknown: nothing to say. An unknown must NOT be treated as a
+	// machine, or Jarvis starts reciting a voicemail at a real person.
+	if !strings.HasPrefix(answeredBy, "machine") && answeredBy != "fax" {
+		infoLog.Printf("phone: brief %s answered by %s", briefID, answeredBy)
+		return
+	}
+
+	sc := m.liveCall(briefID)
+	if sc == nil {
+		// The call already ended, or we never held it. Loud, because a machine we
+		// could not tell him about is a message left badly.
+		log.Printf("phone: brief %s answered by %s but the call is no longer live to tell", briefID, answeredBy)
+		return
+	}
+
+	// machine_start = its greeting is still playing. machine_end_* = the beep
+	// has gone and it is recording NOW, which is the moment to deliver.
+	key := "machine"
+	if strings.HasPrefix(answeredBy, "machine_end") {
+		key = "machine_ready"
+	}
+	infoLog.Printf("phone: brief %s answered by %s, telling the call agent (%s)", briefID, answeredBy, key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	m.injectNote(ctx, sc, briefID, key)
+
+	// On machine_end_* the machine is recording and every second of silence is
+	// wasted tape, so prompt him to speak immediately. On machine_start he
+	// should be quiet and wait for the beep, so no response is prompted.
+	if key == "machine_ready" {
+		if err := sc.WriteJSON(map[string]any{"type": "response.create"}); err != nil {
+			log.Printf("phone: brief %s: prompting the voicemail message failed: %v", briefID, err)
+		}
+	}
+}
+
 // deliverCallStatus writes/updates the call's surface card for a terminal
 // failure and pushes the boss. Keyed on briefID so it collapses into the
 // same evolving card the monitor would have written had the call connected.

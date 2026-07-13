@@ -14,12 +14,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/contacts"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
 )
@@ -57,8 +59,16 @@ func (t *phoneCall) Schema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"to": map[string]any{
+				"type": "string",
+				"description": "Who to call: either a number in E.164 format (+14155550123), or a NAME already " +
+					"in the boss's phone book (\"Ariana\", \"Goodfellas Pizza\"), which is resolved for you. " +
+					"If the name is unknown or matches more than one contact this fails and says so - then " +
+					"find the number (web search, for a business), confirm the right one with the boss, and " +
+					"contact_save it before calling.",
+			},
+			"location": map[string]any{
 				"type":        "string",
-				"description": "Callee number in E.164 format, e.g. +14155550123.",
+				"description": "For a business, which branch: \"the one on Preston Road\". Saved to the phone book so the boss never has to disambiguate twice.",
 			},
 			"contact_kind": map[string]any{
 				"type":        "string",
@@ -87,7 +97,7 @@ func (t *phoneCall) Schema() map[string]any {
 				"description": "Optional RFC3339 time to place this call LATER (e.g. 2026-07-11T15:00:00-05:00). Omit to call now. Scheduled calls are snapped into 8am-9pm boss-local hours.",
 			},
 			"include_identity": map[string]any{
-				"type": "boolean",
+				"type":        "boolean",
 				"description": "Set true ONLY when the call requires verifying Mr. Kai's identity (a bank, utility, doctor) AND the boss's errand authorizes it. The stored details are attached server-side; you never see them.",
 			},
 			"include_payment": map[string]any{
@@ -112,8 +122,34 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 	to := strings.TrimSpace(str(in, "to"))
 	goal := strings.TrimSpace(str(in, "goal"))
 	constraints := strings.TrimSpace(str(in, "constraints"))
+	name := strings.TrimSpace(str(in, "name"))
+
+	// "call Ariana" is the whole point of a phone book, so a NAME here is
+	// resolved rather than rejected. Ambiguity is never guessed at: two
+	// Goodfellas means the boss gets asked which one, because dialing the wrong
+	// branch is worse than asking.
+	if !e164.MatchString(to) && to != "" && m.book != nil {
+		found, err := m.book.Resolve(ctx, to)
+		if err != nil {
+			return "", fmt.Errorf("looking up %q in the phone book failed: %w", to, err)
+		}
+		switch len(found) {
+		case 0:
+			return "", fmt.Errorf("%q is not in the boss's phone book, so I have no number for them. "+
+				"Find the number first (web_search for a business), confirm with the boss which one he means "+
+				"if there is any doubt, contact_save it, then call", to)
+		case 1:
+			if name == "" {
+				name = found[0].Name
+			}
+			to = found[0].Number
+		default:
+			return "", fmt.Errorf("%q matches more than one contact, so I will not guess. Ask the boss which he means, then call that number directly:\n%s",
+				to, contacts.Describe(found))
+		}
+	}
 	if !e164.MatchString(to) {
-		return "", fmt.Errorf("'to' must be E.164 (e.g. +14155550123); got %q", to)
+		return "", fmt.Errorf("'to' must be E.164 (e.g. +14155550123) or a name in the phone book; got %q", to)
 	}
 	if goal == "" {
 		return "", errors.New("'goal' is required - the call agent knows only what the brief says")
@@ -142,14 +178,31 @@ func (t *phoneCall) Execute(ctx context.Context, in map[string]any) (string, err
 	// Store the brief FIRST: the incoming-call webhook rehydrates it by id,
 	// so it must exist before Twilio bridges the leg.
 	briefID := uuid.NewString()
+	kind := strings.TrimSpace(str(in, "contact_kind"))
+	location := strings.TrimSpace(str(in, "location"))
 	brief := &Brief{
 		Topic:       strings.TrimSpace(str(in, "topic")),
-		Kind:        strings.TrimSpace(str(in, "contact_kind")),
-		Name:        strings.TrimSpace(str(in, "name")),
+		Kind:        kind,
+		Name:        name,
 		To:          to,
 		Goal:        goal,
 		Constraints: constraints,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Every call teaches the phone book. The boss should never have to say
+	// "save that number": he told Jarvis who he was calling once, and from then
+	// on the name is enough. Deterministic, so it cannot be forgotten the way a
+	// sentence in a prompt can.
+	if m.book != nil && name != "" {
+		if err := m.book.Upsert(ctx, contacts.Contact{
+			Name: name, Number: to, Kind: kind, Location: location, Source: "call",
+		}); err != nil {
+			// Not fatal: the call still goes through. Loud, because a book that
+			// silently stops learning would send us right back to reciting digits.
+			log.Printf("phone: saving %s (%s) to the phone book failed: %v", name, to, err)
+		}
+		m.book.MarkCalled(ctx, to)
 	}
 	// Scheduled path: stash the whole brief in the one-shot table and let the
 	// poller dial at the target time (snapped into calling hours). Reuses the
@@ -209,6 +262,20 @@ func (m *Manager) createTwilioCall(ctx context.Context, to, briefID string) (str
 		form.Set("StatusCallback", m.cfg.PublicBaseURL+"/webhooks/twilio-status?brief="+url.QueryEscape(briefID))
 		form.Set("StatusCallbackEvent", "initiated ringing answered completed")
 		form.Set("StatusCallbackMethod", "POST")
+
+		// Answering-machine detection. Whether a MACHINE picked up is a FACT,
+		// and facts belong in code: Jarvis was left to work it out from the
+		// audio, and duly explained his whole errand to Ariana's iPhone
+		// screening service instead of leaving the message.
+		//
+		// DetectMessageEnd + AsyncAmd: the call connects immediately (no dead
+		// air while we listen), Twilio detects in parallel, and for a machine it
+		// tells us once the greeting has finished, which is exactly the moment
+		// to deliver. The webhook injects that into the live call.
+		form.Set("MachineDetection", "DetectMessageEnd")
+		form.Set("AsyncAmd", "true")
+		form.Set("AsyncAmdStatusCallback", m.cfg.PublicBaseURL+"/webhooks/twilio-amd?brief="+url.QueryEscape(briefID))
+		form.Set("AsyncAmdStatusCallbackMethod", "POST")
 	}
 
 	endpoint := fmt.Sprintf(twilioCallsURL, m.cfg.TwilioSID)

@@ -17,8 +17,11 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/contacts"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/runs"
 	"github.com/dopesoft/infinity/core/internal/surface"
@@ -38,6 +41,17 @@ const (
 	// wrong-numbers / instant hangups — card only, no push.
 	pushInboundMinDuration = 20 * time.Second
 
+	// greetingGrace: how long to wait, after attaching, to see whether the
+	// session is already greeting the caller on its own before nudging it to.
+	// Short enough that a silent line still gets a prompt hello.
+	greetingGrace = 900 * time.Millisecond
+
+	// callerWindowSize: how many of the caller's recent utterances are joined
+	// when looking for the passphrase. Enough to survive a phrase chopped in
+	// half by barge-in, short enough that stray words never assemble into a
+	// false match.
+	callerWindowSize = 3
+
 	// callSummarySystem is the outcome digester's instruction. Same
 	// precedent as llm/critic.go: the instruction for an auxiliary LLM
 	// task lives beside its seam.
@@ -48,8 +62,29 @@ const (
 		"what happened and what's still open. No preamble, no restating the transcript. " +
 		"Never use em dashes or en dashes; use commas or colons. " +
 		"If the call promised a follow-up action the boss must do or be reminded of " +
-		"(send a form, call back, a deadline), append a final separate line starting " +
-		"exactly with 'FOLLOWUP:' and a short description. Otherwise do not add that line."
+		"(send a form, call back, a deadline), append a separate line starting " +
+		"exactly with 'FOLLOWUP:' and a short description. Otherwise do not add that line. " +
+		// A message someone asked Jarvis to PASS ON is not a call summary. It is
+		// the boss's mail. He gets their words, and he gets his assistant's read
+		// on them, the way a real one would say "she sounded rattled" on the way
+		// through the door.
+		"If the caller left a MESSAGE for the boss, or asked you to tell him something, " +
+		"append a separate line starting exactly with 'MESSAGE:' followed by the message ITSELF, " +
+		"in full, in their own words, as close to verbatim as the transcript allows and losing no " +
+		"detail they asked to be passed on. Clean up only the noise of speech (ums, false starts, " +
+		"stutters, transcription garble); never shorten, summarize, or improve what they meant to say. " +
+		"Then append a separate line starting exactly with 'READ:' giving YOUR account of the call as " +
+		"his assistant: first what it was about and what they want, in a sentence, then how they " +
+		"seemed, their mood and manner (warm, delighted, rattled, curt, upset, in a hurry), and " +
+		"anything you noticed between the lines that he would want to know. Two or three sentences, " +
+		"first person, candid and specific, the way you would tell him on the way through the door. " +
+		"Then append a separate line starting exactly with 'URGENCY:' and one word, low, normal, or " +
+		"high. Use high only when they need him soon or something is genuinely wrong. " +
+		"Omit all three lines if no message was left. " +
+		// Whoever calls should be remembered, the way an assistant remembers.
+		"If the caller gave a name AND a number and is worth remembering, append a separate " +
+		"line starting exactly with 'CONTACT:' followed by their name, then a | character, " +
+		"then their number. Otherwise do not add that line."
 )
 
 // Monitor attaches to the live call, collects + streams the transcript, and
@@ -97,6 +132,17 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		number = "+" + d
 	}
 
+	// Who this is, in words. The live view said "Incoming call" even when the
+	// phone book knew perfectly well it was Ariana.
+	who := ""
+	if brief != nil && brief.Name != "" {
+		who = brief.Name
+	} else if direction == "inbound" {
+		if c, err := m.book.ByNumber(ctx, number); err == nil && c != nil {
+			who = c.Name
+		}
+	}
+
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+m.cfg.OpenAIKey)
 	url := realtimeMonitorURL + "?call_id=" + callID
@@ -112,19 +158,37 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		return fmt.Errorf("phone: monitor dial for call %s failed (HTTP %d): %w", callID, status, err)
 	}
 	defer conn.Close()
+	sc := &safeConn{c: conn}
+	// Reachable from outside while the call is up: Twilio's machine detection
+	// lands on a webhook and needs to speak into THIS call.
+	m.registerLive(briefID, sc)
+	defer m.unregisterLive(briefID)
 	infoLog.Printf("phone: monitoring %s call %s", direction, callID)
 
-	// Make Jarvis speak FIRST. A realtime session waits for user audio and
-	// never opens its mouth unprompted, so without this the caller hears
-	// silence until *they* say hello (and an outbound callee gets dead air
-	// after picking up). One response.create on connect kicks the initial
-	// greeting; WHAT he says is the persona's judgment (mem_agent_state),
-	// not ours — this is purely the "go" signal.
-	if err := conn.WriteJSON(map[string]any{"type": "response.create"}); err != nil {
-		// Non-fatal: the call still works, just greeting-less. Log loud so
-		// a silent pickup is diagnosable rather than mysterious.
-		log.Printf("phone: initial greeting response.create for call %s failed: %v", callID, err)
-	}
+	// Make Jarvis speak FIRST, but only ONCE.
+	//
+	// A realtime session normally waits for the caller to speak, so without a
+	// nudge the line opens on silence. But the session sometimes starts its own
+	// greeting the moment the call is accepted, and an unconditional
+	// response.create on top of that produced the double hello the boss heard:
+	// "Good afternoon." followed by "Good afternoon, Mr. Kai's office, this is
+	// Jarvis." Two greetings, talking over each other.
+	//
+	// So the nudge waits a beat and only fires if he has NOT already started
+	// talking. greetingKicked is read by the loop below, which cancels the
+	// pending nudge the instant a response of any kind appears.
+	var responseSeen atomic.Bool
+	go func() {
+		time.Sleep(greetingGrace)
+		if responseSeen.Load() {
+			return // he is already speaking; a second nudge is a second greeting
+		}
+		if err := sc.WriteJSON(map[string]any{"type": "response.create"}); err != nil {
+			// Non-fatal: the call still works, just greeting-less. Log loud so
+			// a silent pickup is diagnosable rather than mysterious.
+			log.Printf("phone: initial greeting response.create for call %s failed: %v", callID, err)
+		}
+	}()
 
 	// Cap the whole read loop at the ctx deadline (maxCallDuration) so a
 	// half-dead socket can't leak this goroutine forever. NOTE: gorilla
@@ -160,8 +224,27 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 	challenged := false      // Jarvis asked for it, i.e. someone commanded this line
 	var bossAsk []string
 
+	// The caller's recent utterances, and where they sit in lines[].
+	//
+	// Barge-in fragments a spoken phrase across several transcript items: on
+	// Jul 13 the boss cut Jarvis off to give the passphrase and it arrived as
+	// two separate lines. A per-line check can never match either half, so the
+	// passphrase is matched across this rolling window. Interrupting is normal
+	// on a phone call; it must not cost him his identity.
+	var callerWindow []string
+	var callerWindowAt []int
+
 	var lines []string
 	hangupFired := false
+	patchFired := false
+	pendingHangup := false // the agent asked to hang up while the human was still talking
+	// One invocation is announced on several events, so a function is answered
+	// once per call_id and never twice.
+	answered := map[string]bool{}
+	// The last thing each side said, for the hangup guard. An agent that drops
+	// the line mid-sentence is the rudest failure this system has.
+	var lastHumanText, lastAgentText string
+	var lastHumanAt time.Time
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -174,6 +257,12 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 			break
 		}
 
+		// He has started speaking (any response event at all), so the pending
+		// greeting nudge must stand down or he says hello twice.
+		if bytes.Contains(raw, []byte(`"type":"response.`)) {
+			responseSeen.Store(true)
+		}
+
 		// A realtime error event means OUR session config or an event we
 		// injected was rejected. Never swallow it: a call that quietly
 		// misbehaves is the exact failure this whole file is guarding against.
@@ -182,28 +271,41 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 			continue
 		}
 
-		// The call agent asked to hang up (goodbyes exchanged). Lenient
-		// match on the raw event — function-call output arrives in a few
-		// shapes across realtime revisions — then a short grace so the
-		// farewell audio finishes playing out before the line drops.
-		if !hangupFired && bytes.Contains(raw, []byte(`"hangup_call"`)) &&
-			bytes.Contains(raw, []byte(`function_call`)) {
-			hangupFired = true
-			go func() {
-				time.Sleep(2 * time.Second)
-				if err := m.hangupCall(context.Background(), callID); err != nil {
-					log.Printf("phone: agent-requested hangup for call %s failed: %v", callID, err)
-				} else {
-					infoLog.Printf("phone: call %s ended by Jarvis (hangup_call)", callID)
-				}
-			}()
+		// The call agent asked to hang up. Honoured only when the call is
+		// genuinely over (see hangupAllowed): this model reaches for
+		// hangup_call the moment it thinks it has what it needs, and it has
+		// already cut the boss off mid-instruction. If he is still talking,
+		// the request is held, he is told to stay on the line, and it is
+		// re-evaluated as the conversation moves.
+		if !hangupFired && calledFunction(raw, "hangup_call") {
+			if hangupAllowed(lastHumanText, lastAgentText, lastHumanAt, time.Now()) {
+				hangupFired = true
+				go m.dropLine(callID)
+			} else if !pendingHangup {
+				pendingHangup = true
+				log.Printf("phone: call %s: held a hangup, the caller was still mid-conversation", callID)
+				m.injectNote(ctx, sc, callID, "stay_on_line")
+			}
+			continue
+		}
+
+		// The call agent is looking someone up mid-call, so he can confirm the
+		// right person or place with the boss before agreeing to the errand.
+		// Answered off the read loop: the phone book (and the web, for somewhere
+		// he has never called), handed back for him to speak.
+		if id, query, ok := functionCallArg(raw, "find_contact", "query"); ok {
+			if !answered[id] {
+				answered[id] = true
+				go m.answerContactLookup(sc, callID, id, query)
+			}
 			continue
 		}
 
 		// The call agent asked to hand the caller to the boss. Blind
 		// transfer via OpenAI refer: the AI leg drops, the caller is
 		// connected to Mr. Kai directly.
-		if bytes.Contains(raw, []byte(`"patch_in_boss"`)) && bytes.Contains(raw, []byte(`function_call`)) {
+		if !patchFired && calledFunction(raw, "patch_in_boss") {
+			patchFired = true
 			go func() {
 				if err := m.referToBoss(context.Background(), callID); err != nil {
 					log.Printf("phone: patch_in_boss for call %s failed: %v", callID, err)
@@ -229,17 +331,36 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		// redacted form, so the secret never reaches the transcript, the
 		// summarizer, a push, or call history.
 		redacted, verified, attempted := matchPassphrase(text, passphrase)
+		windowVerified := false
 		if direction == "inbound" && speaker != "Jarvis" {
+			// Not in this line alone? Try it against the caller's recent
+			// utterances joined together, which is how an interrupted
+			// passphrase ("blue" ... "falcon") gets recognized at all.
+			if !verified && !bossVerified {
+				joined := strings.Join(append(append([]string{}, callerWindow...), text), " ")
+				if _, jv, ja := matchPassphrase(joined, passphrase); jv {
+					verified, windowVerified = true, true
+				} else if ja {
+					attempted = true
+				}
+			}
 			switch {
 			case verified && !bossVerified:
 				bossVerified = true
 				infoLog.Printf("phone: inbound call %s verified as the boss (passphrase)", callID)
+				if windowVerified {
+					// The phrase was split across lines, so scrub the pieces
+					// out of the ones already stored, then out of this one.
+					for _, at := range callerWindowAt {
+						lines[at] = humanLabel + ": " + redactFragments(strings.TrimPrefix(lines[at], humanLabel+": "), passphrase)
+					}
+					redacted = redactFragments(text, passphrase)
+				}
 				// Tell the LIVE agent he is now talking to the boss and that
-				// his asks WILL be carried out when the call ends. Without
-				// this he knows only the two functions in his hand, so he
-				// tells the boss "I'm unable to make calls" — a lie about the
-				// system he lives in, and exactly what happened on Jul 11.
-				m.notifyVerified(ctx, conn, callID)
+				// his asks WILL be carried out. Without this he knows only the
+				// two functions in his hand, so he tells the boss "I'm unable
+				// to make calls" — a lie about the system he lives in.
+				m.injectNote(ctx, sc, callID, "verified")
 				// An instruction given in the SAME BREATH as the phrase ("It's
 				// Glock 17, call my wife") must not be lost to the redaction.
 				if ask := spokenAsk(redacted); ask != "" {
@@ -269,9 +390,34 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 			continue
 		}
 		lines = append(lines, speaker+": "+text)
+
+		// Track who said what last, for the hangup guard, and keep the caller
+		// window fresh for cross-line passphrase matching.
+		if speaker == "Jarvis" {
+			lastAgentText = text
+		} else {
+			lastHumanText, lastHumanAt = text, time.Now()
+			if !bossVerified {
+				callerWindow = append(callerWindow, text)
+				callerWindowAt = append(callerWindowAt, len(lines)-1)
+				if len(callerWindow) > callerWindowSize {
+					callerWindow = callerWindow[1:]
+					callerWindowAt = callerWindowAt[1:]
+				}
+			}
+		}
+
+		// A hangup we held back: now that the conversation has moved on, is the
+		// call actually over? This is what lets a real goodbye still end the
+		// call promptly while a mid-sentence hangup stays blocked.
+		if pendingHangup && !hangupFired && hangupAllowed(lastHumanText, lastAgentText, lastHumanAt, time.Now()) {
+			hangupFired = true
+			go m.dropLine(callID)
+		}
+
 		// Stream the line to Studio's live call view (Phone card modal).
 		m.emitLive(LiveEvent{
-			CallID: callID, Direction: direction, Number: number,
+			CallID: callID, Direction: direction, Number: number, Name: who,
 			Speaker: speaker, Text: text,
 		})
 	}
@@ -295,25 +441,107 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 	return nil
 }
 
-// notifyVerified tells the LIVE call agent, mid-call, that the caller just
-// verified as the boss.
+// safeConn serializes writes to the realtime socket. The read loop injects
+// notes, and the contact lookup answers from its own goroutine (a web search
+// must not stall the transcript); gorilla permits exactly one concurrent writer,
+// so every write goes through here.
+type safeConn struct {
+	mu sync.Mutex
+	c  *websocket.Conn
+}
+
+func (s *safeConn) WriteJSON(v any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.c.WriteJSON(v)
+}
+
+// answerContactLookup resolves a name the caller said and hands the answer back
+// to the live call agent, who reads it out and confirms it with the boss before
+// committing to anything ("Ariana, on 929-310-0906?" / "Goodfellas Pizza, the one
+// on Preston Road?").
 //
-// The MECHANIC (inject the moment verification lands) is here in code so it
-// cannot be forgotten or dropped. The WORDS are data (mem_agent_state
-// phone:persona:verified): what Jarvis should DO once he knows is judgment, and
-// judgment never belongs in a Go const.
-//
-// Injected as a system message on the live realtime session, with no
-// response.create: he should not interrupt the boss, only know the truth by the
-// time he next opens his mouth.
-func (m *Manager) notifyVerified(ctx context.Context, conn *websocket.Conn, callID string) {
-	note, err := m.loadPersona(ctx, "verified")
-	if err != nil {
-		// Loud: without the note he keeps insisting he is unable to act.
-		log.Printf("phone: call %s: the verified note is missing, so the call agent will not know he can act: %v", callID, err)
+// Runs off the read loop because a web search takes seconds and the transcript
+// must keep flowing. Fails ALOUD into the call: if the book and the web both come
+// up empty, the agent is told so plainly, and says so, rather than agreeing to an
+// errand he has no number for.
+func (m *Manager) answerContactLookup(sc *safeConn, callID, fnCallID, query string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	var result string
+	switch {
+	case m.lookup != nil:
+		out, err := m.lookup(ctx, query)
+		if err != nil {
+			log.Printf("phone: call %s: contact lookup for %q failed: %v", callID, query, err)
+			result = "The lookup failed, so I could not check. Ask him for the number."
+		} else {
+			result = out
+		}
+	case m.book != nil:
+		found, err := m.book.Resolve(ctx, query)
+		if err != nil {
+			log.Printf("phone: call %s: phone-book lookup for %q failed: %v", callID, query, err)
+			result = "The phone book could not be read. Ask him for the number."
+		} else {
+			result = contacts.Describe(found)
+		}
+	default:
+		result = "The phone book is unavailable on this call. Ask him for the number."
+	}
+	infoLog.Printf("phone: call %s: looked up %q for the call agent", callID, query)
+
+	// Hand the result back against the function's call_id, then let him speak:
+	// unlike the persona notes, this one NEEDS a response, because the boss is
+	// sitting in silence waiting to hear whether we have his wife's number.
+	if err := sc.WriteJSON(map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type":    "function_call_output",
+			"call_id": fnCallID,
+			"output":  result,
+		},
+	}); err != nil {
+		log.Printf("phone: call %s: returning the contact lookup failed: %v", callID, err)
 		return
 	}
-	if err := conn.WriteJSON(map[string]any{
+	if err := sc.WriteJSON(map[string]any{"type": "response.create"}); err != nil {
+		log.Printf("phone: call %s: prompting the reply after a contact lookup failed: %v", callID, err)
+	}
+}
+
+// dropLine ends the call after a short grace, so the farewell audio finishes
+// playing out before the line goes dead.
+func (m *Manager) dropLine(callID string) {
+	time.Sleep(2 * time.Second)
+	if err := m.hangupCall(context.Background(), callID); err != nil {
+		log.Printf("phone: agent-requested hangup for call %s failed: %v", callID, err)
+		return
+	}
+	infoLog.Printf("phone: call %s ended by Jarvis (hangup_call)", callID)
+}
+
+// injectNote speaks to the LIVE call agent mid-call, in system voice: that the
+// caller just verified as the boss ("verified"), or that he must not hang up
+// while someone is still talking to him ("stay_on_line").
+//
+// The MECHANIC (inject at the moment it matters) is here in code so it cannot be
+// forgotten or dropped. The WORDS are data (mem_agent_state phone:persona:*):
+// what Jarvis should DO once he knows is judgment, and judgment never belongs in
+// a Go const.
+//
+// Sent with no response.create: he should not interrupt the boss, only know the
+// truth by the time he next opens his mouth.
+func (m *Manager) injectNote(ctx context.Context, sc *safeConn, callID, key string) {
+	note, err := m.loadPersona(ctx, key)
+	if err != nil {
+		// Loud: without the note he keeps insisting he is unable to act, or
+		// keeps trying to hang up on whoever is talking to him.
+		log.Printf("phone: call %s: the %q note is missing, so the call agent will not know how to behave: %v", callID, key, err)
+		return
+	}
+	if err := sc.WriteJSON(map[string]any{
 		"type": "conversation.item.create",
 		"item": map[string]any{
 			"type": "message",
@@ -323,8 +551,115 @@ func (m *Manager) notifyVerified(ctx context.Context, conn *websocket.Conn, call
 			},
 		},
 	}); err != nil {
-		log.Printf("phone: call %s: injecting the verified note failed: %v", callID, err)
+		log.Printf("phone: call %s: injecting the %q note failed: %v", callID, key, err)
 	}
+}
+
+// callerLabel is who to put on an inbound call's card: her NAME if she is in the
+// phone book, otherwise the bare number, which still beats an anonymous "Inbound
+// call". Empty only when we have neither.
+func (m *Manager) callerLabel(ctx context.Context, number string) string {
+	if number == "" {
+		return ""
+	}
+	if m.book != nil {
+		if c, err := m.book.ByNumber(ctx, number); err == nil && c != nil && c.Name != "" {
+			return c.Name
+		}
+	}
+	return number
+}
+
+// deliverMessage hands the boss a message somebody asked Jarvis to pass on.
+//
+// It lands on surface="messages", NOT "calls", and that is the whole point: the
+// dashboard sends every calls item to the Phone card and filters that key out of
+// "Surfaced by Jarvis", so a message on the call card is a message he never
+// reads. This one arrives in his inbox, in Jarvis's own voice, carrying their
+// actual words, and buzzes his phone.
+func (m *Manager) deliverMessage(ctx context.Context, callID, direction, number string, brief *Brief, d callDigest, saidVerbatim []string) {
+	from := "someone"
+	switch {
+	case brief != nil && brief.Name != "":
+		from = brief.Name
+	default:
+		// Her name, not her digits: "Message for you from Ariana" is mail,
+		// "Message for you from +19293100906" is a log line.
+		if who := m.callerLabel(ctx, number); who != "" {
+			from = who
+		}
+	}
+
+	title := "Message from " + from
+	if isUrgent(d.Urgency) {
+		title = "Urgent message from " + from
+	}
+
+	// Body is the fallback for any renderer that does not know what a message is.
+	// The real payload is the metadata below, so the UI can lay this out properly
+	// instead of scraping prose.
+	var b strings.Builder
+	if d.Read != "" {
+		b.WriteString(d.Read + "\n\n")
+	}
+	b.WriteString(d.Message)
+	if number != "" {
+		b.WriteString("\n\nThey were on " + number + ".")
+	}
+
+	if m.surface != nil {
+		// His mail outranks an FYI and sits under a live decision. Urgency is the
+		// model's read; what urgency MEANS is Go's call, so it can never be
+		// argued into or out of reaching him.
+		importance := importanceFor(d.Urgency)
+		if _, err := m.surface.Upsert(ctx, &surface.Item{
+			Surface:    "messages",
+			Kind:       "message",
+			Source:     "phone",
+			ExternalID: callID + ":message",
+			Title:      title,
+			Subtitle:   clip(d.Message, 90),
+			Body:       b.String(),
+			Importance: &importance,
+			// The row's subtext is Jarvis's own account of the call, so the boss
+			// knows what it is and how they sounded WITHOUT opening anything.
+			ImportanceReason: d.Read,
+			// Structured, so the UI renders a message as a message: who it is
+			// from, what they said, how they seemed, how urgent it is.
+			Metadata: map[string]any{
+				"from":    from,
+				"number":  number,
+				"message": d.Message,
+				"read":    d.Read,
+				"urgency": strings.TrimSpace(d.Urgency),
+				"call_id": callID,
+				// Their unedited words, for when he wants to hear it exactly as
+				// they said it. Kept out of the body: he reads the message, and
+				// opens the raw only if he wants to.
+				"verbatim": saidVerbatim,
+			},
+			Actions: []surface.Action{
+				{
+					ID:     "call_back",
+					Label:  "Call back",
+					Intent: "Call " + from + " back on " + number + " about the message they left. Ask what they need and handle it.",
+					Style:  "primary",
+				},
+			},
+		}); err != nil {
+			log.Printf("phone: surfacing the message from call %s failed: %v", callID, err)
+		}
+	}
+	if m.push != nil {
+		m.push.Notify(ctx, push.Notification{
+			Title: title,
+			Body:  clip(d.Message, 200),
+			Kind:  "phone_call",
+			URL:   "/",
+			Tag:   "phone-msg-" + callID,
+		})
+	}
+	infoLog.Printf("phone: call %s left a message for the boss (from %s)", callID, from)
 }
 
 // alertUnverifiedCommand surfaces a call where someone gave orders and could not
@@ -402,13 +737,18 @@ func (m *Manager) deliverOutcome(callID, briefID, direction string, brief *Brief
 		transcript = "(no speech transcribed)"
 	}
 
+	// Name the card. An outbound call knows who it dialed from the brief; an
+	// inbound one used to say nothing but "Inbound call", even when the phone
+	// book knew exactly who was ringing. If we know her, say her name.
 	title := capitalize(direction) + " call"
-	if brief != nil {
-		switch {
-		case brief.Name != "":
-			title += " to " + brief.Name
-		case brief.To != "":
-			title += " to " + brief.To
+	switch {
+	case brief != nil && brief.Name != "":
+		title += " to " + brief.Name
+	case brief != nil && brief.To != "":
+		title += " to " + brief.To
+	case direction == "inbound":
+		if who := m.callerLabel(ctx, number); who != "" {
+			title += " from " + who
 		}
 	}
 
@@ -430,26 +770,55 @@ func (m *Manager) deliverOutcome(callID, briefID, direction string, brief *Brief
 			summary = out
 		}
 	}
-	// Follow-through: the summarizer appends a "FOLLOWUP:" line when the call
-	// promised an action or callback. Go ALWAYS persists it (the only
-	// judgment is whether one exists), then strips it from the shown summary.
-	if m.followupCreator != nil && summary != "" {
-		if idx := strings.Index(summary, "FOLLOWUP:"); idx >= 0 {
-			task := strings.TrimSpace(summary[idx+len("FOLLOWUP:"):])
-			summary = strings.TrimSpace(strings.TrimRight(summary[:idx], "\n -"))
-			if task != "" {
-				title := task
-				if len(title) > 80 {
-					title = title[:80]
-				}
-				body := "From your " + direction + " call"
-				if brief != nil && brief.Name != "" {
-					body += " with " + brief.Name
-				}
-				body += ": " + task
-				go m.followupCreator(context.Background(), title, body)
+	// One parse, every part acted on. The model only judges; Go always delivers.
+	digest := parseDigest(summary)
+	summary = digest.Outcome
+
+	// The boss's MAIL. It cannot ride the call card: the dashboard routes every
+	// surface='calls' item to the Phone card and filters that key OUT of the
+	// inbox, so a message left there is a message he never sees. Ariana called
+	// back with something to tell him and it died inside a transcript.
+	//
+	// The caller's OWN words go with it, lifted straight from the transcript
+	// rather than trusted to a paraphrase: he asked not to lose any detail, and
+	// the exact words are sitting right here.
+	if digest.Message != "" {
+		human := "Caller"
+		if direction == "outbound" {
+			human = "Callee"
+		}
+		m.deliverMessage(ctx, callID, direction, number, brief, digest, speakerLines(lines, human))
+	}
+
+	// Whoever calls gets remembered, the way an assistant remembers. Only
+	// outbound calls used to write to the phone book, so a caller could give her
+	// full name and number and be a stranger again next time.
+	if digest.Contact != "" && m.book != nil {
+		if name, num := parseContact(digest.Contact); name != "" && num != "" {
+			if err := m.book.Upsert(ctx, contacts.Contact{
+				Name: name, Number: num, Source: "call",
+				Note: "Rang the boss's line on " + time.Now().UTC().Format("Jan 2 2006") + ".",
+			}); err != nil {
+				// Loud: a book that quietly stops learning sends us back to digits.
+				log.Printf("phone: call %s: saving %s (%s) to the phone book failed: %v", callID, name, num, err)
+			} else {
+				infoLog.Printf("phone: call %s: saved %s to the phone book", callID, name)
 			}
 		}
+	}
+
+	// Follow-through: an action the call left the boss owing.
+	if m.followupCreator != nil && digest.Followup != "" {
+		title := digest.Followup
+		if len(title) > 80 {
+			title = title[:80]
+		}
+		body := "From your " + direction + " call"
+		if brief != nil && brief.Name != "" {
+			body += " with " + brief.Name
+		}
+		body += ": " + digest.Followup
+		go m.followupCreator(context.Background(), title, body)
 	}
 	body := clip(transcript, maxTranscriptChars)
 	if summary != "" {

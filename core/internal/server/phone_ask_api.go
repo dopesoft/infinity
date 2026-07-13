@@ -103,10 +103,18 @@ func clipLabel(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// GET /api/phone/contacts - the dial-back book: every number Jarvis has
-// call history with, named when the history is (the phone_call `name` is
-// stamped as a "Name: ..." prefix on the newest entry). Read straight off
-// the phone:history:* keyed-state cells - no separate contacts table.
+// GET /api/phone/contacts - the boss's phone book, and the same book the agent
+// resolves "call Ariana" against (mem_contacts, migration 177).
+//
+// This used to read straight off the phone:history:* cells, which meant a
+// contact could only exist AFTER a call and had no name index, so nothing could
+// turn a name into a number. Same surface (PhoneCard -> ContactBookModal), same
+// route, real spine: contacts are now written the moment one is learned, by a
+// call, by the boss saying a number, or by a web search for a business.
+//
+// The per-number call narrative (phone:history:*) is still joined in, because
+// "what we last talked about" is a different thing from "who this is", and the
+// book reads better with both.
 func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -117,8 +125,14 @@ func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT key, value #>> '{}', updated_at FROM mem_agent_state
-		WHERE key LIKE 'phone:history:%' ORDER BY updated_at DESC LIMIT 50
+		SELECT c.name, c.number, c.kind, c.location, c.note, c.times_called,
+		       COALESCE(c.last_called_at, c.updated_at) AS at,
+		       COALESCE(h.value #>> '{}', '') AS history
+		FROM mem_contacts c
+		LEFT JOIN mem_agent_state h
+		       ON h.key = 'phone:history:' || right(regexp_replace(c.number, '[^0-9]', '', 'g'), 10)
+		ORDER BY COALESCE(c.last_called_at, c.updated_at) DESC
+		LIMIT 200
 	`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load contacts")
@@ -126,42 +140,34 @@ func (s *Server) handlePhoneContacts(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type contact struct {
-		Number    string `json:"number"`
-		Name      string `json:"name,omitempty"`
-		Kind      string `json:"kind,omitempty"`
-		Last      string `json:"last"`
-		History   string `json:"history"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	kinds := map[string]string{}
-	if krows, kerr := s.pool.Query(r.Context(), `SELECT key, value #>> '{}' FROM mem_agent_state WHERE key LIKE 'phone:kind:%'`); kerr == nil {
-		for krows.Next() {
-			var kk, kv string
-			if krows.Scan(&kk, &kv) == nil {
-				kinds[strings.TrimPrefix(kk, "phone:kind:")] = kv
-			}
-		}
-		krows.Close()
+		Number      string `json:"number"`
+		Name        string `json:"name,omitempty"`
+		Kind        string `json:"kind,omitempty"`
+		Location    string `json:"location,omitempty"`
+		Note        string `json:"note,omitempty"`
+		TimesCalled int    `json:"times_called"`
+		Last        string `json:"last"`
+		History     string `json:"history"`
+		UpdatedAt   string `json:"updated_at"`
 	}
 	out := []contact{}
 	for rows.Next() {
-		var key, hist string
+		var c contact
 		var at time.Time
-		if rows.Scan(&key, &hist, &at) != nil {
+		if rows.Scan(&c.Name, &c.Number, &c.Kind, &c.Location, &c.Note, &c.TimesCalled, &at, &c.History) != nil {
 			continue
 		}
-		c := contact{Number: "+" + strings.TrimPrefix(key, "phone:history:"), UpdatedAt: at.UTC().Format(time.RFC3339)}
-		// Newest entry leads; a named call reads "Goodfellas Pizza: Outbound call Jul 10 2026...".
-		first := hist
-		if i := strings.Index(hist, " | "); i > 0 {
-			first = hist[:i]
+		c.UpdatedAt = at.UTC().Format(time.RFC3339)
+		// "Last" is the headline line the modal shows: the newest history entry
+		// if we have one, otherwise whatever we know about them.
+		c.Last = c.Note
+		if c.History != "" {
+			first := c.History
+			if i := strings.Index(first, " | "); i > 0 {
+				first = first[:i]
+			}
+			c.Last = first
 		}
-		if i := strings.Index(first, ": "); i > 0 && !strings.HasPrefix(first, "Inbound") && !strings.HasPrefix(first, "Outbound") {
-			c.Name = first[:i]
-		}
-		c.Last = first
-		c.Kind = kinds[strings.TrimPrefix(key, "phone:history:")]
-		c.History = hist
 		out = append(out, c)
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -471,10 +471,21 @@ export async function phoneAsk(prompt: string): Promise<boolean> {
   }
 }
 
-export type PhoneContact = { number: string; name?: string; kind?: "person" | "org"; last: string; history?: string; updated_at: string };
+export type PhoneContact = {
+  number: string;
+  name?: string;
+  kind?: "person" | "org";
+  location?: string;
+  note?: string;
+  times_called?: number;
+  last: string;
+  history?: string;
+  updated_at: string;
+};
 
-// phoneContacts lists every number Jarvis has call history with (named when
-// the call was named) - the dial-back book on the Phone card.
+// phoneContacts lists the boss's phone book (mem_contacts) - the same book
+// Jarvis resolves "call Ariana" against, so what he sees here is what gets
+// dialled.
 export async function phoneContacts(): Promise<PhoneContact[]> {
   try {
     const res = await authedFetch(`/api/phone/contacts`);
@@ -482,6 +493,48 @@ export async function phoneContacts(): Promise<PhoneContact[]> {
     return (await res.json()) as PhoneContact[];
   } catch {
     return [];
+  }
+}
+
+export type PhoneContactInput = {
+  name: string;
+  number: string;
+  kind?: "person" | "org";
+  location?: string;
+  note?: string;
+  aliases?: string[];
+  /** The number this contact had before the edit, when the number itself changed. */
+  was?: string;
+};
+
+// savePhoneContact creates or corrects a contact. Returns the server's own
+// message on failure ("929-310-0906 is not a dialable number"), never a silent
+// false, so the form can say exactly what is wrong.
+export async function savePhoneContact(c: PhoneContactInput): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await authedFetch(`/api/phone/contacts/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(c),
+    });
+    if (res.ok) return { ok: true };
+    const body = await res.json().catch(() => ({}));
+    return { ok: false, error: (body as { error?: string }).error || "Could not save that contact." };
+  } catch {
+    return { ok: false, error: "Could not reach Jarvis." };
+  }
+}
+
+export async function deletePhoneContact(number: string): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/phone/contacts/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ number }),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

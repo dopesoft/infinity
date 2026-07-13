@@ -21,6 +21,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/calendar"
 	"github.com/dopesoft/infinity/core/internal/compass"
 	"github.com/dopesoft/infinity/core/internal/connectors"
+	"github.com/dopesoft/infinity/core/internal/contacts"
 	"github.com/dopesoft/infinity/core/internal/cron"
 	"github.com/dopesoft/infinity/core/internal/crosscheck"
 	"github.com/dopesoft/infinity/core/internal/dashboard"
@@ -1841,12 +1842,51 @@ func serveCmd() *cobra.Command {
 			// plus a push when the call ends.
 			var phoneWebhook http.HandlerFunc
 			var phoneStatusWebhook http.HandlerFunc
+			var phoneAmdWebhook http.HandlerFunc
 			var phoneManager *phone.Manager
 			if pool != nil {
 				phoneManager = phone.NewManager(pool, surface.NewStore(pool, slog.Default()), pushSender)
 				phoneWebhook = phoneManager.HandleWebhook
 				phoneStatusWebhook = phoneManager.HandleStatusCallback
+				phoneAmdWebhook = phoneManager.HandleAmdCallback
 				phone.RegisterPhoneTools(registry, phoneManager)
+
+				// The phone book (mem_contacts): the same book the boss sees on
+				// the dashboard. It is what turns "call Ariana" into a number,
+				// and a ringing number into a name. contact_save/contact_find go
+				// into the shared registry so a chat turn, a voice turn, and the
+				// post-call errand turn all write to the ONE book.
+				book := contacts.NewStore(pool)
+				contacts.RegisterTools(registry, book)
+				phoneManager.SetContacts(book)
+
+				// find_contact, answered live while the boss is still on the
+				// line: his phone book first, then the web for a place he has
+				// never called, so Jarvis can say "Goodfellas Pizza, the one on
+				// Preston Road?" instead of agreeing to an errand he has no
+				// number for. The judgment (which one, and whether to ask) stays
+				// with the model; this seam only hands it the facts.
+				phoneManager.SetContactLookup(func(ctx context.Context, query string) (string, error) {
+					found, err := book.Resolve(ctx, query)
+					if err != nil {
+						return "", err
+					}
+					if len(found) > 0 {
+						return "From the boss's phone book:\n" + contacts.Describe(found), nil
+					}
+					search, ok := registry.Get("web_search")
+					if !ok {
+						return "Not in the phone book, and I cannot search from here. Ask him for the number.", nil
+					}
+					out, err := search.Execute(ctx, map[string]any{
+						"query": query + " phone number address",
+					})
+					if err != nil {
+						return "", fmt.Errorf("web search for %q failed: %w", query, err)
+					}
+					return "Not in the phone book. From a web search, confirm the right one with him " +
+						"(the branch, the address) before calling, and it will be saved:\n" + out, nil
+				})
 				// Post-call outcome digest ("pizza ready in 20 min, 2:50pm")
 				// runs on the boss's active model, same adapter as every
 				// auxiliary LLM task. Nil-safe: without it the raw
@@ -1946,49 +1986,50 @@ func serveCmd() *cobra.Command {
 				browserControl = browserReg.SetController
 			}
 			srv := server.New(server.Config{
-				Addr:             addr,
-				Version:          version,
-				Loop:             loop,
-				MCP:              mcp,
-				Pool:             pool,
-				Store:            store,
-				Searcher:         searcher,
-				SkillsAPI:        skillsAPI,
-				ExtensionsAPI:    extensions.NewAPI(extManager),
-				ProactiveAPI:     proactiveAPI,
-				CronAPI:          cronAPI,
-				WorkflowAPI:      workflowAPI,
-				SentinelAPI:      sentinelAPI,
-				VoyagerAPI:       voyagerAPI,
-				Auth:             authVerifier,
-				Trust:            trustStore,
-				Namer:            sessionNamer,
-				IntentDetector:   intentDetector,
-				IntentStore:      intentDB,
-				GaugeDetector:    gaugeDetector,
-				GaugeStore:       gaugeStore,
-				WAL:              walStore,
-				WorkingBuffer:    workingBuf,
-				Heartbeat:        heartbeat,
-				LLMRegistry:      llmRegistry,
-				Connectors:       connectorsCache,
-				Voice:            voiceMinter,
-				Speaker:          voiceSpeaker,
-				PushAPI:          pushAPI,
-				DashboardAPI:     dashboardAPI,
-				BridgeRouter:     activeBridgeRouter,
-				BridgePrefs:      activeBridgePrefs,
-				Turns:            turnStore,
-				RunsAPI:          runs.NewAPI(pool),
-				CalendarAPI:      calendarAPI,
+				Addr:               addr,
+				Version:            version,
+				Loop:               loop,
+				MCP:                mcp,
+				Pool:               pool,
+				Store:              store,
+				Searcher:           searcher,
+				SkillsAPI:          skillsAPI,
+				ExtensionsAPI:      extensions.NewAPI(extManager),
+				ProactiveAPI:       proactiveAPI,
+				CronAPI:            cronAPI,
+				WorkflowAPI:        workflowAPI,
+				SentinelAPI:        sentinelAPI,
+				VoyagerAPI:         voyagerAPI,
+				Auth:               authVerifier,
+				Trust:              trustStore,
+				Namer:              sessionNamer,
+				IntentDetector:     intentDetector,
+				IntentStore:        intentDB,
+				GaugeDetector:      gaugeDetector,
+				GaugeStore:         gaugeStore,
+				WAL:                walStore,
+				WorkingBuffer:      workingBuf,
+				Heartbeat:          heartbeat,
+				LLMRegistry:        llmRegistry,
+				Connectors:         connectorsCache,
+				Voice:              voiceMinter,
+				Speaker:            voiceSpeaker,
+				PushAPI:            pushAPI,
+				DashboardAPI:       dashboardAPI,
+				BridgeRouter:       activeBridgeRouter,
+				BridgePrefs:        activeBridgePrefs,
+				Turns:              turnStore,
+				RunsAPI:            runs.NewAPI(pool),
+				CalendarAPI:        calendarAPI,
 				PhoneWebhook:       phoneWebhook,
 				PhoneStatusWebhook: phoneStatusWebhook,
-				BrowserClose:     browserClose,
-				BrowserNavigate:  browserNavigate,
-				BrowserInput:     browserInput,
-				BrowserControl:   browserControl,
-				WorkspaceRawBase: workspaceRawBase,
-				WorkspaceToken:   workspaceToken,
+				PhoneAmdWebhook:    phoneAmdWebhook,
+				BrowserClose:       browserClose,
+				BrowserNavigate:    browserNavigate,
+				BrowserInput:       browserInput,
+				BrowserControl:     browserControl,
+				WorkspaceRawBase:   workspaceRawBase,
+				WorkspaceToken:     workspaceToken,
 			})
 
 			// Resume the agent automatically the instant an inline auth card
@@ -2208,7 +2249,7 @@ func serveCmd() *cobra.Command {
 			// Phone card's live indicator + modal update in real time.
 			if phoneManager != nil {
 				phoneManager.SetLiveNotify(func(ev phone.LiveEvent) {
-					srv.EmitPhoneLive(ev.CallID, ev.Direction, ev.Number, ev.Speaker, ev.Text, ev.Done, ev.Summary, ev.Status)
+					srv.EmitPhoneLive(ev.CallID, ev.Direction, ev.Number, ev.Name, ev.Speaker, ev.Text, ev.Done, ev.Summary, ev.Status)
 				})
 				// One-shot scheduled-call poller (fire-once, restart-safe).
 				phoneManager.StartScheduler(cmd.Context())

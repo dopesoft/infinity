@@ -120,6 +120,8 @@ export type WSPhoneLive = {
   call_id: string;
   direction: "inbound" | "outbound";
   number?: string;
+  /** Who that number is, per the phone book. */
+  name?: string;
   speaker?: string;
   text?: string;
   done?: boolean;

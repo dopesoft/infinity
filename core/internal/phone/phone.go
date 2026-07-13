@@ -27,8 +27,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/contacts"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -85,6 +87,15 @@ type Manager struct {
 	surface    *surface.Store
 	push       *push.Sender
 	httpClient *http.Client
+	// book is the phone book (mem_contacts). It turns "call Ariana" into a
+	// number on the way out, and a ringing number into "Ariana, his wife" on
+	// the way in. Nil = no book; the number-only paths still work.
+	book *contacts.Store
+	// lookup answers the live call agent's find_contact function: the phone
+	// book first, then the web for a business he has never called. Wired in
+	// serve.go (it needs the tool registry); nil = the agent is told the book
+	// is unavailable rather than being left to invent a number.
+	lookup ContactLookup
 	// summarize distills a finished call's transcript into the 1-2 sentence
 	// outcome the boss actually wants ("pizza ready in 20 min, 2:50pm").
 	// Late-bound in serve.go to the active-model drafter; nil = raw
@@ -104,6 +115,46 @@ type Manager struct {
 	// followupCreator persists a promised action from a finished call as a
 	// task/follow-up (Rule #1b: Go always persists what the summarizer flags).
 	followupCreator func(ctx context.Context, title, body string)
+
+	// liveMu guards liveCalls: the sockets of calls in flight, keyed by brief
+	// id. Twilio's answering-machine detection lands on a webhook, in a
+	// different goroutine from the monitor, and has to be able to speak into the
+	// call that is HAPPENING RIGHT NOW ("a machine answered, deliver the
+	// message"). Registered when the monitor attaches, dropped when it exits.
+	liveMu    sync.Mutex
+	liveCalls map[string]*safeConn
+}
+
+// registerLive binds a live call's socket to its brief, so out-of-band signals
+// (answering-machine detection) can reach the call while it is still up.
+func (m *Manager) registerLive(briefID string, sc *safeConn) {
+	if m == nil || briefID == "" || sc == nil {
+		return
+	}
+	m.liveMu.Lock()
+	if m.liveCalls == nil {
+		m.liveCalls = map[string]*safeConn{}
+	}
+	m.liveCalls[briefID] = sc
+	m.liveMu.Unlock()
+}
+
+func (m *Manager) unregisterLive(briefID string) {
+	if m == nil || briefID == "" {
+		return
+	}
+	m.liveMu.Lock()
+	delete(m.liveCalls, briefID)
+	m.liveMu.Unlock()
+}
+
+func (m *Manager) liveCall(briefID string) *safeConn {
+	if m == nil || briefID == "" {
+		return nil
+	}
+	m.liveMu.Lock()
+	defer m.liveMu.Unlock()
+	return m.liveCalls[briefID]
 }
 
 // SetFollowupCreator late-binds the follow-through seam (serve.go).
@@ -123,13 +174,14 @@ func (m *Manager) SetExecuteAsk(fn func(transcript string)) {
 // LiveEvent is one streaming update from a call in flight.
 type LiveEvent struct {
 	CallID    string `json:"call_id"`
-	Direction string `json:"direction"`      // inbound | outbound
-	Number    string `json:"number"`         // callee (outbound) or caller id (inbound)
-	Speaker   string `json:"speaker"`        // Jarvis | Caller | Callee ("" on the done event)
-	Text      string `json:"text"`           // transcript line ("" on the done event)
-	Done      bool   `json:"done"`           // true exactly once, when the call ends
-	Summary   string `json:"summary"`        // outcome digest, only on the done event
-	Status    string `json:"status"`         // terminal disposition: no-answer|busy|failed|canceled|completed ("" mid-call)
+	Direction string `json:"direction"` // inbound | outbound
+	Number    string `json:"number"`    // callee (outbound) or caller id (inbound)
+	Name      string `json:"name"`      // who that is, per the phone book ("Ariana"), when we know
+	Speaker   string `json:"speaker"`   // Jarvis | Caller | Callee ("" on the done event)
+	Text      string `json:"text"`      // transcript line ("" on the done event)
+	Done      bool   `json:"done"`      // true exactly once, when the call ends
+	Summary   string `json:"summary"`   // outcome digest, only on the done event
+	Status    string `json:"status"`    // terminal disposition: no-answer|busy|failed|canceled|completed ("" mid-call)
 }
 
 // SetLiveNotify late-binds the live-call streamer (serve.go).
@@ -269,6 +321,26 @@ func (m *Manager) phonePassphrase(ctx context.Context) string {
 		return ""
 	}
 	return v
+}
+
+// ContactLookup resolves a name the caller SAID ("Ariana", "Goodfellas Pizza")
+// into something the agent can read back to him: a phone-book hit, or, for a
+// place he has never called, what the web says. Returns plain prose because the
+// call agent speaks it aloud.
+type ContactLookup func(ctx context.Context, query string) (string, error)
+
+// SetContacts gives the manager the phone book.
+func (m *Manager) SetContacts(s *contacts.Store) {
+	if m != nil {
+		m.book = s
+	}
+}
+
+// SetContactLookup late-binds the live find_contact resolver (serve.go).
+func (m *Manager) SetContactLookup(fn ContactLookup) {
+	if m != nil {
+		m.lookup = fn
+	}
 }
 
 // Summarizer is the LLM seam for post-call outcome digests.
@@ -477,24 +549,49 @@ func (m *Manager) lookupCaller(ctx context.Context, callerID string) string {
 	if m.pool == nil || digits == "" {
 		return ""
 	}
+	// Two sources, BOTH read, never one instead of the other.
+	//
+	// The phone book says WHO is ringing (anyone the boss saved or called is a
+	// known person, not a stranger to be screened), and phone:known_numbers
+	// carries the boss's own standing instructions for how to treat particular
+	// callers (his own entry is what tells Jarvis to ask him for the passphrase).
+	// Returning early on the first hit would have silently dropped the second,
+	// which for his own number means dropping the passphrase ritual entirely.
+	var parts []string
+	if m.book != nil {
+		if c, err := m.book.ByNumber(ctx, callerID); err == nil && c != nil {
+			who := c.Name
+			if c.Kind == "org" {
+				who += " (a business the boss deals with)"
+			}
+			if c.Location != "" {
+				who += ", " + c.Location
+			}
+			if c.Note != "" {
+				who += ". " + c.Note
+			}
+			parts = append(parts, strings.TrimSpace(who))
+		}
+	}
 	var raw string
 	err := m.pool.QueryRow(ctx, `
 		SELECT value::text FROM mem_agent_state WHERE key = 'phone:known_numbers'
 	`).Scan(&raw)
 	if err != nil {
-		return "" // no list yet - every caller is a stranger
+		return strings.Join(parts, "\n\n") // no list yet: the book's word is all we have
 	}
 	known := map[string]string{}
 	if err := json.Unmarshal([]byte(raw), &known); err != nil {
 		log.Printf("phone: phone:known_numbers is not a JSON object: %v", err)
-		return ""
+		return strings.Join(parts, "\n\n")
 	}
 	for number, note := range known {
 		if lastDigits(number, 10) == digits {
-			return strings.TrimSpace(note)
+			parts = append(parts, strings.TrimSpace(note))
+			break
 		}
 	}
-	return ""
+	return strings.Join(parts, "\n\n")
 }
 
 // lastDigits extracts the trailing n digits of any phone-ish string.
@@ -539,14 +636,49 @@ func (m *Manager) acceptCall(ctx context.Context, callID, instructions string) e
 				"description": "Connect the caller directly to Mr. Kai on his own phone when they genuinely need to speak with him personally. This hands the call to him and ends your part. Use sparingly, only when relaying a message will not do.",
 				"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
 			},
+			// find_contact is what lets Jarvis confirm WHO he is about to call
+			// while the boss is still on the line: "Ariana, on 929-310-0906?" or
+			// "Goodfellas Pizza, the one on Preston Road?". It reads the phone
+			// book, and searches the web for a place the boss has never called.
+			// Without it he would agree to an errand and only discover after
+			// hanging up that he has no number, which is exactly the kind of
+			// dead end this system is not allowed to have.
+			{
+				"type": "function",
+				"name": "find_contact",
+				"description": "Look up someone the caller named, to confirm you have the right person or place BEFORE agreeing to the errand. " +
+					"Use it whenever Mr. Kai names anyone to contact. It searches his phone book first, then the web for a business he has not called before. " +
+					"If it comes back with more than one match, ask him which he means (\"the one on Preston Road?\"). Whoever you agree on is saved to his phone book automatically.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{
+							"type":        "string",
+							"description": "The name he said: \"Ariana\", \"my wife\", \"Goodfellas Pizza\".",
+						},
+					},
+					"required": []any{"query"},
+				},
+			},
 		},
 		"audio": map[string]any{
 			// Input transcription is OFF by default on realtime sessions —
 			// without asking for it the caller's words never appear in the
 			// transcript (only Jarvis's own lines, which are free). This is
 			// what makes the call log a real two-sided record.
+			//
+			// language is NOT optional in practice. Without it the transcriber
+			// detects the language per utterance, and a two-word reply over an
+			// 8kHz phone codec gives it almost nothing to go on: on Jul 13 the
+			// boss said "blue falcon" in English and it came back as
+			// "ブルーファルコン" — the right sounds, transcribed into the wrong
+			// alphabet. The passphrase check saw non-Latin text, matched
+			// nothing, and refused him on his own line.
 			"input": map[string]any{
-				"transcription": map[string]any{"model": "gpt-4o-mini-transcribe"},
+				"transcription": map[string]any{
+					"model":    "gpt-4o-mini-transcribe",
+					"language": "en",
+				},
 			},
 			"output": map[string]any{"voice": m.cfg.Voice},
 		},

@@ -2244,7 +2244,74 @@ function FieldValue({ value }: { value: string }) {
   );
 }
 
+/* MessageBody - a message somebody left for the boss on the phone.
+ *
+ * This is his MAIL, and it should read like it: who it is from, what his
+ * assistant made of the call, and then the message itself, given room to
+ * breathe. Not a labelled key/value dump, and not a transcript to excavate.
+ *
+ * Structure mirrors how a real assistant hands you a note: the read first
+ * ("she rang about the voicemail, she sounded moved"), then the words.
+ */
+function MessageBody({ item }: { item: SurfaceItem }) {
+  const meta = item.metadata ?? {};
+  const from = typeof meta.from === "string" ? meta.from : "";
+  const number = typeof meta.number === "string" ? meta.number : "";
+  const message = typeof meta.message === "string" ? meta.message : item.body ?? "";
+  const read = item.importanceReason?.trim() || (typeof meta.read === "string" ? meta.read : "");
+  const urgency = typeof meta.urgency === "string" ? meta.urgency.toLowerCase() : "";
+  const urgent = urgency === "high" || urgency === "urgent" || urgency === "emergency";
+  const initial = (from || "?").trim().charAt(0).toUpperCase();
+
+  return (
+    <div className="space-y-4 pt-4">
+      {/* Who it is from. An avatar and a name, the way every message you have
+          ever read is headed. */}
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          aria-hidden
+          className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+            urgent ? "bg-danger/15 text-danger" : "bg-brand/15 text-brand",
+          )}
+        >
+          {initial}
+        </span>
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate text-sm font-semibold">{from || "Unknown caller"}</span>
+          {number ? (
+            <span className="truncate text-[11px] text-muted-foreground">{number}</span>
+          ) : null}
+        </span>
+        {urgent ? (
+          <span className="ml-auto shrink-0 rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger">
+            Urgent
+          </span>
+        ) : null}
+      </div>
+
+      {/* Jarvis's own account: what the call was about and how they seemed. */}
+      {read ? (
+        <p className="text-[13.5px] italic leading-relaxed text-muted-foreground">{read}</p>
+      ) : null}
+
+      {/* The message. Given the room it deserves. */}
+      {message ? (
+        <div className="min-w-0 rounded-xl border bg-card p-4 sm:p-5">
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Message
+          </p>
+          <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">{message}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SurfaceBody({ item }: { item: SurfaceItem }) {
+  // A message is mail, not a surfaced FYI. It gets its own shape.
+  if (item.surface === "messages") return <MessageBody item={item} />;
+
   const body = dedupeSurfaceBody(item.body, item.importanceReason);
   const fields = parseLabeledBody(body);
   // When the body parses cleanly into fields, drop the "Why it matters"

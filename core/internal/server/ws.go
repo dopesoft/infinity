@@ -198,6 +198,7 @@ type wsPhoneLive struct {
 	CallID    string `json:"call_id"`
 	Direction string `json:"direction"`
 	Number    string `json:"number,omitempty"`
+	Name      string `json:"name,omitempty"`
 	Speaker   string `json:"speaker,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Done      bool   `json:"done,omitempty"`
@@ -413,6 +414,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.unregisterSession(activeSessionID, send)
 		}
 	}()
+
+	/* Broadcast registration, separate from session registration and done the
+	 * moment the socket opens.
+	 *
+	 * registerSession only fires when the boss SENDS a chat message, so a tab
+	 * sitting on the dashboard was in nobody's list and broadcastAll reached an
+	 * empty map. That is why the live call transcript never streamed: the modal
+	 * opened (it reads mem_runs from the DB) and then sat there empty while the
+	 * phone_live events went nowhere. A dashboard is exactly where you watch a
+	 * call from, and it is precisely the tab that never chats. */
+	connID := uuid.NewString()
+	s.registerBroadcast(connID, send)
+	defer s.unregisterBroadcast(connID)
 
 	for {
 		var msg wsClientMessage

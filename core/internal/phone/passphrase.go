@@ -123,6 +123,30 @@ func trailingPunct(word string) string {
 	return string(r[i:])
 }
 
+// redactFragments removes PIECES of the passphrase from a line.
+//
+// Needed because the boss interrupts (as anyone does on a real call), and
+// barge-in chops one spoken phrase into several transcript items: "blue" lands
+// in one, "falcon" in the next. Once the window verifies (see the caller window
+// in monitor.go), each fragment still has to be scrubbed out of the stored
+// transcript, or half the secret survives in the record.
+func redactFragments(text, phrase string) string {
+	want := normalizeSpeech(phrase)
+	if want == "" {
+		return text
+	}
+	words := strings.Fields(text)
+	for i, w := range words {
+		n := normalizeSpeech(w)
+		// Three characters minimum: shorter than that ("is", "a") appears
+		// inside half the language and is not a meaningful piece of anything.
+		if len(n) >= 3 && strings.Contains(want, n) {
+			words[i] = "[passphrase]" + trailingPunct(w)
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 // spokenAsk strips the redaction placeholder from a verified line and reports
 // what is LEFT — the instruction the boss gave in the same breath as the
 // phrase. Empty when he only said the passphrase.

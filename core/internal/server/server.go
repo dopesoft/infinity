@@ -151,6 +151,10 @@ type Config struct {
 	// /webhooks/twilio-status (no-answer/busy/failed). Auth-exempt via the
 	// /webhooks/ prefix; the handler verifies Twilio's SHA1 signature.
 	PhoneStatusWebhook http.HandlerFunc
+	// PhoneAmdWebhook handles Twilio's answering-machine detection result, so a
+	// machine picking up is a fact the live call agent is TOLD, not one he has
+	// to infer from the audio.
+	PhoneAmdWebhook http.HandlerFunc
 	// BrowserClose tears down a live cloud-browser session (Studio's "Stop"
 	// button on the live browser in the Preview pane). Provided as a closure so the server stays
 	// decoupled from the browser package. Nil-safe: the route 503s when
@@ -225,6 +229,11 @@ type Server struct {
 	// writer goroutine; calling it pushes a frame to that browser tab.
 	activeMu       sync.Mutex
 	activeSessions map[string]func(wsServerEvent)
+	// broadcastConns is every OPEN WS connection, registered on connect and
+	// dropped on close, regardless of whether that tab ever chats. It is what
+	// broadcastAll fans out over: the live call transcript has to reach the
+	// dashboard, which is the one tab that never sends a message.
+	broadcastConns map[string]func(wsServerEvent)
 }
 
 func New(cfg Config) *Server {
@@ -257,6 +266,7 @@ func New(cfg Config) *Server {
 		buffer:         cfg.WorkingBuffer,
 		heartbeat:      cfg.Heartbeat,
 		activeSessions: make(map[string]func(wsServerEvent)),
+		broadcastConns: make(map[string]func(wsServerEvent)),
 		bridgeRouter:   cfg.BridgeRouter,
 		bridgePrefs:    cfg.BridgePrefs,
 		turnStore:      cfg.Turns,
@@ -383,6 +393,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/surface/action", s.handleSurfaceAction)
 	mux.HandleFunc("/api/phone/ask", s.handlePhoneAsk)
 	mux.HandleFunc("/api/phone/contacts", s.handlePhoneContacts)
+	// The phone book is EDITABLE, not just readable: Jarvis learns a contact
+	// from a call and can get the name slightly wrong, and until now the boss
+	// had no way to fix it, rename it, or delete it.
+	mux.HandleFunc("/api/phone/contacts/save", s.handlePhoneContactSave)
+	mux.HandleFunc("/api/phone/contacts/delete", s.handlePhoneContactDelete)
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
 	mux.HandleFunc("/api/browser/session/", s.handleBrowserSession)
 	mux.HandleFunc("/api/workspace/download", s.handleWorkspaceDownload)
@@ -438,6 +453,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// the handler; /webhooks/ is exempt from the auth middleware.
 	if s.cfg.PhoneWebhook != nil {
 		mux.HandleFunc("/webhooks/openai-realtime", s.cfg.PhoneWebhook)
+	}
+	if s.cfg.PhoneAmdWebhook != nil {
+		mux.HandleFunc("/webhooks/twilio-amd", s.cfg.PhoneAmdWebhook)
 	}
 	if s.cfg.PhoneStatusWebhook != nil {
 		mux.HandleFunc("/webhooks/twilio-status", s.cfg.PhoneStatusWebhook)

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Bell } from "lucide-react";
+import { AlertTriangle, Bell, MessageSquareQuote } from "lucide-react";
 import { TileCard } from "./Section";
 import { RunIndicator } from "@/lib/runs/RunIndicator";
 import { SurfaceActionButton } from "./SurfaceActions";
@@ -56,6 +56,13 @@ export function SurfaceRow({
 
   const actions = item.actions ?? [];
 
+  // A message somebody left him on the phone is MAIL, and it should look like
+  // mail at a glance: a quote glyph and the caller's initial, never the same
+  // bell as a system alert. The row still renders through this one generic
+  // component, so nothing forks.
+  const isMessage = item.surface === "messages";
+  const from = typeof item.metadata?.from === "string" ? item.metadata.from : "";
+
   return (
     <div className="flex min-w-0 flex-col">
       <TileCard onClick={onClick} className="gap-3 p-3">
@@ -65,7 +72,17 @@ export function SurfaceRow({
             tile,
           )}
         >
-          <Bell className="size-4" aria-hidden />
+          {isMessage ? (
+            from ? (
+              <span className="text-xs font-semibold" aria-hidden>
+                {from.trim().charAt(0).toUpperCase()}
+              </span>
+            ) : (
+              <MessageSquareQuote className="size-4" aria-hidden />
+            )
+          ) : (
+            <Bell className="size-4" aria-hidden />
+          )}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

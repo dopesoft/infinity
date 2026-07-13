@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, BookUser, Building2, Grip, Loader2, Phone, PhoneIncoming, PhoneOutgoing, User } from "lucide-react";
+import { ArrowUp, BookUser, Building2, Grip, Loader2, Pencil, Phone, PhoneIncoming, PhoneOutgoing, Plus, Trash2, User } from "lucide-react";
 import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
 import { SurfaceRow } from "./SurfaceCard";
@@ -10,7 +10,7 @@ import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { ModalSection } from "@/components/ui/modal-content";
 import { useRuns } from "@/lib/runs";
 import { useWebSocket } from "@/lib/ws/provider";
-import { phoneAsk, phoneContacts, type PhoneContact } from "@/lib/api";
+import { deletePhoneContact, phoneAsk, phoneContacts, savePhoneContact, type PhoneContact } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { DashboardItem } from "@/lib/dashboard/types";
 
@@ -34,6 +34,9 @@ type LiveCall = {
   callId: string;
   direction: "inbound" | "outbound";
   number: string;
+  /** Who that is, per the phone book. "Incoming call" told you nothing when
+   *  Jarvis knew perfectly well it was Ariana. */
+  name: string;
   lines: LiveLine[];
   done: boolean;
   summary: string;
@@ -77,8 +80,9 @@ export function PhoneCard({
         const fresh: LiveCall =
           cur && cur.callId === p.call_id
             ? { ...cur }
-            : { callId: p.call_id, direction: p.direction, number: "", lines: [], done: false, summary: "", status: "" };
+            : { callId: p.call_id, direction: p.direction, number: "", name: "", lines: [], done: false, summary: "", status: "" };
         if (p.number) fresh.number = p.number;
+        if (p.name) fresh.name = p.name;
         if (p.done) {
           fresh.done = true;
           fresh.summary = p.summary ?? "";
@@ -298,6 +302,7 @@ export function PhoneCard({
       </Section>
 
       <ContactBookModal
+        onChanged={() => void phoneContacts().then(setContacts)}
         open={bookOpen}
         onOpenChange={setBookOpen}
         contacts={contacts}
@@ -316,6 +321,7 @@ export function PhoneCard({
         onOpenChange={setModalOpen}
         title={
           (direction === "outbound" ? "Outgoing call" : "Incoming call") +
+          (live?.name ? (direction === "outbound" ? " to " : " from ") + live.name : "") +
           (live?.number ? " · " + live.number : "")
         }
         description={
@@ -383,25 +389,35 @@ function ContactIcon({ kind, className }: { kind?: string; className?: string })
   return <Phone className={className} aria-hidden />;
 }
 
-/* ContactBookModal - the dial-back book. ResponsiveModal owns the
+/* ContactBookModal - the phone book. ResponsiveModal owns the
  * dialog-vs-drawer split (drawer on mobile, per the house rule). Desktop:
- * master-detail - searchable name list left, selected contact's call
- * history right. Mobile: the same two panes stacked as list → detail
+ * master-detail - searchable name list left, selected contact's detail
+ * right. Mobile: the same two panes stacked as list → detail
  * (tap a name, back arrow returns).
+ *
+ * The book is EDITABLE here, because Jarvis learns contacts from calls and can
+ * mishear a name, and a book you cannot correct fills up with rubbish. Add,
+ * rename, re-note, delete. Deleting confirms INLINE rather than stacking a
+ * second modal on top of this one: nested dialogs are a trap on a phone.
  */
 function ContactBookModal({
   open,
   onOpenChange,
   contacts,
   onCall,
+  onChanged,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   contacts: PhoneContact[] | null;
   onCall: (c: PhoneContact) => void;
+  onChanged: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<PhoneContact | null>(null);
+  // null = not editing. A contact = editing it. "new" = adding one.
+  const [editing, setEditing] = useState<PhoneContact | "new" | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -414,25 +430,53 @@ function ContactBookModal({
 
   // History entries: newest first, split on the rolling separator.
   const entries = useMemo(
-    () => (selected?.history ?? selected?.last ?? "").split(" | Previously: ").filter(Boolean),
+    () => (selected?.history ?? "").split(" | Previously: ").filter(Boolean),
     [selected],
   );
+
+  // Leaving a contact drops any half-finished edit, so reopening never lands
+  // you in a stale form.
+  const select = (c: PhoneContact | null) => {
+    setSelected(c);
+    setEditing(null);
+    setConfirmDelete(false);
+  };
+
+  const remove = async () => {
+    if (!selected) return;
+    await deletePhoneContact(selected.number);
+    select(null);
+    onChanged();
+  };
 
   return (
     <ResponsiveModal open={open} onOpenChange={onOpenChange} title="Contacts" size="lg">
       <div className="grid min-h-[40dvh] grid-cols-1 gap-3 lg:grid-cols-[240px_1fr]">
         {/* Left: search + names. On mobile this pane hides once a contact is
             selected (detail takes over with a back control). */}
-        <div className={cn("min-w-0 space-y-2", selected && "hidden lg:block")}>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search contacts…"
-            inputMode="search"
-            autoCapitalize="none"
-            className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm transition-colors focus:border-foreground/40 focus:outline-none"
-          />
+        <div className={cn("min-w-0 space-y-2", (selected || editing) && "hidden lg:block")}>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search contacts…"
+              inputMode="search"
+              autoCapitalize="none"
+              className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm transition-colors focus:border-foreground/40 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setSelected(null);
+                setEditing("new");
+              }}
+              aria-label="Add a contact"
+              className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Plus className="size-4" />
+            </button>
+          </div>
           <div className="max-h-[45dvh] space-y-0.5 overflow-y-auto scroll-touch">
             {contacts === null ? (
               <div className="flex items-center justify-center p-4">
@@ -440,14 +484,14 @@ function ContactBookModal({
               </div>
             ) : filtered.length === 0 ? (
               <p className="p-3 text-center text-xs text-muted-foreground">
-                {query ? "No matches." : "No call history yet."}
+                {query ? "No matches." : "No contacts yet. Add one, or Jarvis will as he calls."}
               </p>
             ) : (
               filtered.map((c) => (
                 <button
                   key={c.number}
                   type="button"
-                  onClick={() => setSelected(c)}
+                  onClick={() => select(c)}
                   className={cn(
                     "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent",
                     selected?.number === c.number && "bg-accent",
@@ -456,9 +500,10 @@ function ContactBookModal({
                   <ContactIcon kind={c.kind} className="size-4 shrink-0 text-muted-foreground" />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-sm font-medium">{c.name ?? c.number}</span>
-                    {c.name ? (
-                      <span className="truncate text-[11px] text-muted-foreground">{c.number}</span>
-                    ) : null}
+                    <span className="truncate text-[11px] text-muted-foreground">
+                      {c.name ? c.number : "unnamed"}
+                      {c.location ? ` · ${c.location}` : ""}
+                    </span>
                   </span>
                 </button>
               ))
@@ -466,15 +511,28 @@ function ContactBookModal({
           </div>
         </div>
 
-        {/* Right: the selected contact's story. */}
-        <div className={cn("min-w-0", !selected && "hidden lg:block")}>
-          {selected ? (
+        {/* Right: the selected contact, or the add/edit form. */}
+        <div className={cn("min-w-0", !selected && !editing && "hidden lg:block")}>
+          {editing ? (
+            <ContactForm
+              contact={editing === "new" ? null : editing}
+              onCancel={() => {
+                setEditing(null);
+                if (editing === "new") setSelected(null);
+              }}
+              onSaved={() => {
+                setEditing(null);
+                select(null);
+                onChanged();
+              }}
+            />
+          ) : selected ? (
             <div className="space-y-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <button
                     type="button"
-                    onClick={() => setSelected(null)}
+                    onClick={() => select(null)}
                     className="mb-1 text-[11px] font-medium text-muted-foreground hover:text-foreground lg:hidden"
                   >
                     ← All contacts
@@ -483,24 +541,81 @@ function ContactBookModal({
                     <ContactIcon kind={selected.kind} className="size-4 shrink-0 text-muted-foreground" />
                     {selected.name ?? selected.number}
                   </h3>
-                  <p className="text-xs text-muted-foreground">{selected.number}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {selected.number}
+                    {selected.location ? ` · ${selected.location}` : ""}
+                  </p>
                 </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(selected)}
+                    aria-label="Edit contact"
+                    className="inline-flex size-9 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCall(selected)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:opacity-90"
+                  >
+                    <Phone className="size-3.5" />
+                    Call
+                  </button>
+                </div>
+              </div>
+
+              {selected.note ? (
+                <p className="break-words text-xs leading-relaxed text-muted-foreground">{selected.note}</p>
+              ) : null}
+
+              <div className="max-h-[34dvh] space-y-2 overflow-y-auto scroll-touch">
+                {entries.length === 0 ? (
+                  <div className="rounded-xl border border-dashed bg-card/30 p-3 text-center text-xs text-muted-foreground">
+                    No calls with them yet.
+                  </div>
+                ) : (
+                  entries.map((e, i) => (
+                    <div key={i} className="rounded-xl border bg-card/40 p-3">
+                      <p className="break-words text-xs leading-relaxed">{e}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Delete confirms in place. A second modal over a drawer is a
+                  trap on a phone: you cannot see what you are agreeing to. */}
+              {confirmDelete ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3">
+                  <p className="min-w-0 flex-1 text-xs">
+                    Remove {selected.name ?? selected.number} from your phone book?
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="h-9 rounded-lg border border-input px-3 text-xs font-medium hover:bg-accent"
+                  >
+                    Keep
+                  </button>
+                  <button
+                    type="button"
+                    onClick={remove}
+                    className="h-9 rounded-lg bg-danger px-3 text-xs font-medium text-white hover:opacity-90"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => onCall(selected)}
-                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-brand-foreground hover:opacity-90"
+                  onClick={() => setConfirmDelete(true)}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-danger"
                 >
-                  <Phone className="size-3.5" />
-                  Call
+                  <Trash2 className="size-3.5" />
+                  Remove contact
                 </button>
-              </div>
-              <div className="max-h-[40dvh] space-y-2 overflow-y-auto scroll-touch">
-                {entries.map((e, i) => (
-                  <div key={i} className="rounded-xl border bg-card/40 p-3">
-                    <p className="break-words text-xs leading-relaxed">{e}</p>
-                  </div>
-                ))}
-              </div>
+              )}
             </div>
           ) : (
             <div className="flex h-full min-h-32 items-center justify-center rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
@@ -510,5 +625,181 @@ function ContactBookModal({
         </div>
       </div>
     </ResponsiveModal>
+  );
+}
+
+/* ContactForm - add or correct one contact.
+ *
+ * Deliberately short: name and number are all that is required, everything else
+ * earns its place. The number is validated by the SERVER (the same rule that
+ * decides what is dialable), and its message is shown verbatim, so the form can
+ * never accept something that would fail at dial time.
+ */
+function ContactForm({
+  contact,
+  onCancel,
+  onSaved,
+}: {
+  contact: PhoneContact | null;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(contact?.name ?? "");
+  const [number, setNumber] = useState(contact?.number ?? "");
+  const [kind, setKind] = useState<"person" | "org">(contact?.kind ?? "person");
+  const [location, setLocation] = useState(contact?.location ?? "");
+  const [note, setNote] = useState(contact?.note ?? "");
+  const [aliases, setAliases] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    const res = await savePhoneContact({
+      name: name.trim(),
+      number: number.trim(),
+      kind,
+      location: location.trim(),
+      note: note.trim(),
+      aliases: aliases.split(",").map((a) => a.trim()).filter(Boolean),
+      was: contact?.number,
+    });
+    setSaving(false);
+    if (res.ok) onSaved();
+    else setError(res.error);
+  };
+
+  const canSave = name.trim() !== "" && number.trim() !== "" && !saving;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-base font-semibold tracking-tight">
+          {contact ? "Edit contact" : "New contact"}
+        </h3>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <div className="space-y-2.5">
+        <Field label="Name">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ariana"
+            autoCapitalize="words"
+            className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm focus:border-foreground/40 focus:outline-none"
+          />
+        </Field>
+
+        <Field label="Number">
+          <input
+            type="tel"
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            placeholder="929-310-0906"
+            inputMode="tel"
+            className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm focus:border-foreground/40 focus:outline-none"
+          />
+        </Field>
+
+        {/* Person or business: a two-up toggle, not a select. One tap, and you
+            can see both options without opening anything. */}
+        <Field label="Type">
+          <div className="grid grid-cols-2 gap-1.5">
+            {(["person", "org"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setKind(k)}
+                className={cn(
+                  "inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors",
+                  kind === k
+                    ? "border-foreground/30 bg-accent text-foreground"
+                    : "border-input text-muted-foreground hover:bg-accent/50",
+                )}
+              >
+                <ContactIcon kind={k} className="size-3.5" />
+                {k === "person" ? "Person" : "Business"}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        {kind === "org" ? (
+          <Field label="Which one" hint="So Jarvis never asks you twice">
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="The one on Preston Road"
+              className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm focus:border-foreground/40 focus:outline-none"
+            />
+          </Field>
+        ) : null}
+
+        <Field label="Also called" hint="Comma separated, so “call my wife” works">
+          <input
+            type="text"
+            value={aliases}
+            onChange={(e) => setAliases(e.target.value)}
+            placeholder="my wife, Ari"
+            autoCapitalize="none"
+            className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm focus:border-foreground/40 focus:outline-none"
+          />
+        </Field>
+
+        <Field label="Note" hint="Anything Jarvis should know about them">
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            placeholder="My wife. Mother of Valentino."
+            className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm focus:border-foreground/40 focus:outline-none"
+          />
+        </Field>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-danger/40 bg-danger/10 p-2.5 text-xs text-danger">{error}</p>
+      ) : null}
+
+      <button
+        type="button"
+        disabled={!canSave}
+        onClick={save}
+        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-brand text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+      >
+        {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+        {contact ? "Save changes" : "Add to phone book"}
+      </button>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="flex items-baseline gap-2">
+        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+        {hint ? <span className="truncate text-[10px] text-muted-foreground/70">{hint}</span> : null}
+      </span>
+      {children}
+    </label>
   );
 }

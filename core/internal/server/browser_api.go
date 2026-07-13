@@ -108,7 +108,7 @@ func (s *Server) browserControl(w http.ResponseWriter, r *http.Request, id strin
 // final done+summary) to every connected tab. Calls aren't bound to a chat
 // session — the Phone card lives on the dashboard — so this rides
 // broadcastAll rather than the per-session sender.
-func (s *Server) EmitPhoneLive(callID, direction, number, speaker, text string, done bool, summary, status string) {
+func (s *Server) EmitPhoneLive(callID, direction, number, name, speaker, text string, done bool, summary, status string) {
 	if s == nil || callID == "" {
 		return
 	}
@@ -118,6 +118,7 @@ func (s *Server) EmitPhoneLive(callID, direction, number, speaker, text string, 
 			CallID:    callID,
 			Direction: direction,
 			Number:    number,
+			Name:      name,
 			Speaker:   speaker,
 			Text:      text,
 			Done:      done,
