@@ -80,10 +80,13 @@ type Report struct {
 	TrainingExamples       plasticity.ExtractResult `json:"training_examples"`
 	TrainingEmbedded       int                      `json:"training_embedded"`
 	WorldModel             worldmodel.ExtractReport `json:"world_model"`
+	// People is who he knows: the phone book synced into the world model, plus
+	// the durable facts learned about them from what was actually said.
+	People worldmodel.PeopleReport `json:"people"`
 	// SurfaceExpired counts inbox cards dismissed because their TTL passed —
 	// the informational run outcomes and self-heal receipts that carry a 36h
 	// expiry precisely so they don't accumulate in "Surfaced by Jarvis".
-	SurfaceExpired int         `json:"surface_expired"`
+	SurfaceExpired int          `json:"surface_expired"`
 	Errors         []StageError `json:"errors,omitempty"`
 	Options        Options      `json:"options"`
 	// Highlights carries the run's REAL artifacts (lesson texts, memory
@@ -252,7 +255,8 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 			}
 			report.TrainingEmbedded = n
 		}
-		world, err := worldmodel.NewStore(deps.Pool, deps.Logger).ExtractFromRecentObservations(ctx, 100)
+		wm := worldmodel.NewStore(deps.Pool, deps.Logger)
+		world, err := wm.ExtractFromRecentObservations(ctx, 100)
 		if err != nil {
 			if report.HasCoreChanges() {
 				addErr("worldmodel_extract", err)
@@ -261,6 +265,26 @@ func RunNightlyCognition(ctx context.Context, deps Deps, opts Options) (Report, 
 			}
 		} else {
 			report.WorldModel = world
+		}
+
+		// The people in his life. The extractor above is regex-only: it can see an
+		// email address, never a person, so everyone the boss actually knows was
+		// invisible to the world model. This learns them, and the durable facts
+		// about them (a birthday, a relationship), which is what lets Jarvis say
+		// "Phumi's birthday is on Friday" a year after the call that taught him.
+		if n, err := wm.SyncContacts(ctx); err != nil {
+			addErr("contacts_sync", err)
+		} else {
+			report.People.Contacts = n
+		}
+		if deps.Drafter != nil {
+			people, err := wm.ExtractPeopleFacts(ctx, deps.Drafter, 60)
+			if err != nil {
+				addErr("people_extract", err)
+			} else {
+				people.Contacts = report.People.Contacts
+				report.People = people
+			}
 		}
 	}
 

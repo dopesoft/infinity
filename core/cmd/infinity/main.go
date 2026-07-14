@@ -35,6 +35,7 @@ func main() {
 	root.AddCommand(migrateCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(consolidateCmd())
+	root.AddCommand(newBackfillCircleCmd())
 	root.AddCommand(reflectCmd())
 	root.AddCommand(gymCmd())
 	root.AddCommand(vapidCmd())

@@ -116,6 +116,11 @@ type Manager struct {
 	// task/follow-up (Rule #1b: Go always persists what the summarizer flags).
 	followupCreator func(ctx context.Context, title, body string)
 
+	// capture records a finished call into the boss's memory (see memory.go).
+	// Without it, an entire channel bypasses the memory-first invariant and the
+	// Jarvis he chats to never learns that his calls happened at all.
+	capture CaptureFunc
+
 	// liveMu guards liveCalls: the sockets of calls in flight, keyed by brief
 	// id. Twilio's answering-machine detection lands on a webhook, in a
 	// different goroutine from the monitor, and has to be able to speak into the

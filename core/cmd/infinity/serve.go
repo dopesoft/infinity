@@ -1233,6 +1233,14 @@ func serveCmd() *cobra.Command {
 						// recent memory. Turns "you have a meeting in 30
 						// min" from manual mental work into a heartbeat hit.
 						proactive.CalendarPrepChecklist(pool),
+						// The dates that come back. Reads the recurring dates the
+						// entity extractor has learned about the people in his life
+						// (a birthday mentioned on a call, an anniversary he told
+						// Jarvis about) and raises them a week out, so "wish Phumi
+						// a happy birthday" this year means "her birthday is on
+						// Friday, shall I ring her?" next year. Generic: it knows
+						// nothing about birthdays, only about dates that recur.
+						proactive.AnniversaryChecklist(pool),
 						// Substrate → dashboard: mirror the agent's goals and
 						// anything broken (failed extensions, regressed
 						// capabilities) onto the generic surface contract, so
@@ -2272,6 +2280,24 @@ func serveCmd() *cobra.Command {
 				// and must not depend on the model remembering to do it. The
 				// session row, run tracking, and reporting all live in
 				// phone/errand.go.
+				// Calls enter memory through the SAME hook pipeline as everything
+				// else (StripSecrets → embed → observation → compression), so a
+				// call compresses into memories with provenance, links to its
+				// neighbours, and feeds the entity extractor that learns who these
+				// people are. Without this, an entire channel bypasses the
+				// memory-first invariant: chat-Jarvis would not know the boss had
+				// spoken to anyone.
+				if pipeline != nil {
+					phoneManager.SetCapture(func(ctx context.Context, sessionID, text string, payload map[string]any) {
+						pipeline.Emit(hooks.Event{
+							Name:      hooks.TaskCompleted,
+							SessionID: sessionID,
+							Text:      text,
+							Payload:   payload,
+						})
+					})
+				}
+
 				if loop != nil {
 					phoneManager.SetErrandRunner(func(ctx context.Context, sessionID, prompt string) (string, error) {
 						// Drain the run's events to capture the assistant's final

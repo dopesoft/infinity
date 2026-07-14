@@ -916,6 +916,12 @@ func (m *Manager) deliverOutcome(callID, briefID, direction string, brief *Brief
 			Tag:   "phone-" + callID,
 		})
 	}
+	// Into the brain. Everything above is a RECORD of the call; this is what makes
+	// the call part of what Jarvis KNOWS: retrievable in chat, compressed into
+	// memories with provenance, and read by the entity extractor that learns who
+	// these people are and what matters to them.
+	m.rememberCall(ctx, callID, direction, number, m.callerLabel(ctx, number), brief, summary, lines, dur)
+
 	infoLog.Printf("phone: %s call %s ended after %s (%d transcript lines)", direction, callID, dur.Round(time.Second), len(lines))
 }
 
