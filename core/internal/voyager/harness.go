@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/eval"
@@ -109,12 +110,22 @@ func (m *Manager) loadVerifyContract(ctx context.Context, skillName string) veri
 	return c
 }
 
+// markTestSession pre-stamps the ephemeral session as a container so it stays
+// out of the boss's sessions list (which shows kind='user' only). This MUST run
+// before runTurn: the turn's own memory.Store.OpenSession upserts the same id,
+// and its ON CONFLICT deliberately doesn't touch kind, so whichever row lands
+// first decides. Losing that race means a phantom blank session in his history
+// for the length of the verify, so a failure here is logged, never swallowed —
+// 'skill_test' was missing from mem_sessions_kind_check until migration 184 and
+// this Exec had failed silently on every run since it was written.
 func (m *Manager) markTestSession(ctx context.Context, sessionID, skillName string) {
-	_, _ = m.pool.Exec(ctx, `
-		INSERT INTO mem_sessions (id, kind, started_at)
-		VALUES ($1::uuid, 'skill_test', NOW())
+	if _, err := m.pool.Exec(ctx, `
+		INSERT INTO mem_sessions (id, kind, origin_ref, started_at)
+		VALUES ($1::uuid, 'skill_test', $2::jsonb, NOW())
 		ON CONFLICT (id) DO NOTHING
-	`, sessionID)
+	`, sessionID, fmt.Sprintf(`{"kind":"skill_test","skill":%q}`, skillName)); err != nil {
+		log.Printf("voyager: mark test session for skill %q: %v (verification will surface as a blank session)", skillName, err)
+	}
 }
 
 func (m *Manager) countTestArtifacts(ctx context.Context, sessionID string) int {

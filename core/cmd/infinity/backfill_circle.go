@@ -136,10 +136,14 @@ func rememberPastCalls(ctx context.Context, pool *pgxpool.Pool, store *memory.St
 			continue
 		}
 
+		// kind='backfill', not 'user': this session is only the FK parent the
+		// observation requires, never a conversation. The sessions list shows
+		// kind='user', so stamping 'user' here put a dozen un-openable blank
+		// rows in the boss's history (migration 184).
 		sessionID := uuid.NewString()
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO mem_sessions (id, kind, origin_ref, started_at, ended_at)
-			VALUES ($1::uuid, 'user', '{"kind":"phone_call","backfilled":true}'::jsonb, NOW(), NOW())
+			VALUES ($1::uuid, 'backfill', '{"kind":"phone_call","backfilled":true}'::jsonb, NOW(), NOW())
 			ON CONFLICT (id) DO NOTHING`, sessionID); err != nil {
 			return n, fmt.Errorf("open session for %s: %w", c.id, err)
 		}
