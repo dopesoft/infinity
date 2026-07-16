@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import DOMPurify from "dompurify";
-import { AlertCircle, Eye } from "lucide-react";
+import { AlertCircle, AlignLeft, Eye } from "lucide-react";
+import { Markdown } from "@/components/chat/Markdown";
 import { cn } from "@/lib/utils";
 
 export type ModalSectionTone = "default" | "error" | "warning" | "success";
@@ -424,6 +425,147 @@ export function ModalHtml({ html, className }: { html: string; className?: strin
         style={{ height }}
       />
     </div>
+  );
+}
+
+/* ── Payload rendering ──────────────────────────────────────────────────────
+ *
+ * A tool-call payload is arbitrary nested JSON, and somewhere inside it is
+ * often the thing the boss actually needs to read: a blog post, an email
+ * body, a commit message, a document. `JSON.stringify` turns that into an
+ * escaped one-liner with literal \n between every paragraph, rendered in
+ * 11px mono. It's present but unreadable — which for an approval surface
+ * means the boss can't review what he's approving.
+ *
+ * The fix is one generic shape, driven by the DATA not the source: walk the
+ * payload, and any string long enough to be a document (see
+ * ARTIFACT_MIN_CHARS) is lifted out and rendered as markdown with real
+ * typography. Everything else stays JSON. No per-tool, per-vendor, or
+ * per-kind branch exists or should ever be added here — a Gmail draft body,
+ * a GitHub file's `input.content`, and a tool nobody has written yet all get
+ * the same treatment for the same reason.
+ */
+
+/** Minimum string length for a payload value to count as a readable artifact
+ *  rather than a scalar. ~400 chars is comfortably longer than any id, URL,
+ *  path, SHA, or one-line message, and comfortably shorter than the shortest
+ *  thing worth reading as prose. */
+export const ARTIFACT_MIN_CHARS = 400;
+
+/** Depth cap for the payload walk. Real payloads nest 2-3 deep; this only
+ *  exists so a pathological/cyclic object can't hang the render. */
+const ARTIFACT_MAX_DEPTH = 8;
+
+export type TextArtifact = { path: string; text: string };
+
+/** Deterministic thousands separator. Avoids `toLocaleString`, which renders
+ *  differently on the server (UTC/en-US) than in the client's locale and so
+ *  trips hydration warnings. */
+function countLabel(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/** Walks arbitrary nested JSON and splits it in two:
+ *
+ *    artifacts - every string ≥ minChars, tagged with its key path
+ *                (`input.content`, `files[0].body`, …) so the boss can see
+ *                exactly which field he's reading.
+ *    rest      - the same structure with those strings swapped for a short
+ *                placeholder pointing at the artifact block.
+ *
+ *  Nothing is dropped: every byte is still on screen, just in the form that
+ *  makes it legible. Exported for testing/reuse; `ModalPayload` is the
+ *  component you normally want. */
+export function extractTextArtifacts(
+  value: unknown,
+  minChars: number = ARTIFACT_MIN_CHARS,
+): { artifacts: TextArtifact[]; rest: unknown } {
+  const artifacts: TextArtifact[] = [];
+
+  const walk = (node: unknown, path: string, depth: number): unknown => {
+    if (typeof node === "string") {
+      if (node.length < minChars) return node;
+      // Unkeyed root string still deserves a label.
+      const key = path || "value";
+      artifacts.push({ path: key, text: node });
+      return `↑ shown above as “${key}” (${countLabel(node.length)} chars)`;
+    }
+    if (node === null || typeof node !== "object") return node;
+    if (depth >= ARTIFACT_MAX_DEPTH) return node;
+    if (Array.isArray(node)) {
+      return node.map((v, i) => walk(v, `${path}[${i}]`, depth + 1));
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      out[k] = walk(v, path ? `${path}.${k}` : k, depth + 1);
+    }
+    return out;
+  };
+
+  const rest = walk(value, "", 0);
+  return { artifacts, rest };
+}
+
+/** A long text artifact rendered in its NATIVE form — markdown with real
+ *  typography — instead of an escaped JSON string in a mono block.
+ *
+ *  Scrolls internally (capped in `dvh` so it works on a phone drawer as well
+ *  as a desktop dialog) so a 10k-char document can never blow out the modal
+ *  or bury the approve/deny buttons below a mile of prose. */
+export function ModalArtifact({
+  path,
+  text,
+  className,
+}: {
+  path: string;
+  text: string;
+  className?: string;
+}) {
+  return (
+    <ModalSection
+      label="Artifact"
+      icon={<AlignLeft className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+      meta={`${path} · ${countLabel(text.length)} chars`}
+      className={className}
+    >
+      <div className="scroll-touch max-h-[45dvh] min-w-0 max-w-full overflow-y-auto overscroll-contain">
+        <Markdown text={text} />
+      </div>
+    </ModalSection>
+  );
+}
+
+/** An arbitrary JSON payload, rendered so a human can actually review it.
+ *
+ *  Long strings surface first as readable `ModalArtifact` blocks (labeled
+ *  with their key path); the remaining structure follows as the JSON block,
+ *  with each lifted string replaced by a pointer to its block. Use this
+ *  anywhere a raw `JSON.stringify` of a tool payload would otherwise go. */
+export function ModalPayload({
+  value,
+  meta,
+  label,
+  minChars = ARTIFACT_MIN_CHARS,
+}: {
+  value: unknown;
+  /** right-aligned eyebrow on the JSON block (typically the tool name) */
+  meta?: React.ReactNode;
+  label?: string;
+  minChars?: number;
+}) {
+  const { artifacts, rest } = React.useMemo(
+    () => extractTextArtifacts(value, minChars),
+    [value, minChars],
+  );
+  return (
+    <>
+      {artifacts.map((a) => (
+        <ModalArtifact key={a.path} path={a.path} text={a.text} />
+      ))}
+      <ModalSection label={label} meta={meta}>
+        <ModalPre mono>{JSON.stringify(rest, null, 2)}</ModalPre>
+      </ModalSection>
+    </>
   );
 }
 

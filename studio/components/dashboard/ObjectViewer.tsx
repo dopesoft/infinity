@@ -54,6 +54,7 @@ import {
   ModalDl,
   ModalField,
   ModalHtml,
+  ModalPayload,
   ModalPre,
   ModalSection,
   ModalUrl,
@@ -1665,14 +1666,35 @@ function ApprovalBody({ a }: { a: Approval }) {
         ) : null}
       </div>
 
-      {a.rationale ? (
-        <p className="text-[13px] leading-relaxed text-foreground/85">{a.rationale}</p>
+      {/* What will happen, in the gate's plain words. Leads, because it's the
+          thing the boss is actually deciding on. */}
+      {a.preview ? (
+        <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground/90">
+          {a.preview}
+        </p>
       ) : null}
 
+      {/* Why the gate fired. Steps back to a footnote when a preview is
+          carrying the explanation, stays primary when it's all we have
+          (code proposals and curiosity questions have no preview). */}
+      {a.rationale ? (
+        <p
+          className={cn(
+            "break-words leading-relaxed",
+            a.preview
+              ? "text-[12px] text-muted-foreground"
+              : "text-[13px] text-foreground/85",
+          )}
+        >
+          {a.rationale}
+        </p>
+      ) : null}
+
+      {/* Long strings in the args (a blog post, an email body, a document)
+          surface as readable markdown above the JSON. Generic — the payload's
+          shape decides, not the tool's name. */}
       {a.toolCall ? (
-        <ModalSection meta={a.toolCall.name}>
-          <ModalPre mono>{JSON.stringify(a.toolCall.args, null, 2)}</ModalPre>
-        </ModalSection>
+        <ModalPayload value={a.toolCall.args} meta={a.toolCall.name} />
       ) : null}
 
       {a.diff ? (

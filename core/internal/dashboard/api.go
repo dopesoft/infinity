@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/connectors"
+	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -339,6 +340,11 @@ type Approval struct {
 	FilePath  string `json:"filePath,omitempty"`
 	RiskLevel string `json:"riskLevel,omitempty"`
 	Rationale string `json:"rationale,omitempty"`
+	// Preview is the gate's human-readable card text ("You asked me to: … /
+	// So I want to: … / This can't be undone."). It answers WHAT will happen
+	// to the boss's stuff; Rationale answers WHY the gate fired. They are
+	// different questions, so both ship — Preview never overwrites Rationale.
+	Preview string `json:"preview,omitempty"`
 	// Curiosity specific
 	Question string `json:"question,omitempty"`
 	Context  string `json:"context,omitempty"`
@@ -1362,9 +1368,13 @@ func (a *API) loadApprovals(ctx context.Context) ([]Approval, error) {
 			}
 			ap.ToolCall = &ToolCall{Name: toolName, Args: args}
 		}
-		if preview != "" && reasoning == "" {
-			ap.Rationale = preview
-		}
+		// Preview and reasoning answer different questions, so surface both.
+		// This used to read `if preview != "" && reasoning == ""` — but every
+		// gate sets a non-empty Reasoning constant, so that condition was never
+		// true and the human-readable preview was ALWAYS discarded. The boss
+		// only ever saw the gate's boilerplate "why", never the plain-words
+		// "what will happen to your stuff".
+		ap.Preview = proactive.PreviewSummary(preview)
 		out = append(out, ap)
 	}
 	trustRows.Close()

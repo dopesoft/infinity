@@ -148,7 +148,12 @@ export type Approval = {
   diff?: string;
   filePath?: string;
   riskLevel?: "low" | "medium" | "high" | "critical";
+  // why the gate fired (the gate's own reasoning)
   rationale?: string;
+  // what will actually happen, in plain words, as the gate framed it for the
+  // boss ("You asked me to: … / So I want to: … / This can't be undone.").
+  // Complements `rationale` rather than replacing it.
+  preview?: string;
   // populated for curiosity
   question?: string;
   context?: string;

@@ -1306,6 +1306,17 @@ func serveCmd() *cobra.Command {
 						proactive.ExtensionAuthChecklist(extManager),
 					))
 				heartbeat.Start(cmd.Context())
+				// TrustExecutor: run the actions the boss approved AFTER the
+				// gate that queued them gave up waiting. Every gate blocks
+				// for a bounded WaitTimeout (15 min) and then abandons the
+				// call, so an approval that lands on the boss's schedule
+				// rather than the agent's - reading a drafted post hours
+				// later - previously left the row at 'approved' with nothing
+				// to run it. Shares trustStore with every gate and the API,
+				// and the same registry the agent loop executes against, so
+				// deferred approval works for whatever gets gated next
+				// without touching this file again.
+				proactive.NewTrustExecutor(trustStore, registry).Start(cmd.Context())
 				// IntentFlow classification runs on the boss's active model
 				// (via activeModel) instead of being Anthropic-gated — so it
 				// actually fires under a ChatGPT/Gemini brain.

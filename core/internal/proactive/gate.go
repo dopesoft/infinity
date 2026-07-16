@@ -568,10 +568,30 @@ func buildPreview(ctx context.Context, toolName string, input map[string]any) st
 		if len(raw) > 3584 {
 			raw = append(raw[:3581], []byte("...")...)
 		}
-		b.WriteString("\n\n--- technical details ---\n")
+		b.WriteString(previewTechnicalMarker)
 		b.Write(raw)
 	}
 	return b.String()
+}
+
+// previewTechnicalMarker separates the human-readable head of a preview (the
+// "you asked me to / so I want to / this can't be undone" plain-words part)
+// from the raw tool JSON buildPreview appends underneath it for exactness.
+const previewTechnicalMarker = "\n\n--- technical details ---\n"
+
+// PreviewSummary returns just the human-readable head of a preview string,
+// dropping the technical-details JSON tail.
+//
+// Surfaces that already render the tool args themselves (the dashboard
+// ObjectViewer renders `toolCall.args` as its own block) use this so the boss
+// reads the plain-words explanation once and the JSON once — not the JSON
+// twice. Knowledge of the preview's layout stays in the package that builds
+// it, so callers never string-match the marker themselves.
+func PreviewSummary(preview string) string {
+	if i := strings.Index(preview, previewTechnicalMarker); i >= 0 {
+		return strings.TrimSpace(preview[:i])
+	}
+	return strings.TrimSpace(preview)
 }
 
 // shellVerbEffects translates the command word of a shell invocation into what
