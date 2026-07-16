@@ -117,6 +117,28 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	// repopulates the in-memory map), but the list view should never need
 	// that round-trip.
 	if s.pool != nil {
+		// Two independent reasons a session row is not history the boss wants:
+		//
+		//   kind <> 'user'  — background machinery (cron, heartbeat, voyager,
+		//     the verification harness, the phone backfill's FK containers).
+		//     It runs in sessions on purpose; those just aren't his.
+		//
+		//   nothing to render — the boss's rule, verbatim: "i dont care if we
+		//     secretly use sessions behind the scenes but an empty session is of
+		//     no use to me." So the list offers a session only when the
+		//     transcript endpoint would actually put something on screen. This
+		//     is deliberately a property of the DATA, not of the writer's good
+		//     intentions: any present or future caller that opens a session and
+		//     writes nothing readable is invisible here for free, whatever kind
+		//     it stamps and whether or not it remembered to stamp one. That's
+		//     what keeps the blank rows from coming back a third time.
+		//
+		// A brand-new live session legitimately has nothing yet — it's excluded
+		// here and re-added from the `live` map below, so it still shows.
+		//
+		// msg_count uses the same predicate rather than COUNT(*) over every
+		// observation: the raw count is what advertised the backfill's blank
+		// sessions as "1 message" and then showed an empty screen.
 		rows, err := s.pool.Query(r.Context(), `
 			SELECT s.id::text,
 			       COALESCE(s.name, ''),
@@ -127,10 +149,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(s.project_template, ''),
 			       COALESCE(s.dev_port, 0),
 			       s.last_run_at,
-			       COALESCE((SELECT COUNT(*) FROM mem_observations o WHERE o.session_id = s.id), 0) AS msg_count
+			       COALESCE((SELECT COUNT(*) FROM mem_observations o
+			                  WHERE o.session_id = s.id
+			                    AND o.hook_name IN (`+renderableHooksSQL+`)), 0) AS msg_count
 			  FROM mem_sessions s
 			 WHERE s.deleted_at IS NULL
 			   AND COALESCE(s.kind, 'user') = 'user'
+			   AND `+sessionHasRenderableSQL+`
 			 ORDER BY COALESCE(s.last_run_at, s.started_at) DESC
 			 LIMIT $1
 		`, limit)

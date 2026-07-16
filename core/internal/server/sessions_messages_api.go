@@ -10,6 +10,48 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
+// renderableHooksSQL is the hook whitelist this file's transcript query reads.
+// An observation under any other hook_name is invisible in the UI, no matter
+// what it contains.
+//
+// It lives here, as one const, because handleSessions in api.go filters the
+// sessions LIST on the same definition (sessionHasRenderableSQL below). The
+// boss's rule: an empty session is of no use to him, so the list must never
+// offer him a session this file would render as nothing. Two hand-maintained
+// copies of the whitelist would drift on the first new hook and put the blank
+// rows straight back in his history — so add a hook HERE and both agree.
+const renderableHooksSQL = `'UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure'`
+
+// sessionHasRenderableSQL is a boolean SQL fragment, parameterless, expecting a
+// mem_sessions row aliased `s` in scope. True when the transcript query below
+// would emit at least one message for that session.
+//
+// It mirrors the renderer's per-row skips exactly, which is the whole point:
+//   - a tool card without a tool_call_id is dropped (`continue`), so it doesn't count
+//   - any other hook with empty text is dropped, so it doesn't count
+//   - an errored turn surfaces as the red card even with no observations, so it counts
+//
+// Anything that makes a session unreadable makes it unlisted, by construction.
+// No caller has to remember anything.
+const sessionHasRenderableSQL = `(
+	EXISTS (
+		SELECT 1 FROM mem_observations o
+		 WHERE o.session_id = s.id
+		   AND (
+		         (o.hook_name IN ('PostToolUse', 'PostToolUseFailure')
+		            AND btrim(COALESCE(o.payload->>'tool_call_id', '')) <> '')
+		      OR (o.hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+		            AND btrim(COALESCE(o.raw_text, '')) <> '')
+		   )
+	)
+	OR EXISTS (
+		SELECT 1 FROM mem_turns t
+		 WHERE t.session_id = s.id
+		   AND t.status = 'errored'
+		   AND btrim(COALESCE(t.error, '')) <> ''
+	)
+)`
+
 type sessionAttachmentDTO struct {
 	Name        string `json:"name"`
 	MimeType    string `json:"mime_type,omitempty"`
@@ -137,7 +179,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			       created_at
 			FROM mem_observations
 			WHERE session_id = $1
-			  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure')
+			  AND hook_name IN (`+renderableHooksSQL+`)
 			UNION ALL
 			SELECT 'TaskErrored'                       AS hook_name,
 			       COALESCE(error, '')                 AS raw_text,
