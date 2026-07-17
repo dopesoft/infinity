@@ -325,8 +325,17 @@ const defaultInfoTTL = 72 * time.Hour
 // boss's own inbox (nothing automated resolves it), and 'system' is the
 // Activity stream, which reads status='open' — expiring those would silently
 // erase his activity history rather than tidy his inbox.
+//
+// 'calls' is here for exactly the 'system' reason, learned the hard way on
+// 2026-07-16: it is the boss's CALL LOG, rendered by PhoneCard, and a log is
+// history, not an FYI card. The default 72h TTL quietly aged out every call he
+// had, three days to the minute after each one rang, and the card that promises
+// "Jarvis answers his line and logs every call here" emptied itself while he
+// watched. His words: "its my call log so i dont necesary want them to go away."
+// A call is a durable record of something that happened; nothing about it goes
+// stale, so nothing should retire it but him.
 var bossOwnedSurfaces = map[string]struct{}{
-	"followups": {}, "inbox": {}, "email": {}, "system": {},
+	"followups": {}, "inbox": {}, "email": {}, "system": {}, "calls": {},
 }
 
 // applyDefaultTTL gives action-less informational cards an expiry so they can't
