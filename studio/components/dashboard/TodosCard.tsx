@@ -19,11 +19,15 @@ export function TodosCard({
   onOpen,
   onToggle,
   onAdd,
+  matchHeight,
 }: {
   todos: Todo[];
   onOpen: (item: DashboardItem) => void;
   onToggle: (id: string) => void;
   onAdd: () => void;
+  /** Shared dashboard list height (px) off the Email card. See ScrollList
+   *  "matched" mode; null → fall back to the `max` row count. */
+  matchHeight?: number | null;
 }) {
   const open = todos.filter((t) => !t.done);
   const doneCount = todos.length - open.length;
@@ -38,7 +42,7 @@ export function TodosCard({
     >
       {/* No inner card wrapper - Section already provides chrome. */}
       <div className="space-y-2">
-        <ScrollList max={4}>
+        <ScrollList max={4} maxHeight={matchHeight ?? undefined}>
           <ul className="space-y-1">
             {open.map((t) => (
               <TodoRow

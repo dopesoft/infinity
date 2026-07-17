@@ -47,10 +47,20 @@ export function PhoneCard({
   items,
   delay = 0.25,
   onOpen,
+  matchHeight,
 }: {
   items: DashboardItem[];
   delay?: number;
   onOpen: (item: DashboardItem) => void;
+  /**
+   * The dashboard's shared list height (px), measured off the Email card.
+   * Call rows are ~2 lines where an email row is ~3, so clipping this list
+   * at 4 ROWS left it half the height of the card the grid stretched it to,
+   * with dead space below and a scrollbox that ended mid-card. Clipping at
+   * the shared pixel line instead fills the card with as many calls as fit
+   * and scrolls the rest. Null before the reference reports → `max` applies.
+   */
+  matchHeight?: number | null;
 }) {
   // ── call-errand field ────────────────────────────────────────────────
   const [open, setOpen] = useState(false);
@@ -287,7 +297,7 @@ export function PhoneCard({
       No calls yet, Jarvis answers his line and logs every call here.
           </div>
         ) : (
-          <ScrollList max={4}>
+          <ScrollList max={4} maxHeight={matchHeight ?? undefined}>
             <ul className="space-y-2">
               {items.map((it) => (
                 <li key={`${it.kind}-${it.data.id}`}>

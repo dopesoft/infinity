@@ -25,10 +25,20 @@ export function SurfacedCard({
   items,
   delay = 0.25,
   onOpen,
+  matchHeight,
 }: {
   items: DashboardItem[];
   delay?: number;
   onOpen: (item: DashboardItem) => void;
+  /**
+   * The dashboard's shared list height (px), measured off the Email card.
+   * See ScrollList "matched" mode: a row COUNT can't fill a card whose
+   * height is set by a sibling with taller rows, so this card clips to the
+   * same pixel line instead and shows however many of its own rows fit.
+   * Null before the reference reports (first paint, or Email is empty), in
+   * which case the `max` fallback applies.
+   */
+  matchHeight?: number | null;
 }) {
   return (
     <Section
@@ -42,7 +52,7 @@ export function SurfacedCard({
           Nothing surfaced right now.
         </div>
       ) : (
-        <ScrollList max={4}>
+        <ScrollList max={4} maxHeight={matchHeight ?? undefined}>
           <ul className="space-y-2">
             {items.map((it) => (
               <li key={`${it.kind}-${it.data.id}`}>

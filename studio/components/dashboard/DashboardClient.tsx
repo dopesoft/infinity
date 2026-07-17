@@ -117,6 +117,23 @@ export function DashboardClient() {
   // grouped by `surface` key. A new surface the agent invents renders here
   // automatically - no new state field, no new card component.
   const [surfaceItems, setSurfaceItems] = useState<Record<string, SurfaceItem[]>>({});
+  // The dashboard's ONE list height, in px, measured off the Email card and
+  // shared by every single-list card (Surfaced, Phone, Upcoming, Todos).
+  //
+  // Why a shared PIXEL height and not each card's own row count: the cards sit
+  // in `lg:grid-cols-3`, and grid columns stretch to a common height set by the
+  // tallest. Email's rows are ~3 lines, everyone else's are ~2, so a card that
+  // clipped itself at "4 rows" ended up half the height the grid had already
+  // given it — dead white space below, and a scrollbox that stopped mid-card
+  // while 7 more calls sat just out of reach. Row counts cannot fill a shared
+  // height when the rows are different heights; a shared pixel line can. Email
+  // is the reference because its tall rows make it the one that sets the row.
+  //
+  // Null until Email reports (first paint, or an empty/short inbox with nothing
+  // to clip), and each card falls back to its own `max` row count until then.
+  // This is ScrollList's "matched" mode, which existed and was documented but
+  // was never actually wired up to anything.
+  const [listHeight, setListHeight] = useState<number | null>(null);
   // `loading` covers both the first paint and every realtime-driven
   // refetch. The header spinner reads from this so the boss can see the
   // page is in flight instead of staring at empty cards. Initial value
@@ -450,10 +467,16 @@ export function DashboardClient() {
               past the viewport on mobile; lg splits to three. */}
           {(s.approvals || s.followups) && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
-              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
-              <PhoneCard items={calls} onOpen={openViewer} />
+              {s.approvals && (
+                <SurfacedCard items={surfaced} onOpen={openViewer} matchHeight={listHeight} />
+              )}
+              <PhoneCard items={calls} onOpen={openViewer} matchHeight={listHeight} />
               {s.followups && (
-                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
+                <FollowUpsCard
+                  followUps={filtered.followUps}
+                  onOpen={openViewer}
+                  onMeasure={setListHeight}
+                />
               )}
             </div>
           )}
@@ -462,7 +485,11 @@ export function DashboardClient() {
           {(s.upcoming || s.todos || s.pursuits) && (
             <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
               {s.upcoming && (
-                <UpcomingCard events={filtered.events} onOpen={openViewer} />
+                <UpcomingCard
+                  events={filtered.events}
+                  onOpen={openViewer}
+                  matchHeight={listHeight}
+                />
               )}
               {s.todos && (
                 <TodosCard
@@ -470,6 +497,7 @@ export function DashboardClient() {
                   onOpen={openViewer}
                   onToggle={toggleTodo}
                   onAdd={() => setAddingTodo(true)}
+                  matchHeight={listHeight}
                 />
               )}
               {s.pursuits && (
