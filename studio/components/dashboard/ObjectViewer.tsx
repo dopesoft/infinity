@@ -330,6 +330,23 @@ function eventDuration(startISO: string, endISO: string): string {
 // signal; an unranked item never shows "imp 0", and a source-less
 // item just omits the "via" segment.
 function calmSubtitle(item: DashboardItem, kindLabel: string): React.ReactNode {
+  // The call log gets NO meta strip. Every segment this function could build
+  // for a call is either already on screen or was never English to begin with:
+  //
+  //   "Calls item"  surfaceKindLabel() glues the word "item" onto the raw
+  //                 `surface` DB key. The title already says "Inbound call
+  //                 from Ariana", so this restates it, badly.
+  //   "phone"       the source, on an item the boss opened FROM the Phone card.
+  //   "imp 70"      a constant meaning "this is a phone call" (phone/monitor.go
+  //                 hardcodes 70, or 90 for a failed passphrase). Ten of his
+  //                 twelve calls read the same number.
+  //
+  // That leaves a row of restatements, which is not metadata, it is noise. The
+  // header guards on falsy, so returning null drops the <p> entirely rather
+  // than leaving an empty line. The score still sorts the Phone card; it just
+  // stops narrating itself.
+  if (item.kind === "surface" && item.data.surface === "calls") return null;
+
   const parts: string[] = [kindLabel];
   if (item.kind === "surface") {
     const s = item.data;
@@ -1785,9 +1802,15 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   const sentReply = (f.sentReply ?? "").trim() || optimisticSent.trim();
 
   return (
-    <div className="space-y-1 pt-3">
-      {/* Source · account · time + triage chips */}
-      <ModalChips>
+    <div className="space-y-1">
+      {/* Source · account · time + triage chips.
+          Sits dead-centre in the span between the modal header's bottom border
+          and the From block: 16px above (the modal body's own pt-4, which is why
+          this container carries no pt-* of its own) and 16px below (the mb-4).
+          It used to sit 28px/4px — low, crowding the FROM line — see the note on
+          the From block for why its mt-10 never fired. The From block itself does
+          NOT move: 28+4 and 16+16 span the same distance. */}
+      <ModalChips className="mb-4">
         <Chip tone="muted" icon={<SourceIcon className="size-3" aria-hidden />}>
           {f.source}
         </Chip>
@@ -1807,9 +1830,17 @@ function FollowUpBody({ f }: { f: FollowUp }) {
 
       {/* From / Subject - each a flex row with symmetric padding +
           items-center so the label and value sit dead-center in their row.
-          mt-10 (40px) gives a clearly visible gap below the chip row so the
-          meta chips don't crowd the FROM line. */}
-      <div className="mt-10 overflow-hidden rounded-lg border border-border bg-muted/20">
+
+          The gap above comes from the chip row's mb-4, deliberately NOT an mt-*
+          here. This parent is `space-y-1`, which Tailwind v3 compiles to
+          `.space-y-1>:not([hidden])~:not([hidden])` — specificity (0,3,0), which
+          beats any `.mt-N` at (0,1,0) no matter the source order. The `mt-10`
+          that used to sit here was silently dead: it asked for 40px, got 4px,
+          and the chips crowded this line — the exact outcome its own comment
+          said it was preventing. Margins collapse between siblings, so mb-4 (16)
+          against space-y-1's mt (4) resolves to 16, not 20. If you ever need to
+          respace this, move the value, don't add an mt-* — it won't fire. */}
+      <div className="overflow-hidden rounded-lg border border-border bg-muted/20">
         <div className="flex items-center gap-4 px-3 py-3">
           <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             From
