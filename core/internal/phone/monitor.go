@@ -871,6 +871,14 @@ func (m *Manager) deliverOutcome(callID, briefID, direction string, brief *Brief
 
 	if m.surface != nil {
 		importance := 70
+		// When the call rang, when it hung up, how long it ran — as STRUCTURED
+		// metadata, not just the "4m36s" prefix glued into the subtitle string.
+		// The viewer renders these above the transcript, and a display string is
+		// not a contract: recovering the duration for the calls logged before
+		// this took a regex over the subtitle (migration 187), which is exactly
+		// the tax for storing data as prose. deliverOutcome runs the instant the
+		// call ends, so now IS the hang-up; the start is that minus its length.
+		endedAt := time.Now().UTC()
 		if _, err := m.surface.Upsert(ctx, &surface.Item{
 			Surface:    "calls",
 			Kind:       "call",
@@ -886,7 +894,12 @@ func (m *Manager) deliverOutcome(callID, briefID, direction string, brief *Brief
 				}
 				return fmt.Sprintf("%s · %d exchanges", dur.Round(time.Second), len(lines))
 			}(),
-			Body:       body,
+			Body: body,
+			Metadata: map[string]any{
+				"started_at":  endedAt.Add(-dur).Format(time.RFC3339),
+				"ended_at":    endedAt.Format(time.RFC3339),
+				"duration_ms": dur.Milliseconds(),
+			},
 			Importance: &importance,
 		}); err != nil {
 			log.Printf("phone: surface call outcome %s: %v", callID, err)

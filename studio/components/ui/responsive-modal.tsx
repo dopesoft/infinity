@@ -350,12 +350,26 @@ export function ResponsiveModalHeader({
         ? "line-clamp-2 break-words"
         : "line-clamp-3 break-words",
   );
+  // Where the icon sits depends on whether the text beside it is one line or a
+  // stack. With an eyebrow or subtitle the column is 2+ lines, so the icon
+  // top-aligns (+mt-0.5) to anchor against the TITLE rather than drifting to the
+  // middle of the whole block. With a lone title there is nothing to anchor to
+  // and top-alignment just reads as misaligned — so it centres. Deciding this
+  // here means every header is right by construction; a consumer that drops its
+  // subtitle (the call viewer did) can't silently leave a crooked icon behind.
+  const stacked = Boolean(eyebrow || subtitle);
   return (
-    <header className="flex shrink-0 items-start gap-3 border-b px-4 pb-3 pt-4 sm:px-5">
+    <header
+      className={cn(
+        "flex shrink-0 gap-3 border-b px-4 pb-3 pt-4 sm:px-5",
+        stacked ? "items-start" : "items-center",
+      )}
+    >
       {icon ? (
         <span
           className={cn(
-            "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border",
+            "flex size-8 shrink-0 items-center justify-center rounded-md border",
+            stacked && "mt-0.5",
             tone ?? "border-border bg-muted text-foreground",
           )}
         >

@@ -1966,6 +1966,56 @@ function dedupeChips(
 }
 
 // Pull a string-valued field from a follow-up's metadata bag.
+// callTimeline: "Mon 13 Jul, 5:29pm → 5:34pm · 4m 36s" for a call card.
+//
+// Rendered right-aligned above the transcript, deliberately mirroring the email
+// viewer's received-date line so the two read as one system. Reads the STRUCTURED
+// times phone/monitor.go stamps into metadata (started_at / ended_at /
+// duration_ms), never the "4m36s" prefix in the subtitle string.
+//
+// Degrades a segment at a time rather than all-or-nothing: the two
+// "refused instructions" cards are ALERTS raised mid-call, not call records, so
+// they carry no duration and never will. Whatever is known still shows.
+function callTimeline(m: Record<string, unknown> | undefined): string {
+  const started = metaStr(m, "started_at");
+  const ended = metaStr(m, "ended_at");
+  const durMs = typeof m?.duration_ms === "number" ? m.duration_ms : null;
+
+  const clock = (iso: string): string => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d
+      .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      .toLowerCase()
+      .replace(/\s/g, "");
+  };
+  const day = (iso: string): string => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  };
+  const spell = (ms: number): string => {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m2 = Math.floor(s / 60);
+    const rem = s % 60;
+    if (m2 < 60) return rem ? `${m2}m ${rem}s` : `${m2}m`;
+    const h = Math.floor(m2 / 60);
+    return `${h}h ${m2 % 60}m`;
+  };
+
+  const anchor = started || ended;
+  if (!anchor) return "";
+  const parts: string[] = [];
+  const when = [day(anchor), clock(anchor)].filter(Boolean).join(", ");
+  // Only show the "→ ended" half when the call actually has a length; a
+  // zero-length record would render "5:29pm → 5:29pm" and read as broken.
+  const closed = started && ended && durMs ? ` → ${clock(ended)}` : "";
+  if (when) parts.push(when + closed);
+  if (durMs) parts.push(spell(durMs));
+  return parts.join(" · ");
+}
+
 function metaStr(m: Record<string, unknown> | undefined, ...keys: string[]): string {
   if (!m) return "";
   for (const k of keys) {
@@ -2383,8 +2433,25 @@ function SurfaceBody({ item }: { item: SurfaceItem }) {
     (f) => f.label.toLowerCase() !== "why it matters" || !item.importanceReason,
   );
 
+  // When it rang, when it hung up, how long it ran — right-aligned above the
+  // transcript, same shape and typography as the received-date on an opened
+  // email. Empty string for any non-call surface, and for the mid-call refusal
+  // alerts, which have no times to state.
+  const timeline = item.surface === "calls" ? callTimeline(item.metadata) : "";
+
   return (
     <div className="space-y-4 pt-4">
+      {timeline ? (
+        <ModalChips>
+          <span
+            className="ml-auto font-mono text-[11px] text-muted-foreground"
+            suppressHydrationWarning
+          >
+            {timeline}
+          </span>
+        </ModalChips>
+      ) : null}
+
       {item.importanceReason ? (
         <p className="text-[13.5px] italic leading-relaxed text-muted-foreground">
           {item.importanceReason}
