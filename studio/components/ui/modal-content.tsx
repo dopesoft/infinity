@@ -334,6 +334,28 @@ function diffLines(
   return { rows, added, removed };
 }
 
+/** Floor for the rendered frame, in px. Only ever applies to a genuinely
+ *  tiny email (a one-line note still reads as a card, not a sliver). It is
+ *  NOT a starting guess to be grown from - see the measure effect below. */
+const HTML_FRAME_MIN_H = 80;
+/** Slack under the measured content so a sub-pixel body height can't round
+ *  down into a 1px nested scrollbar. */
+const HTML_FRAME_PAD = 4;
+/** Re-measure cadence + window after (re)load. The ResizeObserver catches
+ *  almost everything; this covers the gap before a body exists to observe. */
+const HTML_MEASURE_POLL_MS = 100;
+const HTML_MEASURE_SETTLE_MS = 2000;
+
+/* Injected AFTER the email's own markup so it wins on cascade order as well
+ * as on `!important`. Email templates set `html,body{height:100%}` constantly.
+ * Inside a frame we are trying to SIZE FROM the body, a percentage height
+ * resolves against the frame we haven't sized yet - the body measures exactly
+ * as tall as the frame already is, we "grow" it to that same value, and it
+ * locks there forever. Forcing height:auto makes the body content-driven, and
+ * transitively makes any `height:100%` descendant resolve to auto too. */
+const HTML_UNLOCK_CSS =
+  "html,body{height:auto!important;min-height:0!important;max-height:none!important;}";
+
 /** Rendered HTML email body.
  *
  *  Renders untrusted email HTML the way a real mail client does: on a clean
@@ -346,10 +368,20 @@ function diffLines(
  *  bleed into the app.
  *
  *  The frame auto-sizes to its content (single scroll - the modal body
- *  scrolls, never a nested scrollbar) and links open in a new tab. */
+ *  scrolls, never a nested scrollbar) and links open in a new tab.
+ *
+ *  That auto-size is the whole ballgame and it is load-bearing: the iframe has
+ *  no CSS height, so if measurement doesn't happen the email silently becomes a
+ *  short window you have to scroll INSIDE, with dead space beneath it. It used
+ *  to hang off a single `load` listener attached in an effect, which a small
+ *  fast-committing srcDoc can beat - and since the ResizeObserver was set up
+ *  inside that same listener, losing the race meant never measuring again.
+ *  Measurement now runs on mount, on load, on a settle poll, and on a
+ *  ResizeObserver rebound to whatever document is live. Don't collapse those
+ *  back into one trigger. */
 export function ModalHtml({ html, className }: { html: string; className?: string }) {
   const frameRef = React.useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = React.useState(160);
+  const [height, setHeight] = React.useState(HTML_FRAME_MIN_H);
 
   // Build the sandboxed document once per html change. Guarded for SSR -
   // DOMPurify needs a DOM, so it only runs client-side (this file is a
@@ -374,37 +406,71 @@ export function ModalHtml({ html, className }: { html: string; className?: strin
       "blockquote{margin:0 0 0 12px;padding-left:12px;border-left:3px solid #e2e2e2;color:#555;}",
       "</style></head><body>",
       clean,
+      "<style>",
+      HTML_UNLOCK_CSS,
+      "</style>",
       "</body></html>",
     ].join("");
   }, [html]);
 
-  // Auto-size: measure on load, then keep watching the body so late image
-  // loads / reflows grow the frame. allow-same-origin (without allow-scripts)
-  // is what lets us read contentDocument here while keeping JS disabled.
+  // Auto-size. allow-same-origin (without allow-scripts) is what lets us read
+  // contentDocument here while keeping JS in the email disabled. Every trigger
+  // below funnels into the same idempotent measure; they exist because no
+  // single one of them fires reliably for every email.
   React.useEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
+
+    let cancelled = false;
     let ro: ResizeObserver | undefined;
+    let observed: HTMLElement | undefined;
+
     const measure = () => {
-      const doc = frame.contentDocument;
-      if (!doc) return;
+      if (cancelled) return;
+      const body = frame.contentDocument?.body;
+      if (!body) return;
+      // Body only, deliberately. `documentElement.scrollHeight` is never less
+      // than the frame's own viewport, so including it feeds our current height
+      // back in as a floor and the frame can never shrink OR discover that it's
+      // too short. The body, with height forced to auto above, is the only
+      // content-truthful number here.
       const h = Math.max(
-        doc.documentElement?.scrollHeight ?? 0,
-        doc.body?.scrollHeight ?? 0,
+        body.scrollHeight,
+        Math.ceil(body.getBoundingClientRect().height),
       );
-      if (h > 0) setHeight(h + 4);
+      if (h > 0) setHeight(Math.max(h + HTML_FRAME_PAD, HTML_FRAME_MIN_H));
     };
-    const onLoad = () => {
-      measure();
-      const doc = frame.contentDocument;
-      if (doc?.body && typeof ResizeObserver !== "undefined") {
-        ro = new ResizeObserver(measure);
-        ro.observe(doc.body);
+
+    // A frame can pass through about:blank before srcDoc commits, so the body
+    // we observed a moment ago may already be detached - an observer left on it
+    // goes quiet forever. Re-point at the live document whenever it changes.
+    const sync = () => {
+      if (cancelled) return;
+      const body = frame.contentDocument?.body;
+      if (body && body !== observed) {
+        observed = body;
+        ro?.disconnect();
+        if (typeof ResizeObserver !== "undefined") {
+          ro = new ResizeObserver(measure);
+          ro.observe(body);
+        }
       }
+      measure();
     };
-    frame.addEventListener("load", onLoad);
+
+    frame.addEventListener("load", sync);
+    sync();
+    const poll = window.setInterval(sync, HTML_MEASURE_POLL_MS);
+    const stop = window.setTimeout(
+      () => window.clearInterval(poll),
+      HTML_MEASURE_SETTLE_MS,
+    );
+
     return () => {
-      frame.removeEventListener("load", onLoad);
+      cancelled = true;
+      frame.removeEventListener("load", sync);
+      window.clearInterval(poll);
+      window.clearTimeout(stop);
       ro?.disconnect();
     };
   }, [srcDoc]);
