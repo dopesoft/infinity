@@ -25,6 +25,20 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// synthSessionID returns sessionID unchanged when it is a valid UUID, and ""
+// otherwise. Dashboard action sessions (and certain cron contexts) use synthetic
+// identifiers like "surface-action-<uuid>" that are not valid UUIDs; passing
+// them to a $1::uuid Postgres cast raises SQLSTATE 22P02. Returning "" lets
+// NULLIF($1,'')::uuid yield NULL, keeping the plan unbound to a session rather
+// crashing. Methods that only need to look up by session (FinalizeSession,
+// CancelActive) guard with uuid.Parse directly and return early.
+func synthSessionID(sessionID string) string {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return ""
+	}
+	return sessionID
+}
+
 // Create supersedes any active/paused plan for the session, then inserts a new
 // plan + its ordered steps. Returns the new plan with steps populated.
 func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID string, steps []NewStepInput) (*Plan, error) {
@@ -38,6 +52,10 @@ func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID strin
 		return nil, errors.New("a plan needs at least one step")
 	}
 
+	// Normalize: treat non-UUID session ids (e.g. "surface-action-<uuid>") as
+	// no-session so NULLIF($1,'')::uuid produces NULL instead of 22P02.
+	safeID := synthSessionID(sessionID)
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -46,11 +64,11 @@ func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID strin
 
 	// Supersede the prior active plan for this session (one active plan per
 	// session). Cancelled, not deleted, so history survives.
-	if sessionID != "" {
+	if safeID != "" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE mem_plans SET status = 'cancelled', updated_at = NOW()
 			 WHERE session_id = $1::uuid AND status IN ('active','paused')
-		`, sessionID); err != nil {
+		`, safeID); err != nil {
 			return nil, fmt.Errorf("supersede active plan: %w", err)
 		}
 	}
@@ -64,7 +82,7 @@ func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID strin
 		INSERT INTO mem_plans (session_id, goal_id, title, goal, status, current_step)
 		VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3, $4, 'active', 0)
 		RETURNING id::text, created_at, updated_at
-	`, sessionID, goalID, title, goal).Scan(&planID, &createdAt, &updatedAt)
+	`, safeID, goalID, title, goal).Scan(&planID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
 	}
@@ -133,6 +151,11 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 		return nil, errors.New("checklist needs at least one item")
 	}
 
+	// Non-UUID synthetic session ids cannot be stored as session_id (UUID column)
+	// and cannot be used in $1::uuid casts. Treat them as no-session so the plan
+	// is created with NULL session_id rather than crashing with 22P02.
+	safeID := synthSessionID(sessionID)
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -140,15 +163,17 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 	defer tx.Rollback(ctx)
 
 	var planID string
-	err = tx.QueryRow(ctx, `
-		SELECT id::text FROM mem_plans
-		 WHERE session_id = $1::uuid AND status IN ('active','paused')
-		 ORDER BY updated_at DESC LIMIT 1
-	`, sessionID).Scan(&planID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		planID = ""
-	} else if err != nil {
-		return nil, err
+	if safeID != "" {
+		err = tx.QueryRow(ctx, `
+			SELECT id::text FROM mem_plans
+			 WHERE session_id = $1::uuid AND status IN ('active','paused')
+			 ORDER BY updated_at DESC LIMIT 1
+		`, safeID).Scan(&planID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			planID = ""
+		} else if err != nil {
+			return nil, err
+		}
 	}
 
 	if planID == "" {
@@ -158,9 +183,9 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 		}
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO mem_plans (session_id, title, goal, status, current_step)
-			VALUES ($1::uuid, $2, '', 'active', 0)
+			VALUES (NULLIF($1,'')::uuid, $2, '', 'active', 0)
 			RETURNING id::text
-		`, sessionID, t).Scan(&planID); err != nil {
+		`, safeID, t).Scan(&planID); err != nil {
 			return nil, fmt.Errorf("create checklist plan: %w", err)
 		}
 	} else if title != "" {
@@ -657,6 +682,12 @@ func (s *Store) FinalizeSession(ctx context.Context, sessionID string) (int, err
 	if s == nil || s.pool == nil || sessionID == "" {
 		return 0, nil
 	}
+	// Synthetic session ids (e.g. "surface-action-<uuid>") are not stored as
+	// session_id (UUID column); the $1::uuid cast would 22P02. Nothing to
+	// finalize for a non-UUID session.
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return 0, nil
+	}
 	// 1. A step still 'in_progress' when the turn ends — whose run is still
 	// 'running' (or has none) — was NOT a failure. The agent simply stopped
 	// before finishing it: a clean turn end, often a deliberate "I'm not going
@@ -892,6 +923,10 @@ func (s *Store) SetStatus(ctx context.Context, planID, status string) error {
 // plan dock. Returns the cancelled plan, or nil if the session had none.
 func (s *Store) CancelActive(ctx context.Context, sessionID string) (*Plan, error) {
 	if s == nil || s.pool == nil || sessionID == "" {
+		return nil, nil
+	}
+	// Non-UUID session ids cannot be stored as session_id; skip the cast.
+	if _, err := uuid.Parse(sessionID); err != nil {
 		return nil, nil
 	}
 	var planID string
