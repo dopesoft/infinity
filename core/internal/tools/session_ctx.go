@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/dopesoft/infinity/core/internal/turnctx"
+	"github.com/google/uuid"
 )
 
 // sessionContextKey is the context.WithValue key under which the agent
@@ -55,6 +56,16 @@ func WithActiveSet(ctx context.Context, s *ActiveSet) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, sessionContextKey{}, s)
+}
+
+// isPlainSessionID reports whether sid is a bare UUID — a real chat session,
+// not a synthetic sub-agent id like "background:<uuid>", "delegate:<uuid>",
+// or "peer:<slug>". Only plain UUIDs are safe for UUID-typed DB columns such
+// as mem_artifacts.source_session_id; synthetic ids carry a prefix that
+// makes PostgreSQL throw SQLSTATE 22P02.
+func isPlainSessionID(sid string) bool {
+	_, err := uuid.Parse(sid)
+	return err == nil
 }
 
 // ActiveSetFromContext retrieves the per-session ActiveSet, if any.

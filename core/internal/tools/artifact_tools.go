@@ -96,7 +96,7 @@ func (t *artifactSave) Execute(ctx context.Context, in map[string]any) (string, 
 	}
 	sid := SessionIDFromContext(ctx)
 	var sidPtr *string
-	if sid != "" {
+	if isPlainSessionID(sid) {
 		sidPtr = &sid
 	}
 
