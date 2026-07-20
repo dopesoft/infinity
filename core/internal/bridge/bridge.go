@@ -140,7 +140,7 @@ func (m *MacBridge) Health(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_, status, ok := doRequest(ctx, http.MethodGet, m.base+"/health", nil, m.headers)
-	// "Reachable" — not "200 on /health". Some Mac tunnels route /sse to the
+	// "Reachable" - not "200 on /health". Some Mac tunnels route /sse to the
 	// MCP proxy but never wire /health to the bridge binary, so /health 404s
 	// while /fs /bash /git work fine. A 404/4xx means the server ANSWERED (it's
 	// up); only a transport failure or a 5xx means it's actually down. The
@@ -365,7 +365,7 @@ func (r *Router) Invalidate() {
 // NormalizePath rewrites a caller-supplied filesystem path for the bridge that
 // actually serves the call, so a Mac-flavored path survives failover onto the
 // cloud workspace and vice versa. Without this, a failover re-runs the SAME
-// path string on the other bridge — the observed bug: `git_status
+// path string on the other bridge - the observed bug: `git_status
 // repo=~/Dev/infinity` failing over to Cloud and opening the nonexistent
 // `/workspace/~/Dev/infinity`. Mapping (mirrors docker/workspace
 // bootstrapLayout: self-clone at /workspace/infinity, other repos at
@@ -438,7 +438,7 @@ func macPath(p string) string {
 // API itself. Real bridge 4xxs carry the {"error":"..."} JSON contract (e.g.
 // the cloud workspace's fs/read missing-file 404); a Mac tunnel that routes
 // /sse to the MCP proxy but never wired /bash answers a plain-text or HTML
-// 404 — that is a bridge-level miss the alternate CAN serve, not a command
+// 404 - that is a bridge-level miss the alternate CAN serve, not a command
 // result. Observed: bash_run 404 on the Mac bridge stalled the self-improve
 // run instead of failing over to the cloud workspace.
 func routeMiss(status int, body []byte) bool {
@@ -454,8 +454,17 @@ func routeMiss(status int, body []byte) bool {
 // ErrBothBridgesDown is returned by Call when the preferred bridge AND its
 // alternate both fail at the bridge level (transport error or HTTP 5xx). The
 // caller surfaces this as a "can't run, no bridge" event the agent must stop
-// on — NOT a per-tool error it would retry to the iteration cap.
+// on - NOT a per-tool error it would retry to the iteration cap.
 var ErrBothBridgesDown = errors.New("both bridges unavailable")
+
+// ErrPinnedBridgeDown is returned by Call when the caller EXPLICITLY pinned a
+// bridge (PrefMac or PrefCloud) and that bridge failed at the bridge level.
+// Failover is deliberately NOT attempted - an explicit pin is a correctness
+// requirement (a cloud-resident CLI, a Mac-only path, a "run this here or
+// don't run it") and silently serving from the alternate would run the call
+// on the wrong machine. The caller surfaces this as a stop-and-report event,
+// same shape as ErrBothBridgesDown.
+var ErrPinnedBridgeDown = errors.New("pinned bridge unavailable")
 
 // alternate returns the other bridge of the mac/cloud pair, or nil if there
 // isn't one configured.
@@ -473,22 +482,34 @@ func (r *Router) alternate(b Bridge) Bridge {
 }
 
 // Call runs fn against the preferred bridge and, on a BRIDGE-level failure,
-// automatically retries fn once on the other bridge. This is the failover that
-// keeps an autonomous run alive when the Mac flakes mid-run: a 3am self-improve
-// pass that loses the Mac steps straight onto the cloud workspace instead of
-// getting stuck (the night-after-night bug).
+// automatically retries fn once on the other bridge - but ONLY when pref is
+// PrefAuto. This is the failover that keeps an autonomous run alive when the
+// Mac flakes mid-run: a 3am self-improve pass that loses the Mac steps straight
+// onto the cloud workspace instead of getting stuck (the night-after-night bug).
 //
-// What counts as a BRIDGE failure (→ fail over): a transport error (ok=false),
-// an HTTP 5xx, or a contract-less 404/405 (a tunnel/proxy that doesn't serve
-// the route — see routeMiss). What does NOT (→ returned as-is, no failover):
-// any 2xx, and any 4xx carrying the bridge's {"error":...} contract — that's
-// the bridge answering with a command/param result (e.g. 400 "repo required",
-// a `go build` that compiled-and-failed), so retrying on the other bridge
-// would just double the work and mask the real error.
+// Explicit pins (PrefMac / PrefCloud) DO NOT fail over. An explicit pin is a
+// correctness requirement - a cloud-resident CLI tool, a Mac-only path, a
+// bash_run with bridge="cloud" cwd="/workspace" - and silently serving from the
+// alternate would run the call on the wrong machine (observed: a cloud-pinned
+// bash landed on the Mac in /Users/n0m4d after a cloud transient). On a
+// primary failure for a pinned call, Call returns the primary's response and
+// ErrPinnedBridgeDown - the caller surfaces "stop and report" the same way it
+// does for ErrBothBridgesDown, never a silent redirect.
+//
+// What counts as a BRIDGE failure (→ fail over for PrefAuto, error for pins):
+// a transport error (ok=false), an HTTP 5xx, or a contract-less 404/405 (a
+// tunnel/proxy that doesn't serve the route - see routeMiss). What does NOT
+// (→ returned as-is, no failover, no error): any 2xx, and any 4xx carrying the
+// bridge's {"error":...} contract - that's the bridge answering with a
+// command/param result (e.g. 400 "repo required", a `go build` that
+// compiled-and-failed), so retrying on the other bridge would just double the
+// work and mask the real error.
 //
 // Returns the bridge that served the final attempt, its response, whether a
 // failover happened (so the caller can annotate the result), and an error only
-// when NO bridge could be reached (ErrBothBridgesDown).
+// when the call cannot be safely served: ErrBothBridgesDown when auto tried
+// both bridges and both failed, or ErrPinnedBridgeDown when an explicit pin's
+// bridge failed at the bridge level.
 func (r *Router) Call(ctx context.Context, pref Preference, fn func(Bridge) ([]byte, int, bool)) (served Bridge, body []byte, status int, failedOver bool, err error) {
 	if r == nil {
 		return nil, nil, 0, false, errors.New("bridge router not configured")
@@ -501,12 +522,19 @@ func (r *Router) Call(ctx context.Context, pref Preference, fn func(Bridge) ([]b
 	if ok && status < 500 && !routeMiss(status, body) {
 		return primary, body, status, false, nil
 	}
-	// Primary failed at the bridge level. Try the alternate once.
+	// Primary failed at the bridge level. An explicit pin is a correctness
+	// requirement - never redirect it to the alternate. Invalidate cached
+	// health so the next probe reflects the fresh evidence.
+	if pref == PrefMac || pref == PrefCloud {
+		r.Invalidate()
+		return primary, body, status, false, ErrPinnedBridgeDown
+	}
+	// PrefAuto: try the alternate once.
 	alt := r.alternate(primary)
 	if alt == nil {
 		return primary, body, status, false, ErrBothBridgesDown
 	}
-	// The primary's failure is fresh evidence its health is stale — re-probe so
+	// The primary's failure is fresh evidence its health is stale - re-probe so
 	// the system prompt / next call reflect reality.
 	r.Invalidate()
 	abody, astatus, aok := fn(alt)

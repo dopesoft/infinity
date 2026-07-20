@@ -102,13 +102,13 @@ func formatBridgeResult(b bridge.Bridge, body []byte) string {
 }
 
 // bridgeCall is the one execution path for every bridge_* tool: it resolves the
-// session's preferred bridge, runs fn against it, and — when that bridge fails
-// at the BRIDGE level (transport error or 5xx) — automatically fails over to the
+// session's preferred bridge, runs fn against it, and - when that bridge fails
+// at the BRIDGE level (transport error or 5xx) - automatically fails over to the
 // other bridge (bridge.Router.Call). fn closes over the tool's path/body and
 // just does the Get/Post, so failover is uniform with zero per-tool wiring.
 //
 // This is the fix for the night-after-night self-improve stall: a Mac that
-// flakes mid-run no longer strands the agent — files/shell/git step straight
+// flakes mid-run no longer strands the agent - files/shell/git step straight
 // onto the healthy cloud workspace. A 4xx (a real command/param error like a
 // failing build) is returned as-is, never retried, so we don't mask real
 // failures or storm the other bridge.
@@ -120,7 +120,7 @@ func bridgeCall(ctx context.Context, router *bridge.Router, prefs PreferenceFetc
 // override is non-nil it pins the call to that bridge (e.g. a cloud-resident CLI
 // tool that must run where it's installed, regardless of the session's
 // preference); otherwise it resolves the session preference exactly as before.
-// Everything downstream — failover, path normalization, the [bridge=…] prefix —
+// Everything downstream - failover, path normalization, the [bridge=…] prefix -
 // is identical, so this stays the one execution path.
 func bridgeCallPref(ctx context.Context, router *bridge.Router, prefs PreferenceFetcher, override *bridge.Preference, tool string, fn func(bridge.Bridge) ([]byte, int, bool)) (string, error) {
 	if router == nil {
@@ -134,16 +134,24 @@ func bridgeCallPref(ctx context.Context, router *bridge.Router, prefs Preference
 	}
 	served, body, status, failedOver, err := router.Call(ctx, pref, fn)
 	if errors.Is(err, bridge.ErrBothBridgesDown) {
-		// Honest, model-readable "stop and surface" — NOT a raw error the model
+		// Honest, model-readable "stop and surface" - NOT a raw error the model
 		// retries to the cap. The run-outcome classifier later reads this marker
 		// (mem_observations) to label the run "needs you", not "done".
 		return bridgeUnavailableResult(tool), nil
+	}
+	if errors.Is(err, bridge.ErrPinnedBridgeDown) {
+		// Explicit pin's bridge failed at the bridge level. Do NOT silently
+		// redirect to the alternate - the pin exists because the other bridge
+		// can't do this correctly (a cloud-resident CLI, a Mac-only path).
+		// Surface the same stop-and-report shape as ErrBothBridgesDown but
+		// name the pinned bridge so the boss knows exactly what came down.
+		return bridgePinnedUnavailableResult(tool, pref), nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("%s: %s", tool, err.Error())
 	}
 	if status >= 300 {
-		// A 4xx is the bridge answering with a command/param result (it's up) —
+		// A 4xx is the bridge answering with a command/param result (it's up) -
 		// surface the real reason, no failover.
 		return "", fmt.Errorf("%s via %s failed (status=%d): %s", tool, served.Name(), status, bridgeErrText(body))
 	}
@@ -164,7 +172,26 @@ func bridgeUnavailableResult(tool string) string {
 		"error":     "bridge_unavailable",
 		"tool":      tool,
 		"both_down": true,
-		"fallback": "Both the Mac bridge and the cloud workspace are unreachable right now, so I can't run files/shell/git. Do NOT retry this in a loop. Surface a HIGH-importance system item with surface_item stating both bridges are down (copy the reason), then stop — the boss needs to bring a bridge back.",
+		"fallback": "Both the Mac bridge and the cloud workspace are unreachable right now, so I can't run files/shell/git. Do NOT retry this in a loop. Surface a HIGH-importance system item with surface_item stating both bridges are down (copy the reason), then stop - the boss needs to bring a bridge back.",
+	}
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
+// bridgePinnedUnavailableResult is the structured tool result for an EXPLICIT
+// bridge pin that failed at the bridge level. Same shape as
+// bridgeUnavailableResult so the run-outcome classifier treats it as a
+// "needs you" stop, not a done - but names the pinned bridge so the boss knows
+// exactly what came down and does not think the other bridge is affected.
+func bridgePinnedUnavailableResult(tool string, pref bridge.Preference) string {
+	payload := map[string]any{
+		"error":  "bridge_unavailable",
+		"tool":   tool,
+		"pinned": string(pref),
+		"fallback": fmt.Sprintf(
+			"The %s bridge was explicitly required for this call but is unavailable right now. Do NOT retry in a loop and do NOT run this on the other bridge - the pin exists because the other bridge can't do this correctly (a cloud-resident CLI, a Mac-only path, etc). Surface a HIGH-importance system item with surface_item stating the %s bridge is down, then stop.",
+			pref, pref,
+		),
 	}
 	b, _ := json.Marshal(payload)
 	return string(b)
@@ -216,7 +243,7 @@ func bridgeErrText(body []byte) string {
 
 func (t *bridgeFSRead) Execute(ctx context.Context, in map[string]any) (string, error) {
 	// Path-bearing params are normalized INSIDE fn, per the bridge that
-	// actually serves the call — including the failover alternate — so a
+	// actually serves the call - including the failover alternate - so a
 	// Mac path keeps working after a Mac→cloud failover and vice versa.
 	return bridgeCall(ctx, t.router, t.prefs, "fs_read", func(b bridge.Bridge) ([]byte, int, bool) {
 		q := "/fs/read?path=" + urlEscape(bridge.NormalizePath(b, strString(in, "path")))
@@ -362,14 +389,14 @@ func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, er
 	override := bridgePrefOverride(in)
 
 	// A command that invokes an installed cli extension (yt-dlp, ffmpeg, …)
-	// DEFAULTS to the cloud workspace with the persistent env sourced — the
+	// DEFAULTS to the cloud workspace with the persistent env sourced - the
 	// extension installs there, and "which machine / which PATH" must never
 	// depend on the model remembering flags. Leaving that to prose cost us a
 	// working yt-dlp for a day.
 	//
 	// An EXPLICIT "mac" pin is respected, un-prefixed: that is the recipe's
 	// escape hatch for IP-walled fetches. YouTube (and friends) bot-wall
-	// datacenter egress but accept the Mac's residential IP — verified
+	// datacenter egress but accept the Mac's residential IP - verified
 	// 2026-07-09: the identical yt-dlp transcript command that got "confirm
 	// you're not a bot" on the cloud succeeded instantly from the Mac. The
 	// /workspace env.sh doesn't exist on the Mac, so no prelude there.
@@ -409,8 +436,8 @@ func bridgePrefOverride(in map[string]any) *bridge.Preference {
 	}
 }
 
-// loginCmdRe matches an interactive CLI sign-in invocation — "<tool> auth login"
-// or "<tool> login" — at the start of the command or after a shell separator. The
+// loginCmdRe matches an interactive CLI sign-in invocation - "<tool> auth login"
+// or "<tool> login" - at the start of the command or after a shell separator. The
 // trailing `(\s+-|\s*($|[;&|]))` requires `login` to be the END of the command or
 // be followed only by a flag, so it fires on real subcommands ("vercel login",
 // "gh auth login", "npm login --registry x") but NOT when "login" is just an
@@ -419,17 +446,17 @@ var loginCmdRe = regexp.MustCompile(`(?i)(^|[;&|]\s*|\bsudo\s+)([a-z0-9][\w.-]*\
 
 // guardInteractiveLogin intercepts raw "<tool> auth login" / "<tool> login" bash
 // commands. Such flows open a browser and/or hold an OAuth callback on whatever
-// box runs them — via raw bash that can land on the boss's Mac, popping HIS
+// box runs them - via raw bash that can land on the boss's Mac, popping HIS
 // browser and authing the wrong machine (the boss may be on his phone with no
 // computer at all). Sign-in must instead run on the cloud workspace with the URL
 // opened in Jarvis's OWN browser. This is the deterministic backstop behind the
 // catalog steering + extension_activate tool (Rule #1b: the mechanic is in code,
-// not prose the model can drop). Generic — zero per-vendor wiring. NOTE: the
+// not prose the model can drop). Generic - zero per-vendor wiring. NOTE: the
 // legit self-contained path (extensions Manager.startDetachedAuth) calls the
 // bridge directly, NOT this tool, so it is never caught here.
 // IsInteractiveLoginCmd reports whether a bash command is an interactive CLI
 // sign-in ("<tool> auth login" / "<tool> login"). Exported so every shell entry
-// point — the bridge bash_run tool here AND the claude_code__bash gate — enforces
+// point - the bridge bash_run tool here AND the claude_code__bash gate - enforces
 // the same "sign-in happens in Jarvis's own cloud browser, never the boss's
 // machine" rule from one source of truth.
 func IsInteractiveLoginCmd(cmd string) bool {
@@ -444,7 +471,7 @@ func guardInteractiveLogin(cmd string) (string, bool) {
 		"blocked": "interactive_sign_in_via_bash",
 		"why": "Running a CLI sign-in (`auth login` / `login`) directly opens a browser and holds the OAuth " +
 			"callback on whatever machine runs it. Via raw bash that can land on the boss's computer, popping HIS " +
-			"browser and signing in the wrong machine — and the boss may be on his phone with no computer at all.",
+			"browser and signing in the wrong machine - and the boss may be on his phone with no computer at all.",
 		"do_this_instead": "Sign in self-contained, inside YOUR cloud browser: if this is a registered cli " +
 			"extension, call extension_activate \"<name>\" (it runs the sign-in on your cloud workspace and returns " +
 			"auth_url), then browser_open that auth_url so the page is live in the boss's Preview pane and he approves " +
