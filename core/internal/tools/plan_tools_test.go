@@ -182,3 +182,69 @@ func TestPlanGet_ReturnsNullWhenNoPlanAnywhere(t *testing.T) {
 		t.Fatalf("expected null plan in output, got: %s", out)
 	}
 }
+
+// adoptingPlanGetter records AdoptSession calls so the tests below can assert
+// that a cross-session pickup actually re-stamps ownership.
+type adoptingPlanGetter struct {
+	stubPlanGetter
+	adoptedPlan    string
+	adoptedSession string
+}
+
+func (s *adoptingPlanGetter) AdoptSession(_ context.Context, planID, sessionID string) error {
+	s.adoptedPlan, s.adoptedSession = planID, sessionID
+	return nil
+}
+
+// TestPlanPickup_AdoptsPlanOntoDrivingSession is the 2026-07-27 regression
+// guard, and it is the defect that actually cost the boss a correct status.
+//
+// A cron RETRY mints a brand-new session per attempt. Attempt 2 reaches attempt
+// 1's plan through this cross-session fallback and finishes the work — but the
+// plan still pointed at attempt 1's dead session. Everything downstream is keyed
+// by session, so all of it silently no-op'd: the cron finalize settled zero
+// steps, the outcome classifier's incomplete-plan backstop looked up the live
+// session, found no plan, and stamped "did_work". Result: the weekly AI digest
+// was delivered, the run went green, and the kanban card spun on "Running"
+// indefinitely.
+//
+// Picking a plan up must therefore mean owning it.
+func TestPlanPickup_AdoptsPlanOntoDrivingSession(t *testing.T) {
+	activePlan := &plan.Plan{ID: "plan-from-attempt-1", Status: plan.PlanActive}
+	stub := &adoptingPlanGetter{stubPlanGetter: stubPlanGetter{bySession: nil, anyActive: activePlan}}
+
+	ctx := WithSessionID(WithAutonomous(context.Background()), "attempt-2-session")
+	got, err := anyActivePlanForTurn(ctx, stub)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || got.ID != "plan-from-attempt-1" {
+		t.Fatalf("autonomous turn must reach the prior attempt's plan, got %+v", got)
+	}
+	if stub.adoptedPlan != "plan-from-attempt-1" {
+		t.Fatalf("picked-up plan was not adopted; session-keyed finalize/classify will silently no-op (adopted=%q)", stub.adoptedPlan)
+	}
+	if stub.adoptedSession != "attempt-2-session" {
+		t.Fatalf("plan adopted onto %q, want the session actually driving it", stub.adoptedSession)
+	}
+}
+
+// TestPlanPickup_InteractiveNeverAdopts keeps the 2026-07-02 fix intact: an
+// interactive chat turn must not reach — let alone take ownership of — another
+// session's plan. Adoption makes that bleed strictly worse, so the autonomous
+// gate has to come first.
+func TestPlanPickup_InteractiveNeverAdopts(t *testing.T) {
+	stranger := &plan.Plan{ID: "plan-stranger", Status: plan.PlanActive}
+	stub := &adoptingPlanGetter{stubPlanGetter: stubPlanGetter{bySession: nil, anyActive: stranger}}
+
+	got, err := anyActivePlanForTurn(WithSessionID(context.Background(), "chat-session"), stub)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("interactive turn must not pick up a stranger's plan, got %+v", got)
+	}
+	if stub.adoptedPlan != "" {
+		t.Fatalf("interactive turn must never adopt a plan, adopted %q", stub.adoptedPlan)
+	}
+}

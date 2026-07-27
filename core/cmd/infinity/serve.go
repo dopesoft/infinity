@@ -2868,6 +2868,16 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool, scheduler *
 			stepReapAge = d
 		}
 	}
+	// A cron plan idle past this with work still open is abandoned, not running.
+	// Comfortably above the 45-min run budget so a genuinely long cron turn is
+	// never swept out from under itself. Override with
+	// INFINITY_STALE_CRON_PLAN_MAX_AGE.
+	staleCronPlanAge := 90 * time.Minute
+	if v := strings.TrimSpace(os.Getenv("INFINITY_STALE_CRON_PLAN_MAX_AGE")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			staleCronPlanAge = d
+		}
+	}
 
 	runOnce := func() {
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -2903,6 +2913,17 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool, scheduler *
 			fmt.Fprintf(os.Stderr, "plan reconcile: %v\n", err)
 		} else if n > 0 {
 			infoLog.Printf("plan reconcile: failed %d stranded in_progress step(s) whose run had errored", n)
+		}
+		// Self-healing sweep for zombie "Running" cards: a CRON plan still
+		// 'active' long after its last activity is a turn that ended without
+		// closing its own books. The executor's finalize is the immediate path;
+		// this catches the ones it can't (process died mid-finalize, rows that
+		// predate the fix). User plans and 'paused' plans are deliberately never
+		// swept — see plan.Store.CloseStaleCronPlans.
+		if n, err := store.CloseStaleCronPlans(runCtx, staleCronPlanAge); err != nil {
+			fmt.Fprintf(os.Stderr, "stale cron plan sweep: %v\n", err)
+		} else if n > 0 {
+			infoLog.Printf("stale cron plan sweep: closed %d abandoned cron plan(s) idle past %s", n, staleCronPlanAge)
 		}
 	}
 

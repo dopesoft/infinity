@@ -755,6 +755,188 @@ func (s *Store) FinalizeSession(ctx context.Context, sessionID string) (int, err
 	return n + m, err
 }
 
+// AdoptSession re-attributes a plan to the session that is now DRIVING it.
+//
+// Why this exists (the 2026-07-27 phantom-"Running" card): a cron retry mints a
+// BRAND-NEW session per attempt, and attempt 2 reaches attempt 1's plan through
+// the autonomous cross-session fallback (tools.anyActivePlanForTurn ->
+// GetAnyActive). The plan kept pointing at the DEAD attempt-1 session, so every
+// piece of session-keyed bookkeeping downstream looked up the live session,
+// found no plan, and silently did nothing: FinalizeSession settled zero steps,
+// classifyOutcome's incomplete-plan backstop saw nil and returned "did_work",
+// and the plan sat 'active' forever as a zombie card on the Agent Work board.
+// The weekly AI digest was the visible case — the report was delivered, the run
+// went green, and the kanban still said "Running".
+//
+// Adopting at the pickup seam makes all of that correct BY CONSTRUCTION rather
+// than by adding a parallel session-agnostic code path to each consumer
+// (Rule #1b: the mechanic lives in code at one chokepoint). Idempotent, and a
+// no-op when the plan already belongs to this session or the id is synthetic.
+func (s *Store) AdoptSession(ctx context.Context, planID, sessionID string) error {
+	if s == nil || s.pool == nil || planID == "" {
+		return nil
+	}
+	sid := synthSessionID(sessionID)
+	if sid == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE mem_plans
+		   SET session_id = $2::uuid, updated_at = NOW()
+		 WHERE id = $1::uuid
+		   AND status IN ('active','paused')
+		   AND (session_id IS DISTINCT FROM $2::uuid)
+	`, planID, sid)
+	return err
+}
+
+// CloseSession is the TERMINAL settle for a one-shot session (cron / heartbeat /
+// any turn nobody is coming back to). FinalizeSession only settles steps left
+// 'in_progress' — a step still 'pending' when the turn ends is invisible to it,
+// so the plan never recomputes, stays 'active' forever, and the board keeps a
+// phantom "Running" card. For a session that will never resume, a pending step
+// is exactly as stranded as an in_progress one: it is never going to run.
+//
+// So: every non-terminal step becomes 'skipped' with a plain-English reason and
+// its open run closes cleanly, until it hits a step that genuinely belongs to
+// the boss — a pending CHECKPOINT (awaiting his approval) or a BLOCKED step.
+// Those, and everything after them, are left alone so recompute lands the plan
+// on 'paused' and it surfaces under "Awaiting you" instead of being silently
+// steamrolled into "completed".
+//
+// Deliberately NOT wired to the foreground chat path: an interactive plan
+// legitimately spans turns, and closing it at turn end would delete work in
+// progress. Returns the number of steps it had to force-settle — >0 means the
+// agent walked away from unfinished work, which the cron outcome classifier
+// must read as "stopped early", never a clean green.
+func (s *Store) CloseSession(ctx context.Context, sessionID string) (int, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return 0, nil
+	}
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return 0, nil
+	}
+	p, err := s.GetActiveBySession(ctx, sessionID)
+	if err != nil || p == nil {
+		return 0, err
+	}
+	return s.closeOutPlan(ctx, p)
+}
+
+// closeOutPlan force-settles a plan's abandoned steps. Shared by CloseSession
+// (the live cron path) and CloseStaleCronPlans (the sweep), so both settle
+// identically and there is only one definition of "abandoned".
+func (s *Store) closeOutPlan(ctx context.Context, p *Plan) (int, error) {
+	abandoned := abandonedSteps(p)
+	for i := range abandoned {
+		st := abandoned[i]
+		if _, err := s.MarkStep(ctx, st.ID, StepSkipped, abandonReason); err != nil {
+			return i, fmt.Errorf("close out step %s: %w", st.ID, err)
+		}
+		// Close the step's own spinner run cleanly ('ok', not 'error') — the
+		// step didn't fail, the turn ended. Otherwise /logs shows a phantom
+		// failure to match the phantom card.
+		s.closeStepRun(ctx, &st, StepSkipped, abandonReason)
+	}
+	return len(abandoned), nil
+}
+
+// abandonReason is what the boss reads on a step the run never got to. Plain
+// first-person, never a robotic category (the "failures read human" rule).
+const abandonReason = "I stopped here — the run ended before I got to this step."
+
+// abandonedSteps returns the steps a one-shot session walked away from: every
+// non-terminal step, in order, UP TO the first one that genuinely belongs to the
+// boss. It stops at a 'blocked' step or a pending CHECKPOINT because those mean
+// "awaiting you", and everything after them is legitimately not-yet-due — force-
+// settling them would flip a plan that needs a decision into a silent
+// "completed", which is the false-green pattern this codebase forbids.
+//
+// Pure so the boundary is testable without a database; closeOutPlan just applies
+// the result.
+func abandonedSteps(p *Plan) []Step {
+	if p == nil {
+		return nil
+	}
+	var out []Step
+	for i := range p.Steps {
+		st := p.Steps[i]
+		if isTerminalStep(st.Status) {
+			continue
+		}
+		if st.Status == StepBlocked || (st.IsCheckpoint && st.Status == StepPending) {
+			break
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// CloseStaleCronPlans is the self-healing sweep behind CloseSession: any plan
+// owned by a CRON session that is still 'active' long after its last activity
+// is, by definition, a turn that ended without closing its own books (a process
+// that died mid-finalize, a path that predates the fix, a future regression).
+// Closing them here means the board heals itself instead of accumulating zombie
+// "Running" cards for weeks — the state the boss found on 2026-07-27, with
+// stale plans going back to June.
+//
+// Scoped deliberately:
+//   - kind='cron' ONLY. A 'user' chat plan is allowed to sit active between
+//     turns; the boss may pick it back up hours later.
+//   - status='active' ONLY. A 'paused' plan is already correctly surfaced as
+//     "Awaiting you" for a real failure or checkpoint — sweeping it would hide
+//     a genuine problem, which is the exact false-green pattern we forbid.
+//
+// Returns the number of plans closed.
+func (s *Store) CloseStaleCronPlans(ctx context.Context, olderThan time.Duration) (int, error) {
+	if s == nil || s.pool == nil || olderThan <= 0 {
+		return 0, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.id::text
+		  FROM mem_plans p
+		  JOIN mem_sessions sess ON sess.id = p.session_id
+		 WHERE p.status = 'active'
+		   AND sess.kind = 'cron'
+		   AND p.updated_at < NOW() - $1::interval
+	`, olderThan.String())
+	if err != nil {
+		return 0, fmt.Errorf("scan stale cron plans: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan stale cron plan id: %w", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	closed := 0
+	for _, id := range ids {
+		p, err := s.Get(ctx, id)
+		if err != nil {
+			return closed, fmt.Errorf("load stale cron plan %s: %w", id, err)
+		}
+		if p == nil {
+			continue
+		}
+		n, err := s.closeOutPlan(ctx, p)
+		if err != nil {
+			return closed, err
+		}
+		if n > 0 {
+			closed++
+		}
+	}
+	return closed, nil
+}
+
 // SetStepRun links a step to the mem_runs row tracking its execution so the
 // UI can show a navigation-proof live spinner.
 func (s *Store) SetStepRun(ctx context.Context, stepID, runID string) error {

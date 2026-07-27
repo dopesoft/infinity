@@ -58,6 +58,52 @@ func resolveStepRef(ctx context.Context, store *plan.Store, raw string) (string,
 	return raw, nil // treat as a real step id (uuid)
 }
 
+// planAdopter is the subset of *plan.Store the cross-session pickup needs. Kept
+// as an interface so the plan_get/plan_update tools (which hold the narrower
+// planGetter) can share the same seam.
+type planAdopter interface {
+	GetAnyActive(ctx context.Context) (*plan.Plan, error)
+}
+
+// anyActivePlanForTurn is THE cross-session plan-pickup seam. Every path that
+// lets a turn reach a plan it doesn't own goes through here, so the two rules
+// that govern it are stated once and can't drift apart:
+//
+//  1. AUTONOMOUS ONLY. Cron/heartbeat/background mint a fresh session UUID per
+//     run and legitimately need to reach the plan they're executing. For
+//     INTERACTIVE chat this fallback is the bug: a brand-new chat session with
+//     no plan of its own would grab ANOTHER session's active plan and start
+//     mutating it (the 2026-07-02 bleed onto c03495f5). Interactive → no
+//     fallback; a missing plan correctly forces plan_create.
+//
+//  2. PICKING IT UP MEANS OWNING IT. The session now driving the plan is
+//     re-stamped onto it (AdoptSession). Without this the plan keeps pointing at
+//     a dead session and every session-keyed consumer downstream silently
+//     no-ops: the cron finalize settles nothing, the outcome classifier's
+//     incomplete-plan backstop sees nil and reports "did_work", and the plan
+//     spins as a phantom "Running" card forever. That is exactly what happened
+//     to the weekly AI digest on 2026-07-27 — retry attempt 2 finished the work
+//     while attempt 1 still owned the plan (see plan.Store.AdoptSession).
+//
+// Best-effort adoption: a failed re-stamp logs nothing and still returns the
+// plan, because losing the bookkeeping is strictly better than failing the
+// agent's tool call.
+func anyActivePlanForTurn(ctx context.Context, store planAdopter) (*plan.Plan, error) {
+	if store == nil || !IsAutonomous(ctx) {
+		return nil, nil
+	}
+	p, err := store.GetAnyActive(ctx)
+	if err != nil || p == nil {
+		return nil, err
+	}
+	if adopter, ok := store.(interface {
+		AdoptSession(ctx context.Context, planID, sessionID string) error
+	}); ok {
+		_ = adopter.AdoptSession(ctx, p.ID, SessionIDFromContext(ctx))
+	}
+	return p, nil
+}
+
 // resolvePositionalStep maps a 1-based step number to the active plan's step id.
 // It first looks up the active plan for the current session; when that yields
 // nothing (cross-session continuation, cron with a new session ID, or a context
@@ -69,14 +115,8 @@ func resolvePositionalStep(ctx context.Context, store *plan.Store, n int) (strin
 	if err != nil {
 		return "", err
 	}
-	if p == nil && IsAutonomous(ctx) {
-		// AUTONOMOUS ONLY (cron/heartbeat/background mint a fresh session UUID per
-		// run and legitimately need to reach the plan they're executing). For
-		// INTERACTIVE chat this fallback is the bug: a brand-new chat session with
-		// no plan of its own would grab ANOTHER session's active plan and start
-		// mutating it (the 2026-07-02 bleed onto c03495f5). Interactive → no
-		// fallback; a missing plan correctly forces plan_create.
-		p, err = store.GetAnyActive(ctx)
+	if p == nil {
+		p, err = anyActivePlanForTurn(ctx, store)
 		if err != nil {
 			return "", err
 		}
@@ -244,8 +284,8 @@ func (t *planUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 		// valid step IDs and can retry with the right ref immediately — no
 		// separate plan_get call needed (Rule #1b: mechanic, not prose).
 		p, _ := t.store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
-		if p == nil && IsAutonomous(ctx) {
-			p, _ = t.store.GetAnyActive(ctx)
+		if p == nil {
+			p, _ = anyActivePlanForTurn(ctx, t.store)
 		}
 		if p != nil {
 			b, _ := json.Marshal(map[string]any{
@@ -380,14 +420,11 @@ func (t *planGet) Execute(ctx context.Context, in map[string]any) (string, error
 	if err != nil {
 		return "", err
 	}
-	// Cross-session fallback — AUTONOMOUS ONLY. Cron/heartbeat mint a fresh
-	// session UUID per run and need to reach the plan they're executing. But for
-	// INTERACTIVE chat this is the bleed bug: a fresh chat session with no plan
-	// grabbed a STRANGER's active plan (2026-07-02, session 6b4eef2b pulled
-	// c03495f5 from c33de995 and wasted a minute mutating it). Interactive → no
-	// fallback: return null so the model correctly plan_creates its own.
-	if p == nil && IsAutonomous(ctx) {
-		p, err = t.store.GetAnyActive(ctx)
+	// Cross-session pickup (autonomous only, and it adopts the plan onto this
+	// session). This is how a cron RETRY reaches the plan its previous attempt
+	// created. See anyActivePlanForTurn.
+	if p == nil {
+		p, err = anyActivePlanForTurn(ctx, t.store)
 		if err != nil {
 			return "", err
 		}

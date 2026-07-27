@@ -123,7 +123,14 @@ func (e *AgentExecutor) ExecuteJob(j Job) (summary RunSummary, err error) {
 	// agent abandoned mid-plan would read "done" instead of "stopped early"
 	// (the boss saw exactly that on the broken self-improve nights).
 	defer func() {
-		if n := e.finalizeSession(sessionID); n > 0 {
+		// Terminal close ONLY when this attempt didn't error. A failed attempt
+		// may be retried (executeWithRetries), and the retry mints a fresh
+		// session that picks this plan up and adopts it — force-settling here
+		// would throw away the work the earlier attempt already completed and
+		// make the retry start from scratch. When retries are exhausted the run
+		// is classified 'failed' (honest, not a false green) and the stale-cron-
+		// plan sweep in the reconcile ticker closes the card.
+		if n := e.finalizeSession(sessionID, err == nil); n > 0 {
 			if summary.Meta == nil {
 				summary.Meta = map[string]any{}
 			}
@@ -414,7 +421,11 @@ func (e *AgentExecutor) seedSelfImproveApprovals(sessionID string, j Job) {
 // which the outcome classifier must read as "stopped early", never "done".
 // Best-effort + nil-safe; non-UUID (system_event) sessions have no UUID-keyed
 // plans and are skipped.
-func (e *AgentExecutor) finalizeSession(sessionID string) int {
+//
+// terminal says no retry is coming, so steps left merely 'pending' can be
+// settled too (see CloseSession). Between retries it is false and only the
+// in_progress reconcile runs, leaving the plan intact for the next attempt.
+func (e *AgentExecutor) finalizeSession(sessionID string, terminal bool) int {
 	if e == nil || e.Pool == nil || sessionID == "" {
 		return 0
 	}
@@ -423,13 +434,29 @@ func (e *AgentExecutor) finalizeSession(sessionID string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	n, err := plan.NewStore(e.Pool).FinalizeSession(ctx, sessionID)
+	store := plan.NewStore(e.Pool)
+	n, err := store.FinalizeSession(ctx, sessionID)
 	if err != nil {
 		// Real failure → stderr (severity:error). Success is silent; the plan
 		// reconcile ticker logs aggregate counts.
 		log.Printf("cron finalize session %s: %v", sessionID, err)
 	}
-	return n
+	if !terminal {
+		return n
+	}
+	// FinalizeSession only settles steps left 'in_progress'. A cron session
+	// never resumes, so a step still 'pending' at turn end is equally stranded —
+	// and leaving it pending is what kept the weekly-digest plan 'active' with a
+	// phantom "Running" card after the report had already been delivered
+	// (2026-07-27). CloseSession force-settles those too, stopping at a real
+	// checkpoint/blocked step so an "Awaiting you" plan is never steamrolled.
+	// Its count folds into n, so an abandoned plan reads "stopped early" instead
+	// of a false green.
+	m, err := store.CloseSession(ctx, sessionID)
+	if err != nil {
+		log.Printf("cron close session %s: %v", sessionID, err)
+	}
+	return n + m
 }
 
 // tagCronRunSession stamps the freshly-minted session id onto the cron's
