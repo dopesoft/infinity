@@ -71,7 +71,7 @@ func contextWindowFor(model string) int {
 
 	// OpenAI gpt-5.x - window differs by MINOR version AND tier. Verified vs
 	// OpenAI cards (all 128K max output):
-	//   gpt-5.4, gpt-5.4-pro, gpt-5.5, gpt-5.5-pro: 1,050,000
+	//   gpt-5.4, gpt-5.4-pro, gpt-5.5, gpt-5.5-pro, gpt-5.6(+sol/terra/luna): 1,050,000
 	//   gpt-5.4-mini/-nano, gpt-5.2, gpt-5.1, gpt-5(+pro/mini/nano): 400,000
 	if strings.HasPrefix(m, "gpt-5") {
 		// mini / nano stay at 400K on every minor version (gpt-5.4-mini is
@@ -79,7 +79,7 @@ func contextWindowFor(model string) int {
 		if strings.Contains(m, "-mini") || strings.Contains(m, "-nano") {
 			return 400_000
 		}
-		if strings.HasPrefix(m, "gpt-5.4") || strings.HasPrefix(m, "gpt-5.5") {
+		if strings.HasPrefix(m, "gpt-5.4") || strings.HasPrefix(m, "gpt-5.5") || strings.HasPrefix(m, "gpt-5.6") {
 			return 1_050_000
 		}
 		return 400_000
