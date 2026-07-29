@@ -105,16 +105,27 @@ export function SavedCard({
   });
 
   const hasBoth = artifactEntries.length > 0 && savedEntries.length > 0;
-  const pool =
-    seg === "saved"
-      ? savedEntries
-      : seg === "generated"
-        ? artifactEntries
-        : [...artifactEntries, ...savedEntries];
-  // "All" interleaves by recency so the freshest thing - a just-built app or a
-  // just-saved link - leads. Single-segment views keep their own order.
-  const shown =
-    seg === "all" ? [...pool].sort((a, b) => +new Date(b.at) - +new Date(a.at)) : pool;
+  const shown = React.useMemo(() => {
+    const pool =
+      seg === "saved"
+        ? savedEntries
+        : seg === "generated"
+          ? artifactEntries
+          : [...artifactEntries, ...savedEntries];
+    return [...pool].sort((a, b) => +new Date(b.at) - +new Date(a.at));
+  }, [seg, saved, artifacts, onOpen]);
+  const scrollKey = shown.map((e) => e.id).join("|");
+
+  const scrollerRef = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    // Pin to newest (left). Double-set catches late layout / scroll restoration.
+    el.scrollLeft = 0;
+    requestAnimationFrame(() => {
+      el.scrollLeft = 0;
+    });
+  }, [scrollKey, seg]);
 
   return (
     <Section
@@ -137,7 +148,10 @@ export function SavedCard({
         </div>
       ) : null}
       <div className="-mx-3 px-3 sm:mx-0 sm:px-0">
-        <div className="flex snap-x snap-mandatory items-stretch gap-3 overflow-x-auto pt-2 pb-3 scroll-touch no-scrollbar">
+        <div
+          ref={scrollerRef}
+          className="flex snap-x snap-mandatory items-stretch gap-3 overflow-x-auto overflow-anchor-none pt-2 pb-3 scroll-touch no-scrollbar"
+        >
           {shown.map((e) => (
             <ShelfTile key={e.id} e={e} />
           ))}
