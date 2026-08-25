@@ -115,7 +115,7 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, schedule, COALESCE(schedule_natural,''), job_kind, target,
 		       COALESCE(target_config::text, '{}'),
-		       enabled, max_retries, backoff_seconds,
+		       enabled, COALESCE(show_sessions, TRUE), max_retries, backoff_seconds,
 		       last_run_at, COALESCE(last_run_status,''), COALESCE(last_run_duration_ms,0),
 		       next_run_at, failure_count, created_at
 		  FROM mem_crons
@@ -132,7 +132,7 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 		var kind string
 		var targetCfg string
 		if err := rows.Scan(&j.ID, &j.Name, &j.Schedule, &j.ScheduleNatural, &kind,
-			&j.Target, &targetCfg, &j.Enabled, &j.MaxRetries, &j.BackoffSeconds,
+			&j.Target, &targetCfg, &j.Enabled, &j.ShowSessions, &j.MaxRetries, &j.BackoffSeconds,
 			&j.LastRunAt, &j.LastRunStatus, &j.LastRunDuration,
 			&j.NextRunAt, &j.FailureCount, &j.CreatedAt); err != nil {
 			return err
@@ -237,7 +237,7 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// mem_sessions, so a bare minted uuid makes plan.Create fail (SQLSTATE
 		// 23503) and the step-timeline card silently never appears. Book the row
 		// here, once, for every fire.
-		s.ensureSession(ctx, j.RunSessionID)
+		s.ensureSession(ctx, j.RunSessionID, j)
 		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
 		handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 		summary, execErr, attempts := s.executeWithRetries(ctx, j)
@@ -379,15 +379,31 @@ func runMetaWithAttempts(meta map[string]any, attempts int) map[string]any {
 // system task) fails to insert and the live step-timeline card never shows.
 // Best-effort + idempotent (ON CONFLICT DO NOTHING); a failure here never blocks
 // the fire — the executor just falls back to a NULL/own session as before.
-func (s *Scheduler) ensureSession(ctx context.Context, id string) {
+func (s *Scheduler) ensureSession(ctx context.Context, id string, j Job) {
 	if s == nil || s.pool == nil || id == "" {
 		return
 	}
+	// Stamp WHICH job this container belongs to, the same shape the agent
+	// executor writes. Without it a cron session is an anonymous 'cron' row:
+	// it can't be labelled with the job's name in the Sessions list, and the
+	// per-job "don't list this chore's sessions" switch can't find it either.
+	// 488 rows were sitting in the database like that, kept out of the boss's
+	// list only by the accident of having no observations to render.
+	origin, _ := json.Marshal(map[string]any{
+		"cron_id":   j.ID,
+		"cron_name": j.Name,
+		"job_kind":  j.JobKind,
+	})
 	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO mem_sessions (id, kind, started_at)
-		VALUES ($1::uuid, 'cron', NOW())
-		ON CONFLICT (id) DO NOTHING
-	`, id); err != nil {
+		INSERT INTO mem_sessions (id, kind, origin_ref, started_at)
+		VALUES ($1::uuid, 'cron', $2::jsonb, NOW())
+		ON CONFLICT (id) DO UPDATE
+		   SET kind       = 'cron',
+		       origin_ref = CASE
+		           WHEN mem_sessions.origin_ref = '{}'::jsonb THEN EXCLUDED.origin_ref
+		           ELSE mem_sessions.origin_ref
+		       END
+	`, id, string(origin)); err != nil {
 		log.Printf("cron: ensureSession %s: %v", id, err)
 	}
 }
@@ -448,17 +464,21 @@ func (s *Scheduler) Upsert(ctx context.Context, j Job) (string, error) {
 	targetCfg = s.deriveToolScope(ctx, j.Target, targetCfg)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_crons (id, name, schedule, schedule_natural, job_kind, target,
-		                       target_config, enabled, max_retries, backoff_seconds)
-		VALUES ($1::uuid, $2, $3, NULLIF($4,''), $5, $6, $7::jsonb, $8, $9, $10)
+		                       target_config, enabled, show_sessions, max_retries, backoff_seconds)
+		VALUES ($1::uuid, $2, $3, NULLIF($4,''), $5, $6, $7::jsonb, $8, $9, $10, $11)
 		ON CONFLICT (name) DO UPDATE SET
 		  schedule = EXCLUDED.schedule,
 		  schedule_natural = EXCLUDED.schedule_natural,
 		  job_kind = EXCLUDED.job_kind,
 		  target = EXCLUDED.target,
 		  target_config = EXCLUDED.target_config,
-		  enabled = EXCLUDED.enabled
+		  enabled = EXCLUDED.enabled,
+		  -- Session visibility is the boss's setting, not the job definition's.
+		  -- An edit that re-saves a cron (or a seed migration re-running) must
+		  -- never silently put a chore's sessions back in his list.
+		  show_sessions = mem_crons.show_sessions
 	`, j.ID, j.Name, j.Schedule, j.ScheduleNatural, string(j.JobKind), j.Target, targetCfg,
-		j.Enabled, j.MaxRetries, j.BackoffSeconds)
+		j.Enabled, showSessionsOrDefault(j), j.MaxRetries, j.BackoffSeconds)
 	if err != nil {
 		return "", err
 	}
@@ -526,6 +546,35 @@ func (s *Scheduler) deriveToolScope(ctx context.Context, target, cfg string) str
 // re-computes next_run_at. This is the "pause without deleting" path — the row,
 // its history, and its config are all preserved, so a disabled cron can be
 // switched back on later with one call.
+// SetShowSessions flips whether this job's sessions appear in the boss's
+// Sessions list. Mirrors SetEnabled, minus the Reload: visibility is a read-time
+// property of the list, so nothing about the schedule changes.
+// showSessionsOrDefault: a Job decoded from an API body that never mentioned
+// show_sessions arrives with the zero value (false), which would hide a brand
+// new cron's sessions for no reason. Only an explicit false from a caller that
+// knows about the field should hide, and that path goes through
+// SetShowSessions, so INSERTs default to visible.
+func showSessionsOrDefault(j Job) bool {
+	if j.ID == "" {
+		return true // brand new job: visible until told otherwise
+	}
+	return j.ShowSessions
+}
+
+func (s *Scheduler) SetShowSessions(ctx context.Context, id string, show bool) error {
+	if s == nil || s.pool == nil {
+		return errors.New("scheduler unconfigured")
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE mem_crons SET show_sessions = $2 WHERE id = $1::uuid`, id, show)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
+	}
+	return nil
+}
+
 func (s *Scheduler) SetEnabled(ctx context.Context, id string, enabled bool) error {
 	if s == nil || s.pool == nil {
 		return errors.New("scheduler unconfigured")
@@ -559,7 +608,7 @@ func (s *Scheduler) List(ctx context.Context) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, schedule, COALESCE(schedule_natural,''), job_kind, target,
 		       COALESCE(target_config::text, '{}'),
-		       enabled, max_retries, backoff_seconds,
+		       enabled, COALESCE(show_sessions, TRUE), max_retries, backoff_seconds,
 		       last_run_at, COALESCE(last_run_status,''), COALESCE(last_run_duration_ms,0),
 		       next_run_at, failure_count, created_at
 		  FROM mem_crons
@@ -575,7 +624,7 @@ func (s *Scheduler) List(ctx context.Context) ([]Job, error) {
 		var kind string
 		var targetCfg string
 		if err := rows.Scan(&j.ID, &j.Name, &j.Schedule, &j.ScheduleNatural, &kind,
-			&j.Target, &targetCfg, &j.Enabled, &j.MaxRetries, &j.BackoffSeconds,
+			&j.Target, &targetCfg, &j.Enabled, &j.ShowSessions, &j.MaxRetries, &j.BackoffSeconds,
 			&j.LastRunAt, &j.LastRunStatus, &j.LastRunDuration,
 			&j.NextRunAt, &j.FailureCount, &j.CreatedAt); err != nil {
 			return nil, err
@@ -607,7 +656,7 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	// Same as the scheduled path: mint + stamp the session id at begin so a
 	// manual "Run now" of a plan-producing job shows its live step timeline.
 	j.RunSessionID = uuid.NewString()
-	s.ensureSession(ctx, j.RunSessionID) // FK: mem_plans.session_id → mem_sessions (see makeFireFn)
+	s.ensureSession(ctx, j.RunSessionID, j) // FK: mem_plans.session_id → mem_sessions (see makeFireFn)
 	handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual)
 	handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
 	summary, execErr, attempts := s.executeWithRetries(ctx, j)

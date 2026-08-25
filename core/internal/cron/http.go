@@ -155,6 +155,38 @@ func (a *API) handleScoped(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": body.Enabled})
 		return
 	}
+	// /api/crons/:id/show-sessions → whether this job's sessions appear in the
+	// boss's Sessions list. Body: {"show_sessions": true|false}. Separate from
+	// /enabled on purpose: this changes what he SEES, never whether the job
+	// runs, and no scheduler reload is needed.
+	if strings.HasSuffix(tail, "/show-sessions") {
+		if r.Method != http.MethodPost && r.Method != http.MethodPatch {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimSuffix(tail, "/show-sessions")
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			ShowSessions bool `json:"show_sessions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.scheduler.SetShowSessions(r.Context(), id, body.ShowSessions); err != nil {
+			if errors.Is(err, errNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "show_sessions": body.ShowSessions})
+		return
+	}
 	id := tail
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

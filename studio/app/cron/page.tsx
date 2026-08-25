@@ -236,6 +236,7 @@ function CronSection() {
         onOpenChange={(v) => {
           if (!v) setSelected(null);
         }}
+        onChanged={() => void load()}
       />
     </div>
   );

@@ -8,49 +8,17 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/sessions"
 )
 
-// renderableHooksSQL is the hook whitelist this file's transcript query reads.
-// An observation under any other hook_name is invisible in the UI, no matter
-// what it contains.
-//
-// It lives here, as one const, because handleSessions in api.go filters the
-// sessions LIST on the same definition (sessionHasRenderableSQL below). The
-// boss's rule: an empty session is of no use to him, so the list must never
-// offer him a session this file would render as nothing. Two hand-maintained
-// copies of the whitelist would drift on the first new hook and put the blank
-// rows straight back in his history — so add a hook HERE and both agree.
-const renderableHooksSQL = `'UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure'`
-
-// sessionHasRenderableSQL is a boolean SQL fragment, parameterless, expecting a
-// mem_sessions row aliased `s` in scope. True when the transcript query below
-// would emit at least one message for that session.
-//
-// It mirrors the renderer's per-row skips exactly, which is the whole point:
-//   - a tool card without a tool_call_id is dropped (`continue`), so it doesn't count
-//   - any other hook with empty text is dropped, so it doesn't count
-//   - an errored turn surfaces as the red card even with no observations, so it counts
-//
-// Anything that makes a session unreadable makes it unlisted, by construction.
-// No caller has to remember anything.
-const sessionHasRenderableSQL = `(
-	EXISTS (
-		SELECT 1 FROM mem_observations o
-		 WHERE o.session_id = s.id
-		   AND (
-		         (o.hook_name IN ('PostToolUse', 'PostToolUseFailure')
-		            AND btrim(COALESCE(o.payload->>'tool_call_id', '')) <> '')
-		      OR (o.hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
-		            AND btrim(COALESCE(o.raw_text, '')) <> '')
-		   )
-	)
-	OR EXISTS (
-		SELECT 1 FROM mem_turns t
-		 WHERE t.session_id = s.id
-		   AND t.status = 'errored'
-		   AND btrim(COALESCE(t.error, '')) <> ''
-	)
-)`
+// The definition of "this session has something to show" lives in
+// internal/sessions (RenderableHooksSQL / HasRenderableSQL) so the transcript
+// renderer here, the sessions LIST in api.go, and the auto-namer's sweep all
+// read the SAME predicate. Aliased here to keep the query text below readable.
+const (
+	renderableHooksSQL      = sessions.RenderableHooksSQL
+	sessionHasRenderableSQL = sessions.HasRenderableSQL
+)
 
 type sessionAttachmentDTO struct {
 	Name        string `json:"name"`

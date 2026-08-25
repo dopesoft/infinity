@@ -800,7 +800,15 @@ func serveCmd() *cobra.Command {
 				// model names the session. (Before this it was Anthropic-only
 				// and went silent the moment the boss switched to gpt-5.4.)
 				sessionNamer = sessions.NewNamer(pool, provider, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
-				fmt.Printf("  sessions: auto-naming enabled (uses the active Studio model)\n")
+				// The turn-end attempt is the fast path, not the guarantee: it
+				// misses whenever the session row hasn't committed yet (a
+				// scheduled run has exactly one turn, so "retry next turn"
+				// never happens) or the draft call fails. This sweep is what
+				// actually makes a title certain - it finds anything untitled
+				// that has something to render and names it, bounded attempts,
+				// failures recorded on the row instead of vanishing.
+				sessions.StartSweep(context.Background(), sessionNamer, 10*time.Minute, sessions.DefaultSweepBatch)
+				fmt.Printf("  sessions: auto-naming enabled (active Studio model) + untitled sweep armed\n")
 			}
 
 			// Connectors cache: live picture of Composio connected accounts +

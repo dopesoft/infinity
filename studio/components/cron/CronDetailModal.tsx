@@ -1,13 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarClock, Clock } from "lucide-react";
+import { CalendarClock, Clock, Eye, EyeOff } from "lucide-react";
 import { ResponsiveModal, ResponsiveModalHeader } from "@/components/ui/responsive-modal";
 import { ModalSection, ModalPre, ModalDl } from "@/components/ui/modal-content";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RunIndicator, useRuns } from "@/lib/runs";
-import { previewCron, triggerCron, setCronEnabled, type CronJobDTO } from "@/lib/api";
+import {
+  previewCron,
+  triggerCron,
+  setCronEnabled,
+  setCronShowSessions,
+  type CronJobDTO,
+} from "@/lib/api";
 import { cronKindMeta, casualTime, localTzAbbrev, cronToHuman } from "./cronMeta";
 
 /* The full cron, on click. Closes the boss's "I can't even read the entire
@@ -19,13 +25,20 @@ export function CronDetailModal({
   cron,
   open,
   onOpenChange,
+  onChanged,
 }: {
   cron: CronJobDTO | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** Called after a setting is changed here so the list reloads. */
+  onChanged?: () => void;
 }) {
   const [nextFires, setNextFires] = useState<string[] | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
+  // Optimistic mirror of the switch: the server is the source of truth (the
+  // list reloads via onChanged), this only keeps the row from flickering back
+  // for the moment between tap and refetch.
+  const [showSessions, setShowSessions] = useState<boolean | null>(null);
 
   // Last-run narrative is server state (mem_runs), same source the list
   // spinner reads, so the detail survives navigation/refresh and shows the
@@ -52,7 +65,13 @@ export function CronDetailModal({
     };
   }, [open, cron]);
 
+  useEffect(() => {
+    setShowSessions(null);
+  }, [cron?.id]);
+
   if (!cron) return null;
+
+  const sessionsListed = showSessions ?? cron.show_sessions ?? true;
 
   const meta = cronKindMeta(cron.job_kind);
   const tz = localTzAbbrev();
@@ -118,6 +137,44 @@ export function CronDetailModal({
       <ModalSection label={cron.job_kind === "system_task" ? "Maintenance task" : "What it does"}>
         <ModalPre>{cron.target || "(no instructions stored)"}</ModalPre>
         <p className="mt-2 text-[12px] text-muted-foreground">{meta.blurb}</p>
+      </ModalSection>
+
+      {/* Whether this job's runs are worth a row in Sessions. Some jobs produce
+          something to talk about (a report, a content package); others are
+          chores whose result already lives on another surface, and a session
+          for those is just something to scroll past. The job carries the
+          answer, so it applies to every future run without another decision. */}
+      <ModalSection label="Sessions">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] text-foreground/90">
+              {sessionsListed
+                ? "Runs of this job appear in Sessions, under Automated."
+                : "Runs of this job stay out of your Sessions list."}
+            </p>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              Only affects what you see. The job keeps running, and its history
+              stays in the run log either way.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant={sessionsListed ? "secondary" : "outline"}
+            className="h-9 shrink-0 gap-1.5"
+            onClick={async () => {
+              const next = !sessionsListed;
+              setShowSessions(next);
+              const ok = await setCronShowSessions(cron.id, next);
+              if (!ok) setShowSessions(!next); // put the switch back, honestly
+              onChanged?.();
+            }}
+            aria-label={sessionsListed ? "Hide this job's sessions" : "Show this job's sessions"}
+          >
+            {sessionsListed ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+            {sessionsListed ? "Shown" : "Hidden"}
+          </Button>
+        </div>
       </ModalSection>
 
       {/* Schedule — explained in the boss's local frame. ONE convention. */}

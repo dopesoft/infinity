@@ -26,7 +26,14 @@ import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { deleteSession, fetchSessions, type SessionDTO } from "@/lib/api";
+import {
+  deleteSession,
+  fetchSessionsByScope,
+  type SessionDTO,
+  type SessionScope,
+} from "@/lib/api";
+import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
+import { Bot } from "lucide-react";
 import { useRealtime } from "@/lib/realtime/provider";
 import { useIsDesktop } from "@/lib/use-media-query";
 
@@ -97,7 +104,12 @@ export function SessionsDrawer({
   trigger: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // One list per tab. Kept separate rather than filtering a single fetch so
+  // the boss's own chats can't be pushed out of the window by a busy night of
+  // scheduled runs (the API returns 50 rows per scope).
   const [sessions, setSessions] = useState<SessionDTO[]>([]);
+  const [autoSessions, setAutoSessions] = useState<SessionDTO[]>([]);
+  const [scope, setScope] = useState<SessionScope>("user");
   const [q, setQ] = useState("");
   const [now, setNow] = useState<number>(0);
   const isDesktop = useIsDesktop();
@@ -193,8 +205,14 @@ export function SessionsDrawer({
   }, []);
 
   async function refresh() {
-    const list = await fetchSessions();
-    setSessions(list ?? []);
+    // Both scopes on every refresh: the tab counts have to be right the moment
+    // the drawer opens, and each list is a single indexed query.
+    const [mine, automated] = await Promise.all([
+      fetchSessionsByScope("user"),
+      fetchSessionsByScope("automated"),
+    ]);
+    setSessions(mine ?? []);
+    setAutoSessions(automated ?? []);
   }
 
   useEffect(() => {
@@ -278,16 +296,27 @@ export function SessionsDrawer({
     setDeletingId(null);
   }
 
+  const active = scope === "automated" ? autoSessions : sessions;
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return sessions;
-    return sessions.filter((s) => {
-      const name = (s.name ?? "").toLowerCase();
+    if (!needle) return active;
+    return active.filter((s) => {
+      // Search what the boss can SEE (the row's title and its origin badge),
+      // not just the stored name - otherwise typing "inbox triage" matches
+      // nothing on a row that literally reads "Inbox triage".
+      const title = (s.title ?? s.name ?? "").toLowerCase();
+      const origin = (s.origin ?? "").toLowerCase();
       const tmpl = (s.project_template ?? "").toLowerCase();
       const id = s.id.toLowerCase();
-      return name.includes(needle) || tmpl.includes(needle) || id.includes(needle);
+      return (
+        title.includes(needle) ||
+        origin.includes(needle) ||
+        tmpl.includes(needle) ||
+        id.includes(needle)
+      );
     });
-  }, [sessions, q]);
+  }, [active, q]);
 
   const grouped = useMemo(() => {
     if (now === 0) return [] as Array<{ group: Group; rows: SessionDTO[] }>;
@@ -358,6 +387,31 @@ export function SessionsDrawer({
             <span className="hidden sm:inline">New</span>
           </Button>
         </div>
+        {/* Mine vs Automated. Sits under the search row, full width, directly
+            above the list it filters — a control belongs with the thing it
+            acts on. Chips (scrollable) per the standard page-tab look, with
+            counts so the boss can see at a glance whether the machinery has
+            been busy. */}
+        <PageTabs
+          value={scope}
+          onValueChange={(v) => setScope(v as SessionScope)}
+          className="mt-2.5"
+        >
+          <PageTabsList scrollable>
+            <PageTabsTrigger value="user">
+              Mine
+              <Badge variant="secondary" className="font-mono text-[10px] tabular-nums">
+                {sessions.length}
+              </Badge>
+            </PageTabsTrigger>
+            <PageTabsTrigger value="automated">
+              Automated
+              <Badge variant="secondary" className="font-mono text-[10px] tabular-nums">
+                {autoSessions.length}
+              </Badge>
+            </PageTabsTrigger>
+          </PageTabsList>
+        </PageTabs>
       </div>
       {/* Bulk-delete confirm strip - sits between the search bar and the
           list so the count + actions are within thumb reach on mobile and
@@ -397,7 +451,11 @@ export function SessionsDrawer({
       <div className="max-h-[70dvh] overflow-y-auto px-2 pb-4 scroll-touch lg:max-h-[60vh]">
         {grouped.length === 0 ? (
           <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-            No sessions match. Start a fresh one above.
+            {scope === "automated"
+              ? q.trim()
+                ? "No automated sessions match."
+                : "Nothing automated yet. Scheduled runs and workflows that hold a conversation show up here."
+              : "No sessions match. Start a fresh one above."}
           </p>
         ) : (
           grouped.map(({ group, rows }) => (
@@ -410,26 +468,32 @@ export function SessionsDrawer({
                   const isConfirming = confirmingId === s.id;
                   const isDeleting = deletingId === s.id;
                   const isSelected = selectedIds.has(s.id);
-                  const displayName = s.name?.trim() || `${s.id.slice(0, 8)}…`;
+                  // Title first, then the stored name, and only a hex slug if
+                  // both are somehow empty (a session with no row and no text).
+                  const displayName =
+                    s.title?.trim() || s.name?.trim() || `${s.id.slice(0, 8)}…`;
+                  const isAutomated = !!s.kind && s.kind !== "user";
                   const rowMeta = (
                     <>
-                      {s.project_path ? (
+                      {isAutomated ? (
+                        <Bot className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                      ) : s.project_path ? (
                         <FolderGit2 className="size-4 shrink-0 text-info" aria-hidden />
                       ) : (
                         <MessageCircle className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">
-                          {s.name?.trim() || (
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {s.id.slice(0, 8)}…
-                            </span>
-                          )}
-                        </div>
+                        <div className="truncate text-sm font-medium">{displayName}</div>
                         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                           <span suppressHydrationWarning>
                             {formatRowDate(s.last_run_at || s.started_at, now)}
                           </span>
+                          {/* Where the session came from: the cron that ran it,
+                              or the dashboard card the boss tapped Discuss on.
+                              Suppressed when it would just repeat the title. */}
+                          {s.origin && s.origin !== displayName ? (
+                            <span className="truncate">{s.origin}</span>
+                          ) : null}
                           {s.live && (
                             <span className="inline-flex items-center gap-1">
                               <span className="size-1.5 rounded-full bg-success" /> live

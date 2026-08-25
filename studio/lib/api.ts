@@ -54,7 +54,18 @@ export type SessionDTO = {
   last_run_at?: string;
   message_count: number;
   live?: boolean;
+  /** Who opened it: "user" for the boss's own chats, else the machinery
+   *  that made it (cron / workflow / heartbeat / voyager / sentinel). */
+  kind?: string;
+  /** Human name of the producer, e.g. "Inbox triage". Empty for own chats. */
+  origin?: string;
+  /** What to display. The drafted name when there is one, else derived from
+   *  the producer or the opening line. Never a hex id. */
+  title?: string;
 };
+
+/** Which slice of the sessions list to load. Mirrors ?kind= on the API. */
+export type SessionScope = "user" | "automated" | "all";
 
 export async function renameSession(id: string, name: string): Promise<boolean> {
   try {
@@ -787,6 +798,11 @@ export const fetchTools = (signal?: AbortSignal) =>
 export const fetchMCP = (signal?: AbortSignal) => getJSON<MCPStatus[]>("/api/mcp", signal);
 export const fetchSessions = (signal?: AbortSignal) =>
   getJSON<SessionDTO[]>("/api/sessions", signal);
+
+// Sessions filtered by who opened them. The drawer keeps one list per tab so
+// neither crowds the other out of the 50-row window.
+export const fetchSessionsByScope = (scope: SessionScope, signal?: AbortSignal) =>
+  getJSON<SessionDTO[]>(`/api/sessions?kind=${encodeURIComponent(scope)}`, signal);
 
 export type SessionMessageDTO = {
   role: "user" | "assistant";
@@ -1592,6 +1608,9 @@ export type CronJobDTO = {
     | "system_task";
   target: string;
   enabled: boolean;
+  /** Whether this job's sessions appear in the Sessions list. Chores whose
+   *  result already shows up elsewhere (triage → Follow-ups) set it false. */
+  show_sessions?: boolean;
   max_retries: number;
   backoff_seconds: number;
   last_run_at?: string | null;
@@ -1655,6 +1674,25 @@ export async function setCronEnabled(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// setCronShowSessions controls whether this job's sessions are listed under
+// Sessions → Automated. Separate from enabled: it changes what the boss SEES,
+// never whether the job runs. Returns true on success.
+export async function setCronShowSessions(
+  id: string,
+  showSessions: boolean,
+): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/crons/${id}/show-sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ show_sessions: showSessions }),
     });
     return res.ok;
   } catch {

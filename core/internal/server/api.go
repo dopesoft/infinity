@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -90,6 +91,17 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		LastRunAt       string `json:"last_run_at,omitempty"`
 		MessageCount    int    `json:"message_count"`
 		Live            bool   `json:"live"`
+		// Kind is who opened the session: 'user' for the boss's own chats,
+		// anything else for machinery (cron / workflow / heartbeat / …). It
+		// drives the Mine vs Automated switcher in the sessions list.
+		Kind string `json:"kind,omitempty"`
+		// Origin names the specific producer ("Inbox triage"), rendered as the
+		// row's badge so an automated session says what it was FOR.
+		Origin string `json:"origin,omitempty"`
+		// Title is what to show. Falls back, in order, to the producer's name
+		// and then the opening line of the conversation, so a row is never a
+		// hex slug the boss can't place.
+		Title string `json:"title,omitempty"`
 	}
 
 	// Build a set of session IDs that are alive in this core process's
@@ -107,6 +119,21 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+
+	// ?kind=user (default) | automated | all — the sessions list switcher.
+	// Unknown values are rejected rather than silently treated as the default:
+	// a typo'd filter returning the wrong set is worse than an error.
+	kindParam := r.URL.Query().Get("kind")
+	kindSQL, kindOK := sessionKindFilter(kindParam)
+	if !kindOK {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "kind must be one of: user, automated, all",
+		})
+		return
+	}
+	automatedOnly := strings.TrimSpace(strings.ToLower(kindParam)) != "" &&
+		strings.TrimSpace(strings.ToLower(kindParam)) != "user" &&
+		strings.TrimSpace(strings.ToLower(kindParam)) != "mine"
 
 	out := []sessionDTO{}
 
@@ -151,11 +178,23 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			       s.last_run_at,
 			       COALESCE((SELECT COUNT(*) FROM mem_observations o
 			                  WHERE o.session_id = s.id
-			                    AND o.hook_name IN (`+renderableHooksSQL+`)), 0) AS msg_count
+			                    AND o.hook_name IN (`+renderableHooksSQL+`)), 0) AS msg_count,
+			       COALESCE(s.kind, 'user') AS kind,
+			       COALESCE(s.origin_ref, '{}'::jsonb)::text AS origin_ref,
+			       COALESCE(s.seeded_from, '{}'::jsonb)::text AS seeded_from,
+			       -- The opening line, for a session whose auto-title hasn't
+			       -- been drafted yet. Cheaper than it looks: indexed on
+			       -- session_id, one row, and only for the 50 listed.
+			       COALESCE((SELECT o.raw_text FROM mem_observations o
+			                  WHERE o.session_id = s.id
+			                    AND o.hook_name IN ('UserPromptSubmit', 'DashboardSeed')
+			                    AND btrim(COALESCE(o.raw_text,'')) <> ''
+			                  ORDER BY o.created_at LIMIT 1), '') AS first_message
 			  FROM mem_sessions s
 			 WHERE s.deleted_at IS NULL
-			   AND COALESCE(s.kind, 'user') = 'user'
+			   AND `+kindSQL+`
 			   AND `+sessionHasRenderableSQL+`
+			   AND `+sessionJobIsListableSQL+`
 			 ORDER BY COALESCE(s.last_run_at, s.started_at) DESC
 			 LIMIT $1
 		`, limit)
@@ -167,11 +206,30 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 				var d sessionDTO
 				var started time.Time
 				var ended, lastRun *time.Time
+				var originRaw, seededRaw, firstMessage string
 				if err := rows.Scan(&d.ID, &d.Name, &started, &ended,
 					&d.Project, &d.ProjectPath, &d.ProjectTemplate,
-					&d.DevPort, &lastRun, &d.MessageCount); err != nil {
+					&d.DevPort, &lastRun, &d.MessageCount,
+					&d.Kind, &originRaw, &seededRaw, &firstMessage); err != nil {
 					log.Printf("handleSessions scan: %v", err)
 					continue
+				}
+				var origin map[string]any
+				if originRaw != "" {
+					_ = json.Unmarshal([]byte(originRaw), &origin)
+				}
+				d.Origin = sessionOriginLabel(d.Kind, origin)
+				if d.Origin == "" && seededRaw != "" {
+					var seed map[string]any
+					_ = json.Unmarshal([]byte(seededRaw), &seed)
+					d.Origin = seedOriginLabel(seed)
+				}
+				// The drafted name always wins: it describes what actually
+				// happened in the session. The derived title only stands in
+				// while there isn't one.
+				d.Title = d.Name
+				if strings.TrimSpace(d.Title) == "" {
+					d.Title = sessionFallbackTitle(d.Kind, origin, firstMessage)
 				}
 				d.StartedAt = started.UTC().Format(time.RFC3339)
 				if ended != nil {
@@ -192,7 +250,10 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	// Any session that's live in RAM but doesn't have a mem_sessions row
 	// yet (extremely early in a brand-new session, race window) - surface
 	// it anyway so the UI never lies about what's running.
-	if s.loop != nil {
+	// Skipped on the Automated tab: a session live in RAM without a row yet
+	// has no kind to test, so adding it there would put a chat the boss just
+	// started under "Automated".
+	if s.loop != nil && !automatedOnly {
 		for _, sess := range s.loop.Sessions() {
 			if _, ok := live[sess.ID]; !ok {
 				continue
@@ -202,6 +263,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 				StartedAt:    sess.StartedAt.UTC().Format("2006-01-02T15:04:05Z"),
 				MessageCount: len(sess.Snapshot()),
 				Live:         true,
+				Kind:         "user",
 			})
 		}
 	}

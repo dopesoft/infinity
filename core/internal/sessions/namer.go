@@ -10,6 +10,7 @@ package sessions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -99,6 +102,12 @@ func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
 	if sessionID == "" || strings.TrimSpace(userMsg) == "" {
 		return
 	}
+	// A non-uuid id is a synthetic session (delegate child, background worker).
+	// It has no mem_sessions row by design, so every query below would error.
+	// Skip it deliberately rather than erroring once per turn forever.
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return
+	}
 
 	n.mu.Lock()
 	if _, busy := n.inflight[sessionID]; busy {
@@ -121,8 +130,19 @@ func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
 		var existing *string
 		if err := n.pool.QueryRow(ctx,
 			`SELECT name FROM mem_sessions WHERE id = $1::uuid`, sessionID).Scan(&existing); err != nil {
-			// Row missing is fine - the loop creates the row on first
-			// observation insert; we'll try again next turn.
+			// The row usually just hasn't committed yet: it's created
+			// asynchronously by the capture pipeline on the first observation,
+			// and this runs the moment the turn ends.
+			//
+			// This used to be the end of the story ("we'll try again next
+			// turn"), which quietly assumed there would BE a next turn. A
+			// scheduled run has exactly one, so its session stayed nameless
+			// forever, and that assumption is most of why the boss's list
+			// filled up with hex slugs. SweepUnnamed now owns the retry for
+			// every one of these, however long after the fact.
+			if !errors.Is(err, pgx.ErrNoRows) {
+				log.Printf("sessions.namer: lookup session=%s: %v (the sweep will retry)", sessionID, err)
+			}
 			return
 		}
 		if existing != nil && strings.TrimSpace(*existing) != "" {
@@ -131,9 +151,15 @@ func (n *Namer) MaybeName(sessionID, userMsg, assistantMsg string) {
 
 		name, err := n.draftName(ctx, userMsg, assistantMsg)
 		if err != nil || name == "" {
+			// Not the end of the road any more: record the attempt so the
+			// sweep retries it (and gives up after a bounded number rather
+			// than burning calls on a session that can never be titled).
+			reason := "empty draft"
 			if err != nil {
+				reason = err.Error()
 				log.Printf("sessions.namer: draft err session=%s: %v", sessionID, err)
 			}
+			n.countNameAttempt(ctx, sessionID, reason)
 			return
 		}
 

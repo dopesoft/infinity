@@ -53,14 +53,20 @@ type Job struct {
 	Target          string          `json:"target"`
 	TargetConfig    json.RawMessage `json:"target_config,omitempty"`
 	Enabled         bool            `json:"enabled"`
-	MaxRetries      int             `json:"max_retries"`
-	BackoffSeconds  int             `json:"backoff_seconds"`
-	LastRunAt       *time.Time      `json:"last_run_at,omitempty"`
-	LastRunStatus   string          `json:"last_run_status,omitempty"`
-	LastRunDuration int             `json:"last_run_duration_ms,omitempty"`
-	NextRunAt       *time.Time      `json:"next_run_at,omitempty"`
-	FailureCount    int             `json:"failure_count"`
-	CreatedAt       time.Time       `json:"created_at"`
+	// ShowSessions declares whether this job's sessions belong in the boss's
+	// Sessions list. Routine chores set it false: their result already lives on
+	// another surface (triage → Follow-ups, a deploy check → the run log), so a
+	// session row is noise. Defaults true, so a new job is visible until told
+	// otherwise. Runs and history are unaffected either way.
+	ShowSessions    bool       `json:"show_sessions"`
+	MaxRetries      int        `json:"max_retries"`
+	BackoffSeconds  int        `json:"backoff_seconds"`
+	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
+	LastRunStatus   string     `json:"last_run_status,omitempty"`
+	LastRunDuration int        `json:"last_run_duration_ms,omitempty"`
+	NextRunAt       *time.Time `json:"next_run_at,omitempty"`
+	FailureCount    int        `json:"failure_count"`
+	CreatedAt       time.Time  `json:"created_at"`
 
 	// RunSessionID is a transient, per-fire session id the scheduler mints
 	// BEFORE executing and stamps onto the run's mem_runs row immediately (so a
