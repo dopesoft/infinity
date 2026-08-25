@@ -20,17 +20,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/dopesoft/infinity/core/internal/connectors"
 	"github.com/dopesoft/infinity/core/internal/surface"
 )
-
-// FollowupBodyFetcher retrieves a message's full rendered body (HTML + text)
-// for durable capture at surface time. Satisfied by connectors.MessageFetcher
-// and injected (late-bound in serve.go) so the generic surface tool stays
-// vendor-agnostic - it asks "give me the body for this id", never "call Gmail".
-type FollowupBodyFetcher interface {
-	FetchMessage(ctx context.Context, source, accountHint, messageID string) (html, text string, attachments []connectors.Attachment, err error)
-}
 
 // RegisterSurfaceTools wires surface_item + surface_update + surface_list.
 // No-op when pool is nil so chat-only / no-DB deployments don't break
@@ -48,13 +39,8 @@ func RegisterSurfaceTools(r *Registry, pool *pgxpool.Pool) {
 // ── surface_item ────────────────────────────────────────────────────────────
 
 type surfaceItemTool struct {
-	store   *surface.Store
-	fetcher FollowupBodyFetcher // late-bound; nil until serve.go wires it
+	store *surface.Store
 }
-
-// SetBodyFetcher injects the durable-body fetcher after registration (the
-// fetcher is constructed later in boot than the tool registry).
-func (t *surfaceItemTool) SetBodyFetcher(f FollowupBodyFetcher) { t.fetcher = f }
 
 func (t *surfaceItemTool) Name() string { return "surface_item" }
 func (t *surfaceItemTool) Description() string {
@@ -182,32 +168,10 @@ func (t *surfaceItemTool) Execute(ctx context.Context, in map[string]any) (strin
 		it.Actions = defaultEmailActions()
 	}
 
-	// Durable email body: for a follow-up email surfaced with a stable id and
-	// no body already supplied, fetch + store the full rendered body NOW, while
-	// the connector is healthy. The boss can then read the whole email from the
-	// dashboard later with NO live connector call - even if the account is
-	// revoked before he ever opens it. The fetch + MIME decode run in Go
-	// (connectors.MessageFetcher), never through the model. Best-effort: a miss
-	// just leaves the lazy open-time path (which also caches) to fill it later.
-	//
-	// For a follow-up EMAIL the Message pane must ALWAYS be the real Gmail body
-	// — never a summary, never the skill's paraphrase. The triage skill
-	// sometimes (wrongly) passes its own summary as body_html/body_text, and
-	// the old `cached == ""` guard then SKIPPED this fetch, so the real email
-	// silently went missing and the Message pane showed a summary. So for an
-	// email with a fetchable id we ALWAYS fetch the real body and let it WIN
-	// over whatever the skill supplied. The skill's summary still shows in the
-	// Context pane (the separate `body` field). Best-effort: if the fetch fails
-	// (e.g. a revoked account) we keep what was passed so the item degrades to
-	// the summary instead of going blank, and the open-time path retries.
-	if t.fetcher != nil && it.ExternalID != "" && isFollowupEmailItem(it.Surface, it.Kind) {
-		if html, text, _, ferr := t.fetcher.FetchMessage(ctx, it.Source, metaAccountHint(it.Metadata), it.ExternalID); ferr == nil &&
-			(strings.TrimSpace(html) != "" || strings.TrimSpace(text) != "") {
-			it.CachedHTML = html
-			it.CachedText = text
-		}
-	}
-
+	// The durable email-body capture that used to live here MOVED to
+	// surface.Store.Upsert (core/internal/surface/body_capture.go). Same
+	// mechanic, same guarantees, one layer down - so the Go triage path and
+	// every other producer get it too, not just this tool.
 	id, err := t.store.Upsert(ctx, it)
 	if err != nil {
 		return "", err
@@ -267,30 +231,11 @@ func deriveExternalID(it *surface.Item) string {
 }
 
 // isFollowupEmailItem reports whether a surface item is a follow-up email -
-// the boss-owned class that no autonomous turn may resolve. Mirrors the
-// dashboard read filter (surface ∈ {followups,inbox,email} AND kind='email')
-// so the guard and the render agree on exactly which rows are protected.
+// the boss-owned class that no autonomous turn may resolve. Delegates to the
+// store's definition so the capture mechanic, the never-auto-resolve guard, and
+// the dashboard render can never disagree about which rows are messages.
 func isFollowupEmailItem(surfaceName, kind string) bool {
-	switch surfaceName {
-	case "followups", "inbox", "email":
-		return kind == "email"
-	}
-	return false
-}
-
-// metaAccountHint pulls the connector account hint a producer stashed in
-// metadata (a ca_ connected_account_id, an email, or an entity label) so the
-// body fetcher can resolve which account to read from. Empty when absent.
-func metaAccountHint(m map[string]any) string {
-	if m == nil {
-		return ""
-	}
-	for _, k := range []string{"connected_account_id", "account"} {
-		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
+	return surface.IsMessageItem(surfaceName, kind)
 }
 
 // surfaceActionSlug derives a stable action id from a label when the agent

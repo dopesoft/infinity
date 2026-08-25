@@ -911,11 +911,12 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 		var (
 			id, surface, kind, source, extID string
 			title, subtitle, body, url       string
+			reason                           string
 			metaRaw, actionsRaw              []byte
 			createdAt                        time.Time
 		)
 		if err := srows.Scan(&id, &surface, &kind, &source, &extID,
-			&title, &subtitle, &body, &url, &metaRaw, &actionsRaw, &createdAt); err != nil {
+			&title, &subtitle, &body, &url, &reason, &metaRaw, &actionsRaw, &createdAt); err != nil {
 			return out, err
 		}
 		var meta map[string]any
@@ -938,12 +939,23 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 			Account: account,
 			From:    from,
 			Subject: firstNonEmpty(strFromMeta(meta, "subject"), title),
-			Preview: firstNonEmpty(subtitle, strFromMeta(meta, "preview")),
+			// A snippet of the real message beats the subtitle, which for a
+			// triaged email is the sender - the same string already shown as
+			// `From`, so the row read "sender / subject / sender". The snippet
+			// is captured with the body (surface.Snippet), so it's the message
+			// itself, never a paraphrase. Subtitle stays the fallback for
+			// producers that write a meaningful one.
+			Preview: firstNonEmpty(strFromMeta(meta, "preview"), subtitle),
 			// The agent-authored body IS the triage summary - it goes in the
 			// "Context" pane. The full email is fetched lazily on open via
 			// /api/followups/message (keyed by this row's external_id), so
 			// Body stays empty here and the dashboard payload stays lean.
-			Summary:    body,
+			//
+			// When no summary was written, fall back to importance_reason: the
+			// triage classifier's own "why this needs you" was being stored on
+			// every row and then dropped on the floor here, so the Context pane
+			// rendered blank while the answer sat in the next column.
+			Summary:    firstNonEmpty(body, reason),
 			ThreadURL:  firstNonEmpty(url, strFromMeta(meta, "thread_url", "url")),
 			Draft:      strFromMeta(meta, "draft"),
 			SentReply:  strFromMeta(meta, "sent_reply"),
@@ -973,6 +985,7 @@ func (a *API) loadFollowUps(ctx context.Context) ([]FollowUp, error) {
 const followupSurfaceSQL = `
 		SELECT id::text, surface, kind, source, COALESCE(external_id,''),
 		       title, subtitle, body, COALESCE(url,''),
+		       COALESCE(importance_reason,''),
 		       COALESCE(metadata, '{}'::jsonb), COALESCE(actions, '[]'::jsonb), created_at
 		FROM mem_surface_items
 		WHERE surface = ANY($1::text[])

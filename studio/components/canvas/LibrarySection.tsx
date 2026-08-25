@@ -20,7 +20,7 @@ import {
   type LibraryEntry,
   type LibraryGroup,
 } from "@/lib/canvas/api";
-import { useCanvasStore } from "@/lib/canvas/store";
+import { docMetaFromLibrary, useCanvasStore } from "@/lib/canvas/store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -83,9 +83,19 @@ export function LibrarySection({
     }
   };
 
-  const handleMedia = (entry: LibraryEntry) => {
+  const handleMedia = (entry: LibraryEntry, kind: string) => {
     if (!entry.storage_path) return;
-    // Filesystem-backed media → open via the canvas store (uses Monaco
+    // Generated documents (docx / pptx / xlsx / pdf / md) open in the DOCUMENT
+    // viewer, exactly as they do from the session gallery: inline PDF or
+    // markdown preview, download button, and bytes fetched cloud-direct so it
+    // works on any device. They used to go through openFile → Monaco, which
+    // read binary .docx as plaintext through the session's bridge - the wrong
+    // reader on the wrong machine.
+    if (kind === "document") {
+      store.openDocument(docMetaFromLibrary(entry));
+      return;
+    }
+    // Other filesystem-backed media → open via the canvas store (uses Monaco
     // or its previewer). Object-store URLs → open in a new tab for v1;
     // a richer in-pane lightbox can come later.
     if (entry.storage_kind === "filesystem") {
@@ -165,7 +175,7 @@ function LibraryGroupRow({
   open: boolean;
   onToggle: () => void;
   onProject: (e: LibraryEntry) => void;
-  onMedia: (e: LibraryEntry) => void;
+  onMedia: (e: LibraryEntry, kind: string) => void;
   currentRoot: string;
 }) {
   const label = KIND_LABEL[group.kind] ?? capitalize(group.kind);
@@ -193,7 +203,9 @@ function LibraryGroupRow({
               <button
                 type="button"
                 onClick={() =>
-                  group.kind === "project" ? onProject(entry) : onMedia(entry)
+                  group.kind === "project"
+                    ? onProject(entry)
+                    : onMedia(entry, group.kind)
                 }
                 className={cn(
                   "flex w-full min-h-7 items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors hover:bg-accent/60",

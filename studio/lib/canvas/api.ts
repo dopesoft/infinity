@@ -218,6 +218,35 @@ export const fetchCanvasFSRead = (path: string, sessionId = "", signal?: AbortSi
   return getJSON<FSReadResponse>(`/api/canvas/fs/read?${qs.toString()}`, signal);
 };
 
+// fetchCanvasFSReadResult is the read that KEEPS the reason it failed. getJSON
+// collapses every failure to null, so the file tab had to guess at a cause and
+// guessed wrong ("mac bridge unreachable?" while the Mac was awake and the file
+// was simply on the cloud volume). Core now answers with a plain-English
+// `error`; this carries it through so the boss reads what actually happened.
+export const fetchCanvasFSReadResult = async (
+  path: string,
+  sessionId = "",
+  signal?: AbortSignal,
+): Promise<{ data: FSReadResponse | null; error: string }> => {
+  const qs = new URLSearchParams({ path });
+  if (sessionId) qs.set("session_id", sessionId);
+  try {
+    const res = await authedFetch(`/api/canvas/fs/read?${qs.toString()}`, { signal });
+    if (!res.ok) {
+      let msg = "";
+      try {
+        msg = ((await res.json()) as { error?: string })?.error ?? "";
+      } catch {
+        /* non-JSON body */
+      }
+      return { data: null, error: msg || `I couldn't read that file (${res.status}).` };
+    }
+    return { data: (await res.json()) as FSReadResponse, error: "" };
+  } catch {
+    return { data: null, error: "I couldn't reach the server to read that file." };
+  }
+};
+
 export const saveCanvasFile = (input: {
   path: string;
   content: string;
@@ -431,6 +460,13 @@ export type LibraryEntry = {
   bridge?: "mac" | "cloud";
   tags: string[];
   created_at: string;
+  // Document-preview metadata (present on kind="document" rows). Same shape as
+  // DocArtifact so a Library click can open the real document viewer.
+  format?: string;
+  pdf_path?: string;
+  thumb_path?: string;
+  html_path?: string;
+  markdown?: string;
 };
 
 export type LibraryGroup = {

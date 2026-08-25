@@ -40,6 +40,7 @@ func main() {
 	root.AddCommand(gymCmd())
 	root.AddCommand(vapidCmd())
 	root.AddCommand(backfillArtifactsCmd())
+	root.AddCommand(backfillBodiesCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

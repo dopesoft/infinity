@@ -621,6 +621,58 @@ func sleepBackoff(ctx context.Context, d *time.Duration) bool {
 	}
 }
 
+// providerErrorMessage turns an in-stream provider error event into something
+// a person can read. The boss was shown the SSE line verbatim — the full
+// `{"type":"error","error":{...},"sequence_number":22}` blob, help-centre URL
+// and request id and all — in the middle of his chat. The provider's own
+// `message` field is the only part that says anything; the envelope is noise.
+// The raw line still goes to the logs, where it belongs.
+//
+// This is deliberately a plain string, not errs.Humanize: package errs imports
+// llm, so the classification into boss-facing Title/Impact/Action happens one
+// layer up (agent loop), which is also where it can be persisted.
+func providerErrorMessage(raw string) string {
+	var evt struct {
+		Message string `json:"message"`
+		Error   struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+		Response struct {
+			Error struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(raw), &evt); err == nil {
+		for _, candidate := range []string{
+			evt.Error.Message, evt.Response.Error.Message, evt.Message,
+		} {
+			if m := strings.TrimSpace(candidate); m != "" {
+				// Trim the vendor's support boilerplate; it tells the boss
+				// nothing and it is the bulk of the string.
+				if i := strings.Index(m, ". You can retry"); i > 0 {
+					m = m[:i+1]
+				}
+				if i := strings.Index(m, " Please include the request ID"); i > 0 {
+					m = m[:i]
+				}
+				code := strings.TrimSpace(evt.Error.Code)
+				if code == "" {
+					code = strings.TrimSpace(evt.Response.Error.Code)
+				}
+				if code != "" && !strings.Contains(strings.ToLower(m), strings.ToLower(code)) {
+					return m + " (" + code + ")"
+				}
+				return m
+			}
+		}
+	}
+	return truncateOAuth(raw, 400)
+}
+
 // isTransientStatus reports whether an HTTP status warrants a retry: rate
 // limits, overload, and 5xx server errors. 4xx (other than 408/425/429) are
 // client errors we should NOT hammer.
@@ -1191,16 +1243,27 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 			}
 			resp.StopReason = "end_turn"
 		case "response.error", "error":
-			errMsg := truncateOAuth(raw, 400)
+			errMsg := providerErrorMessage(raw)
 			// If the failure is a transient provider hiccup (server_error,
 			// overloaded, rate_limit, …) AND we haven't emitted any
 			// user-visible content yet, hand it back as retryable WITHOUT
 			// emitting terminal events — Stream's retry loop owns the decision
 			// to re-issue or give up. This is the fix for the boss's
 			// inbox-triage cron dying on a `server_error` at sequence_number:1.
+			// sawThinking deliberately does NOT block the retry. Reasoning is
+			// the model's scratchpad, not an answer: re-streaming it costs the
+			// boss a second thinking block, while refusing to retry costs him
+			// the whole turn. Answer text and tool calls DO block — replaying
+			// those would duplicate real work.
 			emittedContent := resp.Text != "" || len(resp.ToolCalls) > 0 ||
-				len(pending) > 0 || len(byItem) > 0 || sawThinking
+				len(pending) > 0 || len(byItem) > 0
 			if isTransientResponsesError(raw) && !emittedContent {
+				if sawThinking {
+					emit(out, StreamEvent{
+						Kind:          StreamThinking,
+						ThinkingDelta: "\n(The provider hiccuped there. Picking it back up.)\n",
+					})
+				}
 				return resp, &retryableStreamError{msg: errMsg}
 			}
 			emit(out, StreamEvent{Kind: StreamError, Err: errMsg})

@@ -1966,18 +1966,23 @@ func serveCmd() *cobra.Command {
 				if composioExec != nil {
 					msgFetcher := connectors.NewMessageFetcher(composioExec, connectorsCache)
 					dashboardAPI.Fetcher = msgFetcher
-					// Late-bind the same fetcher into surface_item (registered
-					// before the fetcher existed) so a triage run captures a
-					// durable email body at surface time - the body survives a
-					// later connector revoke without any live call on open.
+					// Install the same fetcher process-wide so the capture runs
+					// at surface.Store.Upsert - the ONE chokepoint all 18
+					// producers flow through - instead of only inside the
+					// surface_item tool. The live path that surfaces the boss's
+					// mail is the Go triage, which calls Upsert directly, so the
+					// tool-only wiring meant real email bodies were never
+					// captured on the path that mattered.
 					if msgFetcher != nil {
-						if st, ok := registry.Get("surface_item"); ok {
-							if setter, ok := st.(interface {
-								SetBodyFetcher(tools.FollowupBodyFetcher)
-							}); ok {
-								setter.SetBodyFetcher(msgFetcher)
-							}
-						}
+						surface.SetBodyFetcher(msgFetcher)
+						// And sweep the rows that were surfaced BEFORE the
+						// capture existed (or whose capture failed transiently)
+						// so the dashboard converges on "every message card has
+						// its message" instead of staying permanently half-empty.
+						// Process-lifetime daemon, like the other background
+						// tickers wired here: it ends when the process does.
+						surface.StartBodyBackfill(context.Background(), pool, 5*time.Minute, surface.DefaultBackfillBatch)
+						fmt.Println("  surface: message-body capture + backfill sweep armed")
 					}
 				}
 				// read_email: lets the agent pull a follow-up's full email body

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/tools"
@@ -1425,7 +1426,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					InputDelta: ev.InputDelta,
 				})
 			case llm.StreamError:
-				emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: ev.Err})
+				emitHumanError(out, s.ID, ev.Err)
 			}
 		}
 
@@ -1532,7 +1533,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				}
 				// Park failed → fall through to the normal error path below.
 			}
-			emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: streamErr.Error()})
+			emitHumanError(out, s.ID, streamErr.Error())
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{
 				AssistantText:    strings.TrimSpace(partialText.String()),
 				StopReason:       "error",
@@ -1902,7 +1903,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// categorises it as a safety-limit stop; add the round/call counts so the
 	// run narrative reads honestly about how far it got.
 	err := fmt.Errorf("hit the tool-iteration cap after %d tool calls across %d round(s) without finishing", toolCallCount, segment+1)
-	emit(out, RunEvent{Kind: EventError, SessionID: s.ID, Error: err.Error()})
+	emitHumanError(out, s.ID, err.Error())
 	l.closeTurn(context.Background(), turnID, TurnCloseFields{
 		StopReason:    "iteration_cap",
 		Status:        "errored",
@@ -2154,4 +2155,52 @@ func formatGatedOutput(toolName string, d GateDecision) string {
 		b.WriteString("Tell the boss the Trust store is misconfigured and the action was simply refused.")
 	}
 	return b.String()
+}
+
+// emitHumanError is the single seam every provider/runtime failure passes
+// through on its way to the boss's screen. Raw text goes to the logs; the chat
+// gets Jarvis's own words.
+//
+// This exists because the boss was shown a bare provider SSE payload mid-chat
+// ({"type":"error","error":{"type":"server_error",...},"sequence_number":22}).
+// That is the failure-copy rule broken at the last inch: every other surface
+// (mem_runs.human_error, cron status, pings) already routes through
+// errs.Humanize, and the live chat, the surface he actually watches, did not.
+// Humanizing HERE rather than at each call site means a new error path can't
+// quietly reintroduce raw JSON.
+func emitHumanError(out chan<- RunEvent, sessionID, raw string) {
+	msg := strings.TrimSpace(raw)
+	if msg == "" {
+		emit(out, RunEvent{Kind: EventError, SessionID: sessionID, Error: "Something went wrong and I stopped."})
+		return
+	}
+	log.Printf("turn error: session=%s err=%s", sessionID, msg)
+	h := errs.HumanizeString(msg)
+	parts := []string{}
+	for _, p := range []string{h.Title, h.Summary, h.Action} {
+		if p = strings.TrimSpace(p); p != "" {
+			if !strings.HasSuffix(p, ".") && !strings.HasSuffix(p, "!") && !strings.HasSuffix(p, "?") {
+				p += "."
+			}
+			parts = append(parts, p)
+		}
+	}
+	human := strings.Join(parts, " ")
+	// An unclassified failure keeps its raw text visible: a prettier sentence
+	// that hides what actually broke would be worse than the JSON it replaced.
+	if h.Category == errs.CatUnknown {
+		human = h.Title + ". " + firstLineOf(msg)
+	}
+	emit(out, RunEvent{Kind: EventError, SessionID: sessionID, Error: human})
+}
+
+func firstLineOf(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\n\r"); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 240 {
+		s = s[:240] + "…"
+	}
+	return s
 }

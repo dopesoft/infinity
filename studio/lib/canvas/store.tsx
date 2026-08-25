@@ -74,6 +74,32 @@ export function docMetaFromArtifact(a: DocArtifact): DocMeta {
   };
 }
 
+// docMetaFromLibrary maps a Library row (mem_artifacts, same table as
+// DocArtifact) to the DocMeta a document tab renders. It lives beside
+// docMetaFromArtifact so both entry points into the document viewer share one
+// mapping: the Library and the session gallery can never drift apart.
+export function docMetaFromLibrary(e: {
+  name: string;
+  storage_path?: string;
+  format?: string;
+  pdf_path?: string;
+  html_path?: string;
+  markdown?: string;
+}): DocMeta {
+  const path = e.storage_path ?? "";
+  return {
+    id: path,
+    filename: e.name,
+    // Fall back to the filename extension when the row predates the metadata
+    // (older artifacts have no metadata->>'format').
+    format: e.format || path.split(".").pop()?.toLowerCase() || "",
+    path,
+    markdown: e.markdown || undefined,
+    pdfPath: e.pdf_path || undefined,
+    htmlPath: e.html_path || undefined,
+  };
+}
+
 // Pending-doc handoff: when a generated document is opened from OUTSIDE the
 // canvas (e.g. the dashboard's Saved card), the opener stashes the DocMeta here
 // and routes to /live. CanvasRightPane drains it on mount and opens the tab

@@ -95,6 +95,11 @@ func (s *Store) Upsert(ctx context.Context, it *Item) (string, error) {
 		it.ExternalID = "sys:" + hex.EncodeToString(sum[:8])
 	}
 
+	// Durable body capture, at the ONE place every producer passes through.
+	// Runs before the metadata is marshalled below so the derived preview and
+	// the failure stamps land on the row in the same write.
+	s.captureBody(ctx, it)
+
 	if it.Importance != nil {
 		if *it.Importance < 0 {
 			*it.Importance = 0

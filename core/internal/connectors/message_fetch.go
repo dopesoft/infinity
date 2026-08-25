@@ -170,6 +170,15 @@ func (f *MessageFetcher) FetchMessage(ctx context.Context, source, accountHint, 
 	return html, text, attachments, nil
 }
 
+// FetchMessageBody is the body-only view of FetchMessage, satisfying
+// surface.MessageBodyFetcher. The surface package must not know what a Gmail
+// attachment is, and there is exactly one fetch implementation underneath, so
+// the two callers can never drift.
+func (f *MessageFetcher) FetchMessageBody(ctx context.Context, source, accountHint, messageID string) (html, text string, err error) {
+	html, text, _, err = f.FetchMessage(ctx, source, accountHint, messageID)
+	return html, text, err
+}
+
 // resolveAccount turns an account hint into a (connected_account_id, entity)
 // pair. The hint may already BE a connected_account_id (ca_...), an
 // email/identity, or an alias. We match it to a cached account to recover

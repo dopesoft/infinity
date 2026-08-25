@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { fetchCanvasFSRead, fetchCanvasGitShow, saveCanvasFile } from "@/lib/canvas/api";
+import { fetchCanvasFSReadResult, fetchCanvasGitShow, saveCanvasFile } from "@/lib/canvas/api";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
 import { INFINITY_DARK, INFINITY_LIGHT, registerInfinityThemes } from "@/lib/canvas/monaco-theme";
 import { cn } from "@/lib/utils";
@@ -129,11 +129,12 @@ export function CanvasFileTab({
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    fetchCanvasFSRead(path, sessionId).then((r) => {
+    fetchCanvasFSReadResult(path, sessionId).then(({ data: r, error }) => {
       if (cancelled) return;
       setLoading(false);
       if (!r) {
-        setLoadError("Could not read file (mac bridge unreachable?)");
+        // Core's own words. Never a guessed cause.
+        setLoadError(error || "I couldn't read that file.");
         return;
       }
       setDiskBaseline(r.content);

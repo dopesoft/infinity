@@ -538,6 +538,41 @@ func (s *Server) canvasCloudFS(ctx context.Context, sessionID string) (bridge.Br
 	return b, true
 }
 
+// isCloudWorkspacePath reports whether a path can ONLY live on the cloud
+// workspace volume. `/workspace` is the cloud bridge's WORKSPACE_ROOT and does
+// not exist on the Mac, so the path itself is authoritative about where the
+// file is — no session state required.
+func isCloudWorkspacePath(path string) bool {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return false
+	}
+	return p == cloudWorkspaceRoot || strings.HasPrefix(p, cloudWorkspaceRoot+"/")
+}
+
+// canvasFSBridge resolves which bridge should serve a filesystem op for THIS
+// path in THIS session. Routing by session preference alone was wrong: a
+// document Jarvis generated on the cloud volume (`/workspace/artifacts/...`)
+// opened from a MAC session got sent to the Mac, which has no `/workspace`, so
+// the read failed and Studio blamed an unreachable Mac bridge that was in fact
+// perfectly healthy.
+//
+// The rule is deterministic and generic: WHERE THE FILE LIVES WINS. A
+// `/workspace` path always routes to the cloud bridge regardless of the
+// session's preference; everything else falls back to the session's own
+// routing. One mechanic, no per-artifact wiring, no per-kind branches.
+func (s *Server) canvasFSBridge(ctx context.Context, sessionID, path string) (bridge.Bridge, bool) {
+	if isCloudWorkspacePath(path) && s.bridgeRouter != nil {
+		if b, _, err := s.bridgeRouter.For(ctx, bridge.PrefCloud); err == nil && b != nil && b.Name() == bridge.KindCloud {
+			return b, true
+		}
+		// Cloud is the only host that can answer for this path. Fall through
+		// so the caller reports the real reason (cloud unreachable) instead of
+		// handing a /workspace path to the Mac and mislabelling the failure.
+	}
+	return s.canvasCloudFS(ctx, sessionID)
+}
+
 // cloudBash runs a command on the cloud workspace bridge's /bash and returns
 // its merged stdout+stderr ("output") plus the exit code. Lets the canvas run
 // the SAME git commands Core runs on the Mac, but against the cloud /workspace
@@ -649,7 +684,7 @@ func (s *Server) handleCanvasFSList(w http.ResponseWriter, r *http.Request) {
 	// against its own WORKSPACE_ROOT, so we pass it through without the Mac
 	// canvasRoot escape check. If cloud is chosen but the call fails, return
 	// empty rather than silently falling back to the Mac — honest, not wrong.
-	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+	if cloud, ok := s.canvasFSBridge(r.Context(), r.URL.Query().Get("session_id"), path); ok {
 		if resp, ok := s.cloudFSList(r.Context(), cloud, path); ok {
 			writeJSON(w, http.StatusOK, resp)
 			return
@@ -882,18 +917,33 @@ func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 
 	// Cloud sessions: read from the cloud /workspace volume (same fs the agent
 	// wrote to), so opening a file Jarvis just created shows its real content.
-	if cloud, ok := s.canvasCloudFS(r.Context(), r.URL.Query().Get("session_id")); ok {
+	if cloud, ok := s.canvasFSBridge(r.Context(), r.URL.Query().Get("session_id"), path); ok {
 		if resp, ok := s.cloudFSRead(r.Context(), cloud, path); ok {
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not readable on cloud workspace"})
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "I couldn't read that file on the cloud workspace. It may have been moved or deleted.",
+		})
+		return
+	}
+
+	// A /workspace path that got here means the cloud bridge itself didn't
+	// answer. Say THAT, rather than letting it fall through to the Mac path and
+	// come back as "escapes INFINITY_CANVAS_ROOT" (or, worse, a bogus "mac
+	// bridge unreachable" while the Mac is sitting right there, awake).
+	if isCloudWorkspacePath(path) {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error": "That file lives on my cloud workspace and the cloud workspace isn't answering right now.",
+		})
 		return
 	}
 
 	resolved, ok := resolveCanvasPath(path)
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path escapes INFINITY_CANVAS_ROOT"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "That path is outside the folder I'm allowed to browse on this machine.",
+		})
 		return
 	}
 
@@ -939,7 +989,15 @@ func (s *Server) handleCanvasFSRead(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not readable"})
+	if s.macBridgeAvailable() {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "I reached your Mac but couldn't read that file. It may have been moved, renamed, or deleted.",
+		})
+		return
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]string{
+		"error": "I couldn't reach your Mac to read that file.",
+	})
 }
 
 // stripReadHeader removes the `cat -n`-style line-number prefix Claude Code's
@@ -1077,7 +1135,7 @@ func (s *Server) handleCanvasFSSave(w http.ResponseWriter, r *http.Request) {
 	// direct manual action, so it saves immediately (no Trust queue; that gate
 	// exists for the AGENT's writes, and the cloud bridge is the same fs Jarvis
 	// already writes to through fs_save).
-	if cloud, ok := s.canvasCloudFS(r.Context(), req.SessionID); ok {
+	if cloud, ok := s.canvasFSBridge(r.Context(), req.SessionID, req.Path); ok {
 		_, status, bok := cloud.Post(r.Context(), "/fs/save", map[string]any{
 			"path":    req.Path,
 			"content": req.Content,

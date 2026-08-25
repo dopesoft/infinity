@@ -93,6 +93,73 @@ func confirmTableExists(ctx context.Context, pool *pgxpool.Pool, name string) er
 	return nil
 }
 
+// registeredActions returns the action vocabulary already registered for a
+// table, so an unknown-action failure can SHOW the agent what exists instead of
+// just saying no. Without this the model guesses a verb, gets a bare rejection,
+// guesses again, and eventually registers junk (a literal "noop" placeholder
+// action landed in mem_action_schemas this way).
+func registeredActions(ctx context.Context, pool *pgxpool.Pool, table string) []string {
+	rows, err := pool.Query(ctx, `
+		SELECT action_name FROM mem_action_schemas
+		 WHERE table_name = $1 ORDER BY action_name
+	`, table)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err == nil {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// columnDataType reports a column's Postgres type, for the set_null guard.
+func columnDataType(ctx context.Context, pool *pgxpool.Pool, table, column string) (string, error) {
+	var typ string
+	err := pool.QueryRow(ctx, `
+		SELECT data_type FROM information_schema.columns
+		 WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+	`, table, column).Scan(&typ)
+	return typ, err
+}
+
+// nullableMarkerTypes are the column types set_null may clear. set_null exists
+// to CLEAR A MARKER — an acknowledgement timestamp, a link to another row. It
+// must never be able to erase content.
+//
+// This guard is not hypothetical: the agent registered a `stash_draft_text`
+// action described as "temporarily store the drafted reply in the item body"
+// whose actual op was set_null on mem_surface_items.body — one call away from
+// wiping the captured email body off a surfaced item. An action the agent
+// writes for itself is still a write, and Rule #1 (never destroy without
+// approval) binds the agent exactly as it binds a session.
+var nullableMarkerTypes = map[string]bool{
+	"timestamp with time zone":    true,
+	"timestamp without time zone": true,
+	"date":                        true,
+	"uuid":                        true,
+}
+
+// guardSetNull rejects a set_null against anything but a marker column.
+func guardSetNull(ctx context.Context, pool *pgxpool.Pool, table, column string) error {
+	typ, err := columnDataType(ctx, pool, table, column)
+	if err != nil {
+		return err
+	}
+	if !nullableMarkerTypes[strings.ToLower(typ)] {
+		return fmt.Errorf(
+			"set_null is only allowed on timestamp/date/uuid marker columns; %s.%s is %s. "+
+				"Blanking a content column would destroy data. Use set_status or set_bool, "+
+				"or write the value through the tool that owns this table",
+			table, column, typ)
+	}
+	return nil
+}
+
 func tableHasColumn(ctx context.Context, pool *pgxpool.Pool, table, column string) (bool, error) {
 	var n int
 	err := pool.QueryRow(ctx, `
@@ -292,10 +359,27 @@ func (t *memAct) Execute(ctx context.Context, in map[string]any) (string, error)
 		 WHERE table_name = $1 AND action_name = $2
 	`, table, action).Scan(&op, &column, &value)
 	if err != nil {
-		return "", fmt.Errorf("no action %q registered for table %q (call action_register first or check action_list)", action, table)
+		known := registeredActions(ctx, t.pool, table)
+		if len(known) == 0 {
+			return "", fmt.Errorf(
+				"no actions are registered for table %q yet (you asked for %q). "+
+					"Register one with action_register({table, action, op, column, value}) first",
+				table, action)
+		}
+		return "", fmt.Errorf(
+			"no action %q registered for table %q. Registered actions here: %s. "+
+				"Use one of those, or action_register a new one",
+			action, table, strings.Join(known, ", "))
 	}
 	if err := validateIdent(column); err != nil {
 		return "", fmt.Errorf("invalid registered column %q: %w", column, err)
+	}
+	// Re-check the destructive guard at EXECUTION, not just registration: rows
+	// registered before the guard existed are still in the table.
+	if op == "set_null" {
+		if err := guardSetNull(ctx, t.pool, table, column); err != nil {
+			return "", err
+		}
 	}
 
 	// Dispatch on bounded op. Updated-rows count is returned for the
@@ -362,11 +446,22 @@ func (t *memAct) Execute(ctx context.Context, in map[string]any) (string, error)
 		return "", fmt.Errorf("unknown op %q in schema (must be set_status|set_timestamp|set_null|set_bool)", op)
 	}
 
+	// "Matched nothing" is a FAILURE, not a quiet success. Returning ok:true
+	// with updated:0 is the empty-because-broken / empty-because-fine collapse
+	// the honesty rule exists to prevent: the agent reports the row dismissed,
+	// the boss still sees it on the dashboard, and nothing anywhere went red.
+	if ct == 0 {
+		return "", fmt.Errorf(
+			"no rows matched: %q on %s updated 0 of %d id(s). The ids are stale or from "+
+				"another table. Re-read them with mem_list({table:%q}) and retry",
+			action, table, len(ids), table)
+	}
+
 	out, _ := json.Marshal(map[string]any{
-		"ok":      true,
-		"table":   table,
-		"action":  action,
-		"updated": ct,
+		"ok":       true,
+		"table":    table,
+		"action":   action,
+		"updated":  ct,
 		"id_count": len(ids),
 	})
 	return string(out), nil
@@ -430,6 +525,11 @@ func (t *actionRegister) Execute(ctx context.Context, in map[string]any) (string
 	}
 	if n == 0 {
 		return "", fmt.Errorf("column %q does not exist on %q", column, table)
+	}
+	if op == "set_null" {
+		if err := guardSetNull(ctx, t.pool, table, column); err != nil {
+			return "", err
+		}
 	}
 
 	value := strString(in, "value")

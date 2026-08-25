@@ -35,6 +35,17 @@ type libraryEntry struct {
 	Bridge      string    `json:"bridge,omitempty"`
 	Tags        []string  `json:"tags"`
 	CreatedAt   time.Time `json:"created_at"`
+
+	// Document-preview metadata, carried straight off the same mem_artifacts
+	// row /api/canvas/artifacts reads. It's what lets a Library click open a
+	// generated document in the DOCUMENT viewer (inline PDF/markdown preview +
+	// download) instead of shoving a binary .docx into a plaintext code editor.
+	// Emitted only when present, so non-document kinds are unaffected.
+	Format    string `json:"format,omitempty"`
+	PDFPath   string `json:"pdf_path,omitempty"`
+	ThumbPath string `json:"thumb_path,omitempty"`
+	HTMLPath  string `json:"html_path,omitempty"`
+	Markdown  string `json:"markdown,omitempty"`
 }
 
 type libraryGroup struct {
@@ -72,6 +83,11 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(storage_mime, '') AS storage_mime,
 			       COALESCE(github_url, '')   AS github_url,
 			       COALESCE(bridge, '')       AS bridge,
+			       COALESCE(metadata->>'format','')     AS format,
+			       COALESCE(metadata->>'pdf_path','')   AS pdf_path,
+			       COALESCE(metadata->>'thumb_path','') AS thumb_path,
+			       COALESCE(metadata->>'html_path','')  AS html_path,
+			       COALESCE(metadata->>'markdown','')   AS markdown,
 			       tags::text  AS tags_json,
 			       created_at,
 			       ROW_NUMBER() OVER (PARTITION BY kind ORDER BY created_at DESC) AS rn
@@ -79,7 +95,9 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 			 WHERE deleted_at IS NULL
 		)
 		SELECT id, kind, name, description, virtual_path, storage_kind,
-		       storage_path, storage_mime, github_url, bridge, tags_json, created_at
+		       storage_path, storage_mime, github_url, bridge,
+		       format, pdf_path, thumb_path, html_path, markdown,
+		       tags_json, created_at
 		  FROM ranked
 		 WHERE rn <= $1
 		 ORDER BY kind, created_at DESC
@@ -98,6 +116,7 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 			&e.ID, &e.Kind, &e.Name, &e.Description,
 			&e.VirtualPath, &e.StorageKind,
 			&e.StoragePath, &e.StorageMime, &e.GitHubURL, &e.Bridge,
+			&e.Format, &e.PDFPath, &e.ThumbPath, &e.HTMLPath, &e.Markdown,
 			&tagsJSON, &e.CreatedAt,
 		); err != nil {
 			continue

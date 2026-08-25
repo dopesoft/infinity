@@ -152,3 +152,48 @@ func TestIsTransientNetErr(t *testing.T) {
 		t.Error("TLS handshake timeout should be retryable")
 	}
 }
+
+// The boss's 2026-08-25 report: the raw SSE line landed in his chat window
+// verbatim, help-centre URL and request id included. What reaches a person must
+// be the provider's own message, never the transport envelope.
+func TestProviderErrorMessage_StripsEnvelopeAndBoilerplate(t *testing.T) {
+	raw := `{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 6e6adfff-3356-43cf-8f0b-f4bd09adceb4 in your message.","param":null},"sequence_number":22}`
+	got := providerErrorMessage(raw)
+
+	for _, leak := range []string{"sequence_number", `{"type"`, "help.openai.com", "request ID"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("provider envelope leaked to the boss (%q) in: %s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "An error occurred while processing your request.") {
+		t.Errorf("the provider's actual message must survive, got: %s", got)
+	}
+}
+
+// A payload we can't parse must keep its raw text rather than become a vague
+// sentence: hiding what broke is worse than showing something ugly.
+func TestProviderErrorMessage_UnparseableKeepsRaw(t *testing.T) {
+	got := providerErrorMessage("not json at all: upstream exploded")
+	if !strings.Contains(got, "upstream exploded") {
+		t.Errorf("unparseable payloads must keep their detail, got: %s", got)
+	}
+}
+
+// Reasoning is a scratchpad, not an answer. A transient failure after only
+// thinking has streamed must STILL be retryable — otherwise a provider hiccup
+// mid-reasoning kills a turn that a retry would have completed.
+func TestReadResponsesSSE_ErrorAfterThinkingOnly_IsRetryable(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"weighing the options"}`,
+		`data: {"type":"error","error":{"type":"server_error","message":"An error occurred while processing your request."},"sequence_number":22}`,
+	}, "\n") + "\n"
+	_, err, events := collectSSE(t, sse)
+
+	var rt *retryableStreamError
+	if !errors.As(err, &rt) {
+		t.Fatalf("thinking-only output must stay retryable, got %T: %v", err, err)
+	}
+	if hasKind(events, StreamError) || hasKind(events, StreamComplete) {
+		t.Error("retryable path must leave terminal events to Stream")
+	}
+}
