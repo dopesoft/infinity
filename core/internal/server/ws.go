@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -29,6 +29,9 @@ func splitProto(h string) []string {
 func hasBearerPrefix(p string) bool { return strings.HasPrefix(p, "bearer.") }
 
 type wsClientAttachment struct {
+	// ID is the mem_attachments row Studio got back from
+	// POST /api/attachments/upload. The bytes never ride the WS frame.
+	ID          string `json:"id,omitempty"`
 	Name        string `json:"name"`
 	MimeType    string `json:"mime_type,omitempty"`
 	SizeBytes   int64  `json:"size_bytes,omitempty"`
@@ -241,97 +244,60 @@ var upgrader = websocket.Upgrader{
 	Subprotocols: []string{},
 }
 
-func formatAttachmentsForPrompt(atts []wsClientAttachment) string {
+// resolveAttachments turns the client's attachment refs into the typed
+// llm.Attachment set the loop ships to the brain. Uploaded files (id) are
+// loaded from the store with their bytes, extracted text and rasterized
+// pages; legacy inline-text rows (no id) become text attachments. A ref that
+// cannot be resolved becomes a loud Note attachment, never a silent omission.
+func (s *Server) resolveAttachments(ctx context.Context, atts []wsClientAttachment) []llm.Attachment {
 	if len(atts) == 0 {
-		return ""
+		return nil
 	}
-	var b strings.Builder
-	b.WriteString("\n\nAttached files:\n")
-	for i, att := range atts {
+	out := make([]llm.Attachment, 0, len(atts))
+	var ids []string
+	for _, att := range atts {
+		if id := strings.TrimSpace(att.ID); id != "" {
+			ids = append(ids, id)
+			continue
+		}
 		name := strings.TrimSpace(att.Name)
 		if name == "" {
 			name = "attachment"
 		}
-		fmt.Fprintf(&b, "%d. %s", i+1, name)
-		meta := make([]string, 0, 2)
-		if mt := strings.TrimSpace(att.MimeType); mt != "" {
-			meta = append(meta, mt)
-		}
-		if att.SizeBytes > 0 {
-			meta = append(meta, fmt.Sprintf("%d bytes", att.SizeBytes))
-		}
-		if len(meta) > 0 {
-			fmt.Fprintf(&b, " (%s)", strings.Join(meta, ", "))
-		}
-		b.WriteString("\n")
+		a := llm.Attachment{Name: name, MIME: strings.TrimSpace(att.MimeType), Kind: llm.AttachmentText, SizeBytes: att.SizeBytes}
 		if text := strings.TrimSpace(att.Text); text != "" {
-			b.WriteString("Contents:\n")
-			b.WriteString(text)
-			if !strings.HasSuffix(text, "\n") {
-				b.WriteString("\n")
+			a.Text = text
+		} else {
+			a.Note = "this file was referenced without an upload id and none of its content reached me; ask the boss to re-attach it"
+		}
+		out = append(out, a)
+	}
+	if len(ids) > 0 {
+		if s.attachments == nil {
+			for _, id := range ids {
+				out = append(out, llm.Attachment{ID: id, Name: "attachment " + id, Kind: llm.AttachmentText,
+					Note: "the attachment store is not configured on this Core, so the file could not be loaded"})
 			}
+		} else {
+			out = append(out, s.attachments.ToLLMMany(ctx, ids)...)
 		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func withAttachmentContext(content string, atts []wsClientAttachment) string {
-	formatted := formatAttachmentsForPrompt(atts)
-	if formatted == "" {
-		return content
-	}
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return formatted
-	}
-	return trimmed + formatted
-}
-
-func attachmentPayload(atts []wsClientAttachment) []map[string]any {
-	if len(atts) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, 0, len(atts))
-	for _, att := range atts {
-		row := map[string]any{}
-		if v := strings.TrimSpace(att.Name); v != "" {
-			row["name"] = v
-		}
-		if v := strings.TrimSpace(att.MimeType); v != "" {
-			row["mime_type"] = v
-		}
-		if att.SizeBytes > 0 {
-			row["size_bytes"] = att.SizeBytes
-		}
-		if v := strings.TrimSpace(att.Text); v != "" {
-			row["text"] = v
-		}
-		if v := strings.TrimSpace(att.PreviewURL); v != "" {
-			row["preview_url"] = v
-		}
-		if v := strings.TrimSpace(att.StoragePath); v != "" {
-			row["storage_path"] = v
-		}
-		if len(row) > 0 {
-			out = append(out, row)
-		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }
 
-func payloadWithAttachments(payload map[string]any, atts []wsClientAttachment) map[string]any {
-	rows := attachmentPayload(atts)
-	if len(rows) == 0 {
-		return payload
+// turnText is the user text that opens (or steers) a turn. A file-only send
+// still needs a non-empty message, because an empty userMsg is the loop's
+// "resume" path; the marker just names the files.
+func turnText(content string, atts []llm.Attachment) string {
+	t := strings.TrimSpace(content)
+	if t != "" || len(atts) == 0 {
+		return t
 	}
-	if payload == nil {
-		payload = map[string]any{}
+	names := make([]string, 0, len(atts))
+	for _, a := range atts {
+		names = append(names, a.Name)
 	}
-	payload["attachments"] = rows
-	return payload
+	return "(attached: " + strings.Join(names, ", ") + ")"
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -472,7 +438,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// iterations and appends the message as a fresh user turn.
 			// If no turn is in flight, fall through to start a normal
 			// turn so the client doesn't have to distinguish.
-			if s.steerTurn(msg.SessionID, withAttachmentContext(msg.Content, msg.Attachments), send) {
+			steerAtts := s.resolveAttachments(connCtx, msg.Attachments)
+			steerText := turnText(msg.Content, steerAtts)
+			if s.steerTurn(msg.SessionID, steerText, steerAtts, send) {
 				/* WAL the steer too - corrections often arrive as
 				 * mid-turn nudges and we need them on the durable
 				 * SESSION-STATE log just like a first message. */
@@ -494,7 +462,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
 			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, msg.Effort, send)
+			s.startTurn(connCtx, userID, sessionID, steerText, steerAtts, msg.Voice, msg.Effort, send)
 			continue
 		case "message":
 			sessionID := msg.SessionID
@@ -525,7 +493,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types - the
 			// server figures it out.
-			if s.steerTurn(sessionID, withAttachmentContext(msg.Content, msg.Attachments), send) {
+			// Resolve uploads into typed blocks BEFORE routing, so a file
+			// dropped mid-turn lands in the running turn exactly like text.
+			msgAtts := s.resolveAttachments(connCtx, msg.Attachments)
+			msgText := turnText(msg.Content, msgAtts)
+			if s.steerTurn(sessionID, msgText, msgAtts, send) {
 				continue
 			}
 			// First message for this session since startup (or after
@@ -533,7 +505,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, withAttachmentContext(msg.Content, msg.Attachments), msg.Voice, msg.Effort, send)
+			s.startTurn(connCtx, userID, sessionID, msgText, msgAtts, msg.Voice, msg.Effort, send)
 		case "resume":
 			// Run one agent turn against a session's existing history
 			// without a fresh user message. Discuss-with-Jarvis uses this:
@@ -571,7 +543,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume - session has no history"})
 				continue
 			}
-			s.startTurn(connCtx, userID, sessionID, "", false, "", send)
+			s.startTurn(connCtx, userID, sessionID, "", nil, false, "", send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
@@ -620,7 +592,7 @@ func interactiveTurnTimeout() time.Duration {
 // page) rather than carried on the WS frame - that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
-func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, voiceTurn bool, effortPin string, _ func(wsServerEvent)) {
+func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, atts []llm.Attachment, voiceTurn bool, effortPin string, _ func(wsServerEvent)) {
 	// Use a fresh background context so the WS dying doesn't cancel this
 	// turn. The interactiveTurnTimeout() below is the only deadline that applies.
 	base := context.Background()
@@ -642,6 +614,9 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	if pin := strings.TrimSpace(effortPin); pin != "" && pin != "auto" {
 		ctxWithUser = agent.WithEffortPin(ctxWithUser, pin)
 	}
+	// Files attached to the opening message ride the ctx; the loop appends
+	// them to the user llm.Message and persists their metadata on the hook.
+	ctxWithUser = agent.WithAttachments(ctxWithUser, atts)
 	turnCtx, cancel := context.WithTimeout(ctxWithUser, interactiveTurnTimeout())
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
 	// Route every WS frame through the live session binding rather than
@@ -650,7 +625,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	send := s.sessionSender(sessionID)
 	state := &turnState{
 		cancel: cancel,
-		steer:  make(chan string, 8),
+		steer:  make(chan agent.Steer, 8),
 		// Voice turns get their speak pump minted here (not inside runTurn)
 		// so it's reachable from the turns registry - that's what lets a
 		// `voice_interrupt` frame squelch synthesis mid-reply. nil for text
@@ -707,12 +682,12 @@ func (s *Server) interruptTurn(sessionID string) {
 // Returns true when the message was consumed by a turn (either queued or
 // dropped with a soft error reported to the client). Returns false when no
 // turn is in flight - the caller should start a fresh turn instead.
-func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) bool {
+func (s *Server) steerTurn(sessionID, content string, atts []llm.Attachment, send func(wsServerEvent)) bool {
 	if sessionID == "" {
 		return false
 	}
 	content = strings.TrimSpace(content)
-	if content == "" {
+	if content == "" && len(atts) == 0 {
 		return false
 	}
 	s.turnsMu.Lock()
@@ -722,7 +697,7 @@ func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) 
 		return false
 	}
 	select {
-	case state.steer <- content:
+	case state.steer <- agent.Steer{Text: content, Attachments: atts}:
 		// Persist to mem_observations immediately so the message survives a
 		// navigation/reload while the turn is still in flight. drainSteer
 		// only appends to the in-memory session; the hook fires here so
@@ -730,7 +705,11 @@ func (s *Server) steerTurn(sessionID, content string, send func(wsServerEvent)) 
 		// iteration boundary (which can be minutes away when the LLM is
 		// mid-stream or the loop is blocked inside WaitForDecision).
 		if h := s.loop.Hooks(); h != nil {
-			h.Emit("UserPromptSubmit", sessionID, "", content, map[string]any{"steered": true})
+			payload := map[string]any{"steered": true}
+			if meta := llm.AttachmentsMeta(atts); len(meta) > 0 {
+				payload["attachments"] = meta
+			}
+			h.Emit("UserPromptSubmit", sessionID, "", content, payload)
 		}
 		// Echo the steered message back so other tabs (and the
 		// originating tab's reconnect path) can render it. The
@@ -846,7 +825,7 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 // receive the steer channel as a receive-only param so the agent loop can
 // drain it between iterations. ctx is already wrapped with the per-turn
 // 5-minute timeout, so we don't re-wrap it here.
-func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, speak *speakPump, steer <-chan string, send func(wsServerEvent)) {
+func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, speak *speakPump, steer <-chan agent.Steer, send func(wsServerEvent)) {
 	events := make(chan agent.RunEvent, 128)
 	done := make(chan struct{})
 

@@ -125,6 +125,12 @@ func DefaultLoadedTools() []string {
 		// while yt-dlp sat installed and active on the cloud workspace.
 		"bash_run",
 		"fs_read",
+		// The boss's own files. Chat uploads (and every generated document)
+		// are mem_artifacts rows; the soul prompt tells the agent to reach
+		// for these in a later turn to re-read an attached PDF/image, so
+		// they must be callable without a tool_search round-trip.
+		"artifact_list",
+		"artifact_get",
 		// Skill self-authoring. These let the agent crystallize repeated
 		// multi-step recipes into named skills mid-conversation. The
 		// SkillProposalCard component in Studio pattern-matches these

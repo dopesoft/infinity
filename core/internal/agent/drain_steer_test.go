@@ -27,9 +27,9 @@ func TestDrainSteer_AppendsToSessionWithoutFiringHook(t *testing.T) {
 	}
 	sess := &Session{ID: "test-session"}
 
-	ch := make(chan string, 4)
-	ch <- "first steer"
-	ch <- "second steer"
+	ch := make(chan Steer, 4)
+	ch <- Steer{Text: "first steer"}
+	ch <- Steer{Text: "second steer"}
 
 	loop.drainSteer(ch, sess)
 
@@ -55,10 +55,10 @@ func TestDrainSteer_DropsEmptyStrings(t *testing.T) {
 	loop := &Loop{}
 	sess := &Session{ID: "test-session"}
 
-	ch := make(chan string, 4)
-	ch <- "  "
-	ch <- ""
-	ch <- "real message"
+	ch := make(chan Steer, 4)
+	ch <- Steer{Text: "  "}
+	ch <- Steer{Text: ""}
+	ch <- Steer{Text: "real message"}
 
 	loop.drainSteer(ch, sess)
 

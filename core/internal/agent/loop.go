@@ -1100,7 +1100,7 @@ const (
 // shows it), a TaskCompleted hook fires with {interrupted: true}, and the
 // loop returns nil with a Complete event tagged stop_reason="interrupted".
 // Real provider errors continue to surface as EventError + a returned error.
-func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerCh <-chan string, out chan<- RunEvent) error {
+func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerCh <-chan Steer, out chan<- RunEvent) error {
 	if l.Provider() == nil {
 		return errors.New("agent loop has no LLM provider configured")
 	}
@@ -1218,8 +1218,17 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// appending a fresh - and empty - user message or firing a bogus
 	// UserPromptSubmit hook.
 	if userMsg != "" {
-		s.Append(llm.Message{Role: llm.RoleUser, Content: userMsg})
-		l.fireHookT(turnID, "UserPromptSubmit", s.ID, s.Project, userMsg, nil)
+		// Files attached to this turn ride the ctx (WithAttachments) and land
+		// on the user message as typed blocks the provider ships natively.
+		// Their metadata is persisted on the hook payload so the transcript
+		// keeps the chips and a post-restart hydrate can reload the files.
+		atts := AttachmentsFromContext(ctx)
+		s.Append(llm.Message{Role: llm.RoleUser, Content: userMsg, Attachments: atts})
+		var payload map[string]any
+		if meta := llm.AttachmentsMeta(atts); len(meta) > 0 {
+			payload = map[string]any{"attachments": meta}
+		}
+		l.fireHookT(turnID, "UserPromptSubmit", s.ID, s.Project, userMsg, payload)
 	}
 
 	// Prompt caching depends on a byte-identical prefix across a session's
@@ -1934,7 +1943,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 // without waiting for the next iteration boundary, so a navigation/reload
 // that arrives while the turn is still in flight will find the steer in
 // fetchSessionMessages instead of losing it.
-func (l *Loop) drainSteer(ch <-chan string, s *Session) int {
+func (l *Loop) drainSteer(ch <-chan Steer, s *Session) int {
 	if ch == nil || s == nil {
 		return 0
 	}
@@ -1945,11 +1954,11 @@ func (l *Loop) drainSteer(ch <-chan string, s *Session) int {
 			if !ok {
 				return drained
 			}
-			text := strings.TrimSpace(msg)
-			if text == "" {
+			text := strings.TrimSpace(msg.Text)
+			if text == "" && len(msg.Attachments) == 0 {
 				continue
 			}
-			s.Append(llm.Message{Role: llm.RoleUser, Content: text})
+			s.Append(llm.Message{Role: llm.RoleUser, Content: text, Attachments: msg.Attachments})
 			drained++
 		default:
 			return drained

@@ -866,11 +866,9 @@ func buildResponsesInput(messages []Message) []any {
 		switch m.Role {
 		case RoleUser:
 			input = append(input, map[string]any{
-				"type": "message",
-				"role": "user",
-				"content": []map[string]any{
-					{"type": "input_text", "text": m.Content},
-				},
+				"type":    "message",
+				"role":    "user",
+				"content": responsesUserContent(m),
 			})
 		case RoleAssistant:
 			if m.Content != "" {
@@ -1541,4 +1539,31 @@ func tierNicknameToCodex(model string) string {
 		return "gpt-5-codex"
 	}
 	return ""
+}
+
+// responsesUserContent renders a user message for the Responses API. Images
+// ride as `input_image` data URLs (the exact item the Codex client sends).
+// Documents ride as their extracted text, plus rasterized pages as images
+// when the PDF has no text layer: the ChatGPT-backed codex endpoint is not
+// documented to accept `input_file`, and a silently dropped file is precisely
+// the failure this path exists to prevent. Attachments precede the text.
+func responsesUserContent(m Message) []map[string]any {
+	content := make([]map[string]any, 0, len(m.Attachments)*3+1)
+	for _, a := range m.Attachments {
+		if a.InlineImageOK() {
+			content = append(content,
+				map[string]any{"type": "input_text", "text": attachmentCaption(a)},
+				map[string]any{"type": "input_image", "image_url": a.DataURL(), "detail": "auto"},
+			)
+			continue
+		}
+		content = append(content, map[string]any{"type": "input_text", "text": a.TextBlock()})
+		for i := range a.Pages {
+			content = append(content, map[string]any{"type": "input_image", "image_url": a.PageDataURL(i), "detail": "auto"})
+		}
+	}
+	if strings.TrimSpace(m.Content) != "" || len(content) == 0 {
+		content = append(content, map[string]any{"type": "input_text", "text": m.Content})
+	}
+	return content
 }

@@ -291,6 +291,8 @@ studio/
 |---|---|---|---|
 | `/health` | GET | server.handleHealth | readiness + uptime |
 | `/ws` | WS | server.handleWebSocket | streaming chat protocol (delta/tool_call/tool_result/complete/error) |
+| `/api/attachments/upload` | POST | server.handleAttachmentUpload | chat file uploads (multipart `session_id` + `file`…); bytes → `mem_attachments`, mirrored to `/workspace/uploads/`, text/pages extracted, indexed in `mem_artifacts`; the WS frame then references the returned ids |
+| `/api/attachments/{id}/raw` | GET | server.handleAttachmentRaw | streams an upload's (or rasterized page's) bytes for Studio previews / open |
 | `/api/status` | GET | server.handleStatus | version, provider, model, tools |
 | `/api/sessions` | GET | server.handleSessions | in-memory loop sessions |
 | `/api/tools` | GET | server.handleTools | registered tool descriptors |

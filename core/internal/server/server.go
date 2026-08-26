@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/attachments"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/browser"
@@ -41,7 +42,7 @@ import (
 // to the client rather than blocking the WS read goroutine.
 type turnState struct {
 	cancel context.CancelFunc
-	steer  chan string
+	steer  chan agent.Steer
 	// speak is the voice pump for this turn (nil on text turns). Held here so
 	// a `voice_interrupt` frame - the browser reporting a barge-in - can
 	// squelch server-side synthesis for the rest of the interrupted reply.
@@ -50,13 +51,16 @@ type turnState struct {
 }
 
 type Config struct {
-	Addr          string
-	Version       string
-	Loop          *agent.Loop
-	MCP           *tools.MCPManager
-	Pool          *pgxpool.Pool
-	Store         *memory.Store
-	Searcher      *memory.Searcher
+	Addr     string
+	Version  string
+	Loop     *agent.Loop
+	MCP      *tools.MCPManager
+	Pool     *pgxpool.Pool
+	Store    *memory.Store
+	Searcher *memory.Searcher
+	// Attachments is the chat-upload store (mem_attachments): files the boss
+	// hands Jarvis in chat, resolved into native multimodal blocks per turn.
+	Attachments   *attachments.Store
 	SkillsAPI     *skills.API
 	ExtensionsAPI *extensions.API
 	ProactiveAPI  *proactive.API
@@ -186,23 +190,24 @@ type Config struct {
 }
 
 type Server struct {
-	cfg        Config
-	http       *http.Server
-	loop       *agent.Loop
-	mcp        *tools.MCPManager
-	pool       *pgxpool.Pool
-	store      *memory.Store
-	searcher   *memory.Searcher
-	skillsAPI  *skills.API
-	trust      *proactive.TrustStore
-	namer      *sessions.Namer
-	auth       *auth.Verifier
-	settings   *settings.Store
-	llmReg     *llm.Registry
-	connectors *connectors.Cache
-	voice      *voice.Minter
-	speaker    *voice.Speaker
-	started    time.Time
+	cfg         Config
+	http        *http.Server
+	loop        *agent.Loop
+	mcp         *tools.MCPManager
+	pool        *pgxpool.Pool
+	store       *memory.Store
+	searcher    *memory.Searcher
+	attachments *attachments.Store
+	skillsAPI   *skills.API
+	trust       *proactive.TrustStore
+	namer       *sessions.Namer
+	auth        *auth.Verifier
+	settings    *settings.Store
+	llmReg      *llm.Registry
+	connectors  *connectors.Cache
+	voice       *voice.Minter
+	speaker     *voice.Speaker
+	started     time.Time
 
 	intentDet *intent.Detector
 	intentDB  *intent.Store
@@ -245,6 +250,7 @@ func New(cfg Config) *Server {
 		loop:           cfg.Loop,
 		mcp:            cfg.MCP,
 		pool:           cfg.Pool,
+		attachments:    cfg.Attachments,
 		store:          cfg.Store,
 		searcher:       cfg.Searcher,
 		skillsAPI:      cfg.SkillsAPI,
@@ -401,6 +407,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/graph", s.handleGraph)
 	mux.HandleFunc("/api/browser/session/", s.handleBrowserSession)
 	mux.HandleFunc("/api/workspace/download", s.handleWorkspaceDownload)
+	// Chat attachments: Studio uploads bytes here, then references the ids on
+	// the WS frame. The raw route streams them back for previews / open.
+	mux.HandleFunc("/api/attachments/upload", s.handleAttachmentUpload)
+	mux.HandleFunc("/api/attachments/", s.handleAttachmentRaw)
 	mux.HandleFunc("/api/workspace/docpages", s.handleWorkspaceDocPages)
 	mux.HandleFunc("/api/canvas/artifact/delete", s.handleArtifactDelete)
 	mux.HandleFunc("/api/canvas/fs/ls", s.handleCanvasFSList)

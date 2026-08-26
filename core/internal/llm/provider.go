@@ -17,13 +17,17 @@ const (
 )
 
 type Message struct {
-	Role       Role           `json:"role"`
-	Content    string         `json:"content"`
-	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	ToolName   string         `json:"tool_name,omitempty"`
-	Timestamp  time.Time      `json:"timestamp,omitempty"`
-	Meta       map[string]any `json:"-"`
+	Role    Role   `json:"role"`
+	Content string `json:"content"`
+	// Attachments are the files attached to a user message (images, PDFs,
+	// text). Providers ship them as native blocks ahead of Content; see
+	// attachment.go. Bytes are excluded from JSON by design.
+	Attachments []Attachment   `json:"attachments,omitempty"`
+	ToolCalls   []ToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID  string         `json:"tool_call_id,omitempty"`
+	ToolName    string         `json:"tool_name,omitempty"`
+	Timestamp   time.Time      `json:"timestamp,omitempty"`
+	Meta        map[string]any `json:"-"`
 }
 
 const ResponseItemMetaKey = "openai_response_item"

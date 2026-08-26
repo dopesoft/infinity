@@ -15,6 +15,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/config"
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/attachments"
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/browser"
@@ -2016,12 +2017,41 @@ func serveCmd() *cobra.Command {
 				browserInput = browserReg.Input
 				browserControl = browserReg.SetController
 			}
+			// Chat uploads: the bytes live in Postgres (mem_attachments), get
+			// mirrored to Jarvis's cloud workspace and read with its toolchain
+			// (pdftotext / pdftoppm / LibreOffice), then ride each turn as
+			// native image / PDF blocks. artifact_get reads them back later.
+			attachmentStore := attachments.NewStore(pool, attachments.NewWorkspaceExtractor(activeBridgeRouter))
+			tools.SetUploadReader(tools.UploadReaderFunc(func(ctx context.Context, storagePath string) (*tools.UploadInfo, error) {
+				a, err := attachmentStore.GetByArtifact(ctx, storagePath)
+				if err != nil {
+					return nil, err
+				}
+				path, merr := attachmentStore.EnsureMirrored(ctx, a)
+				info := &tools.UploadInfo{
+					Name:          a.Name,
+					MIME:          a.MIME,
+					SizeBytes:     a.SizeBytes,
+					Text:          a.TextExtract,
+					WorkspacePath: path,
+					ExtractStatus: a.ExtractStatus,
+					ExtractError:  a.ExtractError,
+					PageCount:     a.PageCount,
+					RawURL:        a.RawURL(),
+				}
+				if merr != nil && path == "" {
+					info.MirrorError = merr.Error()
+				}
+				return info, nil
+			}))
+
 			srv := server.New(server.Config{
 				Addr:               addr,
 				Version:            version,
 				Loop:               loop,
 				MCP:                mcp,
 				Pool:               pool,
+				Attachments:        attachmentStore,
 				Store:              store,
 				Searcher:           searcher,
 				SkillsAPI:          skillsAPI,

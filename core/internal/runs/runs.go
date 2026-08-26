@@ -70,6 +70,10 @@ const (
 	// that finds the number, writes the brief, and places the call. The
 	// resulting call itself is a separate KindPhoneCall row.
 	KindPhoneAsk Kind = "phone.ask"
+	// KindAttachmentIngest is the read of a file the boss attached in chat:
+	// mirror to the workspace, extract text, rasterize scanned pages. Booked so
+	// the /logs Runs lens shows why an upload took a moment and what it found.
+	KindAttachmentIngest Kind = "attachment.ingest"
 )
 
 // Source identifies who initiated the run. Drives Studio's "manual vs

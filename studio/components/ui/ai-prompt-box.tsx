@@ -35,8 +35,9 @@ import { emitVoiceActive, onWakeDetected } from "@/lib/voice/wake-bus";
  *      block instead.
  *   3. Replaced the Search / Think / Canvas toggles with a single
  *      <ModelChip> - click cycles through Sonnet 4.5 → Opus 4.7 → Haiku 4.5.
- *      Voice + image-paste UX stays (the agent loop accepts text only today;
- *      attachments are visual-only until we wire multimodal).
+ *      Voice + image-paste UX stays. Attached files are REAL input: useChat
+ *      uploads them to Core (/api/attachments/upload) and the brain receives
+ *      them as native image / PDF blocks (see core/internal/attachments).
  */
 
 // ── Textarea ──────────────────────────────────────────────────────────────
@@ -884,7 +885,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                           <input
                             ref={uploadRef}
                             type="file"
-                            accept="image/*,.pdf,.txt,.md,.markdown,.json,.csv,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.c,.cc,.cpp,.h,.hpp,.css,.html,.xml,.yaml,.yml,.toml,.ini,.sql"
+                            accept="image/*,.pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.txt,.md,.markdown,.json,.jsonl,.csv,.tsv,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.c,.cc,.cpp,.h,.hpp,.css,.html,.xml,.yaml,.yml,.toml,.ini,.sql,.log"
                             multiple
                             className="hidden"
                             onChange={(e) => {

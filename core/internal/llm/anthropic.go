@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/dopesoft/infinity/core/internal/httpx"
 )
@@ -176,7 +178,7 @@ func (a *Anthropic) StreamCached(
 	for _, m := range messages {
 		switch m.Role {
 		case RoleUser:
-			apiMessages = append(apiMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
+			apiMessages = append(apiMessages, anthropic.NewUserMessage(anthropicUserBlocks(m)...))
 		case RoleAssistant:
 			blocks := []anthropic.ContentBlockParamUnion{}
 			if m.Content != "" {
@@ -390,4 +392,63 @@ func emit(ch chan<- StreamEvent, ev StreamEvent) {
 	case ch <- ev:
 	default:
 	}
+}
+
+// anthropicUserBlocks renders a user message as content blocks. Attachments
+// come FIRST (Anthropic's docs: documents and images before the question
+// perform best), then the typed text. Images and PDFs ride natively when
+// inside the documented limits (image ≤ 10 MB base64, jpeg/png/gif/webp;
+// PDF ≤ 32 MB request, ≤ 100 pages); anything else, and every Note, is the
+// labelled text rendering so nothing is ever silently dropped.
+func anthropicUserBlocks(m Message) []anthropic.ContentBlockParamUnion {
+	if len(m.Attachments) == 0 {
+		return []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(m.Content)}
+	}
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Attachments)*3+1)
+	for _, a := range m.Attachments {
+		switch {
+		case a.InlineImageOK():
+			blocks = append(blocks, anthropic.NewTextBlock(attachmentCaption(a)))
+			blocks = append(blocks, anthropic.NewImageBlockBase64(strings.ToLower(a.MIME), base64.StdEncoding.EncodeToString(a.Data)))
+		case a.InlinePDFOK():
+			doc := anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: base64.StdEncoding.EncodeToString(a.Data)})
+			doc.OfDocument.Title = param.NewOpt(a.Name)
+			blocks = append(blocks, anthropic.NewTextBlock(attachmentCaption(a)))
+			blocks = append(blocks, doc)
+		default:
+			blocks = append(blocks, anthropic.NewTextBlock(a.TextBlock()))
+			for i := range a.Pages {
+				pm := a.PageMIME
+				if pm == "" {
+					pm = "image/jpeg"
+				}
+				blocks = append(blocks, anthropic.NewImageBlockBase64(pm, base64.StdEncoding.EncodeToString(a.Pages[i])))
+			}
+		}
+	}
+	if strings.TrimSpace(m.Content) != "" {
+		blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+	}
+	return blocks
+}
+
+// attachmentCaption is the one-line label that precedes a native image /
+// document block: name, where it lives on the workspace, and any caveat.
+func attachmentCaption(a Attachment) string {
+	var b strings.Builder
+	b.WriteString("Attachment: ")
+	b.WriteString(a.Name)
+	if a.PageCount > 0 {
+		fmt.Fprintf(&b, " (%d pages)", a.PageCount)
+	}
+	if a.Path != "" {
+		b.WriteString(" — on the workspace at ")
+		b.WriteString(a.Path)
+	}
+	if a.Note != "" {
+		b.WriteString(" [note: ")
+		b.WriteString(strings.TrimSpace(a.Note))
+		b.WriteString("]")
+	}
+	return b.String()
 }

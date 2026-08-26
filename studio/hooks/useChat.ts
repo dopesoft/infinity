@@ -5,17 +5,28 @@ import { useSearchParams } from "next/navigation";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchSessionMessages } from "@/lib/api";
+import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
 export type ChatAttachment = {
+  /** mem_attachments id once uploaded to Core. Absent while uploading / on failure. */
+  id?: string;
   name: string;
   mimeType?: string;
   sizeBytes?: number;
   text?: string;
+  /** Image preview: a local blob: URL while sending, Core's raw route after reload. */
   previewUrl?: string;
+  /** Where the file landed on Jarvis's workspace (when the bridge was up). */
   storagePath?: string;
+  /** Core raw route for "open" (JWT-protected). */
+  url?: string;
+  uploading?: boolean;
+  error?: string;
+  extractStatus?: string;
+  pageCount?: number;
   file?: File;
 };
 
@@ -116,12 +127,15 @@ type ServerRow = {
   seed_kind?: string;
   curiosity_id?: string;
   attachments?: {
+    id?: string;
     name?: string;
     mime_type?: string;
     size_bytes?: number;
     text?: string;
     preview_url?: string;
     storage_path?: string;
+    extract_status?: string;
+    page_count?: number;
   }[];
   // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
   // survives navigation/reload. tool_output present = completed.
@@ -135,15 +149,22 @@ type ServerRow = {
 function rowAttachmentsToChat(atts?: ServerRow["attachments"]): ChatAttachment[] | undefined {
   if (!Array.isArray(atts) || atts.length === 0) return undefined;
   const out = atts
-    .map((att) => ({
-      name: att.name?.trim() || "attachment",
-      mimeType: att.mime_type?.trim() || undefined,
-      sizeBytes: typeof att.size_bytes === "number" ? att.size_bytes : undefined,
-      text: att.text?.trim() || undefined,
-      previewUrl: att.preview_url?.trim() || undefined,
-      storagePath: att.storage_path?.trim() || undefined,
-    }))
-    .filter((att) => att.name || att.previewUrl || att.text);
+    .map((att) => {
+      const id = att.id?.trim() || undefined;
+      return {
+        id,
+        name: att.name?.trim() || "attachment",
+        mimeType: att.mime_type?.trim() || undefined,
+        sizeBytes: typeof att.size_bytes === "number" ? att.size_bytes : undefined,
+        text: att.text?.trim() || undefined,
+        previewUrl: att.preview_url?.trim() || undefined,
+        storagePath: att.storage_path?.trim() || undefined,
+        url: id ? attachmentRawPath(id) : undefined,
+        extractStatus: att.extract_status?.trim() || undefined,
+        pageCount: typeof att.page_count === "number" ? att.page_count : undefined,
+      };
+    })
+    .filter((att) => att.id || att.name || att.previewUrl || att.text);
   return out.length > 0 ? out : undefined;
 }
 
@@ -151,13 +172,9 @@ function dedupeAttachments(atts: ChatAttachment[]): ChatAttachment[] {
   const seen = new Set<string>();
   const out: ChatAttachment[] = [];
   for (const att of atts) {
-    const key = [
-      att.name,
-      att.sizeBytes ?? "",
-      att.mimeType ?? "",
-      att.storagePath ?? "",
-      att.previewUrl ?? "",
-    ].join("|");
+    const key = att.id
+      ? `id:${att.id}`
+      : [att.name, att.sizeBytes ?? "", att.mimeType ?? "", att.storagePath ?? "", att.previewUrl ?? ""].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(att);
@@ -449,106 +466,76 @@ function findLatestPendingAssistant(messages: ChatMessage[]): number {
   return -1;
 }
 
+// SendAttachment is the WS-frame reference: the id Core handed back from the
+// upload. Bytes never ride the socket; Core resolves the id into native
+// image / PDF blocks for the brain.
 type SendAttachment = {
+  id: string;
   name: string;
   mime_type?: string;
   size_bytes?: number;
-  text?: string;
-  preview_url?: string;
-  storage_path?: string;
 };
 
 function toSendAttachment(att: ChatAttachment): SendAttachment {
   return {
+    id: att.id ?? "",
     name: att.name,
     mime_type: att.mimeType,
     size_bytes: att.sizeBytes,
-    text: att.text,
-    preview_url: att.previewUrl,
-    storage_path: att.storagePath,
   };
-}
-
-function isUsableAttachment(att: ChatAttachment): boolean {
-  return Boolean(att.name || att.previewUrl || att.text || att.mimeType || att.storagePath);
 }
 
 function isBlobAttachmentPreview(att: ChatAttachment): boolean {
   return Boolean(att.file && att.previewUrl?.startsWith("blob:"));
 }
 
-function attachmentsEqual(a?: ChatAttachment[], b?: ChatAttachment[]): boolean {
-  const left = a ?? [];
-  const right = b ?? [];
-  if (left.length !== right.length) return false;
-  for (let i = 0; i < left.length; i++) {
-    if (
-      left[i].name !== right[i].name ||
-      left[i].mimeType !== right[i].mimeType ||
-      left[i].sizeBytes !== right[i].sizeBytes ||
-      left[i].text !== right[i].text ||
-      left[i].previewUrl !== right[i].previewUrl ||
-      left[i].storagePath !== right[i].storagePath
-    ) {
-      return false;
-    }
-  }
-  return true;
+// fileToLocalAttachment is the optimistic chip shown the instant the boss
+// hits send: local preview for images, "Uploading…" state until Core answers.
+function fileToLocalAttachment(file: File): ChatAttachment {
+  const att: ChatAttachment = {
+    name: file.name || "attachment",
+    mimeType: file.type || undefined,
+    sizeBytes: typeof file.size === "number" ? file.size : undefined,
+    file,
+    uploading: true,
+  };
+  if (file.type.startsWith("image/")) att.previewUrl = URL.createObjectURL(file);
+  return att;
 }
 
-function mergePendingAttachments(
-  messages: ChatMessage[],
-  role: ChatRole,
-  text: string,
-  attachments?: ChatAttachment[],
-): ChatMessage[] {
-  if (!attachments || attachments.length === 0) return messages;
-  return messages.map((message) => {
-    if (message.role !== role) return message;
-    if (message.text !== text) return message;
-    if (!attachmentsEqual(message.attachments, attachments)) return message;
-    const merged = attachments.map((att, idx) => {
-      const current = message.attachments?.[idx];
-      if (!current) return att;
+// reconcileUploads stamps Core's answer onto the optimistic chips, in order:
+// a stored file gets its id / workspace path / extraction status, a failed
+// one keeps its chip with the reason (never silently dropped).
+function reconcileUploads(pending: ChatAttachment[], result: UploadResult): ChatAttachment[] {
+  const stored = [...result.ok];
+  const failed = [...result.failed];
+  return pending.map((att) => {
+    const okIdx = stored.findIndex((u) => u.name === att.name);
+    if (okIdx >= 0) {
+      const [u] = stored.splice(okIdx, 1);
       return {
         ...att,
-        previewUrl: att.previewUrl || current.previewUrl,
-        file: current.file || att.file,
+        id: u.id,
+        mimeType: u.mime_type || att.mimeType,
+        sizeBytes: u.size_bytes ?? att.sizeBytes,
+        storagePath: u.storage_path || undefined,
+        url: attachmentRawPath(u.id),
+        extractStatus: u.extract_status,
+        pageCount: u.page_count,
+        uploading: false,
       };
-    });
-    return { ...message, attachments: merged };
+    }
+    const failIdx = failed.findIndex((f) => f.name === att.name);
+    const reason = failIdx >= 0 ? failed.splice(failIdx, 1)[0].error : "upload failed";
+    return { ...att, uploading: false, error: `Couldn't upload: ${reason}` };
   });
 }
 
-function fileToAttachmentPayload(file: File): Promise<ChatAttachment> {
-  return new Promise((resolve) => {
-    const base: ChatAttachment = {
-      name: file.name || "attachment",
-      mimeType: file.type || undefined,
-      sizeBytes: typeof file.size === "number" ? file.size : undefined,
-      file,
-    };
-    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-    if (previewUrl) base.previewUrl = previewUrl;
-    const canReadText =
-      file.type.startsWith("text/") ||
-      /\.(txt|md|json|csv|ts|tsx|js|jsx|py|go|rs|java|c|cc|cpp|h|hpp|css|html|xml|yaml|yml|toml|ini|sql)$/i.test(file.name);
-    if (!canReadText) {
-      resolve(base);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const raw = typeof reader.result === "string" ? reader.result : "";
-      const text = raw.trim();
-      resolve({
-        ...base,
-        text: text ? text.slice(0, 20_000) : undefined,
-      });
-    };
-    reader.onerror = () => resolve(base);
-    reader.readAsText(file);
-  });
+// attachedMarker mirrors Core's turnText: a file-only send still needs a
+// non-empty user message, and both sides render the same marker so the
+// optimistic bubble matches the persisted row.
+function attachedMarker(files: File[]): string {
+  return `(attached: ${files.map((f) => f.name || "attachment").join(", ")})`;
 }
 
 function revokeMessageAttachmentUrls(messages: ChatMessage[]) {
@@ -1144,7 +1131,7 @@ export function useChat() {
             for (let i = prev.length - 1; i >= 0; i--) {
               const m = prev[i];
               if (m.role !== "user") continue;
-              if (m.steered && m.text === ev.text) return prev;
+              if (m.steered && (m.text === ev.text || (ev.text.startsWith("(attached:") && m.attachments?.length))) return prev;
               break;
             }
             return [
@@ -1248,9 +1235,8 @@ export function useChat() {
   const send = useCallback(
     async (content: string, files?: File[], opts?: { voice?: boolean; effort?: string }) => {
       const trimmed = content.trim();
-      const attachments = await Promise.all((files ?? []).map(fileToAttachmentPayload));
-      const usableAttachments = attachments.filter(isUsableAttachment);
-      if ((!trimmed && usableAttachments.length === 0) || !sessionId) return false;
+      const localFiles = files ?? [];
+      if ((!trimmed && localFiles.length === 0) || !sessionId) return false;
 
       // Mid-turn steering. When a turn is already in flight, send the
       // input as `steer` instead of `message` - the server drops it into
@@ -1259,25 +1245,55 @@ export function useChat() {
       // with `steered: true` so the transcript distinguishes it. The
       // model in use is resolved server-side from the settings store
       // (not from the WS frame) so there's a single source of truth.
-      if (isStreaming) {
-        setMessages((prev) =>
-          mergePendingAttachments(
-            [
-              ...prev,
-              {
-                id: makeId(),
-                role: "user",
-                text: trimmed,
-                attachments: usableAttachments.length > 0 ? usableAttachments : undefined,
-                steered: true,
-                createdAt: Date.now(),
-              },
-            ],
-            "user",
-            trimmed,
-            usableAttachments,
-          ),
-        );
+      // Decided up-front (before any upload) so a file dropped mid-turn is
+      // routed the way the boss saw it; the server tolerates a stale choice
+      // by auto-routing message→steer and steer→message.
+      const steering = isStreamingRef.current;
+      const bubbleId = makeId();
+      const pending = localFiles.map(fileToLocalAttachment);
+      const bubbleText = trimmed || attachedMarker(localFiles);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: bubbleId,
+          role: "user",
+          text: bubbleText,
+          attachments: pending.length > 0 ? pending : undefined,
+          steered: steering || undefined,
+          createdAt: Date.now(),
+        },
+        // Optimistic "Jarvis is thinking" indicator (fresh turns only). Closes
+        // on first delta / tool_call / complete. Hidden if it ends up empty.
+        ...(steering
+          ? []
+          : [{ id: makeId(), role: "thinking" as const, text: "", pending: true, createdAt: Date.now() }]),
+      ]);
+
+      // Files go to Core FIRST (multipart); the WS frame only references the
+      // ids. Core turns them into native image / PDF blocks for the brain.
+      let usableAttachments: ChatAttachment[] = [];
+      if (pending.length > 0) {
+        const result = await uploadAttachments(sessionId, localFiles);
+        const reconciled = reconcileUploads(pending, result);
+        setMessages((prev) => prev.map((m) => (m.id === bubbleId ? { ...m, attachments: reconciled } : m)));
+        usableAttachments = reconciled.filter((a) => !!a.id);
+        if (usableAttachments.length === 0 && !trimmed) {
+          const reason = result.failed[0]?.error || "upload failed";
+          setMessages((prev) => [
+            ...prev.filter((m) => !(m.role === "thinking" && m.pending)),
+            {
+              id: makeId(),
+              role: "assistant",
+              text: "",
+              error: `I couldn't take that file: ${reason}`,
+              createdAt: Date.now(),
+            },
+          ]);
+          return false;
+        }
+      }
+
+      if (steering) {
         const ok = ws.send({
           type: "steer",
           session_id: sessionId,
@@ -1302,26 +1318,6 @@ export function useChat() {
         return ok;
       }
 
-      setMessages((prev) =>
-        mergePendingAttachments(
-          [
-            ...prev,
-            {
-              id: makeId(),
-              role: "user",
-              text: trimmed,
-              attachments: usableAttachments.length > 0 ? usableAttachments : undefined,
-              createdAt: Date.now(),
-            },
-            // Optimistic "Jarvis is thinking" indicator. Closes on first delta /
-            // tool_call / complete. Hidden in the renderer if it ends up empty.
-            { id: makeId(), role: "thinking", text: "", pending: true, createdAt: Date.now() },
-          ],
-          "user",
-          trimmed,
-          usableAttachments,
-        ),
-      );
       turnStartRef.current = Date.now();
       setIsStreaming(true);
       armWatchdog();
@@ -1353,7 +1349,7 @@ export function useChat() {
       }
       return ok;
     },
-    [ws, sessionId, isStreaming, armWatchdog, clearWatchdog],
+    [ws, sessionId, armWatchdog, clearWatchdog],
   );
 
   // interrupt cancels the in-flight turn for the current session. The

@@ -9,6 +9,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 )
@@ -69,7 +70,11 @@ func (o *OpenAI) StreamCached(
 	for _, m := range messages {
 		switch m.Role {
 		case RoleUser:
-			apiMessages = append(apiMessages, openai.UserMessage(m.Content))
+			if len(m.Attachments) == 0 {
+				apiMessages = append(apiMessages, openai.UserMessage(m.Content))
+			} else {
+				apiMessages = append(apiMessages, openai.UserMessage(openaiUserParts(m)))
+			}
 		case RoleAssistant:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			if m.Content != "" {
@@ -255,3 +260,33 @@ func normalizeOpenAIModel(model string) string {
 }
 
 var _ ssestream.Stream[openai.ChatCompletionChunk] // keep import for clarity
+
+// openaiUserParts renders a user message with attachments as Chat Completions
+// content parts: images as image_url data URLs, PDFs as `file` parts
+// (file_data + filename, per the OpenAI PDF guide), everything else as the
+// labelled text rendering. Attachments precede the typed text.
+func openaiUserParts(m Message) []openai.ChatCompletionContentPartUnionParam {
+	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Attachments)*3+1)
+	for _, a := range m.Attachments {
+		switch {
+		case a.InlineImageOK():
+			parts = append(parts, openai.TextContentPart(attachmentCaption(a)))
+			parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: a.DataURL()}))
+		case a.InlinePDFOK():
+			parts = append(parts, openai.TextContentPart(attachmentCaption(a)))
+			parts = append(parts, openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+				FileData: param.NewOpt(a.DataURL()),
+				Filename: param.NewOpt(a.Name),
+			}))
+		default:
+			parts = append(parts, openai.TextContentPart(a.TextBlock()))
+			for i := range a.Pages {
+				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: a.PageDataURL(i)}))
+			}
+		}
+	}
+	if strings.TrimSpace(m.Content) != "" || len(parts) == 0 {
+		parts = append(parts, openai.TextContentPart(m.Content))
+	}
+	return parts
+}

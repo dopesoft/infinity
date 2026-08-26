@@ -8,12 +8,12 @@
 //
 // Generic shape:
 //
-//   artifact_save({kind, name, virtual_path, storage_kind, storage_path?,
-//                  description?, tags?, metadata?, derived_from?,
-//                  github_url?, bridge?, source_tool?})
-//   artifact_list({kind?, tag?, virtual_path_prefix?, session_id?, limit?})
-//   artifact_get({id?, name?, virtual_path?})
-//   artifact_delete({id})   - soft delete (sets deleted_at)
+//	artifact_save({kind, name, virtual_path, storage_kind, storage_path?,
+//	               description?, tags?, metadata?, derived_from?,
+//	               github_url?, bridge?, source_tool?})
+//	artifact_list({kind?, tag?, virtual_path_prefix?, session_id?, limit?})
+//	artifact_get({id?, name?, virtual_path?})
+//	artifact_delete({id})   - soft delete (sets deleted_at)
 //
 // virtual_path is the unique boss-facing identity. The Library UI in
 // Studio renders artifacts as a tree keyed on virtual_path so the boss
@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -58,20 +59,20 @@ func (t *artifactSave) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"kind":          map[string]any{"type": "string", "description": "project | image | audio | video | document | dataset | memory | other"},
-			"name":          map[string]any{"type": "string"},
-			"description":   map[string]any{"type": "string"},
-			"virtual_path":  map[string]any{"type": "string", "description": "Boss-facing folder/path in the Library tree. Must be unique."},
-			"storage_kind":  map[string]any{"type": "string", "enum": []string{"filesystem", "object_store", "postgres", "inline"}},
-			"storage_path":  map[string]any{"type": "string"},
-			"storage_size":  map[string]any{"type": "integer"},
-			"storage_mime":  map[string]any{"type": "string"},
-			"bridge":        map[string]any{"type": "string", "enum": []string{"mac", "cloud"}},
-			"github_url":    map[string]any{"type": "string"},
-			"derived_from":  map[string]any{"type": "string", "description": "Optional parent artifact id this was derived from."},
-			"source_tool":   map[string]any{"type": "string"},
-			"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"metadata":      map[string]any{"type": "object"},
+			"kind":         map[string]any{"type": "string", "description": "project | image | audio | video | document | dataset | memory | other"},
+			"name":         map[string]any{"type": "string"},
+			"description":  map[string]any{"type": "string"},
+			"virtual_path": map[string]any{"type": "string", "description": "Boss-facing folder/path in the Library tree. Must be unique."},
+			"storage_kind": map[string]any{"type": "string", "enum": []string{"filesystem", "object_store", "postgres", "inline"}},
+			"storage_path": map[string]any{"type": "string"},
+			"storage_size": map[string]any{"type": "integer"},
+			"storage_mime": map[string]any{"type": "string"},
+			"bridge":       map[string]any{"type": "string", "enum": []string{"mac", "cloud"}},
+			"github_url":   map[string]any{"type": "string"},
+			"derived_from": map[string]any{"type": "string", "description": "Optional parent artifact id this was derived from."},
+			"source_tool":  map[string]any{"type": "string"},
+			"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"metadata":     map[string]any{"type": "object"},
 		},
 		"required": []string{"kind", "name", "virtual_path", "storage_kind"},
 	}
@@ -133,8 +134,8 @@ func (t *artifactSave) Execute(ctx context.Context, in map[string]any) (string, 
 
 type artifactList struct{ pool *pgxpool.Pool }
 
-func (t *artifactList) Name() string     { return "artifact_list" }
-func (t *artifactList) ReadOnly() bool   { return true }
+func (t *artifactList) Name() string   { return "artifact_list" }
+func (t *artifactList) ReadOnly() bool { return true }
 func (t *artifactList) Description() string {
 	return "List artifacts. Filter by kind, tag, virtual_path prefix, or session. " +
 		"Returns rows sorted by most-recent-first. Use this BEFORE creating " +
@@ -240,10 +241,13 @@ func (t *artifactList) Execute(ctx context.Context, in map[string]any) (string, 
 
 type artifactGet struct{ pool *pgxpool.Pool }
 
-func (t *artifactGet) Name() string     { return "artifact_get" }
-func (t *artifactGet) ReadOnly() bool   { return true }
+func (t *artifactGet) Name() string   { return "artifact_get" }
+func (t *artifactGet) ReadOnly() bool { return true }
 func (t *artifactGet) Description() string {
 	return "Fetch one artifact by id, virtual_path, or name. Returns the full row including metadata. " +
+		"For files the boss attached in chat (source_tool='chat_upload', virtual_path under /uploads/) the " +
+		"reply also carries `upload`: the extracted text, the workspace path to read/process it with " +
+		"fs_read or bash_run, page count and extraction status. " +
 		"Bumps accessed_at so 'recently used' queries work."
 }
 func (t *artifactGet) Schema() map[string]any {
@@ -364,8 +368,105 @@ func (t *artifactGet) Execute(ctx context.Context, in map[string]any) (string, e
 	_ = json.Unmarshal([]byte(metaRaw), &meta)
 	row["tags"] = tags
 	row["metadata"] = meta
+	// Chat uploads live in the attachment store: hand the agent the text and
+	// the workspace path instead of a bare pointer it cannot open.
+	if storageKind == "postgres" && storagePath != nil && strings.HasPrefix(*storagePath, "attachment:") {
+		if reader := currentUploadReader(); reader != nil {
+			info, uerr := reader.ReadUpload(ctx, *storagePath)
+			if uerr != nil {
+				row["upload_error"] = uerr.Error()
+			} else if info != nil {
+				row["upload"] = info.asRow()
+			}
+		}
+	}
 	b, _ := json.Marshal(row)
 	return string(b), nil
+}
+
+// ── chat uploads ─────────────────────────────────────────────────────────
+
+// UploadInfo is what artifact_get returns for a file the boss attached in
+// chat: enough for the agent to read it (text) or work on it (path).
+type UploadInfo struct {
+	Name          string
+	MIME          string
+	SizeBytes     int64
+	Text          string
+	WorkspacePath string
+	MirrorError   string
+	ExtractStatus string
+	ExtractError  string
+	PageCount     int
+	RawURL        string
+}
+
+// uploadTextCap bounds the text an artifact_get reply carries inline; the
+// full text sits next to the file on the workspace.
+const uploadTextCap = 60_000
+
+func (u *UploadInfo) asRow() map[string]any {
+	text := u.Text
+	truncated := false
+	if len(text) > uploadTextCap {
+		text, truncated = text[:uploadTextCap], true
+	}
+	row := map[string]any{
+		"name":           u.Name,
+		"mime":           u.MIME,
+		"size_bytes":     u.SizeBytes,
+		"extract_status": u.ExtractStatus,
+		"page_count":     u.PageCount,
+		"raw_url":        u.RawURL,
+	}
+	if text != "" {
+		row["text"] = text
+		row["text_truncated"] = truncated
+	}
+	if u.WorkspacePath != "" {
+		row["workspace_path"] = u.WorkspacePath
+		row["how_to_read"] = "fs_read the path (or " + u.WorkspacePath + ".txt for the extracted text); bash_run for pdftotext / pdftoppm / OCR / python"
+	}
+	if u.MirrorError != "" {
+		row["workspace_error"] = u.MirrorError
+	}
+	if u.ExtractError != "" {
+		row["extract_error"] = u.ExtractError
+	}
+	return row
+}
+
+// UploadReader resolves a mem_artifacts storage_path of the form
+// "attachment:<id>" into the upload's text and workspace path.
+type UploadReader interface {
+	ReadUpload(ctx context.Context, storagePath string) (*UploadInfo, error)
+}
+
+// UploadReaderFunc adapts a func to UploadReader.
+type UploadReaderFunc func(ctx context.Context, storagePath string) (*UploadInfo, error)
+
+// ReadUpload implements UploadReader.
+func (f UploadReaderFunc) ReadUpload(ctx context.Context, storagePath string) (*UploadInfo, error) {
+	return f(ctx, storagePath)
+}
+
+var (
+	uploadReaderMu sync.RWMutex
+	uploadReader   UploadReader
+)
+
+// SetUploadReader wires the chat-upload store into artifact_get (called once
+// from serve once the attachment store exists). nil-safe.
+func SetUploadReader(r UploadReader) {
+	uploadReaderMu.Lock()
+	defer uploadReaderMu.Unlock()
+	uploadReader = r
+}
+
+func currentUploadReader() UploadReader {
+	uploadReaderMu.RLock()
+	defer uploadReaderMu.RUnlock()
+	return uploadReader
 }
 
 // ── artifact_delete ──────────────────────────────────────────────────────

@@ -21,12 +21,15 @@ const (
 )
 
 type sessionAttachmentDTO struct {
-	Name        string `json:"name"`
-	MimeType    string `json:"mime_type,omitempty"`
-	SizeBytes   int64  `json:"size_bytes,omitempty"`
-	Text        string `json:"text,omitempty"`
-	PreviewURL  string `json:"preview_url,omitempty"`
-	StoragePath string `json:"storage_path,omitempty"`
+	ID            string `json:"id,omitempty"`
+	Name          string `json:"name"`
+	MimeType      string `json:"mime_type,omitempty"`
+	SizeBytes     int64  `json:"size_bytes,omitempty"`
+	Text          string `json:"text,omitempty"`
+	PreviewURL    string `json:"preview_url,omitempty"`
+	StoragePath   string `json:"storage_path,omitempty"`
+	ExtractStatus string `json:"extract_status,omitempty"`
+	PageCount     int    `json:"page_count,omitempty"`
 }
 
 // sessionMessageDTO is the on-the-wire shape returned by
@@ -75,7 +78,7 @@ func attachmentsFromPayload(payload string) []sessionAttachmentDTO {
 	}
 	out := make([]sessionAttachmentDTO, 0, len(p.Attachments))
 	for _, att := range p.Attachments {
-		if strings.TrimSpace(att.Name) == "" && strings.TrimSpace(att.Text) == "" && strings.TrimSpace(att.PreviewURL) == "" {
+		if strings.TrimSpace(att.Name) == "" && strings.TrimSpace(att.Text) == "" && strings.TrimSpace(att.PreviewURL) == "" && strings.TrimSpace(att.ID) == "" {
 			continue
 		}
 		out = append(out, att)
@@ -275,7 +278,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 	}
 
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hook_name, COALESCE(raw_text, ''), created_at
+		SELECT hook_name, COALESCE(raw_text, ''), COALESCE(payload::text, ''), created_at
 		FROM mem_observations
 		WHERE session_id = $1
 		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
@@ -291,9 +294,9 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var hook, text string
+		var hook, text, payload string
 		var createdAt time.Time
-		if err := rows.Scan(&hook, &text, &createdAt); err != nil {
+		if err := rows.Scan(&hook, &text, &payload, &createdAt); err != nil {
 			return
 		}
 		_ = createdAt
@@ -304,11 +307,29 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 		// DashboardSeed is injected context, but to the model it's the
 		// opening user turn - so it hydrates as a user-role message.
 		role := llm.RoleAssistant
+		var atts []llm.Attachment
 		if hook == "UserPromptSubmit" || hook == "DashboardSeed" {
 			role = llm.RoleUser
+			// Files attached to that turn are reloaded from the store so the
+			// brain sees them again after a Core restart, not just the chip.
+			if ids := attachmentIDsFromPayload(payload); len(ids) > 0 && s.attachments != nil {
+				atts = s.attachments.ToLLMMany(r.Context(), ids)
+			}
 		}
-		sess.Append(llm.Message{Role: role, Content: text})
+		sess.Append(llm.Message{Role: role, Content: text, Attachments: atts})
 	}
+}
+
+// attachmentIDsFromPayload pulls the upload ids a UserPromptSubmit hook
+// payload recorded (see llm.AttachmentsMeta).
+func attachmentIDsFromPayload(payload string) []string {
+	var ids []string
+	for _, att := range attachmentsFromPayload(payload) {
+		if id := strings.TrimSpace(att.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // seedKindFromPayload pulls the dashboard item kind ("activity", "memory",
