@@ -14,6 +14,10 @@ import "time"
 
 // Plan statuses.
 const (
+	// PlanProposed: laid out for the boss but NOT approved. Not executable,
+	// not in the chat dock, never adopted by a later session. plan_approve
+	// (or Studio's "Go ahead") makes it active and stamps approved_at.
+	PlanProposed  = "proposed"
 	PlanActive    = "active"
 	PlanPaused    = "paused"
 	PlanCompleted = "completed"
@@ -42,8 +46,14 @@ type Plan struct {
 	CurrentStep int       `json:"current_step"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	Steps       []Step    `json:"steps,omitempty"`
+	// ApprovedAt is when the boss (or an autonomous work order) approved
+	// the plan for execution. nil on a proposal.
+	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+	Steps      []Step     `json:"steps,omitempty"`
 }
+
+// Approved reports whether the plan may be executed / resumed.
+func (p *Plan) Approved() bool { return p != nil && p.Status != PlanProposed && p.ApprovedAt != nil }
 
 // Step is one ordered item in a plan's checklist.
 type Step struct {

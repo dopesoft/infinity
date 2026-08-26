@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/plan"
 )
@@ -60,7 +61,7 @@ func TestResolveStepRef_EmptyStepID(t *testing.T) {
 // emission like "2'}}," (model hallucination) is recovered to integer 2 and
 // then follows the no-active-plan path correctly (returns error, not panic).
 func TestResolveStepRef_MangledPositional(t *testing.T) {
-	_, err := resolveStepRef(context.Background(), nilStore, "2'}}," )
+	_, err := resolveStepRef(context.Background(), nilStore, "2'}},")
 	if err == nil {
 		t.Fatal("expected error for mangled positional with no active plan, got nil")
 	}
@@ -312,9 +313,10 @@ func TestPlanGet_ExplicitPlanID_ReAnchorsToCurrentSession(t *testing.T) {
 	oldSID := "83dce231-bc6a-4e69-81e0-d6c452d3daa4"
 	newSID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	foreignPlan := &plan.Plan{
-		ID:        "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
-		SessionID: oldSID,
-		Status:    plan.PlanPaused,
+		ID:         "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
+		SessionID:  oldSID,
+		Status:     plan.PlanPaused,
+		ApprovedAt: ptrTime(time.Now()), // an approved plan may be resumed across sessions
 		Steps: []plan.Step{
 			{ID: "step-1-uuid", Title: "Step 1"},
 			{ID: "step-2-uuid", Title: "Step 2"},
@@ -413,10 +415,12 @@ func TestCrossSessionResumeEndToEnd(t *testing.T) {
 	oldSID := "83dce231-bc6a-4e69-81e0-d6c452d3daa4"
 	newSID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
+	approvedAt := time.Now()
 	resumedPlan := &plan.Plan{
-		ID:        "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
-		SessionID: oldSID,
-		Status:    plan.PlanPaused,
+		ID:         "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
+		SessionID:  oldSID,
+		Status:     plan.PlanPaused,
+		ApprovedAt: &approvedAt, // only a plan the boss approved may be resumed
 		Steps: []plan.Step{
 			{ID: "step-1-uuid", Title: "Step 1"},
 			{ID: "step-2-uuid", Title: "Step 2"},
@@ -471,3 +475,34 @@ func TestCrossSessionResumeEndToEnd(t *testing.T) {
 		t.Fatalf("old session must no longer own the plan after adoption, got %+v", old)
 	}
 }
+
+// TestCrossSessionResumeRefusesUnapprovedPlan is the consent half of the
+// resume contract (2026-08-26: "I didn't even get a chance to understand what
+// it was"). A plan the boss never approved is returned for READ-BACK, never
+// adopted into the new session.
+func TestCrossSessionResumeRefusesUnapprovedPlan(t *testing.T) {
+	oldSID := "83dce231-bc6a-4e69-81e0-d6c452d3daa4"
+	newSID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	unapproved := &plan.Plan{
+		ID:        "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
+		SessionID: oldSID,
+		Status:    plan.PlanProposed,
+		Steps:     []plan.Step{{ID: "step-1-uuid", Title: "Distill the book"}},
+	}
+	stub := &smartResumePlanGetter{
+		plansByID:      map[string]*plan.Plan{unapproved.ID: unapproved},
+		plansBySession: map[string]*plan.Plan{oldSID: unapproved},
+	}
+	out, err := (&planGet{store: stub}).Execute(WithSessionID(context.Background(), newSID), map[string]any{"plan_id": unapproved.ID})
+	if err != nil {
+		t.Fatalf("plan_get failed: %v", err)
+	}
+	if stub.adoptedPlan != "" {
+		t.Fatalf("an unapproved plan must NOT be adopted, got adopt of %q", stub.adoptedPlan)
+	}
+	if !strings.Contains(out, `"unapproved":true`) || !strings.Contains(out, "Read it back") {
+		t.Fatalf("the model must be told to read the plan back and ask, got: %s", out)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }

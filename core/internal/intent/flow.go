@@ -3,9 +3,9 @@
 // Every user observation runs through Classify which returns one of three
 // control tokens:
 //
-//   • silent             - wait, the user is mid-thought
-//   • fast_intervention  - low-latency understanding help (<1s response)
-//   • full_assistance    - invoke memory + skills + take action
+//   - silent             - wait, the user is mid-thought
+//   - fast_intervention  - low-latency understanding help (<1s response)
+//   - full_assistance    - invoke memory + skills + take action
 //
 // The classifier is a prompt-engineered Claude Haiku call. It can be migrated
 // to a fine-tuned model later once labelled data exists; the Provider/Decision
@@ -27,9 +27,9 @@ import (
 type Token string
 
 const (
-	TokenSilent          Token = "silent"
+	TokenSilent           Token = "silent"
 	TokenFastIntervention Token = "fast_intervention"
-	TokenFullAssistance  Token = "full_assistance"
+	TokenFullAssistance   Token = "full_assistance"
 )
 
 func (t Token) Valid() bool {
@@ -42,10 +42,15 @@ func (t Token) Valid() bool {
 
 // Decision is the structured output of the classifier.
 type Decision struct {
-	Token            Token   `json:"token"`
-	Confidence       float64 `json:"confidence"`
-	Reason           string  `json:"reason"`
-	SuggestedAction  string  `json:"suggested_action,omitempty"`
+	Token           Token   `json:"token"`
+	Confidence      float64 `json:"confidence"`
+	Reason          string  `json:"reason"`
+	SuggestedAction string  `json:"suggested_action,omitempty"`
+	// Stance is what the message asked for: "discuss" (thinking out loud,
+	// asking how/what/why, brainstorming, or explicitly talk-before-build),
+	// "work" (a work order or an approval), or "unclear". The agent loop
+	// holds work tools while the stance is discuss (agent/consent.go).
+	Stance string `json:"stance,omitempty"`
 }
 
 // Recall depth maps from a token to the memory tier we should access.
@@ -59,9 +64,10 @@ const (
 )
 
 // DepthFor maps a token to the deepest layer of memory we'll touch.
-//   silent → none
-//   fast   → workspace only
-//   full   → user + global
+//
+//	silent → none
+//	fast   → workspace only
+//	full   → user + global
 func DepthFor(t Token) Depth {
 	switch t {
 	case TokenFastIntervention:
@@ -75,8 +81,8 @@ func DepthFor(t Token) Depth {
 // Detector classifies user input. It uses an LLM provider configured for a
 // fast model - typically claude-haiku - and a strict JSON output prompt.
 type Detector struct {
-	provider llm.Provider
-	model    string
+	provider      llm.Provider
+	model         string
 	thresholdFast float64
 	thresholdFull float64
 	quietHours    *QuietHours
@@ -85,11 +91,11 @@ type Detector struct {
 }
 
 type Config struct {
-	Provider       llm.Provider
-	Model          string
-	ThresholdFast  float64
-	ThresholdFull  float64
-	QuietHours     *QuietHours
+	Provider      llm.Provider
+	Model         string
+	ThresholdFast float64
+	ThresholdFull float64
+	QuietHours    *QuietHours
 }
 
 type QuietHours struct {
@@ -207,6 +213,11 @@ Output strict JSON with these keys:
 - confidence: 0.0-1.0
 - reason: one short sentence
 - suggested_action: optional one short imperative
+- stance: one of "discuss" | "work" | "unclear"
+  - discuss: the user is thinking out loud, asking how / what / why, brainstorming, asking for suggestions or an opinion, or explicitly says to talk, discuss, hold, or wait before anything gets built. NOTHING should be created or executed on this message.
+  - work: a work order ("do X", "build", "fix", "send", "create", "run", "book it") or an approval of something already proposed ("go ahead", "yes do it", "approved", "ship it").
+  - unclear: cannot tell.
+  An explicit "don't build / let's discuss first" is ALWAYS discuss, even if the rest of the message describes a project.
 
 Use:
 - silent: user mid-thought; input doesn't suggest a need; recent intervention covered it; or unclear.

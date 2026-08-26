@@ -28,6 +28,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/settings"
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/dopesoft/infinity/core/internal/workflow"
@@ -43,6 +44,10 @@ import (
 type turnState struct {
 	cancel context.CancelFunc
 	steer  chan agent.Steer
+	// stance is the turn's consent read (turnctx.Stance): set by the async
+	// IntentFlow classification of the opening message and of every steer,
+	// consulted by the loop before running a work tool.
+	stance *turnctx.StanceHolder
 	// speak is the voice pump for this turn (nil on text turns). Held here so
 	// a `voice_interrupt` frame - the browser reporting a barge-in - can
 	// squelch server-side synthesis for the rest of the interrupted reply.

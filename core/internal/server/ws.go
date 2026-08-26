@@ -13,6 +13,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/auth"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -440,6 +441,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// turn so the client doesn't have to distinguish.
 			steerAtts := s.resolveAttachments(connCtx, msg.Attachments)
 			steerText := turnText(msg.Content, steerAtts)
+			// A mid-turn message re-reads the stance too ("ok, go ahead" flips
+			// a discussion into work without a new turn).
+			if st := s.stanceFor(msg.SessionID); st != nil {
+				s.classifyIntentAsync(connCtx, msg.SessionID, msg.Content, send, st)
+			}
 			if s.steerTurn(msg.SessionID, steerText, steerAtts, send) {
 				/* WAL the steer too - corrections often arrive as
 				 * mid-turn nudges and we need them on the durable
@@ -459,10 +465,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				s.registerSession(sessionID, send)
 			}
 			s.appendWAL(connCtx, sessionID, msg.Content)
-			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
+			stance := s.stanceFor(sessionID)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance)
 			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, steerText, steerAtts, msg.Voice, msg.Effort, send)
+			s.startTurn(connCtx, userID, sessionID, steerText, steerAtts, msg.Voice, msg.Effort, stance, send)
 			continue
 		case "message":
 			sessionID := msg.SessionID
@@ -486,8 +493,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			/* IntentFlow: classify this turn in the background. The agent
 			 * loop always runs regardless of the decision; the decision is
 			 * recorded for analytics and emitted as an `intent` frame so
-			 * Studio's IntentStream panel updates live. */
-			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send)
+			 * Studio's IntentStream panel updates live. Its stance (discuss /
+			 * work) rides the turn: the loop holds work tools while the boss is
+			 * talking it through. If a turn is already in flight the reading
+			 * updates THAT turn's stance (the message becomes a steer). */
+			stance := s.stanceFor(sessionID)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance)
 			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
@@ -505,7 +516,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, msgText, msgAtts, msg.Voice, msg.Effort, send)
+			s.startTurn(connCtx, userID, sessionID, msgText, msgAtts, msg.Voice, msg.Effort, stance, send)
 		case "resume":
 			// Run one agent turn against a session's existing history
 			// without a fresh user message. Discuss-with-Jarvis uses this:
@@ -543,7 +554,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume - session has no history"})
 				continue
 			}
-			s.startTurn(connCtx, userID, sessionID, "", nil, false, "", send)
+			s.startTurn(connCtx, userID, sessionID, "", nil, false, "", nil, send)
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
@@ -592,7 +603,7 @@ func interactiveTurnTimeout() time.Duration {
 // page) rather than carried on the WS frame - that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
-func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, atts []llm.Attachment, voiceTurn bool, effortPin string, _ func(wsServerEvent)) {
+func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, atts []llm.Attachment, voiceTurn bool, effortPin string, stance *turnctx.StanceHolder, _ func(wsServerEvent)) {
 	// Use a fresh background context so the WS dying doesn't cancel this
 	// turn. The interactiveTurnTimeout() below is the only deadline that applies.
 	base := context.Background()
@@ -617,6 +628,13 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	// Files attached to the opening message ride the ctx; the loop appends
 	// them to the user llm.Message and persists their metadata on the hook.
 	ctxWithUser = agent.WithAttachments(ctxWithUser, atts)
+	// The consent read (discuss / work) rides the turn; nil on resume turns,
+	// which the loop treats as unrestricted.
+	if stance == nil {
+		stance = turnctx.NewStanceHolder()
+		stance.Set(turnctx.StanceUnknown, "resume turn")
+	}
+	ctxWithUser = turnctx.WithStance(ctxWithUser, stance)
 	turnCtx, cancel := context.WithTimeout(ctxWithUser, interactiveTurnTimeout())
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
 	// Route every WS frame through the live session binding rather than
@@ -626,6 +644,7 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	state := &turnState{
 		cancel: cancel,
 		steer:  make(chan agent.Steer, 8),
+		stance: stance,
 		// Voice turns get their speak pump minted here (not inside runTurn)
 		// so it's reachable from the turns registry - that's what lets a
 		// `voice_interrupt` frame squelch synthesis mid-reply. nil for text
@@ -886,4 +905,16 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 	// the last clip ships before the turn ctx is cancelled. No-op for text.
 	speak.finish()
 	<-done
+}
+
+// stanceFor returns the consent holder a message should update: the in-flight
+// turn's holder when one exists (the message will become a steer), otherwise a
+// fresh holder for the turn about to start.
+func (s *Server) stanceFor(sessionID string) *turnctx.StanceHolder {
+	s.turnsMu.Lock()
+	defer s.turnsMu.Unlock()
+	if st, ok := s.turns[sessionID]; ok && st != nil && st.stance != nil {
+		return st.stance
+	}
+	return turnctx.NewStanceHolder()
 }

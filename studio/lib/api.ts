@@ -152,6 +152,46 @@ export async function fetchActivePlan(sessionId: string, signal?: AbortSignal): 
   }
 }
 
+// Plan consent. A plan laid out while the boss was talking it through is a
+// PROPOSAL until he says go; these are the card's Go ahead / Not yet buttons.
+export async function fetchPlan(id: string, signal?: AbortSignal): Promise<Plan | null> {
+  if (!id) return null;
+  try {
+    const res = await authedFetch(`/api/plans/get?id=${encodeURIComponent(id)}`, { signal });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { plan?: Plan | null };
+    return data.plan ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function approvePlan(id: string, sessionId?: string): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/plans/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, session_id: sessionId }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function discardPlan(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/plans/discard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Todos (mem_tasks) ────────────────────────────────────────────────────────
 // Manual todo writes from the dashboard. Both endpoints land in the SAME
 // mem_tasks table Jarvis reads/writes via his task_* tools, so a todo the

@@ -69,6 +69,7 @@ func CorePinnedTools() []string {
 		// in hand - pinned so the agent never has to tool_search for it
 		// before laying out or advancing a plan.
 		"plan_create",
+		"plan_approve",
 		"plan_update",
 		"plan_verify",
 		"plan_get",

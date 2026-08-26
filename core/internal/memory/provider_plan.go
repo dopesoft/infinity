@@ -53,7 +53,7 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 		err = p.pool.QueryRow(ctx, `
 			SELECT id::text, title, goal, status
 			  FROM mem_plans
-			 WHERE session_id = $1::uuid AND status IN ('active','paused')
+			 WHERE session_id = $1::uuid AND status IN ('active','paused','proposed')
 			 ORDER BY updated_at DESC LIMIT 1
 		`, sessionID).Scan(&planID, &title, &goal, &status)
 	}
@@ -107,6 +107,27 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 	}
 
 	var b strings.Builder
+	if status == "proposed" {
+		// A proposal is the boss's to approve. The model may refine it with
+		// him (plan_revise) but must not execute a step of it.
+		b.WriteString("<proposed_plan>\n")
+		b.WriteString("This plan is a PROPOSAL the boss has NOT approved. Do not execute any step of it, do not call plan_update on it, and do not start work toward it. ")
+		b.WriteString("Talk it through with him and reshape it with plan_revise as the conversation changes it. When he says to go ahead, call plan_approve first, then start. If he sets it aside, plan_cancel.\n")
+		fmt.Fprintf(&b, "Proposed plan: %s", title)
+		if strings.TrimSpace(goal) != "" {
+			fmt.Fprintf(&b, " — %s", goal)
+		}
+		b.WriteString("\n")
+		for _, s := range steps {
+			fmt.Fprintf(&b, "  %d. %s", s.idx+1, s.title)
+			if s.checkpoint {
+				b.WriteString(" (checkpoint)")
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("</proposed_plan>")
+		return b.String(), nil
+	}
 	b.WriteString("<active_plan>\n")
 	b.WriteString("Your durable plan for this task (survives across turns/restarts). Keep it current with plan_update as you work, and plan_verify before marking a step done. ")
 	b.WriteString("If the boss changes direction or says 'let's do this instead', reshape this plan YOURSELF with plan_revise (prune steps that no longer apply, rewrite a step to what you're now doing, add new ones) so it always matches reality — never make him name step numbers, and never tick a step 'done' that didn't actually happen. If he says to drop/kill/stop the plan, use plan_cancel.\n")

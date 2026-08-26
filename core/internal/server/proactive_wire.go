@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"strings"
 	"sync"
 
@@ -618,16 +619,22 @@ func looksLikeCode(value string) bool {
 // classification stream in real time. Fail-closed: any error degrades to a
 // silent decision and a warning event - chat itself never stalls on
 // classification.
-func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent)) {
+func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent), stance *turnctx.StanceHolder) {
 	if s == nil || s.intentDet == nil || strings.TrimSpace(userMsg) == "" {
+		// No classifier: release the stance immediately so the loop's first
+		// work-tool call never waits on a reading that will not come.
+		stance.Set(turnctx.StanceUnknown, "classifier unavailable")
 		return
 	}
 	go func() {
-		/* Classify uses an internal Haiku call and parses strict JSON. The
+		/* Classify uses the active brain and parses strict JSON. The
 		 * package returns silent on any failure so a classifier outage
 		 * never gates the agent loop - chat continues, the IntentStream
 		 * panel just shows "silent · classifier unavailable". */
 		dec := s.intentDet.Classify(ctx, userMsg, "")
+		// The stance is the consent fact the loop enforces (agent/consent.go):
+		// discuss holds work tools, work / unclear / unknown do not.
+		stance.Set(turnctx.ParseStance(dec.Stance), dec.Reason)
 		if s.intentDB != nil {
 			_ = s.intentDB.Record(ctx, sessionID, userMsg, dec)
 		}
@@ -640,6 +647,7 @@ func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg str
 					Confidence: dec.Confidence,
 					Reason:     dec.Reason,
 					Suggested:  dec.SuggestedAction,
+					Stance:     string(turnctx.ParseStance(dec.Stance)),
 				},
 			})
 		}
@@ -766,4 +774,7 @@ type wsIntent struct {
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason,omitempty"`
 	Suggested  string  `json:"suggested_action,omitempty"`
+	// Stance is the consent read-back Studio shows above the composer:
+	// "discuss" (talking it through) or "work" (a work order / approval).
+	Stance string `json:"stance,omitempty"`
 }

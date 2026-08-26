@@ -74,6 +74,12 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// renders the same plan the dashboard Agent Work board shows (one substrate,
 	// two synced views). The board itself carries plans inline via loadWork.
 	mux.HandleFunc("/api/plans/active", a.handlePlanActive)
+	// Consent: a plan laid out while the boss was talking it through is a
+	// PROPOSAL until he says go. These are the "Go ahead" / "Not yet" buttons
+	// on the chat proposal card (and the reload read behind it).
+	mux.HandleFunc("/api/plans/get", a.handlePlanGet)
+	mux.HandleFunc("/api/plans/approve", a.handlePlanApprove)
+	mux.HandleFunc("/api/plans/discard", a.handlePlanDiscard)
 }
 
 // Response is the single payload returned to Studio. Each section is a

@@ -83,6 +83,8 @@ func isPlanTool(name string) bool {
 // deliberately imperative: laying out a plan is not doing the work.
 const planContinueDirective = `STOP — do not end your turn here. You have an active plan with steps still to do, and you just stopped after setting it up (or after one step). Laying out a plan is NOT doing the work. The boss asked you to DO this, not to describe how you would.
 
+This runtime note only applies to a plan the boss APPROVED (an active plan). His latest message outranks it: if he asked to discuss, hold, change course, or stop, do that instead of continuing.
+
 Keep going NOW:
 1. Look at your active plan (it's in your context, or call plan_get). Take the next unfinished step.
 2. Actually EXECUTE it with your tools — search, fetch, read, write, build, whatever the step needs. Mark it in_progress when you start, and done (with plan_verify evidence when required) once it's really finished and the output exists.

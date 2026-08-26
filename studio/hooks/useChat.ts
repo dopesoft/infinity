@@ -579,6 +579,10 @@ export function useChat() {
   // the EventEffort frame). Drives the Composer chip's "Auto · <level>" display.
   // Per-turn, not durable.
   const [appliedEffort, setAppliedEffort] = useState<string>("");
+  // Consent read-back from the IntentFlow classifier: what Jarvis understood
+  // the last message to be ("discuss" | "work"). Shown as the StanceChip above
+  // the composer; cleared when the session changes.
+  const [stance, setStance] = useState<{ stance: string; reason?: string } | null>(null);
   const turnStartRef = useRef<number | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Discuss-with-Jarvis opens a session whose only row is a DashboardSeed
@@ -1187,10 +1191,13 @@ export function useChat() {
         case "pong":
           break;
         case "intent": {
-          /* IntentFlow classification - consumed by the IntentStream panel
-           * via its own /api/intent fetch path, not the chat transcript.
-           * Acknowledged here so the WSEvent switch is exhaustive and
-           * future TS strictness doesn't blow up. */
+          /* IntentFlow classification - the IntentStream panel reads it via
+           * its own /api/intent fetch path. Here we keep only the stance, the
+           * consent read-back shown above the composer. */
+          if (ev.session_id === sessionId) {
+            const st = ev.intent?.stance;
+            setStance(st === "discuss" || st === "work" ? { stance: st, reason: ev.intent?.reason } : null);
+          }
           break;
         }
         case "gauge": {
@@ -1432,6 +1439,7 @@ export function useChat() {
     ws.send({ type: "clear", session_id: sessionId });
     setMessages([]);
     if (sessionId) writeCachedMessages(sessionId, []);
+    setStance(null);
   }, [ws, sessionId, clearWatchdog]);
 
   // ── Voice integration ──────────────────────────────────────────────────
@@ -1542,6 +1550,7 @@ export function useChat() {
       usage,
       isStreaming,
       appliedEffort,
+      stance,
       send,
       interrupt,
       newSession,
@@ -1557,6 +1566,7 @@ export function useChat() {
       usage,
       isStreaming,
       appliedEffort,
+      stance,
       send,
       interrupt,
       newSession,

@@ -144,6 +144,8 @@ export type WSIntent = {
   confidence: number;
   reason?: string;
   suggested_action?: string;
+  /** Consent read-back: "discuss" (talking it through) | "work" | "unclear". */
+  stance?: "discuss" | "work" | "unclear" | "";
 };
 
 export type WSGauge = {

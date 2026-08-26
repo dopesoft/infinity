@@ -28,9 +28,9 @@ func (s *Store) Record(ctx context.Context, sessionID, userMsg string, d Decisio
 		}
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO mem_intent_decisions (session_id, user_msg, token, confidence, reason, suggested)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6)
-	`, sid, userMsg, string(d.Token), d.Confidence, d.Reason, d.SuggestedAction)
+		INSERT INTO mem_intent_decisions (session_id, user_msg, token, confidence, reason, suggested, stance)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, NULLIF($7,''))
+	`, sid, userMsg, string(d.Token), d.Confidence, d.Reason, d.SuggestedAction, d.Stance)
 	return err
 }
 

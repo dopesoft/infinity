@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { StanceChip } from "@/components/StanceChip";
 import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { BackgroundJobDock } from "@/components/BackgroundJobDock";
@@ -80,6 +81,10 @@ export function WorkspaceChatColumn({
       <PendingApprovalsDock />
       <BackgroundJobDock sessionId={chat.sessionId} />
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
+        {/* Consent read-back: what Jarvis understood the last message to be.
+            Not a mode; a misread ("Working on it" when you meant talk) is
+            visible the instant it happens. */}
+        <StanceChip stance={chat.stance?.stance} reason={chat.stance?.reason} />
         <PromptInputBox
           onSend={(text, files) => {
             const t = text.trim();

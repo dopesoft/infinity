@@ -345,6 +345,7 @@ export type WorkItem = {
 // board as a WorkItem of kind "plan" (steps ride inline on WorkItem.planSteps),
 // and the PlanTimeline component renders them inside ObjectViewer.
 export type PlanStatus =
+  | "proposed"
   | "active"
   | "paused"
   | "completed"

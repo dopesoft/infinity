@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -144,7 +145,7 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 	}
 	store := plan.NewStore(a.Pool)
 	plans, err := store.ListByStatuses(ctx,
-		[]string{plan.PlanActive, plan.PlanPaused, plan.PlanCompleted, plan.PlanFailed, plan.PlanCancelled},
+		[]string{plan.PlanProposed, plan.PlanActive, plan.PlanPaused, plan.PlanCompleted, plan.PlanFailed, plan.PlanCancelled},
 		40)
 	if err != nil {
 		return nil, err
@@ -179,6 +180,9 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 		column := "running"
 		sub := ""
 		switch p.Status {
+		case plan.PlanProposed:
+			column = "awaiting"
+			sub = "proposed, waiting for your go"
 		case plan.PlanActive:
 			column = "running"
 			if next := firstOpenStep(p.Steps); next != "" {
@@ -361,4 +365,99 @@ func firstOpenStep(steps []plan.Step) string {
 		}
 	}
 	return ""
+}
+
+// planDecisionBody is the JSON Studio posts to approve / discard a plan.
+type planDecisionBody struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+func (a *API) writePlanDTO(w http.ResponseWriter, p *plan.Plan) {
+	if p == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"plan": nil})
+		return
+	}
+	steps, done := toPlanSteps(p.Steps)
+	writeJSON(w, http.StatusOK, map[string]any{"plan": Plan{
+		ID:          p.ID,
+		Title:       p.Title,
+		Goal:        p.Goal,
+		Status:      p.Status,
+		CurrentStep: p.CurrentStep,
+		DoneCount:   done,
+		TotalCount:  len(steps),
+		Steps:       steps,
+	}})
+}
+
+// handlePlanGet serves GET /api/plans/get?id= - one plan with steps, any
+// status. The chat proposal card reads it on mount so a decision made
+// elsewhere (work board, Jarvis via plan_approve) shows on reload.
+func (a *API) handlePlanGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" || a.Pool == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"plan": nil})
+		return
+	}
+	p, err := plan.NewStore(a.Pool).Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to load plan")
+		return
+	}
+	a.writePlanDTO(w, p)
+}
+
+// handlePlanApprove serves POST /api/plans/approve {id, session_id?}: the
+// boss's "Go ahead" on a proposed plan. Flips it to active + stamps
+// approved_at; the chat message Studio sends alongside is what makes Jarvis
+// start on it in the same conversation.
+func (a *API) handlePlanApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body planDecisionBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&body); err != nil || body.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no database")
+		return
+	}
+	p, err := plan.NewStore(a.Pool).Approve(r.Context(), body.ID, body.SessionID)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	a.writePlanDTO(w, p)
+}
+
+// handlePlanDiscard serves POST /api/plans/discard {id}: the boss's "Not
+// yet". The proposal is cancelled (kept for history), nothing was built.
+func (a *API) handlePlanDiscard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body planDecisionBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&body); err != nil || body.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	if a.Pool == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no database")
+		return
+	}
+	p, err := plan.NewStore(a.Pool).Cancel(r.Context(), body.ID)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	a.writePlanDTO(w, p)
 }

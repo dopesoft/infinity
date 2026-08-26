@@ -8,6 +8,7 @@ import { ToolCallCard } from "@/components/ToolCallCard";
 import { AgentTeamCard } from "@/components/AgentTeamCard";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { SkillProposalCard } from "@/components/SkillProposalCard";
+import { PlanProposalCard, PLAN_PROPOSAL_TOOLS } from "@/components/PlanProposalCard";
 import { DashboardContextCard } from "@/components/DashboardContextCard";
 import { WorkingIndicator } from "@/components/WorkingIndicator";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -155,6 +156,16 @@ export function ConversationStream({
                 <div className="flex justify-start">
                   <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
                     <SkillProposalCard message={m} />
+                  </div>
+                </div>
+              ) : PLAN_PROPOSAL_TOOLS.has(m.toolCall?.name ?? "") ? (
+                // A plan laid out while the boss is talking it through is a
+                // PROPOSAL: the card carries Go ahead / Not yet and persists
+                // on reload (it rebuilds from the PostToolUse row), so the
+                // read-out is always there to scroll back to.
+                <div className="flex justify-start">
+                  <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+                    <PlanProposalCard message={m} onQuickReply={onQuickReply} />
                   </div>
                 </div>
               ) : (

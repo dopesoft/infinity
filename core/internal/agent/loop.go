@@ -1218,6 +1218,8 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// on for the rest of the turn: in an interactive session the loop then
 	// refuses source-mutating tool calls (selfheal.go guard).
 	inSelfHealPass := false
+	// consentNoted: the "talking it through" note is shown once per turn.
+	consentNoted := false
 
 	// An empty userMsg is the "resume" path: run one turn against the
 	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
@@ -1768,6 +1770,32 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				})
 				s.Append(llm.Message{Role: llm.RoleTool, Content: refusal, ToolCallID: tc.ID, ToolName: tc.Name})
 				toolErredThisTurn = true
+				continue
+			}
+
+			// Consent gate: while the boss is talking it through (stance
+			// discuss), tools that start work or create durable things are
+			// held. He gets a proposal, not a build. See consent.go.
+			if hold, why := consentBlocks(ctx, tc.Name); hold {
+				refusal := discussRefusal(tc.Name, why)
+				endedAt := time.Now().UTC()
+				emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
+					ID: tc.ID, Name: tc.Name, Input: tc.Input, StartedAt: startedAt,
+				}})
+				emit(out, RunEvent{Kind: EventToolResult, SessionID: s.ID, ToolResult: &ToolEvent{
+					ID: tc.ID, Name: tc.Name, Output: refusal, IsError: true,
+					StartedAt: startedAt, EndedAt: endedAt,
+				}})
+				if !consentNoted {
+					consentNoted = true
+					emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: "Talking it through, not building.\n"})
+				}
+				l.fireHookT(turnID, "ToolGated", s.ID, s.Project, tc.Name+": talk first", map[string]any{
+					"name": tc.Name, "input": tc.Input, "reason": "boss is discussing, not asking for work", "tool_call_id": tc.ID,
+				})
+				s.Append(llm.Message{Role: llm.RoleTool, Content: refusal, ToolCallID: tc.ID, ToolName: tc.Name})
+				// Like a boss denial: nothing ran, and it is not a failure to
+				// heal around. Neither counter moves.
 				continue
 			}
 

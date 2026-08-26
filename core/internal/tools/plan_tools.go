@@ -20,8 +20,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/runs"
@@ -122,6 +124,9 @@ func resolvePositionalStep(ctx context.Context, store *plan.Store, n int) (strin
 		}
 	}
 	if p == nil || len(p.Steps) == 0 {
+		if prop, _ := store.GetProposedBySession(ctx, SessionIDFromContext(ctx)); prop != nil {
+			return "", fmt.Errorf("the plan %q is still a PROPOSAL the boss has not approved: do not execute it. Talk it through with him; when he says go, call plan_approve first", prop.Title)
+		}
 		return "", fmt.Errorf("there's no active plan to resolve step %d against — create one with plan_create first", n)
 	}
 	if n < 1 || n > len(p.Steps) {
@@ -138,6 +143,7 @@ func RegisterPlanTools(r *Registry, pool *pgxpool.Pool) {
 	}
 	store := plan.NewStore(pool)
 	r.Register(&planCreate{store: store})
+	r.Register(&planApprove{store: store})
 	r.Register(&planUpdate{store: store})
 	r.Register(&planVerify{store: store})
 	r.Register(&planGet{store: store})
@@ -164,7 +170,9 @@ type planCreate struct{ store *plan.Store }
 func (t *planCreate) Name() string { return "plan_create" }
 func (t *planCreate) Description() string {
 	return "Lay out a durable, step-by-step plan for a multi-step task. Call this FIRST for any task " +
-		"with 3+ steps or that spans multiple tool calls. The plan survives compaction, restart, and " +
+		"with 3+ steps or that spans multiple tool calls. While the boss is still talking a task through " +
+		"(or unless he clearly ordered the work) the plan is created as a PROPOSAL he approves before anything runs. " +
+		"The plan survives compaction, restart, and " +
 		"session boundaries, and the boss can watch it on the dashboard. Mark a step is_checkpoint=true " +
 		"when you should pause for the boss's approval before continuing; mark verify_required=true when " +
 		"the step must be proven (file exists / test passed / API 200) before it counts as done. Creating " +
@@ -236,9 +244,88 @@ func (t *planCreate) Execute(ctx context.Context, in map[string]any) (string, er
 		}
 		title = humanizeJobName(job)
 	}
+	// Consent: in a conversation that is not a clear work order, the plan is
+	// a PROPOSAL the boss approves (Studio card / plan_approve), not a plan to
+	// start executing. Autonomous turns (crons, sub-agents) are work by nature.
+	if planShouldBeProposed(ctx) {
+		p, err := t.store.CreateProposed(ctx, sid, title, goal, strString(in, "goal_id"), steps)
+		if err != nil {
+			return "", err
+		}
+		out, _ := json.Marshal(map[string]any{
+			"plan":     p,
+			"proposed": true,
+			"note": "This plan is a PROPOSAL: the boss sees it as a card with Go ahead / Not yet. Do NOT execute any step or call plan_update on it. " +
+				"Tell him in one or two sentences what you'd do and ask if he wants to go ahead; refine it with plan_revise as you talk. " +
+				"When he says go, call plan_approve, then start.",
+		})
+		return string(out), nil
+	}
 	p, err := t.store.Create(ctx, sid, title, goal, strString(in, "goal_id"), steps)
 	if err != nil {
 		return "", err
+	}
+	return renderPlan(p), nil
+}
+
+// planShouldBeProposed decides whether plan_create lays out a proposal (the
+// boss approves) or an active plan (start now). Work stance and autonomous
+// turns start now; discuss, unclear and unknown propose. Waits briefly for the
+// async classifier so the first plan of a turn does not race it.
+func planShouldBeProposed(ctx context.Context) bool {
+	if IsAutonomous(ctx) {
+		return false
+	}
+	h := turnctx.StanceFromContext(ctx)
+	if h == nil {
+		return false
+	}
+	st, _ := h.Wait(ctx, 2500*time.Millisecond)
+	return st != turnctx.StanceWork
+}
+
+// ── plan_approve ─────────────────────────────────────────────────────────
+
+type planApprove struct{ store *plan.Store }
+
+func (t *planApprove) Name() string { return "plan_approve" }
+func (t *planApprove) Description() string {
+	return "The boss said GO on a proposed plan. Flips the session's proposal (or plan_id, including an earlier unapproved " +
+		"plan you read back to him) to active in THIS conversation so you can drive it with plan_update / plan_verify. " +
+		"Call this ONLY when he has actually approved (\"go ahead\", \"yes, do it\"); never to approve your own proposal."
+}
+func (t *planApprove) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"plan_id": map[string]any{"type": "string", "description": "Optional; defaults to this session's proposed plan."},
+		},
+	}
+}
+func (t *planApprove) Execute(ctx context.Context, in map[string]any) (string, error) {
+	sid := SessionIDFromContext(ctx)
+	id := strings.TrimSpace(strString(in, "plan_id"))
+	if id == "" {
+		p, err := t.store.GetProposedBySession(ctx, sid)
+		if err != nil {
+			return "", err
+		}
+		if p == nil {
+			if active, _ := t.store.GetActiveBySession(ctx, sid); active != nil {
+				return renderPlan(active), nil
+			}
+			return "", errors.New("there's no proposed plan in this session to approve; lay one out with plan_create first")
+		}
+		id = p.ID
+	}
+	p, err := t.store.Approve(ctx, id, sid)
+	if err != nil {
+		return "", err
+	}
+	// The boss approved: this turn is work now, so the consent gate opens
+	// for the tools the plan needs.
+	if h := turnctx.StanceFromContext(ctx); h != nil {
+		h.Set(turnctx.StanceWork, "the boss approved the plan")
 	}
 	return renderPlan(p), nil
 }
@@ -428,6 +515,21 @@ func (t *planGet) Execute(ctx context.Context, in map[string]any) (string, error
 		// plan (showing it is strictly better than a hard error here).
 		if p != nil {
 			if sid := SessionIDFromContext(ctx); sid != "" && p.SessionID != sid {
+				// Only a plan the boss (or an autonomous work order) APPROVED may
+				// be picked up by another session. A proposal, or a plan made
+				// before he ever saw it, is never resumed: 2026-08-26, "I didn't
+				// even get a chance to understand what it was."
+				if !p.Approved() {
+					out, _ := json.Marshal(map[string]any{
+						"plan":       p,
+						"unapproved": true,
+						"note": "This earlier plan was never approved by the boss, so it is NOT resumed. Read it back to him in plain words " +
+							"(what it was going to do, step by step, briefly) and ask whether to scrap it, change it, or go with it. " +
+							"If he wants changes, plan_revise with this plan_id. If he says go, plan_approve with this plan_id adopts it into this conversation. " +
+							"Do not execute any of it before that.",
+					})
+					return string(out), nil
+				}
 				_ = t.store.AdoptSession(ctx, id, sid)
 				p.SessionID = sid // reflect locally so callers see the new owner
 			}
@@ -552,6 +654,11 @@ func (t *planRevise) Execute(ctx context.Context, in map[string]any) (string, er
 		p, err = t.store.Get(ctx, id)
 	} else {
 		p, err = t.store.GetActiveBySession(ctx, SessionIDFromContext(ctx))
+		if err == nil && p == nil {
+			// Reshaping a PROPOSAL while talking it through is exactly what
+			// revise is for ("scrap step 2, add X"): approval comes after.
+			p, err = t.store.GetProposedBySession(ctx, SessionIDFromContext(ctx))
+		}
 	}
 	if err != nil {
 		return "", err

@@ -29,7 +29,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // otherwise. Dashboard action sessions (and certain cron contexts) use synthetic
 // identifiers like "surface-action-<uuid>" that are not valid UUIDs; passing
 // them to a $1::uuid Postgres cast raises SQLSTATE 22P02. Returning "" lets
-// NULLIF($1,'')::uuid yield NULL, keeping the plan unbound to a session rather
+// NULLIF($1,”)::uuid yield NULL, keeping the plan unbound to a session rather
 // crashing. Methods that only need to look up by session (FinalizeSession,
 // CancelActive) guard with uuid.Parse directly and return early.
 func synthSessionID(sessionID string) string {
@@ -42,6 +42,16 @@ func synthSessionID(sessionID string) string {
 // Create supersedes any active/paused plan for the session, then inserts a new
 // plan + its ordered steps. Returns the new plan with steps populated.
 func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID string, steps []NewStepInput) (*Plan, error) {
+	return s.create(ctx, sessionID, title, goal, goalID, steps, false)
+}
+
+// CreateProposed lays a plan out WITHOUT approval: status 'proposed',
+// approved_at NULL. The boss (plan_approve / Studio "Go ahead") activates it.
+func (s *Store) CreateProposed(ctx context.Context, sessionID, title, goal, goalID string, steps []NewStepInput) (*Plan, error) {
+	return s.create(ctx, sessionID, title, goal, goalID, steps, true)
+}
+
+func (s *Store) create(ctx context.Context, sessionID, title, goal, goalID string, steps []NewStepInput, proposed bool) (*Plan, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("plan store not configured")
 	}
@@ -62,40 +72,46 @@ func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID strin
 	}
 	defer tx.Rollback(ctx)
 
-	// Supersede the prior active plan for this session (one active plan per
-	// session). Cancelled, not deleted, so history survives.
+	// Supersede the prior active / paused / proposed plan for this session
+	// (one live plan per session). Cancelled, not deleted, so history survives.
 	if safeID != "" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE mem_plans SET status = 'cancelled', updated_at = NOW()
-			 WHERE session_id = $1::uuid AND status IN ('active','paused')
+			 WHERE session_id = $1::uuid AND status IN ('active','paused','proposed')
 		`, safeID); err != nil {
 			return nil, fmt.Errorf("supersede active plan: %w", err)
 		}
 	}
 
+	status := PlanActive
+	if proposed {
+		status = PlanProposed
+	}
 	var (
-		planID    string
-		createdAt time.Time
-		updatedAt time.Time
+		planID     string
+		createdAt  time.Time
+		updatedAt  time.Time
+		approvedAt *time.Time
 	)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO mem_plans (session_id, goal_id, title, goal, status, current_step)
-		VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3, $4, 'active', 0)
-		RETURNING id::text, created_at, updated_at
-	`, safeID, goalID, title, goal).Scan(&planID, &createdAt, &updatedAt)
+		INSERT INTO mem_plans (session_id, goal_id, title, goal, status, current_step, approved_at)
+		VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3, $4, $5, 0, CASE WHEN $5 = 'proposed' THEN NULL ELSE NOW() END)
+		RETURNING id::text, created_at, updated_at, approved_at
+	`, safeID, goalID, title, goal, status).Scan(&planID, &createdAt, &updatedAt, &approvedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
 	}
 
 	out := &Plan{
-		ID:        planID,
-		SessionID: sessionID,
-		GoalID:    goalID,
-		Title:     title,
-		Goal:      goal,
-		Status:    PlanActive,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		ID:         planID,
+		SessionID:  sessionID,
+		GoalID:     goalID,
+		Title:      title,
+		Goal:       goal,
+		Status:     status,
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
+		ApprovedAt: approvedAt,
 	}
 	for i, st := range steps {
 		var stepID string
@@ -352,9 +368,9 @@ func (s *Store) Get(ctx context.Context, planID string) (*Plan, error) {
 	p := &Plan{}
 	var sessionID, goalID *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id::text, session_id::text, goal_id::text, title, goal, status, current_step, created_at, updated_at
+		SELECT id::text, session_id::text, goal_id::text, title, goal, status, current_step, created_at, updated_at, approved_at
 		  FROM mem_plans WHERE id = $1::uuid
-	`, planID).Scan(&p.ID, &sessionID, &goalID, &p.Title, &p.Goal, &p.Status, &p.CurrentStep, &p.CreatedAt, &p.UpdatedAt)
+	`, planID).Scan(&p.ID, &sessionID, &goalID, &p.Title, &p.Goal, &p.Status, &p.CurrentStep, &p.CreatedAt, &p.UpdatedAt, &p.ApprovedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -393,7 +409,7 @@ func (s *Store) ListByStatuses(ctx context.Context, statuses []string, limit int
 		limit = 50
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::text, session_id::text, goal_id::text, title, goal, status, current_step, created_at, updated_at
+		SELECT id::text, session_id::text, goal_id::text, title, goal, status, current_step, created_at, updated_at, approved_at
 		  FROM mem_plans
 		 WHERE status = ANY($1)
 		 ORDER BY updated_at DESC
@@ -408,7 +424,7 @@ func (s *Store) ListByStatuses(ctx context.Context, statuses []string, limit int
 		var p Plan
 		var sessionID, goalID *string
 		if err := rows.Scan(&p.ID, &sessionID, &goalID, &p.Title, &p.Goal,
-			&p.Status, &p.CurrentStep, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.Status, &p.CurrentStep, &p.CreatedAt, &p.UpdatedAt, &p.ApprovedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -549,6 +565,16 @@ func (s *Store) MarkStep(ctx context.Context, stepID, status, summary string) (*
 		return nil, errors.New("plan store not configured")
 	}
 	status = NormalizeStepStatus(status)
+
+	// Consent chokepoint: a step of a PROPOSED plan cannot be started or
+	// ticked. Every executor path (plan_update, todo_write, background steps)
+	// lands here, so the boss's go is enforced once, in code.
+	var parentStatus, parentTitle string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT p.status, p.title FROM mem_plan_steps st JOIN mem_plans p ON p.id = st.plan_id WHERE st.id = $1::uuid
+	`, stepID).Scan(&parentStatus, &parentTitle); err == nil && parentStatus == PlanProposed {
+		return nil, fmt.Errorf("plan %q is still a PROPOSAL the boss has not approved: do not execute it; talk it through and call plan_approve when he says go", parentTitle)
+	}
 
 	var planID string
 	err := s.pool.QueryRow(ctx, `
@@ -1103,6 +1129,63 @@ func (s *Store) SetStatus(ctx context.Context, planID, status string) error {
 // "kill the plan". Cancelled (not deleted) so history survives, and PlanProvider
 // stops injecting it so it drops out of the agent's context and off the live
 // plan dock. Returns the cancelled plan, or nil if the session had none.
+// GetProposedBySession returns the session's proposal awaiting the boss's go,
+// or nil. Proposals are deliberately invisible to GetActiveBySession so no
+// executor, dock, or continuation nudge can act on an unapproved plan.
+func (s *Store) GetProposedBySession(ctx context.Context, sessionID string) (*Plan, error) {
+	if s == nil || s.pool == nil || sessionID == "" {
+		return nil, nil
+	}
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return nil, nil
+	}
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text FROM mem_plans
+		 WHERE session_id = $1::uuid AND status = 'proposed'
+		 ORDER BY updated_at DESC LIMIT 1
+	`, sessionID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, id)
+}
+
+// Approve flips a proposal to active and stamps approved_at: the boss said go.
+// Re-anchors the plan onto sessionID (when given) so the approving session
+// executes it. Idempotent on an already-active plan.
+func (s *Store) Approve(ctx context.Context, planID, sessionID string) (*Plan, error) {
+	if s == nil || s.pool == nil || planID == "" {
+		return nil, errors.New("plan store not configured")
+	}
+	sid := synthSessionID(sessionID)
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE mem_plans
+		   SET status = 'active',
+		       approved_at = COALESCE(approved_at, NOW()),
+		       session_id = COALESCE(NULLIF($2,'')::uuid, session_id),
+		       updated_at = NOW()
+		 WHERE id = $1::uuid AND status IN ('proposed','active','paused')
+	`, planID, sid)
+	if err != nil {
+		return nil, fmt.Errorf("approve plan: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, fmt.Errorf("plan %s is not open for approval (already finished or cancelled)", planID)
+	}
+	if sid != "" {
+		// One live plan per session: anything else the session had goes away.
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE mem_plans SET status = 'cancelled', updated_at = NOW()
+			 WHERE session_id = $1::uuid AND id <> $2::uuid AND status IN ('active','paused','proposed')
+		`, sid, planID)
+	}
+	return s.Get(ctx, planID)
+}
+
 func (s *Store) CancelActive(ctx context.Context, sessionID string) (*Plan, error) {
 	if s == nil || s.pool == nil || sessionID == "" {
 		return nil, nil
@@ -1114,7 +1197,7 @@ func (s *Store) CancelActive(ctx context.Context, sessionID string) (*Plan, erro
 	var planID string
 	err := s.pool.QueryRow(ctx, `
 		UPDATE mem_plans SET status = 'cancelled', updated_at = NOW()
-		 WHERE session_id = $1::uuid AND status IN ('active','paused')
+		 WHERE session_id = $1::uuid AND status IN ('active','paused','proposed')
 		RETURNING id::text
 	`, sessionID).Scan(&planID)
 	if errors.Is(err, pgx.ErrNoRows) {
