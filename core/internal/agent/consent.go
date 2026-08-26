@@ -73,3 +73,50 @@ func consentBlocks(ctx context.Context, toolName string) (bool, string) {
 	}
 	return false, ""
 }
+
+// turnIsDiscuss reports whether the boss is talking it through right now.
+// Used to switch OFF the finishing reflexes for the turn: a conversation
+// cannot "fail to deliver", so self-heal, plan-continue and the verify pass
+// must not turn a reply that asks him a question into a 10,000-character
+// doctrine (2026-08-26 16:42). Waits briefly for the first reading; nil
+// holder (autonomous turn) is never discuss.
+func turnIsDiscuss(ctx context.Context) bool {
+	h := turnctx.StanceFromContext(ctx)
+	if h == nil {
+		return false
+	}
+	st, _ := h.Wait(ctx, stanceWait)
+	return st == turnctx.StanceDiscuss
+}
+
+// discussSystemOverlay is appended to the volatile system prompt on every
+// iteration of a discuss turn. It frames the register, not the content.
+const discussSystemOverlay = `<conversation>
+The boss is talking this through with you, not ordering work. Reply the way a sharp person talks across a table: a few short paragraphs at most, one or two ideas, plain prose (no headers, no numbered systems, no complete programmes), and end with the one question that moves the thinking forward. Your first reply to an idea is never the finished answer; it is your side of the conversation. Do not create, run, or build anything, and do not "fix" a reply that asked him a question: asking was the point.
+</conversation>`
+
+// firstIterationStanceWait bounds how long the FIRST LLM call of a turn waits
+// for the classifier so a pure-text reply (which is the whole answer in a
+// conversation) gets the conversation register. Later iterations read the
+// current value instantly.
+const firstIterationStanceWait = 900 * time.Millisecond
+
+// discussOverlayFor returns the conversation overlay for this iteration's
+// system prompt, or "" when the boss is not discussing (or the turn is
+// autonomous).
+func discussOverlayFor(ctx context.Context, firstIteration bool) string {
+	h := turnctx.StanceFromContext(ctx)
+	if h == nil {
+		return ""
+	}
+	var st turnctx.Stance
+	if firstIteration {
+		st, _ = h.Wait(ctx, firstIterationStanceWait)
+	} else {
+		st, _ = h.Get()
+	}
+	if st == turnctx.StanceDiscuss {
+		return discussSystemOverlay
+	}
+	return ""
+}

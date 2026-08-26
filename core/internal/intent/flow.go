@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,18 @@ func DepthFor(t Token) Depth {
 		return DepthGlobal
 	}
 	return DepthNone
+}
+
+// classifyTimeout bounds one classification; the turn never waits on it (the
+// consent gate waits at most ~2.5s for the first reading), this only stops a
+// hung provider from pinning a goroutine.
+const classifyTimeout = 30 * time.Second
+
+func truncateForLog(s string) string {
+	if len(s) > 200 {
+		return s[:200] + "…"
+	}
+	return s
 }
 
 // Detector classifies user input. It uses an LLM provider configured for a
@@ -155,37 +168,40 @@ func (d *Detector) Classify(ctx context.Context, observation, recentContext stri
 	prompt := buildPrompt(observation, recentContext)
 	systemPrompt := classifierSystem
 
+	// Providers do NOT close the event channel (the agent loop closes it
+	// itself after Stream returns). The old `for range out {}` here therefore
+	// never terminated: Classify had never returned once since it shipped
+	// (0 rows in mem_intent_decisions, a leaked goroutine per message), so no
+	// intent frame, no record, and no stance for the consent gate. Drain
+	// concurrently, bound the call, and close the channel ourselves.
+	cctx, cancel := context.WithTimeout(ctx, classifyTimeout)
+	defer cancel()
 	out := make(chan llm.StreamEvent, 16)
-	respCh := make(chan llm.Response, 1)
-	errCh := make(chan error, 1)
+	drained := make(chan struct{})
 	go func() {
-		// Empty model → the active-model provider resolves the boss's set model
-		// (same brain as chat); classification is no longer pinned to a vendor.
-		resp, err := d.provider.Stream(ctx, "", systemPrompt,
-			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
-			nil, out)
-		if err != nil {
-			errCh <- err
-			return
+		defer close(drained)
+		for range out {
 		}
-		respCh <- resp
 	}()
-
-	for range out {
-		// drain stream - we only care about the final response
-	}
-
-	var resp llm.Response
-	select {
-	case resp = <-respCh:
-	case err := <-errCh:
+	// Empty model → the active-model provider resolves the boss's set model
+	// (same brain as chat); classification is no longer pinned to a vendor.
+	resp, err := d.provider.Stream(cctx, "", systemPrompt,
+		[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
+		nil, out)
+	close(out)
+	<-drained
+	if err != nil {
+		log.Printf("intent: classify failed: %v", err)
 		return Decision{Token: TokenSilent, Reason: "llm error: " + err.Error()}
-	case <-ctx.Done():
+	}
+	if cctx.Err() != nil {
+		log.Printf("intent: classify timed out after %s", classifyTimeout)
 		return Decision{Token: TokenSilent, Reason: "ctx done"}
 	}
 
 	dec, err := parseDecision(resp.Text)
 	if err != nil {
+		log.Printf("intent: unparseable classification: %v (text=%q)", err, truncateForLog(resp.Text))
 		return Decision{Token: TokenSilent, Reason: "parse error: " + err.Error()}
 	}
 	dec = d.applyThresholds(dec)

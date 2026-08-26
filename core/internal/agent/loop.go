@@ -1400,6 +1400,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// applied to this call only, never persisted onto the session. It is
 		// volatile, so it lands AFTER the cached stable prefix.
 		sysVolatile := volatileSystem
+		// Conversation register: while the boss is talking it through, every
+		// iteration's prompt carries the <conversation> overlay (short, plain,
+		// end with a question). Volatile segment, so the cached prefix holds.
+		if overlay := discussOverlayFor(ctx, iter == 0); overlay != "" {
+			sysVolatile += "\n\n" + overlay
+		}
 		if iter >= windDownAt {
 			if sysVolatile != "" {
 				sysVolatile = sysVolatile + "\n\n" + turnWindDownBlock
@@ -1574,7 +1580,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// keep its draft, inject the self-heal directive, and run another
 			// pass so it investigates + fixes + verifies with its own tools.
 			// Capped by maxSelfHealPerTurn so a genuinely-stuck turn still ends.
-			if selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
+			// A conversation cannot fail to deliver: while the boss is talking it
+			// through, none of the finishing reflexes (self-heal, plan-continue,
+			// verify) run. See consent.go turnIsDiscuss.
+			discussing := turnIsDiscuss(ctx)
+			if !discussing && selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
 				selfHealCount++
 				healedThisTurn = true
 				inSelfHealPass = true
@@ -1593,7 +1603,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// earlier turn can't hijack an unrelated reply), skipped while a
 			// failure is in play (self-heal owns that), and bounded per turn so a
 			// genuinely-blocked plan still ends. See plan_continue.go.
-			if planContinueCount < maxPlanContinuePerTurn && planTouchedThisTurn &&
+			if !discussing && planContinueCount < maxPlanContinuePerTurn && planTouchedThisTurn &&
 				!shouldSelfHeal(resp.Text, toolErredThisTurn) &&
 				l.hasUnfinishedPlan(ctx, s.ID) {
 				planContinueCount++
@@ -1613,7 +1623,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// INSIDE this already-tracked turn, so it rides the turn's hooks +
 			// emits an EventEffort{verify_pass} signal rather than booking a
 			// separate mem_runs row.
-			if verifyCount < maxVerifyPerTurn && !healedThisTurn && !verifyDisabled() &&
+			if !discussing && verifyCount < maxVerifyPerTurn && !healedThisTurn && !verifyDisabled() &&
 				(perTurnEffort == llm.EffortHigh || perTurnEffort == llm.EffortXHigh) &&
 				shouldVerify(resp.Text) {
 				if directive := l.verifyDirectiveText(); directive != "" {

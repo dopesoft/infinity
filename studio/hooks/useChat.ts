@@ -61,6 +61,10 @@ export type ChatMessage = {
   // user pressed Stop mid-stream. The partial text streamed is preserved;
   // the UI surfaces a "↩ interrupted" hint rather than an error state.
   interrupted?: boolean;
+  // interim=true on an assistant bubble that streamed BEFORE a tool call in
+  // the same turn (the "let me check…" narration). Folded into the turn's
+  // work block by ConversationStream; the turn's final reply is never interim.
+  interim?: boolean;
   // proactive=true marks an assistant bubble that originated from the
   // heartbeat broadcaster (an unprompted turn), not from a user message.
   // Studio renders a subtle origin badge so the boss can tell the agent
@@ -431,6 +435,16 @@ function mergeServerRows(
     ...filteredPending,
   ].sort((a, b) => a.createdAt - b.createdAt);
   return merged;
+}
+
+// markTrailingAssistantInterim flags a pending assistant bubble at the tail
+// as interim narration (a tool call is about to follow it).
+function markTrailingAssistantInterim(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant" || !last.pending || last.interim) return messages;
+  const next = [...messages];
+  next[next.length - 1] = { ...last, interim: true };
+  return next;
 }
 
 // settleInFlight closes EVERYTHING the turn left open once it ends (complete,
@@ -979,7 +993,10 @@ export function useChat() {
           } else {
             armWatchdog();
           }
-          setMessages((prev) => {
+          setMessages((prev0) => {
+            // The narration streamed just before this call is interim, not
+            // the reply: mark it so the stream folds it with the tool cards.
+            const prev = markTrailingAssistantInterim(prev0);
             // Upsert by tool_call.id - NEVER blind-append. The same tool_call
             // frame can reach this handler more than once during a long
             // blocking call (iOS Safari focus/visibility churn -> reconnect ->
