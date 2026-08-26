@@ -333,6 +333,9 @@ type Loop struct {
 	planMu      sync.RWMutex
 	planChecker PlanContinuationChecker
 	planSettler PlanSettler
+	// proposalFiler records source changes the self-heal guard refused to
+	// make live (see selfheal.go); shares planMu.
+	proposalFiler CodeProposalFiler
 
 	// reauthMu guards reauth. When the active brain hits a credential failure
 	// the loop parks the turn via this hook (instead of dumping a raw 401) and
@@ -1211,6 +1214,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// `delegate` tool calls in a single message (each spawns a sub-agent); this
 	// hard-caps spawns per turn so a storm can never happen again.
 	delegateSpawns := 0
+	// inSelfHealPass flips once the self-heal directive is injected and stays
+	// on for the rest of the turn: in an interactive session the loop then
+	// refuses source-mutating tool calls (selfheal.go guard).
+	inSelfHealPass := false
 
 	// An empty userMsg is the "resume" path: run one turn against the
 	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
@@ -1568,6 +1575,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			if selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
 				selfHealCount++
 				healedThisTurn = true
+				inSelfHealPass = true
 				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 				s.Append(llm.Message{Role: llm.RoleUser, Content: selfHealDirective})
 				toolErredThisTurn = false // fresh slate for the heal pass
@@ -1742,6 +1750,27 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				"tool_call_id": tc.ID,
 			})
 
+			// Self-heal source guard: while the boss is in the conversation, a
+			// heal pass may not rewrite Infinity's own code. The intended change
+			// is filed as a code proposal; the model is told to answer the boss.
+			if inSelfHealPass && steerCh != nil && isSourceMutation(tc) {
+				refusal := l.refuseSelfHealSourceChange(ctx, s.ID, tc)
+				endedAt := time.Now().UTC()
+				emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
+					ID: tc.ID, Name: tc.Name, Input: tc.Input, StartedAt: startedAt,
+				}})
+				emit(out, RunEvent{Kind: EventToolResult, SessionID: s.ID, ToolResult: &ToolEvent{
+					ID: tc.ID, Name: tc.Name, Output: refusal, IsError: true,
+					StartedAt: startedAt, EndedAt: endedAt,
+				}})
+				l.fireHookT(turnID, "ToolGated", s.ID, s.Project, tc.Name+": self-heal source guard", map[string]any{
+					"name": tc.Name, "input": tc.Input, "reason": "self-heal source guard", "tool_call_id": tc.ID,
+				})
+				s.Append(llm.Message{Role: llm.RoleTool, Content: refusal, ToolCallID: tc.ID, ToolName: tc.Name})
+				toolErredThisTurn = true
+				continue
+			}
+
 			decision := l.gate.Authorize(ctx, s.ID, s.Project, tc.Name, tc.Input)
 
 			// Surface the tool call to Studio. When the gate parked it on
@@ -1766,6 +1795,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				output  string
 				execErr error
 				endedAt time.Time
+				// interruptSteers are boss messages that arrived while a
+				// SteerInterruptible tool ran and were consumed to stop it; they
+				// are appended as user turns right after this tool's result.
+				interruptSteers []Steer
 				// gateRefused: the gate blocked this call and it never ran, with
 				// no Trust contract pending. A wrong-bridge redirect, or a hard
 				// refusal. Distinct from a boss denial (he answered; respect it).
@@ -1783,7 +1816,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// (load_tools / unload_tools / compact_context) can
 				// mutate the right session's loaded list.
 				toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
-				output, execErr = l.tools.Execute(toolCtx, tc)
+				output, execErr, interruptSteers = l.executeInterruptible(toolCtx, tc, steerCh)
 				endedAt = time.Now().UTC()
 				l.recordToolCost(tc.Name, endedAt.Sub(startedAt), execErr)
 
@@ -1806,7 +1839,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				approved, reason := l.gate.WaitForDecision(ctx, decision.ContractID, timeout)
 				if approved {
 					toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
-					output, execErr = l.tools.Execute(toolCtx, tc)
+					output, execErr, interruptSteers = l.executeInterruptible(toolCtx, tc, steerCh)
 					l.recordToolCost(tc.Name, time.Since(startedAt), execErr)
 				} else {
 					if reason == "" {
@@ -1904,6 +1937,20 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
 			})
+
+			// The boss's mid-run messages that stopped this tool land right
+			// after its result, so the next LLM call reads them as the freshest
+			// instruction (the ws layer already persisted them via the hook).
+			if len(interruptSteers) > 0 {
+				for _, st := range interruptSteers {
+					text := strings.TrimSpace(st.Text)
+					if text == "" && len(st.Attachments) == 0 {
+						continue
+					}
+					s.Append(llm.Message{Role: llm.RoleUser, Content: text, Attachments: st.Attachments})
+				}
+				emit(out, RunEvent{Kind: EventSteered, SessionID: s.ID})
+			}
 		}
 	}
 
@@ -2212,4 +2259,60 @@ func firstLineOf(s string) string {
 		s = s[:240] + "…"
 	}
 	return s
+}
+
+// executeInterruptible runs a tool call, and for tools that opted into
+// tools.SteerInterruptible in an INTERACTIVE session (steerCh non-nil), stops
+// it the moment the boss sends a new message: the tool ctx is cancelled (the
+// tool tears its work down), the consumed steer(s) are returned so the caller
+// appends them right after the tool result, and the result tells the model
+// to answer the boss first. Short tools and autonomous runs are untouched.
+func (l *Loop) executeInterruptible(ctx context.Context, tc llm.ToolCall, steerCh <-chan Steer) (string, error, []Steer) {
+	if steerCh == nil || l.tools == nil || !l.tools.InterruptsOnSteer(tc.Name) {
+		out, err := l.tools.Execute(ctx, tc)
+		return out, err, nil
+	}
+	tctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		out string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		o, e := l.tools.Execute(tctx, tc)
+		done <- result{o, e}
+	}()
+	select {
+	case r := <-done:
+		return r.out, r.err, nil
+	case st, ok := <-steerCh:
+		if !ok {
+			r := <-done
+			return r.out, r.err, nil
+		}
+		cancel()
+		r := <-done
+		steers := []Steer{st}
+	drain:
+		for {
+			select {
+			case more, ok2 := <-steerCh:
+				if !ok2 {
+					break drain
+				}
+				steers = append(steers, more)
+			default:
+				break drain
+			}
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "INTERRUPTED: the boss sent a new message while %s was running, so it was stopped to answer him first. "+
+			"His message follows as the next user turn — respond to THAT before anything else, and do not restart this call unless he asks.\n\n", tc.Name)
+		b.WriteString(strings.TrimSpace(r.out))
+		if r.err != nil {
+			b.WriteString("\n(stop detail: " + r.err.Error() + ")")
+		}
+		return b.String(), nil, steers
+	}
 }

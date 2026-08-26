@@ -128,6 +128,7 @@ func (s *stubPlanGetter) GetActiveBySession(_ context.Context, _ string) (*plan.
 func (s *stubPlanGetter) GetAnyActive(_ context.Context) (*plan.Plan, error) {
 	return s.anyActive, nil
 }
+func (s *stubPlanGetter) AdoptSession(_ context.Context, _, _ string) error { return nil }
 
 // TestPlanGet_FallsBackToGlobalWhenAutonomous: for AUTONOMOUS turns (cron,
 // heartbeat, resumed background runs) that mint a fresh session UUID per run,
@@ -187,12 +188,55 @@ func TestPlanGet_ReturnsNullWhenNoPlanAnywhere(t *testing.T) {
 // that a cross-session pickup actually re-stamps ownership.
 type adoptingPlanGetter struct {
 	stubPlanGetter
+	byID           *plan.Plan // returned from Get when IDs match
 	adoptedPlan    string
 	adoptedSession string
 }
 
+func (s *adoptingPlanGetter) Get(_ context.Context, id string) (*plan.Plan, error) {
+	if s.byID != nil && s.byID.ID == id {
+		return s.byID, nil
+	}
+	return nil, nil
+}
 func (s *adoptingPlanGetter) AdoptSession(_ context.Context, planID, sessionID string) error {
 	s.adoptedPlan, s.adoptedSession = planID, sessionID
+	return nil
+}
+
+// smartResumePlanGetter simulates AdoptSession by updating its internal session
+// map so subsequent GetActiveBySession calls reflect the adoption — exactly
+// what the real Store does when it UPDATEs session_id in Postgres. Used to
+// test the full cross-session plan-resume flow without a real database.
+type smartResumePlanGetter struct {
+	plansByID      map[string]*plan.Plan
+	plansBySession map[string]*plan.Plan
+	anyActive      *plan.Plan
+	adoptedPlan    string
+	adoptedSession string
+}
+
+func (s *smartResumePlanGetter) Get(_ context.Context, id string) (*plan.Plan, error) {
+	return s.plansByID[id], nil
+}
+func (s *smartResumePlanGetter) GetActiveBySession(_ context.Context, sid string) (*plan.Plan, error) {
+	return s.plansBySession[sid], nil
+}
+func (s *smartResumePlanGetter) GetAnyActive(_ context.Context) (*plan.Plan, error) {
+	return s.anyActive, nil
+}
+func (s *smartResumePlanGetter) AdoptSession(_ context.Context, planID, sessionID string) error {
+	s.adoptedPlan, s.adoptedSession = planID, sessionID
+	p := s.plansByID[planID]
+	if p == nil {
+		return nil
+	}
+	// Mirror the DB UPDATE: move plan from its old session to the new one.
+	if old := p.SessionID; old != "" {
+		delete(s.plansBySession, old)
+	}
+	p.SessionID = sessionID
+	s.plansBySession[sessionID] = p
 	return nil
 }
 
@@ -246,5 +290,184 @@ func TestPlanPickup_InteractiveNeverAdopts(t *testing.T) {
 	}
 	if stub.adoptedPlan != "" {
 		t.Fatalf("interactive turn must never adopt a plan, adopted %q", stub.adoptedPlan)
+	}
+}
+
+// ── Cross-session explicit plan resume regression (2026-08-26) ───────────────
+//
+// Bug: plan_get(plan_id=X) returned the plan but left its session_id pointing at
+// the original session. Subsequent plan_update(step_id="2") called
+// resolvePositionalStep → GetActiveBySession(currentSID) → nil, then fell
+// through to anyActivePlanForTurn which is gated to autonomous-only → nil, and
+// threw "there's no active plan to resolve step 2 against".
+//
+// Fix: plan_get with an explicit plan_id now calls AdoptSession when the plan
+// belongs to a different session, re-anchoring it before the caller proceeds.
+
+// TestPlanGet_ExplicitPlanID_ReAnchorsToCurrentSession verifies that plan_get
+// called with an explicit plan_id for a plan from a DIFFERENT session calls
+// AdoptSession, re-anchoring the plan onto the current session so that
+// subsequent plan_update/plan_verify positional step refs can resolve.
+func TestPlanGet_ExplicitPlanID_ReAnchorsToCurrentSession(t *testing.T) {
+	oldSID := "83dce231-bc6a-4e69-81e0-d6c452d3daa4"
+	newSID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	foreignPlan := &plan.Plan{
+		ID:        "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
+		SessionID: oldSID,
+		Status:    plan.PlanPaused,
+		Steps: []plan.Step{
+			{ID: "step-1-uuid", Title: "Step 1"},
+			{ID: "step-2-uuid", Title: "Step 2"},
+		},
+	}
+	stub := &adoptingPlanGetter{byID: foreignPlan}
+	tool := &planGet{store: stub}
+
+	ctx := WithSessionID(context.Background(), newSID)
+	out, err := tool.Execute(ctx, map[string]any{"plan_id": foreignPlan.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, foreignPlan.ID) {
+		t.Fatalf("plan_get should return the requested plan, got: %s", out)
+	}
+	if stub.adoptedPlan != foreignPlan.ID {
+		t.Fatalf("plan_get did not call AdoptSession; subsequent positional step refs will fail (adoptedPlan=%q)", stub.adoptedPlan)
+	}
+	if stub.adoptedSession != newSID {
+		t.Fatalf("plan_get adopted onto wrong session: got %q, want %q", stub.adoptedSession, newSID)
+	}
+}
+
+// TestPlanGet_ExplicitPlanID_AlreadyOwnedNoAdopt verifies that when plan_get is
+// called with a plan_id that already belongs to the CURRENT session, AdoptSession
+// is NOT called (no unnecessary DB roundtrip; the plan is already anchored).
+func TestPlanGet_ExplicitPlanID_AlreadyOwnedNoAdopt(t *testing.T) {
+	currentSID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	ownPlan := &plan.Plan{
+		ID:        "plan-already-mine",
+		SessionID: currentSID,
+		Status:    plan.PlanActive,
+		Steps:     []plan.Step{{ID: "step-1-uuid", Title: "Step 1"}},
+	}
+	stub := &adoptingPlanGetter{byID: ownPlan}
+	tool := &planGet{store: stub}
+
+	ctx := WithSessionID(context.Background(), currentSID)
+	out, err := tool.Execute(ctx, map[string]any{"plan_id": ownPlan.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, ownPlan.ID) {
+		t.Fatalf("plan_get should return the plan, got: %s", out)
+	}
+	if stub.adoptedPlan != "" {
+		t.Fatalf("plan_get must NOT call AdoptSession for a plan already owned by this session (adoptedPlan=%q)", stub.adoptedPlan)
+	}
+}
+
+// TestPlanGet_ExplicitPlanID_NoSessionInContext verifies that when there is no
+// session ID in context (CLI / test / unauthenticated call), plan_get with an
+// explicit plan_id still returns the plan without calling AdoptSession — there
+// is nothing to anchor to, so skipping is correct.
+func TestPlanGet_ExplicitPlanID_NoSessionInContext(t *testing.T) {
+	foreignPlan := &plan.Plan{
+		ID:        "plan-foreign",
+		SessionID: "some-other-session",
+		Status:    plan.PlanPaused,
+		Steps:     []plan.Step{{ID: "step-1-uuid", Title: "Step 1"}},
+	}
+	stub := &adoptingPlanGetter{byID: foreignPlan}
+	tool := &planGet{store: stub}
+
+	// No WithSessionID wrapping — SessionIDFromContext returns "".
+	out, err := tool.Execute(context.Background(), map[string]any{"plan_id": foreignPlan.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, foreignPlan.ID) {
+		t.Fatalf("plan_get should return the plan even without session context, got: %s", out)
+	}
+	if stub.adoptedPlan != "" {
+		t.Fatalf("plan_get must not call AdoptSession when there is no session in context (adoptedPlan=%q)", stub.adoptedPlan)
+	}
+}
+
+// TestCrossSessionResumeEndToEnd is the full regression guard for the durable
+// plan resume bug: plan_get(plan_id) must re-anchor the plan so that
+// GetActiveBySession for the NEW session finds it — which is exactly what
+// resolvePositionalStep calls when plan_update(step_id="2") is invoked.
+//
+// This test uses smartResumePlanGetter, which mirrors the DB-level AdoptSession
+// UPDATE by moving the plan between its internal session maps. It proves the
+// complete contract:
+//
+//  1. plan_get(plan_id=X) calls AdoptSession(X, newSession).
+//  2. After adoption GetActiveBySession(newSession) returns the plan.
+//  3. Positional step refs resolve: Steps[1].ID is "step-2-uuid".
+//
+// Point 3 is the actual value resolvePositionalStep(ctx, store, 2) reads when
+// the store is backed by a real DB (exercised by the DB-level SQL, not
+// duplicated here with a mock pool).
+func TestCrossSessionResumeEndToEnd(t *testing.T) {
+	oldSID := "83dce231-bc6a-4e69-81e0-d6c452d3daa4"
+	newSID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+	resumedPlan := &plan.Plan{
+		ID:        "5145c6e7-daa0-4b93-ad0b-65e995b3fad4",
+		SessionID: oldSID,
+		Status:    plan.PlanPaused,
+		Steps: []plan.Step{
+			{ID: "step-1-uuid", Title: "Step 1"},
+			{ID: "step-2-uuid", Title: "Step 2"},
+		},
+	}
+	stub := &smartResumePlanGetter{
+		plansByID:      map[string]*plan.Plan{resumedPlan.ID: resumedPlan},
+		plansBySession: map[string]*plan.Plan{oldSID: resumedPlan},
+	}
+
+	// Step 1: plan_get with explicit plan_id — must re-anchor.
+	getPlan := &planGet{store: stub}
+	ctx := WithSessionID(context.Background(), newSID)
+	out, err := getPlan.Execute(ctx, map[string]any{"plan_id": resumedPlan.ID})
+	if err != nil {
+		t.Fatalf("plan_get failed: %v", err)
+	}
+	if !strings.Contains(out, resumedPlan.ID) {
+		t.Fatalf("plan_get should return the plan, got: %s", out)
+	}
+	if stub.adoptedPlan != resumedPlan.ID || stub.adoptedSession != newSID {
+		t.Fatalf("AdoptSession not called correctly: plan=%q session=%q", stub.adoptedPlan, stub.adoptedSession)
+	}
+
+	// Step 2: after re-anchoring, GetActiveBySession for the new session finds
+	// the plan — this is the exact call resolvePositionalStep makes.
+	p, err := stub.GetActiveBySession(ctx, newSID)
+	if err != nil {
+		t.Fatalf("GetActiveBySession after adopt failed: %v", err)
+	}
+	if p == nil {
+		t.Fatal("GetActiveBySession must return the adopted plan for the new session (got nil) — resolvePositionalStep would throw 'no active plan'")
+	}
+	if p.ID != resumedPlan.ID {
+		t.Fatalf("GetActiveBySession returned wrong plan: got %q, want %q", p.ID, resumedPlan.ID)
+	}
+
+	// Step 3: the plan has the expected steps, so a positional ref "2" resolves.
+	if len(p.Steps) != 2 {
+		t.Fatalf("adopted plan should have 2 steps, got %d", len(p.Steps))
+	}
+	if p.Steps[1].ID != "step-2-uuid" {
+		t.Fatalf("step 2 resolved to %q, want step-2-uuid", p.Steps[1].ID)
+	}
+
+	// Step 4: the old session no longer owns the plan (no bleed back).
+	old, err := stub.GetActiveBySession(ctx, oldSID)
+	if err != nil {
+		t.Fatalf("GetActiveBySession for old session failed: %v", err)
+	}
+	if old != nil {
+		t.Fatalf("old session must no longer own the plan after adoption, got %+v", old)
 	}
 }

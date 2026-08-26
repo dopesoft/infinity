@@ -388,6 +388,11 @@ type planGetter interface {
 	Get(ctx context.Context, planID string) (*plan.Plan, error)
 	GetActiveBySession(ctx context.Context, sessionID string) (*plan.Plan, error)
 	GetAnyActive(ctx context.Context) (*plan.Plan, error)
+	// AdoptSession is needed for cross-session plan resume: when plan_get is
+	// called with an explicit plan_id from a foreign session, it must re-anchor
+	// the plan onto the current session so subsequent plan_update/plan_verify
+	// positional step refs ("2") resolve against it. See plan_get.Execute.
+	AdoptSession(ctx context.Context, planID, sessionID string) error
 }
 
 // ── plan_get ─────────────────────────────────────────────────────────────
@@ -413,6 +418,19 @@ func (t *planGet) Execute(ctx context.Context, in map[string]any) (string, error
 		p, err := t.store.Get(ctx, id)
 		if err != nil {
 			return "", err
+		}
+		// Re-anchor the plan onto the current session so subsequent
+		// plan_update/plan_verify calls with positional step refs ("2") can
+		// resolve against it via GetActiveBySession. Without this, the plan's
+		// session_id still points at the original session, so resolvePositionalStep
+		// finds nothing for the current session and throws "no active plan to
+		// resolve step N against". Best-effort: a failed adopt still returns the
+		// plan (showing it is strictly better than a hard error here).
+		if p != nil {
+			if sid := SessionIDFromContext(ctx); sid != "" && p.SessionID != sid {
+				_ = t.store.AdoptSession(ctx, id, sid)
+				p.SessionID = sid // reflect locally so callers see the new owner
+			}
 		}
 		return renderPlan(p), nil
 	}

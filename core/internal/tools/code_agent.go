@@ -188,6 +188,7 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 	out := fmt.Sprintf("%s/%s.out", codeAgentTmpDir, jobID)
 	errf := fmt.Sprintf("%s/%s.err", codeAgentTmpDir, jobID)
 	status := fmt.Sprintf("%s/%s.status", codeAgentTmpDir, jobID)
+	pidf := fmt.Sprintf("%s/%s.pid", codeAgentTmpDir, jobID)
 	settings := fmt.Sprintf("%s/settings.json", codeAgentTmpDir)
 
 	// One round-trip: ensure tmp dir, (re)write the delete-gate settings,
@@ -204,6 +205,10 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 		"export INF_TASK=" + shellQuote(task),
 		"export INF_MODEL=" + shellQuote(model),
 		"nohup bash -c " + shellQuote(inner) + " >/dev/null 2>&1 &",
+		// Record the wrapper's pid so a Stop / mid-turn steer can actually
+		// kill the job (2026-08-26: the boss said "don't build", the job kept
+		// editing his repo for nine minutes and "couldn't be stopped").
+		`echo $! > ` + pidf,
 		`echo "PID:$!"`,
 	}, "\n")
 
@@ -225,16 +230,17 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 	for {
 		select {
 		case <-ctx.Done():
-			// The caller's context was cancelled (Stop button or graceful
-			// shutdown). The detached `claude -p` on the Mac is unaffected —
-			// it runs independently. Return guidance so the agent can report
-			// this to the boss rather than surfacing a hard failure. The
-			// mem_runs row is closed by the fresh-ctx Finish call in Execute.
+			// The caller's context was cancelled: the Stop button, a mid-turn
+			// message from the boss (SteerInterruptible), or a shutdown. KILL
+			// the detached claude -p — its edits are git-reversible, and a job
+			// the boss just interrupted must not keep rewriting his repo.
+			killed := t.kill(b, repo, pidf)
 			return fmt.Sprintf(
-				"code_agent was interrupted after %s (the Claude Code run %s is still "+
-					"finishing on the Mac — it can't be cancelled from here). "+
-					"Re-attach with `claude --continue` in %s once it completes.",
-				time.Since(started).Round(time.Second), jobID, repoOrRoot(repo)), nil
+				"code_agent was STOPPED after %s (Claude Code run %s %s). Any edits it had already "+
+					"made are uncommitted in %s — check git_status/git_diff before touching that repo. "+
+					"To pick the job back up later, run code_agent again; `claude --continue` in that "+
+					"directory resumes its conversation.",
+				time.Since(started).Round(time.Second), jobID, killed, repoOrRoot(repo)), nil
 		case <-time.After(codeAgentPollEach):
 		}
 
@@ -255,6 +261,32 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 		}
 	}
 }
+
+// kill terminates the detached claude -p (wrapper + children) recorded in
+// pidf. Runs on a FRESH context because the tool ctx is already cancelled.
+// Returns a short human clause for the tool result.
+func (t *codeAgent) kill(b bridge.Bridge, repo, pidf string) string {
+	kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := fmt.Sprintf(
+		`P=$(cat %s 2>/dev/null); if [ -z "$P" ]; then echo NOPID; exit 0; fi; `+
+			`pkill -TERM -P "$P" 2>/dev/null; kill -TERM "$P" 2>/dev/null; sleep 1; `+
+			`if kill -0 "$P" 2>/dev/null; then pkill -KILL -P "$P" 2>/dev/null; kill -KILL "$P" 2>/dev/null; fi; echo KILLED`,
+		pidf)
+	body, code, ok := b.Post(kctx, "/bash", map[string]any{"cmd": cmd, "cwd": repo, "timeout_sec": 10})
+	if !ok || code >= 300 {
+		return "could not be killed: the Mac bridge did not answer, it may still be running"
+	}
+	if strings.Contains(extractJSONFieldFast(string(body), "output"), "NOPID") {
+		return "had no recorded pid, it may still be running"
+	}
+	return "was killed"
+}
+
+// InterruptOnSteer opts code_agent into the loop's steer-interrupt: a message
+// from the boss while Claude Code is working cancels the job (and kills it)
+// so he is answered now, not after the job.
+func (t *codeAgent) InterruptOnSteer() bool { return true }
 
 // collect reads the finished output, parses claude's JSON result, and
 // folds in any blocked-delete notice for the boss to approve.

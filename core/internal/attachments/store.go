@@ -232,9 +232,18 @@ func (s *Store) persistExtraction(ctx context.Context, att *Attachment, pages []
 // artifact_list (the agent's existing "things I have" tools) can find it.
 func (s *Store) registerArtifact(ctx context.Context, att *Attachment) (string, error) {
 	vpath := "/uploads/" + shortSession(att.SessionID) + "/" + att.Name
+	// An upload lands BEFORE the session's first turn creates its
+	// mem_sessions row (the composer uploads, then sends the WS frame), so
+	// the provenance FK would fail on a brand-new chat. Ensure the row exists
+	// first, the same way the turn store does; a non-UUID id (delegate
+	// children) simply carries no provenance.
 	var sessionUUID any
 	if _, err := uuid.Parse(att.SessionID); err == nil {
-		sessionUUID = att.SessionID
+		if _, serr := s.pool.Exec(ctx, `INSERT INTO mem_sessions (id, started_at) VALUES ($1::uuid, NOW()) ON CONFLICT (id) DO NOTHING`, att.SessionID); serr != nil {
+			log.Printf("attachments: ensure session %s: %v", att.SessionID, serr)
+		} else {
+			sessionUUID = att.SessionID
+		}
 	}
 	meta := fmt.Sprintf(`{"attachment_id":%q,"mime":%q,"raw_url":%q}`, att.ID, att.MIME, att.RawURL())
 	var id string

@@ -372,17 +372,15 @@ function mergeServerRows(
     seenLocalToolIds.add(id);
     return true;
   });
-  // Detect pending tail items to preserve (in-flight stream, watchdog
-  // error bubble we don't want to silently erase).
-  const pendingTail: ChatMessage[] = [];
-  for (let i = local.length - 1; i >= 0; i--) {
-    const m = local[i];
-    if (m.pending || m.role === "thinking") {
-      pendingTail.unshift(m);
-    } else {
-      break;
-    }
-  }
+  // Preserve every in-flight local item, wherever it sits: the streaming
+  // tail, but ALSO an interim assistant bubble that streamed BEFORE a tool
+  // call in the same turn. The server transcript only holds a turn's FINAL
+  // text (TaskCompleted), so a tail-only rule erased that interim text on
+  // every reconnect/reconcile — the "it had a whole message, then it
+  // disappeared" report (2026-08-26). They sort back into place by time.
+  const pendingTail: ChatMessage[] = local.filter(
+    (m) => (m.pending && m.role !== "tool") || m.role === "thinking",
+  );
   // De-dupe: drop any pending bubble whose text matches OR is a prefix of
   // a same-role server row. The server's finalized turn always wins.
   //
@@ -430,8 +428,26 @@ function mergeServerRows(
   const merged: ChatMessage[] = [
     ...fromServerSansTools,
     ...localToolMessages,
+    ...filteredPending,
   ].sort((a, b) => a.createdAt - b.createdAt);
-  return [...merged, ...filteredPending];
+  return merged;
+}
+
+// settleInFlight closes EVERYTHING the turn left open once it ends (complete,
+// error, or interrupted): every pending assistant bubble (an interim "let me
+// check the plan…" before a tool call stays pending forever otherwise) and
+// every tool card that never got its result frame. A card with no result
+// after the turn is over is not "running": its timer must stop and it must
+// read as stopped (2026-08-26: code_agent card ticking past 500s after the
+// turn had already finished, "I can't stop it").
+function settleInFlight(messages: ChatMessage[], now: number): ChatMessage[] {
+  return messages.map((m) => {
+    if (m.role === "assistant" && m.pending) return { ...m, pending: false };
+    if (m.role === "tool" && m.toolCall && !m.toolResult && !m.interrupted) {
+      return { ...m, interrupted: true, endedAt: now };
+    }
+    return m;
+  });
 }
 
 // Mark the most recent pending `thinking` message as complete. Called whenever
@@ -1049,6 +1065,9 @@ export function useChat() {
                 createdAt: Date.now(),
               });
             }
+            // Nothing stays "running" once the turn is over: interim assistant
+            // bubbles close and result-less tool cards stop ticking.
+            for (let i = 0; i < next.length; i++) next[i] = settleInFlight([next[i]], Date.now())[0];
             // Silent-turn rescue: when a turn completes with no
             // visible assistant text, surface a clear marker so the
             // chat never just stops mid-air. Phrase the marker
@@ -1150,7 +1169,7 @@ export function useChat() {
         case "error": {
           clearWatchdog();
           setMessages((prev) => [
-            ...closePendingThinking(prev),
+            ...settleInFlight(closePendingThinking(prev), Date.now()),
             {
               id: makeId(),
               role: "assistant",

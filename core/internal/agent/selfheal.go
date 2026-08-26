@@ -1,9 +1,15 @@
 package agent
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
 // Reactive self-heal — the STRUCTURAL backstop behind soul.md's "you are the
@@ -105,4 +111,133 @@ So actually fix it now:
 2. Implement a fix, or try a genuinely different approach. If a sign-in is blocking you, open it in your own browser. If your own tooling or code is the bug, patch it.
 3. VERIFY the fix worked — re-run it, check the output / status / row / page — and only then report.
 
+While the boss is IN this conversation, a heal fixes the CALL, never the codebase: call the tool correctly, take a different route with the tools you have, or say in one plain sentence what you could not do. Do not rewrite Infinity's own source mid-conversation (it is blocked and gets filed for the nightly self-improve loop instead), and never override an instruction he just gave you — if he said discuss, discuss.
+
 Stop WITHOUT fixing it only if you truly need something ONLY the boss can give: a credential or login he alone holds, a deploy he has chosen to gate, or a real decision. If so, say exactly what you need and why, with the fix ready to go. Do not just restate the failure.`
+
+// ── self-heal source guard ────────────────────────────────────────────────
+//
+// 2026-08-26: the boss attached a book and said "don't build, let's discuss".
+// A plan_update usage error tripped the self-heal reflex, whose directive says
+// "if your own code is the bug, patch it", so the model spawned code_agent to
+// rewrite Infinity's plan tooling: nine minutes blocked, his repo edited under
+// him, his "stop" unread. A heal in a LIVE conversation must fix the call, not
+// the codebase. This is the mechanic (Rule #1b): the loop refuses source
+// mutations during an interactive heal pass and FILES the intended change as
+// a code proposal so the nightly self-improve loop still gets the signal.
+
+// sourceMutationTools always count as changing Infinity's (or a repo's) code.
+var sourceMutationTools = map[string]bool{
+	"code_agent":                true,
+	"claude_code__Edit":         true,
+	"claude_code__Write":        true,
+	"claude_code__NotebookEdit": true,
+	"claude_code__Bash":         true,
+	"git_commit":                true,
+	"git_push":                  true,
+	"background_build":          true,
+}
+
+// pathScopedMutationTools change code only when pointed at the Infinity tree.
+var pathScopedMutationTools = map[string]bool{
+	"fs_save":  true,
+	"fs_edit":  true,
+	"bash_run": true,
+}
+
+// isSourceMutation reports whether a tool call would change source code:
+// always for the coding tools, and for the generic fs/bash tools when any
+// string argument points into an Infinity checkout.
+func isSourceMutation(tc llm.ToolCall) bool {
+	if sourceMutationTools[tc.Name] {
+		return true
+	}
+	if !pathScopedMutationTools[tc.Name] {
+		return false
+	}
+	for _, v := range tc.Input {
+		if str, ok := v.(string); ok && strings.Contains(strings.ToLower(str), "infinity") {
+			return true
+		}
+	}
+	return false
+}
+
+// CodeProposalFiler records a source change the self-heal reflex wanted to
+// make but was not allowed to make live. Implemented in serve against
+// mem_code_proposals (the same table Voyager's source extractor feeds), so
+// the nightly self-improve loop and the Code proposals tab pick it up.
+type CodeProposalFiler interface {
+	FileSelfHealProposal(ctx context.Context, sessionID, toolName, task string) (string, error)
+}
+
+// CodeProposalFilerFunc adapts a func to CodeProposalFiler.
+type CodeProposalFilerFunc func(ctx context.Context, sessionID, toolName, task string) (string, error)
+
+// FileSelfHealProposal implements CodeProposalFiler.
+func (f CodeProposalFilerFunc) FileSelfHealProposal(ctx context.Context, sessionID, toolName, task string) (string, error) {
+	return f(ctx, sessionID, toolName, task)
+}
+
+// AttachCodeProposalFiler wires the filer (nil-safe, hot-swappable).
+func (l *Loop) AttachCodeProposalFiler(f CodeProposalFiler) {
+	if l == nil {
+		return
+	}
+	l.planMu.Lock()
+	defer l.planMu.Unlock()
+	l.proposalFiler = f
+}
+
+func (l *Loop) proposalFilerFn() CodeProposalFiler {
+	if l == nil {
+		return nil
+	}
+	l.planMu.RLock()
+	defer l.planMu.RUnlock()
+	return l.proposalFiler
+}
+
+// refuseSelfHealSourceChange files the intended change (best-effort) and
+// returns the tool result the model sees instead of running the call.
+func (l *Loop) refuseSelfHealSourceChange(ctx context.Context, sessionID string, tc llm.ToolCall) string {
+	task := describeToolIntent(tc)
+	filed := ""
+	if f := l.proposalFilerFn(); f != nil {
+		fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if id, err := f.FileSelfHealProposal(fctx, sessionID, tc.Name, task); err != nil {
+			log.Printf("selfheal: file code proposal (%s): %v", tc.Name, err)
+			filed = " I could not file it as a code proposal (" + err.Error() + "), so say in one sentence what you believe is broken."
+		} else if id != "" {
+			filed = " It has been FILED as code proposal " + id + " for the nightly self-improve loop and the Code proposals tab; do not try to patch it now."
+		}
+	}
+	return "BLOCKED (self-heal guard): " + tc.Name + " would change Infinity's own source, and you are in a self-heal pass of a LIVE conversation. " +
+		"A heal fixes the CALL, never the codebase, while the boss is talking to you: call the tool correctly, take a different route with the tools you have, " +
+		"or tell him in one plain sentence what you could not do." + filed + " Now answer the boss, and honour whatever he last asked for."
+}
+
+// describeToolIntent renders the blocked call as a plain brief for the proposal.
+func describeToolIntent(tc llm.ToolCall) string {
+	if task, ok := tc.Input["task"].(string); ok && strings.TrimSpace(task) != "" {
+		return strings.TrimSpace(task)
+	}
+	var b strings.Builder
+	b.WriteString(tc.Name)
+	for k, v := range tc.Input {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if len(s) > 400 {
+			s = s[:400] + "…"
+		}
+		fmt.Fprintf(&b, "\n%s: %s", k, s)
+	}
+	return b.String()
+}

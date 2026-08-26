@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  Ban,
   Check,
   ChevronDown,
   ChevronRight,
@@ -65,13 +66,18 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
   // and the real tool result arrives as a follow-up tool_result event
   // (which transitions this same card to success / error / gated).
   const awaiting = !result && !!call?.awaiting_approval && !!call?.contract_id;
-  const status: "running" | "success" | "error" | "gated" | "awaiting" = useMemo(() => {
+  // "stopped" = the turn ended (finished, errored, or the boss hit Stop /
+  // steered) before this call's result frame arrived. Not running: the
+  // timer freezes at endedAt and the icon says so.
+  const stopped = !result && !!message.interrupted;
+  const status: "running" | "success" | "error" | "gated" | "awaiting" | "stopped" = useMemo(() => {
     if (awaiting) return "awaiting";
+    if (stopped) return "stopped";
     if (!result) return "running";
     if (detectGated(result.output).gated) return "gated";
     if (result.is_error) return "error";
     return "success";
-  }, [result, awaiting]);
+  }, [result, awaiting, stopped]);
 
   // Classify the tool so the card can choose: high-signal at-a-glance
   // display for code/repo writes (boss wants to SEE Jarvis coding),
@@ -168,7 +174,12 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
         </div>
         <StatusIcon status={status} />
         <span className="ml-1 flex items-center gap-2 self-center text-[11px] text-muted-foreground">
-          <span>{formatMs(call.started_at, result?.ended_at)}</span>
+          <span>
+            {formatMs(
+              call.started_at,
+              result?.ended_at ?? (stopped && message.endedAt ? new Date(message.endedAt).toISOString() : undefined),
+            )}
+          </span>
           {open ? (
             <ChevronDown className="size-4" aria-hidden />
           ) : (
@@ -195,6 +206,14 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
                   {filePaths.length - 1 === 1 ? "" : "s"} in this call
                 </p>
               )}
+            </Section>
+          )}
+          {status === "stopped" && (
+            <Section title="Status">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Ban className="size-3 shrink-0" />
+                <span>Stopped before a result came back.</span>
+              </div>
             </Section>
           )}
           {status === "running" && !result && (
@@ -268,8 +287,9 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
   );
 }
 
-function StatusIcon({ status }: { status: "running" | "success" | "error" | "gated" | "awaiting" }) {
+function StatusIcon({ status }: { status: "running" | "success" | "error" | "gated" | "awaiting" | "stopped" }) {
   if (status === "running") return <Loader2 className="size-4 animate-spin text-info" aria-hidden />;
+  if (status === "stopped") return <Ban className="size-4 text-muted-foreground" aria-hidden />;
   if (status === "success") return <Check className="size-4 text-success" aria-hidden />;
   if (status === "gated" || status === "awaiting") return <Lock className="size-4 text-warning" aria-hidden />;
   return <X className="size-4 text-danger" aria-hidden />;

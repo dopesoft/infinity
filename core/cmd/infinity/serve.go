@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -1107,6 +1108,28 @@ func serveCmd() *cobra.Command {
 					// turn ends so an in_progress step is 'skipped'/'done', never
 					// left to be false-failed by the plan-step reaper.
 					loop.SetPlanSettler(plan.NewStore(pool))
+					// Self-heal source guard: a live-conversation heal may not rewrite
+					// Infinity's own code; the intended change is filed here instead so the
+					// nightly self-improve loop + the Code proposals tab still get it.
+					loop.AttachCodeProposalFiler(agent.CodeProposalFilerFunc(func(ctx context.Context, sessionID, toolName, task string) (string, error) {
+						if pool == nil {
+							return "", fmt.Errorf("no database pool")
+						}
+						evidence, _ := json.Marshal(map[string]any{"session_id": sessionID, "tool": toolName, "origin": "self_heal_guard"})
+						if len(task) > 2000 {
+							task = task[:2000] + "…"
+						}
+						var id string
+						err := pool.QueryRow(ctx, `
+							INSERT INTO mem_code_proposals
+							  (target_path, title, rationale, proposed_change, evidence, risk_level, status, source_session)
+							VALUES ($1, $2, $3, $4, $5::jsonb, 'medium', 'candidate', NULLIF($6,'')::uuid)
+							RETURNING id::text
+						`, "core", "Self-heal wanted to change source during a live chat ("+toolName+")",
+							"The self-heal reflex tried to patch Infinity's own code mid-conversation; the guard blocked it and filed the intent here for review.",
+							task, string(evidence), sessionID).Scan(&id)
+						return id, err
+					}))
 				}
 				// Tool visibility - hide claude_code__* on Cloud-routed
 				// sessions so the model can't accidentally edit the Mac

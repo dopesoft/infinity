@@ -18,6 +18,27 @@ type Tool interface {
 	Execute(ctx context.Context, input map[string]any) (string, error)
 }
 
+// SteerInterruptible is an OPTIONAL extension interface for long-running
+// tools that should STOP the moment the boss sends a new message mid-turn
+// (a steer) in an interactive session. The loop cancels the tool's ctx, the
+// tool tears its work down (code_agent kills the detached claude -p), and
+// the boss's words reach the model on the very next iteration instead of
+// after a 10-minute job the boss may have just told it not to run. Opt-in:
+// short tools finish anyway, and sub-agent fan-outs decide for themselves.
+type SteerInterruptible interface {
+	InterruptOnSteer() bool
+}
+
+// InterruptsOnSteer reports whether a registered tool opted in.
+func (r *Registry) InterruptsOnSteer(name string) bool {
+	t, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	si, ok := t.(SteerInterruptible)
+	return ok && si.InterruptOnSteer()
+}
+
 // ReadOnlyTool is an OPTIONAL extension interface. Tools that implement
 // it declare themselves explicitly as reads (true) or mutations (false),
 // killing the system_map heuristic that classified by name suffix. The
