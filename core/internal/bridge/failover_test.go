@@ -160,6 +160,12 @@ func TestNormalizePath(t *testing.T) {
 		{mac, "/workspace/notes.md", "~/notes.md"},
 		{mac, "~/Dev/infinity", "~/Dev/infinity"}, // already native
 		{mac, "relative/path", "relative/path"},
+		// A guessed home ("/Users/kai": the model inferred the boss's login
+		// from his email) must land in the real home, not 400 as a missing
+		// cwd that then reads as "the Mac dropped out" (2026-08-26/27).
+		{mac, "/Users/kai/Dev/infinity", "~/Dev/infinity"},
+		{mac, "/Users/n0m4d/Dev/infinity/core", "~/Dev/infinity/core"},
+		{mac, "/Users/kai", "~"},
 	}
 	for _, c := range cases {
 		if got := NormalizePath(c.b, c.in); got != c.want {

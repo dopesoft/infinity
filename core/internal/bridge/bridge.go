@@ -420,6 +420,19 @@ func cloudPath(p string) string {
 }
 
 func macPath(p string) string {
+	// There is exactly one Mac and one user on it. A path under some OTHER
+	// home ("/Users/kai/Dev/infinity": the model guessing the boss's login
+	// from his email, 2026-08-26 and again 2026-08-27) collapses to "~", so
+	// it lands in the real home instead of a 400 "cwd not a directory" that
+	// then read as "the Mac dropped out". Same collapse cloudPath already does.
+	if strings.HasPrefix(p, "/Users/") {
+		rest := strings.TrimPrefix(p, "/Users/")
+		if j := strings.IndexByte(rest, '/'); j >= 0 {
+			p = "~" + rest[j:]
+		} else {
+			p = "~"
+		}
+	}
 	switch {
 	case p == "/workspace" || p == "/workspace/":
 		return "~"

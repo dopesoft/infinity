@@ -28,6 +28,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -203,6 +204,10 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		// change itself with fs_edit/bash_run on the reachable bridge, instead
 		// of surfacing a raw "launch via mac failed (status=404)". The mem_runs
 		// row already carries the humanized error via runs.Finish.
+		var rejected *launchRejectedError
+		if errors.As(runErr, &rejected) {
+			return rejected.guidance(), nil
+		}
 		h := errs.Humanize(runErr)
 		if h.Category == errs.CatBridge {
 			return fmt.Sprintf("code_agent couldn't run: %s — the Mac bridge is unreachable. "+
@@ -219,6 +224,38 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		return "", runErr
 	}
 	return summary, nil
+}
+
+// launchRejectedError: the Mac bridge answered 4xx to the launch request.
+type launchRejectedError struct {
+	bridge string
+	status int
+	detail string
+}
+
+func (e *launchRejectedError) Error() string {
+	return fmt.Sprintf("code_agent: the %s rejected the launch request (HTTP %d): %s", e.bridge, e.status, e.detail)
+}
+
+// guidance is the tool result for a rejected launch: the model fixes the
+// request and stays on the Mac.
+func (e *launchRejectedError) guidance() string {
+	return fmt.Sprintf("code_agent did not start: the %s bridge is UP and rejected the request (HTTP %d): %s. "+
+		"This is a request problem, not an outage; do NOT move the work to the cloud. Repos on the Mac live under "+
+		"~/Dev/<repo> (the Infinity repo is ~/Dev/infinity); pass that as repo and call code_agent again.",
+		e.bridge, e.status, e.detail)
+}
+
+// bridgeErrorDetail pulls the {"error": "..."} out of a bridge reply, else
+// the raw body.
+func bridgeErrorDetail(body []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && strings.TrimSpace(e.Error) != "" {
+		return strings.TrimSpace(e.Error)
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // claudeCodeQuotaKey is the quota-ledger id for the boss's Claude plan behind
@@ -278,6 +315,13 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 		"cwd":         repo,
 		"timeout_sec": 20,
 	})
+	if ok && code >= 400 && code < 500 {
+		// The bridge ANSWERED and rejected the request (a bad cwd, a bad
+		// arg). That is a request problem, never an outage: it must not
+		// read as "the Mac dropped out" and push the work to the cloud
+		// (2026-08-27 06:51, repo "/Users/kai/Dev/infinity").
+		return "", &launchRejectedError{bridge: string(b.Name()), status: code, detail: bridgeErrorDetail(body)}
+	}
 	if !ok || code >= 300 {
 		return "", fmt.Errorf("code_agent: launch via %s failed (status=%d): %s", b.Name(), code, string(body))
 	}
