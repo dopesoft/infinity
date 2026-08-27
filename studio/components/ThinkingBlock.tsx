@@ -7,6 +7,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useNow } from "@/lib/useNow";
 import type { ChatMessage } from "@/hooks/useChat";
 
 function formatElapsed(ms: number) {
@@ -30,14 +31,11 @@ export function ThinkingBlock({ message }: { message: ChatMessage }) {
   const hasContent = message.text.trim().length > 0;
 
   const [open, setOpen] = useState<boolean>(isPending);
-  const [now, setNow] = useState<number>(() => Date.now());
+  // 0 until the clock's first tick; fall back to the block's own start so the
+  // elapsed readout never goes negative for a frame.
+  const tick = useNow(isPending);
+  const now = tick || message.createdAt;
   const previewRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!isPending) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [isPending]);
 
   // Auto-collapse the moment thinking completes (matches ToolCallCard UX).
   // User can re-open to inspect the full trace.

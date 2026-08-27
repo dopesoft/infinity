@@ -6,7 +6,7 @@ import { useWebSocket } from "@/lib/ws/provider";
 import { fetchCoreStatus, type CoreStatus } from "@/lib/api";
 import { formatUptime, getBootedAt } from "@/lib/uptime";
 import { findVendor, resolveModelEntry, VENDORS } from "@/lib/models-catalog";
-import { useGlobalModel } from "@/lib/use-model";
+import { standbyLabel, useGlobalModel } from "@/lib/use-model";
 
 const dotClass = {
   connected: "bg-success",
@@ -102,6 +102,9 @@ export function FooterStatus() {
     ?? liveModel
     ?? "-";
 
+  // A spent plan: the footer says what is answering, not what was picked.
+  const standby = standbyLabel(setting?.standby);
+
   const toolCount = status?.tools?.length ?? 0;
   const sep = <span aria-hidden className="text-border">|</span>;
 
@@ -132,7 +135,9 @@ export function FooterStatus() {
       </span>
       <span className="ml-auto hidden items-center gap-2.5 truncate sm:flex">
         {sep}
-        <span className="truncate">{vendorLabel} · {modelLabel}</span>
+        <span className="truncate">
+          {standby ? `${standby} · standby` : `${vendorLabel} · ${modelLabel}`}
+        </span>
       </span>
     </footer>
   );

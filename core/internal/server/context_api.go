@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
 // Context usage endpoint - backs the circular meter in Studio's composer.
@@ -64,6 +65,12 @@ func contextWindowFor(model string) int {
 	// fill (dangerous), so 200K is the honest default.
 	if strings.HasPrefix(m, "claude-") {
 		if strings.Contains(m, "1m") {
+			return 1_000_000
+		}
+		// Claude 5 family (Opus 5, Sonnet 5, Fable 5) ships a 1M window as
+		// standard, no beta header (model pages, checked 2026-08-26). Matched
+		// on the family boundary so "claude-sonnet-4-5-…" stays 200K.
+		if isClaude5Family(m) {
 			return 1_000_000
 		}
 		return 200_000
@@ -149,10 +156,16 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modelID := provider.Model()
+	override := ""
 	if s.settings != nil {
-		if override := s.settings.GetModel(r.Context()); override != "" {
+		if override = s.settings.GetModel(r.Context()); override != "" {
 			modelID = override
 		}
+	}
+	// Measure against the brain that is ANSWERING: while the chosen plan is
+	// spent and a standby carries the session, the window is the standby's.
+	if st := llm.EffectiveBrain(provider, override); st.OnStandby && st.Model != "" {
+		modelID = st.Model
 	}
 	window := contextWindowFor(modelID)
 
@@ -210,4 +223,20 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 		CacheReadTokens:  snapshot.LastCacheReadTokens,
 		CacheWriteTokens: snapshot.LastCacheWriteTokens,
 	})
+}
+
+// isClaude5Family reports a Claude 5 model id: "claude-<family>-5" followed
+// by the end of the id, a date/variant suffix ("-…") or the 1M marker ("[…").
+func isClaude5Family(m string) bool {
+	for _, fam := range []string{"opus", "sonnet", "haiku", "fable"} {
+		p := "claude-" + fam + "-5"
+		if !strings.HasPrefix(m, p) {
+			continue
+		}
+		rest := m[len(p):]
+		if rest == "" || rest[0] == '-' || rest[0] == '[' || rest[0] == '.' {
+			return true
+		}
+	}
+	return strings.Contains(m, "mythos")
 }

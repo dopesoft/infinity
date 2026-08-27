@@ -386,6 +386,11 @@ func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, er
 	if redirect, blocked := guardInteractiveLogin(cmd); blocked {
 		return redirect, nil
 	}
+	// Claude Code runs through code_agent (tracked, stoppable, delete-gated,
+	// quota-aware), never as a raw `claude -p` nobody can see or stop.
+	if IsRawClaudeCodeCmd(cmd) {
+		return RawClaudeCodeRedirect(), nil
+	}
 	override := bridgePrefOverride(in)
 
 	// A command that invokes an installed cli extension (yt-dlp, ffmpeg, …)

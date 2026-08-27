@@ -5,6 +5,10 @@ import { Check, Loader2, RefreshCw, X } from "lucide-react";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useRuns } from "@/lib/runs/useRuns";
+import type { RunDTO } from "@/lib/api";
+import { isCodingTool, useLiveTool, type LiveTool } from "@/lib/live-tool";
+import { effectiveModelLabel, useGlobalModel, type ModelSetting } from "@/lib/use-model";
 import {
   fetchBridgeSession,
   fetchBridgeStatus,
@@ -137,7 +141,15 @@ export function BridgePill({
     }
   };
 
-  const pill = renderPill({ sessionId, status, session });
+  const basePill = renderPill({ sessionId, status, session });
+  // While coding is in flight the pill TRANSFORMS into the model doing it
+  // (the boss's ask: no extra chrome, the same button tells the truth).
+  // code_agent runs come from mem_runs (survive refresh); the chat model's
+  // own edits come from the live tool stream.
+  const { runs: codeRuns } = useRuns({ kind: "code_agent", status: "running", limit: 1, enabled: !!sessionId });
+  const liveTool = useLiveTool();
+  const { setting } = useGlobalModel();
+  const pill = codingPill({ base: basePill, codeRun: codeRuns[0] ?? null, liveTool, setting });
 
   const triggerNode = (
     <button
@@ -217,6 +229,54 @@ type PillRender = {
   spin: boolean;
   toneClasses: ReturnType<typeof toneToClasses>;
 };
+
+// codingPill overlays the live coding engine on the bridge pill:
+//   code_agent running     -> "Claude Code · Opus 5"   (his Claude plan, on the Mac)
+//   chat model editing     -> "GPT-5.6 Sol · coding"  (the chosen/standby chat brain)
+//   otherwise              -> the ordinary bridge label
+function codingPill({
+  base,
+  codeRun,
+  liveTool,
+  setting,
+}: {
+  base: PillRender;
+  codeRun: RunDTO | null;
+  liveTool: LiveTool | null;
+  setting: ModelSetting | null;
+}): PillRender {
+  if (codeRun) {
+    const model = claudeModelLabel(codeRun.meta?.model);
+    return {
+      label: `Claude Code · ${model}`,
+      title: `Claude Code is coding on the Mac (${codeRun.meta?.model ?? "your Claude plan"}${codeRun.meta?.effort ? `, effort ${codeRun.meta.effort}` : ""}). Billed to your Claude plan, not the chat model.`,
+      spin: true,
+      toneClasses: toneToClasses("success"),
+    };
+  }
+  if (liveTool && isCodingTool(liveTool.name) && liveTool.name !== "code_agent") {
+    const model = effectiveModelLabel(setting) ?? "chat model";
+    return {
+      label: `${model} · coding`,
+      title: `${model} is editing directly (${liveTool.name}); this bills the chat model's plan, not Claude Code.`,
+      spin: true,
+      toneClasses: toneToClasses(setting?.standby ? "warning" : "info"),
+    };
+  }
+  return base;
+}
+
+// "claude-opus-5[1m]" -> "Opus 5 · 1M", "opus[1m]" -> "Opus · 1M", "" -> "Claude".
+function claudeModelLabel(id: string | undefined): string {
+  if (!id) return "Claude";
+  const oneM = /\[1m\]$/i.test(id);
+  let base = id.replace(/\[1m\]$/i, "").replace(/^claude-/, "").replace(/-\d{8}$/, "");
+  base = base
+    .split("-")
+    .map((part, i) => (i === 0 ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(" ");
+  return oneM ? `${base} · 1M` : base;
+}
 
 function renderPill({
   sessionId,

@@ -26,26 +26,34 @@ func ModelForVendor(vendor string) string {
 	if generic == "" {
 		return ""
 	}
-	lower := strings.ToLower(generic)
-	switch vendor {
-	case "anthropic":
-		if strings.HasPrefix(lower, "claude-") {
-			return generic
-		}
-	case "openai", "openai_oauth":
-		// OpenAI ships gpt-* and o*-series (o1, o3, o4-mini, etc).
-		if strings.HasPrefix(lower, "gpt-") ||
-			strings.HasPrefix(lower, "o1") ||
-			strings.HasPrefix(lower, "o3") ||
-			strings.HasPrefix(lower, "o4") {
-			return generic
-		}
-	case "google":
-		if strings.HasPrefix(lower, "gemini-") {
-			return generic
-		}
+	if ModelFamilyMatches(vendor, generic) {
+		return generic
 	}
 	return ""
+}
+
+// ModelFamilyMatches reports whether a model id belongs to a vendor's family
+// (claude-* → anthropic, gpt-*/o*-series → openai + openai_oauth, gemini-* →
+// google). Used to keep a vendor-specific id from being sent to a different
+// vendor, both at boot (LLM_MODEL) and on standby failover.
+func ModelFamilyMatches(vendor, model string) bool {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if lower == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(vendor)) {
+	case "anthropic":
+		return strings.HasPrefix(lower, "claude-")
+	case "openai", "openai_oauth":
+		// OpenAI ships gpt-* and o*-series (o1, o3, o4-mini, etc).
+		return strings.HasPrefix(lower, "gpt-") ||
+			strings.HasPrefix(lower, "o1") ||
+			strings.HasPrefix(lower, "o3") ||
+			strings.HasPrefix(lower, "o4")
+	case "google":
+		return strings.HasPrefix(lower, "gemini-")
+	}
+	return false
 }
 
 func FromEnv() (Provider, error) {
@@ -126,9 +134,16 @@ func (r *Registry) Register(p Provider) {
 	r.providers[p.Name()] = WrapNoDashes(p)
 }
 
+// Get returns the provider by id, wrapped in the plan-quota failover (see
+// failover.go): every consumer that resolves a brain through the registry
+// (the agent loop via Settings, activeModelProvider for every auxiliary
+// call) gets standby routing from this one seam.
 func (r *Registry) Get(name string) (Provider, bool) {
 	p, ok := r.providers[strings.ToLower(strings.TrimSpace(name))]
-	return p, ok
+	if !ok {
+		return nil, false
+	}
+	return WrapFailover(p, r), true
 }
 
 // Available returns the sorted list of provider ids the registry knows

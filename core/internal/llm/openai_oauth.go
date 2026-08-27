@@ -519,6 +519,15 @@ func (o *OpenAIOAuth) StreamCached(
 		if httpResp.StatusCode/100 != 2 {
 			raw, _ := io.ReadAll(httpResp.Body)
 			httpResp.Body.Close()
+			// A spent PLAN (usage_limit_reached) is not transient: the same
+			// request stays dead until the reset. Return the typed error at
+			// once so the failover wrapper can hand the turn to a standby
+			// brain instead of burning three more doomed attempts.
+			if q, ok := quotaFromOpenAIBody(o.Name(), httpResp.StatusCode, string(raw)); ok {
+				log.Printf("openai_oauth: %v; not retrying", q)
+				emit(out, StreamEvent{Kind: StreamError, Err: q.Error()})
+				return resp, q
+			}
 			statusErr := fmt.Errorf("openai_oauth: status=%d body=%s", httpResp.StatusCode, truncateOAuth(string(raw), 400))
 			lastErr = statusErr
 			if attempt < maxAttempts && isTransientStatus(httpResp.StatusCode) && ctx.Err() == nil {

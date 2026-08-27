@@ -334,6 +334,12 @@ func (g *ClaudeCodeGate) Authorize(ctx context.Context, sessionID, project, tool
 					"boss's Preview pane and he approves it there. Never sign in via claude_code or bash.",
 			}
 		}
+		// A raw `claude -p` through claude_code__Bash is a Claude Code run the
+		// boss cannot see or stop and whose errors go unread (2026-08-26). It
+		// belongs to code_agent. Same rule as the bash_run guard, one source.
+		if cmd, _ := input["command"].(string); tools.IsRawClaudeCodeCmd(cmd) {
+			return agent.GateDecision{Allow: false, Reason: tools.RawClaudeCodeRedirect()}
+		}
 	}
 
 	if _, ok := g.autoAllow[suffix]; ok {

@@ -14,6 +14,7 @@
 package errs
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
@@ -24,6 +25,7 @@ type Category string
 
 const (
 	CatAuth         Category = "auth"
+	CatQuota        Category = "plan_out_of_usage"
 	CatRateLimit    Category = "rate_limit"
 	CatPayloadLarge Category = "payload_too_large"
 	CatToolNotFound Category = "tool_not_found"
@@ -82,6 +84,18 @@ func HumanizeString(raw string) Human {
 		h.Summary = "I asked for more data than the provider allows in a single request, so it bounced me back."
 		h.Impact = "That step couldn't finish. Usually it's email: too many or too-large messages pulled in one grab."
 		h.Action = "I need to page through it in smaller batches instead of all at once. The triage recipe now does that."
+
+	// Plan exhaustion (ChatGPT Plus usage_limit_reached, Claude Max "out of
+	// extra usage", Anthropic credits gone). Checked BEFORE rate-limit because
+	// it also carries a 429, and it is the opposite of a hiccup: it will not
+	// clear on its own until the plan resets, and the boss must hear it in
+	// those words (2026-08-26: this read as "brief server hiccup" for hours).
+	case contains(s, "usage limit reached", "usage_limit_reached", "out of extra usage", "out of usage", "credit balance"):
+		h.Category = CatQuota
+		h.Title = "Your plan is out of usage"
+		h.Summary = "The model's plan has used up its allowance, so it turned me away. That is the plan's cap, not a fault in your setup."
+		h.Impact = "This step waits for the plan to reset; nothing is lost, and I don't switch to a pay-per-token key on my own."
+		h.Action = "It clears when the plan resets" + resetClause(raw) + ". If you want it now, pick a different plan-backed model in Settings."
 
 	// Rate-limit / overload / transient upstream (incl. provider-side 5xx
 	// server_error). Not the boss's fault, self-heals — and the openai_oauth
@@ -183,3 +197,14 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// resetClause pulls the "resets 10:13pm" clause out of a provider message so
+// the action line can name the time; empty when the message has none.
+func resetClause(raw string) string {
+	if m := resetClauseRe.FindString(raw); m != "" {
+		return " (" + m + ")"
+	}
+	return ""
+}
+
+var resetClauseRe = regexp.MustCompile(`(?i)resets?\s+(?:at\s+)?(?:[A-Za-z]{3}\s+)?\d{1,2}(?::\d{2})?\s*[ap]m(?:\s*\([^)]+\))?`)

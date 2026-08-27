@@ -3,11 +3,11 @@ package initiative
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
 // LocalTimeProvider implements agent.MemoryProvider and injects the boss's
@@ -37,15 +37,9 @@ type LocalTimeProvider struct {
 // (IANA name like "America/Chicago"). Returns a provider with loc=UTC
 // when unset/invalid so the agent at least sees something authoritative.
 func NewLocalTimeProvider() *LocalTimeProvider {
-	tz := strings.TrimSpace(os.Getenv("INFINITY_USER_TIMEZONE"))
-	if tz == "" {
-		tz = "America/Chicago"
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		loc = time.UTC
-	}
-	return &LocalTimeProvider{loc: loc}
+	// One source of truth for the boss's clock frame (llm.UserLocation reads
+	// INFINITY_USER_TIMEZONE); provider notices and this block must agree.
+	return &LocalTimeProvider{loc: llm.UserLocation()}
 }
 
 var _ agent.MemoryProvider = (*LocalTimeProvider)(nil)

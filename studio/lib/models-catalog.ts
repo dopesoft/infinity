@@ -49,10 +49,24 @@ export const VENDORS: VendorEntry[] = [
     auth: "api_key",
     models: [
       {
+        id: "claude-opus-5",
+        label: "Opus 5",
+        tagline: "frontier",
+        input_per_mtok: 10,
+        output_per_mtok: 50,
+      },
+      {
+        id: "claude-sonnet-5",
+        label: "Sonnet 5",
+        tagline: "best value",
+        recommended: true,
+        input_per_mtok: 2,
+        output_per_mtok: 10,
+      },
+      {
         id: "claude-opus-4-7",
         label: "Opus 4.7",
-        tagline: "frontier",
-        recommended: true,
+        tagline: "previous frontier",
         input_per_mtok: 5,
         output_per_mtok: 25,
       },

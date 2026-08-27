@@ -1447,6 +1447,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					ToolName:   ev.ToolName,
 					InputDelta: ev.InputDelta,
 				})
+			case llm.StreamNotice:
+				// Provider-layer heads-up for the boss (brain failover on a
+				// spent plan, back on the primary). Same shape as the bridge
+				// failover notice: one italic line in the reply stream.
+				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
 			case llm.StreamError:
 				emitHumanError(out, s.ID, ev.Err)
 			}

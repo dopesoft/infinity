@@ -230,7 +230,14 @@ func (t *planCreate) Execute(ctx context.Context, in map[string]any) (string, er
 	if len(steps) == 0 {
 		return "", errors.New("steps must contain at least one {title} item")
 	}
-	sid := SessionIDFromContext(ctx)
+	// Bind to the conversation that owns this work: a background build's
+	// child binds to the chat session that started it (same as todo_write).
+	// A sub-agent with no owner cannot create a plan at all; an ownerless
+	// "active" plan is a card on the boss's board nobody can resume.
+	sid := SessionForPublish(SessionIDFromContext(ctx))
+	if isSubAgentSession(sid) {
+		return `{"error":"sub-agents don't create plans: this session has no conversation to own it. Do the steps here and return them in your result; the parent session owns the plan."}`, nil
+	}
 	goal := strString(in, "goal")
 	// A plan launched by a named job (a cron) inherits the JOB's name as its
 	// headline so the cron, the card, and the plan all read the same thing —
@@ -831,4 +838,12 @@ func truncForLabel(s string) string {
 		return s[:80] + "…"
 	}
 	return s
+}
+
+// isSubAgentSession reports whether sid is an ephemeral sub-agent session
+// (delegate / peer / background child) with no conversation of its own. The
+// prefixes mirror agent's delegateSessionIDPrefix / peerSessionPrefix /
+// backgroundSessionIDPrefix (tools cannot import agent).
+func isSubAgentSession(sid string) bool {
+	return strings.HasPrefix(sid, "delegate:") || strings.HasPrefix(sid, "peer:") || strings.HasPrefix(sid, "background:")
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { clearLiveTool, publishLiveTool } from "@/lib/live-tool";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
 import { fetchSessionMessages } from "@/lib/api";
@@ -990,6 +991,11 @@ export function useChat() {
           } else {
             armWatchdog();
           }
+          // Tell the status chrome (bridge pill) what is in flight this
+          // second, so it can flash the model doing the coding.
+          if (ev.tool_call.id && ev.tool_call.name) {
+            publishLiveTool({ id: ev.tool_call.id, name: ev.tool_call.name, startedAt: Date.now() });
+          }
           setMessages((prev0) => {
             // The narration streamed just before this call is interim, not
             // the reply: mark it so the stream folds it with the tool cards.
@@ -1033,6 +1039,7 @@ export function useChat() {
         }
         case "tool_result": {
           armWatchdog();
+          clearLiveTool(ev.tool_result.id);
           setMessages((prev) =>
             prev.map((m) =>
               m.role === "tool" && m.toolCall?.id === ev.tool_result.id
@@ -1044,6 +1051,7 @@ export function useChat() {
         }
         case "complete": {
           clearWatchdog();
+          clearLiveTool();
           const inputT = ev.usage?.input ?? 0;
           const outputT = ev.usage?.output ?? 0;
           setUsage((u) => ({ input: u.input + inputT, output: u.output + outputT }));
@@ -1185,6 +1193,7 @@ export function useChat() {
           break;
         }
         case "error": {
+          clearLiveTool();
           clearWatchdog();
           setMessages((prev) => [
             ...settleInFlight(closePendingThinking(prev), Date.now()),

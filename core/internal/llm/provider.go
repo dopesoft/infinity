@@ -160,6 +160,12 @@ const (
 	StreamToolInputDelta StreamEventKind = "tool_input_delta"
 	StreamComplete       StreamEventKind = "complete"
 	StreamError          StreamEventKind = "error"
+	// StreamNotice is a one-line heads-up for the boss that the provider layer
+	// itself wants in the chat (TextDelta carries it): "ChatGPT is out of
+	// usage until 10pm, I'm on Claude meanwhile". Rendered as ordinary reply
+	// text by the agent loop; one-shot consumers (summarizer, classifier)
+	// ignore it like any kind they don't handle.
+	StreamNotice StreamEventKind = "notice"
 )
 
 type Provider interface {

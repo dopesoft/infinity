@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/settings"
 )
 
@@ -29,6 +31,15 @@ type settingsModelResponse struct {
 	// settings store (Studio picker), "default" when it's the env-set
 	// LLM_PROVIDER. Mirrors the existing Source field for the model.
 	ProviderSource string `json:"provider_source"`
+	// EffectiveProvider / EffectiveModel are what is ANSWERING right now.
+	// They equal provider/model unless the chosen brain's plan is spent and
+	// a standby is carrying the conversation (llm.EffectiveBrain), in which
+	// case StandbyUntil (RFC3339) and StandbyReason say why and how long.
+	// The picker keeps showing the boss's choice; the chip shows reality.
+	EffectiveProvider string `json:"effective_provider"`
+	EffectiveModel    string `json:"effective_model"`
+	StandbyUntil      string `json:"standby_until,omitempty"`
+	StandbyReason     string `json:"standby_reason,omitempty"`
 }
 
 // handleSettingsModel serves GET + PUT /api/settings/model.
@@ -94,6 +105,21 @@ func (s *Server) buildSettingsModelResponse(ctx context.Context) settingsModelRe
 	}
 	if s.llmReg != nil {
 		resp.AvailableProviders = s.llmReg.Available()
+	}
+	resp.EffectiveProvider, resp.EffectiveModel = resp.Provider, resp.Model
+	if s.loop != nil {
+		if p := s.loop.Provider(); p != nil {
+			override := ""
+			if resp.Source == "user" {
+				override = resp.Model
+			}
+			if st := llm.EffectiveBrain(p, override); st.OnStandby {
+				resp.EffectiveProvider = st.Provider
+				resp.EffectiveModel = st.Model
+				resp.StandbyUntil = st.Until.UTC().Format(time.RFC3339)
+				resp.StandbyReason = st.Reason
+			}
+		}
 	}
 	// Nil marshals as `"available_providers": null`; Studio treats this
 	// field as an array.

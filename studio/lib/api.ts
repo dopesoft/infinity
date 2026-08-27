@@ -781,6 +781,12 @@ export type MediaItem = {
   path?: string;
 };
 export type RunMeta = {
+  // code_agent runs: which engine/model/effort is coding (the bridge pill
+  // flashes it while the run is live). Set at launch, corrected to the model
+  // Claude actually reports when the run finishes.
+  engine?: string;
+  model?: string;
+  effort?: string;
   todos?: RunTodo[];
   repo?: string;
   currentFile?: string;

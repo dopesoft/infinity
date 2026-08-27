@@ -58,7 +58,7 @@ import {
   type OpenAIOAuthStatusResponse,
   type ToolDescriptor,
 } from "@/lib/api";
-import { useGlobalModel } from "@/lib/use-model";
+import { standbyLabel, standbyResetClock, useGlobalModel } from "@/lib/use-model";
 import {
   VENDORS,
   findVendor,
@@ -688,6 +688,19 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
             ))}
           </NativeSelect>
         </FieldLabel>
+
+        {setting?.standby && (
+          <p className="rounded-sm bg-warning/10 p-2 text-[11px] text-foreground/90">
+            {findVendor(liveProvider).label} is out of usage
+            {standbyResetClock(setting.standby) ? (
+              <>
+                {" "}until{" "}
+                <span suppressHydrationWarning>{standbyResetClock(setting.standby)}</span>
+              </>
+            ) : null}
+            . Jarvis is answering on {standbyLabel(setting.standby)} (your configured standby) until then, and switches back on its own.
+          </p>
+        )}
 
         {isOAuthVendor && <OAuthConnectBlock />}
 

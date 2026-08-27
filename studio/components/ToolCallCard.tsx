@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useNow } from "@/lib/useNow";
 import Link from "next/link";
 import {
   Ban,
@@ -23,10 +24,10 @@ import {
 } from "@/lib/canvas/detection";
 import type { ChatMessage } from "@/hooks/useChat";
 
-function formatMs(start?: string, end?: string) {
+function formatMs(start?: string, end?: string, now?: number) {
   if (!start) return "";
   const s = new Date(start).getTime();
-  const e = end ? new Date(end).getTime() : Date.now();
+  const e = end ? new Date(end).getTime() : (now ?? Date.now());
   const ms = Math.max(0, e - s);
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
@@ -105,6 +106,9 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
     status === "error" ||
     (status === "running" && isWriteCall);
   const [open, setOpen] = useState<boolean>(defaultOpen);
+  // Live clock while the call is in flight, so the seconds readout ticks on
+  // its own instead of only when a tap happens to re-render the card.
+  const now = useNow(status === "running" || status === "awaiting");
 
   if (!call) return null;
   const gated = detectGated(result?.output);
@@ -174,10 +178,11 @@ export function ToolCallCard({ message }: { message: ChatMessage }) {
         </div>
         <StatusIcon status={status} />
         <span className="ml-1 flex items-center gap-2 self-center text-[11px] text-muted-foreground">
-          <span>
+          <span suppressHydrationWarning>
             {formatMs(
               call.started_at,
               result?.ended_at ?? (stopped && message.endedAt ? new Date(message.endedAt).toISOString() : undefined),
+              now || undefined,
             )}
           </span>
           {open ? (

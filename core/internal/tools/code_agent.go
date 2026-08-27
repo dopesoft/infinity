@@ -29,11 +29,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
 	"github.com/dopesoft/infinity/core/internal/errs"
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/runs"
 )
 
@@ -114,7 +116,12 @@ func (t *codeAgent) Schema() map[string]any {
 			},
 			"model": map[string]any{
 				"type":        "string",
-				"description": "Optional Claude model alias (e.g. 'opus', 'sonnet'). Defaults to the boss's configured Claude Code model.",
+				"description": "Optional Claude model id or alias for this run (e.g. 'claude-opus-5[1m]', 'sonnet'). Leave empty for the configured default (INFINITY_CODE_AGENT_MODEL, else the Mac's Claude Code setting).",
+			},
+			"effort": map[string]any{
+				"type":        "string",
+				"enum":        []string{"low", "medium", "high", "xhigh", "max"},
+				"description": "Optional Claude Code effort for this run. Leave empty for the configured default (INFINITY_CODE_AGENT_EFFORT, else the Mac's setting).",
 			},
 		},
 		"required": []string{"task"},
@@ -127,7 +134,11 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		return "", fmt.Errorf("code_agent: task is required")
 	}
 	repo := strString(in, "repo")
-	model := strString(in, "model")
+	// Model + effort for the nested Claude Code: the call's own choice first,
+	// else Infinity's defaults (INFINITY_CODE_AGENT_MODEL / _EFFORT, e.g.
+	// "claude-opus-5[1m]" / "high"), else the Mac's own Claude settings.
+	model := strDefault(in, "model", strings.TrimSpace(os.Getenv("INFINITY_CODE_AGENT_MODEL")))
+	effort := strDefault(in, "effort", strings.TrimSpace(os.Getenv("INFINITY_CODE_AGENT_EFFORT")))
 
 	// Only meaningful on the Mac bridge - that's where the Max-billed
 	// Claude Code CLI lives. On Cloud, the chat model codes directly.
@@ -144,6 +155,14 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	// the Mac: translate it to the Mac layout before launching.
 	repo = bridge.NormalizePath(b, repo)
 
+	// Stop retrying something dead: while the boss's Claude plan is known
+	// spent (the last run said "out of extra usage"), don't launch another
+	// `claude -p` that will fail the same way. Held in the shared quota
+	// ledger so Settings can show it alongside the chat brain's state.
+	if until, detail, spent := llm.Exhausted(claudeCodeQuotaKey); spent {
+		return claudeCodeHeldGuidance(until, detail), nil
+	}
+
 	// Book the run so Studio shows a live, navigation-proof spinner.
 	// runs.Handle is the real API (Begin → Progress → Finish); it's
 	// nil-safe, so this degrades cleanly when the pool isn't wired.
@@ -158,7 +177,19 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		jobID = fmt.Sprintf("job-%d", time.Now().UnixNano())
 	}
 
-	summary, runErr := t.run(ctx, b, jobID, task, repo, model, heartbeat)
+	// The run row carries which model is coding (Studio's bridge pill flashes
+	// it while the run is live): the requested id now, the exact id Claude
+	// reports once it finishes.
+	setMeta := func(key, value string) {
+		if value != "" {
+			handle.SetMetaString(context.Background(), key, value)
+		}
+	}
+	setMeta("engine", "claude_code")
+	setMeta("model", model)
+	setMeta("effort", effort)
+
+	summary, runErr := t.run(ctx, b, jobID, task, repo, model, effort, heartbeat, setMeta)
 	// Always close the run row on a fresh context. Using the tool ctx here
 	// means a cancelled ctx (Stop button, graceful shutdown) silently drops
 	// the Finish UPDATE and leaves the row stuck 'running' until the reaper.
@@ -172,19 +203,45 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		// change itself with fs_edit/bash_run on the reachable bridge, instead
 		// of surfacing a raw "launch via mac failed (status=404)". The mem_runs
 		// row already carries the humanized error via runs.Finish.
-		if h := errs.Humanize(runErr); h.Category == errs.CatBridge {
+		h := errs.Humanize(runErr)
+		if h.Category == errs.CatBridge {
 			return fmt.Sprintf("code_agent couldn't run: %s — the Mac bridge is unreachable. "+
 				"Don't stop: write the change yourself with fs_edit/fs_save in /workspace, then "+
 				"`bash_run` go build ./... && go vet ./... && go test ./..., then git_commit (and git_push if autonomy is on). "+
 				"The cloud workspace has the Go toolchain pre-installed.", h.Summary), nil
+		}
+		// The boss's Claude plan is spent: the run row is red (the truth is
+		// in Agent Work), and the model gets a directive rather than a raw
+		// error it would retry to the iteration cap.
+		if q, ok := llm.AsQuota(runErr); ok {
+			return claudeCodeHeldGuidance(q.ResetsAt, q.Detail), nil
 		}
 		return "", runErr
 	}
 	return summary, nil
 }
 
+// claudeCodeQuotaKey is the quota-ledger id for the boss's Claude plan behind
+// `claude -p` (distinct from the "anthropic" API-key provider).
+const claudeCodeQuotaKey = "claude_code"
+
+// claudeCodeHeldGuidance is the tool result while Claude Code is out of usage.
+func claudeCodeHeldGuidance(until time.Time, detail string) string {
+	when := "for now"
+	if !until.IsZero() {
+		when = "until about " + llm.FormatLocalClock(until)
+	}
+	if detail == "" {
+		detail = "its plan's usage allowance is spent"
+	}
+	return fmt.Sprintf("HOLD: Claude Code (the boss's Claude plan) is out of usage %s (%s). "+
+		"Do NOT call code_agent again before then; it will fail the same way. Tell the boss plainly that his Claude plan "+
+		"is out of usage %s. If he wants the change now anyway, make it yourself with claude_code__Edit / fs_edit "+
+		"(that bills the chat model instead), otherwise pick the work back up after the reset.", when, detail, when)
+}
+
 // run launches the detached claude -p and polls to completion.
-func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo, model string, heartbeat func(string)) (string, error) {
+func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo, model, effort string, heartbeat func(string), setMeta func(key, value string)) (string, error) {
 	out := fmt.Sprintf("%s/%s.out", codeAgentTmpDir, jobID)
 	errf := fmt.Sprintf("%s/%s.err", codeAgentTmpDir, jobID)
 	status := fmt.Sprintf("%s/%s.status", codeAgentTmpDir, jobID)
@@ -195,7 +252,7 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 	// then launch claude -p DETACHED. Task/model go via exported env so
 	// the inner single-quoted bash -c needs no fragile nested quoting.
 	inner := fmt.Sprintf(
-		`claude -p "$INF_TASK" ${INF_MODEL:+--model "$INF_MODEL"} --output-format json `+
+		`claude -p "$INF_TASK" ${INF_MODEL:+--model "$INF_MODEL"} ${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format json `+
 			`--permission-mode bypassPermissions --settings %s > %s 2> %s; echo $? > %s`,
 		settings, out, errf, status,
 	)
@@ -204,12 +261,16 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 		"cat > " + settings + " <<'INFEOF'\n" + codeAgentSettingsJSON() + "\nINFEOF",
 		"export INF_TASK=" + shellQuote(task),
 		"export INF_MODEL=" + shellQuote(model),
+		"export INF_EFFORT=" + shellQuote(effort),
 		"nohup bash -c " + shellQuote(inner) + " >/dev/null 2>&1 &",
 		// Record the wrapper's pid so a Stop / mid-turn steer can actually
 		// kill the job (2026-08-26: the boss said "don't build", the job kept
 		// editing his repo for nine minutes and "couldn't be stopped").
 		`echo $! > ` + pidf,
 		`echo "PID:$!"`,
+		// When no model was pinned, the Mac's own Claude default is what will
+		// code; report it so the run row (and the pill) name the real model.
+		`echo "SETTINGS:$(cat ~/.claude/settings.json 2>/dev/null | tr -d '\n')"`,
 	}, "\n")
 
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{
@@ -219,6 +280,16 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 	})
 	if !ok || code >= 300 {
 		return "", fmt.Errorf("code_agent: launch via %s failed (status=%d): %s", b.Name(), code, string(body))
+	}
+	if model == "" || effort == "" {
+		launchOut, _ := bridgeBashOutput(body)
+		dm, de := macClaudeDefaults(launchOut)
+		if model == "" && setMeta != nil {
+			setMeta("model", dm)
+		}
+		if effort == "" && setMeta != nil {
+			setMeta("effort", de)
+		}
 	}
 	heartbeat("launched claude -p; working…")
 
@@ -246,9 +317,9 @@ func (t *codeAgent) run(ctx context.Context, b bridge.Bridge, jobID, task, repo,
 
 		pb, pc, pok := b.Post(ctx, "/bash", map[string]any{"cmd": pollCmd, "cwd": repo, "timeout_sec": 15})
 		if pok && pc < 300 {
-			outStr := extractJSONFieldFast(string(pb), "output")
+			outStr, _ := bridgeBashOutput(pb)
 			if strings.Contains(outStr, "DONE:") {
-				return t.collect(ctx, b, out, errf, repo)
+				return t.collect(ctx, b, out, errf, repo, setMeta)
 			}
 		}
 		heartbeat(fmt.Sprintf("working… %s elapsed", time.Since(started).Round(time.Second)))
@@ -277,7 +348,7 @@ func (t *codeAgent) kill(b bridge.Bridge, repo, pidf string) string {
 	if !ok || code >= 300 {
 		return "could not be killed: the Mac bridge did not answer, it may still be running"
 	}
-	if strings.Contains(extractJSONFieldFast(string(body), "output"), "NOPID") {
+	if kout, _ := bridgeBashOutput(body); strings.Contains(kout, "NOPID") {
 		return "had no recorded pid, it may still be running"
 	}
 	return "was killed"
@@ -290,19 +361,52 @@ func (t *codeAgent) InterruptOnSteer() bool { return true }
 
 // collect reads the finished output, parses claude's JSON result, and
 // folds in any blocked-delete notice for the boss to approve.
-func (t *codeAgent) collect(ctx context.Context, b bridge.Bridge, out, errf, repo string) (string, error) {
+func (t *codeAgent) collect(ctx context.Context, b bridge.Bridge, out, errf, repo string, setMeta func(key, value string)) (string, error) {
 	fetch := fmt.Sprintf(`echo "===OUT==="; cat %s 2>/dev/null; echo "===ERR==="; tail -c 4000 %s 2>/dev/null`, out, errf)
 	fb, fc, fok := b.Post(ctx, "/bash", map[string]any{"cmd": fetch, "cwd": repo, "timeout_sec": 20})
 	if !fok || fc >= 300 {
 		return "", fmt.Errorf("code_agent: finished but reading output failed (status=%d)", fc)
 	}
-	raw := extractJSONFieldFast(string(fb), "output")
+	// Decode the bridge's {output, exit_code} JSON for real. The old
+	// first-quote scanner cut Claude's own JSON at its first escaped quote,
+	// so every result (including "You're out of extra usage") came back as
+	// `{\` and was reported ok (2026-08-26).
+	raw, _ := bridgeBashOutput(fb)
 	outPart, errPart := splitMarker(raw, "===OUT===", "===ERR===")
 
 	res := parseClaudeResult(outPart)
+	if res.parsed && setMeta != nil {
+		// Claude names the model that actually ran; that beats our request.
+		for m := range res.ModelUsage {
+			setMeta("model", m)
+			break
+		}
+	}
+	if res.parsed && res.IsError {
+		msg := strings.TrimSpace(res.Result)
+		if msg == "" {
+			msg = "Claude Code reported an error"
+			if res.Subtype != "" {
+				msg += " (" + res.Subtype + ")"
+			}
+		}
+		// A spent Claude plan: hold further launches until its reset (parsed
+		// from Claude's own copy when it names one) and fail LOUD, typed, so
+		// the run row, the tool result and the chat all say what happened.
+		if res.APIErrorStatus == 429 || looksLikeUsageCap(msg) {
+			until, ok := llm.ParseResetClock(msg, time.Now())
+			if !ok {
+				until = time.Time{}
+			}
+			q := &llm.QuotaError{Provider: claudeCodeQuotaKey, ResetsAt: until, Detail: msg}
+			llm.MarkExhausted(claudeCodeQuotaKey, until, msg)
+			return "", q
+		}
+		return "", fmt.Errorf("code_agent: Claude Code failed: %s", msg)
+	}
 	var sb strings.Builder
-	if res != "" {
-		sb.WriteString(res)
+	if res.Result != "" {
+		sb.WriteString(res.Result)
 	} else {
 		// Fall back to raw stdout if JSON parse failed.
 		sb.WriteString(strings.TrimSpace(outPart))
@@ -319,23 +423,76 @@ func (t *codeAgent) collect(ctx context.Context, b bridge.Bridge, out, errf, rep
 	return sb.String(), nil
 }
 
-// parseClaudeResult pulls the human-readable "result" field out of
-// `claude -p --output-format json` output. Returns "" if it can't parse.
-func parseClaudeResult(s string) string {
+// claudeResult is the shape of `claude -p --output-format json` we act on.
+// APIErrorStatus is the upstream HTTP status Claude Code saw (429 = the plan
+// is out of usage); nil in the JSON when the run succeeded.
+type claudeResult struct {
+	Result         string                     `json:"result"`
+	IsError        bool                       `json:"is_error"`
+	Subtype        string                     `json:"subtype"`
+	APIErrorStatus int                        `json:"api_error_status"`
+	ModelUsage     map[string]json.RawMessage `json:"modelUsage"`
+	parsed         bool
+}
+
+// macClaudeDefaults reads the "SETTINGS:{...}" line the launch script
+// appends (the Mac's ~/.claude/settings.json) and returns its model and
+// effortLevel, "" when absent.
+func macClaudeDefaults(launchOut string) (model, effort string) {
+	i := strings.Index(launchOut, "SETTINGS:")
+	if i < 0 {
+		return "", ""
+	}
+	var cfg struct {
+		Model       string `json:"model"`
+		EffortLevel string `json:"effortLevel"`
+	}
+	line := strings.TrimSpace(launchOut[i+len("SETTINGS:"):])
+	if nl := strings.IndexByte(line, '\n'); nl >= 0 {
+		line = line[:nl]
+	}
+	if err := json.Unmarshal([]byte(line), &cfg); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(cfg.Model), strings.TrimSpace(cfg.EffortLevel)
+}
+
+// parseClaudeResult decodes the JSON result object out of claude's stdout.
+// parsed is false when there is no decodable object (raw stdout is used).
+func parseClaudeResult(s string) claudeResult {
 	start := strings.Index(s, "{")
 	end := strings.LastIndex(s, "}")
 	if start < 0 || end <= start {
-		return ""
+		return claudeResult{}
 	}
-	var res struct {
-		Result  string `json:"result"`
-		IsError bool   `json:"is_error"`
-		Subtype string `json:"subtype"`
-	}
+	var res claudeResult
 	if err := json.Unmarshal([]byte(s[start:end+1]), &res); err != nil {
-		return ""
+		return claudeResult{}
 	}
-	return strings.TrimSpace(res.Result)
+	res.Result = strings.TrimSpace(res.Result)
+	res.parsed = true
+	return res
+}
+
+// looksLikeUsageCap recognises Claude Code's plan-cap copy.
+func looksLikeUsageCap(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "out of extra usage") || strings.Contains(m, "out of usage") ||
+		strings.Contains(m, "usage limit") || strings.Contains(m, "hit your limit")
+}
+
+// bridgeBashOutput decodes a bridge /bash reply ({output, exit_code, ...}).
+// Falls back to the raw body when it is not that JSON so a bridge that
+// answers plain text still reads.
+func bridgeBashOutput(body []byte) (string, int) {
+	var r struct {
+		Output   string `json:"output"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return string(body), 0
+	}
+	return r.Output, r.ExitCode
 }
 
 // splitMarker carves a "===A===…===B===…" blob into its two parts.

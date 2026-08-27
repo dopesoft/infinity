@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -320,6 +321,10 @@ func (a *Anthropic) StreamCached(
 	}
 
 	if err := stream.Err(); err != nil {
+		if q := quotaFromAnthropicErr(a.Name(), err); q != nil {
+			emit(out, StreamEvent{Kind: StreamError, Err: q.Error()})
+			return resp, q
+		}
 		emit(out, StreamEvent{Kind: StreamError, Err: err.Error()})
 		return resp, err
 	}
@@ -382,6 +387,21 @@ func normalizeAnthropicModel(model string) string {
 		return "claude-opus-4-7"
 	}
 	return ""
+}
+
+// quotaFromAnthropicErr recognises a spent Anthropic API account ("Your credit
+// balance is too low", a 400 invalid_request_error) as plan exhaustion. A 429
+// from Anthropic is a per-minute rate limit and stays transient.
+func quotaFromAnthropicErr(provider string, err error) *QuotaError {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if apiErr.StatusCode == 400 && strings.Contains(msg, "credit balance") {
+		return &QuotaError{Provider: provider, Detail: "the Anthropic API account has no credit left"}
+	}
+	return nil
 }
 
 func emit(ch chan<- StreamEvent, ev StreamEvent) {

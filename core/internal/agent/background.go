@@ -53,6 +53,13 @@ type BackgroundAgent struct {
 	// serve.go to broadcast proactive chat bubbles that share the run id,
 	// so Studio can render an updating progress card tied to mem_runs.
 	OnProgress func(ctx context.Context, p BackgroundProgress)
+
+	// inflight is the one background build allowed per originating chat
+	// session (parent → run id). 2026-08-26: three builds of the SAME feature
+	// ran side by side, each a full agent loop on the boss's plan, until the
+	// plan was spent. One conversation, one build; the rest are told to watch.
+	inflightMu sync.Mutex
+	inflight   map[string]string
 }
 
 // BackgroundResult is the completion payload handed to OnDone.
@@ -163,10 +170,27 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 
 	// Capture the parent (calling) session NOW, while the request context
 	// still carries it. The detached goroutine runs on context.Background()
-	// and would otherwise lose it.
-	parentSession := tools.SessionIDFromContext(ctx)
+	// and would otherwise lose it. Collapse a background child to the chat
+	// session that owns it, so a build started from inside a build still
+	// binds its plan/dock to the boss's conversation, never to a throwaway
+	// child id (that is how four ownerless "active" plans appeared).
+	parentSession := tools.SessionForPublish(tools.SessionIDFromContext(ctx))
+	if IsSyntheticSessionID(parentSession) {
+		// A delegate / peer / unbound child has no conversation to report
+		// into: its build would be invisible and unownable. Do the work here.
+		return `{"error":"background_build is only available from a chat session; you are a sub-agent. Do the work in this session instead (fs_edit / bash_run / claude_code__*), or return it to the parent as your result."}`, nil
+	}
 
 	runID := uuid.NewString()
+	if existing, busy := b.claimSlot(parentSession, runID); busy {
+		out, _ := json.Marshal(map[string]any{
+			"status":  "already_running",
+			"run_id":  existing,
+			"message": "A background build is already running for this conversation (run " + existing + "). Do NOT start another one: " +
+				"the same job twice just spends the boss's plan twice. Watch that run (watch_until on its run id) or wait for its result.",
+		})
+		return string(out), nil
+	}
 	bridgeKind := b.activeBridgeKind(ctx, parentSession)
 	label := backgroundLabel(task, bridgeKind)
 
@@ -184,6 +208,7 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 // runDetached owns the whole background lifecycle on a fresh, detached
 // context so it survives the triggering session closing.
 func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief string, allowed []string, timeout time.Duration, bridgeKind string) {
+	defer b.releaseSlot(parentSession, runID)
 	// Cap the absolute lifetime so a wedged build can't leak a goroutine
 	// forever. context.Background() (not the request ctx) is the point:
 	// hanging up the voice call must NOT cancel the build.
@@ -234,6 +259,36 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 		// Detached notify ctx - the run ctx may already be cancelled by
 		// the timeout/defer above by the time we get here.
 		b.OnDone(context.Background(), res)
+	}
+}
+
+// claimSlot reserves the parent session's single build slot for runID.
+// Returns the running run id and busy=true when one is already in flight.
+func (b *BackgroundAgent) claimSlot(parent, runID string) (string, bool) {
+	if parent == "" {
+		return "", false
+	}
+	b.inflightMu.Lock()
+	defer b.inflightMu.Unlock()
+	if b.inflight == nil {
+		b.inflight = map[string]string{}
+	}
+	if existing, ok := b.inflight[parent]; ok && existing != "" {
+		return existing, true
+	}
+	b.inflight[parent] = runID
+	return runID, false
+}
+
+// releaseSlot frees the parent's slot when the run that holds it finishes.
+func (b *BackgroundAgent) releaseSlot(parent, runID string) {
+	if parent == "" {
+		return
+	}
+	b.inflightMu.Lock()
+	defer b.inflightMu.Unlock()
+	if b.inflight[parent] == runID {
+		delete(b.inflight, parent)
 	}
 }
 

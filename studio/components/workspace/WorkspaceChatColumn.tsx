@@ -6,7 +6,7 @@ import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { BackgroundJobDock } from "@/components/BackgroundJobDock";
 import { PendingApprovalsDock } from "@/components/PendingApprovalsDock";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
-import { useGlobalModel } from "@/lib/use-model";
+import { standbyLabel, useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
@@ -109,6 +109,7 @@ export function WorkspaceChatColumn({
           placeholder="ask me anything.."
           modelId={setting?.model ?? ""}
           vendorId={setting?.provider ?? ""}
+          standbyLabel={standbyLabel(setting?.standby)}
           effort={effort}
           appliedEffort={chat.appliedEffort}
           onEffortChange={changeEffort}

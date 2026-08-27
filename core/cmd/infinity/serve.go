@@ -323,6 +323,16 @@ func serveCmd() *cobra.Command {
 					oauthStoreShared := llm.NewOAuthStore(p)
 					llmRegistry = llm.BuildRegistry(oauthStoreShared)
 					fmt.Printf("  llm: registered %v\n", llmRegistry.Available())
+					// Route the boot provider through the registry's failover
+					// wrapper too, so the agent loop (until Settings swaps it),
+					// the session namer and activeModel's fallback all get
+					// standby routing on a spent plan. Same credentials, same
+					// token store; only the wrapper differs.
+					if provider != nil {
+						if wrapped, ok := llmRegistry.Get(provider.Name()); ok {
+							provider = wrapped
+						}
+					}
 
 					// activeModel is the ONE adapter every auxiliary LLM task
 					// runs through (compression, reflection, prediction, intent,

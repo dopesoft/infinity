@@ -191,6 +191,7 @@ function ModelChip({
   effort,
   appliedEffort,
   onEffortChange,
+  standbyLabel,
 }: {
   modelId: string;
   vendorId?: string;
@@ -198,6 +199,7 @@ function ModelChip({
   effort?: string;
   appliedEffort?: string;
   onEffortChange?: (level: string) => void;
+  standbyLabel?: string | null;
 }) {
   // The active vendor wins over whatever vendor the model id happens to
   // belong to in the global catalog. Otherwise a stale model override
@@ -212,21 +214,30 @@ function ModelChip({
     vendor.models[0];
   const pin = (effort || "auto").toLowerCase();
   const showEffort = Boolean(onEffortChange);
+  // While the chosen brain's plan is spent, the chip shows what is ACTUALLY
+  // answering (amber dot + "standby"); the menu still edits the boss's choice.
+  const onStandby = Boolean(standbyLabel);
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          title={`${vendor.label} · model & effort`}
+          title={
+            onStandby
+              ? `${current.label} is out of usage; answering on ${standbyLabel} for now`
+              : `${vendor.label} · model & effort`
+          }
           className={cn(
             "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium",
             "border-border bg-muted/50 text-foreground/90 transition-colors",
             "hover:bg-muted hover:text-foreground active:scale-[0.98]",
+            onStandby && "border-warning/50",
           )}
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden />
-          <span>{current.label}</span>
+          <span className={cn("h-1.5 w-1.5 rounded-full", onStandby ? "bg-warning" : "bg-success")} aria-hidden />
+          <span>{onStandby ? standbyLabel : current.label}</span>
+          {onStandby ? <span className="text-muted-foreground">standby</span> : null}
           {showEffort ? (
             <span className="text-muted-foreground">{effortDisplay(effort, appliedEffort)}</span>
           ) : null}
@@ -396,6 +407,9 @@ export interface PromptInputBoxProps {
   vendorId?: string;
   /** Called with the next full model id when the user picks one in the chip. */
   onModelChange?: (modelId: string) => void;
+  /** Label of the standby brain answering while the chosen one's plan is
+   *  spent ("Anthropic · Sonnet 4.5"); null/undefined when healthy. */
+  standbyLabel?: string | null;
   /** Per-turn thinking-effort pin (steal C): "auto" | none|low|medium|high|xhigh.
    *  "auto"/undefined lets Jarvis size each turn. */
   effort?: string;
@@ -439,6 +453,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       modelId: controlledModelId,
       vendorId,
       onModelChange,
+      standbyLabel,
       effort,
       appliedEffort,
       onEffortChange,
@@ -863,6 +878,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                     effort={effort}
                     appliedEffort={appliedEffort}
                     onEffortChange={onEffortChange}
+                    standbyLabel={standbyLabel}
                   />
                   <ContextMeter sessionId={sessionId} />
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { authedFetch } from "@/lib/api";
+import { findVendor } from "@/lib/models-catalog";
 
 /**
  * Global model selection - single source of truth in Core's settings
@@ -37,6 +38,20 @@ export type ModelSetting = {
   providerSource: "user" | "default";
   /** Providers the runtime knows how to swap to (creds wired). */
   availableProviders: string[];
+  /** Set while the chosen brain's plan is spent and a standby is answering
+   *  (Core's llm.EffectiveBrain). null when the chosen brain is healthy. */
+  standby: StandbyBrain | null;
+};
+
+export type StandbyBrain = {
+  /** Provider actually answering right now (e.g. "anthropic"). */
+  provider: string;
+  /** Model actually answering right now. */
+  model: string;
+  /** ISO time the chosen brain's plan resets. */
+  until: string;
+  /** Plain-English reason from Core ("the ChatGPT plus plan's usage allowance is spent"). */
+  reason: string;
 };
 
 const SETTING_ENDPOINT = "/api/settings/model";
@@ -61,16 +76,31 @@ type WireResp = {
   source?: string;
   provider_source?: string;
   available_providers?: string[];
+  effective_provider?: string;
+  effective_model?: string;
+  standby_until?: string;
+  standby_reason?: string;
 };
 
 function decode(raw: WireResp): ModelSetting {
+  const provider = (raw.provider ?? "").toLowerCase();
+  const effectiveProvider = (raw.effective_provider ?? provider).toLowerCase();
+  const onStandby = Boolean(raw.standby_until) && effectiveProvider !== "" && effectiveProvider !== provider;
   return {
     model: raw.model ?? "",
     defaultModel: raw.default_model ?? "",
-    provider: (raw.provider ?? "").toLowerCase(),
+    provider,
     source: raw.source === "user" ? "user" : "default",
     providerSource: raw.provider_source === "user" ? "user" : "default",
     availableProviders: raw.available_providers ?? [],
+    standby: onStandby
+      ? {
+          provider: effectiveProvider,
+          model: raw.effective_model ?? "",
+          until: raw.standby_until ?? "",
+          reason: raw.standby_reason ?? "",
+        }
+      : null,
   };
 }
 
@@ -163,3 +193,29 @@ export function useGlobalModel() {
   return { setting, setModel, setProvider, saving };
 }
 
+/** Human label for a standby brain, from the shared model catalog. */
+export function standbyLabel(standby: StandbyBrain | null | undefined): string | null {
+  if (!standby) return null;
+  const vendor = findVendor(standby.provider);
+  const model = vendor.models.find((m) => m.id === standby.model);
+  return `${vendor.label} · ${model?.label ?? (standby.model || vendor.label)}`;
+}
+
+/** "10:13pm" style local clock for the reset time; empty when unknown. */
+export function standbyResetClock(standby: StandbyBrain | null | undefined): string {
+  if (!standby?.until) return "";
+  const d = new Date(standby.until);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+}
+
+/** Label of the model ANSWERING right now (standby when the chosen plan is
+ *  spent, else the chosen model), e.g. "GPT-5.6 Sol" / "Sonnet 5". */
+export function effectiveModelLabel(setting: ModelSetting | null | undefined): string | null {
+  if (!setting) return null;
+  const provider = setting.standby?.provider ?? setting.provider;
+  const modelId = setting.standby?.model || setting.model || setting.defaultModel;
+  const vendor = findVendor(provider);
+  const model = vendor.models.find((m) => m.id === modelId);
+  return model?.label ?? (modelId || null);
+}

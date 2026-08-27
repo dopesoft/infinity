@@ -39,6 +39,14 @@ func synthSessionID(sessionID string) string {
 	return sessionID
 }
 
+// ErrNoOwningSession: a plan or checklist was asked for from a session that
+// cannot own it (a synthetic sub-agent id, or none). Writing it anyway would
+// create an ownerless "active" plan the dashboard lists forever and no
+// conversation can resume (four of them on 2026-08-26). Callers bind to the
+// owning chat session first (tools.SessionForPublish); if there is none, the
+// checklist is not persisted.
+var ErrNoOwningSession = errors.New("plan needs an owning session")
+
 // Create supersedes any active/paused plan for the session, then inserts a new
 // plan + its ordered steps. Returns the new plan with steps populated.
 func (s *Store) Create(ctx context.Context, sessionID, title, goal, goalID string, steps []NewStepInput) (*Plan, error) {
@@ -167,10 +175,12 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 		return nil, errors.New("checklist needs at least one item")
 	}
 
-	// Non-UUID synthetic session ids cannot be stored as session_id (UUID column)
-	// and cannot be used in $1::uuid casts. Treat them as no-session so the plan
-	// is created with NULL session_id rather than crashing with 22P02.
+	// Non-UUID synthetic session ids cannot be stored as session_id (UUID
+	// column). They cannot own a plan either: refuse, never insert ownerless.
 	safeID := synthSessionID(sessionID)
+	if safeID == "" {
+		return nil, ErrNoOwningSession
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -179,17 +189,15 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 	defer tx.Rollback(ctx)
 
 	var planID string
-	if safeID != "" {
-		err = tx.QueryRow(ctx, `
-			SELECT id::text FROM mem_plans
-			 WHERE session_id = $1::uuid AND status IN ('active','paused')
-			 ORDER BY updated_at DESC LIMIT 1
-		`, safeID).Scan(&planID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			planID = ""
-		} else if err != nil {
-			return nil, err
-		}
+	err = tx.QueryRow(ctx, `
+		SELECT id::text FROM mem_plans
+		 WHERE session_id = $1::uuid AND status IN ('active','paused')
+		 ORDER BY updated_at DESC LIMIT 1
+	`, safeID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		planID = ""
+	} else if err != nil {
+		return nil, err
 	}
 
 	if planID == "" {

@@ -25,8 +25,10 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
   // the active model or provider changes, we re-fetch immediately so the
   // meter never lags the actual runtime.
   const { setting } = useGlobalModel();
-  const watchModel = setting?.model ?? "";
-  const watchProvider = setting?.provider ?? "";
+  // Follow the brain that is ANSWERING: on standby (chosen plan spent) the
+  // window is the standby model's, not the chosen one's.
+  const watchModel = setting?.standby?.model ?? setting?.model ?? "";
+  const watchProvider = setting?.standby?.provider ?? setting?.provider ?? "";
 
   // Poll lightly while the composer is mounted. Single in-flight; cheap
   // server-side (chars/4 estimate on already-in-memory state). The deps

@@ -19,6 +19,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -143,6 +144,12 @@ func (t *todoWrite) Execute(ctx context.Context, in map[string]any) (string, err
 	}
 	title := strings.TrimSpace(strString(in, "repo"))
 	if _, err := t.plans.SyncChecklist(ctx, planSession, title, items); err != nil {
+		if errors.Is(err, plan.ErrNoOwningSession) {
+			// A sub-agent with no conversation to report into: the checklist
+			// stays in its head. Persisting it would create an ownerless
+			// "active" plan on the boss's board (the 2026-08-26 orphans).
+			return fmt.Sprintf("checklist noted (%d/%d done, now: %s) but not saved: this sub-agent session has no owning chat session, so there is no dock or board card for it. Carry on; report the steps in your result.", done, total, current), nil
+		}
 		return "", err
 	}
 
