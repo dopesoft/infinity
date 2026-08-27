@@ -25,7 +25,9 @@ type Anthropic struct {
 
 func NewAnthropic(apiKey, model string) *Anthropic {
 	if model == "" {
-		model = "claude-sonnet-4-5-20250929"
+		// Matches the catalog's recommended Anthropic pick (Sonnet 5, 1M
+		// window). Only reached when the boss picks Claude in Settings.
+		model = "claude-sonnet-5"
 	}
 	// The SDK's DefaultClientOptions eagerly builds defaultHTTPClient(), which
 	// does http.DefaultTransport.(*http.Transport).Clone() and PANICS once

@@ -333,6 +333,20 @@ func serveCmd() *cobra.Command {
 							provider = wrapped
 						}
 					}
+					// The boot brain FOLLOWS the boss's Settings choice, not
+					// LLM_PROVIDER. Before this, the session namer and the
+					// active-model fallback rode the env provider (Anthropic
+					// API key) even though Settings said ChatGPT; the boss's
+					// rule is that the API key is used ONLY when he picks a
+					// Claude model in Settings himself.
+					if name := settings.New(p).GetProvider(cmd.Context()); name != "" {
+						if chosen, ok := llmRegistry.Get(name); ok {
+							if provider == nil || chosen.Name() != provider.Name() {
+								fmt.Printf("  llm: boot provider follows Settings: %s (env LLM_PROVIDER ignored)\n", chosen.Name())
+							}
+							provider = chosen
+						}
+					}
 
 					// activeModel is the ONE adapter every auxiliary LLM task
 					// runs through (compression, reflection, prediction, intent,
