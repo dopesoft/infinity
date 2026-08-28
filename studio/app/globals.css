@@ -3,64 +3,73 @@
 @tailwind utilities;
 
 /* -----------------------------------------------------------------------
- * Theme tokens (HSL).
+ * Theme tokens (HSL) - "Majordomo" palette, docs/studio/MAJORDOMO.md §3.
  *
- * Light: clean neutral white-on-near-black surfaces, no blue tint.
- * Dark:  TRUE black backgrounds (#000) with neutral gray surfaces; no
- *        blue/slate undertone - "OLED-friendly" look.
+ * Light: warm near-white paper ground (#fffefb) with warm-grey ink. No blue
+ *        tint anywhere; the neutrals carry a ~40-45deg hue so the page reads
+ *        as paper rather than screen.
+ * Dark:  TRUE black background (#000, house rule) with warm near-black
+ *        surfaces and a warm off-white ink. No blue/slate undertone.
  *
- * NOTE: Dark mode foreground deliberately keeps a touch of warmth via
- * higher lightness; pure white on pure black is harsh, so we use 0 0% 96%.
+ * Every value below is the hex from the MAJORDOMO token table converted to
+ * the `H S% L%` triplet Tailwind wraps in hsl(). Variable NAMES are frozen -
+ * every existing utility class depends on them. `--success` and the tier
+ * palette are deliberately untouched (they carry meaning, not chrome).
+ *
+ * Two names are new:
+ *   --foreground-quiet  meta, timestamps, resting glyphs  (text-quiet)
+ *   --hairline          the fainter line between rows     (border-hairline)
  * --------------------------------------------------------------------- */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 8%;
+    --background: 45 100% 99.2%; /* #fffefb */
+    --foreground: 45 8.3% 9.4%; /* #1a1916 */
 
-    --muted: 0 0% 96%;
-    --muted-foreground: 0 0% 40%;
+    --muted: 42.9 25.9% 94.7%; /* #f5f3ee - inset ground */
+    --muted-foreground: 40 7% 35%; /* #5f5b53 */
+    --foreground-quiet: 40 6.4% 53.9%; /* #918c82 */
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 8%;
+    --popover: 45 100% 99.2%; /* #fffefb */
+    --popover-foreground: 45 8.3% 9.4%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 8%;
+    --card: 45 100% 99.2%; /* #fffefb */
+    --card-foreground: 45 8.3% 9.4%;
 
-    --border: 0 0% 90%;
-    --input: 0 0% 90%;
+    --border: 43.6 16.9% 87.3%; /* #e4e1d9 */
+    --input: 43.6 16.9% 87.3%; /* #e4e1d9 */
+    --hairline: 45 18.2% 91.4%; /* #edebe5 - fainter row rule */
 
-    --primary: 0 0% 8%;
-    --primary-foreground: 0 0% 98%;
+    --primary: 45 8.3% 9.4%; /* ink */
+    --primary-foreground: 45 100% 99.2%; /* ground */
 
-    --secondary: 0 0% 96%;
-    --secondary-foreground: 0 0% 8%;
+    --secondary: 42.9 25.9% 94.7%; /* #f5f3ee */
+    --secondary-foreground: 45 8.3% 9.4%;
 
-    --accent: 0 0% 94%;
-    --accent-foreground: 0 0% 8%;
+    --accent: 42 18.5% 89.4%; /* #e9e6df - hover/active row ground */
+    --accent-foreground: 45 8.3% 9.4%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 0 68% 54%;
     --destructive-foreground: 0 0% 100%;
 
-    --ring: 0 0% 70%;
+    --ring: 40 6.4% 53.9%; /* #918c82 */
     --radius: 0.75rem;
 
-    --info: 217 91% 55%;
+    --info: 215.9 67.7% 50.2%; /* #2a6fd6 */
     --info-foreground: 0 0% 100%;
     --success: 142 71% 38%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 48%;
+    --warning: 36.9 89.5% 44.9%; /* #d98a0c - needs you */
     --warning-foreground: 0 0% 100%;
-    --danger: 0 84% 55%;
+    --danger: 0 68% 54%; /* #d93a3a - failed */
     --danger-foreground: 0 0% 100%;
 
     /* Brand accent. Emerald reads "alive / healthy" - the agent's
-     * identity color. Used for active nav indicators, the agent-activity
-     * dot, the "installed" state on skill cards, success toasts, and
-     * the pulse indicator on the dashboard "needs you" badge. NOT used
-     * for primary buttons (which stay neutral so the page doesn't read
+     * identity color. Under Majordomo it marks THE one thing happening
+     * right now (a running step, the live dot) and nothing else. NOT used
+     * for primary buttons (which stay ink so the page doesn't read
      * green-on-green). */
-    --brand: 152 64% 38%;
+    --brand: 152.8 65.7% 35.5%; /* #1f9660 */
     --brand-foreground: 0 0% 100%;
 
     --tier-working: 0 0% 50%;
@@ -73,43 +82,45 @@
   }
 
   .dark {
-    --background: 0 0% 0%;          /* TRUE black */
-    --foreground: 0 0% 96%;
+    --background: 0 0% 0%; /* #000000 - TRUE black */
+    --foreground: 42 26.3% 92.5%; /* #f1eee7 */
 
-    --muted: 0 0% 10%;
-    --muted-foreground: 0 0% 65%;
+    --muted: 30 8% 5%; /* #0e0d0c - inset ground */
+    --muted-foreground: 41.5 7% 63.3%; /* #a8a49b */
+    --foreground-quiet: 40 5.7% 41.2%; /* #6f6b63 */
 
-    --popover: 0 0% 4%;
-    --popover-foreground: 0 0% 96%;
+    --popover: 60 5.3% 3.7%; /* #0a0a09 */
+    --popover-foreground: 42 26.3% 92.5%;
 
-    --card: 0 0% 6%;
-    --card-foreground: 0 0% 96%;
+    --card: 30 8% 5%; /* #0e0d0c */
+    --card-foreground: 42 26.3% 92.5%;
 
-    --border: 0 0% 14%;
-    --input: 0 0% 14%;
+    --border: 40 4.1% 14.3%; /* #262523 */
+    --input: 40 4.1% 14.3%; /* #262523 */
+    --hairline: 30 4.5% 8.6%; /* #171615 */
 
-    --primary: 0 0% 96%;
-    --primary-foreground: 0 0% 4%;
+    --primary: 42 26.3% 92.5%; /* ink */
+    --primary-foreground: 0 0% 0%; /* ground */
 
-    --secondary: 0 0% 10%;
-    --secondary-foreground: 0 0% 96%;
+    --secondary: 40 6.1% 9.6%; /* #1a1917 */
+    --secondary-foreground: 42 26.3% 92.5%;
 
-    --accent: 0 0% 12%;
-    --accent-foreground: 0 0% 96%;
+    --accent: 40 6.1% 9.6%; /* #1a1917 */
+    --accent-foreground: 42 26.3% 92.5%;
 
-    --destructive: 0 70% 50%;
+    --destructive: 0 81.4% 66.3%;
     --destructive-foreground: 0 0% 100%;
 
-    --ring: 0 0% 30%;
+    --ring: 40 5.7% 41.2%; /* #6f6b63 */
 
-    --info: 217 91% 65%;
+    --info: 218 87.4% 68.8%; /* #6a9df5 */
     --success: 142 71% 50%;
-    --warning: 38 92% 55%;
-    --danger: 0 84% 65%;
+    --warning: 36.3 85.8% 58.4%; /* #f0a83a */
+    --danger: 0 81.4% 66.3%; /* #ef6363 */
 
-    /* Brand on dark - slightly more luminous so it pops against true
-     * black without going neon. */
-    --brand: 152 64% 48%;
+    /* Brand on dark - more luminous so it pops against true black
+     * without going neon. */
+    --brand: 154.5 58.3% 49.8%; /* #35c98a */
     --brand-foreground: 0 0% 4%;
 
     --tier-working: 0 0% 65%;

@@ -147,9 +147,12 @@ export function BridgePill({
   // code_agent runs come from mem_runs (survive refresh); the chat model's
   // own edits come from the live tool stream.
   const { runs: codeRuns } = useRuns({ kind: "code_agent", status: "running", limit: 1, enabled: !!sessionId });
+  // A background build on the Mac is a Claude Code run too (meta.engine).
+  const { runs: bgRuns } = useRuns({ kind: "background.build", status: "running", limit: 3, enabled: !!sessionId });
+  const claudeRun = codeRuns[0] ?? bgRuns.find((r) => r.meta?.engine === "claude_code") ?? null;
   const liveTool = useLiveTool();
   const { setting } = useGlobalModel();
-  const pill = codingPill({ base: basePill, codeRun: codeRuns[0] ?? null, liveTool, setting });
+  const pill = codingPill({ base: basePill, codeRun: claudeRun, liveTool, setting });
 
   const triggerNode = (
     <button
@@ -247,9 +250,10 @@ function codingPill({
 }): PillRender {
   if (codeRun) {
     const model = claudeModelLabel(codeRun.meta?.model);
+    const plan = codeRun.meta?.auth?.trim() || "your Claude plan";
     return {
       label: `Claude Code · ${model}`,
-      title: `Claude Code is coding on the Mac (${codeRun.meta?.model ?? "your Claude plan"}${codeRun.meta?.effort ? `, effort ${codeRun.meta.effort}` : ""}). Billed to your Claude plan, not the chat model.`,
+      title: `Claude Code is coding on the Mac on ${plan} (${codeRun.meta?.model ?? "default model"}${codeRun.meta?.effort ? `, effort ${codeRun.meta.effort}` : ""}). Billed to your Claude subscription, not the chat model.`,
       spin: true,
       toneClasses: toneToClasses("success"),
     };

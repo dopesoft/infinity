@@ -1,10 +1,8 @@
 "use client";
 
-import { AlertTriangle, Bell, MessageSquareQuote } from "lucide-react";
-import { TileCard } from "./Section";
+import { ListRow } from "@/components/ui/list-row";
 import { RunIndicator } from "@/lib/runs/RunIndicator";
 import { SurfaceActionButton } from "./SurfaceActions";
-import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
 import { parseLabeledBody } from "@/lib/dashboard/parseBody";
 import type { SurfaceItem } from "@/lib/dashboard/types";
@@ -21,6 +19,14 @@ import type { SurfaceItem } from "@/lib/dashboard/types";
  * for every `kind:"surface"` item. Tap a row → ObjectViewer with the full
  * item. This is the Rule #1 payoff on the Studio side - the app adapts to
  * whatever the agent assembles.
+ *
+ * MAJORDOMO SWEEP: the importance-tinted `size-9 rounded-md border` icon tile,
+ * the bell/quote glyph, and the trailing AlertTriangle are gone. Importance is
+ * now the row's tone DOT (danger ≥ 80, info ≥ 50, resting grey below) — the
+ * one alive signal, §1.4 — and WHAT it is + WHY it was raised + WHEN read as
+ * title and one quiet meta line. The action buttons and their server-tracked
+ * RunIndicator keep their place, now inside the row's own rule rather than
+ * floating under it on a hand-measured indent.
  */
 export function SurfaceRow({
   item,
@@ -29,20 +35,8 @@ export function SurfaceRow({
   item: SurfaceItem;
   onClick: () => void;
 }) {
-  // A surfaced item is something Jarvis raised - it has no "sender". The two
-  // lines that matter are WHAT it is (title) and WHY it was raised
-  // (importanceReason). Same icon-tile grammar as the other dashboard rows:
-  //   leading tile (tinted by importance) · title + time · the "why" subtext
-  // Importance shows through the tile tint + a trailing alert glyph for the
-  // top tier - never a colored left-edge bar. Tapping opens ObjectViewer.
   const imp = typeof item.importance === "number" ? item.importance : null;
-  const high = imp != null && imp >= 80;
-  const mid = imp != null && imp >= 50 && imp < 80;
-  const tile = high
-    ? "border-rose-400/40 bg-rose-400/15 text-rose-400"
-    : mid
-      ? "border-info/40 bg-info/15 text-info"
-      : "border-border bg-muted text-muted-foreground";
+  const tone = imp != null && imp >= 80 ? "danger" : imp != null && imp >= 50 ? "info" : "default";
 
   // The "why": prefer the assistant-written reason, then an explicit
   // subtitle, then a labelled body field. Never the raw multi-line body.
@@ -54,60 +48,27 @@ export function SurfaceRow({
     parsed[0]?.value ||
     "";
 
-  const actions = item.actions ?? [];
+  // A message somebody left him on the phone is MAIL: name the caller in the
+  // meta so the row still says who it was from without a bespoke glyph.
+  const from =
+    item.surface === "messages" && typeof item.metadata?.from === "string"
+      ? item.metadata.from
+      : "";
 
-  // A message somebody left him on the phone is MAIL, and it should look like
-  // mail at a glance: a quote glyph and the caller's initial, never the same
-  // bell as a system alert. The row still renders through this one generic
-  // component, so nothing forks.
-  const isMessage = item.surface === "messages";
-  const from = typeof item.metadata?.from === "string" ? item.metadata.from : "";
+  const actions = item.actions ?? [];
+  const meta = [from, why, relTime(item.updatedAt ?? item.createdAt)]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <TileCard onClick={onClick} className="gap-3 p-3">
-        <span
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-md border",
-            tile,
-          )}
-        >
-          {isMessage ? (
-            from ? (
-              <span className="text-xs font-semibold" aria-hidden>
-                {from.trim().charAt(0).toUpperCase()}
-              </span>
-            ) : (
-              <MessageSquareQuote className="size-4" aria-hidden />
-            )
-          ) : (
-            <Bell className="size-4" aria-hidden />
-          )}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-              {item.title}
-            </span>
-            <span
-              className="shrink-0 font-mono text-[10px] text-muted-foreground"
-              suppressHydrationWarning
-            >
-              {relTime(item.updatedAt ?? item.createdAt)}
-            </span>
-          </div>
-          {why ? (
-            <p className="mt-0.5 line-clamp-1 break-words text-[12px] text-muted-foreground">
-              {why}
-            </p>
-          ) : null}
-        </div>
-        {high ? (
-          <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden />
-        ) : null}
-      </TileCard>
+    <ListRow
+      tone={tone}
+      title={item.title}
+      meta={<span suppressHydrationWarning>{meta}</span>}
+      onClick={onClick}
+    >
       {actions.length > 0 ? (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 pl-12">
+        <div className="flex flex-wrap items-center gap-2 pl-[30px]">
           {actions.map((a) => (
             <SurfaceActionButton key={a.id} itemId={item.id} action={a} />
           ))}
@@ -115,6 +76,6 @@ export function SurfaceRow({
           <RunIndicator kind="surface.action" targetId={item.id} mode="inline" />
         </div>
       ) : null}
-    </div>
+    </ListRow>
   );
 }

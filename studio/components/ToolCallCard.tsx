@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { ToolIcon } from "@/components/ToolIcon";
 import { cn } from "@/lib/utils";
+import { diffLineClass } from "@/lib/diff";
 import {
   extractToolFilePath,
   extractToolFilePaths,
@@ -369,22 +370,19 @@ function previewTitle(name: string): string {
 // DiffPre renders unified-diff text with per-line color hints. Pure presentation -
 // no parsing of multi-file structure (Claude Code returns single-file diffs in
 // most edits, and large multi-file ones get the same treatment line by line).
+//
+// The line -> colour decision lives in `lib/diff.ts` so this card and the
+// Majordomo `<Inset variant="diff">` primitive tint identically. Don't
+// re-inline it here.
 function DiffPre({ text }: { text: string }) {
   const lines = text.split("\n");
   return (
     <pre className="min-w-0 max-w-full max-h-72 overflow-y-auto overflow-x-hidden rounded-md bg-muted p-2 font-mono text-[11px] leading-snug scroll-touch sm:text-xs">
-      {lines.map((line, i) => {
-        let cls = "";
-        if (line.startsWith("+++") || line.startsWith("---")) cls = "text-muted-foreground";
-        else if (line.startsWith("@@")) cls = "text-info";
-        else if (line.startsWith("+")) cls = "bg-success/10 text-success";
-        else if (line.startsWith("-")) cls = "bg-danger/10 text-danger";
-        return (
-          <div key={i} className={cn("whitespace-pre-wrap break-all px-1", cls)}>
-            {line || " "}
-          </div>
-        );
-      })}
+      {lines.map((line, i) => (
+        <div key={i} className={cn("whitespace-pre-wrap break-all px-1", diffLineClass(line))}>
+          {line || " "}
+        </div>
+      ))}
     </pre>
   );
 }

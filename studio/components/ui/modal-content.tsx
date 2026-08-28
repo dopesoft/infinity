@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import DOMPurify from "dompurify";
-import { AlertCircle, AlignLeft, Eye } from "lucide-react";
 import { Markdown } from "@/components/chat/Markdown";
+import { Inset } from "@/components/ui/inset";
 import { cn } from "@/lib/utils";
 
 export type ModalSectionTone = "default" | "error" | "warning" | "success";
@@ -20,20 +20,27 @@ export type ModalSectionTone = "default" | "error" | "warning" | "success";
  * the primitive doesn't fit, extend it here so the rest of the app gets
  * the same baseline. */
 
-/** Labeled context block - the "card-within-a-modal" surface used for
- *  body content, JSON payloads, diffs, drafts, etc. Replaces the
- *  inlined ContextBlock that lived in ObjectViewer.
+/** ModalSection - a LABELLED ROW, not a card (Majordomo §7).
  *
- *  Props:
- *    label   - eyebrow text (default "Context"). Pass "Error" / "Schedule"
- *              / "Output" / "Steps" so cards self-describe.
- *    tone    - color hint. default | error | warning | success. Tints
- *              the border + header background so errors visually
- *              stand out without the consumer hand-rolling color
- *              classes. Pairs with a matching icon swap (alert icon
- *              for error/warning, eye for everything else).
- *    icon    - override the leading icon (rare). Defaults follow tone.
- *    meta    - right-aligned eyebrow (timestamp, count, etc.).
+ *  Mono uppercase label in a ~92px left column, content on the right, a
+ *  hairline between siblings, and NO border, NO header bar, NO tinted frame.
+ *  This is the component that used to produce "eight bordered boxes stacked
+ *  down a modal, each with its own uppercase header strip". Sections separate
+ *  by ground and rhythm now (§1.2), and the only container allowed inside one
+ *  is an `Inset`.
+ *
+ *  Prop names are unchanged so every consumer compiles:
+ *    label   - the row label (default "Context").
+ *    tone    - default | error | warning | success. Now expressed in the
+ *              LABEL and text colour rather than a tinted box.
+ *    icon    - ACCEPTED AND IGNORED. Decorative leading glyphs belonged to
+ *              the header bar that no longer exists; the label already says
+ *              what the icon said ("Message" beside a mail glyph).
+ *    meta    - quiet right-aligned line above the content (timestamp, count,
+ *              a "open in gmail" link). Kept: it carries real information.
+ *
+ *  On a phone the label stacks above its content; from `sm` up it sits in the
+ *  left column. Mobile-first, no horizontal scroll at 375px.
  */
 export function ModalSection({
   label = "Context",
@@ -50,73 +57,57 @@ export function ModalSection({
   className?: string;
   children: React.ReactNode;
 }) {
-  const toneClasses = (() => {
-    switch (tone) {
-      case "error":
-        return {
-          frame: "border-danger/40 bg-danger/5",
-          header: "border-danger/30 bg-danger/10",
-          label: "text-danger",
-        };
-      case "warning":
-        return {
-          frame: "border-warning/40 bg-warning/5",
-          header: "border-warning/30 bg-warning/10",
-          label: "text-warning",
-        };
-      case "success":
-        return {
-          frame: "border-success/40 bg-success/5",
-          header: "border-success/30 bg-success/10",
-          label: "text-success",
-        };
-      default:
-        return {
-          frame: "bg-muted/30",
-          header: "bg-muted/40",
-          label: "text-muted-foreground",
-        };
-    }
-  })();
-  const defaultIcon =
-    tone === "error" || tone === "warning" ? (
-      <AlertCircle className={cn("size-3.5 shrink-0", toneClasses.label)} aria-hidden />
-    ) : (
-      <Eye className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-    );
+  // See the `icon` doc above: the header bar it lived on is gone.
+  void icon;
+  const labelCls =
+    tone === "error"
+      ? "text-danger"
+      : tone === "warning"
+        ? "text-warning"
+        : tone === "success"
+          ? "text-brand"
+          : "text-quiet";
+  // Tone reaches the CONTENT as ink, never as a box. Bare text inherits it;
+  // children that set their own colour (ModalPre) keep theirs.
+  const bodyCls =
+    tone === "error"
+      ? "text-danger"
+      : tone === "warning"
+        ? "text-warning"
+        : "text-foreground/90";
   return (
-    <div
+    <section
       className={cn(
-        "mt-4 min-w-0 max-w-full overflow-hidden rounded-lg border",
-        toneClasses.frame,
+        "grid min-w-0 max-w-full grid-cols-1 gap-1.5 border-t border-hairline py-3.5 first:border-t-0 first:pt-0 sm:grid-cols-[5.75rem_minmax(0,1fr)] sm:gap-4",
         className,
       )}
     >
-      <header
-        className={cn("flex min-w-0 items-center gap-2 border-b px-3 py-2", toneClasses.header)}
+      <div
+        className={cn(
+          "min-w-0 font-mono text-[10.5px] uppercase leading-5 tracking-[0.14em] sm:pt-px",
+          labelCls,
+        )}
       >
-        {icon ?? defaultIcon}
-        <span
-          className={cn(
-            "font-mono text-[10px] uppercase tracking-[0.16em]",
-            toneClasses.label,
-          )}
-        >
-          {label}
-        </span>
+        {label}
+      </div>
+      <div className={cn("min-w-0 max-w-full text-[13px] leading-relaxed", bodyCls)}>
         {meta ? (
-          <span className="ml-auto min-w-0 truncate text-[11px] text-muted-foreground">
+          <div className="mb-1.5 flex min-w-0 max-w-full justify-end break-words text-[11px] text-quiet">
             {meta}
-          </span>
+          </div>
         ) : null}
-      </header>
-      <div className="min-w-0 max-w-full p-3 text-[13px] leading-relaxed">{children}</div>
-    </div>
+        {children}
+      </div>
+    </section>
   );
 }
 
 /** Prose / JSON / wrapping preformatted text. Always wraps, breaks long
- *  unbroken strings (URLs, tokens, IDs) so nothing escapes the modal. */
+ *  unbroken strings (URLs, tokens, IDs) so nothing escapes the modal.
+ *
+ *  Sits on an `Inset` (§7): a tinted, borderless, radius-10 ground. That is
+ *  what replaced the bordered code box that used to nest inside a bordered
+ *  section inside a bordered modal. */
 export function ModalPre({
   children,
   className,
@@ -129,15 +120,17 @@ export function ModalPre({
   mono?: boolean;
 }) {
   return (
-    <pre
-      className={cn(
-        "min-w-0 max-w-full whitespace-pre-wrap break-words leading-relaxed text-foreground/90",
-        mono ? "font-mono text-[12px]" : "font-sans text-[13px]",
-        className,
-      )}
-    >
-      {children}
-    </pre>
+    <Inset variant="plain">
+      <pre
+        className={cn(
+          "min-w-0 max-w-full whitespace-pre-wrap break-words leading-relaxed text-foreground/90",
+          mono ? "font-mono text-[12px]" : "font-sans text-[13px]",
+          className,
+        )}
+      >
+        {children}
+      </pre>
+    </Inset>
   );
 }
 
@@ -151,14 +144,16 @@ export function ModalCode({
   className?: string;
 }) {
   return (
-    <pre
-      className={cn(
-        "min-w-0 max-w-full overflow-x-auto whitespace-pre font-mono text-[11px] leading-relaxed",
-        className,
-      )}
-    >
-      {children}
-    </pre>
+    <Inset variant="plain">
+      <pre
+        className={cn(
+          "min-w-0 max-w-full overflow-x-auto whitespace-pre font-mono text-[11px] leading-relaxed",
+          className,
+        )}
+      >
+        {children}
+      </pre>
+    </Inset>
   );
 }
 
@@ -183,62 +178,36 @@ export function ModalDiff({
     () => diffLines(before ?? "", after ?? "", context),
     [before, after, context],
   );
+  // Serialise the LCS rows into unified-diff text for the Inset. A collapsed
+  // run becomes an `@@ N unchanged @@` marker, which the shared tinter already
+  // colours as a hunk header — so the "what changed" reading survives the
+  // move onto the shared primitive.
+  const diffText = React.useMemo(
+    () =>
+      rows
+        .map((r) =>
+          r.kind === "gap"
+            ? `@@ ${r.count} unchanged @@`
+            : `${r.kind === "add" ? "+" : r.kind === "del" ? "-" : " "}${r.text}`,
+        )
+        .join("\n"),
+    [rows],
+  );
   return (
     <div className={cn("min-w-0 max-w-full", className)}>
       <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px]">
         <span className="text-success">+{added} added</span>
         <span className="text-danger">−{removed} removed</span>
         {added === 0 && removed === 0 && (
-          <span className="text-muted-foreground">no text change</span>
+          <span className="text-quiet">no text change</span>
         )}
       </div>
-      <div className="overflow-hidden rounded-md border font-mono text-[11px] leading-relaxed">
-        {rows.map((r, i) =>
-          r.kind === "gap" ? (
-            <div
-              key={i}
-              className="select-none bg-muted/30 px-2 py-0.5 text-center text-[10px] text-muted-foreground"
-            >
-              ··· {r.count} unchanged ···
-            </div>
-          ) : (
-            <div
-              key={i}
-              className={cn(
-                "flex min-w-0 gap-1.5 px-2 py-0.5",
-                r.kind === "add" && "bg-success/10",
-                r.kind === "del" && "bg-danger/10",
-              )}
-            >
-              <span
-                className={cn(
-                  "shrink-0 select-none",
-                  r.kind === "add"
-                    ? "text-success"
-                    : r.kind === "del"
-                      ? "text-danger"
-                      : "text-muted-foreground/40",
-                )}
-                aria-hidden
-              >
-                {r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "}
-              </span>
-              <span
-                className={cn(
-                  "min-w-0 whitespace-pre-wrap break-words",
-                  r.kind === "add"
-                    ? "text-success"
-                    : r.kind === "del"
-                      ? "text-danger"
-                      : "text-foreground/70",
-                )}
-              >
-                {r.text || " "}
-              </span>
-            </div>
-          ),
-        )}
-      </div>
+      {/* The diff sits on an Inset (§5 `diff` variant): tinted ground, no
+          border, tinting from the shared `diffLineClass` that ToolCallCard's
+          DiffPre also uses. A bordered code block inside a bordered section
+          inside a bordered modal was three of the nested boxes Majordomo
+          removes; this component now owns only the LCS. */}
+      <Inset variant="diff" text={diffText} />
     </div>
   );
 }
@@ -475,22 +444,22 @@ export function ModalHtml({ html, className }: { html: string; className?: strin
     };
   }, [srcDoc]);
 
+  // The email sits on an Inset (§7). The iframe keeps its own white ground -
+  // email HTML is authored against white and would be unreadable on the dark
+  // theme's ink - but the bordered card that used to wrap it is gone.
   return (
-    <div
-      className={cn(
-        "min-w-0 max-w-full overflow-hidden rounded-lg border border-border bg-white",
-        className,
-      )}
-    >
-      <iframe
-        ref={frameRef}
-        srcDoc={srcDoc}
-        title="Email message"
-        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-        className="block w-full border-0 bg-white"
-        style={{ height }}
-      />
-    </div>
+    <Inset variant="plain">
+      <div className={cn("min-w-0 max-w-full overflow-hidden rounded-lg", className)}>
+        <iframe
+          ref={frameRef}
+          srcDoc={srcDoc}
+          title="Email message"
+          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          className="block w-full border-0 bg-white"
+          style={{ height }}
+        />
+      </div>
+    </Inset>
   );
 }
 
@@ -590,13 +559,14 @@ export function ModalArtifact({
   return (
     <ModalSection
       label="Artifact"
-      icon={<AlignLeft className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
       meta={`${path} · ${countLabel(text.length)} chars`}
       className={className}
     >
-      <div className="scroll-touch max-h-[45dvh] min-w-0 max-w-full overflow-y-auto overscroll-contain">
-        <Markdown text={text} />
-      </div>
+      <Inset variant="plain">
+        <div className="scroll-touch max-h-[45dvh] min-w-0 max-w-full overflow-y-auto overscroll-contain">
+          <Markdown text={text} />
+        </div>
+      </Inset>
     </ModalSection>
   );
 }
@@ -668,7 +638,12 @@ export function ModalUrl({
 }
 
 /** Key/value metadata grid - replaces hand-rolled `<dl class="grid">`
- *  blocks. Each row is `key (mono, truncates) · value (breaks)`. */
+ *  blocks. Each row is `key (mono, truncates) · value (breaks)`.
+ *
+ *  This IS `<Inset variant="kv">` now (§5/§7) - the Inset owns the `<dl>`
+ *  grid, the mono/quiet label column and the wrapping. ModalDl survives as
+ *  the named entry point its ~6 consumers already import, mapping the
+ *  `{k, v}` shape they pass to the Inset's `{label, value}` items. */
 export function ModalDl({
   entries,
   className,
@@ -678,19 +653,11 @@ export function ModalDl({
 }) {
   if (entries.length === 0) return null;
   return (
-    <dl
-      className={cn(
-        "grid min-w-0 grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px]",
-        className,
-      )}
-    >
-      {entries.map((e) => (
-        <React.Fragment key={e.k}>
-          <dt className="min-w-0 truncate font-mono text-muted-foreground">{e.k}</dt>
-          <dd className="min-w-0 break-all text-foreground/85">{e.v}</dd>
-        </React.Fragment>
-      ))}
-    </dl>
+    <Inset
+      variant="kv"
+      className={className}
+      items={entries.map((e) => ({ label: e.k, value: e.v }))}
+    />
   );
 }
 
@@ -722,11 +689,13 @@ export function ModalField({
   return (
     <div
       className={cn(
-        "grid min-w-0 grid-cols-1 gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:gap-4 sm:py-3.5",
+        // Same geometry as ModalSection (§7 labelled row) so a body that
+        // mixes the two reads as ONE column of labels, not two systems.
+        "grid min-w-0 grid-cols-1 gap-1.5 py-3 first:pt-0 last:pb-0 sm:grid-cols-[5.75rem_minmax(0,1fr)] sm:gap-4 sm:py-3.5",
         className,
       )}
     >
-      <div className="min-w-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:pt-px">
+      <div className="min-w-0 font-mono text-[10.5px] uppercase leading-5 tracking-[0.14em] text-quiet sm:pt-px">
         {label}
       </div>
       <div className="min-w-0 break-words text-[13px] leading-relaxed text-foreground/90">
@@ -753,12 +722,13 @@ export function ModalMedia({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        "mt-4 flex min-w-0 max-w-full items-center justify-center overflow-hidden rounded-lg border bg-black/40",
-        className,
-      )}
-    >
+    <Inset variant="plain">
+      <div
+        className={cn(
+          "flex min-w-0 max-w-full items-center justify-center overflow-hidden rounded-lg",
+          className,
+        )}
+      >
       {kind === "video" ? (
         <video
           src={src}
@@ -774,12 +744,23 @@ export function ModalMedia({
           className="max-h-[70dvh] w-full max-w-full object-contain"
         />
       )}
-    </div>
+      </div>
+    </Inset>
   );
 }
 
-/** Horizontal chip row - the standardized "eyebrow with badges" line that
- *  sits above the body content (kind, time, risk, etc.). Wraps on mobile. */
+/** ModalChips - the meta line above a modal body (kind, time, risk, …).
+ *
+ *  Majordomo §7: this is now PLAIN TEXT, interpunct-separated, not a row of
+ *  bordered pills. Each child is rendered as a segment with a `·` between
+ *  segments, so a caller passes strings (or an interactive node when a
+ *  segment is genuinely a control - those keep whatever chrome they own).
+ *  The old bordered-chip row was the modal's third layer of boxes and it
+ *  mostly restated the header's context line.
+ *
+ *  A child that opts out of the separator rhythm (a right-aligned timestamp
+ *  using `ml-auto`) still works: separators only appear BETWEEN rendered
+ *  children, and the row is still a wrapping flex line. */
 export function ModalChips({
   children,
   className,
@@ -787,14 +768,25 @@ export function ModalChips({
   children: React.ReactNode;
   className?: string;
 }) {
+  const items = React.Children.toArray(children).filter(Boolean);
+  if (items.length === 0) return null;
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted-foreground",
+        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-quiet",
         className,
       )}
     >
-      {children}
+      {items.map((child, i) => (
+        <React.Fragment key={i}>
+          {i > 0 ? (
+            <span aria-hidden className="text-quiet/60">
+              ·
+            </span>
+          ) : null}
+          {child}
+        </React.Fragment>
+      ))}
     </div>
   );
 }

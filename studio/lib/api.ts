@@ -787,6 +787,9 @@ export type RunMeta = {
   engine?: string;
   model?: string;
   effort?: string;
+  // The subscription proof for a Claude Code run ("Max subscription · kai@…"),
+  // read from the Mac's own sign-in before the run started.
+  auth?: string;
   todos?: RunTodo[];
   repo?: string;
   currentFile?: string;

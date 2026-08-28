@@ -12,13 +12,22 @@ const config: Config = {
     },
     extend: {
       fontFamily: {
-        // App-wide: everything is Mulish. The `mono` family is mapped to
-        // Mulish too so existing `font-mono` classes (tabs, pills, badges,
-        // labels) keep working but render in the brand font. For tabular
-        // alignment of digits use the Tailwind `tabular-nums` utility — it's
-        // CSS-level (font-variant-numeric) and works on any font.
-        sans: ["var(--font-mulish)", "ui-sans-serif", "system-ui"],
-        mono: ["var(--font-mulish)", "ui-sans-serif", "system-ui"],
+        // Majordomo type (docs/studio/MAJORDOMO.md §4). One family, three
+        // registers:
+        //   sans  - chrome: labels, nav, buttons, meta (13.5 / medium)
+        //   voice - Jarvis's words + page/section titles (15.5 / 26)
+        //   mono  - data: commands, diffs, ids, schemas, group labels
+        //
+        // `voice` is intentionally the same family as `sans` today. The
+        // utility exists so the voice register can be retuned in ONE place
+        // later without touching every consumer.
+        //
+        // `mono` is REAL mono now (Geist Mono). It used to alias the sans
+        // family, which is why data columns never lined up; use it with
+        // `tabular-nums` for numeric alignment.
+        sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui"],
+        voice: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui"],
+        mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       height: { dvh: "100dvh", svh: "100svh", lvh: "100lvh" },
       minHeight: { dvh: "100dvh", svh: "100svh" },
@@ -28,6 +37,12 @@ const config: Config = {
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        // Majordomo §3. `hairline` is the fainter rule between rows -
+        // `border-hairline`. `quiet` is the third ink level below
+        // muted-foreground (meta, timestamps, resting glyphs) - `text-quiet`,
+        // `bg-quiet`, and `border-quiet` all resolve from the one token.
+        hairline: "hsl(var(--hairline))",
+        quiet: "hsl(var(--foreground-quiet))",
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",

@@ -1,8 +1,6 @@
 "use client";
 
-import { AlertTriangle, FileCode, HelpCircle, Terminal } from "lucide-react";
-import { TileCard } from "./Section";
-import { cn } from "@/lib/utils";
+import { ListRow } from "@/components/ui/list-row";
 import { relTime } from "@/lib/dashboard/format";
 import type { Approval, ApprovalKind } from "@/lib/dashboard/types";
 
@@ -17,58 +15,45 @@ import type { Approval, ApprovalKind } from "@/lib/dashboard/types";
  * the unified "Surfaced by Jarvis" card (SurfacedCard), which renders this
  * row for every `kind:"approval"` item. Tapping a row opens the
  * ObjectViewer with the full payload.
+ *
+ * MAJORDOMO SWEEP: was a `TileCard` carrying a `size-9 rounded-md border`
+ * tinted icon tile, a coloured mono kind label, and a trailing AlertTriangle.
+ * It is now a `ListRow`: the tone DOT carries the signal (warning = waiting on
+ * the boss, danger = high/critical risk, info = an FYI-grade proposal or
+ * question) and the kind label + timestamp + subtitle fold into the one quiet
+ * meta line. Same data, same tap target, no chrome.
  */
 
-const KIND_META: Record<
-  ApprovalKind,
-  { Icon: typeof Terminal; tone: "warning" | "info"; label: string }
-> = {
-  trust_bash: { Icon: Terminal, tone: "warning", label: "bash" },
-  trust_edit: { Icon: FileCode, tone: "warning", label: "edit" },
-  trust_write: { Icon: FileCode, tone: "warning", label: "write" },
-  code_proposal: { Icon: FileCode, tone: "info", label: "code" },
-  curiosity: { Icon: HelpCircle, tone: "info", label: "asks" },
+const KIND_LABEL: Record<ApprovalKind, string> = {
+  trust_bash: "bash",
+  trust_edit: "edit",
+  trust_write: "write",
+  code_proposal: "code",
+  curiosity: "asks",
+};
+
+/** Waiting-on-you flavours read amber; a proposal or a question reads info. */
+const KIND_TONE: Record<ApprovalKind, "warning" | "info"> = {
+  trust_bash: "warning",
+  trust_edit: "warning",
+  trust_write: "warning",
+  code_proposal: "info",
+  curiosity: "info",
 };
 
 export function ApprovalRow({ a, onClick }: { a: Approval; onClick: () => void }) {
-  const meta = KIND_META[a.kind];
+  const risky = a.riskLevel === "high" || a.riskLevel === "critical";
+  const tone = risky ? "danger" : KIND_TONE[a.kind];
+  const meta = [KIND_LABEL[a.kind], relTime(a.createdAt), a.subtitle]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <TileCard onClick={onClick} tone={meta.tone} className="gap-3 p-3">
-      <span
-        className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-md border",
-          meta.tone === "warning"
-            ? "border-rose-400/40 bg-rose-400/15 text-rose-400"
-            : "border-info/40 bg-info/15 text-info",
-        )}
-      >
-        <meta.Icon className="size-4" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span
-            className={cn(
-              "font-mono text-[10px] uppercase tracking-[0.14em]",
-              meta.tone === "warning" ? "text-rose-400" : "text-info",
-            )}
-          >
-            {meta.label}
-          </span>
-          <span
-            className="shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
-            suppressHydrationWarning
-          >
-            · {relTime(a.createdAt)}
-          </span>
-        </div>
-        <p className="mt-0.5 truncate text-sm font-medium text-foreground">{a.title}</p>
-        {a.subtitle ? (
-          <p className="truncate text-[11px] text-muted-foreground">{a.subtitle}</p>
-        ) : null}
-      </div>
-      {a.riskLevel === "high" || a.riskLevel === "critical" ? (
-        <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden />
-      ) : null}
-    </TileCard>
+    <ListRow
+      tone={tone}
+      title={a.title}
+      meta={<span suppressHydrationWarning>{meta}</span>}
+      onClick={onClick}
+    />
   );
 }

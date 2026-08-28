@@ -1,8 +1,8 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
 import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
+import { DASHBOARD_LIST_ROWS } from "./listHeight";
 import { ApprovalRow } from "./ApprovalsCard";
 import { SurfaceRow } from "./SurfaceCard";
 import type { DashboardItem } from "@/lib/dashboard/types";
@@ -17,13 +17,18 @@ import type { DashboardItem } from "@/lib/dashboard/types";
  * The merge + sort happens upstream in DashboardClient (decisions rank to
  * the top so a yes/no never hides under FYIs); this card just renders the
  * pre-built `DashboardItem[]`. A new surface key the agent invents still
- * appears automatically - it just lands in this unified card instead of a
- * card of its own. Tap any row → ObjectViewer with the full payload, where
- * Dismiss + Discuss with Jarvis live.
+ * appears automatically. Tap any row → ObjectViewer with the full payload,
+ * where Dismiss + Discuss with Jarvis live.
+ *
+ * MAJORDOMO SWEEP: the section header icon and the dashed-border empty box are
+ * gone (§1.2 — never a bordered empty state), and the rows sit on hairlines as
+ * direct siblings so `ListRow`'s `last:border-b-0` can actually see which row
+ * is last. Wrapping each row in an `<li>` made every row the last child of its
+ * own parent, which silently ate the separators.
  */
 export function SurfacedCard({
   items,
-  delay = 0.25,
+  delay = 0,
   onOpen,
   matchHeight,
 }: {
@@ -31,39 +36,37 @@ export function SurfacedCard({
   delay?: number;
   onOpen: (item: DashboardItem) => void;
   /**
-   * The dashboard's shared list height (px), measured off the Email card.
-   * See ScrollList "matched" mode: a row COUNT can't fill a card whose
-   * height is set by a sibling with taller rows, so this card clips to the
-   * same pixel line instead and shows however many of its own rows fit.
-   * Null before the reference reports (first paint, or Email is empty), in
-   * which case the `max` fallback applies.
+   * Optional explicit pixel cap for the list (ScrollList "matched" mode).
+   * The dashboard no longer threads one: every list card in a row clips at the
+   * same ROW COUNT, and Majordomo rows are a uniform height, so the columns
+   * line up by layout instead of by a measured pixel handed across rows. Kept
+   * for a surface that genuinely needs to match a specific pixel line.
    */
   matchHeight?: number | null;
 }) {
   return (
-    <Section
-      title="Surfaced by Jarvis"
-      Icon={Sparkles}
-      delay={delay}
-      badge={items.length}
-    >
+    <Section title="Surfaced by Jarvis" delay={delay} badge={items.length}>
       {items.length === 0 ? (
-        <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-          Nothing surfaced right now.
-        </div>
+        <p className="py-2 text-[13px] text-quiet">Nothing surfaced right now.</p>
       ) : (
-        <ScrollList max={4} maxHeight={matchHeight ?? undefined}>
-          <ul className="space-y-2">
-            {items.map((it) => (
-              <li key={`${it.kind}-${it.data.id}`}>
-                {it.kind === "approval" ? (
-                  <ApprovalRow a={it.data} onClick={() => onOpen(it)} />
-                ) : it.kind === "surface" ? (
-                  <SurfaceRow item={it.data} onClick={() => onOpen(it)} />
-                ) : null}
-              </li>
-            ))}
-          </ul>
+        <ScrollList max={DASHBOARD_LIST_ROWS} maxHeight={matchHeight ?? undefined}>
+          <div className="flex min-w-0 flex-col">
+            {items.map((it) =>
+              it.kind === "approval" ? (
+                <ApprovalRow
+                  key={`${it.kind}-${it.data.id}`}
+                  a={it.data}
+                  onClick={() => onOpen(it)}
+                />
+              ) : it.kind === "surface" ? (
+                <SurfaceRow
+                  key={`${it.kind}-${it.data.id}`}
+                  item={it.data}
+                  onClick={() => onOpen(it)}
+                />
+              ) : null,
+            )}
+          </div>
         </ScrollList>
       )}
     </Section>

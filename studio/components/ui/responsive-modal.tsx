@@ -206,8 +206,12 @@ export function ResponsiveModal({
         // viewport - no more buttons glued to the modal's bottom
         // border on desktop. `gap-2` separates stacked actions when
         // they wrap on a narrow viewport.
+        // Majordomo §7: the footer is a hairline, not a tinted box. The
+        // `bg-muted/20` tint that used to live here made the action bar read
+        // as a third stacked container under the body. Consumers that WANT a
+        // tint (the event RSVP bar) still pass one via footerClassName.
         <div className={cn(
-          "flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 pt-3 sm:px-5 pb-safe",
+          "flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-4 pt-3 sm:px-5 pb-safe",
           footerClassName,
         )}>
           {footer}
@@ -272,6 +276,24 @@ export function ResponsiveModal({
   );
 }
 
+/* ── Modal header (Majordomo §7) ───────────────────────────────────────────
+ *
+ * A modal header is exactly three things: the TITLE in the voice face, ONE
+ * quiet context line, and the close affordance (owned by the Dialog
+ * primitive, which pins its own X at top-right - hence the `pr-12` gutter).
+ *
+ * What is deliberately GONE: the icon chip, the mono uppercase eyebrow above
+ * the title, and the second stacked sub-header. Those made every modal open
+ * with "a header with a title, some subtext, then inside that another header
+ * with more subtext". One title per surface (§1.3); anything that used to
+ * live in an eyebrow belongs in the context line beside the rest of the meta.
+ */
+
+/** Shared header chrome so DefaultHeader and ResponsiveModalHeader can never
+ *  drift apart. `pr-12` keeps the title clear of the Dialog's pinned close. */
+const HEADER_CLS =
+  "flex shrink-0 items-start gap-3 border-b px-4 pb-3 pr-12 pt-4 sm:px-5 sm:pr-14";
+
 /* DefaultHeader - the standard title row used when callers don't supply a
  * custom `header`. Renders the visible <DialogTitle>/<DrawerTitle> directly
  * so a11y and visuals agree. */
@@ -289,7 +311,7 @@ function DefaultHeader({
   // let the inactive one no-op. In practice only one ancestor exists at a
   // time, so only one of these mounts. Keeps the header isomorphic.
   return (
-    <header className="flex shrink-0 items-center gap-3 border-b px-4 pb-3 pt-4 sm:px-5">
+    <header className={HEADER_CLS}>
       <div className="min-w-0 flex-1">
         <ModalTitleSlot>{title}</ModalTitleSlot>
         {description ? <ModalDescriptionSlot>{description}</ModalDescriptionSlot> : null}
@@ -299,30 +321,53 @@ function DefaultHeader({
 }
 
 function ModalTitleSlot({ children }: { children: React.ReactNode }) {
-  // Render the same text once - Radix Title or vaul Title - by trying
-  // both. Each is a no-op if its Root isn't mounted as an ancestor. We
-  // use the Dialog primitive here because it's mounted on lg+; mobile
-  // uses Drawer and we render the Drawer title at the same level. The
-  // wrapper component picks which is alive.
+  // Voice register, 19px medium, tracking-tight (§4 scale: one step under a
+  // section title). line-clamp-2 rather than truncate so a long email subject
+  // stays readable at 375px instead of being cut mid-word.
   return (
-    <h2 className="truncate text-base font-semibold tracking-tight text-foreground">
+    <h2 className="line-clamp-2 break-words font-voice text-[19px] font-medium leading-snug tracking-tight text-foreground">
       {children}
     </h2>
   );
 }
 
 function ModalDescriptionSlot({ children }: { children: React.ReactNode }) {
+  // The ONE context line. Quiet ink, chrome register, never a second title.
   return (
-    <p className="mt-0.5 line-clamp-2 break-words text-xs text-muted-foreground">
+    <p className="mt-1 line-clamp-2 break-words text-[12.5px] leading-snug text-quiet">
       {children}
     </p>
   );
 }
 
-/* CustomHeader - opt-in helper for richer headers (icon + eyebrow + title +
- * trailing slot). Pass into ResponsiveModal via the `header` prop. Carries
- * the same overflow discipline as the default header so callers can't
- * regress it. Pair with `title` on ResponsiveModal for the a11y label. */
+/** joinContext - folds whatever meta a consumer passed (an old `eyebrow`, a
+ *  `subtitle`, or both) into the single interpunct-joined context line. This
+ *  is why dropping the eyebrow loses no information: "Webhook sentinel" +
+ *  "fired 3× · cooldown 60s" becomes one line, not two stacked ones. */
+function joinContext(parts: React.ReactNode[]): React.ReactNode {
+  const kept = parts.filter(
+    (p) => p !== null && p !== undefined && p !== false && p !== "",
+  );
+  if (kept.length === 0) return null;
+  return kept.map((p, i) => (
+    <React.Fragment key={i}>
+      {i > 0 ? <span aria-hidden> · </span> : null}
+      {p}
+    </React.Fragment>
+  ));
+}
+
+/* ResponsiveModalHeader - the opt-in header for callers that need to build
+ * their own context line (or hang a status badge off the right). Pass into
+ * ResponsiveModal via the `header` prop; pair with `title` on ResponsiveModal
+ * for the a11y label.
+ *
+ * Majordomo §7 collapsed this to the SAME shape as DefaultHeader: title +
+ * one context line + close. The export and every prop name survive so no
+ * consumer had to change, but `icon`, `tone`, `titleSize` and `titleClamp`
+ * are now accepted-and-ignored (see the note on each). `eyebrow` is NOT
+ * dropped - it folds into the context line ahead of `subtitle`, so a caller
+ * that only ever passed an eyebrow still shows its words. */
 export function ResponsiveModalHeader({
   icon,
   eyebrow,
@@ -330,75 +375,46 @@ export function ResponsiveModalHeader({
   subtitle,
   trailing,
   tone,
-  titleSize = "default",
-  titleClamp = 1,
+  titleSize,
+  titleClamp,
 }: {
+  /** IGNORED (Majordomo §7: no icon chip in a modal header). Accepted so the
+   *  ~7 existing callers keep compiling; a bordered 32px tile beside the
+   *  title was the first of the "boxes inside boxes" the language removes. */
   icon?: React.ReactNode;
-  /** Tiny uppercase kicker above the title. Optional - prefer `subtitle`
-   *  below the title for surface items, which reads much calmer than a
-   *  loud "SECTION NAME" cap row above a giant title. */
+  /** Folded into the context line as its FIRST segment, no longer rendered as
+   *  a mono uppercase kicker ABOVE the title (§1.6: eyebrows never sit above
+   *  a title). Nothing is lost - "Webhook sentinel · fired 3×" is one line. */
   eyebrow?: string;
   title: string;
-  /** Muted single-line meta strip rendered below the title (e.g.
-   *  "Follow-up · email · 21m ago"). Replaces the older pattern of a
-   *  chip-row underneath the header for kind/source/time metadata. */
+  /** The context line (e.g. "Follow-up · email · 21m ago"). When `eyebrow` is
+   *  also present the two are joined with an interpunct. */
   subtitle?: React.ReactNode;
+  /** Right-hand slot. Still rendered: it carries STATUS (the cron/sentinel
+   *  enabled badge), not chrome, and dropping it would delete information. */
   trailing?: React.ReactNode;
-  /** Tone classes for the icon chip (border + bg + text). Default = muted. */
+  /** IGNORED - tone classes existed only to tint the icon chip. */
   tone?: string;
-  /** "lg" bumps the title to text-lg + slightly heavier — used for
-   *  preview-style headers (FollowUps, Saved, Reflection) where the title
-   *  IS the hero. "default" keeps the original tighter sizing. */
+  /** IGNORED - there is one title size now (voice 19). The old "default"/"lg"
+   *  split existed because some headers had to shout over an eyebrow. */
   titleSize?: "default" | "lg";
-  /** Max lines for the title before truncation. Default 1 keeps the older
-   *  tight header shape; 2 lets long subjects breathe (Untitled UI shape). */
+  /** IGNORED - the title always clamps at 2 lines: one line cut long email
+   *  subjects mid-word on a phone, three let a title become the whole header. */
   titleClamp?: 1 | 2 | 3;
 }) {
-  const titleCls = cn(
-    "tracking-tight text-foreground",
-    titleSize === "lg" ? "text-[17px] font-semibold leading-snug" : "text-base font-semibold",
-    titleClamp === 1
-      ? "truncate"
-      : titleClamp === 2
-        ? "line-clamp-2 break-words"
-        : "line-clamp-3 break-words",
-  );
-  // Where the icon sits depends on whether the text beside it is one line or a
-  // stack. With an eyebrow or subtitle the column is 2+ lines, so the icon
-  // top-aligns (+mt-0.5) to anchor against the TITLE rather than drifting to the
-  // middle of the whole block. With a lone title there is nothing to anchor to
-  // and top-alignment just reads as misaligned — so it centres. Deciding this
-  // here means every header is right by construction; a consumer that drops its
-  // subtitle (the call viewer did) can't silently leave a crooked icon behind.
-  const stacked = Boolean(eyebrow || subtitle);
+  // Explicitly consumed so lint doesn't flag the accepted-and-ignored props,
+  // and so the reason they're inert is legible at the point of use.
+  void icon;
+  void tone;
+  void titleSize;
+  void titleClamp;
+
+  const context = joinContext([eyebrow, subtitle]);
   return (
-    <header
-      className={cn(
-        "flex shrink-0 gap-3 border-b px-4 pb-3 pt-4 sm:px-5",
-        stacked ? "items-start" : "items-center",
-      )}
-    >
-      {icon ? (
-        <span
-          className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-md border",
-            stacked && "mt-0.5",
-            tone ?? "border-border bg-muted text-foreground",
-          )}
-        >
-          {icon}
-        </span>
-      ) : null}
+    <header className={HEADER_CLS}>
       <div className="min-w-0 flex-1">
-        {eyebrow ? (
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-            {eyebrow}
-          </p>
-        ) : null}
-        <h2 className={titleCls}>{title}</h2>
-        {subtitle ? (
-          <p className="mt-1 truncate text-[12px] text-muted-foreground">{subtitle}</p>
-        ) : null}
+        <ModalTitleSlot>{title}</ModalTitleSlot>
+        {context ? <ModalDescriptionSlot>{context}</ModalDescriptionSlot> : null}
       </div>
       {trailing ? <div className="shrink-0">{trailing}</div> : null}
     </header>

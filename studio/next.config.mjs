@@ -33,6 +33,13 @@ const nextConfig = {
   output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,
+  // `geist` (Vercel's Geist / Geist Mono, wired through next/font/local in
+  // app/layout.tsx) ships ESM that Next < 15 will not resolve on the server
+  // without transpiling — the symptom is
+  // `next_font_local__WEBPACK_IMPORTED_MODULE_0___default(...) is not a
+  // function` at build time. Required per the package README while we are on
+  // Next 14.x; it can be dropped on the Next 15 upgrade.
+  transpilePackages: ["geist"],
   async rewrites() {
     return [
       {

@@ -4,35 +4,19 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
-  AtSign,
-  Brain,
-  Calendar,
   CheckCircle2,
   Circle,
   ExternalLink,
-  FileCode,
-  Flame,
-  Hash,
-  HelpCircle,
-  Inbox,
   AlignLeft,
-  Layers,
-  ListTodo,
   Loader2,
-  Mail,
   MapPin,
-  MessageCircle,
   Paperclip,
   Pencil,
-  Quote,
   Repeat,
   Send,
   Sparkles,
-  Target,
-  Terminal,
   Users,
   Video,
   X,
@@ -47,10 +31,10 @@ import {
   ResponsiveModalHeader,
 } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
+import { Inset } from "@/components/ui/inset";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ModalChips,
-  ModalCode,
   ModalDl,
   ModalField,
   ModalHtml,
@@ -59,7 +43,6 @@ import {
   ModalSection,
   ModalUrl,
 } from "@/components/ui/modal-content";
-import { Chip, classificationTone, intentTone, modeTone, type ChipTone } from "./Chip";
 import { PlanTimeline } from "./PlanTimeline";
 import { EditTodoModal } from "./EditTodoModal";
 import { cn } from "@/lib/utils";
@@ -109,9 +92,12 @@ export function ObjectViewer({
   const isEvent = item?.kind === "event";
   const isInviteeEvent = isEvent && !!item?.data && (item.data as CalendarEvent).responseStatus;
   const hasFooter = !isEvent || isInviteeEvent;
+  // Majordomo §7: the footer is `justify-between` for every kind - secondary
+  // and destructive actions left, the ONE primary right. The event RSVP bar
+  // keeps its lavender ground (it is a designed surface, not modal chrome).
   const footerOverride = isEvent
     ? "bg-violet-100/70 dark:bg-violet-950/40 justify-between"
-    : undefined;
+    : "justify-between";
   // The email viewer gets a wider, fixed-height frame on desktop so it reads
   // comfortably AND doesn't grow/shrink as the lazy email body loads. Other
   // kinds keep the snug, content-sized `lg` modal.
@@ -154,140 +140,41 @@ export function ObjectViewer({
   );
 }
 
+/* ItemHeader - ONE header shape for every kind (Majordomo §7).
+ *
+ * Was: an icon chip + a mono uppercase eyebrow + the title + a kind subtitle
+ * for most kinds, plus a bespoke hand-rolled header for events with its own
+ * typography and a tone-coded classification pill. That is the "a header with
+ * a title, some subtext, then inside that another header with more subtext"
+ * the boss called out.
+ *
+ * Now: title + ONE context line, for all eleven kinds, through the shared
+ * ResponsiveModalHeader. Everything the eyebrow / pill / bespoke date row used
+ * to say is a segment of the context line (see viewerContext), so no
+ * information is lost - the event's classification, date, time and duration
+ * all still show, as words instead of as chrome. The calendar deep-link
+ * survives as the header's trailing slot because it is an ACTION, not chrome. */
 function ItemHeader({ item }: { item: DashboardItem }) {
-  const { Icon, label, tone } = headerMeta(item);
-  // Event kind gets a bespoke header per the design reference: large
-  // bold title, classification pill (tone-coded), kebab placeholder,
-  // date/duration subtitle row under the title. Hand-built instead of
-  // ResponsiveModalHeader because the design hierarchy is distinct
-  // enough that fitting it into the generic header was producing the
-  // wrong typography.
-  if (item.kind === "event") {
-    return <EventHeader event={item.data} />;
-  }
-  // Surface items, follow-ups, saved, and reflections render the "calm
-  // preview" header shape: no loud uppercase eyebrow above the title,
-  // title grows to 2 lines for long subjects, and the kind / source /
-  // time appear as a muted subtitle UNDER the title. Other kinds
-  // (approval, work, todo, pursuit) keep the original compact header.
-  const useCalmHeader =
-    item.kind === "surface" ||
-    item.kind === "followup" ||
-    item.kind === "saved" ||
-    item.kind === "artifact" ||
-    item.kind === "reflection";
-
-  if (useCalmHeader) {
-    return (
-      <ResponsiveModalHeader
-        icon={<Icon className="size-4" aria-hidden />}
-        title={getViewerTitle(item)}
-        subtitle={calmSubtitle(item, label)}
-        tone={tone}
-        titleSize="lg"
-        titleClamp={2}
-      />
-    );
-  }
+  const link = item.kind === "event" ? item.data.htmlLink : undefined;
   return (
     <ResponsiveModalHeader
-      icon={<Icon className="size-4" aria-hidden />}
-      eyebrow={label}
       title={getViewerTitle(item)}
-      tone={tone}
-    />
-  );
-}
-
-// ── EventHeader ───────────────────────────────────────────────────────────
-//
-// Bespoke event modal header. Matches the design reference: large bold
-// title, classification pill (tone-coded) + kebab on the right, plain
-// sans-serif date/duration row under the title, separator at the bottom
-// to match other modal headers. NO icon + eyebrow combo; the shape is
-// distinct from every other kind's header.
-function EventHeader({ event }: { event: CalendarEvent }) {
-  const cls = (event.classification || "meeting").toLowerCase();
-  const pillTone = eventClassificationTone(cls);
-  return (
-    <header className="flex shrink-0 flex-col gap-2 border-b px-4 pt-4 pb-3 pr-12 sm:px-5 sm:pr-14">
-      <div className="flex items-center gap-2">
-        <h2 className="min-w-0 flex-1 text-[20px] font-semibold leading-tight tracking-tight text-foreground sm:text-[22px]">
-          {event.title}
-        </h2>
-        {/* Both right-side affordances are h-6 so they vertically center
-            cleanly against the title baseline (items-center on the row). */}
-        {event.htmlLink ? (
+      subtitle={<span suppressHydrationWarning>{viewerContext(item)}</span>}
+      trailing={
+        link ? (
           <a
-            href={event.htmlLink}
+            href={link}
             target="_blank"
             rel="noreferrer noopener"
             aria-label="Open in Google Calendar"
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-8 items-center justify-center rounded-[10px] text-quiet transition-colors hover:bg-accent hover:text-foreground"
           >
             <ExternalLink className="size-4" aria-hidden />
           </a>
-        ) : null}
-        <span
-          className={cn(
-            "inline-flex h-6 shrink-0 items-center rounded-full px-2.5 text-[12px] font-medium capitalize leading-none",
-            pillTone,
-          )}
-        >
-          {cls}
-        </span>
-      </div>
-      <p
-        className="flex flex-wrap items-baseline gap-x-3 text-[13px] text-foreground/80"
-        suppressHydrationWarning
-      >
-        <span>{eventDateLine(event.startsAt, event.allDay)}</span>
-        {!event.allDay ? (
-          <>
-            <span>
-              {clockTime(event.startsAt)}
-              {event.endsAt ? ` – ${clockTime(event.endsAt)}` : ""}
-            </span>
-            {event.endsAt ? (
-              <span className="text-muted-foreground">
-                ({eventDuration(event.startsAt, event.endsAt)})
-              </span>
-            ) : null}
-          </>
-        ) : (
-          <span>All day</span>
-        )}
-      </p>
-    </header>
+        ) : undefined
+      }
+    />
   );
-}
-
-// eventClassificationTone: orange "Meeting" pill in the design ref is the
-// default; other event kinds get distinct tints so the boss can spot
-// "flight" / "dinner" / "appointment" at a glance. (Distinct from the
-// email-chip classificationTone imported from ./Chip - this one returns a
-// full className string for the bespoke event pill.)
-function eventClassificationTone(cls: string): string {
-  switch (cls) {
-    case "meeting":
-      return "bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300";
-    case "flight":
-    case "travel":
-      return "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300";
-    case "dinner":
-    case "lunch":
-      return "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300";
-    case "concert":
-    case "social":
-      return "bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300";
-    case "appointment":
-    case "interview":
-      return "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300";
-    case "wedding":
-      return "bg-pink-100 text-pink-700 dark:bg-pink-500/20 dark:text-pink-300";
-    default:
-      return "bg-muted text-muted-foreground";
-  }
 }
 
 // eventDateLine: "Thu, 1st April, 2026" format from the design ref.
@@ -323,50 +210,137 @@ function eventDuration(startISO: string, endISO: string): string {
   return `${hLabel} ${rem} min`;
 }
 
-// calmSubtitle: builds the muted meta strip rendered under the hero
-// title for the calm header shape. Combines the kind label with the
-// most useful trailing meta (source + time + optional importance) in
-// interpunct form. Each segment is only included when it carries
-// signal; an unranked item never shows "imp 0", and a source-less
-// item just omits the "via" segment.
-function calmSubtitle(item: DashboardItem, kindLabel: string): React.ReactNode {
-  // The call log gets NO meta strip. Every segment this function could build
-  // for a call is either already on screen or was never English to begin with:
-  //
-  //   "Calls item"  surfaceKindLabel() glues the word "item" onto the raw
-  //                 `surface` DB key. The title already says "Inbound call
-  //                 from Ariana", so this restates it, badly.
-  //   "phone"       the source, on an item the boss opened FROM the Phone card.
-  //   "imp 70"      a constant meaning "this is a phone call" (phone/monitor.go
-  //                 hardcodes 70, or 90 for a failed passphrase). Ten of his
-  //                 twelve calls read the same number.
-  //
-  // That leaves a row of restatements, which is not metadata, it is noise. The
-  // header guards on falsy, so returning null drops the <p> entirely rather
-  // than leaving an empty line. The score still sorts the Phone card; it just
-  // stops narrating itself.
-  if (item.kind === "surface" && item.data.surface === "calls") return null;
+// viewerContext: the ONE context line under every modal title (§7). Kind
+// label, then status, then when - interpunct-joined, quiet ink, never a
+// second title.
+//
+// This is also where every chip row that used to sit at the top of a body
+// went. A segment is included only when it carries signal: an unranked item
+// never shows "imp 0", a source-less item omits the source, a pursuit with no
+// streak omits the streak. Nothing here may restate the title (§1.3), which is
+// why a follow-up's subject and an event's own name never appear.
+function viewerContext(item: DashboardItem): string {
+  const { label } = headerMeta(item);
+  const parts: string[] = [];
+  const push = (v: string | number | null | undefined | false) => {
+    if (v === null || v === undefined || v === false) return;
+    const s = String(v).trim();
+    if (s) parts.push(s);
+  };
 
-  const parts: string[] = [kindLabel];
-  if (item.kind === "surface") {
-    const s = item.data;
-    if (s.source) parts.push(s.source);
-    parts.push(relTime(s.createdAt));
-    if (typeof s.importance === "number" && s.importance >= 50) {
-      parts.push(`imp ${s.importance}`);
+  switch (item.kind) {
+    case "pursuit": {
+      const p = item.data;
+      push(label);
+      push(p.cadence);
+      push(p.status ? p.status.replace(/_/g, " ") : "");
+      push(p.streakDays ? `${p.streakDays}d streak` : "");
+      push(p.doneToday ? "done today" : "open today");
+      break;
     }
-  } else if (item.kind === "followup") {
-    if (item.data.source) parts.push(item.data.source);
-    parts.push(relTime(item.data.receivedAt));
-  } else if (item.kind === "saved") {
-    if (item.data.kind) parts.push(item.data.kind);
-    parts.push(`saved ${relTime(item.data.savedAt)}`);
-  } else if (item.kind === "artifact") {
-    parts.push(item.data.kind);
-    parts.push(`built ${relTime(item.data.createdAt)}`);
-  } else if (item.kind === "reflection") {
-    parts.push(`${item.data.evidenceCount} sources`);
-    parts.push(relTime(item.data.capturedAt));
+    case "todo": {
+      const t = item.data;
+      push(label);
+      push(t.priority ? `${t.priority} priority` : "");
+      push(t.source);
+      push(t.dueAt ? `due ${todoDueLabel(t.dueAt).toLowerCase()}` : "");
+      break;
+    }
+    case "event": {
+      const e = item.data;
+      // The bespoke event header's classification pill and date/duration row,
+      // rendered as words. "Meeting · Thu, 1st April, 2026 · 9:30am – 10:30am
+      // · 1 hour".
+      push((e.classification || "meeting").toLowerCase());
+      push(eventDateLine(e.startsAt, e.allDay));
+      if (e.allDay) {
+        push("all day");
+      } else {
+        push(
+          `${clockTime(e.startsAt)}${e.endsAt ? ` – ${clockTime(e.endsAt)}` : ""}`,
+        );
+        if (e.endsAt) push(eventDuration(e.startsAt, e.endsAt));
+      }
+      break;
+    }
+    case "reflection": {
+      const r = item.data;
+      push(label);
+      push(`${r.evidenceCount} sources`);
+      push(relTime(r.capturedAt));
+      break;
+    }
+    case "approval": {
+      const a = item.data;
+      push(label);
+      push(a.riskLevel ? `risk ${a.riskLevel}` : "");
+      push(relTime(a.createdAt));
+      break;
+    }
+    case "followup": {
+      const f = item.data;
+      push(label);
+      push(f.source);
+      push(relTime(f.receivedAt));
+      break;
+    }
+    case "work": {
+      const w = item.data;
+      // Kind label, STATUS (the board column), then when. The engine
+      // ("Voyager" / "GEPA") stays off the header and lives in Details, per
+      // the readable-names rule.
+      push(label);
+      push(w.column);
+      push(
+        w.finishedAt
+          ? `finished ${relTime(w.finishedAt)}`
+          : w.startedAt
+            ? `started ${relTime(w.startedAt)}`
+            : w.scheduledFor
+              ? `scheduled ${relTime(w.scheduledFor)}`
+              : "",
+      );
+      push(w.durationMs ? formatDuration(w.durationMs) : "");
+      break;
+    }
+    case "saved": {
+      const s = item.data;
+      push(label);
+      push(s.kind);
+      push(s.readingMinutes ? `${s.readingMinutes} min read` : "");
+      push(`saved ${relTime(s.savedAt)}`);
+      break;
+    }
+    case "artifact": {
+      const a = item.data;
+      push(label);
+      push(a.kind);
+      push(`built ${relTime(a.createdAt)}`);
+      break;
+    }
+    case "activity": {
+      const e = item.data;
+      push(label);
+      push(e.kind);
+      push(e.future ? `in ${dayLabel(e.at).toLowerCase()}` : relTime(e.at));
+      break;
+    }
+    case "surface": {
+      const s = item.data;
+      // The call log's own guard: every segment it could build restates the
+      // title or is a constant. Kind label alone.
+      if (s.surface === "calls") {
+        push(label);
+        break;
+      }
+      push(label);
+      push(s.source);
+      push(relTime(s.createdAt));
+      if (typeof s.importance === "number" && s.importance >= 50) {
+        push(`imp ${s.importance}`);
+      }
+      break;
+    }
   }
   return parts.join(" · ");
 }
@@ -844,9 +818,13 @@ function ViewerActions({
   if (item.kind === "event") {
     return <>{renderSecondary()}</>;
   }
+  // §7 footer anatomy: one LEFT cluster (secondary + destructive, however many
+  // this kind has) and exactly ONE primary on the right. The wrapper is what
+  // makes `justify-between` mean that rather than "spread three buttons".
+  // It renders even when empty so the primary stays pinned right.
   return (
     <>
-      {renderSecondary()}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">{renderSecondary()}</div>
       <button
         type="button"
         onClick={discuss}
@@ -1167,41 +1145,30 @@ function ViewerContent({ item }: { item: DashboardItem }) {
 
 // ── Pursuit ───────────────────────────────────────────────────────────────
 function PursuitBody({ p }: { p: Pursuit }) {
+  // Cadence / streak / status moved into the header context line — they were
+  // the chip row that used to sit on top of this body restating it.
   return (
-    <div className="pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider text-muted-foreground">
-          {p.cadence}
-        </span>
-        {p.streakDays ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-rose-400/10 px-2 py-0.5 font-mono text-rose-400">
-            <Flame className="size-3" aria-hidden /> {p.streakDays}d streak
-          </span>
-        ) : null}
-        {p.status ? (
-          <span className="font-mono uppercase tracking-wider text-muted-foreground">
-            · {p.status.replace("_", " ")}
-          </span>
-        ) : null}
-      </div>
+    <ViewerSections>
       {p.progress ? (
-        <ModalSection meta={`${p.progress.current}/${p.progress.target} ${p.progress.unit ?? ""}`}>
+        <ModalSection
+          label="Progress"
+          meta={`${p.progress.current}/${p.progress.target} ${p.progress.unit ?? ""}`}
+        >
           <div className="space-y-2">
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
               <div
-                className="h-full rounded-full bg-foreground"
+                className="h-full rounded-full bg-brand"
                 style={{ width: `${Math.min(100, Math.round((p.progress.current / p.progress.target) * 100))}%` }}
               />
             </div>
-            <p className="text-muted-foreground">
-              Progress so far: {p.progress.current} of {p.progress.target}{" "}
-              {p.progress.unit ?? "units"}.
+            <p className="text-quiet">
+              {p.progress.current} of {p.progress.target} {p.progress.unit ?? "units"} so far.
             </p>
           </div>
         </ModalSection>
       ) : (
-        <ModalSection meta={p.doneToday ? "today: done" : "today: open"}>
-          <p className="text-muted-foreground">
+        <ModalSection label="Today">
+          <p>
             {p.doneToday
               ? `Checked in today${p.doneAt ? ` at ${clockTime(p.doneAt)}` : ""}.`
               : "Not yet completed today."}
@@ -1212,62 +1179,54 @@ function PursuitBody({ p }: { p: Pursuit }) {
         </ModalSection>
       )}
       {p.createdAt ? (
-        <p
-          className="pt-2 font-mono text-[11px] uppercase tracking-wider text-muted-foreground"
-          suppressHydrationWarning
-        >
-          created {relTime(p.createdAt)}
-        </p>
+        <ModalSection label="Created">
+          <span suppressHydrationWarning>{relTime(p.createdAt)}</span>
+        </ModalSection>
       ) : null}
-    </div>
+    </ViewerSections>
   );
+}
+
+/* ViewerSections - the modal body's section column.
+ *
+ * Sections are hairline-separated LABELLED ROWS now (§7), so the body must be
+ * a plain stack with no `space-y-*`: a gap between two hairline-separated rows
+ * reads as two disconnected fragments. Every body routes through this so the
+ * rhythm is identical across all eleven kinds, and `first:border-t-0` in
+ * ModalSection actually fires (it only works when the section is the first
+ * child of its container). */
+function ViewerSections({ children }: { children: React.ReactNode }) {
+  return <div className="min-w-0 max-w-full">{children}</div>;
+}
+
+/* QuietNote - the honest one-liner an empty body gets instead of an empty
+ * section (§7 "only sections with data render", §1.5 "descriptions stay on
+ * empty states"). */
+function QuietNote({ children }: { children: React.ReactNode }) {
+  return <p className="py-1 text-[13px] leading-relaxed text-quiet">{children}</p>;
 }
 
 // ── Todo ──────────────────────────────────────────────────────────────────
 function TodoBody({ t }: { t: Todo }) {
+  // Priority / source / due are in the header context line; the title is the
+  // header's title. What is left is the note, and only when there is one.
+  const agentNote = t.source === "agent";
+  if (!t.body?.trim() && !agentNote) {
+    return <QuietNote>Nothing else recorded on this one.</QuietNote>;
+  }
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        {t.priority ? (
-          <span
-            className={cn(
-              "rounded-full px-2 py-0.5 font-mono uppercase tracking-wider",
-              t.priority === "high"
-                ? "bg-danger/10 text-danger"
-                : t.priority === "med"
-                  ? "bg-rose-400/10 text-rose-400"
-                  : "bg-muted text-muted-foreground",
-            )}
-          >
-            {t.priority}
-          </span>
-        ) : null}
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider text-muted-foreground">
-          {t.source}
-        </span>
-        {t.dueAt ? (
-          <span
-            className="font-mono uppercase tracking-wider text-muted-foreground"
-            suppressHydrationWarning
-          >
-            due {todoDueLabel(t.dueAt).toLowerCase()}
-          </span>
-        ) : null}
-      </div>
-      <ModalSection>
-        <p className="text-foreground/85">{t.title}</p>
-        {t.body ? (
-          <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-muted-foreground">
-            {t.body}
-          </p>
-        ) : null}
-        {t.source === "agent" ? (
-          <p className="mt-2 text-[12px] text-muted-foreground">
-            Jarvis created this todo based on your recent activity. Discuss to ask why.
-          </p>
-        ) : null}
-      </ModalSection>
-    </div>
+    <ViewerSections>
+      {t.body?.trim() ? (
+        <ModalSection label="Note">
+          <p className="whitespace-pre-wrap break-words">{t.body}</p>
+        </ModalSection>
+      ) : null}
+      {agentNote ? (
+        <ModalSection label="Why">
+          <p>Jarvis created this todo from your recent activity. Discuss to ask why.</p>
+        </ModalSection>
+      ) : null}
+    </ViewerSections>
   );
 }
 
@@ -1399,7 +1358,7 @@ function EventBody({ e }: { e: CalendarEvent }) {
       ) : null}
 
       {prep.length > 0 ? (
-        <ModalSection meta={`${openPrep.length}/${prep.length} prep open`}>
+        <ModalSection label="Prep" meta={`${openPrep.length}/${prep.length} open`}>
           <ul className="space-y-2">
             {prep.map((p) => (
               <li key={p.id} className="flex items-start gap-2">
@@ -1638,73 +1597,46 @@ function readableRecurrence(rec?: string[]): string | null {
 
 // ── Reflection ────────────────────────────────────────────────────────────
 function ReflectionBody({ r }: { r: Reflection }) {
+  // A reflection is Jarvis thinking out loud, so it takes the voice face and
+  // no chrome at all: no chip row (the header context line carries the source
+  // count and the time) and no labelled section around a single paragraph.
+  if (!r.body?.trim()) return <QuietNote>He hasn&apos;t written this one up yet.</QuietNote>;
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-tier-procedural/10 px-2 py-0.5 font-mono uppercase tracking-wider text-tier-procedural">
-          metacognition
-        </span>
-        <span className="font-mono" suppressHydrationWarning>
-          {relTime(r.capturedAt)}
-        </span>
-        <span className="font-mono">· {r.evidenceCount} sources</span>
-      </div>
-      <ModalSection>
-        <p className="leading-relaxed text-foreground/90">{r.body}</p>
-      </ModalSection>
-    </div>
+    <p className="min-w-0 whitespace-pre-wrap break-words font-voice text-[15.5px] leading-[1.55] text-foreground">
+      {r.body}
+    </p>
   );
 }
 
 // ── Approval ──────────────────────────────────────────────────────────────
 function ApprovalBody({ a }: { a: Approval }) {
+  // Kind / time / risk are in the header context line now.
+  const empty = !a.preview && !a.rationale && !a.toolCall && !a.diff && !a.question;
+  if (empty) return <QuietNote>He hasn&apos;t said any more about this one yet.</QuietNote>;
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-rose-400/10 px-2 py-0.5 font-mono uppercase tracking-wider text-rose-400">
-          {a.kind.replace("_", " ")}
-        </span>
-        <span className="font-mono" suppressHydrationWarning>
-          {relTime(a.createdAt)}
-        </span>
-        {a.riskLevel ? (
-          <span
-            className={cn(
-              "font-mono uppercase tracking-wider",
-              a.riskLevel === "high" || a.riskLevel === "critical"
-                ? "text-danger"
-                : a.riskLevel === "medium"
-                  ? "text-rose-400"
-                  : "text-muted-foreground",
-            )}
-          >
-            · risk {a.riskLevel}
-          </span>
-        ) : null}
-      </div>
-
+    <ViewerSections>
       {/* What will happen, in the gate's plain words. Leads, because it's the
-          thing the boss is actually deciding on. */}
+          thing the boss is actually deciding on — so it is voice, unlabelled,
+          above the labelled rows rather than boxed in one. */}
       {a.preview ? (
-        <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground/90">
+        <p className="mb-3 min-w-0 whitespace-pre-wrap break-words font-voice text-[15.5px] leading-[1.55] text-foreground">
           {a.preview}
         </p>
       ) : null}
 
-      {/* Why the gate fired. Steps back to a footnote when a preview is
-          carrying the explanation, stays primary when it's all we have
-          (code proposals and curiosity questions have no preview). */}
+      {/* Why the gate fired. A footnote when a preview is carrying the
+          explanation, the lead when it's all we have (code proposals and
+          curiosity questions have no preview). */}
       {a.rationale ? (
-        <p
-          className={cn(
-            "break-words leading-relaxed",
-            a.preview
-              ? "text-[12px] text-muted-foreground"
-              : "text-[13px] text-foreground/85",
-          )}
-        >
-          {a.rationale}
-        </p>
+        a.preview ? (
+          <ModalSection label="Why">
+            <p className="break-words">{a.rationale}</p>
+          </ModalSection>
+        ) : (
+          <p className="mb-3 min-w-0 whitespace-pre-wrap break-words font-voice text-[15.5px] leading-[1.55] text-foreground">
+            {a.rationale}
+          </p>
+        )
       ) : null}
 
       {/* Long strings in the args (a blog post, an email body, a document)
@@ -1715,65 +1647,42 @@ function ApprovalBody({ a }: { a: Approval }) {
       ) : null}
 
       {a.diff ? (
-        <ModalSection meta={a.filePath ?? "patch"}>
-          <ModalCode>
-            {a.diff.split("\n").map((line, i) => {
-              const cls = line.startsWith("+++") || line.startsWith("---")
-                ? "text-muted-foreground"
-                : line.startsWith("+")
-                  ? "text-success"
-                  : line.startsWith("-")
-                    ? "text-danger"
-                    : line.startsWith("@")
-                      ? "text-info"
-                      : "text-foreground/80";
-              return (
-                <span key={i} className={cn("block", cls)}>
-                  {line}
-                </span>
-              );
-            })}
-          </ModalCode>
+        // The hand-rolled per-line tinting that used to live here is now the
+        // shared `<Inset variant="diff">` (same `diffLineClass` the chat's
+        // tool cards use) — one tinting rule for every diff in Studio.
+        <ModalSection label="Patch" meta={a.filePath ?? undefined}>
+          <Inset variant="diff" text={a.diff} />
         </ModalSection>
       ) : null}
 
       {a.question ? (
-        <ModalSection meta="Jarvis asks">
-          <p className="text-[13px] leading-relaxed text-foreground/90">{a.question}</p>
+        <ModalSection label="Jarvis asks">
+          <p className="break-words">{a.question}</p>
           {a.context ? (
             // whitespace-pre-line so the multi-line diagnosis (what it does /
             // what it was doing / the real error / suggested fix) keeps its
             // line breaks instead of collapsing into a run-on.
-            <p className="mt-2 whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground">
+            <p className="mt-2 whitespace-pre-line break-words text-[12px] leading-relaxed text-quiet">
               {a.context}
             </p>
           ) : null}
         </ModalSection>
       ) : null}
-    </div>
+    </ViewerSections>
   );
 }
 
 // ── FollowUp ──────────────────────────────────────────────────────────────
 function FollowUpBody({ f }: { f: FollowUp }) {
-  const SourceIcon =
-    f.source === "gmail"
-      ? AtSign
-      : f.source === "slack"
-        ? Hash
-        : f.source === "imessage"
-          ? MessageCircle
-          : Inbox;
-
   // Triage chips. classification / intent / mode are separate metadata axes
   // that often overlap — intent "needs reply" + mode "reply" are the SAME
   // thing shown twice. dedupeChips collapses them: it drops any value
   // contained in a longer sibling (so "reply" disappears next to "needs
   // reply") and any exact duplicate.
   const triageChips = dedupeChips([
-    { v: metaStr(f.metadata, "classification", "category"), tone: classificationTone },
-    { v: metaStr(f.metadata, "intent"), tone: intentTone },
-    { v: metaStr(f.metadata, "mode", "action"), tone: modeTone },
+    metaStr(f.metadata, "classification", "category"),
+    metaStr(f.metadata, "intent"),
+    metaStr(f.metadata, "mode", "action"),
   ]);
 
   // The OFFICIAL time the email landed in the real inbox (the triage skill
@@ -1802,73 +1711,32 @@ function FollowUpBody({ f }: { f: FollowUp }) {
   const sentReply = (f.sentReply ?? "").trim() || optimisticSent.trim();
 
   return (
-    <div className="space-y-1">
-      {/* Source · account · time + triage chips.
-          Sits dead-centre in the span between the modal header's bottom border
-          and the From block: 16px above (the modal body's own pt-4, which is why
-          this container carries no pt-* of its own) and 16px below (the mb-4).
-          It used to sit 28px/4px — low, crowding the FROM line — see the note on
-          the From block for why its mt-10 never fired. The From block itself does
-          NOT move: 28+4 and 16+16 span the same distance. */}
-      <ModalChips className="mb-4">
-        <Chip tone="muted" icon={<SourceIcon className="size-3" aria-hidden />}>
-          {f.source}
-        </Chip>
-        {f.account ? <Chip tone="muted">{f.account}</Chip> : null}
+    <ViewerSections>
+      {/* Account + triage read as WORDS now, not a row of bordered pills, and
+          the source/time segments moved to the header context line so this
+          line no longer restates it. The received date stays because the modal
+          deliberately shows the OFFICIAL full date (received_at from the real
+          inbox), never the listing's relative "Nd ago". */}
+      <ModalChips className="mb-3">
+        {f.account ? <span key="account">{f.account}</span> : null}
         {triageChips.map((c) => (
-          <Chip key={c.v} tone={c.tone}>
-            {c.v}
-          </Chip>
+          <span key={c}>{c}</span>
         ))}
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground" suppressHydrationWarning>
-          {/* Modal shows the OFFICIAL received date in full (received_at from
-       the real inbox), falling back to the full found-date, never the
-              listing's relative "Nd ago". */}
+        <span key="when" suppressHydrationWarning>
           {receivedReal || fullDateTime(f.receivedAt)}
         </span>
       </ModalChips>
 
-      {/* From / Subject - each a flex row with symmetric padding +
-          items-center so the label and value sit dead-center in their row.
+      {/* From. The SUBJECT is the modal's title, so repeating it here would be
+          the second title §1.3 forbids — it is gone from the body. */}
+      <ModalSection label="From">
+        <span className="break-words font-medium text-foreground">{f.from}</span>
+      </ModalSection>
 
-          The gap above comes from the chip row's mb-4, deliberately NOT an mt-*
-          here. This parent is `space-y-1`, which Tailwind v3 compiles to
-          `.space-y-1>:not([hidden])~:not([hidden])` — specificity (0,3,0), which
-          beats any `.mt-N` at (0,1,0) no matter the source order. The `mt-10`
-          that used to sit here was silently dead: it asked for 40px, got 4px,
-          and the chips crowded this line — the exact outcome its own comment
-          said it was preventing. Margins collapse between siblings, so mb-4 (16)
-          against space-y-1's mt (4) resolves to 16, not 20. If you ever need to
-          respace this, move the value, don't add an mt-* — it won't fire. */}
-      <div className="overflow-hidden rounded-lg border border-border bg-muted/20">
-        <div className="flex items-center gap-4 px-3 py-3">
-          <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-            From
-          </span>
-          <span className="min-w-0 flex-1 break-words text-[13px] font-medium text-foreground">
-            {f.from}
-          </span>
-        </div>
-        {f.subject ? (
-          <div className="flex items-center gap-4 border-t border-border px-3 py-3">
-            <span className="w-20 shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              Subject
-            </span>
-            <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/90">
-              {f.subject}
-            </span>
-          </div>
-        ) : null}
-      </div>
-
-      {/* Context (summary) - ABOVE the email, under From/Subject. Stays
-          silent when there's no triage summary (raw poll rows). */}
+      {/* Context (summary) - ABOVE the email. Stays silent when there's no
+          triage summary (raw poll rows). */}
       {f.summary?.trim() ? (
-        <ModalSection
-          label="Context"
-          icon={<Sparkles className="size-3.5 shrink-0 text-brand" aria-hidden />}
-          className="border-brand/20 bg-brand/[0.04]"
-        >
+        <ModalSection label="Context">
           <ModalPre>{f.summary.trim()}</ModalPre>
         </ModalSection>
       ) : null}
@@ -1889,7 +1757,6 @@ function FollowUpBody({ f }: { f: FollowUp }) {
       {/* Message - the real email, rendered as HTML when available. */}
       <ModalSection
         label="Message"
-        icon={<Mail className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
         meta={
           f.threadUrl ? (
             <ModalUrl href={f.threadUrl} icon={<ExternalLink className="size-3" aria-hidden />}>
@@ -1941,26 +1808,29 @@ function FollowUpBody({ f }: { f: FollowUp }) {
           </p>
         ) : null}
       </ModalSection>
-    </div>
+    </ViewerSections>
   );
 }
 
-// dedupeChips collapses the overlapping triage chips. A value is dropped when
+// dedupeChips collapses the overlapping triage values. A value is dropped when
 // a longer sibling already contains it (so "reply" vanishes next to "needs
-// reply") or when it's an exact duplicate; each surviving chip keeps its tone.
-function dedupeChips(
-  defs: { v: string; tone: (v: string) => ChipTone }[],
-): { v: string; tone: ChipTone }[] {
-  const present = defs.filter((d) => d.v.trim() !== "");
-  const out: { v: string; tone: ChipTone }[] = [];
-  for (const d of present) {
-    const lv = d.v.toLowerCase();
+// reply") or when it's an exact duplicate.
+//
+// It returns plain STRINGS now: §7 turned the modal's chip row into text, so
+// the per-axis tone (classificationTone / intentTone / modeTone) that used to
+// colour a bordered pill has no surface to paint. Those helpers still tone the
+// chips on the dashboard's own Follow-ups CARD - only the modal reads as prose.
+function dedupeChips(values: string[]): string[] {
+  const present = values.filter((v) => v.trim() !== "");
+  const out: string[] = [];
+  for (const v of present) {
+    const lv = v.toLowerCase();
     const dominated = present.some(
-      (o) => o.v !== d.v && o.v.toLowerCase().includes(lv) && o.v.length > d.v.length,
+      (o) => o !== v && o.toLowerCase().includes(lv) && o.length > v.length,
     );
     if (dominated) continue;
-    if (out.some((s) => s.v.toLowerCase() === lv)) continue;
-    out.push({ v: d.v, tone: d.tone(d.v) });
+    if (out.some((s) => s.toLowerCase() === lv)) continue;
+    out.push(v);
   }
   return out;
 }
@@ -2076,9 +1946,8 @@ function SentReplySection({ text, source }: { text: string; source: string }) {
   return (
     <ModalSection
       label="Response"
-      icon={<CheckCircle2 className="size-3.5 shrink-0 text-success" aria-hidden />}
+      tone="success"
       meta={`you replied${source ? " · " + source : ""}`}
-      className="border-success/25 bg-success/[0.04]"
     >
       <ModalPre>{text}</ModalPre>
     </ModalSection>
@@ -2116,15 +1985,18 @@ function DraftReplyPanel({
   return (
     <ModalSection
       label="Draft reply"
-      icon={
+      meta={
         running ? (
-          <Loader2 className="size-3.5 shrink-0 animate-spin text-brand" aria-hidden />
+          <span className="inline-flex items-center gap-1.5 text-brand">
+            <Loader2 className="size-3 animate-spin" aria-hidden />
+            Jarvis is writing
+          </span>
+        ) : draft ? (
+          "saved draft"
         ) : (
-          <Sparkles className="size-3.5 shrink-0 text-brand" aria-hidden />
+          "latest action"
         )
       }
-      meta={running ? "Jarvis is writing" : draft ? "saved draft" : "latest action"}
-      className="border-brand/25 bg-brand/[0.04]"
     >
       <div className="space-y-2">
         {error ? (
@@ -2248,19 +2120,18 @@ function useFollowupMessage(f: FollowUp): FetchedMessage {
 // honest "here's what's attached" label.
 function AttachmentChips({ attachments }: { attachments: Attachment[] }) {
   if (attachments.length === 0) return null;
+  // Text, not bordered pills (§7). One paperclip leads the line; the filenames
+  // read as a list. Still display-only for the same reason as before.
   return (
-    <div className="mt-3 flex flex-wrap gap-2">
+    <p className="mt-3 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-quiet">
+      <Paperclip className="size-3.5 shrink-0" aria-hidden />
       {attachments.map((att, i) => (
-        <span
-          key={`${att.id || att.name}-${i}`}
-          className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 text-[12px] text-foreground/85"
-          title={att.name}
-        >
-          <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="min-w-0 truncate">{att.name}</span>
+        <span key={`${att.id || att.name}-${i}`} className="min-w-0 break-all" title={att.name}>
+          {att.name}
+          {i < attachments.length - 1 ? "," : ""}
         </span>
       ))}
-    </div>
+    </p>
   );
 }
 
@@ -2388,7 +2259,9 @@ function MessageBody({ item }: { item: SurfaceItem }) {
           ) : null}
         </span>
         {urgent ? (
-          <span className="ml-auto shrink-0 rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger">
+          // One alive signal (§1.4): red ink says urgent. It does not need a
+          // bordered pill to say it, and a pill here is a box inside the row.
+          <span className="ml-auto shrink-0 font-mono text-[10.5px] uppercase tracking-[0.14em] text-danger">
             Urgent
           </span>
         ) : null}
@@ -2399,14 +2272,13 @@ function MessageBody({ item }: { item: SurfaceItem }) {
         <p className="text-[13.5px] italic leading-relaxed text-muted-foreground">{read}</p>
       ) : null}
 
-      {/* The message. Given the room it deserves. */}
+      {/* The message. Given the room it deserves — on an Inset (the one
+          container allowed inside a row) rather than the bordered card that
+          used to sit inside the modal's own border. */}
       {message ? (
-        <div className="min-w-0 rounded-xl border bg-card p-4 sm:p-5">
-          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Message
-          </p>
-          <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">{message}</p>
-        </div>
+        <ModalSection label="Message">
+          <Inset variant="quote" text={message} />
+        </ModalSection>
       ) : null}
     </div>
   );
@@ -2439,91 +2311,92 @@ function SurfaceBody({ item }: { item: SurfaceItem }) {
   // alerts, which have no times to state.
   const timeline = item.surface === "calls" ? callTimeline(item.metadata) : "";
 
+  const empty = visibleFields.length === 0 && !body && !item.importanceReason;
+
   return (
-    <div className="space-y-4 pt-4">
+    <ViewerSections>
       {timeline ? (
-        <ModalChips>
-          <span
-            className="ml-auto font-mono text-[11px] text-muted-foreground"
-            suppressHydrationWarning
-          >
-            {timeline}
-          </span>
+        <ModalChips className="mb-3 justify-end">
+          <span suppressHydrationWarning>{timeline}</span>
         </ModalChips>
       ) : null}
 
+      {/* Jarvis's read on it, in his own voice, above the labelled rows. */}
       {item.importanceReason ? (
-        <p className="text-[13.5px] italic leading-relaxed text-muted-foreground">
+        <p className="mb-3 min-w-0 whitespace-pre-wrap break-words font-voice text-[15.5px] leading-[1.55] text-foreground">
           {item.importanceReason}
         </p>
       ) : null}
 
+      {/* Labelled rows on hairlines — the bordered card that used to wrap them
+          was a box inside the modal's box. The rows already carry the shape. */}
       {visibleFields.length > 0 ? (
-        <div className="divide-y divide-border rounded-lg border bg-card">
-          <div className="px-4 py-1.5 sm:px-5">
-            {visibleFields.map((f) => (
-              <ModalField key={f.label} label={f.label}>
-                <FieldValue value={f.value} />
-              </ModalField>
-            ))}
-          </div>
+        <div className="min-w-0 divide-y divide-hairline">
+          {visibleFields.map((f) => (
+            <ModalField key={f.label} label={f.label}>
+              <FieldValue value={f.value} />
+            </ModalField>
+          ))}
         </div>
       ) : body ? (
         // Body didn't parse into labelled fields - render as prose so we
         // still show what Jarvis wrote, without the faux-card chrome.
-        <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground/90">
+        <p className="min-w-0 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground/90">
           {body}
         </p>
+      ) : empty ? (
+        <QuietNote>Nothing further on this one.</QuietNote>
       ) : null}
 
       {sessionId ? (
-        <a
-          href={`/live?session=${encodeURIComponent(sessionId)}`}
-          className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-3 text-xs font-medium transition-colors hover:bg-accent"
-        >
-          <MessagesSquare className="size-3.5" aria-hidden />
-          See what he did
-        </a>
+        <div className="pt-4">
+          <a
+            href={`/live?session=${encodeURIComponent(sessionId)}`}
+            className="inline-flex h-11 items-center gap-2 rounded-[10px] border border-input px-3 text-[13.5px] font-medium transition-colors hover:bg-accent"
+          >
+            <MessagesSquare className="size-3.5" aria-hidden />
+            See what he did
+          </a>
+        </div>
       ) : null}
 
       {item.url ? (
-        <ModalUrl href={item.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
-          {item.url}
-        </ModalUrl>
+        <div className="pt-3">
+          <ModalUrl href={item.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
+            {item.url}
+          </ModalUrl>
+        </div>
       ) : null}
-    </div>
+    </ViewerSections>
   );
 }
 
 // ── Saved ─────────────────────────────────────────────────────────────────
 function SavedBody({ s }: { s: Saved }) {
+  // kind / reading time / saved-when are in the header context line.
+  if (!s.source && !s.body && !s.url) {
+    return <QuietNote>Just the title on this one.</QuietNote>;
+  }
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-          {s.kind}
-        </span>
-        {s.readingMinutes ? (
-          <span className="font-mono">· {s.readingMinutes} min read</span>
-        ) : null}
-        <span className="font-mono" suppressHydrationWarning>
-          · saved {relTime(s.savedAt)}
-        </span>
-      </div>
+    <ViewerSections>
       {s.source ? (
-        <p className="break-words text-[12px] text-muted-foreground">{s.source}</p>
+        <ModalSection label="Source">
+          <span className="break-words">{s.source}</span>
+        </ModalSection>
       ) : null}
       {s.body ? (
-        <ModalSection>
+        <ModalSection label="Saved">
           <ModalPre>{s.body}</ModalPre>
         </ModalSection>
       ) : null}
       {s.url ? (
-        <ModalUrl href={s.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
-          {s.url}
-        </ModalUrl>
+        <ModalSection label="Link">
+          <ModalUrl href={s.url} icon={<ExternalLink className="size-3.5" aria-hidden />}>
+            {s.url}
+          </ModalUrl>
+        </ModalSection>
       ) : null}
-    </div>
+    </ViewerSections>
   );
 }
 
@@ -2533,34 +2406,28 @@ function ArtifactBody({ a }: { a: Artifact }) {
   if (a.virtualPath) meta.push({ k: "path", v: <span className="break-all font-mono text-[11px]">{a.virtualPath}</span> });
   if (a.sourceTool) meta.push({ k: "built with", v: a.sourceTool });
   if (a.bridge) meta.push({ k: "where", v: a.bridge === "mac" ? "your Mac" : "cloud workspace" });
+  // kind / "made by jarvis" / built-when are in the header context line.
   return (
-    <div className="space-y-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-tier-procedural/10 px-2 py-0.5 font-mono uppercase tracking-wider text-tier-procedural">
-          {a.kind}
-        </span>
-        <span className="inline-flex items-center gap-1 font-mono text-tier-procedural">
-          <Sparkles className="size-3" aria-hidden /> made by jarvis
-        </span>
-        <span className="font-mono" suppressHydrationWarning>
-          · built {relTime(a.createdAt)}
-        </span>
-      </div>
+    <ViewerSections>
       <ModalSection label="What it is">
-        <p className="text-[13px] text-muted-foreground">
-          {a.description?.trim()
-            ? a.description
-            : "Jarvis built this for you."}{" "}
+        <p>
+          {a.description?.trim() ? a.description : "Jarvis built this for you."}{" "}
           Tap <span className="font-medium text-foreground">Open</span> to launch it.
         </p>
       </ModalSection>
-      {meta.length > 0 ? <ModalDl entries={meta} /> : null}
-      {a.githubUrl ? (
-        <ModalUrl href={a.githubUrl} icon={<ExternalLink className="size-3.5" aria-hidden />}>
-          {a.githubUrl}
-        </ModalUrl>
+      {meta.length > 0 ? (
+        <ModalSection label="Details">
+          <ModalDl entries={meta} />
+        </ModalSection>
       ) : null}
-    </div>
+      {a.githubUrl ? (
+        <ModalSection label="Repo">
+          <ModalUrl href={a.githubUrl} icon={<ExternalLink className="size-3.5" aria-hidden />}>
+            {a.githubUrl}
+          </ModalUrl>
+        </ModalSection>
+      ) : null}
+    </ViewerSections>
   );
 }
 
@@ -2582,22 +2449,10 @@ function WorkBody({ w }: { w: WorkItem }) {
   if (w.engine) detailEntries.push({ k: "engine", v: w.engine });
   if (w.ref) detailEntries.push({ k: "reference", v: <span className="break-all font-mono">{w.ref}</span> });
 
+  // Column / engine / duration are in the header context line now — that chip
+  // row was the loudest of the eight boxes this modal used to open with.
   return (
-    <div className="space-y-3 pt-3">
-      <ModalChips>
-        <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-          {w.column}
-        </span>
-        {w.engine ? (
-          <span className="rounded-full bg-muted px-2 py-0.5 font-mono uppercase tracking-wider">
-            {w.engine}
-          </span>
-        ) : null}
-        {w.durationMs ? (
-          <span className="font-mono">· {formatDuration(w.durationMs)}</span>
-        ) : null}
-      </ModalChips>
-
+    <ViewerSections>
       {/* What it does — the job's actual instruction (cron) or goal (plan), so a
           queued/running item explains itself inline instead of sending the boss
           to /cron to find out what it is. */}
@@ -2607,20 +2462,13 @@ function WorkBody({ w }: { w: WorkItem }) {
         </ModalSection>
       ) : null}
 
-      {/* Skills it runs — the ingredients under the job headline. Chips, not a
-          wall of text, so it reads at a glance. */}
+      {/* Skills it runs — the ingredients under the job headline, as mono text
+          rather than a row of bordered pills. */}
       {w.skills && w.skills.length > 0 ? (
         <ModalSection label={w.skills.length === 1 ? "Skill" : "Skills"}>
-          <div className="flex flex-wrap gap-1.5">
-            {w.skills.map((s) => (
-              <span
-                key={s}
-                className="inline-flex max-w-full items-center truncate rounded-md border border-border bg-muted px-2 py-1 font-mono text-[11px] text-foreground/80"
-              >
-                {s}
-              </span>
-            ))}
-          </div>
+          <span className="min-w-0 break-words font-mono text-[12px] text-foreground/85">
+            {w.skills.join(", ")}
+          </span>
         </ModalSection>
       ) : null}
 
@@ -2775,15 +2623,17 @@ function WorkBody({ w }: { w: WorkItem }) {
       ) : null}
 
       {w.detailHref ? (
-        <ModalUrl
-          href={w.detailHref}
-          external={false}
-          icon={<ExternalLink className="size-3.5" aria-hidden />}
-        >
-          open in {w.detailHref}
-        </ModalUrl>
+        <ModalSection label="Elsewhere">
+          <ModalUrl
+            href={w.detailHref}
+            external={false}
+            icon={<ExternalLink className="size-3.5" aria-hidden />}
+          >
+            open in {w.detailHref}
+          </ModalUrl>
+        </ModalSection>
       ) : null}
-    </div>
+    </ViewerSections>
   );
 }
 
@@ -2888,126 +2738,92 @@ function renderActivityInline(text: string): React.ReactNode {
   );
 }
 
-function activityChipCls(kind: string): string {
-  switch (kind) {
-    case "completed":
-      return "border-success/40 bg-success/10 text-success";
-    case "reflection":
-      return "border-tier-procedural/40 bg-tier-procedural/10 text-tier-procedural";
-    case "alert":
-      return "border-rose-400/40 bg-rose-400/10 text-rose-400";
-    case "memory":
-      return "border-info/40 bg-info/10 text-info";
-    default: // scheduled | system
-      return "border-border bg-muted text-muted-foreground";
-  }
-}
-
 function ActivityBody({ e }: { e: ActivityEv }) {
   const blocks = parseActivityDetail(e.detail || "");
+  // Kind + relative time are in the header context line; the full timestamp
+  // stays here because the header carries the relative one ("2h ago") and the
+  // absolute one is the thing you open a detail view to read.
   return (
-    <div className="space-y-4 pt-3">
-      {/* Meta row — tone-colored kind chip + when. */}
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <span
-          className={cn(
-            "rounded-full border px-2 py-0.5 font-mono uppercase tracking-wider",
-            activityChipCls(e.kind),
-          )}
-        >
-          {e.kind}
-        </span>
-        <span className="font-mono text-muted-foreground" suppressHydrationWarning>
-          {e.future ? `in ${dayLabel(e.at).toLowerCase()}` : relTime(e.at)}
-        </span>
-        <span className="text-muted-foreground/40">·</span>
-        <span className="font-mono text-muted-foreground/70" suppressHydrationWarning>
-          {fullDateTime(e.at)}
-        </span>
-      </div>
+    <ViewerSections>
+      <ModalChips className="mb-3 justify-end">
+        <span suppressHydrationWarning>{fullDateTime(e.at)}</span>
+      </ModalChips>
 
-      {/* Body — uniform labeled / bullet / prose blocks. */}
+      {/* Body — labelled rows for "label: value" segments (the action/why/
+          result/safety shape heartbeat findings emit), bullets and prose for
+          the rest. A labelled segment IS a ModalSection now, so the whole body
+          reads as one column of labels instead of two competing label styles. */}
       {blocks.length > 0 ? (
-        <div className="space-y-3">
+        <>
           {blocks.map((b, i) =>
             b.label ? (
-              <div key={i} className="space-y-1">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  {b.label}
-                </div>
-                <div className="text-[13px] leading-relaxed text-foreground/90">
-                  {renderActivityInline(b.value || "")}
-                </div>
-              </div>
+              <ModalSection key={i} label={b.label}>
+                {renderActivityInline(b.value || "")}
+              </ModalSection>
             ) : b.bullets ? (
               <ul
                 key={i}
-                className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-foreground/90"
+                className="list-disc space-y-1 py-2 pl-5 text-[13px] leading-relaxed text-foreground/90"
               >
                 {b.bullets.map((x, j) => (
-                  <li key={j}>{renderActivityInline(x)}</li>
+                  <li key={j} className="break-words">
+                    {renderActivityInline(x)}
+                  </li>
                 ))}
               </ul>
             ) : (
-              <p key={i} className="text-[13px] leading-relaxed text-foreground/85">
+              <p
+                key={i}
+                className="min-w-0 break-words py-1 text-[13px] leading-relaxed text-foreground/85"
+              >
                 {renderActivityInline(b.value || "")}
               </p>
             ),
           )}
-        </div>
+        </>
       ) : (
-        <p className="text-[13px] italic leading-relaxed text-muted-foreground">
-          No further detail.
-        </p>
+        <QuietNote>No further detail.</QuietNote>
       )}
-    </div>
+    </ViewerSections>
   );
 }
 
 // ── header meta dispatch ─────────────────────────────────────────────────
 
-function headerMeta(item: DashboardItem): {
-  Icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  tone: string;
-} {
+/* headerKindLabel - the kind label that leads every modal's context line.
+ *
+ * It used to also hand back an `Icon` and a `tone` className for the header's
+ * bordered icon chip. Majordomo §7 removed the chip (one title per surface, no
+ * chrome above it), so the icon and the tint have no surface left to paint and
+ * are gone rather than left dangling as data nothing reads. The LABEL is the
+ * part that carried meaning and it still does, as the first word of the
+ * context line. */
+function headerMeta(item: DashboardItem): { label: string } {
   switch (item.kind) {
     case "pursuit":
-      return { Icon: Target, label: "Pursuit", tone: "border-border bg-muted text-foreground" };
+      return { label: "Pursuit" };
     case "todo":
-      return { Icon: ListTodo, label: "Todo", tone: "border-border bg-muted text-foreground" };
+      return { label: "Todo" };
     case "event":
-      return { Icon: Calendar, label: "Calendar event", tone: "border-border bg-muted text-foreground" };
+      return { label: "Calendar event" };
     case "reflection":
-      return { Icon: Brain, label: "Reflection", tone: "border-tier-procedural/40 bg-tier-procedural/10 text-tier-procedural" };
+      return { label: "Reflection" };
     case "approval":
-      if (item.data.kind === "code_proposal")
-        return { Icon: FileCode, label: "Code proposal", tone: "border-info/40 bg-info/10 text-info" };
-      if (item.data.kind === "curiosity")
-        return { Icon: HelpCircle, label: "Curiosity", tone: "border-info/40 bg-info/10 text-info" };
-      return { Icon: Terminal, label: "Approval", tone: "border-rose-400/40 bg-rose-400/10 text-rose-400" };
+      if (item.data.kind === "code_proposal") return { label: "Code proposal" };
+      if (item.data.kind === "curiosity") return { label: "Curiosity" };
+      return { label: "Approval" };
     case "followup":
-      return { Icon: Inbox, label: "Follow-up", tone: "border-border bg-muted text-foreground" };
+      return { label: "Follow-up" };
     case "surface":
-      return {
-        Icon: Sparkles,
-        label: surfaceKindLabel(item.data.surface),
-        tone:
-          (item.data.importance ?? 0) >= 80
-            ? "border-danger/40 bg-danger/10 text-danger"
-            : "border-border bg-muted text-foreground",
-      };
+      return { label: surfaceKindLabel(item.data.surface) };
     case "work":
-      return { Icon: Layers, label: "Agent work", tone: "border-border bg-muted text-foreground" };
+      return { label: "Agent work" };
     case "saved":
-      return { Icon: item.data.kind === "quote" ? Quote : Sparkles, label: "Saved", tone: "border-border bg-muted text-foreground" };
+      return { label: "Saved" };
     case "artifact":
-      return { Icon: Sparkles, label: "Made by Jarvis", tone: "border-tier-procedural/40 bg-tier-procedural/10 text-tier-procedural" };
+      return { label: "Made by Jarvis" };
     case "activity":
-      return { Icon: Activity, label: "Activity", tone: "border-border bg-muted text-foreground" };
+      return { label: "Activity" };
   }
 }
 
-// Keep this import referenced so tree-shaking doesn't complain about an
-// unused declaration in the union-meta switch above.
-void Loader2;

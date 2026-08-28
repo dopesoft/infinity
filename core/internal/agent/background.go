@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -40,9 +41,21 @@ import (
 // It runs the FULL default tool loadout by default (read/write/exec) so
 // it can actually build - the read-only delegate default would be useless
 // for "build me X". Pass allowed_tools to narrow it.
+//
+// WHICH BRAIN CODES (the boss's contract, 2026-08-28): on the MAC bridge the
+// build runs on Claude Code (`claude -p`) under his Claude Max subscription,
+// through the same tools.ClaudeCodeRunner as code_agent - subscription proof,
+// API-key guard, delete gate, quota ledger, live progress included. The
+// settings-model loop below is the CLOUD path only, where there is no Claude
+// Code. Before this, background_build ran a full ChatGPT-billed coding loop
+// on the Mac too (13 minutes on 2026-08-27 15:17, again 2026-08-28 01:58) -
+// the leak that spent his ChatGPT plan while he was "connected to the Mac".
 type BackgroundAgent struct {
 	Loop   *Loop
 	Bridge bridge.PrefFetcher
+	// Code launches Claude Code on the Mac (tools.ClaudeCodeRunner). Nil
+	// (not wired) falls back to the settings-model loop on every bridge.
+	Code CodeRunner
 	// OnDone is invoked once, after the background run finishes (success
 	// or failure). Wired in serve.go to broadcast a chat bubble + send a
 	// push. nil-safe: when unset, the run still completes + persists to
@@ -60,6 +73,16 @@ type BackgroundAgent struct {
 	// plan was spent. One conversation, one build; the rest are told to watch.
 	inflightMu sync.Mutex
 	inflight   map[string]string
+}
+
+// CodeRunner is the Mac-bridge Claude Code launcher (implemented by
+// *tools.ClaudeCodeRunner); declared here so the agent package depends on
+// the behaviour, not the concrete type, and tests can fake it.
+type CodeRunner interface {
+	ActiveBridge(ctx context.Context) (bridge.Bridge, string, error)
+	DefaultModel() string
+	DefaultEffort() string
+	Run(ctx context.Context, job tools.ClaudeCodeJob) (string, error)
 }
 
 // BackgroundResult is the completion payload handed to OnDone.
@@ -104,8 +127,9 @@ func (b *BackgroundAgent) Name() string { return "background_build" }
 
 func (b *BackgroundAgent) Description() string {
 	return "Run a heavy, multi-step engineering task (writing or editing code, building a feature, " +
-		"refactoring, a build/test cycle, large multi-file work) autonomously IN THE BACKGROUND on the " +
-		"boss's main settings model. Returns immediately with a run_id - it does NOT block. The work runs " +
+		"refactoring, a build/test cycle, large multi-file work) autonomously IN THE BACKGROUND. On the Mac " +
+		"bridge it runs on Claude Code under the boss's Claude Max subscription (the same engine as code_agent); " +
+		"on the Cloud bridge it runs on the boss's settings model. Returns immediately with a run_id - it does NOT block. The work runs " +
 		"to completion detached from this conversation and the boss is notified (chat + push) when done, so " +
 		"he can walk away or hang up a voice call. Use this for anything that would otherwise take many tool " +
 		"turns. Do NOT use it for quick one-shot actions (a single file read, a calendar lookup, sending one " +
@@ -125,6 +149,10 @@ func (b *BackgroundAgent) Schema() map[string]any {
 			"context_brief": map[string]any{
 				"type":        "string",
 				"description": "Optional extra background: relevant file paths, identifiers, prior decisions, or links the agent should know.",
+			},
+			"repo": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of the repo to work in (e.g. /Users/<you>/Dev/infinity on the Mac, /workspace/infinity on the cloud). Strongly recommended: Claude Code reads that repo's CLAUDE.md from here. Inferred from the task text when omitted.",
 			},
 			"allowed_tools": map[string]any{
 				"type":        "array",
@@ -192,14 +220,34 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 		return string(out), nil
 	}
 	bridgeKind := b.activeBridgeKind(ctx, parentSession)
+	// The runner knows the bridge that is ACTUALLY active (health-routed),
+	// not just the session's preference; on the Mac it is the engine too.
+	var macBridge bridge.Bridge
+	if b.Code != nil {
+		if br, _, err := b.Code.ActiveBridge(ctx); err == nil && br != nil {
+			bridgeKind = string(br.Name())
+			if br.Name() == bridge.KindMac {
+				macBridge = br
+			}
+		}
+	}
+	repo, _ := input["repo"].(string)
+	if repo = strings.TrimSpace(repo); repo == "" {
+		repo = inferRepoPath(task + "\n" + brief)
+	}
 	label := backgroundLabel(task, bridgeKind)
+	message := "Build started in the background on the settings model. It'll keep running even if this session ends - the boss gets a chat message and a push when it's done."
+	if macBridge != nil {
+		label = "Claude Code: " + backgroundLabel(task, "")
+		message = "Build started in the background on Claude Code (the boss's Claude subscription, on the Mac). It'll keep running even if this session ends - the boss gets a chat message and a push when it's done."
+	}
 
-	go b.runDetached(parentSession, runID, label, task, brief, allowed, timeout, bridgeKind)
+	go b.runDetached(parentSession, runID, label, task, brief, repo, allowed, timeout, bridgeKind, macBridge)
 
 	resp := map[string]any{
 		"status":  "started",
 		"run_id":  runID,
-		"message": "Build started in the background on the settings model. It'll keep running even if this session ends - the boss gets a chat message and a push when it's done.",
+		"message": message,
 	}
 	out, _ := json.Marshal(resp)
 	return string(out), nil
@@ -207,11 +255,19 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 
 // runDetached owns the whole background lifecycle on a fresh, detached
 // context so it survives the triggering session closing.
-func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief string, allowed []string, timeout time.Duration, bridgeKind string) {
+func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief, repo string, allowed []string, timeout time.Duration, bridgeKind string, macBridge bridge.Bridge) {
 	defer b.releaseSlot(parentSession, runID)
 	// Cap the absolute lifetime so a wedged build can't leak a goroutine
 	// forever. context.Background() (not the request ctx) is the point:
 	// hanging up the voice call must NOT cancel the build.
+	//
+	// A Claude Code run is never killed by this deadline (2026-08-27: three
+	// 14-minute runs were guillotined at a 30-minute budget with the work
+	// half done); we poll it for the full ceiling and, if it is still going,
+	// say so instead of pretending it finished or stopping it.
+	if macBridge != nil && timeout < backgroundTimeoutCeiling {
+		timeout = backgroundTimeoutCeiling
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -239,7 +295,7 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief s
 	}
 	handle.Progress(ctx, 0.05, "queued")
 
-	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, allowed, handle, bridgeKind)
+	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, repo, allowed, handle, bridgeKind, macBridge)
 	// Close on a detached context: a timed-out run's ctx is already
 	// cancelled by the defer above, but the row must still flip to ok/error
 	// (otherwise it spins until the next boot's RecoverStranded sweep).
@@ -295,7 +351,11 @@ func (b *BackgroundAgent) releaseSlot(parent, runID string) {
 // runToCompletion spins an ephemeral session, runs the agent loop on the
 // DEFAULT (settings) model to completion, and returns the final text.
 // Mirrors delegate.run, minus the synchronous-return contract.
-func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief string, allowed []string, handle *runs.Handle, bridgeKind string) (string, error) {
+func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, runID, task, brief, repo string, allowed []string, handle *runs.Handle, bridgeKind string, macBridge bridge.Bridge) (string, error) {
+	// Mac bridge: Claude Code does the coding on the boss's subscription.
+	if macBridge != nil && b.Code != nil {
+		return b.runOnClaudeCode(ctx, parentSession, runID, task, brief, repo, handle, macBridge)
+	}
 	childID := backgroundSessionIDPrefix + uuid.NewString()
 	child := b.Loop.GetOrCreateSession(childID)
 	defer b.Loop.ClearSession(childID)
@@ -343,46 +403,8 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 		runErr        error
 		wg            sync.WaitGroup
 		toolCallCount int
-		lastProgress  string
 	)
-	progressForToolCalls := func(count int) float32 {
-		if count <= 0 {
-			return 0.15
-		}
-		// Stage-based, asymptotic progress: initial setup = 0.05, each tool
-		// call advances the bar, but leave room for wrap-up and final summary.
-		progress := float32(0.15 + 0.1*float32(count))
-		if progress > 0.9 {
-			progress = 0.9
-		}
-		return progress
-	}
-	publishProgress := func(label, action, detail string, step int, progress *float32) {
-		trimmed := strings.TrimSpace(label)
-		if trimmed == "" || b.OnProgress == nil {
-			return
-		}
-		if trimmed == lastProgress {
-			return
-		}
-		lastProgress = trimmed
-		b.OnProgress(context.Background(), BackgroundProgress{
-			RunID:         runID,
-			ParentSession: parentSession,
-			Task:          task,
-			Label:         trimmed,
-			Status:        "running",
-			Progress:      progress,
-			Step:          step,
-			Action:        strings.TrimSpace(action),
-			Detail:        strings.TrimSpace(detail),
-		})
-		// Mirror onto the mem_runs row so the pinned dock (useRuns) shows the
-		// same live progress + step the inline card does, durably.
-		if progress != nil && persist != nil {
-			persist(*progress, backgroundDurableLabel(step, strings.TrimSpace(action), strings.TrimSpace(detail), trimmed))
-		}
-	}
+	publishProgress := b.progressPublisher(runID, parentSession, task, persist)
 	publishProgress("starting background build", "setup", "", 0, func() *float32 { v := float32(0.1); return &v }())
 	wg.Add(1)
 	go func() {
@@ -436,6 +458,121 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 		summary = "Background build completed (no summary text produced)."
 	}
 	return summary, runErr
+}
+
+// progressForToolCalls maps a running tool-call count onto the dock's bar:
+// stage-based, asymptotic (setup 0.05, each call advances, wrap-up reserved).
+func progressForToolCalls(count int) float32 {
+	if count <= 0 {
+		return 0.15
+	}
+	progress := float32(0.15 + 0.1*float32(count))
+	if progress > 0.9 {
+		progress = 0.9
+	}
+	return progress
+}
+
+// progressPublisher returns the one function both engines (the settings-model
+// loop and Claude Code) call to report a stage: it broadcasts the live card
+// into the parent chat (deduped on label) and, via persist, mirrors it onto
+// the mem_runs row so the pinned dock stays current across navigation /
+// refresh / device.
+func (b *BackgroundAgent) progressPublisher(runID, parentSession, task string, persist func(float32, string)) func(label, action, detail string, step int, progress *float32) {
+	lastProgress := ""
+	return func(label, action, detail string, step int, progress *float32) {
+		trimmed := strings.TrimSpace(label)
+		if trimmed == "" || trimmed == lastProgress {
+			return
+		}
+		lastProgress = trimmed
+		if b.OnProgress != nil {
+			b.OnProgress(context.Background(), BackgroundProgress{
+				RunID:         runID,
+				ParentSession: parentSession,
+				Task:          task,
+				Label:         trimmed,
+				Status:        "running",
+				Progress:      progress,
+				Step:          step,
+				Action:        strings.TrimSpace(action),
+				Detail:        strings.TrimSpace(detail),
+			})
+		}
+		if progress != nil && persist != nil {
+			persist(*progress, backgroundDurableLabel(step, strings.TrimSpace(action), strings.TrimSpace(detail), trimmed))
+		}
+	}
+}
+
+// runOnClaudeCode is the Mac path: the whole task goes to `claude -p` on the
+// boss's Claude subscription through the shared runner. The run row carries
+// the engine, the subscription proof (meta.auth → meta.backend), the pinned
+// model/effort, and Claude's live activity; the parent chat gets the same
+// progress card the settings-model loop would post.
+func (b *BackgroundAgent) runOnClaudeCode(ctx context.Context, parentSession, runID, task, brief, repo string, handle *runs.Handle, mac bridge.Bridge) (string, error) {
+	model := b.Code.DefaultModel()
+	effort := b.Code.DefaultEffort()
+	handle.SetMetaString(ctx, "worker", "Claude Code")
+	handle.SetMetaString(ctx, "engine", "claude_code")
+	handle.SetMetaString(ctx, "backend", "your Claude subscription")
+	handle.SetMetaString(ctx, "model", model)
+	handle.SetMetaString(ctx, "effort", effort)
+	handle.SetMetaString(ctx, "repo", repo)
+
+	publish := b.progressPublisher(runID, parentSession, task, func(fraction float32, label string) {
+		handle.Progress(ctx, fraction, label)
+	})
+	publish("starting Claude Code on the Mac", "setup", "", 0, func() *float32 { v := float32(0.1); return &v }())
+
+	full := task
+	if trimmed := strings.TrimSpace(brief); trimmed != "" {
+		full += "\n\n## Brief\n" + trimmed
+	}
+	maxWait := backgroundTimeoutCeiling
+	if dl, ok := ctx.Deadline(); ok {
+		maxWait = time.Until(dl) - 15*time.Second
+	}
+	steps := 0
+	lastKey := ""
+	summary, err := b.Code.Run(ctx, tools.ClaudeCodeJob{
+		Bridge:       mac,
+		JobID:        runID,
+		Task:         full,
+		Repo:         repo,
+		Model:        model,
+		Effort:       effort,
+		MaxWait:      maxWait,
+		KillOnCancel: false,
+		Heartbeat: func(label, action, detail string) {
+			// A new tool call (name + target) is a new step for the bar.
+			if key := action + "\x00" + detail; detail != "" && key != lastKey {
+				lastKey = key
+				steps++
+			}
+			phase := progressForToolCalls(steps)
+			publish(label, action, detail, steps, &phase)
+		},
+		SetMeta: func(key, value string) {
+			handle.SetMetaString(ctx, key, value)
+			if key == "auth" {
+				handle.SetMetaString(ctx, "backend", value)
+			}
+		},
+	})
+	if err == nil && strings.TrimSpace(summary) == "" {
+		summary = "Claude Code finished (no summary text produced)."
+	}
+	return summary, err
+}
+
+// repoPathRe finds the first repo path a task names: the boss's Mac layout
+// (~/Dev/<repo>) or the cloud workspace (/workspace/<repo>).
+var repoPathRe = regexp.MustCompile(`(?:/Users/[^\s"'` + "`" + `]+/Dev/[\w.-]+|~/Dev/[\w.-]+|/workspace/[\w.-]+)`)
+
+// inferRepoPath returns the first repo path mentioned in text, "" when none.
+func inferRepoPath(text string) string {
+	return strings.TrimRight(repoPathRe.FindString(text), ".,;:")
 }
 
 // backgroundLabel produces the short human string Studio shows next to the

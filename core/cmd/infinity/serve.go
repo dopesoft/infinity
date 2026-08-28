@@ -113,6 +113,8 @@ func serveCmd() *cobra.Command {
 				llmRegistry         *llm.Registry
 				activeModel         *activeModelProvider
 				activeBridgeRouter  *bridge.Router
+				// claudeRunner is the ONE Claude Code launcher (code_agent + background_build on the Mac).
+				claudeRunner *tools.ClaudeCodeRunner
 				activeBridgePrefs   tools.PreferenceFetcher
 				browserReg          *browser.Registry
 				docCreate           *tools.DocumentCreate
@@ -126,6 +128,25 @@ func serveCmd() *cobra.Command {
 			)
 
 			if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+				// Schema is brought current BEFORE the listener opens. `serve` used
+				// to never migrate, so a merged migration only reached prod if a
+				// human remembered to run `infinity migrate` separately. That is
+				// how 011-014 sat unapplied for weeks while handlers logged
+				// "relation does not exist" against tables the code assumed. Doing
+				// it here, synchronously, makes a deploy self-consistent by
+				// construction. A failure returns from RunE, so the process exits
+				// non-zero without ever binding the port: nothing can report ready
+				// on an unmigrated schema, and Railway keeps the previous healthy
+				// container serving instead of promoting a broken one. Boot cost is
+				// one round trip when there is nothing pending.
+				mctx, mcancel := context.WithTimeout(cmd.Context(), migrateTimeout)
+				n, mErr := applyMigrations(mctx, dsn, "", nil)
+				mcancel()
+				if mErr != nil {
+					return fmt.Errorf("migrate: %w", mErr)
+				}
+				fmt.Printf("  migrations: schema current (%d applied this boot)\n", n)
+
 				pctx, pcancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 				// Default pgxpool MaxConns is max(4, NumCPU), which forces
 				// fan-out workloads (the dashboard aggregator fires ~11
@@ -476,7 +497,8 @@ func serveCmd() *cobra.Command {
 					// PreToolUse hook blocks for the boss to approve. This is the
 					// fix for "I was on the Mac bridge but it was still burning
 					// my ChatGPT plan." See CLAUDE.md "Coding via Claude Code".
-					tools.RegisterCodeAgentTool(registry, activeBridgeRouter, activeBridgePrefs, runs.New(p))
+					claudeRunner = tools.NewClaudeCodeRunner(activeBridgeRouter, activeBridgePrefs)
+					tools.RegisterCodeAgentTool(registry, claudeRunner, runs.New(p))
 					// Generic artifact CRUD + high-level project_create.
 					// project_create is the boss-asked-for end-to-end
 					// app-bootstrap tool; it routes through the bridge
@@ -1101,6 +1123,14 @@ func serveCmd() *cobra.Command {
 				// orchestrate builds. OnDone is wired after the server
 				// exists (it needs broadcast + push).
 				bgAgent = &agent.BackgroundAgent{Loop: loop}
+				if activeBridgePrefs != nil {
+					bgAgent.Bridge = bridge.PrefFetcher(activeBridgePrefs)
+				}
+				if claudeRunner != nil {
+					// Mac bridge: the build runs on Claude Code under the boss's
+					// Claude subscription, never a second ChatGPT-billed loop.
+					bgAgent.Code = claudeRunner
+				}
 				registry.Register(bgAgent)
 				if pool != nil {
 					registry.Register(&agent.AgentTeam{Loop: loop, Pool: pool, Settings: settings.New(pool)})

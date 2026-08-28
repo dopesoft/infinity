@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
-import { Mulish } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import { AuthProvider } from "@/lib/auth/session";
 import { NavBadgesProvider } from "@/lib/nav-badges";
 import { RealtimeProvider } from "@/lib/realtime/provider";
@@ -19,12 +20,18 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const mulish = Mulish({
-  subsets: ["latin"],
-  variable: "--font-mulish",
-  display: "swap",
-  weight: ["300", "400", "500", "600", "700", "800"],
-});
+// Majordomo type (docs/studio/MAJORDOMO.md §4). Geist for voice + chrome,
+// Geist Mono for data. `geist` is Vercel's own package: it ships the fonts
+// locally and wraps them in next/font/local, so there is no Google Fonts
+// round trip at build time and no FOUT at runtime.
+//
+// GeistSans.variable / GeistMono.variable are CLASS NAMES that declare
+// --font-geist-sans / --font-geist-mono. Tailwind's `sans`, `voice`, and
+// `mono` families read those variables (tailwind.config.ts).
+//
+// Next 14 needs `transpilePackages: ["geist"]` in next.config.mjs - the
+// package ships ESM that the 14.x server bundler will not resolve otherwise.
+const fontVariables = `${GeistSans.variable} ${GeistMono.variable}`;
 
 export const metadata: Metadata = {
   title: "Infinity",
@@ -70,7 +77,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${mulish.variable} font-sans`}>
+      <body className={`${fontVariables} font-sans`}>
         <AuthProvider>
           <RealtimeProvider>
             <NavBadgesProvider>
