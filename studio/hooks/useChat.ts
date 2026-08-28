@@ -8,6 +8,7 @@ import { useWebSocket } from "@/lib/ws/provider";
 import { fetchSessionMessages } from "@/lib/api";
 import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
+import { reconcileSteerEcho } from "@/lib/chat/steer";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
@@ -1172,24 +1173,13 @@ export function useChat() {
           // the bubble optimistically; this exists for multi-tab parity
           // and reconnect cases. Dedup is best-effort: if the most recent
           // user message has the same text and was marked steered, drop.
-          setMessages((prev) => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              const m = prev[i];
-              if (m.role !== "user") continue;
-              if (m.steered && (m.text === ev.text || (ev.text.startsWith("(attached:") && m.attachments?.length))) return prev;
-              break;
-            }
-            return [
-              ...prev,
-              {
-                id: makeId(),
-                role: "user",
-                text: ev.text,
-                steered: true,
-                createdAt: Date.now(),
-              },
-            ];
-          });
+          // Reconciliation is a MECHANIC, so it lives in a pure tested
+          // function rather than inline here: the client and the server can
+          // legitimately disagree about whether a send was a message or a
+          // steer, and the old inline dedupe only handled the one case that
+          // could never happen in that race, so it drew the boss's message
+          // twice. See lib/chat/steer.ts.
+          setMessages((prev) => reconcileSteerEcho(prev, ev.text, makeId()));
           break;
         }
         case "error": {

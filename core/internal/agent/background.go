@@ -92,7 +92,39 @@ type BackgroundResult struct {
 	Task          string
 	Summary       string
 	Err           string
-	DurationMS    int64
+	// StillRunning: the build did NOT finish and did NOT fail — its inline wait
+	// window closed while the worker kept going on the Mac. Err is empty in this
+	// case, deliberately: every consumer that branches on "did it error?" must
+	// see "no", because settling a plan step failed or pushing "Build failed"
+	// here is a lie about work that is still landing on disk. Consumers that
+	// need to distinguish "finished" from "still going" read THIS field.
+	StillRunning bool
+	DurationMS   int64
+}
+
+// classifyBackgroundRun turns a finished worker's (summary, error) into what
+// the run row and the completion payload should say. Pure, so the one rule that
+// matters — STILL WORKING IS NEVER A FAILURE — is testable, and so it is
+// impossible to state it in two places that drift.
+//
+// Detection is by TYPE (tools.IsStillRunning → errors.As), never by scanning
+// the message. That is the actual bug being fixed: serve.go's isRecoverableErr
+// matched on substrings ("timeout", "eof", …) and this sentinel's wording is
+// none of them, so "still working" fell through to the failure branch.
+//
+// A genuine error is untouched: errText carries it, stillWorking is false, and
+// the caller closes the row 'error' exactly as before.
+func classifyBackgroundRun(summary string, runErr error) (finalSummary string, stillWorking bool, errText string) {
+	if runErr == nil {
+		return summary, false, ""
+	}
+	if tools.IsStillRunning(runErr) {
+		if strings.TrimSpace(summary) == "" {
+			summary = tools.StillRunningMessage(runErr)
+		}
+		return summary, true, ""
+	}
+	return summary, false, runErr.Error()
 }
 
 // BackgroundProgress is a best-effort live status update emitted while a
@@ -296,20 +328,29 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief, 
 	handle.Progress(ctx, 0.05, "queued")
 
 	summary, runErr := b.runToCompletion(ctx, parentSession, runID, task, brief, repo, allowed, handle, bridgeKind, macBridge)
+	summary, stillWorking, errText := classifyBackgroundRun(summary, runErr)
 	// Close on a detached context: a timed-out run's ctx is already
-	// cancelled by the defer above, but the row must still flip to ok/error
-	// (otherwise it spins until the next boot's RecoverStranded sweep).
-	handle.Finish(context.Background(), runErr, "")
+	// cancelled by the defer above, but the row must still flip to a terminal
+	// state (otherwise it spins until the next boot's RecoverStranded sweep).
+	if stillWorking {
+		// The worker is STILL GOING. Closing this row 'error' is what produced
+		// the red step + "Build failed" push for work that was landing on disk.
+		// FinishInterrupted closes it 'ok' + meta.stopped_reason='still_working'
+		// with a summary that says plainly it hasn't finished, so nothing
+		// downstream can read it as either a failure OR a success.
+		handle.FinishInterrupted(context.Background(), runs.StoppedStillWorking, summary)
+	} else {
+		handle.Finish(context.Background(), runErr, "")
+	}
 
 	res := BackgroundResult{
 		RunID:         runID,
 		ParentSession: parentSession,
 		Task:          task,
 		Summary:       summary,
+		StillRunning:  stillWorking,
+		Err:           errText,
 		DurationMS:    time.Since(start).Milliseconds(),
-	}
-	if runErr != nil {
-		res.Err = runErr.Error()
 	}
 	if b.OnDone != nil {
 		// Detached notify ctx - the run ctx may already be cancelled by
@@ -560,6 +601,13 @@ func (b *BackgroundAgent) runOnClaudeCode(ctx context.Context, parentSession, ru
 			}
 		},
 	})
+	// STILL WORKING IS NOT A FAILURE. The wait window closed while Claude Code
+	// kept going on the Mac (nohup-reparented, KillOnCancel:false above). Carry
+	// its honest wording up as the summary but keep the TYPED error intact so
+	// runDetached classifies it with errors.As — never by reading these words.
+	if msg := tools.StillRunningMessage(err); msg != "" {
+		return msg, err
+	}
 	if err == nil && strings.TrimSpace(summary) == "" {
 		summary = "Claude Code finished (no summary text produced)."
 	}

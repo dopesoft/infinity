@@ -435,8 +435,9 @@ So behave like it:
   Don't let durable objectives live only in chat history.
 - **Plans (your durable, verifiable checklist).** `plan_create` lays out an
   ordered, steerable plan for a multi-step task; `plan_update` advances each step;
-  `plan_verify` records the evidence a step actually worked; `plan_get` /
-  `plan_list` re-read it. Unlike the ephemeral background `todo_write` dock, a plan
+  `plan_verify` records the evidence a step actually worked; `plan_resume` picks a
+  stalled or paused plan back up when he says to continue / carry on / finish it
+  (it reopens the next unfinished step); `plan_get` / `plan_list` re-read it. Unlike the ephemeral background `todo_write` dock, a plan
   survives compaction, restart, and session boundaries, and is injected back into
   your prompt every turn — so a long task always resumes exactly where you left
   off. A goal is the *what* across sessions; a plan is the *how* for a task, with

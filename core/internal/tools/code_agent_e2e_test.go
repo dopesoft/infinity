@@ -83,6 +83,29 @@ sleep 0.4
 echo '{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"result":"Done: edited core/x.go","modelUsage":{"claude-opus-5":{"inputTokens":1}}}'
 `
 
+// gitInit makes dir a real git worktree - the preflight refuses to launch
+// Claude Code anywhere that is not one.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v: %s", dir, err, out)
+	}
+}
+
+// resolved is the symlink-free absolute form of p, which is what the
+// preflight reports back (macOS temp dirs live under /private/var).
+func resolved(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", p, err)
+	}
+	return r
+}
+
 func setupLocalMac(t *testing.T, oauthAccount string) (*localMacBridge, string) {
 	t.Helper()
 	if _, err := exec.LookPath("bash"); err != nil {
@@ -106,6 +129,7 @@ func setupLocalMac(t *testing.T, oauthAccount string) (*localMacBridge, string) 
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fakeClaude), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	gitInit(t, repo)
 	mark := filepath.Join(root, "launched.mark")
 	b := &localMacBridge{home: home, bin: bin, extra: []string{"FAKE_CLAUDE_MARK=" + mark}}
 
@@ -156,6 +180,25 @@ func TestClaudeCodeRunner_EndToEnd_RunsOnTheSubscription(t *testing.T) {
 	if meta["model"] != "claude-opus-5" {
 		t.Fatalf("meta.model must be corrected to what Claude reports: %+v", meta)
 	}
+	// The audit trail: which directory, which binary, which model, whose plan.
+	want := resolved(t, repo)
+	if meta["repo"] != want || meta["repo_root"] != want {
+		t.Fatalf("meta must record the resolved repo and its git root (want %q): %+v", want, meta)
+	}
+	if !strings.HasSuffix(meta["claude_bin"], "/claude") {
+		t.Fatalf("meta.claude_bin must record the resolved executable: %+v", meta)
+	}
+	for _, frag := range []string{"repo " + want, "git root " + want, "/claude", "model claude-opus-5[1m]", "Max subscription · kai@example.com"} {
+		if !strings.Contains(meta["preflight"], frag) {
+			t.Fatalf("meta.preflight missing %q: %q", frag, meta["preflight"])
+		}
+	}
+	if strings.Contains(meta["preflight"], "sk-ant") {
+		t.Fatalf("the evidence line must never carry a key: %q", meta["preflight"])
+	}
+	if !strings.Contains(summary, "in "+want) {
+		t.Fatalf("the result footer must name the repo it ran in: %q", summary)
+	}
 	joined := strings.Join(labels, "\n")
 	if !strings.Contains(joined, "signed in on your Max subscription") {
 		t.Fatalf("the sign-in must be reported before launch:\n%s", joined)
@@ -189,5 +232,107 @@ func TestClaudeCodeRunner_EndToEnd_RefusesWithoutTheSubscription(t *testing.T) {
 	}
 	if !strings.Contains(notSub.guidance(), "NOT LAUNCHED") || !strings.Contains(notSub.guidance(), "/login") {
 		t.Fatalf("guidance must tell the boss how to fix it: %s", notSub.guidance())
+	}
+}
+
+// Why: a blank or wrong repo used to fall through to the bridge's default
+// cwd - ~/Dev, the umbrella folder holding every repo the boss owns - and
+// Claude Code would start editing whatever it found in there. Every one of
+// these must refuse BEFORE `claude` is ever launched.
+func TestClaudeCodeRunner_EndToEnd_RefusesABadRepo(t *testing.T) {
+	const maxAccount = `{"emailAddress":"kai@example.com","organizationType":"claude_max","billingType":"stripe_subscription"}`
+
+	t.Run("empty", func(t *testing.T) {
+		mac, _ := setupLocalMac(t, maxAccount)
+		assertRepoRefused(t, mac, "", repoReasonEmpty)
+	})
+	t.Run("missing", func(t *testing.T) {
+		mac, repo := setupLocalMac(t, maxAccount)
+		assertRepoRefused(t, mac, filepath.Join(repo, "does-not-exist"), repoReasonMissing)
+	})
+	t.Run("file not directory", func(t *testing.T) {
+		mac, repo := setupLocalMac(t, maxAccount)
+		file := filepath.Join(repo, "README.md")
+		if err := os.WriteFile(file, []byte("hi"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertRepoRefused(t, mac, file, repoReasonNotDir)
+	})
+	t.Run("not a git repo", func(t *testing.T) {
+		mac, repo := setupLocalMac(t, maxAccount)
+		plain := filepath.Join(filepath.Dir(repo), "plain")
+		if err := os.MkdirAll(plain, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		assertRepoRefused(t, mac, plain, repoReasonNotGit)
+	})
+	t.Run("the ~/Dev umbrella", func(t *testing.T) {
+		mac, _ := setupLocalMac(t, maxAccount)
+		umbrella := filepath.Join(mac.home, "Dev")
+		// Even a git repo AT ~/Dev is the umbrella, never a work target.
+		if err := os.MkdirAll(umbrella, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitInit(t, umbrella)
+		assertRepoRefused(t, mac, umbrella, repoReasonUmbrella)
+	})
+}
+
+// assertRepoRefused runs a job against repo and proves it was rejected for
+// reason, with nothing launched and a guidance line the model can act on.
+func assertRepoRefused(t *testing.T, mac *localMacBridge, repo, reason string) {
+	t.Helper()
+	r := NewClaudeCodeRunner(nil, nil)
+	_, err := r.Run(context.Background(), ClaudeCodeJob{
+		Bridge: mac, JobID: "job-repo", Task: "edit core/x.go", Repo: repo, MaxWait: 5 * time.Second,
+	})
+	var bad *repoRejectedError
+	if !errors.As(err, &bad) {
+		t.Fatalf("want repoRejectedError, got %v", err)
+	}
+	if bad.reason != reason {
+		t.Fatalf("reason = %q, want %q (%v)", bad.reason, reason, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(mac.home), "launched.mark")); statErr == nil {
+		t.Fatal("claude must never have been launched for a bad repo")
+	}
+	g := bad.guidance()
+	if !strings.Contains(g, "NOT LAUNCHED") || !strings.Contains(g, "~/Dev/<repo>") {
+		t.Fatalf("guidance must name the fix: %s", g)
+	}
+	if strings.Contains(g, "write the code yourself") && !strings.Contains(g, "Do NOT write the code yourself") {
+		t.Fatalf("a refusal must never steer the chat model into coding on its own plan: %s", g)
+	}
+}
+
+// Why: the boss pays for Opus on his Max plan. Claude Code's own default is
+// Sonnet, so a run launched without a model must be pinned at the execution
+// boundary, not left to whatever the Mac happens to be configured for.
+func TestClaudeCodeRunner_EndToEnd_PinsOpus5WhenNoModelGiven(t *testing.T) {
+	mac, repo := setupLocalMac(t, `{"emailAddress":"kai@example.com","organizationType":"claude_max","billingType":"stripe_subscription"}`)
+	// The Mac's own Claude settings name a different model; the pin wins.
+	var (
+		mu   sync.Mutex
+		meta = map[string]string{}
+	)
+	r := NewClaudeCodeRunner(nil, nil)
+	if _, err := r.Run(context.Background(), ClaudeCodeJob{
+		Bridge: mac, JobID: "job-pin", Task: "edit core/x.go", Repo: repo,
+		MaxWait: 20 * time.Second, KillOnCancel: true,
+		SetMeta: func(k, v string) { mu.Lock(); meta[k] = v; mu.Unlock() },
+	}); err != nil {
+		t.Fatalf("run: %v\ncommands:\n%s", err, strings.Join(mac.cmds, "\n----\n"))
+	}
+	if !strings.Contains(meta["preflight"], "model "+pinnedCodeModel) {
+		t.Fatalf("an unspecified model must resolve to the pin on the run row: %q", meta["preflight"])
+	}
+	mu.Lock()
+	cmds := strings.Join(mac.cmds, "\n----\n")
+	mu.Unlock()
+	if !strings.Contains(cmds, "export INF_MODEL="+shellQuote(pinnedCodeModel)) {
+		t.Fatalf("the launch must carry the pinned model:\n%s", cmds)
+	}
+	if strings.Contains(cmds, "INF_MODEL=''") {
+		t.Fatalf("the launch must never leave the model unset (Claude Code would pick Sonnet):\n%s", cmds)
 	}
 }

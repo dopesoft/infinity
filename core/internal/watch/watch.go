@@ -200,38 +200,53 @@ func (p *Poller) process(ctx context.Context, d dueWatch) {
 // it grabs the most recent run that started within a short lookback of the
 // watch's creation, which fits "I just fired/will-fire it, watch THIS run"
 // whether the fire was synchronous (already terminal) or async (still running).
+//
+// A row carrying meta.stopped_reason is reported as STILL RUNNING, not as a
+// result. Such a row closed WITHOUT a verdict: the worker outlived the wait
+// window, or the box restarted under it (runs.FinishInterrupted /
+// runs.RecoverStranded). It closes 'ok' so nothing downstream calls an
+// interruption a failure - but "ok" here would make this poller announce
+// "finished ok" into the boss's chat for work that never reported a result,
+// which is exactly the false green the honesty rules forbid. Keeping it
+// unsettled means the watch either sees the real outcome later or expires and
+// says plainly that it is standing down.
 func (p *Poller) resolve(ctx context.Context, d dueWatch) (status, errMsg string, durMs int, found bool) {
 	var (
-		st  string
-		em  string
-		dms *int
+		st     string
+		em     string
+		dms    *int
+		reason string
 	)
 	switch d.kind {
 	case "cron":
 		err := p.pool.QueryRow(ctx, `
-			SELECT status, error, duration_ms
+			SELECT status, error, duration_ms, COALESCE(meta->>'stopped_reason','')
 			  FROM mem_runs
 			 WHERE kind = 'cron' AND target_id = $1
 			   AND started_at >= $2::timestamptz - INTERVAL '10 minutes'
 			 ORDER BY started_at DESC
 			 LIMIT 1
-		`, d.targetID, d.createdAt).Scan(&st, &em, &dms)
+		`, d.targetID, d.createdAt).Scan(&st, &em, &dms, &reason)
 		if err != nil {
 			return "", "", 0, false
 		}
 	default: // "run"
 		err := p.pool.QueryRow(ctx, `
-			SELECT status, error, duration_ms
+			SELECT status, error, duration_ms, COALESCE(meta->>'stopped_reason','')
 			  FROM mem_runs
 			 WHERE id = $1::uuid
 			 LIMIT 1
-		`, d.targetID).Scan(&st, &em, &dms)
+		`, d.targetID).Scan(&st, &em, &dms, &reason)
 		if err != nil {
 			return "", "", 0, false
 		}
 	}
 	if dms != nil {
 		durMs = *dms
+	}
+	if strings.TrimSpace(reason) != "" && st != "error" {
+		// No verdict was reached: do not announce one.
+		return "running", em, durMs, true
 	}
 	return st, em, durMs, true
 }

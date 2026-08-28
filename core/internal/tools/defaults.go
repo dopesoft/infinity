@@ -70,6 +70,11 @@ func CorePinnedTools() []string {
 		// before laying out or advancing a plan.
 		"plan_create",
 		"plan_approve",
+		// plan_resume is the "carry on" verb and is pinned beside plan_approve
+		// for the same reason: it is one of the two doors out of the consent
+		// gate, so it must be in hand the moment the boss says continue - never
+		// behind a tool_search on a turn the gate has already closed.
+		"plan_resume",
 		"plan_update",
 		"plan_verify",
 		"plan_get",

@@ -129,6 +129,16 @@ func (p *PlanProvider) BuildSystemPrefix(ctx context.Context, sessionID, query s
 		return b.String(), nil
 	}
 	b.WriteString("<active_plan>\n")
+	if status == "paused" {
+		// A paused plan is stalled work he already approved - a step failed, got
+		// blocked, or its run was killed. When he says to continue / carry on /
+		// finish it, plan_resume is the verb: it reopens the next unfinished step
+		// AND opens the consent gate for the tools the step needs. Without this
+		// line the only way to say "continue" was plan_update, which is
+		// consent-gated, so the resume was refused on the exact turn he asked
+		// for it (2026-08-28).
+		b.WriteString("This plan is PAUSED: a step stopped short (failed, blocked, or its run was killed) - the work is not finished. If the boss says to continue, carry on, pick it back up, or finish it, call plan_resume: it reopens the next unfinished step and puts you back to work. Then actually do the step, don't just re-describe the plan.\n")
+	}
 	b.WriteString("Your durable plan for this task (survives across turns/restarts). Keep it current with plan_update as you work, and plan_verify before marking a step done. ")
 	b.WriteString("If the boss changes direction or says 'let's do this instead', reshape this plan YOURSELF with plan_revise (prune steps that no longer apply, rewrite a step to what you're now doing, add new ones) so it always matches reality — never make him name step numbers, and never tick a step 'done' that didn't actually happen. If he says to drop/kill/stop the plan, use plan_cancel.\n")
 	fmt.Fprintf(&b, "Plan: %s", title)

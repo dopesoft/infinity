@@ -1672,11 +1672,11 @@ func serveCmd() *cobra.Command {
 					// '(interrupted by restart)' with no story. minAge floor avoids
 					// touching a poll that fired in the first seconds after boot;
 					// real orphans predate the restart and are far older.
-					if n, err := cronScheduler.ReconcileReaped(bctx, 2*time.Minute); err != nil {
+					if n, err := cronScheduler.ReconcileReaped(bctx, cron.DefaultReconcileAges(2*time.Minute, 2*time.Minute)); err != nil {
 						log.Printf("cron reconcile (boot): %v", err)
 					} else if n > 0 {
 						infoLog := log.New(os.Stdout, "", log.LstdFlags)
-						infoLog.Printf("cron reconcile (boot): gave %d orphaned cron run(s) a clear outcome", n)
+						infoLog.Printf("cron reconcile (boot): gave %d orphaned run(s) a clear outcome", n)
 					}
 				}()
 				cronAPI = cron.NewAPI(cronScheduler)
@@ -1689,6 +1689,12 @@ func serveCmd() *cobra.Command {
 				// Go branches.
 				if watchStore := watch.NewStore(pool); watchStore != nil {
 					tools.RegisterWatchTools(registry, watchStore, pool)
+					// Hand code_agent the store DIRECTLY as well. A job that
+					// outlived its turn registers its own "tell him when it
+					// lands" watch; without this it falls back to invoking the
+					// watch_until TOOL to do the same thing, which works but
+					// costs a tool hop on a path the boss is already waiting on.
+					tools.AttachWatchCreator(registry, watchStore)
 				}
 
 				dispatcher := sentinel.SkillDispatcher{
@@ -2228,10 +2234,20 @@ func serveCmd() *cobra.Command {
 					// the build finishes". Decide settle/recovery BEFORE notifying
 					// so the chat bubble + push match what actually happened.
 					recovering := false
+					settle := classifyBackgroundResult(r)
 					if pool != nil && r.ParentSession != "" {
 						pstore := plan.NewStore(pool)
-						switch {
-						case r.Err == "":
+						switch settle {
+						case bgSettleStillWorking:
+							// STILL WORKING IS NOT FAILED. The inline wait window
+							// closed; the worker kept going on the Mac. Settling the
+							// step failed here is what put a red ❌ and a "Build
+							// failed" push in front of the boss for code that was
+							// landing on disk. Leave the step in_progress: it is
+							// still, accurately, in progress. Nothing is stranded —
+							// the plan.step reaper and cron.ReconcileReaped both
+							// still close it honestly if the work never lands.
+						case bgSettleDone:
 							if _, err := pstore.SettlePlanForSession(context.Background(), r.ParentSession, plan.StepDone, r.Summary); err != nil {
 								fmt.Fprintf(os.Stderr, "plan settle (done) for %s: %v\n", r.ParentSession, err)
 							}
@@ -2240,7 +2256,7 @@ func serveCmd() *cobra.Command {
 							// transient/bridge-class failure if the in_progress step
 							// hasn't already been retried; the recovery_attempted
 							// guard makes this un-loopable.
-							if isRecoverableErr(r.Err) {
+							if settle == bgSettleRetry {
 								if step, sErr := pstore.InProgressStepForSession(context.Background(), r.ParentSession); sErr == nil && step != nil && !step.RecoveryAttempted {
 									if mErr := pstore.MarkRecoveryAttempted(context.Background(), step.ID); mErr == nil {
 										rctx := tools.WithSessionID(context.Background(), r.ParentSession)
@@ -2252,7 +2268,9 @@ func serveCmd() *cobra.Command {
 							}
 							if !recovering {
 								// Stop and surface the REAL error: step -> failed,
-								// plan -> paused, under "Awaiting you".
+								// plan -> paused, under "Awaiting you". Reached only
+								// for a genuine failure — a run that actually errored
+								// still goes red here, exactly as before.
 								if _, err := pstore.SettlePlanForSession(context.Background(), r.ParentSession, plan.StepFailed, r.Err); err != nil {
 									fmt.Fprintf(os.Stderr, "plan settle (failed) for %s: %v\n", r.ParentSession, err)
 								}
@@ -2263,6 +2281,9 @@ func serveCmd() *cobra.Command {
 					if recovering {
 						srv.BroadcastBackgroundDone(r.ParentSession, r.Task, "First attempt hit a transient issue — retrying once on the cloud workspace.", "")
 					} else {
+						// r.Err is empty for a still-working result by
+						// construction, so the bubble reads as "here's where it's
+						// at", never as a failure.
 						srv.BroadcastBackgroundDone(r.ParentSession, r.Task, r.Summary, r.Err)
 					}
 					if localPush != nil {
@@ -2274,6 +2295,11 @@ func serveCmd() *cobra.Command {
 							body = r.Task
 							if r.Err != "" {
 								body += " — first attempt hit: " + r.Err
+							}
+						case settle == bgSettleStillWorking:
+							title = "Still working"
+							if r.Summary != "" {
+								body = r.Summary
 							}
 						case r.Err != "":
 							title = "Build failed"
@@ -3006,17 +3032,20 @@ func runPlanReconcileTicker(ctx context.Context, pool *pgxpool.Pool, scheduler *
 	runOnce := func() {
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		// Give orphaned cron runs a clear outcome + inbox card BEFORE the generic
-		// reaper flips them to a bare 'error' — a run whose container died
-		// mid-finalize (the self-push redeploy case) reads "stopped early — I was
-		// interrupted by a deploy" on the kanban instead of a silent reap. Uses
-		// the 45-min budget so a healthy in-flight run (≤30-min job timeout) is
-		// never touched. Idempotent: once it stamps meta.outcome it won't re-run.
+		// Give orphaned runs a clear outcome BEFORE the generic reapers flip them
+		// to a bare 'error' — a run whose container died mid-finalize (the
+		// self-push redeploy case) reads "stopped early — I was interrupted by a
+		// deploy" on the kanban instead of a silent reap. Crons get the 45-min
+		// budget (healthy in-flight ≤30-min job timeout is never touched), plan
+		// steps the same tighter budget their own reaper below uses (running
+		// FIRST is what makes the honest classification reachable at all), and
+		// detached coding jobs a 2h floor since they're exempt from the blanket
+		// reaper. Idempotent: once it stamps meta.outcome it won't re-run.
 		if scheduler != nil {
-			if n, err := scheduler.ReconcileReaped(runCtx, reapAge); err != nil {
-				fmt.Fprintf(os.Stderr, "cron reconcile: %v\n", err)
+			if n, err := scheduler.ReconcileReaped(runCtx, cron.DefaultReconcileAges(reapAge, stepReapAge)); err != nil {
+				fmt.Fprintf(os.Stderr, "run reconcile: %v\n", err)
 			} else if n > 0 {
-				infoLog.Printf("cron reconcile: gave %d stranded cron run(s) a clear outcome", n)
+				infoLog.Printf("run reconcile: gave %d stranded run(s) a clear outcome", n)
 			}
 		}
 		// Reap stranded runs FIRST so the steps they back flip to a terminal
@@ -3073,6 +3102,52 @@ func clipPush(s string, max int) string {
 		return s
 	}
 	return strings.TrimSpace(string(r[:max])) + "…"
+}
+
+// bgSettlement is how a finished background build settles its plan step. It
+// exists so the one rule that kept getting broken — STILL WORKING IS NOT FAILED
+// — is a single typed decision instead of an if-chain that can grow a fifth
+// branch nobody notices.
+type bgSettlement int
+
+const (
+	// bgSettleDone: the build finished. Steps → done, plan → completed.
+	bgSettleDone bgSettlement = iota
+	// bgSettleStillWorking: it neither finished nor failed. Its inline wait
+	// window closed while the worker kept going. Settle NOTHING; never push
+	// "Build failed".
+	bgSettleStillWorking
+	// bgSettleRetry: a transient/bridge-class failure eligible for the one-shot
+	// re-dispatch. Falls through to bgSettleFailed when recovery can't fire.
+	bgSettleRetry
+	// bgSettleFailed: a real failure. Step → failed, plan → paused, "Awaiting
+	// you", push "Build failed". Unchanged, and it must stay reachable.
+	bgSettleFailed
+)
+
+// classifyBackgroundResult decides how a finished background build settles.
+//
+// The bug this fixes: "still working" used to arrive here as a non-empty r.Err
+// and get run through isRecoverableErr, which matches on SUBSTRINGS ("timeout",
+// "eof", "connection reset"). The still-running sentinel's wording is none of
+// them, so it fell straight through to SettlePlanForSession(StepFailed) and a
+// "Build failed" push — for a job that was still writing code. Detection now
+// happens upstream by TYPE (errors.As, in agent.classifyBackgroundRun) and
+// arrives here as a dedicated field, so no wording can ever decide it again.
+//
+// Nothing here softens a genuine failure: a real error with no still-running
+// flag is bgSettleFailed (or one retry, then failed) exactly as before.
+func classifyBackgroundResult(r agent.BackgroundResult) bgSettlement {
+	if r.StillRunning {
+		return bgSettleStillWorking
+	}
+	if r.Err == "" {
+		return bgSettleDone
+	}
+	if isRecoverableErr(r.Err) {
+		return bgSettleRetry
+	}
+	return bgSettleFailed
 }
 
 // isRecoverableErr reports whether a background build failure is transient

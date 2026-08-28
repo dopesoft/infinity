@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +30,35 @@ func (b *blockingTool) Execute(ctx context.Context, _ map[string]any) (string, e
 	close(b.started)
 	select {
 	case <-ctx.Done():
+		return "stopped: " + ctx.Err().Error(), nil
+	case <-time.After(3 * time.Second):
+		return "finished on its own", nil
+	}
+}
+
+// detachableTool stands in for code_agent: its real work runs somewhere else
+// (a detached `claude -p` on the Mac), so a non-stop message must DETACH it,
+// not cancel it. It records which wire the loop actually pulled.
+type detachableTool struct {
+	name      string
+	started   chan struct{}
+	cancelled atomic.Bool
+	detached  atomic.Bool
+}
+
+func (d *detachableTool) Name() string           { return d.name }
+func (d *detachableTool) Description() string    { return "work that outlives the turn" }
+func (d *detachableTool) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (d *detachableTool) InterruptOnSteer() bool { return true }
+func (d *detachableTool) DetachOnSteer() bool    { return true }
+func (d *detachableTool) Execute(ctx context.Context, _ map[string]any) (string, error) {
+	close(d.started)
+	select {
+	case <-tools.DetachRequested(ctx):
+		d.detached.Store(true)
+		return "STILL RUNNING (not stopped, not failed): Claude Code is Edit core/x.go. Run id run-1.", nil
+	case <-ctx.Done():
+		d.cancelled.Store(true)
 		return "stopped: " + ctx.Err().Error(), nil
 	case <-time.After(3 * time.Second):
 		return "finished on its own", nil
@@ -62,6 +92,87 @@ func TestExecuteInterruptible_SteerStopsOptedInTool(t *testing.T) {
 	}
 	if len(consumed) != 2 || consumed[0].Text != "well i just told u not to build anything" {
 		t.Fatalf("both queued steers must be handed back in order, got %+v", consumed)
+	}
+}
+
+// Why: 2026-08-28, the other half of the same bug. "how's it going?" killed a
+// 14-minute build, because arrival of a message WAS the kill order. A tool
+// whose work outlives the turn must be DETACHED by an ordinary message: still
+// alive, boss answered now, result reported back later.
+func TestExecuteInterruptible_NonStopSteerDetachesInsteadOfKilling(t *testing.T) {
+	dt := &detachableTool{name: "code_agent_fake", started: make(chan struct{})}
+	loop := newLoopWith(t, dt)
+	steer := make(chan Steer, 2)
+	go func() {
+		<-dt.started
+		steer <- Steer{Text: "how's it going?"}
+	}()
+	out, err, consumed := loop.executeInterruptible(context.Background(), llm.ToolCall{ID: "1", Name: dt.name}, steer)
+	if err != nil {
+		t.Fatalf("a detach must not surface as a tool error: %v", err)
+	}
+	if dt.cancelled.Load() {
+		t.Fatal("a question must NEVER cancel the tool — that is the bug this exists to stop")
+	}
+	if !dt.detached.Load() {
+		t.Fatal("the loop must have pulled the detach wire")
+	}
+	if !strings.HasPrefix(out, "STILL RUNNING:") {
+		t.Fatalf("the sentinel must tell the model the job is alive, got: %q", out)
+	}
+	for _, want := range []string{"DETACHED, not stopped", "Do NOT start it again", "Run id run-1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("result missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "do not restart this call unless he asks") {
+		t.Fatal("the old sentinel wording is what left long jobs dead; it must be gone from the detach path")
+	}
+	if len(consumed) != 1 || consumed[0].Text != "how's it going?" {
+		t.Fatalf("the boss must still be answered this turn, got %+v", consumed)
+	}
+}
+
+// Why: the other side of the same switch — an explicit stop still kills, on
+// exactly the same tool, with no per-tool branch in the loop.
+func TestExecuteInterruptible_ExplicitStopStillKillsADetachableTool(t *testing.T) {
+	dt := &detachableTool{name: "code_agent_fake", started: make(chan struct{})}
+	loop := newLoopWith(t, dt)
+	steer := make(chan Steer, 2)
+	go func() {
+		<-dt.started
+		steer <- Steer{Text: "stop building"}
+	}()
+	out, err, consumed := loop.executeInterruptible(context.Background(), llm.ToolCall{ID: "1", Name: dt.name}, steer)
+	if err != nil {
+		t.Fatalf("a stop must not surface as a tool error: %v", err)
+	}
+	if !dt.cancelled.Load() || dt.detached.Load() {
+		t.Fatalf("an explicit stop must cancel the tool (cancelled=%v detached=%v)", dt.cancelled.Load(), dt.detached.Load())
+	}
+	if !strings.HasPrefix(out, "INTERRUPTED:") || !strings.Contains(out, "stopped: context canceled") {
+		t.Fatalf("a stop keeps the stopped-for-the-boss result: %q", out)
+	}
+	if len(consumed) != 1 {
+		t.Fatalf("the stop message is still handed to the model, got %+v", consumed)
+	}
+}
+
+// Why: "how's it going" then "actually stop" is a stop. The decision reads
+// every message consumed in the interruption, not just the first to arrive.
+func TestExecuteInterruptible_StopAnywhereInTheBatchKills(t *testing.T) {
+	dt := &detachableTool{name: "code_agent_fake", started: make(chan struct{})}
+	loop := newLoopWith(t, dt)
+	// Both queued before the call, so the drain provably sees them together.
+	steer := make(chan Steer, 4)
+	steer <- Steer{Text: "how's it going?"}
+	steer <- Steer{Text: "actually cancel it"}
+	out, _, consumed := loop.executeInterruptible(context.Background(), llm.ToolCall{ID: "1", Name: dt.name}, steer)
+	if len(consumed) != 2 {
+		t.Fatalf("both messages must reach the model, got %+v", consumed)
+	}
+	if dt.detached.Load() || !strings.HasPrefix(out, "INTERRUPTED:") {
+		t.Fatalf("a stop later in the batch must still kill: detached=%v out=%q", dt.detached.Load(), out)
 	}
 }
 

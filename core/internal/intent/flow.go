@@ -234,6 +234,7 @@ Output strict JSON with these keys:
   - work: a work order ("do X", "build", "fix", "send", "create", "run", "book it") or an approval of something already proposed ("go ahead", "yes do it", "approved", "ship it").
   - unclear: cannot tell.
   An explicit "don't build / let's discuss first" is ALWAYS discuss, even if the rest of the message describes a project.
+  Recent context may say that a plan is already underway or paused in this conversation. When it does, a message telling the assistant to CONTINUE, carry on, pick it back up, keep going, or finish it is work: it is the boss approving more of what he already approved, not a musing. Read it as discuss only if he is asking ABOUT the work ("how's it going?", "what's left?") rather than telling it to proceed.
 
 Use:
 - silent: user mid-thought; input doesn't suggest a need; recent intervention covered it; or unclear.

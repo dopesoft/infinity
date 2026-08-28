@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,135 @@ func TestClaudeLaunchScript_GuardsTheSubscriptionAndStreams(t *testing.T) {
 	}
 	if got := exitCodeFromDone("DONE:1\n===TAIL==="); got != 1 {
 		t.Fatalf("exit code = %d", got)
+	}
+}
+
+// Why: a coding run must land in ONE named git repo. A blank or wrong path
+// used to fall through to the bridge's default cwd - ~/Dev, the umbrella
+// holding every repo the boss owns - so Claude Code would start editing in
+// there. These are the readings the preflight has to refuse.
+func TestValidateRepo_RefusesAnythingButAGitWorktree(t *testing.T) {
+	const home = "/Users/kai"
+	good := repoInfo{Path: "/Users/kai/Dev/infinity", Root: "/Users/kai/Dev/infinity", ClaudeBin: "/usr/local/bin/claude", home: home}
+	if err := validateRepo("~/Dev/infinity", good); err != nil {
+		t.Fatalf("a real git worktree must be accepted: %v", err)
+	}
+	// A subdirectory of a repo is still inside the worktree: allowed.
+	if err := validateRepo("~/Dev/infinity/core", repoInfo{Path: "/Users/kai/Dev/infinity/core", Root: "/Users/kai/Dev/infinity", home: home}); err != nil {
+		t.Fatalf("a directory inside the worktree must be accepted: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		info   repoInfo
+		reason string
+	}{
+		{"missing", repoInfo{reason: repoReasonMissing, home: home}, repoReasonMissing},
+		{"a file", repoInfo{reason: repoReasonNotDir, home: home}, repoReasonNotDir},
+		{"unresolvable", repoInfo{home: home}, repoReasonMissing},
+		{"the ~/Dev umbrella", repoInfo{Path: "/Users/kai/Dev", Root: "/Users/kai/Dev", home: home}, repoReasonUmbrella},
+		{"trailing-slash umbrella", repoInfo{Path: "/Users/kai/Dev/", Root: "/Users/kai/Dev", home: home}, repoReasonUmbrella},
+		{"home itself", repoInfo{Path: "/Users/kai", Root: "/Users/kai", home: home}, repoReasonUmbrella},
+		{"the workspace root", repoInfo{Path: "/workspace", Root: "/workspace", home: "/root"}, repoReasonUmbrella},
+		{"filesystem root", repoInfo{Path: "/", Root: "/", home: home}, repoReasonUmbrella},
+		{"a plain folder", repoInfo{Path: "/Users/kai/Dev/notes", home: home}, repoReasonNotGit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRepo("whatever", tc.info)
+			var bad *repoRejectedError
+			if !errors.As(err, &bad) {
+				t.Fatalf("want repoRejectedError, got %v", err)
+			}
+			if bad.reason != tc.reason {
+				t.Fatalf("reason = %q, want %q", bad.reason, tc.reason)
+			}
+			g := bad.guidance()
+			if !strings.Contains(g, "NOT LAUNCHED") || !strings.Contains(g, "~/Dev/<repo>") {
+				t.Fatalf("guidance must refuse and name the fix: %s", g)
+			}
+			if !strings.Contains(g, "Do NOT write the code yourself") {
+				t.Fatalf("a refusal must never leave the chat model coding on its own plan: %s", g)
+			}
+		})
+	}
+}
+
+// Why: the preflight runs on the bridge, so the only thing Go sees is this
+// text. It has to carry the resolved path, the git root and the resolved
+// `claude` binary - the evidence a run row is audited by.
+func TestParseRepoPreflight_ReadsTheResolvedFacts(t *testing.T) {
+	info := parseRepoPreflight("HOME:/Users/kai\nCLAUDEBIN:/Users/kai/.local/bin/claude\n" +
+		"REPOPATH:/Users/kai/Dev/infinity\nREPOROOT:/Users/kai/Dev/infinity\n")
+	if info.Path != "/Users/kai/Dev/infinity" || info.Root != "/Users/kai/Dev/infinity" {
+		t.Fatalf("path/root must decode: %+v", info)
+	}
+	if info.ClaudeBin != "/Users/kai/.local/bin/claude" || info.home != "/Users/kai" {
+		t.Fatalf("binary and home must decode: %+v", info)
+	}
+	// A directory that exists but is outside any repo: root comes back empty.
+	if got := parseRepoPreflight("HOME:/Users/kai\nCLAUDEBIN:\nREPOPATH:/Users/kai/Dev/notes\nREPOROOT:\n"); got.Root != "" || got.Path == "" {
+		t.Fatalf("an empty git root must stay empty: %+v", got)
+	}
+	if got := parseRepoPreflight("HOME:/Users/kai\nREPO:missing\n"); got.reason != repoReasonMissing {
+		t.Fatalf("a missing path must be flagged: %+v", got)
+	}
+	if got := parseRepoPreflight("HOME:/Users/kai\nREPO:notdir\n"); got.reason != repoReasonNotDir {
+		t.Fatalf("a file must be flagged: %+v", got)
+	}
+	// The script must never hand a raw path to the shell unquoted, and must
+	// resolve the physical path so the umbrella comparison is sound.
+	script := repoPreflightScript("~/Dev/my repo; rm -rf /")
+	if !strings.Contains(script, shellQuote("~/Dev/my repo; rm -rf /")) {
+		t.Fatalf("the requested path must be quoted into the script:\n%s", script)
+	}
+	if !strings.Contains(script, "pwd -P") || !strings.Contains(script, "git rev-parse --show-toplevel") {
+		t.Fatalf("the script must resolve the real path and the git root:\n%s", script)
+	}
+}
+
+// Why: the boss pays for Opus on his Max plan, and Claude Code's own default
+// is Sonnet. An unspecified model must resolve to Opus 5 here, in code.
+func TestDefaultModel_PinsOpus5(t *testing.T) {
+	t.Setenv("INFINITY_CODE_AGENT_MODEL", "")
+	r := NewClaudeCodeRunner(nil, nil)
+	if got := r.DefaultModel(); got != pinnedCodeModel {
+		t.Fatalf("an unset env must pin Opus 5, got %q", got)
+	}
+	if !strings.HasPrefix(pinnedCodeModel, "claude-opus-5") {
+		t.Fatalf("the pin must be Opus 5, got %q", pinnedCodeModel)
+	}
+	if strings.Contains(pinnedCodeModel, "sonnet") {
+		t.Fatal("the pin must never be a Sonnet tier")
+	}
+	t.Setenv("INFINITY_CODE_AGENT_MODEL", "claude-opus-4-7")
+	if got := r.DefaultModel(); got != "claude-opus-4-7" {
+		t.Fatalf("an explicit override must win, got %q", got)
+	}
+}
+
+// Why: "it ran" is not evidence. The run row has to say WHICH repo, WHICH
+// binary, WHICH model and WHOSE plan - and never carry a secret.
+func TestPreflightEvidence_RecordsTheResolvedRun(t *testing.T) {
+	auth := parseClaudeAuth("APIKEY:present\n" +
+		`AUTH:{"emailAddress":"kai@example.com","organizationType":"claude_max","billingType":"stripe_subscription"}` + "\n")
+	info := repoInfo{Path: "/Users/kai/Dev/infinity", Root: "/Users/kai/Dev/infinity", ClaudeBin: "/usr/local/bin/claude"}
+	line := preflightEvidence(info, pinnedCodeModel, auth)
+	for _, want := range []string{
+		"repo /Users/kai/Dev/infinity", "git root /Users/kai/Dev/infinity",
+		"/usr/local/bin/claude", "model " + pinnedCodeModel, "Max subscription · kai@example.com",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("evidence missing %q: %s", want, line)
+		}
+	}
+	// Presence of a key is recorded elsewhere; the value never appears here.
+	if strings.Contains(line, "sk-") {
+		t.Fatalf("evidence must never carry a credential: %s", line)
+	}
+	// A Mac without claude on PATH says so rather than printing a blank.
+	if got := preflightEvidence(repoInfo{Path: "/r", Root: "/r"}, pinnedCodeModel, auth); !strings.Contains(got, "not on PATH") {
+		t.Fatalf("a missing binary must be named: %s", got)
 	}
 }
 

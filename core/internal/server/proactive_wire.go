@@ -8,10 +8,13 @@ import (
 	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/extensions"
 	"github.com/dopesoft/infinity/core/internal/intent"
+	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
@@ -619,7 +622,9 @@ func looksLikeCode(value string) bool {
 // classification stream in real time. Fail-closed: any error degrades to a
 // silent decision and a warning event - chat itself never stalls on
 // classification.
-func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent), stance *turnctx.StanceHolder) {
+// recent is the memoized recent-context builder for this message (see
+// recentContextFn); nil is treated as "no context".
+func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent), stance *turnctx.StanceHolder, recent func(context.Context) string) {
 	if s == nil || s.intentDet == nil || strings.TrimSpace(userMsg) == "" {
 		// No classifier: release the stance immediately so the loop's first
 		// work-tool call never waits on a reading that will not come.
@@ -631,7 +636,7 @@ func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg str
 		 * package returns silent on any failure so a classifier outage
 		 * never gates the agent loop - chat continues, the IntentStream
 		 * panel just shows "silent · classifier unavailable". */
-		dec := s.intentDet.Classify(ctx, userMsg, "")
+		dec := s.intentDet.Classify(ctx, userMsg, recentContext(ctx, recent))
 		// The stance is the consent fact the loop enforces (agent/consent.go):
 		// discuss holds work tools, work / unclear / unknown do not.
 		stance.Set(turnctx.ParseStance(dec.Stance), dec.Reason)
@@ -654,6 +659,228 @@ func (s *Server) classifyIntentAsync(ctx context.Context, sessionID, userMsg str
 	}()
 }
 
+// ── classifier recent context ────────────────────────────────────────────
+//
+// Both classifiers take a `recentContext` argument whose own doc says it
+// "should be the last few user/assistant turns concatenated". It was hard-coded
+// to "" at every call site, so the stance classifier read every message cold.
+// That is why "please continue the build and finish up" landed as `discuss`:
+// the classifier's definition of `work` includes "an approval of something
+// already proposed", and with no context there was nothing on record as
+// proposed or underway. The consent gate then refused plan_update for the rest
+// of the turn.
+//
+// It is deliberately CHEAP and BOUNDED: the last few turns the model itself is
+// already looking at (the agent loop's in-memory session, no query at all),
+// falling back to the same mem_observations rows hydrateLoopSession reads when
+// the process was restarted; plus one line naming the plan this conversation
+// already has open. Never the whole session.
+const (
+	// recentContextTurns is how many trailing user/assistant messages ride along.
+	recentContextTurns = 6
+	// recentContextChars clips each one; the classifier needs the shape of the
+	// exchange, not its content.
+	recentContextChars = 400
+)
+
+// recentContextFn returns a memoized, lazy builder for this message's recent
+// context. Lazy so nothing runs on the WS read loop (both classifiers call it
+// from their own goroutine), memoized so the intent and gauge classifiers
+// share one gather instead of doing it twice.
+func (s *Server) recentContextFn(sessionID string) func(context.Context) string {
+	var (
+		once sync.Once
+		val  string
+	)
+	return func(ctx context.Context) string {
+		once.Do(func() { val = s.recentContextFor(ctx, sessionID) })
+		return val
+	}
+}
+
+// recentContext is the nil-safe way to call a builder returned above.
+func recentContext(ctx context.Context, fn func(context.Context) string) string {
+	if fn == nil {
+		return ""
+	}
+	return fn(ctx)
+}
+
+// recentContextFor assembles the block. Nil-safe at every step: a server with
+// no loop and no pool yields "", which is exactly the old behaviour.
+func (s *Server) recentContextFor(ctx context.Context, sessionID string) string {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	msgs := s.recentTurns(sessionID)
+	if len(msgs) == 0 {
+		msgs = s.recentTurnsFromStore(ctx, sessionID)
+	}
+	return buildRecentContext(msgs, s.openPlanNote(ctx, sessionID))
+}
+
+// recentTurns reads the tail of the live in-memory conversation straight from
+// the agent loop — no query, and it is exactly what the model sees. It looks
+// the session up by scanning Sessions() rather than calling
+// GetOrCreateSession, which would MINT a session (and fire SessionStart)
+// before the turn has even begun.
+func (s *Server) recentTurns(sessionID string) []llm.Message {
+	if s == nil || s.loop == nil {
+		return nil
+	}
+	for _, sess := range s.loop.Sessions() {
+		if sess == nil || sess.ID != sessionID {
+			continue
+		}
+		return tailConversation(sess.Snapshot(), recentContextTurns)
+	}
+	return nil
+}
+
+// recentTurnsFromStore is the after-a-restart fallback: the same
+// mem_observations rows hydrateLoopSession replays, newest few only. Without
+// it the first message after a Core restart or a fresh tab would classify cold
+// again — which is the exact failure this fixes, so it cannot depend on
+// process-local state.
+func (s *Server) recentTurnsFromStore(ctx context.Context, sessionID string) []llm.Message {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(cctx, `
+		SELECT hook_name, COALESCE(raw_text, '')
+		  FROM mem_observations
+		 WHERE session_id = $1
+		   AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+		 ORDER BY created_at DESC
+		 LIMIT $2
+	`, sessionID, recentContextTurns)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []llm.Message
+	for rows.Next() {
+		var hook, text string
+		if err := rows.Scan(&hook, &text); err != nil {
+			return nil
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		role := llm.RoleAssistant
+		if hook == "UserPromptSubmit" || hook == "DashboardSeed" {
+			role = llm.RoleUser
+		}
+		// Query is newest-first; prepend so the block reads oldest -> newest.
+		out = append([]llm.Message{{Role: role, Content: text}}, out...)
+	}
+	return out
+}
+
+// openPlanNote names the plan this conversation already has open. This is the
+// single fact the classifier was missing when the boss said "continue": that
+// something is already underway and already approved, which makes "carry on"
+// an approval rather than a musing. Silent when there is no plan.
+func (s *Server) openPlanNote(ctx context.Context, sessionID string) string {
+	if s == nil || s.pool == nil {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	store := plan.NewStore(s.pool)
+	p, err := store.GetActiveBySession(cctx, sessionID)
+	if err != nil {
+		return ""
+	}
+	if p == nil {
+		// No live plan — but an un-approved PROPOSAL is equally load-bearing:
+		// "go ahead" against one is the classifier's own definition of work.
+		if p, err = store.GetProposedBySession(cctx, sessionID); err != nil || p == nil {
+			return ""
+		}
+		return fmt.Sprintf("Already on the table in this conversation: the proposed plan %q (%d steps), which the boss has NOT approved yet.",
+			p.Title, len(p.Steps))
+	}
+	done := 0
+	next := ""
+	for _, st := range p.Steps {
+		switch st.Status {
+		case "done", "skipped":
+			done++
+		default:
+			if next == "" {
+				next = st.Title
+			}
+		}
+	}
+	line := fmt.Sprintf("Already underway in this conversation: the plan %q, which the boss approved. Status %s, %d of %d steps finished.",
+		p.Title, p.Status, done, len(p.Steps))
+	if next != "" {
+		line += fmt.Sprintf(" The next unfinished step is %q.", clipForContext(next, 120))
+	}
+	return line
+}
+
+// tailConversation keeps the last n user/assistant messages, oldest first.
+// Tool traffic is dropped: it is noise for an intent read and it is where the
+// bulk of the tokens live.
+func tailConversation(msgs []llm.Message, n int) []llm.Message {
+	if n <= 0 {
+		return nil
+	}
+	var kept []llm.Message
+	for _, m := range msgs {
+		if m.Role != llm.RoleUser && m.Role != llm.RoleAssistant {
+			continue
+		}
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	if len(kept) > n {
+		kept = kept[len(kept)-n:]
+	}
+	return kept
+}
+
+// buildRecentContext renders the block. Pure so the shape is testable without
+// a loop, a pool, or a classifier.
+func buildRecentContext(msgs []llm.Message, planNote string) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		who := "Boss"
+		if m.Role == llm.RoleAssistant {
+			who = "Jarvis"
+		}
+		b.WriteString(who + ": " + clipForContext(collapseWhitespace(m.Content), recentContextChars) + "\n")
+	}
+	if strings.TrimSpace(planNote) != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(strings.TrimSpace(planNote) + "\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// collapseWhitespace flattens a message to one line so a long fenced reply
+// can't dominate the block.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// clipForContext truncates on a rune boundary.
+func clipForContext(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 // wsGauge is the per-turn effort sizing emitted on a type="gauge" frame.
 type wsGauge struct {
 	Tier   string `json:"tier"`
@@ -666,7 +893,7 @@ type wsGauge struct {
 // read is persisted (the durable record + the session-scoped GaugeProvider's
 // source) and emitted as a `gauge` frame for the Studio chip. Gated to
 // substantive turns so a greeting doesn't burn a model call.
-func (s *Server) classifyGaugeAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent)) {
+func (s *Server) classifyGaugeAsync(ctx context.Context, sessionID, userMsg string, send func(wsServerEvent), recent func(context.Context) string) {
 	if s == nil || s.gaugeDet == nil || strings.TrimSpace(userMsg) == "" {
 		return
 	}
@@ -674,7 +901,7 @@ func (s *Server) classifyGaugeAsync(ctx context.Context, sessionID, userMsg stri
 		return
 	}
 	go func() {
-		read := s.gaugeDet.Classify(ctx, userMsg, "")
+		read := s.gaugeDet.Classify(ctx, userMsg, recentContext(ctx, recent))
 		if s.gaugeDB != nil {
 			s.gaugeDB.Record(ctx, sessionID, userMsg, read)
 		}

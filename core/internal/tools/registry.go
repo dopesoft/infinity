@@ -39,6 +39,34 @@ func (r *Registry) InterruptsOnSteer(name string) bool {
 	return ok && si.InterruptOnSteer()
 }
 
+// SteerDetachable is an OPTIONAL second half of SteerInterruptible, for a
+// tool whose work OUTLIVES the turn: the job runs somewhere else (a detached
+// `claude -p` on the Mac bridge) and killing it throws away real work.
+//
+// When such a tool is interrupted by a message that is NOT an explicit stop,
+// the loop DETACHES instead of cancelling: it fires the tools.WithDetachSignal
+// channel, the tool stops waiting inline and returns what it can say now, and
+// the job keeps running and reports back on its own. An explicit stop still
+// cancels the context exactly as before.
+//
+// The loop reads only this interface, so "talking never kills work" needs no
+// per-tool branch anywhere in agent/.
+type SteerDetachable interface {
+	// DetachOnSteer: true = a non-stop interruption detaches this tool
+	// rather than killing it.
+	DetachOnSteer() bool
+}
+
+// DetachesOnSteer reports whether a registered tool survives the turn.
+func (r *Registry) DetachesOnSteer(name string) bool {
+	t, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	sd, ok := t.(SteerDetachable)
+	return ok && sd.DetachOnSteer()
+}
+
 // ReadOnlyTool is an OPTIONAL extension interface. Tools that implement
 // it declare themselves explicitly as reads (true) or mutations (false),
 // killing the system_map heuristic that classified by name suffix. The

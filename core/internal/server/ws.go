@@ -442,9 +442,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			steerAtts := s.resolveAttachments(connCtx, msg.Attachments)
 			steerText := turnText(msg.Content, steerAtts)
 			// A mid-turn message re-reads the stance too ("ok, go ahead" flips
-			// a discussion into work without a new turn).
+			// a discussion into work without a new turn). The re-read can only
+			// ESCALATE: once the turn has run a work tool the holder refuses a
+			// demotion back to discuss, so chatting to Jarvis mid-build no
+			// longer retroactively shuts the consent gate on work he already
+			// approved (turnctx.StanceHolder).
 			if st := s.stanceFor(msg.SessionID); st != nil {
-				s.classifyIntentAsync(connCtx, msg.SessionID, msg.Content, send, st)
+				s.classifyIntentAsync(connCtx, msg.SessionID, msg.Content, send, st, s.recentContextFn(msg.SessionID))
 			}
 			if s.steerTurn(msg.SessionID, steerText, steerAtts, send) {
 				/* WAL the steer too - corrections often arrive as
@@ -466,8 +470,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			s.appendWAL(connCtx, sessionID, msg.Content)
 			stance := s.stanceFor(sessionID)
-			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance)
-			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
+			recent := s.recentContextFn(sessionID)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance, recent)
+			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send, recent)
 			s.hydrateLoopSession(r, sessionID)
 			s.startTurn(connCtx, userID, sessionID, steerText, steerAtts, msg.Voice, msg.Effort, stance, send)
 			continue
@@ -498,8 +503,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			 * talking it through. If a turn is already in flight the reading
 			 * updates THAT turn's stance (the message becomes a steer). */
 			stance := s.stanceFor(sessionID)
-			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance)
-			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send)
+			recent := s.recentContextFn(sessionID)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance, recent)
+			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send, recent)
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types - the

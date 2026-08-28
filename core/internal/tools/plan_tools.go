@@ -150,6 +150,23 @@ func RegisterPlanTools(r *Registry, pool *pgxpool.Pool) {
 	r.Register(&planList{store: store})
 	r.Register(&planRevise{store: store})
 	r.Register(&planCancel{store: store})
+	r.Register(&planResume{store: store})
+}
+
+// openStanceForWork opens the turn's consent gate (agent/consent.go). It is
+// the ONLY thing that lets a conversation cross into building, besides the
+// IntentFlow classifier reading the boss's message as a work order — so every
+// path on which he says "go" has to call it, not just the approve-a-fresh-
+// proposal path. Missing it on the already-approved path is what left a paused
+// build unresumable on 2026-08-28: plan_approve returned early, the stance
+// stayed 'discuss', and plan_update was refused for the rest of the turn.
+//
+// Escalate (not Set) because this is his explicit word: it latches the turn so
+// a later chatty steer cannot demote it back to a conversation mid-build.
+func openStanceForWork(ctx context.Context, reason string) {
+	if h := turnctx.StanceFromContext(ctx); h != nil {
+		h.Escalate(reason)
+	}
 }
 
 // renderPlan is the compact JSON the tools hand back so the model sees the
@@ -293,7 +310,16 @@ func planShouldBeProposed(ctx context.Context) bool {
 
 // ── plan_approve ─────────────────────────────────────────────────────────
 
-type planApprove struct{ store *plan.Store }
+// planApprover is the store surface plan_approve needs. An interface (not the
+// concrete *plan.Store) so the "already approved, open the gate anyway" branch
+// — the one that was silently missing — is unit-testable without a database.
+type planApprover interface {
+	GetProposedBySession(ctx context.Context, sessionID string) (*plan.Plan, error)
+	GetActiveBySession(ctx context.Context, sessionID string) (*plan.Plan, error)
+	Approve(ctx context.Context, planID, sessionID string) (*plan.Plan, error)
+}
+
+type planApprove struct{ store planApprover }
 
 func (t *planApprove) Name() string { return "plan_approve" }
 func (t *planApprove) Description() string {
@@ -319,7 +345,22 @@ func (t *planApprove) Execute(ctx context.Context, in map[string]any) (string, e
 		}
 		if p == nil {
 			if active, _ := t.store.GetActiveBySession(ctx, sid); active != nil {
-				return renderPlan(active), nil
+				// There is nothing left to approve — but "go ahead" / "continue"
+				// on a plan he ALREADY approved is still his go for THIS turn.
+				// This branch used to return here without opening the stance,
+				// so the consent gate stayed shut on an active-or-paused plan
+				// and every plan_update after it was refused. That is the exact
+				// dead end behind "it blocked me from reopening the step".
+				if active.Approved() {
+					openStanceForWork(ctx, "the boss said go on a plan he already approved")
+				}
+				out, _ := json.Marshal(map[string]any{
+					"plan":           active,
+					"already_active": true,
+					"note": "This plan is already approved and live, so there was nothing to approve. " +
+						"To carry on with it call plan_resume (it reopens the next step), then keep driving it with plan_update / plan_verify.",
+				})
+				return string(out), nil
 			}
 			return "", errors.New("there's no proposed plan in this session to approve; lay one out with plan_create first")
 		}
@@ -331,10 +372,195 @@ func (t *planApprove) Execute(ctx context.Context, in map[string]any) (string, e
 	}
 	// The boss approved: this turn is work now, so the consent gate opens
 	// for the tools the plan needs.
-	if h := turnctx.StanceFromContext(ctx); h != nil {
-		h.Set(turnctx.StanceWork, "the boss approved the plan")
-	}
+	openStanceForWork(ctx, "the boss approved the plan")
 	return renderPlan(p), nil
+}
+
+// ── plan_resume ──────────────────────────────────────────────────────────
+//
+// The verb for "carry on with what you were doing". Before this there was
+// none: reopening a paused step could only be said as plan_update, which is
+// consent-gated, so on a turn the classifier read as conversation the boss's
+// "please continue the build and finish up" was refused and Jarvis told him he
+// had "blocked me from reopening the step" (2026-08-28). plan_approve was no
+// help either — the plan was already approved, so it returned early.
+//
+// Its safety is the whole point, so it is enforced in code, not in the
+// description (Rule #1b):
+//
+//   - It ONLY resumes a plan the boss already approved (approved_at set). A
+//     PROPOSAL is refused outright and read back to him instead — the proposal
+//     flow is deliberate and this must never be the back door around it.
+//   - It cannot resurrect a closed plan (completed / cancelled).
+//   - Cross-session pickup re-anchors ownership, same rule as plan_get.
+//   - plan.Store.MarkStep refuses steps of a proposed plan anyway, so the
+//     consent rule holds even if this tool is called wrongly.
+//
+// Like plan_approve it is deliberately NOT in agent/consent.go's
+// consentToolPattern: gating the verb that grants consent would deadlock the
+// gate. Approving/resuming is the boss's word, not work.
+
+// planResumer is the store surface plan_resume needs. An interface (not the
+// concrete *plan.Store) so the safety rules above are unit-testable without a
+// database — the consent rule is the part that must never regress silently.
+type planResumer interface {
+	planGetter
+	MarkStep(ctx context.Context, stepID, status, summary string) (*plan.Plan, error)
+	SetStepRun(ctx context.Context, stepID, runID string) error
+}
+
+type planResume struct{ store planResumer }
+
+func (t *planResume) Name() string { return "plan_resume" }
+func (t *planResume) Description() string {
+	return "The boss asked you to CONTINUE, carry on with, pick back up, or finish work already underway. " +
+		"Reopens the next actionable step of the plan he already approved (the one that was interrupted, " +
+		"failed, blocked, or is simply next) and puts you back to work on it, then keep driving it with " +
+		"plan_update / plan_verify as normal. Use this instead of plan_approve when the plan is already " +
+		"approved and just stalled or paused. It will NOT touch a plan he has not approved: for a proposal, " +
+		"read it back to him and use plan_approve when he says go."
+}
+func (t *planResume) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"plan_id": map[string]any{"type": "string", "description": "Optional: a specific plan id. Omit for this session's current plan."},
+			"step":    map[string]any{"type": "string", "description": "Optional: reopen this step instead of the automatically chosen one: its 1-based number (e.g. \"3\") or its id."},
+			"note":    map[string]any{"type": "string", "description": "Optional short note recorded on the step, e.g. 'restarted after the run was killed'."},
+		},
+	}
+}
+
+func (t *planResume) Execute(ctx context.Context, in map[string]any) (string, error) {
+	sid := SessionIDFromContext(ctx)
+	explicitID := strings.TrimSpace(strString(in, "plan_id"))
+
+	var (
+		p   *plan.Plan
+		err error
+	)
+	if explicitID != "" {
+		p, err = t.store.Get(ctx, explicitID)
+	} else {
+		p, err = t.store.GetActiveBySession(ctx, sid)
+		if err == nil && p == nil {
+			// Autonomous-only cross-session pickup (cron retries). Interactive
+			// turns never inherit a stranger's plan — see anyActivePlanForTurn.
+			p, err = anyActivePlanForTurn(ctx, t.store)
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		return "", errors.New("there's no plan in this conversation to resume. Read it back with plan_get (pass plan_id if you know it), or lay out a new one with plan_create")
+	}
+
+	// CONSENT. A plan the boss never approved is not resumable work; it is a
+	// proposal he has not seen through. Read it back, don't start it.
+	if !p.Approved() {
+		out, _ := json.Marshal(map[string]any{
+			"plan":       p,
+			"unapproved": true,
+			"note": "This plan is a PROPOSAL the boss has NOT approved, so nothing was resumed and no step was reopened. " +
+				"Tell him briefly what it would do, step by step, and ask whether to go with it, change it, or scrap it. " +
+				"If he says go, call plan_approve (with this plan_id) and start; if he wants changes, plan_revise.",
+		})
+		return string(out), nil
+	}
+	switch p.Status {
+	case plan.PlanCompleted, plan.PlanCancelled:
+		out, _ := json.Marshal(map[string]any{
+			"plan": p, "note": "This plan is " + p.Status + ", so there is nothing to resume. Lay out a new one with plan_create if he wants more done.",
+		})
+		return string(out), nil
+	}
+
+	// Cross-session pickup means owning it (same rule as plan_get), so the
+	// positional step refs plan_update uses next resolve against this session.
+	if explicitID != "" && sid != "" && p.SessionID != sid {
+		_ = t.store.AdoptSession(ctx, p.ID, sid)
+		p.SessionID = sid
+	}
+
+	step, err := pickResumeStep(p, strString(in, "step"))
+	if err != nil {
+		return "", err
+	}
+	if step == nil {
+		out, _ := json.Marshal(map[string]any{
+			"plan": p, "note": "Every step of this plan is already finished or skipped, so there is nothing left to reopen. Tell him what got done, and what (if anything) is genuinely still outstanding.",
+		})
+		return string(out), nil
+	}
+
+	prevStatus := step.Status
+	note := strings.TrimSpace(strString(in, "note"))
+	refreshed := p
+	if prevStatus != plan.StepInProgress {
+		// Book the live spinner the boss watches, exactly as plan_update does
+		// when a step starts (server-tracked progress: it must survive
+		// navigation and refresh).
+		if h := runs.BeginGlobal(ctx, runs.KindPlanStep, step.ID, "Plan step: "+truncForLabel(step.Title), runs.SourceAgent); h.ID() != "" {
+			_ = t.store.SetStepRun(ctx, step.ID, h.ID())
+		}
+		refreshed, err = t.store.MarkStep(ctx, step.ID, plan.StepInProgress, firstNonEmpty(note, "resumed"))
+		if err != nil {
+			return "", err
+		}
+	}
+
+	// The boss said carry on: this turn is work, and it stays work even if he
+	// chats mid-build (turnctx.StanceHolder latches on Escalate).
+	openStanceForWork(ctx, "the boss asked to continue an approved plan")
+
+	out, _ := json.Marshal(map[string]any{
+		"plan": refreshed,
+		"resumed_step": map[string]any{
+			"id": step.ID, "number": step.Idx + 1, "title": step.Title, "was": prevStatus,
+		},
+		"note": "Back on step " + strconv.Itoa(step.Idx+1) + ": " + step.Title + ". Do the work now: actually run it, don't re-describe the plan. " +
+			"Verify it before you tick it (plan_verify), then plan_update it done and keep going through the remaining steps.",
+	})
+	return string(out), nil
+}
+
+// pickResumeStep chooses the step plan_resume reopens. Explicit ref wins;
+// otherwise a step already running (there is at most one), else the FIRST
+// unfinished step in plan order — failed, blocked or pending alike. A killed
+// coding run leaves its step 'failed' with later steps still pending, so plan
+// order is what puts Jarvis back exactly where he was cut off. Returns
+// (nil, nil) when every step is terminal.
+func pickResumeStep(p *plan.Plan, ref string) (*plan.Step, error) {
+	if p == nil || len(p.Steps) == 0 {
+		return nil, errors.New("this plan has no steps to resume")
+	}
+	if ref = strings.TrimSpace(ref); ref != "" {
+		if n, e := strconv.Atoi(ref); e == nil {
+			if n < 1 || n > len(p.Steps) {
+				return nil, fmt.Errorf("step %d is out of range - this plan has %d steps (use 1..%d)", n, len(p.Steps), len(p.Steps))
+			}
+			return &p.Steps[n-1], nil
+		}
+		for i := range p.Steps {
+			if p.Steps[i].ID == ref {
+				return &p.Steps[i], nil
+			}
+		}
+		return nil, fmt.Errorf("no step %q in this plan", ref)
+	}
+	for i := range p.Steps {
+		if p.Steps[i].Status == plan.StepInProgress {
+			return &p.Steps[i], nil
+		}
+	}
+	for i := range p.Steps {
+		switch p.Steps[i].Status {
+		case plan.StepFailed, plan.StepBlocked, plan.StepPending:
+			return &p.Steps[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // ── plan_update ──────────────────────────────────────────────────────────

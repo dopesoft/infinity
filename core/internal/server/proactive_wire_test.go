@@ -1,9 +1,13 @@
 package server
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/agent"
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
@@ -38,5 +42,107 @@ func TestBroadcastBackgroundDoneTargetsOriginatingSession(t *testing.T) {
 	}
 	if ev.FindingKind != "background_build" {
 		t.Fatalf("finding kind = %q", ev.FindingKind)
+	}
+}
+// ── classifier recent context (2026-08-28) ─────────────────────────────────
+//
+// Both classifiers were called with a hard-coded empty recentContext, while
+// their own contract says it should carry "the last few user/assistant turns".
+// With nothing on record as proposed or underway, "please continue the build
+// and finish up" could not read as an approval, so it classified as `discuss`
+// and the consent gate refused plan_update for the rest of the turn.
+
+func TestBuildRecentContextCarriesTheExchangeAndThePlan(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: "start on the build-to-done work"},
+		{Role: llm.RoleAssistant, Content: "On it.\nStep 1 is\tunderway"},
+		{Role: llm.RoleUser, Content: "please continue the build and finish up"},
+	}
+	note := `Already underway in this conversation: the plan "Make Jarvis finish long coding tasks", which the boss approved — status paused, 1 of 4 steps finished.`
+
+	got := buildRecentContext(msgs, note)
+	if got == "" {
+		t.Fatal("the classifier must not be called blind: the context block is empty")
+	}
+	for _, want := range []string{"Boss: start on the build-to-done work", "Jarvis: On it. Step 1 is underway", "please continue the build", "which the boss approved", "paused"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("context is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\n\nJarvis") || strings.Count(got, "\n\n") != 1 {
+		t.Fatalf("turns run together, one blank line before the plan note:\n%s", got)
+	}
+}
+
+func TestBuildRecentContextStaysBounded(t *testing.T) {
+	var msgs []llm.Message
+	for i := 0; i < 40; i++ {
+		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: strings.Repeat("x", 5000)})
+		msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: "tool noise that must not ride along"})
+	}
+	kept := tailConversation(msgs, recentContextTurns)
+	if len(kept) != recentContextTurns {
+		t.Fatalf("kept %d turns, want the last %d", len(kept), recentContextTurns)
+	}
+	got := buildRecentContext(kept, "")
+	if strings.Contains(got, "tool noise") {
+		t.Fatal("tool traffic must not ride along: it is noise for an intent read and most of the tokens")
+	}
+	if lines := strings.Split(got, "\n"); len(lines) != recentContextTurns {
+		t.Fatalf("got %d lines, want %d", len(lines), recentContextTurns)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if len([]rune(line)) > recentContextChars+len("Boss: ")+1 {
+			t.Fatalf("a turn was not clipped (%d runes)", len([]rune(line)))
+		}
+	}
+}
+
+func TestBuildRecentContextEmptyWhenThereIsNothingToSay(t *testing.T) {
+	if got := buildRecentContext(nil, ""); got != "" {
+		t.Fatalf("with no turns and no plan the block must stay empty, got %q", got)
+	}
+}
+
+// TestRecentContextForReadsTheLiveConversation proves the wiring, not just the
+// shape: the builder the classifiers are handed returns the real session's
+// trailing turns, and it does so WITHOUT minting a session.
+func TestRecentContextForReadsTheLiveConversation(t *testing.T) {
+	loop := agent.New(agent.Config{})
+	sess := loop.GetOrCreateSession("11111111-2222-3333-4444-555555555555")
+	sess.Append(llm.Message{Role: llm.RoleUser, Content: "start on the build-to-done work"})
+	sess.Append(llm.Message{Role: llm.RoleAssistant, Content: "On it."})
+	sess.Append(llm.Message{Role: llm.RoleUser, Content: "please continue the build and finish up"})
+
+	srv := &Server{loop: loop}
+	got := recentContext(context.Background(), srv.recentContextFn(sess.ID))
+	if got == "" {
+		t.Fatal("the classifier is still being called blind on a live conversation")
+	}
+	if !strings.Contains(got, "please continue the build and finish up") {
+		t.Fatalf("the latest exchange is missing:\n%s", got)
+	}
+
+	// An unknown session must not be created as a side effect of classifying.
+	before := len(loop.Sessions())
+	if other := srv.recentContextFor(context.Background(), "99999999-2222-3333-4444-555555555555"); other != "" {
+		t.Fatalf("unknown session should yield no context, got %q", other)
+	}
+	if after := len(loop.Sessions()); after != before {
+		t.Fatalf("building the classifier's context minted a session (%d -> %d)", before, after)
+	}
+}
+
+func TestRecentContextIsNilSafe(t *testing.T) {
+	var srv *Server
+	if got := srv.recentContextFor(context.Background(), "sid"); got != "" {
+		t.Fatalf("nil server must yield no context, got %q", got)
+	}
+	empty := &Server{}
+	if got := recentContext(context.Background(), empty.recentContextFn("")); got != "" {
+		t.Fatalf("no loop and no pool must yield no context, got %q", got)
+	}
+	if got := recentContext(context.Background(), nil); got != "" {
+		t.Fatalf("a nil builder must yield no context, got %q", got)
 	}
 }

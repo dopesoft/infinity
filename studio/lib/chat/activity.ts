@@ -371,6 +371,9 @@ const VERBS: Record<string, VerbSpec> = {
   // ── Plans ─────────────────────────────────────────────────────────────────
   plan_create: { present: "Laying out", past: "Laid out", object: "a plan", plural: "plans", glyph: "ListChecks", kind: "plan", solo: true, meta: (i) => oneLine(str(i, "title", "goal", "task")) },
   plan_approve: { present: "Approving", past: "Approved", object: "the plan", plural: "plans", glyph: "SquareCheckBig", kind: "plan" },
+  // plan_resume: the boss said carry on with work already approved. Its own
+  // verb because "Advancing the plan" would hide the thing he asked for.
+  plan_resume: { present: "Picking back up", past: "Picked back up", object: "the plan", plural: "plans", glyph: "ListChecks", kind: "plan" },
   plan_update: { present: "Advancing", past: "Advanced", object: "the plan", plural: "plan steps", glyph: "ListChecks", kind: "plan", meta: (i) => oneLine(str(i, "status", "step_id")) },
   plan_verify: { present: "Verifying", past: "Verified", object: "a step", plural: "steps", glyph: "ShieldCheck", kind: "plan", meta: (i) => oneLine(str(i, "evidence", "step_id")) },
   plan_get: { present: "Checking", past: "Checked", object: "the plan", plural: "the plan", glyph: "ListChecks", kind: "plan", group: timesGroup },

@@ -19,6 +19,16 @@ import (
 // something durable, and tells the model to propose instead. Reads, memory,
 // tool loading and plan proposals stay open. Only interactive turns are
 // gated; crons and sub-agents always have a work stance.
+//
+// The gate has exactly two doors out, and both are the boss's own word:
+// plan_approve ("go ahead" on a proposal) and plan_resume ("carry on" with a
+// plan he ALREADY approved). Both are deliberately absent from
+// consentToolPattern — gating the verb that grants consent would deadlock the
+// gate, which is what stranded a paused build on 2026-08-28 ("please continue
+// the build and finish up" was read as discussion, plan_update was refused, and
+// Jarvis reported that he had "blocked me from reopening the step"). Neither
+// door can promote an UNAPPROVED proposal: plan_resume refuses one outright and
+// plan.Store.MarkStep refuses steps of a proposed plan at the store chokepoint.
 
 // stanceWait bounds how long the first work-tool call waits for the async
 // classifier. Text-only turns never wait at all.
@@ -71,6 +81,13 @@ func consentBlocks(ctx context.Context, toolName string) (bool, string) {
 	if st == turnctx.StanceDiscuss {
 		return true, why
 	}
+	// This call is about to DO work with the boss's consent, so latch the
+	// turn: a chatty mid-build steer ("how's it going?") must not be able to
+	// re-classify an approved build as a conversation and shut the gate on the
+	// rest of it. The latch itself lives in the holder (turnctx/stance.go) so
+	// no caller can forget it; this is the one place that knows a work tool
+	// actually ran.
+	h.MarkWorked(toolName)
 	return false, ""
 }
 

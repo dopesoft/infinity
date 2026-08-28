@@ -118,7 +118,7 @@ const REAL_TOOL_IDS = [
   "remember", "recall", "forget", "mem_list", "mem_act", "action_register", "action_list",
   "compact_context", "delegate", "delegate_parallel", "background_build",
   "agent_team_start", "code_agent",
-  "plan_create", "plan_approve", "plan_update", "plan_verify", "plan_get", "plan_list",
+  "plan_create", "plan_approve", "plan_resume", "plan_update", "plan_verify", "plan_get", "plan_list",
   "plan_revise", "plan_cancel",
   "goal_set", "goal_update", "goal_list", "worldmodel_extract", "entity_upsert",
   "entity_link", "entity_get", "entity_search",

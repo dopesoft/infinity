@@ -52,8 +52,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/bridge"
@@ -73,6 +75,14 @@ import (
 // -delete"}` — so -delete is followed by `"`, not a space/EOL. Verified
 // 2026-05-31: without the `"` the find-delete case slips the gate.
 const deleteGateHookCmd = `in=$(cat); if printf '%s' "$in" | grep -qE 'rm[[:space:]]+-[a-zA-Z]*[rf]|rmdir|shred|mkfs|dd[[:space:]]+if=|truncate[[:space:]]+-s[[:space:]]*0|git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f|git[[:space:]]+reset[[:space:]]+--hard|>[[:space:]]*/dev/sd|[[:space:]]-delete([[:space:]"\\]|$)|-exec[[:space:]]+rm'; then echo "INFINITY_DELETE_BLOCKED: a destructive/delete command was blocked - it needs the boss's approval. Do NOT retry it; describe exactly what you wanted to delete in your final summary so the boss can approve that one command." >&2; exit 2; fi`
+
+// deleteBlockedNotice is what the boss reads when the gate stopped a delete.
+// One constant, so the finished path and every salvaged path (killed,
+// detached, abandoned) say it the same way - the notice must survive a job
+// that never got to write its own summary.
+const deleteBlockedNotice = "\n\n⚠️ **Delete blocked — needs your approval.** Claude Code wanted to run a destructive/delete " +
+	"command and the gate stopped it (see its summary above for what). Tell me to go ahead and I'll run that one " +
+	"command through the normal Trust approval."
 
 // codeAgentSettings is what we hand `claude -p --settings`. It MERGES
 // with the boss's normal Claude config (--settings is additive), so all
@@ -96,14 +106,21 @@ func codeAgentSettingsJSON() string {
 }
 
 const (
-	codeAgentMaxWait = 20 * time.Minute // inline ceiling; longer jobs → background_build
+	codeAgentMaxWait = 20 * time.Minute // the job's own ceiling; longer jobs → background_build
+	// codeAgentJobGrace is the slack on top of MaxWait that the job's OWN
+	// context gets, so the final read of the transcript is never cut off by
+	// the same clock that ended the polling.
+	codeAgentJobGrace = 2 * time.Minute
 	// claudeTailBytes is how much of Claude's stream-json we read on each
 	// poll to name its current activity; claudeResultTailBytes is how much we
 	// read at the end to find the final `result` line (the last line of the
 	// stream, per the Claude Code docs) without tripping the bridge's output
-	// cap on a long run.
+	// cap on a long run. claudeInitHeadBytes is the HEAD we read for the
+	// `system/init` line carrying Claude's session id — it is the first line
+	// of the stream, so on a long run it has long since left the tail.
 	claudeTailBytes       = 12000
 	claudeResultTailBytes = 30000
+	claudeInitHeadBytes   = 4000
 )
 
 // codeAgentPollEach / codeAgentTmpDir are vars so the end-to-end test can
@@ -112,6 +129,164 @@ var (
 	codeAgentPollEach = 15 * time.Second
 	codeAgentTmpDir   = "/tmp/inf-code"
 )
+
+// pinnedCodeModel is the model a Mac coding run uses when the call does not
+// name one. Claude Code's own default is Sonnet, and on the Mac the boss is
+// paying for Opus on his Max plan: a serious build must never quietly drop a
+// tier because nobody passed a model. The pin is applied at the execution
+// boundary (ClaudeCodeRunner.Run) so every caller - code_agent inline,
+// background_build detached - gets it by construction (Rule #1b).
+// INFINITY_CODE_AGENT_MODEL overrides it.
+const pinnedCodeModel = "claude-opus-5[1m]"
+
+// repo rejection reasons, in the order preflight decides them.
+const (
+	repoReasonEmpty    = "empty"
+	repoReasonMissing  = "missing"
+	repoReasonNotDir   = "notdir"
+	repoReasonUmbrella = "umbrella"
+	repoReasonNotGit   = "notgit"
+)
+
+// repoRejectedError: the requested working directory is not a repo Claude
+// Code may be turned loose in, so NOTHING was launched. Before this check a
+// missing/blank repo silently landed in the bridge's default cwd - ~/Dev, the
+// umbrella folder holding every one of the boss's repos - and Claude Code
+// would happily start editing whatever it found there.
+type repoRejectedError struct {
+	requested string
+	resolved  string
+	reason    string
+}
+
+func (e *repoRejectedError) Error() string {
+	return "code_agent: " + e.detail() + "; not launching"
+}
+
+// detail is the plain sentence naming what is wrong with the path.
+func (e *repoRejectedError) detail() string {
+	where := strings.TrimSpace(e.requested)
+	if where == "" {
+		where = "(none given)"
+	}
+	switch e.reason {
+	case repoReasonEmpty:
+		return "no repo was given, and a coding run must never fall back to the ~/Dev umbrella folder"
+	case repoReasonMissing:
+		return "the repo path " + where + " does not exist on the Mac"
+	case repoReasonNotDir:
+		return "the repo path " + where + " is a file, not a directory"
+	case repoReasonUmbrella:
+		return "the path " + repoOrRoot(e.resolved) + " is the umbrella folder that holds every repo, not a repo"
+	case repoReasonNotGit:
+		return "the directory " + repoOrRoot(e.resolved) + " is not a git repository"
+	}
+	return "the repo path " + where + " is unusable"
+}
+
+// guidance is the tool result: the model fixes the path and calls again, and
+// never wanders off into whatever directory happened to answer.
+func (e *repoRejectedError) guidance() string {
+	return fmt.Sprintf("NOT LAUNCHED: %s. Nothing was started and nothing was billed. "+
+		"Claude Code only runs inside one specific git repository. Pass `repo` as the absolute path of the repo "+
+		"to work in - on the Mac they live under ~/Dev/<repo> (Infinity itself is ~/Dev/infinity) - and call "+
+		"code_agent again. Do NOT pass ~/Dev itself. Do NOT write the code yourself on the chat model.",
+		e.detail())
+}
+
+// repoPreflightScript resolves the requested working directory ON the bridge
+// and reports what is actually there: the absolute path, the git worktree
+// root, the home directory (so the umbrella folders can be recognised), and
+// where `claude` really lives. It runs WITHOUT a cwd on purpose - handing a
+// bad path to the bridge as cwd answers with a blunt 400 "cwd not a
+// directory", which then reads as "the Mac dropped out" instead of "your
+// path is wrong".
+func repoPreflightScript(repo string) string {
+	return strings.Join([]string{
+		"INF_REPO=" + shellQuote(repo),
+		`D="${INF_REPO/#\~/$HOME}"`,
+		// Physical HOME, so the umbrella comparison matches `pwd -P` below
+		// even where the home path runs through a symlink.
+		`echo "HOME:$(cd "$HOME" 2>/dev/null && pwd -P)"`,
+		`echo "CLAUDEBIN:$(command -v claude 2>/dev/null)"`,
+		`if [ ! -e "$D" ]; then echo "REPO:missing"; exit 0; fi`,
+		`if [ ! -d "$D" ]; then echo "REPO:notdir"; exit 0; fi`,
+		`P=$(cd "$D" 2>/dev/null && pwd -P)`,
+		`if [ -z "$P" ]; then echo "REPO:missing"; exit 0; fi`,
+		`echo "REPOPATH:$P"`,
+		`echo "REPOROOT:$(cd "$P" && git rev-parse --show-toplevel 2>/dev/null)"`,
+	}, "\n")
+}
+
+// repoInfo is what preflight learned about the run's working directory and
+// the engine that will execute in it.
+type repoInfo struct {
+	// Path is the requested directory, absolute and symlink-resolved.
+	Path string
+	// Root is the git worktree root; "" when the directory is not in a repo.
+	Root string
+	// ClaudeBin is the resolved `claude` executable on the bridge.
+	ClaudeBin string
+	home      string
+	reason    string
+}
+
+// parseRepoPreflight decodes repoPreflightScript's output.
+func parseRepoPreflight(out string) repoInfo {
+	var info repoInfo
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "HOME:"):
+			info.home = strings.TrimSpace(strings.TrimPrefix(line, "HOME:"))
+		case strings.HasPrefix(line, "CLAUDEBIN:"):
+			info.ClaudeBin = strings.TrimSpace(strings.TrimPrefix(line, "CLAUDEBIN:"))
+		case strings.HasPrefix(line, "REPOPATH:"):
+			info.Path = strings.TrimSpace(strings.TrimPrefix(line, "REPOPATH:"))
+		case strings.HasPrefix(line, "REPOROOT:"):
+			info.Root = strings.TrimSpace(strings.TrimPrefix(line, "REPOROOT:"))
+		case line == "REPO:missing":
+			info.reason = repoReasonMissing
+		case line == "REPO:notdir":
+			info.reason = repoReasonNotDir
+		}
+	}
+	return info
+}
+
+// isUmbrellaDir reports whether path is a container of repos rather than a
+// repo: the filesystem root, the bridge workspace root, the boss's home, or
+// ~/Dev - the folder every one of his repos sits in.
+func isUmbrellaDir(path, home string) bool {
+	p := strings.TrimRight(strings.TrimSpace(path), "/")
+	if p == "" {
+		return true
+	}
+	switch p {
+	case "/", "/workspace", "/workspace/projects", "/Users":
+		return true
+	}
+	h := strings.TrimRight(strings.TrimSpace(home), "/")
+	return h != "" && (p == h || p == h+"/Dev")
+}
+
+// validateRepo turns a preflight reading into a launch/refuse decision.
+func validateRepo(requested string, info repoInfo) error {
+	reject := func(reason string) error {
+		return &repoRejectedError{requested: requested, resolved: info.Path, reason: reason}
+	}
+	switch {
+	case info.reason != "":
+		return reject(info.reason)
+	case strings.TrimSpace(info.Path) == "":
+		return reject(repoReasonMissing)
+	case isUmbrellaDir(info.Path, info.home):
+		return reject(repoReasonUmbrella)
+	case strings.TrimSpace(info.Root) == "":
+		return reject(repoReasonNotGit)
+	}
+	return nil
+}
 
 // claudeAuthProbeCmd prints the Mac's Claude Code sign-in so a launch can
 // PROVE which plan is about to pay: the oauthAccount block of ~/.claude.json
@@ -255,25 +430,55 @@ func (e *notSubscriptionError) guidance() string {
 		"Do NOT write the code yourself on the chat model.", e.auth.Label(), fix)
 }
 
-// stillRunningError: the wait window closed while Claude Code was still
-// working on the Mac. The job was NOT killed.
+// stillRunningError: the inline wait window closed while Claude Code was
+// still working on the Mac. The job was NOT killed and NOT cancelled - this
+// is the "keep working" outcome, not a failure.
 type stillRunningError struct {
 	jobID   string
 	repo    string
 	elapsed time.Duration
+	// activity is what the job was doing at the last poll ("Edit
+	// core/x.go"), so the boss gets a fact instead of a spinner.
+	activity string
+	// following: a background follower is still watching this job and will
+	// close its run row with the real receipt when it lands. Set by the
+	// detach path; the caller uses it to decide whether the run row stays
+	// open (it must, or the watch would settle on a job that is still going).
+	following bool
+	// reporting: a durable watch was registered on the run, so its completion
+	// is delivered back into the chat by the watch poller. Only claimed when
+	// the watch was actually created - promising a callback that no row backs
+	// is the same lie as reporting a killed job as finished.
+	reporting bool
 }
 
 func (e *stillRunningError) Error() string {
-	return fmt.Sprintf("code_agent: Claude Code is still working after %s (run %s); it was not stopped - resume with `claude --continue` in %s",
+	return fmt.Sprintf("code_agent: Claude Code is STILL WORKING after %s (run %s in %s); it was not stopped",
 		e.elapsed.Round(time.Second), e.jobID, repoOrRoot(e.repo))
 }
 
-// inlineMessage is the friendly form for the inline tool result.
+// inlineMessage is the tool result the model reads. It tells the truth the
+// old copy did not: the job is alive, this is its run id, and it reports back
+// on its own - so the model neither declares failure nor launches a duplicate.
 func (e *stillRunningError) inlineMessage() string {
-	return fmt.Sprintf("⏳ Claude Code is still working after %s (run %s). It keeps going on the Mac; "+
-		"this is past the inline wait window. Check back, or for jobs this long hand them to background_build. "+
-		"Resume the same session with `claude --continue` in %s.",
-		e.elapsed.Round(time.Second), e.jobID, repoOrRoot(e.repo))
+	doing := "working"
+	if strings.TrimSpace(e.activity) != "" {
+		doing = e.activity
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "STILL RUNNING (not stopped, not failed): Claude Code is %s in %s after %s. Run id %s.",
+		doing, repoOrRoot(e.repo), e.elapsed.Round(time.Second), e.jobID)
+	switch {
+	case e.following && e.reporting:
+		b.WriteString(" I am still following it: when it finishes, its real result lands on that run AND is delivered back into this chat on its own — you will be told, you do not have to poll for it.")
+	case e.following:
+		b.WriteString(" I am still following it: when it finishes, its real result lands on that run (check it with the run id above).")
+	default:
+		b.WriteString(" It keeps working on the Mac past this turn; check the run for its result.")
+	}
+	b.WriteString(" Do NOT call code_agent again for the same work (that would run it twice), and do NOT tell the boss it failed or was cancelled — " +
+		"tell him plainly that it is still going and what it is doing right now.")
+	return b.String()
 }
 
 // ClaudeCodeRunner launches Claude Code (`claude -p`) on the Mac bridge under
@@ -297,10 +502,14 @@ func (r *ClaudeCodeRunner) ActiveBridge(ctx context.Context) (bridge.Bridge, str
 	return pickBridge(ctx, r.router, r.prefs)
 }
 
-// DefaultModel is Infinity's pinned Claude Code model (INFINITY_CODE_AGENT_MODEL,
-// e.g. "claude-opus-5[1m]"); "" defers to the Mac's own Claude setting.
+// DefaultModel is Infinity's pinned Claude Code model: INFINITY_CODE_AGENT_MODEL
+// when set, else pinnedCodeModel (Opus 5). It never returns "" - deferring to
+// the Mac's own Claude setting is how a build silently ends up on Sonnet.
 func (r *ClaudeCodeRunner) DefaultModel() string {
-	return strings.TrimSpace(os.Getenv("INFINITY_CODE_AGENT_MODEL"))
+	if m := strings.TrimSpace(os.Getenv("INFINITY_CODE_AGENT_MODEL")); m != "" {
+		return m
+	}
+	return pinnedCodeModel
 }
 
 // DefaultEffort is the pinned effort (INFINITY_CODE_AGENT_EFFORT).
@@ -314,17 +523,47 @@ type ClaudeCodeJob struct {
 	JobID  string
 	Task   string
 	// Repo is the working directory (Mac or cloud-flavored path; normalized
-	// here). Empty → the bridge workspace root.
-	Repo   string
+	// here). It must name one real git repository: empty, missing, or the
+	// ~/Dev umbrella is refused before launch, never defaulted.
+	Repo string
+	// Model is the Claude model for this run. Empty → pinnedCodeModel /
+	// INFINITY_CODE_AGENT_MODEL, applied in Run so no path falls to Sonnet.
 	Model  string
 	Effort string
 	// MaxWait bounds how long Run polls before reporting the job still
 	// running (it is never killed for this). Zero → codeAgentMaxWait.
 	MaxWait time.Duration
-	// KillOnCancel: when ctx is cancelled (Stop button, mid-turn steer) kill
-	// the detached claude -p. The inline tool sets it; a background build
-	// leaves Claude working and reports that instead.
+	// KillOnCancel: when the INLINE window is cancelled outright (the Stop
+	// button, an explicit stop order) kill the detached claude -p. A timeout
+	// is never a cancel: the turn's clock running out leaves Claude working.
+	// The inline tool sets it; a background build leaves Claude working and
+	// reports that instead.
 	KillOnCancel bool
+	// Inline is the CALLER's context (the chat turn). It bounds how long Run
+	// waits INLINE - never how long the job gets to work, which is ctx. When
+	// it ends, the job is killed only if it was explicitly cancelled AND
+	// KillOnCancel is set; a deadline detaches. Zero → ctx, the pre-detach
+	// behaviour for callers that have no separate turn.
+	//
+	// This split is the fix for the 2026-08-28 guillotine: INFINITY_TURN_TIMEOUT
+	// (15 min) always fired before this tool's own 20-minute ceiling, so every
+	// long job took the kill branch and the "never killed" path was dead code.
+	Inline context.Context
+	// Detach fires when the loop wants the inline wait to END without killing
+	// anything - the boss said something that is not a stop. Nil for callers
+	// that have no such signal (crons, delegates), where a nil channel simply
+	// never fires.
+	Detach <-chan struct{}
+	// Detached is called when a job that outlived the inline wait finally
+	// settles. The caller closes its run row with it, so a detached job still
+	// ends with a real receipt instead of a spinner nothing ever closes.
+	Detached func(JobOutcome)
+	// Stopped is called when an EXPLICIT stop tore the job down, with the same
+	// summary Run returns. The caller closes its run row as interrupted rather
+	// than ok: a killed job reached no verdict, and a green row carrying a
+	// "was STOPPED" summary is the false green this whole path exists to
+	// prevent (runs.StoppedInterrupted).
+	Stopped func(summary string)
 	// Heartbeat receives live progress: a label for the run row, plus the
 	// current tool (action) and its target (detail) when known.
 	Heartbeat func(label, action, detail string)
@@ -353,6 +592,12 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	if job.MaxWait <= 0 {
 		job.MaxWait = codeAgentMaxWait
 	}
+	// Opus, always, unless this call named something else. Enforced here, at
+	// the one execution boundary, so no caller can leave it to Claude Code's
+	// own Sonnet default.
+	if strings.TrimSpace(job.Model) == "" {
+		job.Model = r.DefaultModel()
+	}
 	// A cloud-flavored repo path (e.g. /workspace/infinity) still resolves on
 	// the Mac: translate it to the Mac layout before launching.
 	repo := bridge.NormalizePath(b, job.Repo)
@@ -364,7 +609,29 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 		return "", &llm.QuotaError{Provider: claudeCodeQuotaKey, ResetsAt: until, Detail: detail}
 	}
 
-	// 1. Prove the sign-in before anything runs or bills.
+	// 1. Prove there is a real repo to work in. A blank/bad path used to fall
+	// through to the bridge's default cwd - ~/Dev, the umbrella holding every
+	// repo the boss owns - and Claude Code would start editing in there.
+	if strings.TrimSpace(job.Repo) == "" {
+		return "", &repoRejectedError{requested: job.Repo, reason: repoReasonEmpty}
+	}
+	info, err := r.preflightRepo(ctx, b, repo)
+	if err != nil {
+		return "", err
+	}
+	if err := validateRepo(repo, info); err != nil {
+		return "", err
+	}
+	// From here on the run works in the resolved absolute path, not the
+	// tilde/cloud spelling that was requested.
+	repo = info.Path
+	setMeta("repo", info.Path)
+	setMeta("repo_root", info.Root)
+	setMeta("claude_bin", info.ClaudeBin)
+	setMeta("model", job.Model)
+	setMeta("effort", job.Effort)
+
+	// 2. Prove the sign-in before anything runs or bills.
 	auth, err := r.probeAuth(ctx, b, repo)
 	if err != nil {
 		return "", err
@@ -376,14 +643,13 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	if !auth.Subscription() {
 		return "", &notSubscriptionError{auth: auth}
 	}
-	// When no model/effort was pinned, the Mac's own Claude default is what
-	// will code; record it so the run row (and the pill) name the real model.
-	if job.Model == "" {
-		setMeta("model", auth.defaultModel)
-	}
 	if job.Effort == "" {
 		setMeta("effort", auth.defaultEffort)
 	}
+	// The one auditable line saying what this run resolved to before it
+	// spent a token: which repo, which binary, which model, whose plan.
+	setMeta("preflight", preflightEvidence(info, job.Model, auth))
+	codeAgentInfo().Printf("code_agent preflight ok: %s", preflightEvidence(info, job.Model, auth))
 	heartbeat("Claude Code · signed in on your "+auth.Label(), "auth", "")
 
 	// 2. Launch, detached.
@@ -411,54 +677,462 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	// client cap and the 600s server cap never bite the long run. Each poll
 	// also reads the tail of Claude's stream so the run row says what it is
 	// doing right now.
+	p := &claudePoll{
+		runner:    r,
+		b:         b,
+		files:     files,
+		repo:      repo,
+		auth:      auth,
+		jobID:     job.JobID,
+		started:   started,
+		deadline:  started.Add(job.MaxWait),
+		heartbeat: heartbeat,
+		setMeta:   setMeta,
+		pollEach:  codeAgentPollEach,
+		tmpDir:    codeAgentTmpDir,
+	}
+	inline := job.Inline
+	if inline == nil {
+		inline = ctx
+	}
+	summary, runErr, outcome := p.wait(ctx, inline, job.Detach, job.KillOnCancel)
+	switch outcome {
+	case waitFinished:
+		return summary, runErr
+	case waitKill:
+		out := p.stopped()
+		if job.Stopped != nil {
+			job.Stopped(out)
+		}
+		return out, nil
+	default:
+		return p.detach(ctx, job)
+	}
+}
+
+// JobOutcome is how a job that outlived its turn finally settled. Summary and
+// Err are what Run would have returned; StoppedReason is non-empty only when
+// the job never reached a verdict (runs.StoppedStillWorking), so the caller
+// closes the row as interrupted instead of announcing a green it never earned.
+type JobOutcome struct {
+	Summary       string
+	Err           error
+	StoppedReason string
+}
+
+// waitOutcome is why the inline wait ended.
+type waitOutcome int
+
+const (
+	waitFinished waitOutcome = iota // the job exited; the receipt is real
+	waitDetach                      // stop waiting, leave the job running
+	waitKill                        // stop waiting and tear the job down
+)
+
+// claudePoll is one launched job being watched. It exists so the SAME poll
+// loop can run inline (inside the turn) and then, after a detach, in a
+// background follower - one implementation, so a detached job gets the same
+// heartbeats, the same session capture and the same receipt as an inline one.
+type claudePoll struct {
+	runner    *ClaudeCodeRunner
+	b         bridge.Bridge
+	files     claudeJobFiles
+	repo      string
+	auth      claudeAuth
+	jobID     string
+	started   time.Time
+	deadline  time.Time
+	heartbeat func(label, action, detail string)
+	setMeta   func(key, value string)
+	// pollEach / tmpDir are snapshotted at launch rather than read from the
+	// package vars mid-run: once a job is launched, its cadence and its file
+	// layout are fixed for its whole life, including the part that runs in
+	// the background follower after the turn is gone.
+	pollEach time.Duration
+	tmpDir   string
+
+	// Written only by whichever single goroutine is polling: the inline
+	// waiter until it detaches, the follower after.
+	lastAction  string
+	lastDetail  string
+	sessionSeen bool
+}
+
+// wait polls the job until it finishes, its own lifetime (ctx) ends, or the
+// inline window closes. It NEVER kills anything itself; waitKill is a request
+// the caller acts on.
+func (p *claudePoll) wait(ctx, inline context.Context, detach <-chan struct{}, killOnCancel bool) (string, error, waitOutcome) {
 	pollCmd := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi; echo "===TAIL==="; tail -c %d %s 2>/dev/null`,
-		files.status, files.status, claudeTailBytes, files.out)
-	deadline := started.Add(job.MaxWait)
-	lastAction, lastDetail := "", ""
+		p.files.status, p.files.status, claudeTailBytes, p.files.out)
+	// When the caller gave no separate inline window, ctx IS the window;
+	// listening on both would make the outcome a coin flip.
+	var jobDone <-chan struct{}
+	if inline != ctx {
+		jobDone = ctx.Done()
+	}
 	for {
 		select {
-		case <-ctx.Done():
-			elapsed := time.Since(started).Round(time.Second)
-			if !job.KillOnCancel {
-				return "", &stillRunningError{jobID: job.JobID, repo: repo, elapsed: elapsed}
+		case <-jobDone:
+			// The JOB's own lifetime ended (its budget). A clock is not the
+			// boss telling it to stop, so it is left running.
+			return "", nil, waitDetach
+		case <-detach:
+			// The boss spoke, and it was not a stop.
+			return "", nil, waitDetach
+		case <-inline.Done():
+			// A DEADLINE is the chat turn timing out — the job outlives it.
+			// An explicit CANCEL is the Stop button or a stop order, and only
+			// that is allowed to tear the work down.
+			if killOnCancel && !errors.Is(inline.Err(), context.DeadlineExceeded) {
+				return "", nil, waitKill
 			}
-			// The caller's context was cancelled: the Stop button, a mid-turn
-			// message from the boss (SteerInterruptible), or a shutdown. KILL
-			// the detached claude -p — its edits are git-reversible, and a job
-			// the boss just interrupted must not keep rewriting his repo.
-			killed := r.kill(b, repo, files.pid)
-			return fmt.Sprintf(
-				"code_agent was STOPPED after %s (Claude Code run %s %s). Any edits it had already "+
-					"made are uncommitted in %s — check git_status/git_diff before touching that repo. "+
-					"To pick the job back up later, run code_agent again; `claude --continue` in that "+
-					"directory resumes its conversation.",
-				elapsed, job.JobID, killed, repoOrRoot(repo)), nil
-		case <-time.After(codeAgentPollEach):
+			return "", nil, waitDetach
+		case <-time.After(p.pollEach):
 		}
 
-		pb, pc, pok := b.Post(ctx, "/bash", map[string]any{"cmd": pollCmd, "cwd": repo, "timeout_sec": 15})
+		pb, pc, pok := p.b.Post(ctx, "/bash", map[string]any{"cmd": pollCmd, "cwd": p.repo, "timeout_sec": 15})
 		if pok && pc < 300 {
 			raw, _ := bridgeBashOutput(pb)
 			head, tail := splitMarker(raw, "", "===TAIL===")
+			// Claude's own session id rides the stream from its first line;
+			// capture it early, while the head is still inside the tail
+			// window, so even a killed job can be resumed later.
+			p.noteSession(tail)
 			if strings.Contains(head, "DONE:") {
-				exit := exitCodeFromDone(head)
-				return r.collect(ctx, b, files, repo, exit, auth, started, setMeta)
+				out, err := p.finish(ctx, exitCodeFromDone(head))
+				return out, err, waitFinished
 			}
 			if action, detail, found := claudeStreamActivity(tail); found {
-				lastAction, lastDetail = action, detail
+				p.lastAction, p.lastDetail = action, detail
 			}
 		}
-		elapsed := time.Since(started).Round(time.Second)
-		heartbeat(claudeProgressLabel(lastAction, lastDetail, elapsed), lastAction, lastDetail)
-		if lastDetail != "" {
-			setMeta("currentFile", lastDetail)
+		elapsed := time.Since(p.started).Round(time.Second)
+		p.heartbeat(claudeProgressLabel(p.lastAction, p.lastDetail, elapsed), p.lastAction, p.lastDetail)
+		if p.lastDetail != "" {
+			p.setMeta("currentFile", p.lastDetail)
 		}
 
-		if time.Now().After(deadline) {
-			return "", &stillRunningError{jobID: job.JobID, repo: repo, elapsed: time.Since(started)}
+		if time.Now().After(p.deadline) {
+			return "", nil, waitDetach
 		}
 	}
 }
+
+// finish reads the completed job's transcript, turns it into the receipt, and
+// clears its files off the Mac.
+func (p *claudePoll) finish(ctx context.Context, exitCode int) (string, error) {
+	t, err := p.fetch(ctx)
+	if err != nil {
+		return "", err
+	}
+	out, ierr := p.interpret(t, exitCode)
+	p.cleanup()
+	return out, ierr
+}
+
+// stopped kills the job and hands back what it ACTUALLY did. Before this the
+// transcript at /tmp/inf-code was orphaned on every kill: nothing read it, so
+// a stopped job reported nothing but the fact that it stopped.
+func (p *claudePoll) stopped() string {
+	elapsed := time.Since(p.started).Round(time.Second)
+	killed := p.runner.kill(p.b, p.repo, p.files)
+	var b strings.Builder
+	fmt.Fprintf(&b, "code_agent was STOPPED after %s (Claude Code run %s %s).", elapsed, p.jobID, killed)
+	if t, ok := p.salvage(); ok {
+		if res := parseClaudeStreamResult(t.out); res.parsed && strings.TrimSpace(res.Result) != "" {
+			// It had already written its own summary when the stop landed.
+			b.WriteString("\n\nWhat it reported before it stopped:\n" + res.Result)
+		} else if did := p.didSoFar(t.out); did != "" {
+			b.WriteString("\n\nWhat it had done when it stopped: " + did)
+		}
+		if strings.Contains(t.err, "INFINITY_DELETE_BLOCKED") {
+			b.WriteString(deleteBlockedNotice)
+		}
+	}
+	fmt.Fprintf(&b, "\n\nAny edits it had already made are uncommitted in %s — check git_status/git_diff before touching that repo. "+
+		"To pick the job back up, call code_agent again with what is left to do.", repoOrRoot(p.repo))
+	p.cleanup()
+	return b.String()
+}
+
+// detach leaves the job running. It first reads the transcript, because the
+// job may have crossed the line in the seconds between the last poll and the
+// interruption - reporting "still running" for a finished job would be its
+// own lie. Otherwise it keeps FOLLOWING the job on a context of its own, so
+// the run row still closes with a real receipt after the turn is gone, and
+// returns the still-running result for this turn.
+func (p *claudePoll) detach(ctx context.Context, job ClaudeCodeJob) (string, error) {
+	if t, ok := p.salvage(); ok {
+		if res := parseClaudeStreamResult(t.out); res.parsed {
+			out, err := p.interpret(t, 0)
+			p.cleanup()
+			return out, err
+		}
+	}
+	still := &stillRunningError{
+		jobID:    p.jobID,
+		repo:     p.repo,
+		elapsed:  time.Since(p.started),
+		activity: p.activityLine(),
+	}
+	if job.Detached == nil {
+		return "", still
+	}
+	// Its own context, derived from the job's but insensitive to the caller
+	// returning: the follower must outlive this call by construction.
+	fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), time.Until(p.deadline)+codeAgentJobGrace)
+	still.following = true
+	codeAgentInfo().Printf("code_agent detached: run %s keeps working in %s (%s)", p.jobID, repoOrRoot(p.repo), p.activityLine())
+	go func() {
+		defer fcancel()
+		summary, err, outcome := p.wait(fctx, fctx, nil, false)
+		if outcome != waitFinished {
+			// No verdict: it was still going when we stopped following it.
+			// Marked so the run row - and any watch on it - reads "still
+			// working", never a green nobody earned.
+			job.Detached(JobOutcome{Summary: p.abandoned(), StoppedReason: runs.StoppedStillWorking})
+			return
+		}
+		job.Detached(JobOutcome{Summary: summary, Err: err})
+	}()
+	return "", still
+}
+
+// abandoned is the receipt for a job that outlived even the follower's
+// window. It salvages the transcript first: "we stopped watching" must never
+// be reported as "it produced nothing".
+func (p *claudePoll) abandoned() string {
+	elapsed := time.Since(p.started).Round(time.Second)
+	if t, ok := p.salvage(); ok {
+		if res := parseClaudeStreamResult(t.out); res.parsed && strings.TrimSpace(res.Result) != "" {
+			return res.Result + "\n\n_Reported after " + elapsed.String() + ", past the window Infinity follows a run for._"
+		}
+		if did := p.didSoFar(t.out); did != "" {
+			return fmt.Sprintf("Claude Code was STILL WORKING after %s in %s, past the window I follow a run for, so I stopped watching it. "+
+				"It was not stopped. What it had done by then: %s. Check git_status/git_diff in that repo for its edits.",
+				elapsed, repoOrRoot(p.repo), did)
+		}
+	}
+	return fmt.Sprintf("Claude Code was still working after %s in %s, past the window I follow a run for, so I stopped watching it. "+
+		"It was not stopped — check git_status/git_diff in that repo for its edits.", elapsed, repoOrRoot(p.repo))
+}
+
+// activityLine names what the job was doing at the last poll.
+func (p *claudePoll) activityLine() string {
+	switch {
+	case p.lastAction != "" && p.lastDetail != "":
+		return p.lastAction + " " + p.lastDetail
+	case p.lastAction != "":
+		return p.lastAction
+	}
+	return ""
+}
+
+// didSoFar reads a partial transcript and says, in one line, what the job
+// actually touched. This is the salvage a killed or abandoned run hands back.
+func (p *claudePoll) didSoFar(stream string) string {
+	parts := []string{}
+	if files := claudeTouchedFiles(stream); len(files) > 0 {
+		parts = append(parts, "edited "+strings.Join(files, ", "))
+	}
+	action, detail, found := claudeStreamActivity(stream)
+	if !found {
+		action, detail = p.lastAction, p.lastDetail
+	}
+	if action != "" {
+		last := "last: " + action
+		if detail != "" {
+			last += " " + detail
+		}
+		parts = append(parts, last)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// transcript is one read of the job's output and stderr off the Mac.
+type transcript struct{ out, err string }
+
+// fetch reads the job's transcript. It takes the HEAD of the stream too (the
+// `system/init` line carrying Claude's session id, which has long scrolled
+// out of the tail on a real run) as well as the tail holding the result.
+func (p *claudePoll) fetch(ctx context.Context) (transcript, error) {
+	cmd := fmt.Sprintf(`echo "===INIT==="; head -c %d %s 2>/dev/null; echo "===OUT==="; tail -c %d %s 2>/dev/null; echo "===ERR==="; tail -c 4000 %s 2>/dev/null`,
+		claudeInitHeadBytes, p.files.out, claudeResultTailBytes, p.files.out, p.files.err)
+	fb, fc, fok := p.b.Post(ctx, "/bash", map[string]any{"cmd": cmd, "cwd": p.repo, "timeout_sec": 20})
+	if !fok || fc >= 300 {
+		return transcript{}, fmt.Errorf("code_agent: reading the run's output failed (status=%d)", fc)
+	}
+	// Decode the bridge's {output, exit_code} JSON for real. The old
+	// first-quote scanner cut Claude's own JSON at its first escaped quote,
+	// so every result (including "You're out of extra usage") came back as
+	// `{\` and was reported ok (2026-08-26).
+	raw, _ := bridgeBashOutput(fb)
+	initPart, rest := splitMarker(raw, "===INIT===", "===OUT===")
+	outPart, errPart := splitMarker(rest, "", "===ERR===")
+	p.noteSession(initPart)
+	p.noteSession(outPart)
+	return transcript{out: outPart, err: errPart}, nil
+}
+
+// salvage reads the transcript on a FRESH context. Every path that calls it -
+// kill, detach, abandon - runs when the caller's context is already dead or
+// irrelevant, which is exactly why the transcript used to be thrown away.
+func (p *claudePoll) salvage() (transcript, bool) {
+	sctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	t, err := p.fetch(sctx)
+	if err != nil {
+		log.Printf("code_agent: could not salvage run %s output: %v", p.jobID, err)
+		return transcript{}, false
+	}
+	return t, true
+}
+
+// cleanup removes this job's files from the Mac's /tmp/inf-code and sweeps
+// day-old leftovers. Nothing cleaned that directory before, so every run
+// since the tool shipped left its transcript there forever. Only ever called
+// for a job that has SETTLED (finished or killed) - a job that may still be
+// writing keeps its files.
+func (p *claudePoll) cleanup() {
+	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	f := p.files
+	cmd := strings.Join([]string{
+		"rm -f " + shellQuote(f.out) + " " + shellQuote(f.err) + " " + shellQuote(f.status) + " " +
+			shellQuote(f.pid) + " " + shellQuote(f.pgid),
+		// Leftovers from runs that predate this sweep, or whose core
+		// restarted mid-flight. A live job's files are minutes old at most
+		// (the ceiling is 20 minutes), so a day is a safe floor.
+		"find " + shellQuote(p.tmpDir) + " -maxdepth 1 -type f -mmin +1440 ! -name settings.json -exec rm -f {} + 2>/dev/null",
+		"exit 0",
+	}, "\n")
+	p.b.Post(cctx, "/bash", map[string]any{"cmd": cmd, "cwd": p.repo, "timeout_sec": 10})
+}
+
+// noteSession records Claude's own session id on the run row the first time
+// the stream shows it. It is on the wire from the first line of every run and
+// nothing read it until now - which is why a killed or detached job could
+// never actually be resumed.
+func (p *claudePoll) noteSession(stream string) {
+	if p.sessionSeen {
+		return
+	}
+	id := parseClaudeSessionID(stream)
+	if id == "" {
+		return
+	}
+	p.sessionSeen = true
+	p.setMeta("claude_session_id", id)
+}
+
+// parseClaudeSessionID finds the session id in a stream-json fragment. The
+// `{"type":"system","subtype":"init","session_id":…}` line is the first, but
+// every event carries it, so any decodable line will do.
+func parseClaudeSessionID(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var ev struct {
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		if id := strings.TrimSpace(ev.SessionID); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// claudeTouchedFiles lists the files a (possibly partial) stream shows Claude
+// writing to, newest first, capped. Deterministic evidence for a run that
+// never got to write its own summary.
+func claudeTouchedFiles(stream string) []string {
+	const maxFiles = 8
+	seen := map[string]bool{}
+	out := []string{}
+	lines := strings.Split(stream, "\n")
+	for i := len(lines) - 1; i >= 0 && len(out) < maxFiles; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content []struct {
+					Type  string         `json:"type"`
+					Name  string         `json:"name"`
+					Input map[string]any `json:"input"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "assistant" {
+			continue
+		}
+		for _, c := range ev.Message.Content {
+			if c.Type != "tool_use" {
+				continue
+			}
+			switch c.Name {
+			case "Edit", "Write", "NotebookEdit", "MultiEdit":
+			default:
+				continue
+			}
+			path, _ := c.Input["file_path"].(string)
+			if path = strings.TrimSpace(path); path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// preflightRepo resolves the working directory on the bridge. It runs with
+// no cwd so a bad path comes back as a readable reading, not a bridge 400.
+func (r *ClaudeCodeRunner) preflightRepo(ctx context.Context, b bridge.Bridge, repo string) (repoInfo, error) {
+	body, code, ok := b.Post(ctx, "/bash", map[string]any{"cmd": repoPreflightScript(repo), "timeout_sec": 15})
+	if ok && code >= 400 && code < 500 {
+		return repoInfo{}, &launchRejectedError{bridge: string(b.Name()), status: code, detail: bridgeErrorDetail(body)}
+	}
+	if !ok || code >= 300 {
+		return repoInfo{}, fmt.Errorf("code_agent: repo check via %s failed (status=%d): %s", b.Name(), code, string(body))
+	}
+	out, _ := bridgeBashOutput(body)
+	return parseRepoPreflight(out), nil
+}
+
+// preflightEvidence is the audit line for the run row and the log: what this
+// launch resolved to, with no secret in it (the probe only ever reports the
+// PRESENCE of a key, never its value).
+func preflightEvidence(info repoInfo, model string, auth claudeAuth) string {
+	bin := info.ClaudeBin
+	if bin == "" {
+		bin = "claude (not on PATH)"
+	}
+	if model == "" {
+		model = "(unset)"
+	}
+	return fmt.Sprintf("repo %s (git root %s) · %s · model %s · %s",
+		repoOrRoot(info.Path), repoOrRoot(info.Root), bin, model, auth.Label())
+}
+
+// codeAgentInfo writes to stdout so Railway tags these lines severity=info;
+// stdlib log goes to stderr, which is reserved for real failures.
+func codeAgentInfo() *log.Logger {
+	codeAgentLogOnce.Do(func() { codeAgentLog = log.New(os.Stdout, "", log.LstdFlags) })
+	return codeAgentLog
+}
+
+var (
+	codeAgentLog     *log.Logger
+	codeAgentLogOnce sync.Once
+)
 
 // probeAuth runs the sign-in probe on the Mac and decodes it.
 func (r *ClaudeCodeRunner) probeAuth(ctx context.Context, b bridge.Bridge, repo string) (claudeAuth, error) {
@@ -475,7 +1149,7 @@ func (r *ClaudeCodeRunner) probeAuth(ctx context.Context, b bridge.Bridge, repo 
 
 // claudeJobFiles are the per-job files under codeAgentTmpDir.
 type claudeJobFiles struct {
-	out, err, status, pid, settings string
+	out, err, status, pid, pgid, settings string
 }
 
 func newClaudeJobFiles(jobID string) claudeJobFiles {
@@ -484,6 +1158,7 @@ func newClaudeJobFiles(jobID string) claudeJobFiles {
 		err:      fmt.Sprintf("%s/%s.err", codeAgentTmpDir, jobID),
 		status:   fmt.Sprintf("%s/%s.status", codeAgentTmpDir, jobID),
 		pid:      fmt.Sprintf("%s/%s.pid", codeAgentTmpDir, jobID),
+		pgid:     fmt.Sprintf("%s/%s.pgid", codeAgentTmpDir, jobID),
 		settings: fmt.Sprintf("%s/settings.json", codeAgentTmpDir),
 	}
 }
@@ -510,12 +1185,23 @@ func claudeLaunchScript(f claudeJobFiles, task, model, effort string) string {
 		"export INF_TASK=" + shellQuote(task),
 		"export INF_MODEL=" + shellQuote(model),
 		"export INF_EFFORT=" + shellQuote(effort),
+		// Monitor mode puts a background job in its OWN process group even in
+		// a non-interactive shell (no `setsid` on macOS). That is what makes
+		// the wrapper a group leader, so a Stop can reap the WHOLE tree -
+		// claude, and the `go build` / MCP server / test run it spawned -
+		// instead of one level (see claudeKillScript).
+		"set -m",
 		"nohup bash -c " + shellQuote(inner) + " >/dev/null 2>&1 &",
-		// Record the wrapper's pid so a Stop / mid-turn steer can actually
-		// kill the job (2026-08-26: the boss said "don't build", the job kept
-		// editing his repo for nine minutes and "couldn't be stopped").
-		`echo $! > ` + f.pid,
-		`echo "PID:$!"`,
+		"INF_PID=$!",
+		// Record the wrapper's pid so a Stop / mid-turn stop order can
+		// actually kill the job (2026-08-26: the boss said "don't build", the
+		// job kept editing his repo for nine minutes and "couldn't be
+		// stopped"), and its process group so a kill that arrives after the
+		// wrapper itself has exited can still reap the orphans.
+		`echo $INF_PID > ` + f.pid,
+		`ps -o pgid= -p $INF_PID 2>/dev/null | tr -d ' \t' > ` + f.pgid,
+		"set +m",
+		`echo "PID:$INF_PID"`,
 	}, "\n")
 }
 
@@ -539,42 +1225,56 @@ func exitCodeFromDone(head string) int {
 	return n
 }
 
-// kill terminates the detached claude -p (wrapper + children) recorded in
-// pidf. Runs on a FRESH context because the tool ctx is already cancelled.
-// Returns a short human clause for the tool result.
-func (r *ClaudeCodeRunner) kill(b bridge.Bridge, repo, pidf string) string {
-	kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// kill terminates the detached claude -p and EVERYTHING it spawned. Runs on a
+// FRESH context because the tool ctx is already cancelled. Returns a short
+// human clause for the tool result.
+func (r *ClaudeCodeRunner) kill(b bridge.Bridge, repo string, f claudeJobFiles) string {
+	kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := fmt.Sprintf(
-		`P=$(cat %s 2>/dev/null); if [ -z "$P" ]; then echo NOPID; exit 0; fi; `+
-			`pkill -TERM -P "$P" 2>/dev/null; kill -TERM "$P" 2>/dev/null; sleep 1; `+
-			`if kill -0 "$P" 2>/dev/null; then pkill -KILL -P "$P" 2>/dev/null; kill -KILL "$P" 2>/dev/null; fi; echo KILLED`,
-		pidf)
-	body, code, ok := b.Post(kctx, "/bash", map[string]any{"cmd": cmd, "cwd": repo, "timeout_sec": 10})
+	body, code, ok := b.Post(kctx, "/bash", map[string]any{"cmd": claudeKillScript(f), "cwd": repo, "timeout_sec": 12})
 	if !ok || code >= 300 {
 		return "could not be killed: the Mac bridge did not answer, it may still be running"
 	}
-	if kout, _ := bridgeBashOutput(body); strings.Contains(kout, "NOPID") {
+	kout, _ := bridgeBashOutput(body)
+	if strings.Contains(kout, "NOPID") {
 		return "had no recorded pid, it may still be running"
 	}
 	return "was killed"
 }
 
-// collect reads the finished output, parses Claude's final result message,
-// and folds in any blocked-delete notice for the boss to approve.
-func (r *ClaudeCodeRunner) collect(ctx context.Context, b bridge.Bridge, f claudeJobFiles, repo string, exitCode int, auth claudeAuth, started time.Time, setMeta func(string, string)) (string, error) {
-	fetch := fmt.Sprintf(`echo "===OUT==="; tail -c %d %s 2>/dev/null; echo "===ERR==="; tail -c 4000 %s 2>/dev/null`,
-		claudeResultTailBytes, f.out, f.err)
-	fb, fc, fok := b.Post(ctx, "/bash", map[string]any{"cmd": fetch, "cwd": repo, "timeout_sec": 20})
-	if !fok || fc >= 300 {
-		return "", fmt.Errorf("code_agent: finished but reading output failed (status=%d)", fc)
-	}
-	// Decode the bridge's {output, exit_code} JSON for real. The old
-	// first-quote scanner cut Claude's own JSON at its first escaped quote,
-	// so every result (including "You're out of extra usage") came back as
-	// `{\` and was reported ok (2026-08-26).
-	raw, _ := bridgeBashOutput(fb)
-	outPart, errPart := splitMarker(raw, "===OUT===", "===ERR===")
+// claudeKillScript tears down the whole job tree. It used to be
+// `pkill -TERM -P "$P"`, which reaps exactly ONE level: the wrapper's child
+// `claude` died, and its grandchildren - a `go build`, a test run, an MCP
+// server it had started - were orphaned and kept running against the boss's
+// repo after he had said stop. Signalling the PROCESS GROUP reaps every
+// descendant with one signal.
+//
+// The group is only ever signalled when it is provably the job's OWN: the
+// launch runs under `set -m`, so the wrapper is a group leader and its pgid
+// equals its pid. If that check fails (an older job launched before this
+// change, a shell without monitor mode) we fall back to the one-level pkill
+// rather than risk signalling the group the Mac bridge itself lives in.
+func claudeKillScript(f claudeJobFiles) string {
+	return fmt.Sprintf(`P=$(cat %s 2>/dev/null | tr -d ' \t\n')
+G=$(cat %s 2>/dev/null | tr -d ' \t\n')
+if [ -z "$P" ]; then echo NOPID; exit 0; fi
+if [ -z "$G" ]; then G=$(ps -o pgid= -p "$P" 2>/dev/null | tr -d ' \t\n'); fi
+if [ -n "$G" ] && [ "$G" = "$P" ]; then GROUP="$G"; else GROUP=""; fi
+if [ -n "$GROUP" ]; then kill -TERM -"$GROUP" 2>/dev/null; echo "GROUP:$GROUP"; else pkill -TERM -P "$P" 2>/dev/null; echo "GROUP:none"; fi
+kill -TERM "$P" 2>/dev/null
+sleep 1
+if [ -n "$GROUP" ]; then kill -KILL -"$GROUP" 2>/dev/null; fi
+if kill -0 "$P" 2>/dev/null; then pkill -KILL -P "$P" 2>/dev/null; kill -KILL "$P" 2>/dev/null; fi
+echo KILLED`, f.pid, f.pgid)
+}
+
+// interpret turns a captured transcript into the tool's receipt: Claude's
+// final result message, the plan-cap / crash cases, and any blocked-delete
+// notice for the boss to approve. exitCode is the shell's, or 0 when the
+// transcript was salvaged rather than collected on completion.
+func (p *claudePoll) interpret(t transcript, exitCode int) (string, error) {
+	outPart, errPart := t.out, t.err
+	repo, auth, setMeta, started := p.repo, p.auth, p.setMeta, p.started
 
 	res := parseClaudeStreamResult(outPart)
 	model := ""
@@ -623,9 +1323,7 @@ func (r *ClaudeCodeRunner) collect(ctx context.Context, b bridge.Bridge, f claud
 	}
 
 	if strings.Contains(errPart, "INFINITY_DELETE_BLOCKED") {
-		sb.WriteString("\n\n⚠️ **Delete blocked — needs your approval.** Claude Code wanted to run a destructive/delete " +
-			"command and the gate stopped it (see its summary above for what). Tell me to go ahead and I'll run that one " +
-			"command through the normal Trust approval.")
+		sb.WriteString(deleteBlockedNotice)
 	}
 	if strings.TrimSpace(sb.String()) == "" {
 		return "code_agent finished but returned no output. Check the run logs.", nil
@@ -635,6 +1333,7 @@ func (r *ClaudeCodeRunner) collect(ctx context.Context, b bridge.Bridge, f claud
 	if model != "" {
 		sb.WriteString(" · model " + model)
 	}
+	sb.WriteString(" · in " + repoOrRoot(repo))
 	sb.WriteString(" · " + time.Since(started).Round(time.Second).String() + "_")
 	return sb.String(), nil
 }
@@ -797,14 +1496,22 @@ func macClaudeDefaults(probeOut string) (model, effort string) {
 // ── the code_agent tool ─────────────────────────────────────────────────
 
 // RegisterCodeAgentTool wires the code_agent tool over the shared runner;
-// tracker books the mem_runs row.
+// tracker books the mem_runs row. The registry is kept so a detached job can
+// register its own watch through the watch substrate that is registered on
+// the same registry later in boot (see watchDetached).
 func RegisterCodeAgentTool(r *Registry, runner *ClaudeCodeRunner, tracker *runs.Tracker) {
-	r.Register(&codeAgent{runner: runner, tracker: tracker})
+	r.Register(&codeAgent{runner: runner, tracker: tracker, reg: r})
 }
 
 type codeAgent struct {
 	runner  *ClaudeCodeRunner
 	tracker *runs.Tracker
+	// reg is the registry this tool was registered on; watchDetached uses it
+	// to reach the watch substrate.
+	reg *Registry
+	// watches, when attached (AttachWatchCreator), is used directly instead
+	// of going through the registered watch_until tool.
+	watches WatchCreator
 }
 
 func (t *codeAgent) Name() string   { return "code_agent" }
@@ -816,7 +1523,10 @@ func (t *codeAgent) Description() string {
 		"builds/tests, and returns a summary of what it changed. This is the ONLY way to write code on the Mac " +
 		"bridge: you orchestrate, Claude Code does the implementation. It runs freely; only destructive deletes are " +
 		"blocked and surfaced for the boss to approve. For a tiny one-line/deterministic edit, fs_edit/claude_code__Edit " +
-		"are fine; for anything real, use this."
+		"are fine; for anything real, use this. The job OUTLIVES this turn: if the boss says something while it works, " +
+		"or the turn times out, you get a STILL RUNNING result naming its run id - the job was not stopped, its completion " +
+		"is reported back into the chat on its own, and calling code_agent again for the same work would run it twice. " +
+		"Only an explicit stop from him kills it."
 }
 
 func (t *codeAgent) Schema() map[string]any {
@@ -829,11 +1539,11 @@ func (t *codeAgent) Schema() map[string]any {
 			},
 			"repo": map[string]any{
 				"type":        "string",
-				"description": "Absolute path (or workspace-relative) of the repo to work in. Defaults to the bridge workspace root.",
+				"description": "REQUIRED: absolute path of the ONE git repository to work in (on the Mac they live under ~/Dev/<repo>; Infinity itself is ~/Dev/infinity). It must be a git repo - a missing path, a plain folder, or the ~/Dev umbrella is refused and nothing runs.",
 			},
 			"model": map[string]any{
 				"type":        "string",
-				"description": "Optional Claude model id or alias for this run (e.g. 'claude-opus-5[1m]', 'sonnet'). Leave empty for the configured default (INFINITY_CODE_AGENT_MODEL, else the Mac's Claude Code setting).",
+				"description": "Optional Claude model id or alias for this run (e.g. 'claude-opus-5[1m]', 'sonnet'). Leave empty for the pinned default (INFINITY_CODE_AGENT_MODEL, else Opus 5).",
 			},
 			"effort": map[string]any{
 				"type":        "string",
@@ -841,8 +1551,23 @@ func (t *codeAgent) Schema() map[string]any {
 				"description": "Optional Claude Code effort for this run. Leave empty for the configured default (INFINITY_CODE_AGENT_EFFORT, else the Mac's setting).",
 			},
 		},
-		"required": []string{"task"},
+		"required": []string{"task", "repo"},
 	}
+}
+
+// codeAgentJobContext gives a coding job a lifetime of its OWN, derived from
+// the tool context by context.WithoutCancel: every value the context carries
+// - the session id the bridge preference is read from, the autonomy marker,
+// the session's ActiveSet, the turn's stance holder, the detach signal - is
+// preserved by construction, and ONLY cancellation and the turn's deadline
+// are dropped. Nothing is copied key by key, so a value added later cannot be
+// silently lost here.
+//
+// The budget is the job's own ceiling plus grace for the final read of the
+// transcript, so the last collect is never cut off by the same clock that
+// ended the polling.
+func codeAgentJobContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), codeAgentMaxWait+codeAgentJobGrace)
 }
 
 func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, error) {
@@ -883,7 +1608,7 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	// runs.Handle is the real API (Begin → Progress → Finish); it's
 	// nil-safe, so this degrades cleanly when the pool isn't wired.
 	label := "Claude Code: " + truncateForLabel(task, 80)
-	handle := t.tracker.Begin(ctx, runs.Kind("code_agent"), "", label, runs.SourceAgent)
+	handle := t.tracker.Begin(ctx, runs.KindCodeAgent, "", label, runs.SourceAgent)
 	jobID := handle.ID()
 	if jobID == "" {
 		jobID = fmt.Sprintf("job-%d", time.Now().UnixNano())
@@ -909,7 +1634,35 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	setMeta("model", model)
 	setMeta("effort", effort)
 
-	summary, runErr := t.runner.Run(ctx, ClaudeCodeJob{
+	// The job gets a lifetime of its OWN, derived from context.Background()
+	// via context.WithoutCancel: every value the tool ctx carries (the
+	// session id the bridge preference is read from, the autonomy marker, the
+	// session's ActiveSet, the turn's stance holder) is carried across
+	// unchanged, and ONLY cancellation and the turn's deadline are dropped.
+	// The turn ctx is handed in separately as Inline and decides one thing:
+	// how long we wait here. That is the whole fix for "the 15-minute chat
+	// turn kills a 20-minute build".
+	jobCtx, jobCancel := codeAgentJobContext(ctx)
+	defer jobCancel()
+
+	// Detached is how a job that outlived this turn still ends with a real
+	// receipt: the follower calls it when the job settles and the run row
+	// closes then, not now. A settle with no verdict closes INTERRUPTED, so
+	// neither Studio nor a watch on the run reads it as a finished success.
+	closeRun := func(o JobOutcome) {
+		fc, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if o.StoppedReason != "" {
+			handle.FinishInterrupted(fc, o.StoppedReason, o.Summary)
+			return
+		}
+		handle.Finish(fc, o.Err, o.Summary)
+	}
+	// stopReason is set when an explicit stop killed the job; it decides how
+	// the row closes below.
+	stopReason := ""
+
+	summary, runErr := t.runner.Run(jobCtx, ClaudeCodeJob{
 		Bridge:       b,
 		JobID:        jobID,
 		Task:         task,
@@ -918,6 +1671,10 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		Effort:       effort,
 		MaxWait:      codeAgentMaxWait,
 		KillOnCancel: true,
+		Inline:       ctx,
+		Detach:       DetachRequested(ctx),
+		Detached:     closeRun,
+		Stopped:      func(string) { stopReason = runs.StoppedInterrupted },
 		Heartbeat:    heartbeat,
 		SetMeta:      setMeta,
 	})
@@ -929,11 +1686,17 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	if runErr != nil {
 		var still *stillRunningError
 		if errors.As(runErr, &still) {
-			// Past the inline wait window; Claude keeps working on the Mac.
-			// The row closes with that truth as its summary, not as a failure.
-			msg := still.inlineMessage()
-			handle.Finish(finCtx, nil, msg)
-			return msg, nil
+			// The turn is over and Claude Code keeps working on the Mac.
+			if still.following {
+				// A follower owns the run row now: closing it here would tell
+				// Studio (and any watch on it) that a live job had settled.
+				// Register the watch so its completion reports back into this
+				// chat on its own, and leave the row running.
+				t.watchDetached(ctx, jobID, label, still)
+				return still.inlineMessage(), nil
+			}
+			handle.FinishInterrupted(finCtx, runs.StoppedStillWorking, still.inlineMessage())
+			return still.inlineMessage(), nil
 		}
 		handle.Finish(finCtx, runErr, summary)
 		// A bridge/launch failure (the Mac is unreachable — the 404 that used to
@@ -950,6 +1713,13 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		if errors.As(runErr, &notSub) {
 			return notSub.guidance(), nil
 		}
+		// A bad repo is a request problem the model can fix on the next call:
+		// return it as guidance naming the right shape of path, rather than a
+		// raw error it would retry verbatim.
+		var badRepo *repoRejectedError
+		if errors.As(runErr, &badRepo) {
+			return badRepo.guidance(), nil
+		}
 		// The boss's Claude plan is spent: the run row is red (the truth is
 		// in Agent Work), and the model gets a directive rather than a raw
 		// error it would retry to the iteration cap.
@@ -965,14 +1735,28 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		}
 		return "", runErr
 	}
+	if stopReason != "" {
+		// The boss stopped it. It did not fail, and it did not finish either:
+		// closing this 'ok' with a "was STOPPED" summary is exactly the green
+		// card that reads as success.
+		handle.FinishInterrupted(finCtx, stopReason, summary)
+		return summary, nil
+	}
 	handle.Finish(finCtx, nil, summary)
 	return summary, nil
 }
 
 // InterruptOnSteer opts code_agent into the loop's steer-interrupt: a message
-// from the boss while Claude Code is working cancels the job (and kills it)
-// so he is answered now, not after the job.
+// from the boss while Claude Code is working ends the inline wait so he is
+// answered now, not after the job.
 func (t *codeAgent) InterruptOnSteer() bool { return true }
+
+// DetachOnSteer says the work OUTLIVES the turn: `claude -p` runs detached on
+// the Mac, so a message that is not an explicit stop must DETACH (the job
+// keeps going, the boss gets answered, completion reports back) rather than
+// kill. Only an explicit stop - agent.isStopIntent, or the Stop button, which
+// cancels the context outright - tears it down.
+func (t *codeAgent) DetachOnSteer() bool { return true }
 
 // launchRejectedError: the Mac bridge answered 4xx to the launch request.
 type launchRejectedError struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/runs"
@@ -650,34 +651,46 @@ func (s *Store) RecordVerify(ctx context.Context, stepID, verdict, evidence, met
 // Work board with a dead step under it, while the cron/run that spawned it already
 // shows "Done". That split is the exact confusion this fixes.
 //
-// A terminal-error run is unambiguous proof the execution finished and failed, so
-// the step is marked 'failed'; recompute then pauses (or fails) the plan and it
-// surfaces under "Awaiting you" for the boss to replan or close out. Safe to call
-// on a live process precisely because it only acts on steps whose run has already
-// ENDED — never one still legitimately executing (its run is still 'running').
+// A terminal-error run WITH NO stopped_reason is unambiguous proof the execution
+// finished and failed, so the step is marked 'failed'; recompute then pauses (or
+// fails) the plan and it surfaces under "Awaiting you" for the boss to replan or
+// close out. Safe to call on a live process precisely because it only acts on
+// steps whose run has already ENDED — never one still legitimately executing
+// (its run is still 'running').
+//
+// THE stopped_reason CAVEAT — this is the correction that matters. The belief
+// above used to be stated without it, and it was false: 'error' was also what
+// every SWEEP wrote (runs.RecoverStranded at boot, a cancel, a reaper), because
+// runs.Handle.Finish was binary ok|error and had no way to say "interrupted".
+// So a coding job that was merely INTERRUPTED — the box redeployed under it, its
+// worker outlived the turn — arrived here indistinguishable from a build that
+// actually broke, and the boss got a red ❌ step and a "Build failed" push for
+// work that had landed on disk.
+//
+// runs.FinishInterrupted / RecoverStranded now stamp meta.stopped_reason on any
+// run that closed WITHOUT a verdict. Two lanes follow from it:
+//
+//	no stopped_reason + status 'error' → the execution ran and FAILED → 'failed'
+//	stopped_reason set                → it never reached a verdict     → 'blocked'
+//
+// 'blocked' is the honest middle: recompute pauses the plan (so it still
+// surfaces under "Awaiting you" and still reads incomplete to
+// cron.classifyOutcome — never a false "done"), the step renders as a warning
+// rather than a failure, and it stays non-terminal so the work can be resumed.
 // Returns the number of steps reconciled.
 func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
 	if s == nil || s.pool == nil {
 		return 0, nil
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT s.id::text,
-		       COALESCE(NULLIF(r.result_summary, ''), NULLIF(r.error, ''), '') AS run_detail
-		  FROM mem_plan_steps s
-		  JOIN mem_runs r ON r.id = s.run_id
-		  JOIN mem_plans p ON p.id = s.plan_id
-		 WHERE s.status = 'in_progress'
-		   AND r.status = 'error'
-		   AND p.status IN ('active', 'paused')
-	`)
+	rows, err := s.pool.Query(ctx, reconcileStrandedSQL)
 	if err != nil {
 		return 0, fmt.Errorf("scan stranded steps: %w", err)
 	}
-	type stranded struct{ id, detail string }
+	type stranded struct{ id, detail, runStatus, stoppedReason string }
 	var steps []stranded
 	for rows.Next() {
 		var st stranded
-		if scanErr := rows.Scan(&st.id, &st.detail); scanErr != nil {
+		if scanErr := rows.Scan(&st.id, &st.detail, &st.runStatus, &st.stoppedReason); scanErr != nil {
 			rows.Close()
 			return 0, fmt.Errorf("scan stranded step id: %w", scanErr)
 		}
@@ -692,15 +705,60 @@ func (s *Store) ReconcileStranded(ctx context.Context) (int, error) {
 	for _, st := range steps {
 		// Surface the run's ACTUAL error so the boss sees what broke, not a
 		// generic placeholder. MarkStep recomputes the parent plan's lifecycle
-		// (failed step + later pending steps -> paused).
-		summary := firstNonEmptySummary(st.detail,
-			"step execution ended without recording a result — reconciled from its run, which had already failed")
-		if _, err := s.MarkStep(ctx, st.id, StepFailed, summary); err != nil {
+		// (failed/blocked step + later pending steps -> paused).
+		status, summary := strandedStepOutcome(st.runStatus, st.stoppedReason, st.detail)
+		if _, err := s.MarkStep(ctx, st.id, status, summary); err != nil {
 			return n, fmt.Errorf("reconcile stranded step %s: %w", st.id, err)
 		}
 		n++
 	}
 	return n, nil
+}
+
+// reconcileStrandedSQL selects in_progress steps whose tracking run has already
+// ENDED, in either lane: a genuine 'error' close, or any terminal close that
+// carries a stopped_reason (interrupted / still working). A run that closed 'ok'
+// with no stopped_reason is deliberately NOT selected — that is a clean finish
+// whose step simply wasn't marked, and inventing a verdict for it here would be
+// the guessing this whole path exists to stop.
+const reconcileStrandedSQL = `
+	SELECT s.id::text,
+	       COALESCE(NULLIF(r.result_summary, ''), NULLIF(r.error, ''), '') AS run_detail,
+	       COALESCE(r.status, '')                                          AS run_status,
+	       COALESCE(r.meta->>'stopped_reason', '')                         AS stopped_reason
+	  FROM mem_plan_steps s
+	  JOIN mem_runs r ON r.id = s.run_id
+	  JOIN mem_plans p ON p.id = s.plan_id
+	 WHERE s.status = 'in_progress'
+	   AND r.status IN ('error', 'ok')
+	   AND (r.status = 'error' OR COALESCE(r.meta->>'stopped_reason', '') <> '')
+	   AND p.status IN ('active', 'paused')`
+
+// runIsGenuineFailure reports whether a TERMINATED mem_runs row is proof that
+// its plan step failed, as opposed to proof that the step never got a verdict.
+//
+// This is the whole discriminator, in one place, deliberately tiny:
+//
+//	'error' + no reason → the execution ran and failed. Red stays red.
+//	any reason present  → a sweep/detach closed it. It was interrupted.
+//
+// Keeping it a pure function (and calling it on the live path, not just
+// mirroring it in SQL) is what makes "a genuine failure still fails its step"
+// something a test can pin rather than something a comment claims.
+func runIsGenuineFailure(runStatus, stoppedReason string) bool {
+	return runStatus == "error" && strings.TrimSpace(stoppedReason) == ""
+}
+
+// strandedStepOutcome maps a terminated run onto the step status + boss-facing
+// summary it justifies. Failure keeps the run's real error text; an interruption
+// says, in the first person, that there is no verdict — never "step failed".
+func strandedStepOutcome(runStatus, stoppedReason, detail string) (status, summary string) {
+	if runIsGenuineFailure(runStatus, stoppedReason) {
+		return StepFailed, firstNonEmptySummary(detail,
+			"step execution ended without recording a result — reconciled from its run, which had already failed")
+	}
+	return StepBlocked, firstNonEmptySummary(detail,
+		"I was interrupted part-way through this step, so there's no result to show. Nothing broke and nothing was rolled back; pick it up from here.")
 }
 
 // FinalizeSession closes a cron/isolated turn's plan bookkeeping the instant the

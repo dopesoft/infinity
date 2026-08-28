@@ -2300,10 +2300,20 @@ func firstLineOf(s string) string {
 
 // executeInterruptible runs a tool call, and for tools that opted into
 // tools.SteerInterruptible in an INTERACTIVE session (steerCh non-nil), stops
-// it the moment the boss sends a new message: the tool ctx is cancelled (the
-// tool tears its work down), the consumed steer(s) are returned so the caller
-// appends them right after the tool result, and the result tells the model
-// to answer the boss first. Short tools and autonomous runs are untouched.
+// WAITING on it the moment the boss sends a new message. What "stops" means
+// depends on two things, and on nothing tool-specific:
+//
+//   - Is the message an explicit stop? isStopIntent decides, deterministically
+//     (no LLM call: a running build must not depend on a classifier).
+//   - Does the tool's work outlive the turn? tools.SteerDetachable declares it.
+//
+// A stop order, or a tool whose work dies with the turn → the tool ctx is
+// cancelled and the tool tears its work down (today's behaviour). Anything
+// else on a detachable tool → the DETACH signal fires: the tool returns what
+// it can say now, its job keeps running, and it reports back on its own.
+// Either way the consumed steer(s) come back so the caller appends them right
+// after the tool result and the boss is answered immediately. Short tools and
+// autonomous runs are untouched.
 func (l *Loop) executeInterruptible(ctx context.Context, tc llm.ToolCall, steerCh <-chan Steer) (string, error, []Steer) {
 	if steerCh == nil || l.tools == nil || !l.tools.InterruptsOnSteer(tc.Name) {
 		out, err := l.tools.Execute(ctx, tc)
@@ -2311,6 +2321,10 @@ func (l *Loop) executeInterruptible(ctx context.Context, tc llm.ToolCall, steerC
 	}
 	tctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Detachable tools get the "keep working" wire. Handing it out costs
+	// nothing for tools that never read it.
+	detachable := l.tools.DetachesOnSteer(tc.Name)
+	tctx, detach := tools.WithDetachSignal(tctx)
 	type result struct {
 		out string
 		err error
@@ -2328,8 +2342,8 @@ func (l *Loop) executeInterruptible(ctx context.Context, tc llm.ToolCall, steerC
 			r := <-done
 			return r.out, r.err, nil
 		}
-		cancel()
-		r := <-done
+		// Read every message that is already queued BEFORE deciding: "how's
+		// it going" followed by "actually stop" is a stop.
 		steers := []Steer{st}
 	drain:
 		for {
@@ -2343,12 +2357,33 @@ func (l *Loop) executeInterruptible(ctx context.Context, tc llm.ToolCall, steerC
 				break drain
 			}
 		}
+		kill := !detachable || anyStopIntent(steers)
+		if kill {
+			cancel()
+		} else {
+			detach()
+		}
+		r := <-done
 		var b strings.Builder
-		fmt.Fprintf(&b, "INTERRUPTED: the boss sent a new message while %s was running, so it was stopped to answer him first. "+
-			"His message follows as the next user turn — respond to THAT before anything else, and do not restart this call unless he asks.\n\n", tc.Name)
+		if kill {
+			fmt.Fprintf(&b, "INTERRUPTED: the boss sent a new message while %s was running, so it was stopped to answer him first. "+
+				"His message follows as the next user turn — respond to THAT before anything else, and do not restart this call unless he asks.\n\n", tc.Name)
+		} else {
+			// The truth, because the old sentinel's "do not restart this call
+			// unless he asks" is what left long jobs dead: the model believed
+			// the work had ended. It has NOT.
+			fmt.Fprintf(&b, "STILL RUNNING: the boss sent a new message while %s was working, so it was DETACHED, not stopped — "+
+				"the job is still going and its result below names the run it is on and how it reports back when it lands. "+
+				"Do NOT start it again (that would run the same work twice) and do NOT tell him it was cancelled. "+
+				"His message follows as the next user turn — answer THAT now, and say in one line that the work is still running.\n\n", tc.Name)
+		}
 		b.WriteString(strings.TrimSpace(r.out))
 		if r.err != nil {
-			b.WriteString("\n(stop detail: " + r.err.Error() + ")")
+			if kill {
+				b.WriteString("\n(stop detail: " + r.err.Error() + ")")
+			} else {
+				b.WriteString("\n(detach detail: " + r.err.Error() + ")")
+			}
 		}
 		return b.String(), nil, steers
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/plan"
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 )
 
 // nilStore is a plan.Store backed by a nil pool. Every read method returns
@@ -506,3 +507,365 @@ func TestCrossSessionResumeRefusesUnapprovedPlan(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// ── Phase 6: the gate must never block RESUMING (2026-08-28) ────────────────
+//
+// A 14-minute coding run was killed, its plan step went 'failed' and the plan
+// paused. The boss said "please continue the build and finish up". The turn
+// classified as `discuss`, so the consent gate refused plan_update and Jarvis
+// reported that he had "blocked me from reopening the step". Two of the four
+// causes live in this file: plan_approve returned early on an already-active
+// plan WITHOUT opening the stance, and there was no non-gated verb for
+// "continue" at all.
+
+// resumeStore is a planResumer / planApprover backed by in-memory plans, so
+// the consent rules below are provable without a database. It records every
+// MarkStep so a test can assert what was (and was not) reopened.
+type resumeStore struct {
+	byID      map[string]*plan.Plan
+	bySession map[string]*plan.Plan
+	proposed  map[string]*plan.Plan
+	anyActive *plan.Plan
+
+	marked         []markCall
+	approved       string
+	adoptedPlan    string
+	adoptedSession string
+	stepRuns       int
+}
+
+type markCall struct{ stepID, status, summary string }
+
+func newResumeStore() *resumeStore {
+	return &resumeStore{
+		byID:      map[string]*plan.Plan{},
+		bySession: map[string]*plan.Plan{},
+		proposed:  map[string]*plan.Plan{},
+	}
+}
+
+func (s *resumeStore) add(sessionID string, p *plan.Plan) *plan.Plan {
+	p.SessionID = sessionID
+	s.byID[p.ID] = p
+	if p.Status == plan.PlanProposed {
+		s.proposed[sessionID] = p
+	} else {
+		s.bySession[sessionID] = p
+	}
+	return p
+}
+
+func (s *resumeStore) Get(_ context.Context, id string) (*plan.Plan, error) { return s.byID[id], nil }
+func (s *resumeStore) GetActiveBySession(_ context.Context, sid string) (*plan.Plan, error) {
+	return s.bySession[sid], nil
+}
+func (s *resumeStore) GetProposedBySession(_ context.Context, sid string) (*plan.Plan, error) {
+	return s.proposed[sid], nil
+}
+func (s *resumeStore) GetAnyActive(_ context.Context) (*plan.Plan, error) { return s.anyActive, nil }
+func (s *resumeStore) AdoptSession(_ context.Context, planID, sessionID string) error {
+	s.adoptedPlan, s.adoptedSession = planID, sessionID
+	return nil
+}
+func (s *resumeStore) SetStepRun(_ context.Context, _, _ string) error { s.stepRuns++; return nil }
+func (s *resumeStore) Approve(_ context.Context, planID, _ string) (*plan.Plan, error) {
+	s.approved = planID
+	p := s.byID[planID]
+	if p != nil {
+		p.Status = plan.PlanActive
+	}
+	return p, nil
+}
+func (s *resumeStore) MarkStep(_ context.Context, stepID, status, summary string) (*plan.Plan, error) {
+	s.marked = append(s.marked, markCall{stepID, status, summary})
+	for _, p := range s.byID {
+		for i := range p.Steps {
+			if p.Steps[i].ID == stepID {
+				p.Steps[i].Status = status
+				if status == plan.StepInProgress && p.Status == plan.PlanPaused {
+					p.Status = plan.PlanActive // mirrors store.recompute
+				}
+				return p, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// killedBuildPlan is the live shape of plan 2f1508a2: step 1 failed when its
+// coding run was killed, step 2 was skipped, steps 3-4 never started, and the
+// whole plan paused. The boss approved it before any of that happened.
+func killedBuildPlan(id string) *plan.Plan {
+	return &plan.Plan{
+		ID:         id,
+		Status:     plan.PlanPaused,
+		ApprovedAt: ptrTime(time.Now().Add(-time.Hour)),
+		Title:      "Make Jarvis finish long coding tasks",
+		Steps: []plan.Step{
+			{ID: "step-1", Idx: 0, Title: "Give the job its own lifetime", Status: plan.StepFailed},
+			{ID: "step-2", Idx: 1, Title: "Salvage the receipt", Status: plan.StepSkipped},
+			{ID: "step-3", Idx: 2, Title: "Add worker liveness safeguards", Status: plan.StepPending},
+			{ID: "step-4", Idx: 3, Title: "Enforce proof-gated completion", Status: plan.StepPending},
+		},
+	}
+}
+
+func stanceCtx(sessionID string) (context.Context, *turnctx.StanceHolder) {
+	h := turnctx.NewStanceHolder()
+	h.Set(turnctx.StanceDiscuss, "read as conversation")
+	return turnctx.WithStance(WithSessionID(context.Background(), sessionID), h), h
+}
+
+// TestPlanApprove_AlreadyApprovedPlanStillOpensTheGate is mechanism #1. With no
+// proposal to approve, plan_approve fell through to GetActiveBySession and
+// returned the plan — BEFORE the h.Set(StanceWork) that is the only designed
+// way the consent gate ever opens besides the classifier. So "go ahead" on a
+// paused build left every following plan_update refused.
+func TestPlanApprove_AlreadyApprovedPlanStillOpensTheGate(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	store := newResumeStore()
+	store.add(sid, killedBuildPlan("plan-paused"))
+	ctx, h := stanceCtx(sid)
+
+	out, err := (&planApprove{store: store}).Execute(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("plan_approve on an already-approved plan must not error: %v", err)
+	}
+	if !strings.Contains(out, "plan-paused") || !strings.Contains(out, `"already_active":true`) {
+		t.Fatalf("plan_approve should hand back the live plan, got: %s", out)
+	}
+	if !strings.Contains(out, "plan_resume") {
+		t.Fatalf("the model must be told how to carry on, got: %s", out)
+	}
+	if got, why := h.Get(); got != turnctx.StanceWork {
+		t.Fatalf("stance = %q (%s), want work — the gate stayed shut on an approved build", got, why)
+	}
+	if latched, _ := h.Latched(); !latched {
+		t.Fatal("his go must latch the turn so a later chatty steer can't shut the gate again")
+	}
+}
+
+// TestPlanApprove_UnapprovedActivePlanDoesNotOpenTheGate: the gate only opens
+// for work he actually approved. A plan with no approved_at is not his go.
+func TestPlanApprove_UnapprovedActivePlanDoesNotOpenTheGate(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	store := newResumeStore()
+	p := killedBuildPlan("plan-unapproved")
+	p.ApprovedAt = nil
+	store.add(sid, p)
+	ctx, h := stanceCtx(sid)
+
+	if _, err := (&planApprove{store: store}).Execute(ctx, map[string]any{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := h.Get(); got != turnctx.StanceDiscuss {
+		t.Fatalf("stance = %q, want discuss — an unapproved plan is not the boss's go", got)
+	}
+}
+
+// TestPlanResume_ReopensTheKilledStepAndOpensTheGate is mechanism #2, the whole
+// point of the tool: "continue the build and finish up" now has a verb, it puts
+// the agent back on the step that was cut off, and it opens the gate for the
+// tools that step needs.
+func TestPlanResume_ReopensTheKilledStepAndOpensTheGate(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	store := newResumeStore()
+	store.add(sid, killedBuildPlan("plan-paused"))
+	ctx, h := stanceCtx(sid)
+
+	out, err := (&planResume{store: store}).Execute(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("plan_resume failed: %v", err)
+	}
+	if len(store.marked) != 1 || store.marked[0].stepID != "step-1" || store.marked[0].status != plan.StepInProgress {
+		t.Fatalf("plan_resume must reopen the step the run was killed on, got %+v", store.marked)
+	}
+	if !strings.Contains(out, `"was":"failed"`) || !strings.Contains(out, "step-1") {
+		t.Fatalf("the model must see which step it is back on, got: %s", out)
+	}
+	if got, _ := h.Get(); got != turnctx.StanceWork {
+		t.Fatalf("stance = %q, want work — resuming is the boss's go", got)
+	}
+	if latched, _ := h.Latched(); !latched {
+		t.Fatal("resuming must latch the turn against a mid-build demotion")
+	}
+	// The live spinner rides runs.BeginGlobal exactly as plan_update's start
+	// branch does; with no tracker configured (unit test) it hands back an
+	// empty run id and SetStepRun is correctly skipped, so stepRuns stays 0.
+	if store.stepRuns != 0 {
+		t.Fatalf("no run tracker is configured, so no step run should be recorded, got %d", store.stepRuns)
+	}
+	if p := store.byID["plan-paused"]; p.Status != plan.PlanActive {
+		t.Fatalf("plan status after resume = %q, want active", p.Status)
+	}
+}
+
+// TestPlanResume_RefusesAnUnapprovedProposal is the load-bearing safety rule.
+// plan_resume is NOT consent-gated, so it is the one verb that could turn a
+// proposal the boss never saw through into running work. It must not: the
+// proposal flow is deliberate (2026-08-26, "I didn't even get a chance to
+// understand what it was").
+func TestPlanResume_RefusesAnUnapprovedProposal(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	store := newResumeStore()
+	store.add(sid, &plan.Plan{
+		ID:     "plan-proposal",
+		Status: plan.PlanProposed,
+		Title:  "Rewrite the billing service",
+		Steps:  []plan.Step{{ID: "step-1", Idx: 0, Title: "Rip out Stripe", Status: plan.StepPending}},
+	})
+	ctx, h := stanceCtx(sid)
+
+	out, err := (&planResume{store: store}).Execute(ctx, map[string]any{"plan_id": "plan-proposal"})
+	if err != nil {
+		t.Fatalf("plan_resume should refuse politely, not error: %v", err)
+	}
+	if !strings.Contains(out, `"unapproved":true`) {
+		t.Fatalf("a proposal must be refused as unapproved, got: %s", out)
+	}
+	if len(store.marked) != 0 {
+		t.Fatalf("plan_resume started an unapproved proposal: %+v", store.marked)
+	}
+	if store.adoptedPlan != "" {
+		t.Fatalf("an unapproved proposal must not be adopted, got %q", store.adoptedPlan)
+	}
+	if got, _ := h.Get(); got != turnctx.StanceDiscuss {
+		t.Fatalf("stance = %q, want discuss — resuming a proposal must never open the gate", got)
+	}
+}
+
+// TestPlanResume_RefusesAClosedPlan: "continue" on something finished or killed
+// is not a resume; the agent must say so rather than reopening history.
+func TestPlanResume_RefusesAClosedPlan(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	for _, status := range []string{plan.PlanCompleted, plan.PlanCancelled} {
+		store := newResumeStore()
+		p := killedBuildPlan("plan-" + status)
+		p.Status = status
+		store.add(sid, p)
+		ctx, h := stanceCtx(sid)
+
+		out, err := (&planResume{store: store}).Execute(ctx, map[string]any{"plan_id": p.ID})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", status, err)
+		}
+		if !strings.Contains(out, status) || len(store.marked) != 0 {
+			t.Fatalf("%s plan must not be reopened, out=%s marked=%+v", status, out, store.marked)
+		}
+		if got, _ := h.Get(); got != turnctx.StanceDiscuss {
+			t.Fatalf("%s: stance = %q, want discuss", status, got)
+		}
+	}
+}
+
+// TestPlanResume_AllStepsDoneSaysSo: nothing left to reopen must read as
+// "it's finished", never as a silently-successful resume that starts nothing.
+func TestPlanResume_AllStepsDoneSaysSo(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	store := newResumeStore()
+	store.add(sid, &plan.Plan{
+		ID: "plan-finished", Status: plan.PlanActive, ApprovedAt: ptrTime(time.Now()),
+		Steps: []plan.Step{
+			{ID: "step-1", Idx: 0, Title: "One", Status: plan.StepDone},
+			{ID: "step-2", Idx: 1, Title: "Two", Status: plan.StepSkipped},
+		},
+	})
+	ctx, _ := stanceCtx(sid)
+	out, err := (&planResume{store: store}).Execute(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(store.marked) != 0 {
+		t.Fatalf("nothing should have been reopened, got %+v", store.marked)
+	}
+	if !strings.Contains(out, "already finished") {
+		t.Fatalf("the model must be told there is nothing left, got: %s", out)
+	}
+}
+
+// TestPlanResume_ExplicitStepAndInProgressStep covers the two remaining picks:
+// an explicit step reference wins, and a step already running is not churned.
+func TestPlanResume_ExplicitStepAndInProgressStep(t *testing.T) {
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+	store := newResumeStore()
+	store.add(sid, killedBuildPlan("plan-paused"))
+	ctx, _ := stanceCtx(sid)
+	if _, err := (&planResume{store: store}).Execute(ctx, map[string]any{"step": "3"}); err != nil {
+		t.Fatalf("explicit step resume failed: %v", err)
+	}
+	if len(store.marked) != 1 || store.marked[0].stepID != "step-3" {
+		t.Fatalf("an explicit step ref must win, got %+v", store.marked)
+	}
+
+	running := newResumeStore()
+	p := killedBuildPlan("plan-running")
+	p.Steps[2].Status = plan.StepInProgress
+	running.add(sid, p)
+	ctx2, h := stanceCtx(sid)
+	out, err := (&planResume{store: running}).Execute(ctx2, map[string]any{})
+	if err != nil {
+		t.Fatalf("resume with a live step failed: %v", err)
+	}
+	if len(running.marked) != 0 {
+		t.Fatalf("a step already running must not be re-marked or double-booked, got %+v", running.marked)
+	}
+	if !strings.Contains(out, "step-3") {
+		t.Fatalf("the live step should be the one resumed, got: %s", out)
+	}
+	if got, _ := h.Get(); got != turnctx.StanceWork {
+		t.Fatalf("stance = %q, want work", got)
+	}
+}
+
+// TestPlanResume_NoPlanToResume: an honest error, not a silent no-op.
+func TestPlanResume_NoPlanToResume(t *testing.T) {
+	ctx, h := stanceCtx("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	_, err := (&planResume{store: newResumeStore()}).Execute(ctx, map[string]any{})
+	if err == nil {
+		t.Fatal("resuming with no plan must be an error, not a quiet success")
+	}
+	if !strings.Contains(err.Error(), "plan_create") {
+		t.Fatalf("the error should say what to do instead, got: %v", err)
+	}
+	if got, _ := h.Get(); got != turnctx.StanceDiscuss {
+		t.Fatalf("stance = %q, want discuss — a failed resume is not consent", got)
+	}
+}
+
+// TestPlanResume_InteractiveTurnNeverPicksUpAStrangersPlan keeps the 2026-07-02
+// cross-session bleed shut on the new verb too: interactive turns get their own
+// session's plan or nothing.
+func TestPlanResume_InteractiveTurnNeverPicksUpAStrangersPlan(t *testing.T) {
+	store := newResumeStore()
+	store.anyActive = killedBuildPlan("plan-stranger")
+	ctx, _ := stanceCtx("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	if _, err := (&planResume{store: store}).Execute(ctx, map[string]any{}); err == nil {
+		t.Fatal("an interactive turn must not resume another session's plan")
+	}
+	if len(store.marked) != 0 {
+		t.Fatalf("a stranger's plan was touched: %+v", store.marked)
+	}
+}
+
+// TestPickResumeStep covers the ordering rule directly: a running step wins,
+// otherwise the FIRST unfinished step in plan order (the killed one), and
+// nothing when every step is terminal.
+func TestPickResumeStep(t *testing.T) {
+	p := killedBuildPlan("p")
+	got, err := pickResumeStep(p, "")
+	if err != nil || got == nil || got.ID != "step-1" {
+		t.Fatalf("want the failed step-1 (plan order), got %+v err=%v", got, err)
+	}
+	p.Steps[3].Status = plan.StepInProgress
+	if got, _ = pickResumeStep(p, ""); got == nil || got.ID != "step-4" {
+		t.Fatalf("a step already running wins, got %+v", got)
+	}
+	done := &plan.Plan{ID: "p", Steps: []plan.Step{{ID: "s", Status: plan.StepDone}}}
+	if got, err = pickResumeStep(done, ""); err != nil || got != nil {
+		t.Fatalf("a fully finished plan has nothing to reopen, got %+v err=%v", got, err)
+	}
+	if _, err = pickResumeStep(p, "99"); err == nil {
+		t.Fatal("an out-of-range step ref must error")
+	}
+}
