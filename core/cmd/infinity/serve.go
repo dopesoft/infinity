@@ -414,6 +414,10 @@ func serveCmd() *cobra.Command {
 					// longer Anthropic-gated, so merging works under any brain.
 					tools.RegisterSkillTools(registry, p, activeModel)
 					tools.RegisterDashboardTools(registry, p)
+					// Coached-pursuit read/write. Lets a decision made in a
+					// "Discuss with Jarvis" chat land in the same cockpit state
+					// the boss sees, through the same pc.Store.Apply chokepoint.
+					tools.RegisterPursuitPCTools(registry, p)
 					// todo_write - the background agent's live checklist. Writes
 					// meta.todos onto the current background run's mem_runs row so
 					// the pinned dock renders a Claude-Code-style todo list.

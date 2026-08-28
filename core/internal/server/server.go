@@ -395,6 +395,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// active/recent; GET /api/mandates/<id> reads one with its crosscheck.
 	mux.HandleFunc("/api/mandates", s.handleMandates)
 	mux.HandleFunc("/api/mandates/", s.handleMandate)
+	// Pursuit experiences: a pursuit whose experience is 'psycho_cybernetics'
+	// opens a coached cockpit instead of the ordinary detail card. GET
+	// /api/pursuits/pc/state reads it; the POST actions write through it.
+	// Ordinary pursuits are rejected with 409 by every handler here.
+	mux.HandleFunc("/api/pursuits/pc/", s.handlePursuitsPC)
 	// Wards — structural privacy zones enforced by proactive.WardGate. GET
 	// lists; PUT adds; DELETE?id= removes.
 	mux.HandleFunc("/api/wards", s.handleWards)

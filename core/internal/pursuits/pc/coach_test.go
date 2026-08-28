@@ -190,3 +190,31 @@ func TestLocalDayDeltaAcrossDST(t *testing.T) {
 		})
 	}
 }
+
+// A timestamp AHEAD of today has not elapsed. Postgres NOW() and Go's
+// time.Now() can disagree by enough to stamp a session marginally in the
+// future, and measuring the magnitude of the gap instead of the elapsed days
+// made that read as "two days missed" - opening the recovery prompt on a
+// morning the boss had just logged.
+func TestLocalDayDeltaClampsFutureTimestamps(t *testing.T) {
+	loc, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Fatal(err)
+	}
+	today := time.Date(2026, time.August, 27, 0, 0, 0, 0, loc)
+	future := time.Date(2026, time.August, 30, 9, 0, 0, 0, loc)
+	if got := localDayDelta(future, today, loc); got != 0 {
+		t.Fatalf("a future timestamp must report 0 elapsed days, got %d", got)
+	}
+
+	// The same clamp is what keeps a clock-skewed session out of recovery.
+	s := baseSnapshot()
+	s = NewSnapshot(s.Pursuit, s.State, today,
+		nil, nil, []Session{{OccurredAt: future}})
+	if s.LastSessionDaysAgo != 0 {
+		t.Fatalf("LastSessionDaysAgo = %d, want 0", s.LastSessionDaysAgo)
+	}
+	if got := NextGuidance(s).Phase; got == SessionRecovery {
+		t.Fatal("a session stamped in the future must not trigger recovery")
+	}
+}

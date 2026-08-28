@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/dashboard"
+	"github.com/dopesoft/infinity/core/internal/pursuits/pc"
 	"github.com/google/uuid"
 )
 
@@ -103,6 +104,22 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 				rawText += "\n\nFull email body:\n" + full
 			}
 		}
+	}
+	// For a Psycho-Cybernetics pursuit, hydrate the FULL cockpit into turn-1
+	// context so "Discuss with Jarvis" lands the boss in a conversation that
+	// already knows his identity, objective, programme position, today's proof
+	// state, recent evidence, memories, and patterns. Without this the coach
+	// would open by interrogating him for facts the database already holds.
+	if body.Kind == "pursuit_pc" {
+		cockpit, cerr := pc.NewStore(s.pool).Cockpit(r.Context(), body.ID, time.Now())
+		if cerr != nil {
+			// Fail loud: a cockpit we could not read is NOT an empty cockpit,
+			// and a coach seeded with no context would silently interrogate the
+			// boss for things he already wrote down.
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("load pursuit cockpit: %v", cerr))
+			return
+		}
+		rawText = pc.FormatChatContext(cockpit)
 	}
 	// For a generated document/artifact, hydrate the actual CONTENT into turn-1
 	// context so "Discuss with Jarvis" lands the boss in a chat that can answer

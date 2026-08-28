@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Check, Flame, Plus, Target } from "lucide-react";
+import { Brain, Check, Flame, Plus, Target } from "lucide-react";
 import { Section, TileCard } from "./Section";
 import { ScrollList } from "./ScrollList";
 import { cn } from "@/lib/utils";
@@ -87,25 +87,39 @@ function HabitRow({
   onOpen: () => void;
   onToggle: () => void;
 }) {
+  // A coached pursuit tracks its own day inside its cockpit, so it gets no
+  // tick box here. Leaving one would let a tap write done_today behind the
+  // programme's back, and the row would then claim a day was complete that
+  // the cockpit had never seen.
+  const coached = !!p.experience && p.experience !== "ordinary";
   return (
     <li className="flex items-center gap-2">
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.85 }}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        aria-label={p.doneToday ? "Uncheck habit" : "Check habit"}
-        className={cn(
-          "inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-all",
-          p.doneToday
-            ? "border-success bg-success text-success-foreground shadow-[0_0_12px_hsl(var(--success)/0.4)]"
-            : "border-border bg-background hover:border-foreground/40",
-        )}
-      >
-        {p.doneToday ? <Check className="size-3.5" /> : null}
-      </motion.button>
+      {coached ? (
+        <span
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
+          aria-hidden
+        >
+          <Brain className="size-3.5" />
+        </span>
+      ) : (
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.85 }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          aria-label={p.doneToday ? "Uncheck habit" : "Check habit"}
+          className={cn(
+            "inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-all",
+            p.doneToday
+              ? "border-success bg-success text-success-foreground shadow-[0_0_12px_hsl(var(--success)/0.4)]"
+              : "border-border bg-background hover:border-foreground/40",
+          )}
+        >
+          {p.doneToday ? <Check className="size-3.5" /> : null}
+        </motion.button>
+      )}
       <button
         type="button"
         onClick={onOpen}
@@ -114,15 +128,15 @@ function HabitRow({
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-sm",
-            p.doneToday ? "text-muted-foreground line-through" : "text-foreground",
+            !coached && p.doneToday ? "text-muted-foreground line-through" : "text-foreground",
           )}
         >
           {p.title}
         </span>
         <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {p.cadence}
+          {coached ? "programme" : p.cadence}
         </span>
-        {p.streakDays !== undefined && p.streakDays > 0 ? (
+        {!coached && p.streakDays !== undefined && p.streakDays > 0 ? (
           <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-400/10 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-rose-400">
             <Flame className="size-2.5" aria-hidden />
             {p.streakDays}d

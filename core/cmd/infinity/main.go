@@ -5,6 +5,14 @@ import (
 	"log/slog"
 	"os"
 
+	// The runtime image is gcr.io/distroless/static-debian12, which ships no
+	// /usr/share/zoneinfo. Without this every time.LoadLocation in the binary
+	// fails and silently falls back to UTC, so anything reasoning about a local
+	// day boundary (cron schedules, quota windows, the pursuit day counter)
+	// rolls over at 7pm Chicago instead of midnight - and disagrees with
+	// Postgres, which carries its own tzdata and gets it right.
+	_ "time/tzdata"
+
 	"github.com/spf13/cobra"
 )
 

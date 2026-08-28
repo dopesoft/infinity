@@ -37,7 +37,7 @@ import { cn } from "@/lib/utils";
  * are still exported (the global nav drawer, sessions drawer, etc. use
  * them) but content/preview/action modals route through here. */
 
-type Size = "sm" | "md" | "lg" | "xl";
+type Size = "sm" | "md" | "lg" | "xl" | "full";
 
 // Dialog widths map to a single source of truth. Drawer is always full
 // viewport width (per the mobile pattern) so size only affects Dialog.
@@ -49,6 +49,10 @@ const SIZE_CLS: Record<Size, string> = {
   md: "w-[min(96vw,32rem)] max-w-lg",
   lg: "w-[min(96vw,42rem)] max-w-2xl",
   xl: "w-[min(96vw,50rem)] max-w-[50rem]",
+  // "full" is for a whole app-in-a-modal (a cockpit), not a preview: it takes
+  // essentially the whole viewport so a multi-section surface has room to
+  // breathe instead of scrolling in a letterbox.
+  full: "w-[min(98vw,64rem)] max-w-[64rem]",
 };
 
 // Desktop height behaviour. "auto" sizes the Dialog to its content up to
@@ -56,9 +60,14 @@ const SIZE_CLS: Record<Size, string> = {
 // 85dvh so the modal never grows/shrinks as lazily-loaded content arrives
 // (right for the email viewer, whose body ranges from a one-line note to a
 // 86KB HTML email - the body scrolls instead of the frame jumping).
-const HEIGHT_CLS: Record<"auto" | "tall", string> = {
+// "full" pins the tallest frame the viewport allows on BOTH breakpoints (the
+// mobile Drawer included, which otherwise sizes to content up to 92dvh). Use
+// it for cockpit-style surfaces whose sections must stay put while the body
+// scrolls; "tall" and "auto" are unchanged for every existing consumer.
+const HEIGHT_CLS: Record<"auto" | "tall" | "full", string> = {
   auto: "max-h-[90dvh]",
   tall: "h-[85dvh]",
+  full: "h-[92dvh]",
 };
 
 export interface ResponsiveModalProps {
@@ -75,10 +84,11 @@ export interface ResponsiveModalProps {
   footer?: React.ReactNode;
   /** Dialog max width on desktop. Default `md`. Drawer always spans full width. */
   size?: Size;
-  /** Desktop height behaviour. "auto" (default) sizes to content up to 90dvh;
-   *  "tall" pins a fixed 85dvh so the frame doesn't grow as content loads.
-   *  Drawer (mobile) ignores this. */
-  desktopHeight?: "auto" | "tall";
+  /** Height behaviour. "auto" (default) sizes to content up to 90dvh; "tall"
+   *  pins a fixed 85dvh on desktop so the frame doesn't grow as content loads.
+   *  Both are desktop-only. The Drawer ignores them. "full" is the exception:
+   *  it pins the tallest frame on BOTH breakpoints, for cockpit surfaces. */
+  desktopHeight?: "auto" | "tall" | "full";
   /** Optional className for the body wrapper (the scrollable region). */
   bodyClassName?: string;
   /** Optional className for the underlying Dialog/Drawer content node. */
@@ -160,7 +170,8 @@ export function ResponsiveModal({
   // Never `h-full`: a percentage height against an indefinite parent collapses
   // to auto and breaks the flex chain when the iOS keyboard shrinks the
   // viewport (the original blank-drawer bug).
-  const fillHeight = effectiveIsDesktop && desktopHeight === "tall";
+  const fillHeight =
+    desktopHeight === "full" || (effectiveIsDesktop && desktopHeight === "tall");
 
   // Shared inner shell. Same JSX tree for Dialog and Drawer so the body /
   // header / footer behave identically across breakpoints - the ONLY
@@ -244,7 +255,9 @@ export function ResponsiveModal({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className={contentClassName}>
+      <DrawerContent
+        className={cn(desktopHeight === "full" && "h-[92dvh]", contentClassName)}
+      >
         {header ? (
           <>
             <DrawerTitle className="sr-only">{title}</DrawerTitle>

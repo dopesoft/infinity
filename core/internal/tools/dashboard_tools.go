@@ -25,7 +25,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/pursuits/pc"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -206,7 +208,8 @@ type pursuitCreate struct{ pool *pgxpool.Pool }
 
 func (t *pursuitCreate) Name() string { return "pursuit_create" }
 func (t *pursuitCreate) Description() string {
-	return "Create a Pursuit (habit, weekly cadence, or long-term goal) with a cadence tag. Use cadence='daily'/'weekly' for habits (track via pursuit_checkin) or 'goal'/'quarterly' for objectives with progress targets."
+	return "Create a Pursuit (habit, weekly cadence, or long-term goal) with a cadence tag. Use cadence='daily'/'weekly' for habits (track via pursuit_checkin) or 'goal'/'quarterly' for objectives with progress targets. " +
+		"Set experience='psycho_cybernetics' to create a coached 21-day identity programme instead of an ordinary pursuit: it opens a cockpit rather than a checkbox, and is read and written with pursuit_pc_state / pursuit_pc_write. Leave experience unset for everything else."
 }
 func (t *pursuitCreate) Schema() map[string]any {
 	return map[string]any{
@@ -218,6 +221,12 @@ func (t *pursuitCreate) Schema() map[string]any {
 			"current_value": map[string]any{"type": "number", "description": "For goals: progress so far."},
 			"unit":          map[string]any{"type": "string", "description": "books, %, lbs, sessions, …"},
 			"due_at":        map[string]any{"type": "string", "description": "For goals: ISO 8601 target date."},
+			"experience": map[string]any{
+				"type":        "string",
+				"enum":        pc.ValidExperiences(),
+				"default":     pc.ExperienceOrdinary,
+				"description": "'ordinary' (default) for a normal habit or goal. 'psycho_cybernetics' for the coached 21-day identity programme.",
+			},
 		},
 		"required": []string{"title"},
 	}
@@ -240,7 +249,42 @@ func (t *pursuitCreate) Execute(ctx context.Context, in map[string]any) (string,
 		unit = &v
 	}
 	dueAt, _ := parseTime(in["due_at"])
+	experience := pc.NormalizeExperience(strString(in, "experience"))
+	if !pc.IsValidExperience(experience) {
+		return "", fmt.Errorf("unknown pursuit experience %q: expected one of %s",
+			experience, strings.Join(pc.ValidExperiences(), ", "))
+	}
 	id := uuid.New()
+
+	// The ordinary path deliberately does not name the `experience` column, so
+	// it behaves identically on a database that has not yet run migration 192
+	// (serve does not auto-migrate, so that is a real state to be in). A
+	// coached pursuit genuinely needs the column, so it is checked first and
+	// fails with a sentence that says what to do rather than a raw 42703.
+	if experience != pc.ExperienceOrdinary {
+		var hasColumn bool
+		if err := t.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				 WHERE table_schema = 'public' AND table_name = 'mem_pursuits'
+				   AND column_name = 'experience'
+			)
+		`).Scan(&hasColumn); err != nil {
+			return "", err
+		}
+		if !hasColumn {
+			return "", errors.New("this database cannot hold a coached pursuit yet: migration 192 has not been applied, so mem_pursuits has no experience column. Run `infinity migrate`, then create it again")
+		}
+		if _, err := t.pool.Exec(ctx, `
+			INSERT INTO mem_pursuits
+				(id, title, cadence, experience, current_value, target_value, unit, due_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		`, id, title, cadence, experience, current, target, unit, dueAt); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(`{"ok":true,"id":"%s","experience":"%s"}`, id, experience), nil
+	}
+
 	_, err := t.pool.Exec(ctx, `
 		INSERT INTO mem_pursuits
 			(id, title, cadence, current_value, target_value, unit, due_at, created_at, updated_at)
@@ -253,6 +297,26 @@ func (t *pursuitCreate) Execute(ctx context.Context, in map[string]any) (string,
 }
 
 // ── pursuit_checkin ────────────────────────────────────────────────────────
+
+// pursuitExperience reads a pursuit's experience discriminator, tolerating a
+// database that has not yet run migration 192. `experience` is extracted from
+// to_jsonb(p) rather than referenced as a bare column so a pre-192 schema
+// yields NULL (which reads as 'ordinary') instead of a 42703 parse error -
+// serve does not auto-migrate, so core can genuinely be running against one.
+func pursuitExperience(ctx context.Context, pool *pgxpool.Pool, pursuitID string) (string, error) {
+	var experience string
+	err := pool.QueryRow(ctx, `
+		SELECT COALESCE(to_jsonb(p) ->> 'experience', 'ordinary')
+		FROM mem_pursuits p WHERE p.id = $1::uuid
+	`, pursuitID).Scan(&experience)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("pursuit %s not found", pursuitID)
+	}
+	if err != nil {
+		return "", err
+	}
+	return experience, nil
+}
 
 type pursuitCheckin struct{ pool *pgxpool.Pool }
 
@@ -280,6 +344,21 @@ func (t *pursuitCheckin) Execute(ctx context.Context, in map[string]any) (string
 	var delta *float64
 	if v, ok := numFloat(in["delta"]); ok {
 		delta = &v
+	}
+
+	// A coached pursuit is not a habit and must never be checked in here. This
+	// tool writes streak_days and done_today, and "never a streak, never a
+	// grade" is the whole point of the Psycho-Cybernetics programme: a missed
+	// day there is data, and the cycle continues from wherever it is picked up.
+	// A check-in would stamp a streak the coach then has to contradict, and
+	// would record the day as done without any of the reflection that actually
+	// constitutes the day. The tool description says as much, but prose in a
+	// description is droppable by the model (Rule #1b), so the refusal is
+	// enforced here and names the tool that IS correct.
+	if experience, err := pursuitExperience(ctx, t.pool, id); err != nil {
+		return "", err
+	} else if experience == pc.ExperiencePsychoCybernetics {
+		return "", errors.New("this is a coached Psycho-Cybernetics pursuit, not a habit: it has no streak and no done-today. Log the day with pursuit_pc_write (action='session') and read it with pursuit_pc_state")
 	}
 
 	tx, err := t.pool.Begin(ctx)
@@ -534,7 +613,10 @@ func (t *pursuitList) ReadOnly() bool { return true }
 func (t *pursuitList) Description() string {
 	return "List Pursuits (habits + goals) on the dashboard with their ids. Use " +
 		"this BEFORE pursuit_checkin - ids are not shown in the UI. Returns id, " +
-		"title, cadence, current_value, target_value, unit, streak_days, done_today."
+		"title, cadence, experience, current_value, target_value, unit, " +
+		"streak_days, done_today. A row whose experience is 'psycho_cybernetics' " +
+		"is a coached programme: read and write it with pursuit_pc_state / " +
+		"pursuit_pc_write, never pursuit_checkin."
 }
 func (t *pursuitList) Schema() map[string]any {
 	return map[string]any{
@@ -554,19 +636,24 @@ func (t *pursuitList) Execute(ctx context.Context, in map[string]any) (string, e
 	if limit > 500 {
 		limit = 500
 	}
-	q := `SELECT id::text, title, cadence,
-	             COALESCE(current_value::text,''), COALESCE(target_value::text,''),
-	             COALESCE(unit,''), COALESCE(streak_days, 0)::text,
-	             COALESCE(done_today, false)::text
-	        FROM mem_pursuits`
+	// `experience` is read via to_jsonb(p) so this tool keeps working on a
+	// database that has not yet run migration 192 (serve does not auto-migrate).
+	// A missing key yields NULL, which COALESCEs to 'ordinary', truthful
+	// since such a database has no coached pursuits.
+	q := `SELECT p.id::text, p.title, p.cadence,
+	             COALESCE(to_jsonb(p) ->> 'experience', 'ordinary'),
+	             COALESCE(p.current_value::text,''), COALESCE(p.target_value::text,''),
+	             COALESCE(p.unit,''), COALESCE(p.streak_days, 0)::text,
+	             COALESCE(p.done_today, false)::text
+	        FROM mem_pursuits p`
 	args := []any{}
 	if cadence != "all" {
-		q += ` WHERE cadence = $1`
+		q += ` WHERE p.cadence = $1`
 		args = append(args, cadence)
 	}
-	q += ` ORDER BY created_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
+	q += ` ORDER BY p.created_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
 	return queryRowsAsJSON(ctx, t.pool, q, args,
-		[]string{"id", "title", "cadence", "current_value", "target_value", "unit", "streak_days", "done_today"})
+		[]string{"id", "title", "cadence", "experience", "current_value", "target_value", "unit", "streak_days", "done_today"})
 }
 
 // ── followup_list ──────────────────────────────────────────────────────────

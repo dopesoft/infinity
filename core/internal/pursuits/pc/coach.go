@@ -99,19 +99,21 @@ func NewSnapshot(header PursuitHeader, state State, now time.Time,
 	}
 
 	// Days since any session of any kind. Sessions arrive sorted DESC by
-	// occurred_at; take the first one that has a timestamp.
-	s.LastSessionDaysAgo = 9999
+	// occurred_at; take the first one that carries a usable timestamp.
+	//
+	// Zero is the deliberate default for "no readable history", not a large
+	// number. Recovery is the one phase that accuses the boss of having missed
+	// something, so it may only fire on evidence that he actually did: a real
+	// session, on a real earlier day. A fresh programme and a history we could
+	// not read both mean we do not know, and "we do not know" must never open
+	// with an apology for a day he may well have shown up for.
+	s.LastSessionDaysAgo = 0
 	for _, sess := range sessions {
 		if sess.OccurredAt.IsZero() {
 			continue
 		}
 		s.LastSessionDaysAgo = localDayDelta(sess.OccurredAt, today, loc)
 		break
-	}
-	if len(sessions) == 0 {
-		// No history at all - flag as "many days" so the recovery branch
-		// does not trigger on the fresh onboarding case.
-		s.LastSessionDaysAgo = 0
 	}
 
 	// Proof pending today = there exists a proof planned for today and it
@@ -135,14 +137,37 @@ func NewSnapshot(header PursuitHeader, state State, now time.Time,
 	return s
 }
 
+// NeedsOnboarding reports whether the programme still has no identity or no
+// objective, and so cannot run a daily phase yet.
+//
+// Exported and shared because two places have to agree on it: NextGuidance
+// (which ASKS the onboarding questions) and Store.Apply (which PROMOTES the
+// answers into the state). If the reader's idea of "onboarded" ever drifted
+// from the writer's, the boss would answer onboarding, have it saved, and be
+// asked again on the next read.
+func NeedsOnboarding(st State) bool {
+	return strings.TrimSpace(st.CurrentIdentity) == "" ||
+		strings.TrimSpace(st.CurrentObjective) == ""
+}
+
+// ReviewDue reports whether the cycle has reached its final day and is waiting
+// on a review to close it.
+//
+// Shared for the same reason as NeedsOnboarding: NextGuidance offers the review
+// and Store.Apply acts on it. Store.Apply additionally relies on this going
+// FALSE the moment a review lands (CompleteReview resets current_day to 1),
+// which is what stops a cycle being closed twice.
+func ReviewDue(st State) bool {
+	return st.CurrentDay >= st.CycleLengthDays
+}
+
 // NextGuidance decides which coaching phase the boss should enter next
 // and formats the coach's author-framed prompt. Deterministic; the LLM is
 // never in the loop for this decision (Rule #1b: mechanic in code).
 func NextGuidance(s Snapshot) Guidance {
 	// Onboarding first. If the state row was never populated
 	// (identity/objective blank), that is the only phase that runs.
-	if strings.TrimSpace(s.State.CurrentIdentity) == "" ||
-		strings.TrimSpace(s.State.CurrentObjective) == "" {
+	if NeedsOnboarding(s.State) {
 		return guidanceOnboarding(s)
 	}
 
@@ -150,7 +175,7 @@ func NextGuidance(s Snapshot) Guidance {
 	// cycle reaches its final day and no review has closed it. The
 	// caller passes a State with a cycle_number that increments only on
 	// review completion, so a due review sits here until closed.
-	if s.State.CurrentDay >= s.State.CycleLengthDays {
+	if ReviewDue(s.State) {
 		return guidanceReview(s)
 	}
 
@@ -348,6 +373,26 @@ func guidanceIdle(s Snapshot) Guidance {
 
 // ── Adjustment / adaptation ───────────────────────────────────────────────
 
+// PickRehearsalMemory chooses which banked success memory to rehearse on a
+// given day. Maltz's framing has the boss return to the felt memory of a win
+// before rehearsing, so the pick has to be a mechanic rather than something
+// the LLM improvises differently every morning.
+//
+// Memories arrive weight-DESC, so rotating by day walks the heaviest ones
+// first and cycles rather than replaying a single memory for three weeks.
+// Pure and clock-free: the same day always yields the same memory, which is
+// what keeps the cockpit and a seeded chat naming the same one.
+func PickRehearsalMemory(memories []Memory, day int) *Memory {
+	if len(memories) == 0 {
+		return nil
+	}
+	if day < 1 {
+		day = 1
+	}
+	m := memories[(day-1)%len(memories)]
+	return &m
+}
+
 // AdaptForResistance emits an Adjustment guidance the coach can offer
 // when today's evidence has piled up more resistance than evidence. Kept
 // as a pure helper: caller decides when to offer it.
@@ -426,16 +471,48 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
+// DefaultTimezone is the day boundary a pursuit uses when it carries none.
+const DefaultTimezone = "America/Chicago"
+
+// NormalizeTimezone resolves a stored timezone to one that is loadable HERE.
+//
+// It is the single source of truth for the day boundary, and it exists because
+// the boundary is computed in two places: Go (the coach's phase derivation) and
+// SQL (the missed-day count, via AT TIME ZONE). Feeding those two a different
+// zone puts them a few hours apart, which shows up as a day the boss logged
+// being counted as missed. So refreshState passes this exact string to
+// Postgres rather than the raw column, and loadLocation resolves this exact
+// string in Go.
+//
+// A zone this binary cannot load resolves to UTC rather than to an error: a
+// cockpit that still reads is worth more than one that 500s over a timezone.
+func NormalizeTimezone(tz string) string {
+	tz = strings.TrimSpace(tz)
+	if tz == "" {
+		tz = DefaultTimezone
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return "UTC"
+	}
+	return tz
+}
+
+// IsValidTimezone reports whether a caller-supplied timezone is loadable. Used
+// at the write boundary so a typo is rejected at the point it is written
+// instead of quietly moving every future day boundary.
+func IsValidTimezone(tz string) bool {
+	_, err := time.LoadLocation(strings.TrimSpace(tz))
+	return err == nil
+}
+
 // loadLocation resolves the IANA timezone with a safe fallback.
 func loadLocation(tz string) *time.Location {
-	if tz == "" {
-		tz = "America/Chicago"
+	loc, err := time.LoadLocation(NormalizeTimezone(tz))
+	if err != nil {
+		// Unreachable given NormalizeTimezone, but never return nil.
+		return time.UTC
 	}
-	if loc, err := time.LoadLocation(tz); err == nil {
-		return loc
-	}
-	// Fallback: UTC (deterministic, never nil).
-	return time.UTC
+	return loc
 }
 
 // timeToLocalDate returns the midnight-local time.Time for the date the
@@ -452,8 +529,17 @@ func isSameLocalDay(t time.Time, localDate time.Time, loc *time.Location) bool {
 	return timeToLocalDate(t, loc).Equal(localDate)
 }
 
-// localDayDelta returns the number of local-day boundaries between the
-// supplied timestamp and today. today must already be midnight-local.
+// localDayDelta returns the number of local-day boundaries that have ELAPSED
+// from the supplied timestamp up to today. today must already be
+// midnight-local.
+//
+// A timestamp in the future clamps to 0 rather than counting backwards. Both
+// callers depend on that direction: a cycle whose start is ahead of now is on
+// day 1, not day 4, and a session stamped slightly ahead of the caller's clock
+// (Postgres NOW() versus Go's time.Now() across a pooler) is "logged today",
+// not "missed for two days". Taking the magnitude instead made future
+// timestamps read as elapsed time and could open the recovery prompt on a
+// programme the boss had not started.
 func localDayDelta(t time.Time, today time.Time, loc *time.Location) int {
 	tDay := timeToLocalDate(t, loc)
 	// Compare civil dates through UTC midnight. Using elapsed local hours
@@ -462,7 +548,7 @@ func localDayDelta(t time.Time, today time.Time, loc *time.Location) int {
 	toCivil := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
 	days := int(toCivil.Sub(fromCivil).Hours() / 24)
 	if days < 0 {
-		days = -days
+		return 0
 	}
 	return days
 }

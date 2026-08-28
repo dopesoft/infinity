@@ -16,10 +16,17 @@ export type PursuitCadence =
   | "goal" // dated long-term objective (book count, ship date, etc.)
   | "quarterly";
 
+/** Which app a pursuit opens into. "ordinary" is the default habit/goal row
+ *  rendered by PursuitsCard + ObjectViewer. A non-ordinary value routes the
+ *  tap into that experience's own full-screen cockpit. */
+export type PursuitExperience = "ordinary" | "psycho_cybernetics";
+
 export type Pursuit = {
   id: string;
   title: string;
   cadence: PursuitCadence;
+  /** Absent on legacy/mock rows, which are treated as "ordinary". */
+  experience?: PursuitExperience;
   // for habits: today's completion
   doneToday?: boolean;
   doneAt?: string;

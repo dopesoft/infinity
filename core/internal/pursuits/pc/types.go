@@ -263,6 +263,14 @@ type Cockpit struct {
 	Corrections    []Pattern     `json:"corrections"`
 	RecentSessions []Session     `json:"recent_sessions"`
 	CycleReviews   []Review      `json:"cycle_reviews"`
+	// RehearsalMemory is the banked success memory to rehearse today, or nil
+	// when the bank is empty. Picked deterministically so the cockpit and a
+	// seeded chat name the same memory on the same day.
+	RehearsalMemory *Memory `json:"rehearsal_memory,omitempty"`
+	// Adjustment is the coach's adaptive note, present only on a day whose
+	// resistance outweighed its evidence. It never replaces Guidance; it sits
+	// alongside as a suggestion to shrink tomorrow's proof.
+	Adjustment *Guidance `json:"adjustment,omitempty"`
 	// Guidance is the coach's next-step recommendation for the boss. It
 	// carries a headline (the action-first CTA), a body (author-framed
 	// prompt), and hints (the coach's derived reasoning).

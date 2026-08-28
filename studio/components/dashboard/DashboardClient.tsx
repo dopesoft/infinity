@@ -16,6 +16,7 @@ import { ActivityCard } from "./ActivityCard";
 import { MemoryFooter } from "./MemoryFooter";
 import { ObjectViewer } from "./ObjectViewer";
 import { AddTodoModal } from "./AddTodoModal";
+import { PCCockpit } from "@/components/pursuits/pc/PCCockpit";
 import { updateTodo } from "@/lib/api";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
 import { fetchDashboard, readDashboardCache } from "@/lib/dashboard/fetcher";
@@ -213,10 +214,24 @@ export function DashboardClient() {
   const [search, setSearch] = useState("");
   const [addingTodo, setAddingTodo] = useState(false);
   const [viewing, setViewing] = useState<DashboardItem | null>(null);
+  // A pursuit running a bespoke experience opens its own cockpit rather than
+  // the generic ObjectViewer. Held as {id,title} instead of the whole row so
+  // the cockpit always reads its state from the server.
+  const [pcPursuit, setPcPursuit] = useState<{ id: string; title: string } | null>(null);
   const { prefs } = useDashboardPrefs();
   const s = prefs.sections;
 
-  const openViewer = useCallback((item: DashboardItem) => setViewing(item), []);
+  // The one routing decision for every dashboard tap. An ordinary item goes to
+  // the ObjectViewer; a pursuit whose `experience` names an app goes to that
+  // app. Keeping the branch here means each card still calls one `onOpen` and
+  // no card needs to know which experiences exist.
+  const openViewer = useCallback((item: DashboardItem) => {
+    if (item.kind === "pursuit" && item.data.experience === "psycho_cybernetics") {
+      setPcPursuit({ id: item.data.id, title: item.data.title });
+      return;
+    }
+    setViewing(item);
+  }, []);
   const closeViewer = useCallback(() => setViewing(null), []);
   const liveViewing = useMemo<DashboardItem | null>(() => {
     if (!viewing) return null;
@@ -529,6 +544,20 @@ export function DashboardClient() {
       </div>
 
       <ObjectViewer item={liveViewing} onClose={closeViewer} onResolved={resolveViewerItem} />
+
+      {pcPursuit ? (
+        <PCCockpit
+          pursuitId={pcPursuit.id}
+          title={pcPursuit.title}
+          open
+          onOpenChange={(next) => {
+            if (!next) setPcPursuit(null);
+            // Closing the cockpit may have advanced the programme (a logged
+            // session, a taken proof), so pull the dashboard back in step.
+            if (!next) void load({ background: true });
+          }}
+        />
+      ) : null}
 
       <AddTodoModal
         open={addingTodo}

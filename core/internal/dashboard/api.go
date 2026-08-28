@@ -106,9 +106,14 @@ type Response struct {
 // ── DTOs (mirror studio/lib/dashboard/types.ts) ───────────────────────────
 
 type Pursuit struct {
-	ID           string     `json:"id"`
-	Title        string     `json:"title"`
-	Cadence      string     `json:"cadence"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Cadence string `json:"cadence"`
+	// Experience discriminates the ordinary pursuit surface from a bespoke
+	// coached app (currently 'psycho_cybernetics'). Studio routes a tap on a
+	// non-ordinary pursuit into that experience's cockpit instead of the
+	// generic ObjectViewer.
+	Experience   string     `json:"experience"`
 	DoneToday    bool       `json:"doneToday"`
 	DoneAt       *time.Time `json:"doneAt,omitempty"`
 	StreakDays   int        `json:"streakDays"`
@@ -646,13 +651,22 @@ func (a *API) loadPursuits(ctx context.Context) ([]Pursuit, error) {
 	if a.Pool == nil {
 		return nil, errors.New("no pool")
 	}
+	// `experience` is read through to_jsonb(p) rather than as a bare column.
+	// `infinity serve` does not auto-migrate, so core can boot against a
+	// database that has not yet run migration 192, and a bare column
+	// reference there is a 42703 parse error that empties the whole Pursuits
+	// card while the loader only logs a warning. Extracting the key from the
+	// row's JSON yields NULL on a pre-192 schema, which COALESCEs to
+	// 'ordinary': truthful, because such a database has no coached pursuits.
 	rows, err := a.Pool.Query(ctx, `
-		SELECT id, title, cadence, done_today, done_at, streak_days,
-		       current_value, target_value, unit, due_at, status, created_at
-		FROM mem_pursuits
+		SELECT p.id, p.title, p.cadence,
+		       COALESCE(to_jsonb(p) ->> 'experience', 'ordinary'),
+		       p.done_today, p.done_at, p.streak_days,
+		       p.current_value, p.target_value, p.unit, p.due_at, p.status, p.created_at
+		FROM mem_pursuits p
 		ORDER BY
-			CASE cadence WHEN 'daily' THEN 0 WHEN 'weekly' THEN 1 ELSE 2 END,
-			title
+			CASE p.cadence WHEN 'daily' THEN 0 WHEN 'weekly' THEN 1 ELSE 2 END,
+			p.title
 	`)
 	if err != nil {
 		return nil, err
@@ -663,7 +677,7 @@ func (a *API) loadPursuits(ctx context.Context) ([]Pursuit, error) {
 		var p Pursuit
 		var status *string
 		if err := rows.Scan(
-			&p.ID, &p.Title, &p.Cadence, &p.DoneToday, &p.DoneAt, &p.StreakDays,
+			&p.ID, &p.Title, &p.Cadence, &p.Experience, &p.DoneToday, &p.DoneAt, &p.StreakDays,
 			&p.CurrentValue, &p.TargetValue, &p.Unit, &p.DueAt, &status, &p.CreatedAt,
 		); err != nil {
 			return nil, err
