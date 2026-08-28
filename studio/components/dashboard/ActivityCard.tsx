@@ -1,59 +1,35 @@
 "use client";
 
 import { useMemo } from "react";
-import { motion } from "framer-motion";
-import {
-  Activity,
-  AlertTriangle,
-  Brain,
-  CheckCircle2,
-  Clock4,
-  Server,
-  Sparkles,
-  type LucideIcon,
-} from "lucide-react";
+import { GroupLabel, ListRow, type RowTone } from "@/components/ui/list-row";
 import { Section } from "./Section";
-import { cn } from "@/lib/utils";
 import { clockTime, relTime } from "@/lib/dashboard/format";
 import type { ActivityEvent, ActivityKind, DashboardItem } from "@/lib/dashboard/types";
 
-/* Activity feed - rolling stream of agent events.
+/* Activity feed - the rolling stream of agent events.
  *
- * Time-ordered, with a "now" divider separating future (scheduled) from
- * past (completed). Each row taps into the ObjectViewer for the source
- * artifact. Visual style borrowed from /heartbeat (timeline with colored
- * dots) but flatter since this lives inside a card.
+ * Time-ordered, split at "now" so what is SCHEDULED reads apart from what has
+ * HAPPENED. Each row taps into the ObjectViewer for the source artifact.
+ *
+ * MAJORDOMO SWEEP: the feed drew its own timeline - an absolutely positioned
+ * 1px rail, per-row dots with a `ring-4 ring-card` halo (which only worked
+ * because the section was a card), a glow shadow per tone, and a trailing
+ * kind icon. That is four decorations for "something happened at a time". The
+ * rows are `ListRow`s now: the tone dot is the primitive's, the "now" divider
+ * is a `GroupLabel`, and the time is where every other row keeps it - in the
+ * quiet meta line, tabular so the column of timestamps aligns.
  */
 
-const KIND_META: Record<
-  ActivityKind,
-  { Icon: LucideIcon; tone: "info" | "success" | "warning" | "danger" | "muted" | "procedural" }
-> = {
-  scheduled: { Icon: Clock4, tone: "muted" },
-  completed: { Icon: CheckCircle2, tone: "success" },
-  alert: { Icon: AlertTriangle, tone: "warning" },
-  memory: { Icon: Brain, tone: "info" },
-  reflection: { Icon: Sparkles, tone: "procedural" },
-  system: { Icon: Server, tone: "muted" }, // folded-in operational agent notes
+/** Event kind → the one alive/waiting/broken palette. An alert is the only
+ *  kind that reads coloured-for-attention; the rest are grey history. */
+const KIND_TONE: Record<ActivityKind, RowTone> = {
+  scheduled: "quiet",
+  completed: "success",
+  alert: "warning",
+  memory: "info",
+  reflection: "info",
+  system: "quiet", // folded-in operational agent notes
 };
-
-const DOT_CLS = {
-  info: "bg-info shadow-[0_0_6px_hsl(var(--info))]",
-  success: "bg-success shadow-[0_0_6px_hsl(var(--success))]",
-  warning: "bg-rose-400 shadow-[0_0_6px_theme(colors.rose.400)]",
-  danger: "bg-danger shadow-[0_0_6px_hsl(var(--danger))]",
-  muted: "bg-muted-foreground/40",
-  procedural: "bg-tier-procedural shadow-[0_0_6px_hsl(var(--tier-procedural))]",
-} as const;
-
-const ICON_CLS = {
-  info: "text-info",
-  success: "text-success",
-  warning: "text-rose-400",
-  danger: "text-danger",
-  muted: "text-muted-foreground",
-  procedural: "text-tier-procedural",
-} as const;
 
 export function ActivityCard({
   activity,
@@ -66,7 +42,7 @@ export function ActivityCard({
     () =>
       [...activity].sort((a, b) => {
         // Future events sorted ascending (soonest first), past descending
-        // (most-recent first). The divider rendered between groups.
+        // (most-recent first). The divider is rendered between the groups.
         const ta = new Date(a.at).getTime();
         const tb = new Date(b.at).getTime();
         if (a.future && b.future) return ta - tb;
@@ -79,92 +55,31 @@ export function ActivityCard({
   const firstPast = sorted.findIndex((e) => !e.future);
 
   return (
-    <Section
-      title="Activity"
-      Icon={Activity}
-      delay={0.45}
-      action={{ label: "open heartbeat", href: "/heartbeat" }}
-      noPad
-    >
-      <ol className="relative max-h-[420px] overflow-y-auto px-3 py-3 scroll-touch sm:px-4">
-        <span
-          aria-hidden
-          className="absolute bottom-3 left-[14px] top-3 w-px bg-border sm:left-[18px]"
-        />
-        {sorted.map((e, i) => (
-          <Row
-            key={e.id}
-            e={e}
-            showDivider={i === firstPast && i !== 0}
-            onClick={() => onOpen({ kind: "activity", data: e })}
-          />
-        ))}
-      </ol>
-    </Section>
-  );
-}
-
-function Row({
-  e,
-  showDivider,
-  onClick,
-}: {
-  e: ActivityEvent;
-  showDivider: boolean;
-  onClick: () => void;
-}) {
-  const meta = KIND_META[e.kind];
-  return (
-    <>
-      {showDivider ? (
-        <li className="relative my-2 flex items-center gap-2 pl-5 sm:pl-7">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            now
-          </span>
-          <span className="h-px flex-1 bg-border" aria-hidden />
-        </li>
-      ) : null}
-      <li className="relative">
-        <motion.button
-          type="button"
-          onClick={onClick}
-          whileHover={{ x: 2 }}
-          transition={{ duration: 0.12 }}
-          className="flex w-full items-start gap-2 rounded-md py-2 pl-5 pr-1 text-left transition-colors hover:bg-accent/40 sm:pl-7 sm:pr-2"
-        >
-          <span
-            className={cn(
-              "absolute left-[10px] top-3.5 size-2 rounded-full ring-4 ring-card sm:left-[14px]",
-              DOT_CLS[meta.tone],
-            )}
-            aria-hidden
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <span
-                // shrink-0 + whitespace-nowrap so "2m ago" / "5h ago"
-                // never fold onto two lines when the title is long.
-                className="shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
-                suppressHydrationWarning
-              >
-                {e.future ? clockTime(e.at) : relTime(e.at)}
-              </span>
-              <span className="min-w-0 truncate text-[13px] font-medium text-foreground">
-                {e.title}
-              </span>
+    <Section title="Activity" action={{ label: "open heartbeat", href: "/heartbeat" }}>
+      {sorted.length === 0 ? (
+        <p className="py-2 text-[13px] text-quiet">Nothing has happened yet today.</p>
+      ) : (
+        <div className="flex max-h-[420px] min-w-0 flex-col overflow-y-auto scroll-touch">
+          {sorted.map((e, i) => (
+            <div key={e.id} className="flex min-w-0 flex-col">
+              {/* The "now" line: everything above it is still to come. */}
+              {i === firstPast && i !== 0 ? <GroupLabel label="now" /> : null}
+              <ListRow
+                tone={KIND_TONE[e.kind]}
+                title={e.title}
+                meta={
+                  <span suppressHydrationWarning>
+                    {[e.future ? clockTime(e.at) : relTime(e.at), e.detail]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                }
+                onClick={() => onOpen({ kind: "activity", data: e })}
+              />
             </div>
-            {e.detail ? (
-              <p className="mt-0.5 line-clamp-1 break-words text-[11px] text-muted-foreground">
-                {e.detail}
-              </p>
-            ) : null}
-          </div>
-          <meta.Icon
-            className={cn("size-3.5 shrink-0", ICON_CLS[meta.tone])}
-            aria-hidden
-          />
-        </motion.button>
-      </li>
-    </>
+          ))}
+        </div>
+      )}
+    </Section>
   );
 }

@@ -1,18 +1,37 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Brain, Check, Flame, Plus, Target } from "lucide-react";
-import { Section, TileCard } from "./Section";
+import { Brain, Check, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { GroupLabel, ListRow, WorkRow, type RowTone } from "@/components/ui/list-row";
+import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
+import { DASHBOARD_LIST_ROWS } from "./listHeight";
 import { cn } from "@/lib/utils";
 import type { DashboardItem, Pursuit } from "@/lib/dashboard/types";
 
 /* Pursuits - habits + goals + objectives merged.
  *
- * Each row carries a cadence tag (daily / weekly / goal / quarterly).
- * Habits show a check button + streak; goals show a progress bar. Tap
- * any row to open the ObjectViewer with the pursuit's history.
+ * Habits carry a tick and a streak; goals carry a progress bar. Tap any row to
+ * open the ObjectViewer with the pursuit's history.
+ *
+ * MAJORDOMO SWEEP: the two lists were separated by a dashed rule and the goals
+ * were `TileCard`s with a hand-rolled progress bar, a hand-rolled percentage
+ * line, and a hand-rolled status word - a third copy of a bar that already
+ * exists in the `WorkRow` primitive. Habits and goals are now `GroupLabel` +
+ * rows, the goal bar IS `WorkRow`'s bar (which now takes its colour from the
+ * row tone, so an at-risk goal reads red instead of emerald), and the streak
+ * flame pill is a word in the meta line.
  */
+
+/** A goal's status maps to the one alive/waiting/broken palette (§1.4). */
+function statusTone(status: Pursuit["status"]): RowTone {
+  if (status === "ahead") return "success";
+  if (status === "slow") return "warning";
+  if (status === "at_risk") return "danger";
+  return "default";
+}
+
 export function PursuitsCard({
   pursuits,
   onOpen,
@@ -26,53 +45,46 @@ export function PursuitsCard({
   const goals = pursuits.filter((p) => p.cadence === "goal" || p.cadence === "quarterly");
 
   return (
-    <Section
-      title="Pursuits"
-      Icon={Target}
-      delay={0.05}
-      action={{ label: "manage", href: "/memory" }}
-    >
-      {/* No inner card wrapper - Section already provides the rounded
-          chrome. Adding a second rounded-xl border bg-card inside the
-          Section produced the "double card" cutoff at corners. */}
-      <div className="space-y-2.5">
-        <ScrollList max={4}>
-          <ul className="space-y-1">
-            {habits.map((p) => (
-              <HabitRow
-                key={p.id}
-                p={p}
-                onOpen={() => onOpen({ kind: "pursuit", data: p })}
-                onToggle={() => onToggleHabit(p.id)}
-              />
+    <Section title="Pursuits" action={{ label: "manage", href: "/memory" }}>
+      <div className="min-w-0">
+        {habits.length === 0 && goals.length === 0 ? (
+          <p className="py-2 text-[13px] text-quiet">
+            Nothing being pursued yet - habits and goals land here.
+          </p>
+        ) : null}
+
+        {habits.length > 0 ? (
+          <ScrollList max={DASHBOARD_LIST_ROWS}>
+            <div className="flex min-w-0 flex-col">
+              {habits.map((p) => (
+                <HabitRow
+                  key={p.id}
+                  p={p}
+                  onOpen={() => onOpen({ kind: "pursuit", data: p })}
+                  onToggle={() => onToggleHabit(p.id)}
+                />
+              ))}
+            </div>
+          </ScrollList>
+        ) : null}
+
+        {goals.length > 0 ? (
+          <div className="flex min-w-0 flex-col">
+            <GroupLabel label="Goals" count={goals.length} />
+            {goals.map((p) => (
+              <GoalRow key={p.id} p={p} onOpen={() => onOpen({ kind: "pursuit", data: p })} />
             ))}
-          </ul>
-        </ScrollList>
+          </div>
+        ) : null}
 
-        {goals.length > 0 && (
-          <>
-            <div className="border-t border-dashed" />
-            <ScrollList max={4}>
-              <ul className="space-y-2">
-                {goals.map((p) => (
-                  <GoalRow
-                    key={p.id}
-                    p={p}
-                    onOpen={() => onOpen({ kind: "pursuit", data: p })}
-                  />
-                ))}
-              </ul>
-            </ScrollList>
-          </>
-        )}
-
-        <button
+        <Button
           type="button"
-          className="mt-1 inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+          variant="ghost"
+          className="mt-1 h-11 w-full justify-start px-0 text-[13.5px] font-medium text-quiet hover:bg-transparent hover:text-foreground"
         >
-          <Plus className="size-3.5" aria-hidden />
+          <Plus className="size-4" aria-hidden />
           New pursuit
-        </button>
+        </Button>
       </div>
     </Section>
   );
@@ -92,16 +104,30 @@ function HabitRow({
   // programme's back, and the row would then claim a day was complete that
   // the cockpit had never seen.
   const coached = !!p.experience && p.experience !== "ordinary";
+  const meta = [
+    coached ? "programme" : p.cadence,
+    !coached && p.streakDays ? `${p.streakDays}d streak` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const shared = {
+    title: (
+      <span className={cn(!coached && p.doneToday && "text-quiet line-through")}>{p.title}</span>
+    ),
+    meta,
+    onClick: onOpen,
+  };
+
+  if (coached) {
+    return <ListRow {...shared} leading={<Brain className="size-4" aria-hidden />} />;
+  }
+
   return (
-    <li className="flex items-center gap-2">
-      {coached ? (
-        <span
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
-          aria-hidden
-        >
-          <Brain className="size-3.5" />
-        </span>
-      ) : (
+    <ListRow
+      {...shared}
+      tone={p.doneToday ? "success" : "quiet"}
+      leadingAction={
         <motion.button
           type="button"
           whileTap={{ scale: 0.85 }}
@@ -110,97 +136,51 @@ function HabitRow({
             onToggle();
           }}
           aria-label={p.doneToday ? "Uncheck habit" : "Check habit"}
-          className={cn(
-            "inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-all",
-            p.doneToday
-              ? "border-success bg-success text-success-foreground shadow-[0_0_12px_hsl(var(--success)/0.4)]"
-              : "border-border bg-background hover:border-foreground/40",
-          )}
+          /* 18px on the page, 44px to a thumb - see TodosCard for the why. */
+          className="group -m-[13px] inline-flex size-11 shrink-0 items-center justify-center transition-colors"
         >
-          {p.doneToday ? <Check className="size-3.5" /> : null}
-        </motion.button>
-      )}
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/50"
-      >
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-sm",
-            !coached && p.doneToday ? "text-muted-foreground line-through" : "text-foreground",
-          )}
-        >
-          {p.title}
-        </span>
-        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {coached ? "programme" : p.cadence}
-        </span>
-        {!coached && p.streakDays !== undefined && p.streakDays > 0 ? (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-400/10 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-rose-400">
-            <Flame className="size-2.5" aria-hidden />
-            {p.streakDays}d
+          <span
+            className={cn(
+              "inline-flex size-[18px] items-center justify-center rounded-full border transition-colors",
+              p.doneToday
+                ? "border-brand bg-brand text-brand-foreground"
+                : "border-border text-quiet group-hover:border-foreground/50",
+            )}
+          >
+            <Check
+              className={cn(
+                "size-3 transition-opacity",
+                p.doneToday ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+              )}
+              aria-hidden
+            />
           </span>
-        ) : null}
-      </button>
-    </li>
+        </motion.button>
+      }
+    />
   );
 }
 
 function GoalRow({ p, onOpen }: { p: Pursuit; onOpen: () => void }) {
-  const pct = p.progress ? Math.min(100, Math.round((p.progress.current / p.progress.target) * 100)) : 0;
-  const statusTone =
-    p.status === "ahead"
-      ? "text-success"
-      : p.status === "slow"
-        ? "text-rose-400"
-        : p.status === "at_risk"
-          ? "text-danger"
-          : "text-muted-foreground";
+  const pct = p.progress
+    ? Math.min(100, Math.round((p.progress.current / p.progress.target) * 100))
+    : 0;
+  const tone = statusTone(p.status);
+  const meta = p.progress
+    ? `${p.progress.current}/${p.progress.target}${
+        p.progress.unit ? ` ${p.progress.unit}` : ""
+      } · ${pct}%`
+    : undefined;
+
   return (
-    <li>
-      <TileCard onClick={onOpen} className="flex-col items-stretch gap-1.5 p-3">
-        <div className="flex items-center gap-2">
-          <span className="flex-1 truncate text-sm font-medium text-foreground">{p.title}</span>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {p.cadence === "quarterly" ? "Q" : p.cadence}
-          </span>
-        </div>
-        {p.progress ? (
-          <div className="space-y-1">
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${pct}%` }}
-                transition={{ duration: 0.8, ease: [0.2, 0.7, 0.2, 1], delay: 0.15 }}
-                className={cn(
-                  "h-full rounded-full",
-                  p.status === "ahead"
-                    ? "bg-success"
-                    : p.status === "slow"
-                      ? "bg-rose-400"
-                      : p.status === "at_risk"
-                        ? "bg-danger"
-                        : "bg-foreground",
-                )}
-              />
-            </div>
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="font-mono text-muted-foreground">
-                {p.progress.current}/{p.progress.target}
-                {p.progress.unit ? <span className="opacity-60"> {p.progress.unit}</span> : null}
-                {" · "}
-                <span className="font-semibold text-foreground">{pct}%</span>
-              </span>
-              {p.status ? (
-                <span className={cn("font-mono uppercase tracking-wider", statusTone)}>
-                  {p.status.replace("_", " ")}
-                </span>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-      </TileCard>
-    </li>
+    <WorkRow
+      kind={p.cadence === "quarterly" ? "quarterly" : p.cadence}
+      title={p.title}
+      status={p.status ? p.status.replace("_", " ") : undefined}
+      tone={tone}
+      meta={meta}
+      progress={p.progress ? pct / 100 : undefined}
+      onClick={onOpen}
+    />
   );
 }

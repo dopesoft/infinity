@@ -140,7 +140,7 @@ export function Composer({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={codeMode ? "code mode: paths, commands, code..." : "ask me anything..."}
+          placeholder={codeMode ? "Paths, commands, code" : "Ask me anything"}
           rows={1}
           inputMode="text"
           autoCapitalize={codeMode ? "none" : "sentences"}

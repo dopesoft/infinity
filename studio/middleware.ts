@@ -12,18 +12,6 @@ export async function middleware(request: NextRequest) {
   // surface the misconfiguration in the login page.
   if (!url || !anon) return NextResponse.next();
 
-  // TEMPORARY (Majordomo design sweep, 2026-08-28) — REMOVE BEFORE MERGE.
-  // Lets a headless browser screenshot pages during the redesign without a
-  // Supabase session. Double-gated: dead in any production build (NODE_ENV
-  // is "production" for `next build`/`next start`) AND requires the operator
-  // to set MAJORDOMO_SCREENSHOT=1 explicitly on a local dev server.
-  if (
-    process.env.NODE_ENV !== "production" &&
-    process.env.MAJORDOMO_SCREENSHOT === "1"
-  ) {
-    return NextResponse.next();
-  }
-
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(url, anon, {

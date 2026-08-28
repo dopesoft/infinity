@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, BookUser, Building2, Grip, Loader2, Pencil, Phone, PhoneIncoming, PhoneOutgoing, Plus, Trash2, User } from "lucide-react";
 import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
+import { DASHBOARD_LIST_ROWS } from "./listHeight";
 import { SurfaceRow } from "./SurfaceCard";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { ModalSection } from "@/components/ui/modal-content";
@@ -45,7 +46,9 @@ type LiveCall = {
 
 export function PhoneCard({
   items,
-  delay = 0.25,
+  /* 0 by default: the cards used to fade in on staggered timers, which read as
+     a row that settles rather than a row that is simply there. */
+  delay = 0,
   onOpen,
   matchHeight,
 }: {
@@ -162,7 +165,6 @@ export function PhoneCard({
     <>
       <Section
         title="Phone"
-        Icon={Phone}
         delay={delay}
         badge={items.length}
         headerExtra={
@@ -171,9 +173,9 @@ export function PhoneCard({
               type="button"
               onClick={() => setModalOpen(true)}
               aria-label="View the live call"
-              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-success/40 bg-success/10 px-2.5 text-[11px] font-medium text-success"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[12.5px] font-medium text-brand transition-colors hover:bg-accent/60"
             >
-              <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden />
+              <span className="size-[7px] animate-pulse-soft rounded-full bg-brand" aria-hidden />
               <DirIcon className="size-3" aria-hidden />
               <span className="capitalize">{direction === "outbound" ? "Outgoing" : "Incoming"}</span>
               <span className="font-mono tabular-nums">{elapsed}</span>
@@ -189,10 +191,8 @@ export function PhoneCard({
               aria-label="Contact book - call someone back"
               aria-expanded={bookOpen}
               className={cn(
-                "inline-flex size-7 items-center justify-center rounded-md transition-colors",
-                bookOpen
-                  ? "bg-brand/15 text-brand"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                "inline-flex size-8 items-center justify-center rounded-lg transition-colors",
+                bookOpen ? "bg-accent text-foreground" : "text-quiet hover:bg-accent/60 hover:text-foreground",
               )}
             >
               <BookUser className="size-4" />
@@ -203,10 +203,8 @@ export function PhoneCard({
               aria-label="Have Jarvis make a call"
               aria-expanded={open}
               className={cn(
-                "inline-flex size-7 items-center justify-center rounded-md transition-colors",
-                open
-                  ? "bg-brand/15 text-brand"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                "inline-flex size-8 items-center justify-center rounded-lg transition-colors",
+                open ? "bg-accent text-foreground" : "text-quiet hover:bg-accent/60 hover:text-foreground",
               )}
             >
               <Grip className="size-4" />
@@ -216,15 +214,15 @@ export function PhoneCard({
         }
       >
         {askRun?.status === "error" ? (
-          <div className="mb-3 rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs">
-            <p className="font-semibold text-danger">Your call errand failed</p>
-            <p className="mt-0.5 break-words text-muted-foreground">
+          <div className="mb-3 min-w-0 rounded-[10px] bg-danger/10 px-3 py-2.5">
+            <p className="text-[13.5px] font-medium text-danger">Your call errand failed</p>
+            <p className="mt-0.5 break-words text-[12px] leading-relaxed text-muted-foreground">
               {askRun.human_error?.summary ?? askRun.error ?? "The run died before dialing."}
             </p>
           </div>
         ) : askRun?.status === "running" && !callRunning ? (
-          <div className="mb-3 flex items-center gap-2 rounded-xl border bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          <div className="mb-3 flex min-w-0 items-center gap-2 rounded-[10px] bg-muted px-3 py-2.5 text-[12px] text-muted-foreground">
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-brand" aria-hidden />
       Working your call errand, finding the number and briefing the call…
           </div>
         ) : null}
@@ -241,7 +239,7 @@ export function PhoneCard({
               className="overflow-hidden"
             >
               {state === "sent" ? (
-                <div className="mb-3 flex min-h-11 items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-3 text-xs text-success">
+                <div className="mb-3 flex min-h-11 items-center gap-2 rounded-[10px] bg-brand/10 px-3 text-[12.5px] text-brand">
                   <Phone className="size-3.5 shrink-0" aria-hidden />
          On it, the outcome will land here and on your phone.
                 </div>
@@ -263,7 +261,7 @@ export function PhoneCard({
                     autoCapitalize="sentences"
                     autoCorrect="on"
                     className={cn(
-                      "h-11 w-full rounded-xl border border-input bg-background pl-3 pr-11 text-sm",
+                      "h-11 w-full rounded-lg border border-input bg-background pl-3 pr-11 text-sm",
                       "transition-colors focus:border-foreground/40 focus:outline-none",
                     )}
                   />
@@ -293,20 +291,22 @@ export function PhoneCard({
         </AnimatePresence>
 
         {items.length === 0 ? (
-          <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-      No calls yet, Jarvis answers his line and logs every call here.
-          </div>
+          <p className="py-2 text-[13px] text-quiet">
+            No calls yet, Jarvis answers his line and logs every call here.
+          </p>
         ) : (
-          <ScrollList max={4} maxHeight={matchHeight ?? undefined}>
-            <ul className="space-y-2">
-              {items.map((it) => (
-                <li key={`${it.kind}-${it.data.id}`}>
-                  {it.kind === "surface" ? (
-                    <SurfaceRow item={it.data} onClick={() => onOpen(it)} />
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+          <ScrollList max={DASHBOARD_LIST_ROWS} maxHeight={matchHeight ?? undefined}>
+            <div className="flex min-w-0 flex-col">
+              {items.map((it) =>
+                it.kind === "surface" ? (
+                  <SurfaceRow
+                    key={`${it.kind}-${it.data.id}`}
+                    item={it.data}
+                    onClick={() => onOpen(it)}
+                  />
+                ) : null,
+              )}
+            </div>
           </ScrollList>
         )}
       </Section>
@@ -351,7 +351,7 @@ export function PhoneCard({
           ) : null}
 
           {live && live.lines.length > 0 ? (
-            <div className="max-h-[50dvh] min-w-0 space-y-3 overflow-y-auto rounded-xl border bg-card/40 p-3 scroll-touch">
+            <div className="max-h-[50dvh] min-w-0 space-y-3 overflow-y-auto rounded-[10px] bg-muted p-3 scroll-touch">
               {live.lines.map((l, i) => (
                 <div key={i} className="flex min-w-0 gap-3">
                   <span className="w-14 shrink-0 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -369,11 +369,11 @@ export function PhoneCard({
               <div ref={transcriptEndRef} />
             </div>
           ) : (
-            <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
+            <p className="py-2 text-[13px] text-quiet">
               {callRunning
         ? "Connected, the transcript streams in as they talk."
                 : "No transcript captured for this call."}
-            </div>
+            </p>
           )}
         </div>
       </ResponsiveModal>
@@ -582,13 +582,11 @@ function ContactBookModal({
 
               <div className="max-h-[34dvh] space-y-2 overflow-y-auto scroll-touch">
                 {entries.length === 0 ? (
-                  <div className="rounded-xl border border-dashed bg-card/30 p-3 text-center text-xs text-muted-foreground">
-                    No calls with them yet.
-                  </div>
+                  <p className="text-[13px] text-quiet">No calls with them yet.</p>
                 ) : (
                   entries.map((e, i) => (
-                    <div key={i} className="rounded-xl border bg-card/40 p-3">
-                      <p className="break-words text-xs leading-relaxed">{e}</p>
+                    <div key={i} className="min-w-0 rounded-[10px] bg-muted px-3 py-2.5">
+                      <p className="break-words text-[13px] leading-relaxed">{e}</p>
                     </div>
                   ))
                 )}
@@ -597,7 +595,7 @@ function ContactBookModal({
               {/* Delete confirms in place. A second modal over a drawer is a
                   trap on a phone: you cannot see what you are agreeing to. */}
               {confirmDelete ? (
-                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3">
+                <div className="flex flex-wrap items-center gap-2 rounded-[10px] bg-danger/10 p-3">
                   <p className="min-w-0 flex-1 text-xs">
                     Remove {selected.name ?? selected.number} from your phone book?
                   </p>
@@ -628,7 +626,7 @@ function ContactBookModal({
               )}
             </div>
           ) : (
-            <div className="flex h-full min-h-32 items-center justify-center rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
+            <div className="flex h-full min-h-32 items-center justify-center p-4 text-center text-[13px] text-quiet">
               Pick a contact to see your history with them.
             </div>
           )}

@@ -4,30 +4,33 @@ import { useEffect, useMemo, useState } from "react";
 import { useTabParam } from "@/lib/useTabParam";
 import {
   Check,
-  ChevronDown,
   ExternalLink,
   Bell,
   Compass,
-  Info,
   LayoutDashboard,
   Shield,
   LayoutPanelLeft,
   Loader2,
   MessageSquare,
   Plug,
-  PlugZap,
-  Search,
   Server,
   ShieldCheck,
   Sliders,
   Unplug,
   Wrench,
-  X,
 } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
+import { PageHeader } from "@/components/ui/page-header";
+import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { Inset, type InsetField } from "@/components/ui/inset";
+import { NativeSelect } from "@/components/ui/native-select";
+import { SettingRow } from "@/components/ui/setting-row";
+import { Switch } from "@/components/ui/switch";
+import { Section } from "@/components/dashboard/Section";
+import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -81,6 +84,12 @@ type SectionId =
 type SectionMeta = {
   id: SectionId;
   label: string;
+  /**
+   * Kept as the rail row's `title` attribute only. Majordomo §1.5: a rail
+   * label that carries a sentence restating itself is furniture, so the
+   * description no longer renders — but the copy stays here so nothing is
+   * lost and a hover still explains the section.
+   */
   description: string;
   icon: typeof Sliders;
 };
@@ -88,9 +97,9 @@ type SectionMeta = {
 const SECTIONS: SectionMeta[] = [
   { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
   { id: "chat", label: "Chat", description: "Live chat behavior, agent teams, budgets", icon: MessageSquare },
- { id: "compass", label: "Compass", description: "Your mission, goals + principles, Jarvis reads this every turn", icon: Compass },
+  { id: "compass", label: "Compass", description: "Your mission, goals + principles, Jarvis reads this every turn", icon: Compass },
   { id: "trust", label: "Trust", description: "Approve high-risk actions Jarvis is asking for + audit what you've already trusted", icon: ShieldCheck },
- { id: "privacy", label: "Privacy", description: "Wards, paths Jarvis must not freely read", icon: Shield },
+  { id: "privacy", label: "Privacy", description: "Wards, paths Jarvis must not freely read", icon: Shield },
   { id: "dashboard", label: "Dashboard", description: "Pick which Dashboard sections show on /", icon: LayoutDashboard },
   { id: "notifications", label: "Notifications", description: "iOS-style push notifications on iPhone + Mac", icon: Bell },
   { id: "mcp", label: "Connectors", description: "MCP servers + Composio integrations the agent can call", icon: Plug },
@@ -137,53 +146,88 @@ export default function SettingsPage() {
     [tools.length, mcp.length],
   );
 
+  // The one meta line under the title: counts, never a description (§1.5).
+  const meta = useMemo(() => {
+    const bits: string[] = [];
+    if (tools.length) bits.push(`${tools.length} tools`);
+    if (mcp.length) bits.push(`${mcp.length} connectors`);
+    if (status?.version) bits.push(`core ${status.version}`);
+    return bits.join(" · ");
+  }, [tools.length, mcp.length, status?.version]);
+
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
-          <h1 className="text-base font-semibold tracking-tight text-foreground">
-            Settings
-          </h1>
+        <div className="px-4 pt-4 sm:px-6 lg:px-8">
+          <PageHeader title="Settings" meta={meta || undefined} />
         </div>
 
-        {/* Mobile: section rail across the top, content below. */}
+        {/* Mobile: the section rail is a chip row — the house tab-strip
+            primitive, not a bespoke pill (CLAUDE.md → "Page tab strips"). */}
         <div className="flex min-h-0 flex-1 flex-col lg:hidden">
-          <nav className="no-scrollbar flex gap-1.5 overflow-x-auto scroll-touch px-4 py-2 sm:px-6">
-            {SECTIONS.map((s) => (
-              <SectionPill
-                key={s.id}
-                meta={s}
-                active={active === s.id}
-                count={counts[s.id]}
-                onClick={() => setActive(s.id)}
-              />
-            ))}
-          </nav>
-          <div className="min-h-0 flex-1 overflow-y-auto scroll-touch p-3 pb-safe">
+          <div className="px-4 sm:px-6">
+            <PageTabs value={active} onValueChange={(v) => setActive(v as SectionId)}>
+              <PageTabsList scrollable>
+                {SECTIONS.map((s) => (
+                  <PageTabsTrigger key={s.id} value={s.id} className="gap-1.5">
+                    <span>{s.label}</span>
+                    {typeof counts[s.id] === "number" && counts[s.id] ? (
+                      <span
+                        className={cn(
+                          "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+                          active === s.id
+                            ? "bg-background/20 text-background"
+                            : "bg-muted-foreground/15 text-muted-foreground",
+                        )}
+                      >
+                        {counts[s.id]}
+                      </span>
+                    ) : null}
+                  </PageTabsTrigger>
+                ))}
+              </PageTabsList>
+            </PageTabs>
+          </div>
+          {/* px-4 sm:px-6 exactly matches Section tone="band"'s negative
+              margins, so a band bleeds to the screen edge without ever
+              widening the page. */}
+          <div className="min-h-0 flex-1 overflow-y-auto scroll-touch px-4 pb-safe pt-2 sm:px-6">
             <SectionContent active={active} status={status} tools={tools} mcp={mcp} />
           </div>
         </div>
 
-        {/* Desktop: resizable split - sidebar list + content. */}
+        {/* Desktop: resizable split - names-only rail + content. */}
         <div className="hidden min-h-0 flex-1 lg:flex">
           <ResizablePanelGroup direction="horizontal" autoSaveId="settings:h">
             <ResizablePanel defaultSize={22} minSize={16} maxSize={36}>
-              <nav className="flex h-full flex-col gap-0.5 overflow-y-auto p-2">
-                {SECTIONS.map((s) => (
-                  <SectionRow
-                    key={s.id}
-                    meta={s}
-                    active={active === s.id}
-                    count={counts[s.id]}
-                    onClick={() => setActive(s.id)}
-                  />
-                ))}
+              <nav className="flex h-full flex-col overflow-y-auto px-4 py-1 scroll-touch">
+                {SECTIONS.map((s) => {
+                  const Icon = s.icon;
+                  const isActive = active === s.id;
+                  return (
+                    <ListRow
+                      key={s.id}
+                      leading={<Icon className="size-4" aria-hidden />}
+                      title={s.label}
+                      trailing={
+                        typeof counts[s.id] === "number" && counts[s.id] ? (
+                          <span className="font-mono text-[11px] tabular-nums text-quiet">
+                            {counts[s.id]}
+                          </span>
+                        ) : undefined
+                      }
+                      chevron={false}
+                      onClick={() => setActive(s.id)}
+                      className={cn(isActive && "bg-accent")}
+                    />
+                  );
+                })}
               </nav>
             </ResizablePanel>
             <ResizableHandle />
             <ResizablePanel defaultSize={78} minSize={50}>
-              <div className="h-full overflow-y-auto p-4">
-                <div className="mx-auto w-full max-w-3xl space-y-3">
+              <div className="h-full overflow-y-auto px-6 py-2 scroll-touch">
+                <div className="mx-auto w-full min-w-0 max-w-3xl">
                   <SectionContent active={active} status={status} tools={tools} mcp={mcp} />
                 </div>
               </div>
@@ -192,82 +236,6 @@ export default function SettingsPage() {
         </div>
       </div>
     </TabFrame>
-  );
-}
-
-function SectionPill({
-  meta,
-  active,
-  count,
-  onClick,
-}: {
-  meta: SectionMeta;
-  active: boolean;
-  count?: number;
-  onClick: () => void;
-}) {
-  const Icon = meta.icon;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 font-mono text-[11px] uppercase tracking-wider transition-colors",
-        active
-          ? "border-foreground bg-foreground text-background"
-          : "border-border bg-muted text-muted-foreground hover:bg-accent",
-      )}
-    >
-      <Icon className="size-3.5" aria-hidden />
-      <span>{meta.label}</span>
-      {typeof count === "number" && (
-        <span
-          className={cn(
-            "ml-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px]",
-            active ? "bg-background/20 text-background" : "bg-background text-muted-foreground",
-          )}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function SectionRow({
-  meta,
-  active,
-  count,
-  onClick,
-}: {
-  meta: SectionMeta;
-  active: boolean;
-  count?: number;
-  onClick: () => void;
-}) {
-  const Icon = meta.icon;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors",
-        active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-      )}
-    >
-      <Icon className="size-4 shrink-0" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{meta.label}</span>
-          {typeof count === "number" && (
-            <Badge variant="secondary" className="h-4 min-w-[1.1rem] justify-center px-1 font-mono text-[10px]">
-              {count}
-            </Badge>
-          )}
-        </div>
-        <p className="truncate text-[11px] text-muted-foreground">{meta.description}</p>
-      </div>
-    </button>
   );
 }
 
@@ -313,22 +281,20 @@ function SectionContent({
 
 function TrustSection() {
   return (
-    <div className="space-y-3">
-      <SectionHeader
-        title="Trust"
-        description="Real-time requests still pop up inline in Chat. This page groups batched approvals (inbox triage, calendar prep, etc.) so you can clear them in one tap."
-      />
-      <TrustReviewPanel />
-    </div>
-  );
-}
-
-function SectionHeader({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="space-y-1">
-      <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-      <p className="text-xs text-muted-foreground">{description}</p>
-    </div>
+    <Section
+      title="Trust"
+      // A decision aid, not a restatement: it says which approvals land here
+      // versus inline in Chat, which is what the boss needs to know before
+      // he starts clearing them.
+      headerExtra={
+        <span className="hidden text-[12px] text-quiet sm:inline">batched approvals</span>
+      }
+      noPad
+    >
+      <div className="pt-3">
+        <TrustReviewPanel />
+      </div>
+    </Section>
   );
 }
 
@@ -387,122 +353,160 @@ function ChatSettingsSection() {
   }
 
   return (
-    <div className="space-y-4">
-      <SectionHeader
-        title="Chat"
-        description="Controls for the /live chat experience. Agent teams use these caps and display preferences when Jarvis splits complex work into specialist agents."
-      />
+    <div className="min-w-0 space-y-1">
+      <Section
+        title="Agent teams"
+        badge={loading ? "loading" : draft.team_aggressiveness.replace("_", " ")}
+        noPad
+      >
+        <SettingRow label="Agent teams" description="Whether Jarvis may split work across specialist agents.">
+          <NativeSelect
+            value={draft.agent_teams}
+            onValueChange={(v) => patch({ agent_teams: v as ChatSettings["agent_teams"] })}
+            aria-label="Agent teams"
+          >
+            <option value="off">Off</option>
+            <option value="ask">Ask first</option>
+            <option value="auto">Auto</option>
+          </NativeSelect>
+        </SettingRow>
+        <SettingRow label="Aggressiveness" description="How readily he reaches for a team instead of doing it himself.">
+          <NativeSelect
+            value={draft.team_aggressiveness}
+            onValueChange={(v) =>
+              patch({ team_aggressiveness: v as ChatSettings["team_aggressiveness"] })
+            }
+            aria-label="Aggressiveness"
+          >
+            <option value="conservative">Conservative</option>
+            <option value="balanced">Balanced</option>
+            <option value="full_tilt">Full tilt</option>
+          </NativeSelect>
+        </SettingRow>
+        <NumberSetting
+          label="Max agents"
+          description="Ceiling on workers inside one team."
+          value={draft.max_agents_per_team}
+          min={1}
+          max={12}
+          onChange={(v) => patch({ max_agents_per_team: v })}
+        />
+        <NumberSetting
+          label="Max parallel teams"
+          description="How many teams may run at once."
+          value={draft.max_parallel_teams}
+          min={1}
+          max={6}
+          onChange={(v) => patch({ max_parallel_teams: v })}
+        />
+        <NumberSetting
+          label="Runtime seconds"
+          description="A team is stopped once it passes this."
+          value={draft.max_runtime_seconds}
+          min={60}
+          max={3600}
+          onChange={(v) => patch({ max_runtime_seconds: v })}
+        />
+        <NumberSetting
+          label="Team token budget"
+          description="Tokens a single team may spend."
+          value={draft.max_team_tokens}
+          min={1000}
+          max={1000000}
+          onChange={(v) => patch({ max_team_tokens: v })}
+        />
+        <NumberSetting
+          label="Team tool-call budget"
+          description="Tool calls a single team may make."
+          value={draft.max_tool_calls}
+          min={1}
+          max={500}
+          onChange={(v) => patch({ max_tool_calls: v })}
+        />
+        <SettingRow label="Worker model policy" description="Which brain the workers run on.">
+          <NativeSelect
+            value={draft.model_policy}
+            onValueChange={(v) => patch({ model_policy: v })}
+            aria-label="Worker model policy"
+          >
+            <option value="same_as_chat">Same as chat</option>
+          </NativeSelect>
+        </SettingRow>
+        <ToggleSetting
+          label="Allow artifact agents"
+          description="Workers that produce documents, decks, and images."
+          checked={draft.allow_artifact_agents}
+          onChange={(v) => patch({ allow_artifact_agents: v })}
+        />
+        <ToggleSetting
+          label="Allow code-writing agents"
+          description="Workers that edit and write source."
+          checked={draft.allow_code_agents}
+          onChange={(v) => patch({ allow_code_agents: v })}
+        />
+        <ToggleSetting
+          label="Allow connector/action agents"
+          description="Workers that call your connected accounts."
+          checked={draft.allow_connector_agents}
+          onChange={(v) => patch({ allow_connector_agents: v })}
+        />
+        <ToggleSetting
+          label="Require approval for external/destructive actions"
+          description="A worker must ask before anything leaves the machine."
+          checked={draft.require_action_approval}
+          onChange={(v) => patch({ require_action_approval: v })}
+        />
+      </Section>
 
-      <div className="space-y-3 rounded-md border bg-background p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold tracking-tight">Agent teams</h3>
-          <Badge variant="secondary" className="font-mono text-[10px]">
-            {loading ? "loading" : draft.team_aggressiveness.replace("_", " ")}
-          </Badge>
-        </div>
+      <Section title="Chat visibility" tone="band" noPad>
+        <SettingRow label="Team activity" description="How much of a team's work shows in the thread.">
+          <NativeSelect
+            value={draft.show_team_activity}
+            onValueChange={(v) =>
+              patch({ show_team_activity: v as ChatSettings["show_team_activity"] })
+            }
+            aria-label="Team activity"
+          >
+            <option value="off">Off</option>
+            <option value="compact">Compact</option>
+            <option value="detailed">Detailed</option>
+          </NativeSelect>
+        </SettingRow>
+        <SettingRow label="Default team card" description="Whether a team card arrives open or folded.">
+          <NativeSelect
+            value={draft.default_team_card_state}
+            onValueChange={(v) =>
+              patch({ default_team_card_state: v as ChatSettings["default_team_card_state"] })
+            }
+            aria-label="Default team card"
+          >
+            <option value="collapsed">Collapsed</option>
+            <option value="expanded">Expanded</option>
+          </NativeSelect>
+        </SettingRow>
+        <ToggleSetting
+          label="Show token usage"
+          description="Per-turn token counts in the thread."
+          checked={draft.show_token_usage}
+          onChange={(v) => patch({ show_token_usage: v })}
+        />
+        <ToggleSetting
+          label="Show worker summaries"
+          description="Each worker's closing summary."
+          checked={draft.show_worker_summaries}
+          onChange={(v) => patch({ show_worker_summaries: v })}
+        />
+        <ToggleSetting
+          label="Show artifacts"
+          description="Inline previews of what a team produced."
+          checked={draft.show_artifacts}
+          onChange={(v) => patch({ show_artifacts: v })}
+        />
+      </Section>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <FieldLabel label="Agent teams">
-            <NativeSelect
-              value={draft.agent_teams}
-              onChange={(v) => patch({ agent_teams: v as ChatSettings["agent_teams"] })}
-            >
-              <option value="off">Off</option>
-              <option value="ask">Ask first</option>
-              <option value="auto">Auto</option>
-            </NativeSelect>
-          </FieldLabel>
-          <FieldLabel label="Aggressiveness">
-            <NativeSelect
-              value={draft.team_aggressiveness}
-              onChange={(v) => patch({ team_aggressiveness: v as ChatSettings["team_aggressiveness"] })}
-            >
-              <option value="conservative">Conservative</option>
-              <option value="balanced">Balanced</option>
-              <option value="full_tilt">Full tilt</option>
-            </NativeSelect>
-          </FieldLabel>
-          <NumberField
-            label="Max agents"
-            value={draft.max_agents_per_team}
-            min={1}
-            max={12}
-            onChange={(v) => patch({ max_agents_per_team: v })}
-          />
-          <NumberField
-            label="Max parallel teams"
-            value={draft.max_parallel_teams}
-            min={1}
-            max={6}
-            onChange={(v) => patch({ max_parallel_teams: v })}
-          />
-          <NumberField
-            label="Runtime seconds"
-            value={draft.max_runtime_seconds}
-            min={60}
-            max={3600}
-            onChange={(v) => patch({ max_runtime_seconds: v })}
-          />
-          <NumberField
-            label="Team token budget"
-            value={draft.max_team_tokens}
-            min={1000}
-            max={1000000}
-            onChange={(v) => patch({ max_team_tokens: v })}
-          />
-          <NumberField
-            label="Team tool-call budget"
-            value={draft.max_tool_calls}
-            min={1}
-            max={500}
-            onChange={(v) => patch({ max_tool_calls: v })}
-          />
-          <FieldLabel label="Worker model policy">
-            <NativeSelect value={draft.model_policy} onChange={(v) => patch({ model_policy: v })}>
-              <option value="same_as_chat">Same as chat</option>
-            </NativeSelect>
-          </FieldLabel>
-        </div>
-
-        <div className="grid gap-2 sm:grid-cols-2">
-          <ToggleRow label="Allow artifact agents" checked={draft.allow_artifact_agents} onChange={(v) => patch({ allow_artifact_agents: v })} />
-          <ToggleRow label="Allow code-writing agents" checked={draft.allow_code_agents} onChange={(v) => patch({ allow_code_agents: v })} />
-          <ToggleRow label="Allow connector/action agents" checked={draft.allow_connector_agents} onChange={(v) => patch({ allow_connector_agents: v })} />
-          <ToggleRow label="Require approval for external/destructive actions" checked={draft.require_action_approval} onChange={(v) => patch({ require_action_approval: v })} />
-        </div>
-      </div>
-
-      <div className="space-y-3 rounded-md border bg-background p-3">
-        <h3 className="text-sm font-semibold tracking-tight">Chat visibility</h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <FieldLabel label="Team activity">
-            <NativeSelect
-              value={draft.show_team_activity}
-              onChange={(v) => patch({ show_team_activity: v as ChatSettings["show_team_activity"] })}
-            >
-              <option value="off">Off</option>
-              <option value="compact">Compact</option>
-              <option value="detailed">Detailed</option>
-            </NativeSelect>
-          </FieldLabel>
-          <FieldLabel label="Default team card">
-            <NativeSelect
-              value={draft.default_team_card_state}
-              onChange={(v) => patch({ default_team_card_state: v as ChatSettings["default_team_card_state"] })}
-            >
-              <option value="collapsed">Collapsed</option>
-              <option value="expanded">Expanded</option>
-            </NativeSelect>
-          </FieldLabel>
-          <ToggleRow label="Show token usage" checked={draft.show_token_usage} onChange={(v) => patch({ show_token_usage: v })} />
-          <ToggleRow label="Show worker summaries" checked={draft.show_worker_summaries} onChange={(v) => patch({ show_worker_summaries: v })} />
-          <ToggleRow label="Show artifacts" checked={draft.show_artifacts} onChange={(v) => patch({ show_artifacts: v })} />
-        </div>
-      </div>
-
-      {err && <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>}
-      <div className="flex items-center justify-end gap-2">
-        {savedAt && <span className="text-xs text-muted-foreground">Saved</span>}
+      {err && <ErrorNote>{err}</ErrorNote>}
+      <div className="flex items-center justify-end gap-2 pt-3">
+        {savedAt && <span className="text-[12px] text-quiet">Saved</span>}
         <Button onClick={save} disabled={saving || loading}>
           {saving ? "Saving…" : "Save"}
         </Button>
@@ -511,52 +515,78 @@ function ChatSettingsSection() {
   );
 }
 
-function NumberField({
+/** A number field on a setting row. One shape, every numeric cap. */
+function NumberSetting({
   label,
+  description,
   value,
   min,
   max,
   onChange,
 }: {
   label: string;
+  description?: string;
   value: number;
   min: number;
   max: number;
   onChange: (next: number) => void;
 }) {
   return (
-    <FieldLabel label={label}>
-      <Input
-        type="number"
-        inputMode="numeric"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value || min))}
-      />
-    </FieldLabel>
+    <SettingRow
+      label={label}
+      description={description}
+      control={
+        <Input
+          type="number"
+          inputMode="numeric"
+          aria-label={label}
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value || min))}
+          className="w-28 text-right font-mono tabular-nums"
+        />
+      }
+    />
   );
 }
 
-function ToggleRow({
+/** A toggle on a setting row. Routes through the Switch primitive. */
+function ToggleSetting({
   label,
+  description,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
+  description?: string;
   checked: boolean;
   onChange: (next: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-      <span className="min-w-0">{label}</span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="size-5 shrink-0 accent-foreground"
-      />
-    </label>
+    <SettingRow
+      label={label}
+      description={description}
+      control={
+        <Switch
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          aria-label={label}
+        />
+      }
+    />
+  );
+}
+
+/** The one failure note shape on this page: tinted, borderless, radius 8. */
+function ErrorNote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="min-w-0 rounded-[8px] bg-danger/10 px-3 py-2 text-[12px] leading-relaxed text-danger [overflow-wrap:anywhere]">
+      {children}
+    </p>
   );
 }
 
@@ -655,15 +685,17 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   }
 
   return (
-    <div className="space-y-4">
-      <SectionHeader
-        title="General"
-        description="Pick a vendor to inspect its pricing and connect credentials. The active provider is wired via LLM_PROVIDER on Core; switch the env to flip which one runs the chat."
-      />
-
-      <div className="space-y-3 rounded-md border bg-background p-3">
-        <FieldLabel label="Vendor">
-          <NativeSelect value={draftVendor} onChange={setDraftVendor}>
+    <div className="min-w-0 space-y-1">
+      <Section
+        title="Brain"
+        badge={findVendor(liveProvider).label}
+        noPad
+      >
+        <SettingRow
+          label="Vendor"
+          description="Who answers. Switching keeps stored credentials, so you can flip back without re-auth."
+        >
+          <NativeSelect value={draftVendor} onValueChange={setDraftVendor} aria-label="Vendor">
             {VENDORS.map((v) => {
               const available =
                 availableProviders.length === 0 ||
@@ -677,20 +709,20 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
               );
             })}
           </NativeSelect>
-        </FieldLabel>
+        </SettingRow>
 
-        <FieldLabel label="Model">
-          <NativeSelect value={draftModel} onChange={setDraftModel}>
+        <SettingRow label="Model" description="The exact model Jarvis runs on for chat.">
+          <NativeSelect value={draftModel} onValueChange={setDraftModel} aria-label="Model">
             {dropdownOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id === defaultModel ? `${m.label} · default` : m.label}
               </option>
             ))}
           </NativeSelect>
-        </FieldLabel>
+        </SettingRow>
 
         {setting?.standby && (
-          <p className="rounded-sm bg-warning/10 p-2 text-[11px] text-foreground/90">
+          <p className="min-w-0 rounded-[8px] bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
             {findVendor(liveProvider).label} is out of usage
             {standbyResetClock(setting.standby) ? (
               <>
@@ -704,11 +736,9 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
         {isOAuthVendor && <OAuthConnectBlock />}
 
-        {err && (
-          <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
-        )}
+        {err && <ErrorNote>{err}</ErrorNote>}
 
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex items-center justify-end gap-2 pt-3">
           {setting?.source === "user" && defaultModel && draftModel !== defaultModel && (
             <Button variant="ghost" onClick={clearOverride} disabled={busy}>
               Reset to default
@@ -718,7 +748,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
             {busy ? "Saving…" : "Save"}
           </Button>
         </div>
-      </div>
+      </Section>
 
       <PricingTable vendor={selectedVendor} />
     </div>
@@ -759,42 +789,34 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
   }, [vendor.models, sortKey, sortDir]);
 
   return (
-    <div className="space-y-2 rounded-md border bg-background p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold tracking-tight">
-          {vendor.label} pricing
-        </h3>
-        <Badge variant="secondary" className="font-mono text-[10px]">
-          per 1M tokens
-        </Badge>
-      </div>
-      <div className="overflow-x-auto scroll-touch">
-        <table className="w-full text-left text-[12px]">
+    <Section title={`${vendor.label} pricing`} badge="per 1M tokens" tone="band" noPad>
+      <div className="min-w-0 overflow-x-auto pt-1 scroll-touch">
+        <table className="w-full text-left text-[12.5px]">
           <thead>
-            <tr className="border-b text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-              <th className="px-2 py-1.5 font-normal">Model</th>
+            <tr className="border-b border-hairline font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
+              <th className="py-1.5 pr-2 font-normal">Model</th>
               <SortHeader label="Input" active={sortKey === "input"} dir={sortDir} onClick={() => toggle("input")} />
               <SortHeader label="Output" active={sortKey === "output"} dir={sortDir} onClick={() => toggle("output")} />
             </tr>
           </thead>
           <tbody>
             {sorted.map((m) => (
-              <tr key={m.id} className="border-b last:border-b-0">
-                <td className="px-2 py-2">
-                  <div className="flex flex-col">
-                    <span className="font-medium">{m.label}</span>
+              <tr key={m.id} className="border-b border-hairline last:border-b-0">
+                <td className="py-2 pr-2">
+                  <div className="flex min-w-0 flex-col">
+                    <span className="font-medium text-foreground">{m.label}</span>
                     {m.tagline && (
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-[11px] text-quiet">
                         {m.tagline}
                         {m.note ? ` · ${m.note}` : ""}
                       </span>
                     )}
                   </div>
                 </td>
-                <td className="px-2 py-2 text-right font-mono">
+                <td className="py-2 pl-2 text-right font-mono tabular-nums">
                   {m.input_per_mtok != null ? `$${m.input_per_mtok.toFixed(2)}` : "-"}
                 </td>
-                <td className="px-2 py-2 text-right font-mono">
+                <td className="py-2 pl-2 text-right font-mono tabular-nums">
                   {m.output_per_mtok != null ? `$${m.output_per_mtok.toFixed(2)}` : "-"}
                 </td>
               </tr>
@@ -802,7 +824,7 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
           </tbody>
         </table>
       </div>
-    </div>
+    </Section>
   );
 }
 
@@ -818,7 +840,7 @@ function SortHeader({
   onClick: () => void;
 }) {
   return (
-    <th className="px-2 py-1.5 text-right font-normal">
+    <th className="py-1.5 pl-2 text-right font-normal">
       <button
         type="button"
         onClick={onClick}
@@ -934,84 +956,72 @@ function OAuthConnectBlock() {
   const refreshedAt = status?.last_refreshed ? new Date(status.last_refreshed) : null;
 
   return (
-    <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <PlugZap className="size-3.5 text-muted-foreground" aria-hidden />
-          <span className="text-xs font-semibold tracking-tight">
-            ChatGPT (Plan) connect
-          </span>
-        </div>
-        {loading ? (
-          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-        ) : connected ? (
-          <Badge variant="secondary" className="gap-1 text-[10px]">
-            <Check className="size-3 text-success" />
-            connected
-          </Badge>
-        ) : (
-          <Badge variant="secondary" className="gap-1 text-[10px]">
-            <Unplug className="size-3 text-muted-foreground" />
-            not connected
-          </Badge>
-        )}
-      </div>
+    <div className="min-w-0 space-y-2 pt-1">
+      <GroupLabel
+        label="ChatGPT plan"
+        trailing={
+          loading ? (
+            <Loader2 className="size-3.5 animate-spin text-quiet" aria-hidden />
+          ) : (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-[0.06em]",
+                connected ? "text-brand" : "text-quiet",
+              )}
+            >
+              {connected ? <Check className="size-3" aria-hidden /> : <Unplug className="size-3" aria-hidden />}
+              {connected ? "connected" : "not connected"}
+            </span>
+          )
+        }
+      />
 
       {connected && (
-        <dl className="space-y-1 text-[11px] text-muted-foreground">
-          {status?.account_email && (
-            <div className="flex items-center justify-between gap-2">
-              <dt className="font-mono uppercase tracking-wider">account</dt>
-              <dd className="truncate font-mono">{status.account_email}</dd>
-            </div>
-          )}
-          {refreshedAt && (
-            <div className="flex items-center justify-between gap-2">
-              <dt className="font-mono uppercase tracking-wider">refreshed</dt>
-              <dd className="font-mono" suppressHydrationWarning>
-                {refreshedAt.toLocaleString()}
-              </dd>
-            </div>
-          )}
-          {expiresAt && (
-            <div className="flex items-center justify-between gap-2">
-              <dt className="font-mono uppercase tracking-wider">expires</dt>
-              <dd className="font-mono" suppressHydrationWarning>
-                {expiresAt.toLocaleString()}
-              </dd>
-            </div>
-          )}
-        </dl>
+        <Inset
+          variant="kv"
+          items={[
+            ...(status?.account_email ? [{ label: "account", value: status.account_email }] : []),
+            ...(refreshedAt
+              ? [
+                  {
+                    label: "refreshed",
+                    value: <span suppressHydrationWarning>{refreshedAt.toLocaleString()}</span>,
+                  },
+                ]
+              : []),
+            ...(expiresAt
+              ? [
+                  {
+                    label: "expires",
+                    value: <span suppressHydrationWarning>{expiresAt.toLocaleString()}</span>,
+                  },
+                ]
+              : []),
+          ]}
+        />
       )}
 
       {!connected && !pending && (
-        <div className="space-y-2 rounded-md border bg-background p-2.5">
-          <div className="flex items-start gap-2 rounded-sm bg-info/10 p-2 text-[11px] text-info">
-            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <p className="leading-relaxed">
-              <span className="font-semibold">Heads up:</span> after you log in,
-              your browser will show a &quot;can&apos;t reach{" "}
-              <code className="font-mono">localhost:1455</code>&quot; page.
-              That&apos;s expected - OpenAI&apos;s OAuth client only redirects
-              to localhost, and Studio lives in the cloud. Just copy the URL
-              from the address bar back here.
-            </p>
-          </div>
-        </div>
+        <Inset>
+          <span className="font-medium text-foreground">Heads up:</span> after you log in, your
+          browser will show a &quot;can&apos;t reach{" "}
+          <code className="font-mono text-[12px]">localhost:1455</code>&quot; page. That&apos;s
+          expected - OpenAI&apos;s OAuth client only redirects to localhost, and Studio lives in
+          the cloud. Just copy the URL from the address bar back here.
+        </Inset>
       )}
 
       {pending && (
-        <div className="space-y-2 rounded-md border bg-background p-2.5">
-          <p className="text-[11px] text-muted-foreground">
-            Logged in? Copy the full address-bar URL from the &quot;can&apos;t
-            reach&quot; page (or just the{" "}
-            <code className="font-mono">code=…</code> value) and paste it below.
+        <div className="min-w-0 space-y-2">
+          <p className="text-[12px] leading-relaxed text-quiet">
+            Logged in? Copy the full address-bar URL from the &quot;can&apos;t reach&quot; page (or
+            just the <code className="font-mono">code=…</code> value) and paste it below.
           </p>
           <a
             href={pending.authorize_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[11px] text-info hover:underline"
+            className="inline-flex items-center gap-1 text-[12px] text-info hover:underline"
           >
             <ExternalLink className="size-3" />
             re-open authorize URL
@@ -1024,7 +1034,7 @@ function OAuthConnectBlock() {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            className="h-9 font-mono text-[11px]"
+            className="font-mono text-[12px]"
           />
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             <Button
@@ -1054,86 +1064,37 @@ function OAuthConnectBlock() {
         </div>
       )}
 
-      {error && (
-        <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{error}</p>
-      )}
+      {error && <ErrorNote>{error}</ErrorNote>}
       {successAt && Date.now() - successAt < 4000 && !error && (
-        <p className="rounded-sm bg-success/10 p-2 text-[11px] text-success">
+        <p className="rounded-[8px] bg-success/10 px-3 py-2 text-[12px] text-success">
           Connected - Core will use this token on the next openai_oauth turn.
         </p>
       )}
 
-      <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <div className="flex items-center gap-1.5">
-          {connected && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={disconnect}
-              disabled={busy === "disconnect"}
-            >
-              {busy === "disconnect" ? <Loader2 className="animate-spin" /> : <Unplug />}
-              disconnect
-            </Button>
-          )}
-          {!pending && (
-            <Button
-              size="sm"
-              variant={connected ? "ghost" : "default"}
-              onClick={connect}
-              disabled={busy === "start"}
-            >
-              {busy === "start" ? <Loader2 className="animate-spin" /> : <Plug />}
-              {connected ? "reconnect" : "open ChatGPT login"}
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="block font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function NativeSelect({
-  value,
-  onChange,
-  children,
-  disabled,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  children: React.ReactNode;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className={cn(
-          "h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
-          "[&>option]:bg-popover [&>option]:text-popover-foreground",
-          "disabled:cursor-not-allowed disabled:opacity-60",
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        {connected && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={disconnect}
+            disabled={busy === "disconnect"}
+          >
+            {busy === "disconnect" ? <Loader2 className="animate-spin" /> : <Unplug />}
+            disconnect
+          </Button>
         )}
-      >
-        {children}
-      </select>
-      <ChevronDown
-        className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-        aria-hidden
-      />
+        {!pending && (
+          <Button
+            size="sm"
+            variant={connected ? "ghost" : "default"}
+            onClick={connect}
+            disabled={busy === "start"}
+          >
+            {busy === "start" ? <Loader2 className="animate-spin" /> : <Plug />}
+            {connected ? "reconnect" : "open ChatGPT login"}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1146,8 +1107,32 @@ function splitToolName(name: string): { group: string; leaf: string } {
   return { group: "native", leaf: name };
 }
 
+/**
+ * schemaFields flattens a JSON-Schema `properties` bag into the field list
+ * `<Inset variant="schema">` renders. Anything the schema doesn't describe
+ * (oneOf, nested objects) still reaches the boss through "Raw schema".
+ */
+function schemaFields(schema: Record<string, unknown> | undefined): InsetField[] {
+  if (!schema) return [];
+  const props = schema.properties;
+  if (!props || typeof props !== "object") return [];
+  const required = new Set(
+    Array.isArray(schema.required) ? (schema.required as unknown[]).map(String) : [],
+  );
+  return Object.entries(props as Record<string, unknown>).map(([name, raw]) => {
+    const v = (raw ?? {}) as Record<string, unknown>;
+    return {
+      name,
+      type: typeof v.type === "string" ? v.type : undefined,
+      note: typeof v.description === "string" ? v.description : undefined,
+      required: required.has(name),
+    };
+  });
+}
+
 function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
   const [query, setQuery] = useState("");
+  const [openTool, setOpenTool] = useState<string | null>(null);
   const q = query.trim().toLowerCase();
 
   const groups = useMemo(() => {
@@ -1180,161 +1165,111 @@ function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
   const filteredCount = groups.reduce((sum, g) => sum + g.items.length, 0);
 
   return (
-    <div className="space-y-3">
-      <SectionHeader
-        title={`Tools (${tools.length})`}
-        description="Native + MCP tools available to the agent right now. Grouped by source - tap a group to expand, then tap a tool to inspect its schema."
-      />
-      <SearchBar
-        value={query}
-        onChange={setQuery}
-        placeholder="Search tools by name or description…"
-      />
-      {q && (
-        <p className="text-[11px] text-muted-foreground">
-          {filteredCount} match{filteredCount === 1 ? "" : "es"} across {groups.length} group{groups.length === 1 ? "" : "s"}
-        </p>
-      )}
-      {tools.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No tools registered.</p>
-      ) : groups.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No tools match “{query}”.</p>
-      ) : (
-        <ul className="space-y-2">
-          {groups.map((g) => (
-            <ToolGroup key={g.name} name={g.name} items={g.items} forceOpen={Boolean(q)} />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function ToolGroup({
-  name,
-  items,
-  forceOpen,
-}: {
-  name: string;
-  items: ToolDescriptor[];
-  forceOpen: boolean;
-}) {
-  // Default collapsed for big groups, open for small ones.
-  const [open, setOpen] = useState(items.length <= 6);
-  const isOpen = forceOpen || open;
-  const isNative = name === "native";
-  return (
-    <li className="overflow-hidden rounded-md border bg-muted/20">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/40"
-      >
-        {isNative ? (
-          <Wrench className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+    <Section
+      title="Tools"
+      badge={q ? `${filteredCount} of ${tools.length}` : `${tools.length} available`}
+      noPad
+    >
+      <div className="min-w-0 space-y-3 pt-3">
+        <SearchInput
+          value={query}
+          onValueChange={setQuery}
+          placeholder="Search tools by name or description…"
+        />
+        {tools.length === 0 ? (
+          <p className="py-2 text-[13.5px] text-quiet">
+            No tools registered — Core is either offline or has an empty registry.
+          </p>
+        ) : groups.length === 0 ? (
+          <p className="py-2 text-[13.5px] text-quiet">No tools match “{query}”.</p>
         ) : (
-          <Server className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <div className="min-w-0">
+            {groups.map((g) => (
+              <div key={g.name} className="min-w-0">
+                <GroupLabel
+                  label={g.name}
+                  count={g.items.length}
+                  trailing={
+                    g.name === "native" ? (
+                      <Wrench className="size-3.5 text-quiet" aria-hidden />
+                    ) : (
+                      <Server className="size-3.5 text-quiet" aria-hidden />
+                    )
+                  }
+                />
+                {g.items.map((t) => (
+                  <ToolRow
+                    key={t.name}
+                    tool={t}
+                    groupName={g.name}
+                    open={openTool === t.name}
+                    onToggle={() =>
+                      setOpenTool((cur) => (cur === t.name ? null : t.name))
+                    }
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
         )}
-        <span className="truncate font-mono text-[11px] font-semibold uppercase tracking-wider">
-          {name}
-        </span>
-        <Badge variant="secondary" className="h-4 min-w-[1.1rem] shrink-0 justify-center px-1 font-mono text-[10px]">
-          {items.length}
-        </Badge>
-        <ChevronDown
-          className={cn(
-            "ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform",
-            isOpen && "rotate-180",
-          )}
-          aria-hidden
-        />
-      </button>
-      {isOpen && (
-        <ul className="space-y-1 border-t bg-background p-1.5">
-          {items.map((t) => (
-            <ToolCard key={t.name} tool={t} groupName={name} />
-          ))}
-        </ul>
-      )}
-    </li>
+      </div>
+    </Section>
   );
 }
 
-function ToolCard({ tool, groupName }: { tool: ToolDescriptor; groupName?: string }) {
-  const [open, setOpen] = useState(false);
-  const hasSchema = tool.schema && Object.keys(tool.schema).length > 0;
+/**
+ * One tool = one row. Tapping opens ONE Inset in place (the field list),
+ * with "Raw schema" revealing the JSON as the last link — never a bordered
+ * card inside a bordered group inside a tinted panel inside a `<details>`,
+ * which is what this replaces (five containers deep).
+ */
+function ToolRow({
+  tool,
+  groupName,
+  open,
+  onToggle,
+}: {
+  tool: ToolDescriptor;
+  groupName: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const [raw, setRaw] = useState(false);
   const { leaf } = splitToolName(tool.name);
-  // Inside a group we show just the leaf to avoid duplicating the prefix.
   const display = groupName && groupName !== "native" ? leaf : tool.name;
+  const fields = schemaFields(tool.schema);
+  const hasSchema = tool.schema && Object.keys(tool.schema).length > 0;
+
   return (
-    <li className="overflow-hidden rounded-md border bg-background">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/40"
-      >
-        <Wrench className="size-3 shrink-0 text-muted-foreground" aria-hidden />
-        <code className="truncate font-mono text-xs">{display}</code>
-        <ChevronDown
-          className={cn(
-            "ml-auto size-3 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180",
-          )}
-          aria-hidden
-        />
-      </button>
-      {open && (
-        <div className="space-y-2 border-t bg-muted/30 px-3 py-2.5">
-          <p className="text-xs leading-relaxed text-muted-foreground">{tool.description || "No description."}</p>
-          {hasSchema && (
-            <details className="text-[11px]">
-              <summary className="cursor-pointer font-mono uppercase tracking-wider text-muted-foreground">
-                input schema
-              </summary>
-              <pre className="mt-1.5 overflow-x-auto rounded-sm bg-background p-2 font-mono text-[10px] leading-relaxed text-foreground/90">
-                {JSON.stringify(tool.schema, null, 2)}
-              </pre>
-            </details>
+    <ListRow
+      leading={<Wrench className="size-3.5" aria-hidden />}
+      title={<span className="font-mono text-[12.5px]">{display}</span>}
+      meta={open ? undefined : tool.description || undefined}
+      onClick={onToggle}
+      chevron={false}
+    >
+      {open ? (
+        <div className="min-w-0 space-y-2">
+          <p className="text-[13.5px] leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+            {tool.description || "No description."}
+          </p>
+          {fields.length > 0 ? <Inset variant="schema" fields={fields} /> : null}
+          {hasSchema ? (
+            <>
+              {raw ? <Inset text={JSON.stringify(tool.schema, null, 2)} /> : null}
+              <button
+                type="button"
+                onClick={() => setRaw((v) => !v)}
+                className="text-[12px] font-medium text-quiet transition-colors hover:text-foreground"
+              >
+                {raw ? "Hide raw schema" : "Raw schema"}
+              </button>
+            </>
+          ) : (
+            <p className="text-[12px] text-quiet">No input schema.</p>
           )}
         </div>
-      )}
-    </li>
-  );
-}
-
-function SearchBar({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div className="relative">
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        inputMode="search"
-        type="text"
-        autoCapitalize="none"
-        autoCorrect="off"
-        spellCheck={false}
-        className="h-9 pl-8 pr-8 text-sm"
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => onChange("")}
-          aria-label="Clear search"
-          className="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      )}
-    </div>
+      ) : null}
+    </ListRow>
   );
 }

@@ -1,22 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Search, SearchX, Wand2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, RefreshCw, SearchX, Wand2 } from "lucide-react";
 import { TabFrame } from "@/components/TabFrame";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/ui/page-header";
+import { GroupLabel } from "@/components/ui/list-row";
 import { SkillCard } from "@/components/SkillCard";
 import { SkillDetail } from "@/components/SkillDetail";
 import { CandidateSkillsPanel } from "@/components/CandidateSkillsPanel";
 import { EmptyState } from "@/components/EmptyState";
-import {
-  PageTabs,
-  PageTabsList,
-  PageTabsTrigger,
-  HScrollRow,
-  FilterPill,
-  PageSectionHeader,
-} from "@/components/ui/page-tabs";
+import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 import { fetchSkills, type SkillSummaryDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
@@ -28,12 +24,22 @@ type StatusFilter = (typeof STATUS_FILTERS)[number];
 const RISK_FILTERS = ["all", "low", "medium", "high", "critical"] as const;
 type RiskFilter = (typeof RISK_FILTERS)[number];
 
+const GROUP_LABEL: Record<StatusFilter, string> = {
+  all: "All skills",
+  active: "Active",
+  candidate: "Candidate",
+  archived: "Archived",
+};
+
 export default function SkillsPage() {
   const [skills, setSkills] = useState<SkillSummaryDTO[]>([]);
   const [selected, setSelected] = useState<SkillSummaryDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDetail, setShowDetail] = useState(false);
   const [query, setQuery] = useState("");
+  // Reported up by the candidates group so the page header can say how many
+  // are waiting on a decision without a second fetch.
+  const [candidateCount, setCandidateCount] = useState(0);
   // Active status tab persists in ?status=<id> so a refresh keeps the view.
   const [statusFilter, setStatusFilter] = useTabParam<StatusFilter>(
     "status",
@@ -42,16 +48,16 @@ export default function SkillsPage() {
   );
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     const list = await fetchSkills();
     setSkills(list ?? []);
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [load]);
 
   // The active status filter is URL-backed (?status=<id>) via useTabParam, so
   // deep-links land on the right filter and a refresh keeps it — no separate
@@ -97,21 +103,45 @@ export default function SkillsPage() {
     return counts;
   }, [skills, query, riskFilter]);
 
+  // One quiet line under the title: counts only, never a description (§1.5).
+  const meta = useMemo(() => {
+    const activeCount = skills.filter((s) => s.status === "active").length;
+    if (loading && skills.length === 0) return "Loading the library…";
+    const bits = [`${activeCount} active`];
+    if (skills.length !== activeCount) bits.push(`${skills.length} in the library`);
+    if (candidateCount > 0) {
+      bits.push(`${candidateCount} candidate${candidateCount === 1 ? "" : "s"} to review`);
+    }
+    return bits.join(" · ");
+  }, [skills, candidateCount, loading]);
+
   return (
     <TabFrame>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
-          {/* No "skills (#)" header - the total moves into the tab chips
-              below so each status tab carries its own filter-aware count. */}
+        <div className="px-4 pt-4 sm:px-6 lg:px-8">
+          <PageHeader
+            title="Skills"
+            meta={meta}
+            actions={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void load()}
+                disabled={loading}
+                title="Re-read the skill library from Core"
+              >
+                <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden />
+                Reload
+              </Button>
+            }
+          />
+        </div>
 
-          {/* Search row centered on desktop with a sane max width - mirrors
-              the Memory tab so the two read as the same family. Mobile stays
-              full-width because there's no space to spare. Reload sits to the
-              right as an icon-only ghost button, matching Memory's refresh. */}
-          <form
-            onSubmit={(e) => e.preventDefault()}
-            className="mx-auto flex w-full items-center gap-5 sm:max-w-2xl sm:pt-1"
-          >
+        {/* Search + risk sit together, directly above the list they filter.
+            ONE chip row below them carries status — the second unlabelled
+            chip strip (risk) is gone; see the note on RISK_FILTERS. */}
+        <div className="flex flex-col gap-2.5 px-4 pb-3 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-2">
             <div className="min-w-0 flex-1">
               <SearchInput
                 value={query}
@@ -119,124 +149,111 @@ export default function SkillsPage() {
                 placeholder="Search your skill library…"
               />
             </div>
-            <Button
-              type="submit"
-              aria-label="Search"
-              title="Search"
-              className="h-9 w-9 shrink-0 bg-transparent px-0 text-foreground hover:bg-accent hover:text-foreground sm:w-auto sm:gap-1.5 sm:bg-primary sm:px-4 sm:text-primary-foreground sm:hover:bg-primary/90"
+            <NativeSelect
+              value={riskFilter}
+              onValueChange={(v) => setRiskFilter(v as RiskFilter)}
+              aria-label="Filter by risk level"
+              className="w-[8.5rem] shrink-0"
             >
-              <Search className="size-4 sm:hidden" aria-hidden />
-              <span className="hidden sm:inline">Search</span>
-            </Button>
-          </form>
-
-          <div className="space-y-3">
-            <PageTabs
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-              className="w-full"
-            >
-              <PageTabsList scrollable>
-                {STATUS_FILTERS.map((s) => (
-                  <PageTabsTrigger key={s} value={s} className="gap-1.5">
-                    <span>{s}</span>
-                    <span
-                      className={cn(
-                        "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                        statusFilter === s
-                          ? "bg-foreground text-background"
-                          : "bg-muted-foreground/15 text-muted-foreground",
-                      )}
-                      aria-label={`${statusCounts[s]} matching`}
-                    >
-                      {statusCounts[s]}
-                    </span>
-                  </PageTabsTrigger>
-                ))}
-              </PageTabsList>
-            </PageTabs>
-
-            <HScrollRow>
               {RISK_FILTERS.map((r) => (
-                <FilterPill
-                  key={r}
-                  active={riskFilter === r}
-                  onClick={() => setRiskFilter(r)}
-                >
-                  {r}
-                </FilterPill>
+                <option key={r} value={r}>
+                  {r === "all" ? "Any risk" : `${r} risk`}
+                </option>
               ))}
-            </HScrollRow>
+            </NativeSelect>
           </div>
+
+          <PageTabs
+            value={statusFilter}
+            onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+            className="w-full"
+          >
+            <PageTabsList scrollable>
+              {STATUS_FILTERS.map((s) => (
+                <PageTabsTrigger key={s} value={s} className="gap-1.5">
+                  <span>{s}</span>
+                  <span
+                    className={cn(
+                      "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+                      statusFilter === s
+                        ? "bg-background/20 text-background"
+                        : "bg-muted-foreground/15 text-muted-foreground",
+                    )}
+                    aria-label={`${statusCounts[s]} matching`}
+                  >
+                    {statusCounts[s]}
+                  </span>
+                </PageTabsTrigger>
+              ))}
+            </PageTabsList>
+          </PageTabs>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-          {/* Candidate rail - Voyager-proposed skills awaiting a decision.
-              Lives here (not in /memory) because the mental model is "the
-              skill library and its pipeline" - candidates are upstream
-              registry entries. Hidden on mobile while a skill detail is
-              open so the list/detail switcheroo isn't crowded. */}
+          {/* The list column. Voyager's candidates are the first GROUP in it,
+              not a separate bordered rail: same data shape, one surface
+              (CLAUDE.md → "consolidate similar surfaces"). */}
           <aside
             className={cn(
-              "min-h-0 w-full shrink-0 space-y-3 overflow-y-auto bg-background px-4 py-4 scroll-touch sm:px-6 lg:w-96 lg:px-4 lg:border-r",
-              showDetail ? "hidden lg:block" : "block",
-            )}
-          >
-            <CandidateSkillsPanel />
-          </aside>
-          <aside
-            className={cn(
-              "min-h-0 w-full flex-1 flex-col overflow-y-auto bg-background scroll-touch lg:w-80 lg:flex-none lg:shrink-0 lg:border-r",
+              "min-h-0 w-full min-w-0 flex-1 flex-col overflow-y-auto bg-background px-4 pb-6 scroll-touch sm:px-6",
+              "lg:w-[24rem] lg:flex-none lg:shrink-0 lg:border-r lg:border-hairline lg:px-4",
               showDetail ? "hidden lg:flex" : "flex",
             )}
           >
-            <PageSectionHeader
-              title="results"
-              count={filtered.length}
-              className="px-3 pb-1 pt-3"
-            />
-            <div className="flex flex-1 flex-col gap-2 px-3 pb-4">
-              {filtered.length === 0 ? (
-                loading ? (
-                  <p className="px-1 text-sm text-muted-foreground">Loading…</p>
-                ) : query || statusFilter !== "active" || riskFilter !== "all" ? (
-                  <EmptyState
-                    icon={SearchX}
-                    title="No matching skills"
-                    description={
-                      query
-                        ? "Nothing in your library matches that search under the current filters. Try widening the status or risk."
-                        : "No skills match the current filters. Reset status or risk to see more."
-                    }
-                  />
-                ) : (
-                  <EmptyState
-                    icon={Wand2}
-                    title="No skills installed"
-                    description={
-                      <>
-                        Drop a skill folder into{" "}
-                        <code className="rounded bg-muted px-1 font-mono text-[10px]">./skills/</code>{" "}
-                        on Core and reload, or wait for Voyager to propose one from your sessions -
-                        candidates appear in the rail to the left.
-                      </>
-                    }
-                  />
-                )
+            <CandidateSkillsPanel query={query} onCountChange={setCandidateCount} />
+
+            <GroupLabel label={GROUP_LABEL[statusFilter]} count={filtered.length} />
+
+            {filtered.length === 0 ? (
+              loading ? (
+                <p className="py-2 text-[13.5px] text-quiet">Loading…</p>
+              ) : /* A genuinely empty library reads as "nothing installed",
+                     never as "your filters are too narrow" — the filter copy
+                     only makes sense when there IS something to filter. */
+                skills.length > 0 &&
+                (query || statusFilter !== "active" || riskFilter !== "all") ? (
+                <EmptyState
+                  icon={SearchX}
+                  align="top"
+                  className="pt-10"
+                  title="No matching skills"
+                  description={
+                    query
+                      ? "Nothing in your library matches that search under the current filters. Try widening the status or risk."
+                      : "No skills match the current filters. Reset status or risk to see more."
+                  }
+                />
               ) : (
-                filtered.map((s) => (
-                  <SkillCard
-                    key={s.name}
-                    skill={s}
-                    active={selected?.name === s.name}
-                    onClick={() => {
-                      setSelected(s);
-                      setShowDetail(true);
-                    }}
-                  />
-                ))
-              )}
-            </div>
+                <EmptyState
+                  icon={Wand2}
+                  align="top"
+                  className="pt-10"
+                  title="No skills installed"
+                  description={
+                    <>
+                      Drop a skill folder into{" "}
+                      <code className="rounded-[6px] bg-muted px-1 font-mono text-[11px]">
+                        ./skills/
+                      </code>{" "}
+                      on Core and reload, or wait for Voyager to propose one from your sessions —
+                      candidates arrive at the top of this list.
+                    </>
+                  }
+                />
+              )
+            ) : (
+              filtered.map((s) => (
+                <SkillCard
+                  key={s.name}
+                  skill={s}
+                  active={selected?.name === s.name}
+                  onClick={() => {
+                    setSelected(s);
+                    setShowDetail(true);
+                  }}
+                />
+              ))
+            )}
           </aside>
 
           <section
@@ -247,10 +264,12 @@ export default function SkillsPage() {
           >
             {showDetail && (
               <button
+                type="button"
                 onClick={() => setShowDetail(false)}
-                className="px-4 py-2 text-left text-xs text-muted-foreground lg:hidden"
+                className="inline-flex min-h-11 items-center gap-1 px-4 text-left text-[13.5px] font-medium text-quiet transition-colors hover:text-foreground lg:hidden"
               >
-                ← back to list
+                <ChevronLeft className="size-4" aria-hidden />
+                Back to list
               </button>
             )}
             <SkillDetail selected={selected} onClose={() => setShowDetail(false)} />

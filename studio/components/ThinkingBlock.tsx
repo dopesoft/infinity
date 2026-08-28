@@ -1,138 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  Brain,
-  ChevronDown,
-  ChevronRight,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
-import { useNow } from "@/lib/useNow";
+import { ActivityStepFor } from "@/components/chat/ActivityStep";
 import type { ChatMessage } from "@/hooks/useChat";
 
-function formatElapsed(ms: number) {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 /**
- * ThinkingBlock - shown above an assistant turn while Jarvis is preparing a
- * response. Renders the live "extended thinking" stream (when available) with
- * an auto-scroll preview, a shimmering "Jarvis is thinking" header, and an
- * elapsed timer. After the agent moves on it stays as a collapsed "Thought
- * for Xs" pill that the user can re-expand to inspect the trace.
+ * ThinkingBlock — compatibility shim over the activity ledger (MAJORDOMO §6).
  *
- * If the message ends with no thinking content (e.g. extended thinking is
- * disabled on the provider) the block hides itself entirely so the stream
- * doesn't pile up empty cards.
+ * A thought is a line in the ledger now, the same as any other step. The
+ * behaviour the old block owned is preserved in
+ * `components/chat/ActivityStep.tsx`: the trace streams with the preview
+ * pinned to its own bottom, it wears the fade mask while live, it opens
+ * itself while pending and collapses when the agent moves on (the row's own
+ * elapsed is the "Thought for 11s" readout), and a thought that ended with no
+ * content renders nothing at all.
  */
 export function ThinkingBlock({ message }: { message: ChatMessage }) {
-  const isPending = !!message.pending;
-  const hasContent = message.text.trim().length > 0;
-
-  const [open, setOpen] = useState<boolean>(isPending);
-  // 0 until the clock's first tick; fall back to the block's own start so the
-  // elapsed readout never goes negative for a frame.
-  const tick = useNow(isPending);
-  const now = tick || message.createdAt;
-  const previewRef = useRef<HTMLDivElement>(null);
-
-  // Auto-collapse the moment thinking completes (matches ToolCallCard UX).
-  // User can re-open to inspect the full trace.
-  useEffect(() => {
-    if (!isPending) setOpen(false);
-  }, [isPending]);
-
-  // While streaming, keep the preview pinned to the bottom so the latest
-  // thinking content is always visible.
-  useEffect(() => {
-    if (!isPending || !open) return;
-    const el = previewRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [isPending, open, message.text]);
-
-  // Hide collapsed-and-empty blocks: nothing useful to surface. Placed AFTER
-  // hooks so hook order stays stable across renders.
-  if (!isPending && !hasContent) return null;
-
-  const elapsedMs = isPending
-    ? now - message.createdAt
-    : (message.endedAt ?? now) - message.createdAt;
-
-  return (
-    <div
-      className={cn(
-        // min-w-0 + max-w-full + overflow-hidden so a long single token
-        // in the thinking trace (URL, hash, code path) can't push the
-        // block past the chat column's width on mobile. The chat column
-        // itself is min-w-0, but the constraint needs to propagate down.
-        "min-w-0 max-w-full overflow-hidden rounded-xl border bg-card text-card-foreground transition-colors",
-        isPending && "border-info/40",
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left"
-        aria-expanded={open}
-      >
-        {/* Live-activity indicator: a pulsing blue dot while the agent
-            is thinking, so the boss has an unmistakable "Jarvis is doing
-            something right now" signal at a glance. Collapses to the
-            Brain glyph once the trace is final. The ping ring uses
-            position-relative + position-absolute for the canonical
-            tailwind double-element pulse. */}
-        {isPending ? (
-          <span
-            className="relative inline-flex size-2.5 shrink-0"
-            aria-hidden
-          >
-            <span className="absolute inset-0 inline-flex animate-ping rounded-full bg-info opacity-60" />
-            <span className="relative inline-flex size-2.5 rounded-full bg-info" />
-          </span>
-        ) : (
-          <Brain className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        )}
-        <span
-          className={cn(
-            "whitespace-nowrap text-xs sm:text-sm",
-            isPending ? "thinking-shimmer" : "text-muted-foreground",
-          )}
-        >
-          {isPending ? "Jarvis is thinking" : "Thought"}
-        </span>
-        <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span suppressHydrationWarning>{formatElapsed(elapsedMs)}</span>
-          {hasContent ? (
-            open ? (
-              <ChevronDown className="size-4" aria-hidden />
-            ) : (
-              <ChevronRight className="size-4" aria-hidden />
-            )
-          ) : null}
-        </span>
-      </button>
-
-      {open && hasContent && (
-        <div className="min-w-0 border-t px-3 py-2">
-          <div className="relative min-w-0">
-            <div
-              ref={previewRef}
-              className={cn(
-                // [overflow-wrap:anywhere] forces break on any character
-                // (not just at word boundaries), which is what we need
-                // for the long unwrappable tokens that show up in
-                // thinking traces (file paths, URLs, hashes).
-                "max-h-40 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-mono text-[11px] leading-snug text-muted-foreground scroll-touch sm:text-xs",
-                isPending && "thinking-fade-mask",
-              )}
-            >
-              {message.text}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  return <ActivityStepFor message={message} />;
 }

@@ -1,30 +1,8 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import {
-  Activity,
-  AlertTriangle,
-  Brain,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Clock4,
-  Cog,
-  FileCode,
-  HelpCircle,
-  Layers,
-  ListChecks,
-  Target,
-  Loader2,
-  Sparkles,
-  Terminal,
-  type LucideIcon,
-  Workflow,
-  PhoneCall,
-} from "lucide-react";
+import { useMemo } from "react";
+import { GroupLabel, WorkRow, type RowTone } from "@/components/ui/list-row";
 import { Section } from "./Section";
-import { cn } from "@/lib/utils";
 import { clockTime, formatDuration, relTime } from "@/lib/dashboard/format";
 import type {
   DashboardItem,
@@ -33,42 +11,58 @@ import type {
   WorkItemKind,
 } from "@/lib/dashboard/types";
 
-/* Agent Work Board - Kanban of agent activity.
+/* Agent work - the ledger of what Jarvis is doing.
  *
- * Four columns: queued / running / awaiting you / done (today). Visible
- * proof that Jarvis is *doing things* - cron runs, sentinel watchers,
- * Voyager optimizations, skill verifications, memory ops.
+ * WHAT CHANGED, AND WHY (Majordomo §2, §5)
  *
- * Desktop: 4 columns side-by-side, each scrolls internally.
- * Mobile: horizontal-swipe carousel between columns with pager dots,
- *         so a long Done column doesn't push the rest of the dashboard
- *         off-screen.
+ * This was the deepest surface in the app: a bordered `Section` → four
+ * `rounded-xl border` Kanban columns, each with its OWN `border-b bg-muted/20`
+ * header bar carrying an uppercase label and a count pill → a `WorkRow` → a
+ * `size-6 rounded-md border` icon tile. Two stacked header bars and four
+ * levels of box to say "a cron ran". On a phone it was worse: the four columns
+ * became a horizontal snap-rail with pager dots and prev/next buttons, so
+ * three quarters of what Jarvis was doing lived off-screen behind a swipe.
+ *
+ * It is now ONE list. Each column is a `GroupLabel` (mono, uppercase, with its
+ * count) followed by its `WorkRow`s, in the order that matches how the boss
+ * reads the board: what is happening now, what is waiting on him, what is
+ * coming, what is finished. Everything the columns carried is still here -
+ * counts, the plan/mandate progress bar (now the primitive's, tinted danger
+ * when the plan failed), the skills a job ran, the run's narrative summary,
+ * and the per-column timing meta - and the rail is gone, so nothing hides
+ * off-screen and the page cannot scroll sideways.
+ *
+ * Titles stay plain English; the engine (cron id, raw skill name) lives in the
+ * detail on tap, never in the row.
  */
 
-const KIND_ICON: Record<WorkItemKind, LucideIcon> = {
-  cron_run: Clock4,
-  voyager_opt: Workflow,
-  sentinel: Activity,
-  skill_run: Cog,
-  workflow: Workflow,
-  plan: ListChecks,
-  mandate: Target,
-  trust: Terminal,
-  code_proposal: FileCode,
-  curiosity: HelpCircle,
-  memory_op: Brain,
-  reflection: Sparkles,
-  // An errand he gave by phone is an agent task like any other, so it sits on
-  // the board with the crons and the skills, wearing a phone.
-  phone_errand: PhoneCall,
-  phone_call: PhoneCall,
+/** Plain-English name for the kind of work, shown as the row's eyebrow. The
+ *  raw kind is an internal token - the boss should never read `voyager_opt`. */
+const KIND_LABEL: Record<WorkItemKind, string> = {
+  cron_run: "Scheduled job",
+  voyager_opt: "Self-improvement",
+  sentinel: "Watcher",
+  skill_run: "Skill",
+  workflow: "Workflow",
+  plan: "Plan",
+  mandate: "Mandate",
+  trust: "Permission",
+  code_proposal: "Code change",
+  curiosity: "Question",
+  memory_op: "Memory",
+  reflection: "Reflection",
+  phone_errand: "Phone errand",
+  phone_call: "Phone call",
 };
 
-const COLUMNS: { key: WorkColumn; label: string; tone: string; Icon: LucideIcon }[] = [
-  { key: "queued", label: "Queued", tone: "text-muted-foreground", Icon: Layers },
-  { key: "running", label: "Running", tone: "text-info", Icon: Loader2 },
-  { key: "awaiting", label: "Awaiting you", tone: "text-rose-400", Icon: AlertTriangle },
-  { key: "done", label: "Done today", tone: "text-success", Icon: CheckCircle2 },
+/* Group order and tone. Running is the one ALIVE thing (brand, pulsing);
+ * awaiting is the one thing WAITING on him (warning); queued and done are
+ * grey, because a finished job is not an event (§1.4). */
+const GROUPS: { key: WorkColumn; label: string; tone: RowTone; empty: string }[] = [
+  { key: "running", label: "Running", tone: "brand", empty: "Nothing currently running." },
+  { key: "awaiting", label: "Awaiting you", tone: "warning", empty: "Nothing waiting on you." },
+  { key: "queued", label: "Queued", tone: "quiet", empty: "Queue is empty." },
+  { key: "done", label: "Done today", tone: "quiet", empty: "No completions yet today." },
 ];
 
 export function AgentWorkBoard({
@@ -78,179 +72,61 @@ export function AgentWorkBoard({
   items: WorkItem[];
   onOpen: (item: DashboardItem) => void;
 }) {
-  const [colIdx, setColIdx] = useState(0);
-  const trackRef = useRef<HTMLDivElement>(null);
-
   const grouped = useMemo(() => {
     const m: Record<WorkColumn, WorkItem[]> = { queued: [], running: [], awaiting: [], done: [] };
     for (const it of items) m[it.column].push(it);
     return m;
   }, [items]);
 
-  function snapToCol(i: number) {
-    setColIdx(i);
-    const el = trackRef.current;
-    if (!el) return;
-    const card = el.children[i] as HTMLElement | undefined;
-    if (card) el.scrollTo({ left: card.offsetLeft, behavior: "smooth" });
-  }
-
   const totalAwaiting = grouped.awaiting.length;
+  const active = GROUPS.filter((g) => grouped[g.key].length > 0);
 
   return (
     <Section
       title="Agent work"
-      Icon={Workflow}
-      delay={0.35}
       badge={totalAwaiting > 0 ? `${totalAwaiting} awaiting` : undefined}
       action={{ label: "open cron", href: "/cron" }}
     >
-      {/* Desktop: 4-column grid */}
-      <div className="hidden grid-cols-4 gap-3 lg:grid">
-        {COLUMNS.map((c) => (
-          <KanbanColumn
-            key={c.key}
-            col={c}
-            items={grouped[c.key]}
-            onOpen={onOpen}
-            variant="desktop"
-          />
-        ))}
-      </div>
-
-      {/* Mobile: horizontal-swipe carousel.
-       *
-       * No edge-bleed (-mx-3): the first card MUST start at the same
-       * x-position as every other dashboard card so the section reads
-       * as part of the page, not a stray rail glued to the viewport
-       * edge. Parent `<main>` carries px-3 on mobile / px-4 on sm+;
-       * the rail inherits that padding, the first card lands at the
-       * same inset as the SAVED / ACTIVITY cards above it.
-       *
-       * `snap-x snap-proximity` is gentler than mandatory - desktop
-       * trackpads and resized viewports between sm and lg often fight
-       * snap-mandatory because the user wants to scroll partway to
-       * peek the next column, and mandatory yanks it back. Proximity
-       * still snaps when you let go near a boundary. */}
-      <div className="space-y-2 lg:hidden">
-        <div
-          ref={trackRef}
-          className="flex snap-x snap-proximity overflow-x-auto pb-1 scroll-touch no-scrollbar"
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            const w = el.clientWidth;
-            const i = Math.round(el.scrollLeft / Math.max(1, w * 0.86));
-            if (i !== colIdx) setColIdx(i);
-          }}
-        >
-          {COLUMNS.map((c) => (
-            <div key={c.key} className="w-[86%] shrink-0 snap-start pr-3 last:pr-0">
-              <KanbanColumn col={c} items={grouped[c.key]} onOpen={onOpen} variant="mobile" />
+      {active.length === 0 ? (
+        /* Every group empty: one quiet line rather than four labelled empties,
+         * which is all noise and no information. */
+        <p className="py-2 text-[13px] text-quiet">Nothing waiting on you.</p>
+      ) : (
+        <div className="flex min-w-0 flex-col">
+          {active.map((g) => (
+            <div key={g.key} className="flex min-w-0 flex-col">
+              <GroupLabel label={g.label} count={grouped[g.key].length} />
+              {grouped[g.key].map((it) => (
+                <Row
+                  key={it.id}
+                  it={it}
+                  tone={g.tone}
+                  onClick={() => onOpen({ kind: "work", data: it })}
+                />
+              ))}
             </div>
           ))}
         </div>
-        <div className="flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => snapToCol(Math.max(0, colIdx - 1))}
-            aria-label="Previous column"
-            className="inline-flex size-8 items-center justify-center rounded-md border bg-card text-muted-foreground hover:text-foreground disabled:opacity-40"
-            disabled={colIdx === 0}
-          >
-            <ChevronLeft className="size-4" aria-hidden />
-          </button>
-          <div className="flex items-center gap-1.5">
-            {COLUMNS.map((c, i) => (
-              <button
-                key={c.key}
-                type="button"
-                onClick={() => snapToCol(i)}
-                aria-label={`Go to ${c.label}`}
-                className={cn(
-                  "h-1.5 rounded-full transition-all",
-                  i === colIdx ? "w-6 bg-foreground" : "w-1.5 bg-muted-foreground/30",
-                )}
-              />
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => snapToCol(Math.min(COLUMNS.length - 1, colIdx + 1))}
-            aria-label="Next column"
-            className="inline-flex size-8 items-center justify-center rounded-md border bg-card text-muted-foreground hover:text-foreground disabled:opacity-40"
-            disabled={colIdx === COLUMNS.length - 1}
-          >
-            <ChevronRight className="size-4" aria-hidden />
-          </button>
-        </div>
-      </div>
+      )}
     </Section>
   );
 }
 
-function KanbanColumn({
-  col,
-  items,
-  onOpen,
-  variant,
+function Row({
+  it,
+  tone,
+  onClick,
 }: {
-  col: (typeof COLUMNS)[number];
-  items: WorkItem[];
-  onOpen: (item: DashboardItem) => void;
-  variant: "desktop" | "mobile";
+  it: WorkItem;
+  tone: RowTone;
+  onClick: () => void;
 }) {
-  const isRunning = col.key === "running";
-  return (
-    <div className="overflow-hidden rounded-xl border bg-card">
-      <header className="flex items-center justify-between gap-2 border-b bg-muted/20 px-3 py-2">
-        <div className="flex items-center gap-2">
-          <col.Icon
-            className={cn("size-3.5", col.tone, isRunning && items.length > 0 && "animate-spin")}
-            aria-hidden
-          />
-          <span className={cn("text-[11px] font-semibold uppercase tracking-wider", col.tone)}>
-            {col.label}
-          </span>
-        </div>
-        <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-foreground/10 px-1.5 font-mono text-[10px] font-semibold text-foreground">
-          {items.length}
-        </span>
-      </header>
-      <ul
-        className={cn(
-          "divide-y divide-border/60 overflow-y-auto scroll-touch",
-          variant === "desktop" ? "max-h-[320px]" : "max-h-[280px]",
-        )}
-      >
-        {items.length === 0 ? (
-          <li className="px-3 py-6 text-center text-[11px] text-muted-foreground">
-            {col.key === "awaiting"
-              ? "Nothing waiting on you."
-              : col.key === "running"
-                ? "Nothing currently running."
-                : col.key === "queued"
-                  ? "Queue is empty."
-                  : "No completions yet today."}
-          </li>
-        ) : (
-          items.map((it) => (
-            <li key={it.id}>
-              <WorkRow it={it} onClick={() => onOpen({ kind: "work", data: it })} />
-            </li>
-          ))
-        )}
-      </ul>
-    </div>
-  );
-}
-
-function WorkRow({ it, onClick }: { it: WorkItem; onClick: () => void }) {
-  const Icon = KIND_ICON[it.kind] ?? Cog;
-  const isRunning = it.column === "running";
-  const meta =
+  // Timing reads differently per column: when it is due, how long it has been
+  // going, that it needs him, or how long it took and when it landed.
+  const timing =
     it.column === "queued"
       ? it.scheduledFor
-        ? `${clockTime(it.scheduledFor)}`
+        ? clockTime(it.scheduledFor)
         : "queued"
       : it.column === "running"
         ? it.startedAt
@@ -261,88 +137,38 @@ function WorkRow({ it, onClick }: { it: WorkItem; onClick: () => void }) {
           : it.durationMs
             ? `${formatDuration(it.durationMs)} · ${relTime(it.finishedAt)}`
             : relTime(it.finishedAt);
-  return (
-    <motion.button
-      type="button"
-      onClick={onClick}
-      whileHover={{ x: 2 }}
-      transition={{ duration: 0.12 }}
-      className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/40"
-    >
-      <span
-        className={cn(
-          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md border",
-          isRunning
-            ? "border-info/40 bg-info/10 text-info"
-            : "border-border bg-muted text-muted-foreground",
-        )}
-      >
-        <Icon className={cn("size-3", isRunning && "animate-spin")} aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium text-foreground">{it.title}</p>
-        {/* Plans AND mandates show a progress bar + "4/7" right on the card so
-            the running stage reads at a glance without opening the detail. For a
-            mandate it's "criteria verified". */}
-        {(it.kind === "plan" || it.kind === "mandate") &&
-        typeof it.totalCount === "number" &&
-        it.totalCount > 0 ? (
-          <PlanProgress
-            done={it.doneCount ?? 0}
-            total={it.totalCount}
-            failed={it.subtitle === "failed" || it.subtitle === "abandoned"}
-          />
-        ) : null}
-        {it.subtitle ? (
-          <p className="truncate text-[11px] text-muted-foreground">{it.subtitle}</p>
-        ) : null}
-        {/* The job (cron) is the headline; the skill(s) it ran are the
-            ingredients, shown as chips underneath so one card tells the whole
-            story without two names. */}
-        {it.skills && it.skills.length > 0 ? (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {it.skills.map((s) => (
-              <span
-                key={s}
-                className="inline-flex max-w-full items-center truncate rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-              >
-                {s}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {it.summary ? (
-          <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground/90">
-            {it.summary}
-          </p>
-        ) : null}
-        <p
-          className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-          suppressHydrationWarning
-        >
-          {meta}
-        </p>
-      </div>
-    </motion.button>
-  );
-}
 
-// PlanProgress - the inline step-progress bar + "4/7" shown on a plan card so
-// its running stage reads at a glance without opening the detail. Brand fill,
-// danger when the plan failed.
-function PlanProgress({ done, total, failed }: { done: number; total: number; failed?: boolean }) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  // Plans and mandates carry a step count; a mandate's steps are its criteria.
+  const measurable =
+    (it.kind === "plan" || it.kind === "mandate") &&
+    typeof it.totalCount === "number" &&
+    it.totalCount > 0;
+  const done = it.doneCount ?? 0;
+  const failed = it.subtitle === "failed" || it.subtitle === "abandoned";
+
+  // The job is the headline; the skills it ran are the ingredients, named in
+  // the meta line so one row tells the whole story without two titles.
+  const meta = [
+    measurable ? `${done}/${it.totalCount}` : "",
+    it.subtitle,
+    it.skills?.length ? it.skills.join(", ") : "",
+    timing,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const rowTone: RowTone = failed ? "danger" : tone;
+
   return (
-    <div className="mt-1 flex items-center gap-2">
-      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full transition-all", failed ? "bg-danger" : "bg-brand")}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-        {done}/{total}
-      </span>
-    </div>
+    <WorkRow
+      kind={KIND_LABEL[it.kind] ?? "Work"}
+      title={it.title}
+      tone={rowTone}
+      live={it.column === "running"}
+      meta={<span suppressHydrationWarning>{meta}</span>}
+      summary={it.summary}
+      progress={measurable ? done / (it.totalCount as number) : undefined}
+      onClick={onClick}
+    />
   );
 }

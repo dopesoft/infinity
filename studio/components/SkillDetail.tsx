@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Clock, Hash, History, MousePointerSquareDashed, Play, RefreshCw, X } from "lucide-react";
+import { Check, History, MousePointerSquareDashed, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { TabsContent } from "@/components/ui/tabs";
+import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
+import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { Inset, type InsetField } from "@/components/ui/inset";
+import { SectionTitle } from "@/components/dashboard/Section";
 import { RiskBadge } from "@/components/RiskBadge";
 import { EmptyState } from "@/components/EmptyState";
+import { RunIndicator } from "@/lib/runs";
 import { cn } from "@/lib/utils";
 import {
   fetchSkill,
@@ -17,12 +22,30 @@ import {
   invokeSkill,
   promoteSkillVersion,
   type SkillDTO,
+  type SkillIODef,
   type SkillRunDTO,
   type SkillSummaryDTO,
   type SkillTestDTO,
   type SkillVersionEntry,
 } from "@/lib/api";
 
+/**
+ * SkillDetail — one skill, read and run (Majordomo §2, §8).
+ *
+ * Header is now the Majordomo shape: the plain-English title, ONE quiet meta
+ * line (`inbox-triage · v7 · medium risk · 12 runs`), and the close control.
+ * The five stacked badges that used to sit under the title are that meta line
+ * now. Inside, the six-tab strip is the house chip row (`PageTabsList
+ * scrollable`) instead of a third packed tab bar, and every code-ish block —
+ * SKILL.md, trigger phrases, run output, a test's inputs — renders in `Inset`
+ * rather than a bordered `<pre>`.
+ *
+ * "Run skill" now goes through `RunIndicator` on the `skill` run kind, which
+ * `skills/runner.go` already books into `mem_runs`: the spinner is server
+ * state, so it survives navigation, refresh, and a second device, instead of
+ * the local `useState(running)` it replaces (CLAUDE.md → "Server-tracked
+ * progress").
+ */
 export function SkillDetail({
   selected,
   onClose,
@@ -35,9 +58,9 @@ export function SkillDetail({
   const [tests, setTests] = useState<SkillTestDTO[]>([]);
   const [versions, setVersions] = useState<SkillVersionEntry[]>([]);
   const [promotingVersion, setPromotingVersion] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
   const [argsText, setArgsText] = useState("{}");
+  const [openRun, setOpenRun] = useState<string | null>(null);
 
   useEffect(() => {
     setSkill(null);
@@ -119,10 +142,8 @@ export function SkillDetail({
       setRunResult(`Invalid JSON: ${String(e)}`);
       return;
     }
-    setRunning(true);
     setRunResult(null);
     const res = await invokeSkill(selected.name, parsed);
-    setRunning(false);
     if (!res) {
       setRunResult("network error");
       return;
@@ -135,375 +156,349 @@ export function SkillDetail({
     void refreshRuns();
   }
 
+  // The one meta line: id, version, risk, source, network, run count.
+  const metaBits = [
+    selected.name,
+    `v${selected.version || "-"}`,
+    `${selected.risk_level} risk`,
+    selected.source,
+    selected.network_egress?.length
+      ? `egress ${selected.network_egress.join(", ")}`
+      : "no network",
+    `${skill?.total_runs ?? 0} runs`,
+  ];
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-start justify-between gap-2 border-b px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Hash className="size-3" aria-hidden />
-            <code className="truncate font-mono">{selected.name}</code>
-          </div>
-          <h3 className="mt-1 truncate text-sm font-semibold">
-            {selected.description || selected.name}
-          </h3>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <RiskBadge level={selected.risk_level} />
-            <Badge variant="outline" className="font-mono">
-              importance {selected.importance ?? 50}
-            </Badge>
-            <Badge variant="outline" className="font-mono">{selected.version}</Badge>
-            <Badge variant="secondary" className="font-mono">{selected.source}</Badge>
-            {selected.network_egress?.length ? (
-              <Badge variant="outline" className="font-mono">
-                egress: {selected.network_egress.join(", ")}
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="font-mono">no network</Badge>
-            )}
-          </div>
-        </div>
-        <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close detail">
-          <X className="size-4" />
-        </Button>
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      <header className="min-w-0 border-b border-hairline px-4 py-3">
+        <SectionTitle
+          title={selected.description?.trim() || selected.name}
+          headerExtra={
+            <>
+              <RiskBadge level={selected.risk_level} />
+              <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close detail">
+                <X className="size-4" />
+              </Button>
+            </>
+          }
+        />
+        <p className="mt-0.5 min-w-0 truncate text-[12px] text-quiet">{metaBits.join(" · ")}</p>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 scroll-touch">
-        <Tabs defaultValue="overview" className="space-y-3">
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="run">Run</TabsTrigger>
-            <TabsTrigger value="tests">Tests</TabsTrigger>
-            <TabsTrigger value="runs">Runs</TabsTrigger>
-            <TabsTrigger value="versions">Versions</TabsTrigger>
-            <TabsTrigger value="code">Code</TabsTrigger>
-          </TabsList>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 scroll-touch">
+        <PageTabs defaultValue="overview" className="min-w-0 space-y-3">
+          <PageTabsList scrollable>
+            <PageTabsTrigger value="overview">Overview</PageTabsTrigger>
+            <PageTabsTrigger value="run">Run</PageTabsTrigger>
+            <PageTabsTrigger value="tests">Tests</PageTabsTrigger>
+            <PageTabsTrigger value="runs">Runs</PageTabsTrigger>
+            <PageTabsTrigger value="versions">Versions</PageTabsTrigger>
+            <PageTabsTrigger value="code">Code</PageTabsTrigger>
+          </PageTabsList>
 
-          <TabsContent value="overview" className="space-y-3">
+          <TabsContent value="overview" className="min-w-0 space-y-1">
             {!skill ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
+              <p className="py-2 text-[13.5px] text-quiet">Loading…</p>
             ) : (
               <>
                 {/* Metadata strip: created / last updated / total runs.
                     Reads from the detail DTO which the server flattens
                     out of mem_skills + COUNT(mem_skill_runs). */}
-                <Section title="Timeline">
-                  <dl className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <dt className="text-muted-foreground">Created</dt>
-                      <dd className="font-mono" suppressHydrationWarning>
-                        {skill.created_at
-                          ? new Date(skill.created_at).toLocaleDateString()
-                          : "—"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground">Last updated</dt>
-                      <dd className="font-mono" suppressHydrationWarning>
-                        {skill.updated_at
-                          ? new Date(skill.updated_at).toLocaleDateString()
-                          : "—"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground">Total runs</dt>
-                      <dd className="font-mono">{skill.total_runs ?? 0}</dd>
-                    </div>
-                  </dl>
-                </Section>
-                <Section title="Trigger phrases">
-                  {skill.trigger_phrases?.length ? (
-                    <ul className="ml-4 list-disc text-sm">
+                <GroupLabel label="Timeline" />
+                <Inset
+                  variant="kv"
+                  items={[
+                    {
+                      label: "created",
+                      value: (
+                        <span suppressHydrationWarning>
+                          {skill.created_at
+                            ? new Date(skill.created_at).toLocaleDateString()
+                            : "—"}
+                        </span>
+                      ),
+                    },
+                    {
+                      label: "updated",
+                      value: (
+                        <span suppressHydrationWarning>
+                          {skill.updated_at
+                            ? new Date(skill.updated_at).toLocaleDateString()
+                            : "—"}
+                        </span>
+                      ),
+                    },
+                    { label: "total runs", value: String(skill.total_runs ?? 0) },
+                  ]}
+                />
+
+                <GroupLabel label="Trigger phrases" count={skill.trigger_phrases?.length} />
+                {skill.trigger_phrases?.length ? (
+                  <Inset>
+                    <ul className="flex min-w-0 flex-col gap-1 font-mono text-[12px]">
                       {skill.trigger_phrases.map((p) => (
-                        <li key={p} className="font-mono">&ldquo;{p}&rdquo;</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">none</p>
-                  )}
-                </Section>
-                <Section title="Inputs">
-                  {skill.inputs?.length ? (
-                    <ul className="space-y-1 text-sm">
-                      {skill.inputs.map((io) => (
-                        <li key={io.name} className="flex items-center gap-2">
-                          <code className="font-mono">{io.name}</code>
-                          <span className="text-muted-foreground">
-                            {io.type}
-                            {io.required ? " (required)" : ""}
-                          </span>
+                        <li key={p} className="min-w-0 [overflow-wrap:anywhere]">
+                          &ldquo;{p}&rdquo;
                         </li>
                       ))}
                     </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">none</p>
-                  )}
-                </Section>
-                <Section title="Outputs">
-                  {skill.outputs?.length ? (
-                    <ul className="space-y-1 text-sm">
-                      {skill.outputs.map((io) => (
-                        <li key={io.name} className="flex items-center gap-2">
-                          <code className="font-mono">{io.name}</code>
-                          <span className="text-muted-foreground">{io.type}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">none</p>
-                  )}
-                </Section>
-                <Section title="Strategic importance">
-                  <p className="text-sm text-muted-foreground">
-                    {selected.importance_reason || "General reusable skill."}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Risk is execution danger. Importance is how central this skill is to autonomous behavior.
-                  </p>
-                </Section>
+                  </Inset>
+                ) : (
+                  <p className="pb-1 text-[13.5px] text-quiet">None — Jarvis picks it by name.</p>
+                )}
+
+                <GroupLabel label="Inputs" count={skill.inputs?.length} />
+                {skill.inputs?.length ? (
+                  <Inset variant="schema" fields={ioFields(skill.inputs)} />
+                ) : (
+                  <p className="pb-1 text-[13.5px] text-quiet">Takes no arguments.</p>
+                )}
+
+                <GroupLabel label="Outputs" count={skill.outputs?.length} />
+                {skill.outputs?.length ? (
+                  <Inset variant="schema" fields={ioFields(skill.outputs)} />
+                ) : (
+                  <p className="pb-1 text-[13.5px] text-quiet">Returns plain text.</p>
+                )}
+
+                <GroupLabel label="Strategic importance" count={selected.importance ?? 50} />
+                <p className="text-[13.5px] leading-relaxed text-muted-foreground">
+                  {selected.importance_reason || "General reusable skill."}
+                </p>
+                <p className="pb-1 text-[12px] leading-relaxed text-quiet">
+                  Risk is execution danger. Importance is how central this skill is to autonomous
+                  behavior.
+                </p>
+
                 {/* Last run sample - shows the boss what the skill was
                     actually called with + what it produced the most
-                    recent time it ran. Powers the "show me an example"
-                    Overview expectation (#2 in the skill-review thread). */}
+                    recent time it ran. */}
                 {skill.last_run ? (
-                  <Section title="Last run">
-                    <div className="space-y-2 text-xs">
-                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <Clock className="size-3" aria-hidden />
-                          <time suppressHydrationWarning>
-                            {new Date(skill.last_run.started_at).toLocaleString()}
-                          </time>
-                        </span>
-                        <span className="font-mono">
+                  <>
+                    <GroupLabel
+                      label="Last run"
+                      trailing={
+                        <span
+                          className={cn(
+                            "font-mono text-[11px]",
+                            skill.last_run.success ? "text-success" : "text-danger",
+                          )}
+                        >
                           {skill.last_run.trigger_source} ·{" "}
-                          <span className={skill.last_run.success ? "text-success" : "text-danger"}>
-                            {skill.last_run.success ? "ok" : "fail"}
-                          </span>
+                          {skill.last_run.success ? "ok" : "fail"}
                         </span>
-                      </div>
-                      <div>
-                        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                          Input
-                        </p>
-                        <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
-                          {JSON.stringify(skill.last_run.input ?? {}, null, 2)}
-                        </pre>
-                      </div>
-                      <div>
-                        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                          Output
-                        </p>
-                        <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
-                          {skill.last_run.output || "(empty)"}
-                        </pre>
-                      </div>
-                    </div>
-                  </Section>
+                      }
+                    />
+                    <p className="text-[12px] text-quiet" suppressHydrationWarning>
+                      <time>{new Date(skill.last_run.started_at).toLocaleString()}</time>
+                    </p>
+                    <GroupLabel label="Called with" />
+                    <Inset text={JSON.stringify(skill.last_run.input ?? {}, null, 2)} />
+                    <GroupLabel label="It produced" />
+                    <Inset text={skill.last_run.output || "(empty)"} />
+                  </>
                 ) : null}
               </>
             )}
           </TabsContent>
 
-          <TabsContent value="run" className="space-y-3">
-            <Section title="Arguments (JSON)">
-              <textarea
-                value={argsText}
-                onChange={(e) => setArgsText(e.target.value)}
-                rows={6}
-                className="w-full rounded-md border bg-muted/40 p-2 font-mono text-xs"
-                spellCheck={false}
-              />
-            </Section>
-            <Button onClick={run} disabled={running}>
-              <Play className="mr-1 size-4" />
-              {running ? "running…" : "Run skill"}
-            </Button>
+          <TabsContent value="run" className="min-w-0 space-y-2">
+            <GroupLabel label="Arguments (JSON)" />
+            <Textarea
+              value={argsText}
+              onChange={(e) => setArgsText(e.target.value)}
+              rows={6}
+              className="font-mono text-xs"
+              spellCheck={false}
+              aria-label="Skill arguments as JSON"
+            />
+            {/* Server-tracked: runner.go books a mem_runs row of kind
+                'skill' keyed by the skill name, so this spinner is the
+                server's state, not this component's. */}
+            <RunIndicator
+              kind="skill"
+              targetId={selected.name}
+              label="Run skill"
+              title={`Run ${selected.name}`}
+              onRun={run}
+            />
             {runResult !== null && (
-              <Section title="Output">
-                <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/60 p-3 font-mono text-xs leading-relaxed scroll-touch">
-                  {runResult}
-                </pre>
-              </Section>
+              <>
+                <GroupLabel label="Output" />
+                <Inset text={runResult} />
+              </>
             )}
           </TabsContent>
 
-          <TabsContent value="runs" className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">{runs.length} runs</p>
-              <Button size="sm" variant="ghost" onClick={refreshRuns}>
-                <RefreshCw className="size-4" />
-              </Button>
-            </div>
-            {runs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No runs yet.</p>
-            ) : (
-              <ul className="space-y-2">
-                {runs.map((r) => (
-                  <li key={r.id} className="rounded-md border bg-card p-2 text-xs">
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Clock className="size-3" aria-hidden />
-                        <time suppressHydrationWarning>
-                          {new Date(r.started_at).toLocaleString()}
-                        </time>
-                      </span>
-                      <span className="font-mono">
-                        {r.trigger_source} · {r.duration_ms}ms ·{" "}
-                        <span className={r.success ? "text-success" : "text-danger"}>
-                          {r.success ? "ok" : "fail"}
-                        </span>
-                      </span>
-                    </div>
-                    {r.output && (
-                      <pre className="mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">
-                        {r.output}
-                      </pre>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </TabsContent>
-
-          <TabsContent value="versions" className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">
-                {versions.length} version{versions.length === 1 ? "" : "s"}
-              </p>
-              <Button size="sm" variant="ghost" onClick={refreshVersions}>
-                <RefreshCw className="size-4" />
-              </Button>
-            </div>
-            {versions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No version history yet.</p>
-            ) : (
-              <ul className="space-y-2">
-                {versions.map((v) => (
-                  <li
-                    key={v.version}
-                    className={cn(
-                      "rounded-md border bg-card p-2 text-xs",
-                      v.active && "border-brand/60 bg-brand/5",
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <code className="font-mono text-[12px] font-medium">
-                          {v.version}
-                        </code>
-                        {v.active ? (
-                          <Badge className="bg-brand text-brand-foreground">
-                            <Check className="mr-1 size-3" /> Active
-                          </Badge>
-                        ) : null}
-                        {v.source ? (
-                          <Badge variant="outline" className="font-mono text-[10px]">
-                            {v.source}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {!v.active ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={promotingVersion !== null}
-                          onClick={() => promoteVersion(v.version)}
-                        >
-                          {promotingVersion === v.version ? (
-                            <>
-                              <RefreshCw className="mr-1 size-3 animate-spin" />
-                              Promoting…
-                            </>
-                          ) : (
-                            <>
-                              <History className="mr-1 size-3" />
-                              Promote
-                            </>
-                          )}
-                        </Button>
-                      ) : null}
-                    </div>
-                    <p
-                      className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground"
-                      suppressHydrationWarning
-                    >
-                      <Clock className="size-3" aria-hidden />
-                      <time>{new Date(v.created_at).toLocaleString()}</time>
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </TabsContent>
-
-          <TabsContent value="tests" className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">{tests.length} verifier tests</p>
-              <div className="flex gap-1">
-                <Button size="sm" variant="ghost" onClick={refreshTests}>
+          <TabsContent value="runs" className="min-w-0">
+            <GroupLabel
+              label="Runs"
+              count={runs.length}
+              trailing={
+                <Button size="sm" variant="ghost" onClick={refreshRuns} aria-label="Refresh runs">
                   <RefreshCw className="size-4" />
                 </Button>
-                <Button size="sm" onClick={generateTests}>
-                  Generate
+              }
+            />
+            {runs.length === 0 ? (
+              <p className="py-2 text-[13.5px] text-quiet">No runs yet.</p>
+            ) : (
+              runs.map((r) => (
+                <ListRow
+                  key={r.id}
+                  tone={r.success ? "success" : "danger"}
+                  title={r.trigger_source || "run"}
+                  meta={
+                    <span suppressHydrationWarning>
+                      {new Date(r.started_at).toLocaleString()} · {r.duration_ms}ms ·{" "}
+                      {r.success ? "ok" : "fail"}
+                    </span>
+                  }
+                  onClick={r.output ? () => setOpenRun((c) => (c === r.id ? null : r.id)) : undefined}
+                  chevron={false}
+                >
+                  {r.output && openRun === r.id ? <Inset text={r.output} /> : null}
+                </ListRow>
+              ))
+            )}
+          </TabsContent>
+
+          <TabsContent value="versions" className="min-w-0">
+            <GroupLabel
+              label="Versions"
+              count={versions.length}
+              trailing={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={refreshVersions}
+                  aria-label="Refresh versions"
+                >
+                  <RefreshCw className="size-4" />
                 </Button>
-              </div>
-            </div>
+              }
+            />
+            {versions.length === 0 ? (
+              <p className="py-2 text-[13.5px] text-quiet">No version history yet.</p>
+            ) : (
+              versions.map((v) => (
+                <ListRow
+                  key={v.version}
+                  tone={v.active ? "brand" : "quiet"}
+                  title={<span className="font-mono text-[12.5px]">{v.version}</span>}
+                  meta={
+                    <span suppressHydrationWarning>
+                      {new Date(v.created_at).toLocaleString()}
+                      {v.source ? ` · ${v.source}` : ""}
+                    </span>
+                  }
+                  trailing={
+                    v.active ? (
+                      <span className="inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-[0.06em] text-brand">
+                        <Check className="size-3" aria-hidden /> active
+                      </span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={promotingVersion !== null}
+                        onClick={() => promoteVersion(v.version)}
+                      >
+                        {promotingVersion === v.version ? (
+                          <>
+                            <RefreshCw className="size-3 animate-spin" />
+                            Promoting…
+                          </>
+                        ) : (
+                          <>
+                            <History className="size-3" />
+                            Promote
+                          </>
+                        )}
+                      </Button>
+                    )
+                  }
+                />
+              ))
+            )}
+          </TabsContent>
+
+          <TabsContent value="tests" className="min-w-0">
+            <GroupLabel
+              label="Verifier tests"
+              count={tests.length}
+              trailing={
+                <span className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={refreshTests}
+                    aria-label="Refresh tests"
+                  >
+                    <RefreshCw className="size-4" />
+                  </Button>
+                  <Button size="sm" onClick={generateTests}>
+                    Generate
+                  </Button>
+                </span>
+              }
+            />
             {tests.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="py-2 text-[13.5px] leading-relaxed text-quiet">
                 No verifier tests yet. Generate a smoke test before relying on this skill.
               </p>
             ) : (
-              <ul className="space-y-2">
-                {tests.map((t) => (
-                  <li key={t.id} className="rounded-md border bg-card p-2 text-xs">
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                      <span className="font-mono">{t.source}</span>
-                      <span className="font-mono">
-                        {t.last_passed == null ? "not run" : t.last_passed ? "passed" : "failed"}
-                      </span>
-                    </div>
-                    <p className="mt-1 font-medium">{t.description}</p>
-                    <p className="mt-1 text-muted-foreground">{t.expected}</p>
-                    <pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted/60 p-2 font-mono">
-                      {JSON.stringify(t.inputs ?? {}, null, 2)}
-                    </pre>
-                  </li>
-                ))}
-              </ul>
+              tests.map((t) => (
+                <ListRow
+                  key={t.id}
+                  tone={t.last_passed == null ? "quiet" : t.last_passed ? "success" : "danger"}
+                  title={t.description}
+                  meta={`${t.source} · ${
+                    t.last_passed == null ? "not run" : t.last_passed ? "passed" : "failed"
+                  }`}
+                  chevron={false}
+                >
+                  <div className="min-w-0 space-y-2">
+                    {t.expected ? (
+                      <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+                        Expects: {t.expected}
+                      </p>
+                    ) : null}
+                    <Inset text={JSON.stringify(t.inputs ?? {}, null, 2)} />
+                  </div>
+                </ListRow>
+              ))
             )}
           </TabsContent>
 
-          <TabsContent value="code" className="space-y-2">
+          <TabsContent value="code" className="min-w-0 space-y-1">
             {!skill ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
+              <p className="py-2 text-[13.5px] text-quiet">Loading…</p>
             ) : (
               <>
-                <Section title="SKILL.md body">
-                  <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/60 p-3 font-mono text-xs leading-relaxed scroll-touch">
-                    {skill.body || "-"}
-                  </pre>
-                </Section>
+                <GroupLabel label="SKILL.md body" />
+                <Inset text={skill.body || "-"} />
                 {skill.impl_path && (
-                  <Section title={`Implementation (${skill.impl_language})`}>
-                    <code className="font-mono text-xs">{skill.impl_path}</code>
-                  </Section>
+                  <>
+                    <GroupLabel label={`Implementation · ${skill.impl_language}`} />
+                    <Inset text={skill.impl_path} />
+                  </>
                 )}
               </>
             )}
           </TabsContent>
-        </Tabs>
+        </PageTabs>
       </div>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </div>
-      <div className="space-y-1">{children}</div>
-    </section>
-  );
+/** Skill inputs/outputs share the schema Inset's field shape. */
+function ioFields(io: SkillIODef[]): InsetField[] {
+  return io.map((f) => ({
+    name: f.name,
+    type: f.type,
+    required: f.required,
+    note: f.doc,
+  }));
 }

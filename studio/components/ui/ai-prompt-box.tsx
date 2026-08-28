@@ -446,7 +446,7 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       onSend,
       isLoading = false,
       disabled = false,
-      placeholder = "ask me anything…",
+      placeholder = "Ask me anything",
       className,
       value: controlledValue,
       onValueChange,

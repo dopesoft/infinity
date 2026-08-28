@@ -75,7 +75,13 @@ export function SectionBand({
   className?: string;
   children: React.ReactNode;
 }) {
-  return <div className={cn(BAND_GROUND, "max-w-full", className)}>{children}</div>;
+  /* NO `max-w-full` here, and that is load-bearing rather than an omission.
+   * The bleed works by letting `width:auto` resolve to the containing block
+   * plus the two negative margins; a `max-width:100%` caps it back at the
+   * containing block, so the band shifts left by the margin and stops short on
+   * the right instead of running edge to edge. Measured at 375: 12→331 with
+   * the cap, 12→363 without it, against a page column of 12→363. */
+  return <div className={cn(BAND_GROUND, className)}>{children}</div>;
 }
 
 /**
@@ -105,9 +111,20 @@ export function SectionTitle({
 }) {
   const hasBadge = badge !== undefined && badge !== null && badge !== 0 && badge !== "";
   return (
+    /* min-h-11, not min-h-9, and the reason is a real bug this caused.
+     *
+     * `Section` passes `pb-2` and the hairline in via `className`, and the box
+     * is border-box, so the padding eats into the minimum. A section with an
+     * action link or a header control (32px) needed 32 + 8 = 40px and grew
+     * past a 36px minimum; a title-only section stayed at 36. Side by side in
+     * a grid that put the two titles on different baselines and their hairline
+     * rules 4px apart - which is exactly the "not at the same level" the boss
+     * reported. At 44 the tallest possible content (32 + 8) still fits under
+     * the minimum, so every title row in a row of sections is the same height
+     * by construction rather than by coincidence. */
     <div
       className={cn(
-        "flex min-h-9 min-w-0 max-w-full items-center justify-between gap-3",
+        "flex min-h-11 min-w-0 max-w-full items-center justify-between gap-3",
         className,
       )}
     >
@@ -126,7 +143,13 @@ export function SectionTitle({
         {action ? (
           <Link
             href={action.href}
-            className="group inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12.5px] font-medium text-quiet transition-colors hover:bg-accent/60 hover:text-foreground"
+            /* The visible pill stays 32px so the title row keeps its rhythm,
+               but the TAP target must be 44px (CLAUDE.md, mobile rules). The
+               `before` overlay extends the hit area vertically without moving
+               a single pixel of layout — growing the link itself to h-11 would
+               paint a chunky 44px hover slab and, because the row is min-h-11,
+               leave no breathing room at all. */
+            className="group relative inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12.5px] font-medium text-quiet transition-colors before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-[''] hover:bg-accent/60 hover:text-foreground"
           >
             {action.label}
             <ArrowRight
@@ -215,13 +238,17 @@ export function Section({
 }
 
 /**
- * TileCard — kept for its existing consumers (ApprovalsCard, FollowUpsCard,
- * PursuitsCard, SurfaceCard), now implemented as ListRow styling: hairline
- * separator, 44px minimum height, hover ground, no border, no radius, no
- * lift. `tone` is still accepted; under Majordomo it no longer paints a
- * border on hover (colour is reserved for alive/waiting/broken), so it is
- * kept as an accepted-and-ignored prop until the page sweep removes the call
- * sites. Documented rather than deleted so nothing silently changes meaning.
+ * TileCard — ListRow styling as a plain button: hairline separator, 44px
+ * minimum height, hover ground, no border, no radius, no lift.
+ *
+ * Its four dashboard consumers (ApprovalsCard, FollowUpsCard, PursuitsCard,
+ * SurfaceCard) moved to the real `ui/list-row` primitives in the Home sweep,
+ * so today it is only exercised by the primitive stories. It stays exported
+ * because it is still the right shape for a tappable row that is NOT a
+ * ListRow (one that owns its own internal layout), and deleting a working
+ * export to chase a zero is how the next page sweep ends up re-rolling it.
+ * `tone` is accepted and ignored: it used to paint a hover border, which
+ * Majordomo reserves for alive/waiting/broken.
  */
 export const TileCard = React.forwardRef<
   HTMLButtonElement,

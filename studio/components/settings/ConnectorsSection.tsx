@@ -3,9 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
-  Check,
-  ChevronDown,
-  CircleDashed,
   Info,
   Link as LinkIcon,
   Pencil,
@@ -15,9 +12,12 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
+import { Section } from "@/components/dashboard/Section";
+import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { Inset } from "@/components/ui/inset";
+import { EmptyState } from "@/components/EmptyState";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CustomExtensions } from "@/components/settings/CustomExtensions";
 import { useTabParam } from "@/lib/useTabParam";
@@ -287,17 +287,13 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   }
 
   return (
-    <div className="space-y-3">
-      <div className="space-y-1">
-        <h2 className="text-base font-semibold tracking-tight">Connectors</h2>
-        <p className="text-xs text-muted-foreground">
-          MCP servers and Composio integrations the agent can call. Each connected toolkit
-          adds tool schemas to the system prompt - keep the activated set tight to control
-          context budget. Connect the same toolkit more than once for multi-account routing
-          (e.g. personal + work Gmail).
-        </p>
-      </div>
-
+    // Majordomo §1.3/§1.5: the nav rail, the page header and this heading all
+    // said "Connectors", and the four-line paragraph restated it a third
+    // time. Title + live account count now; the one fact the boss actually
+    // acts on (connect a toolkit twice for multi-account routing) moved into
+    // the group body where that button lives.
+    <Section title="Connectors" badge={totalActiveCount || undefined} noPad>
+      <div className="min-w-0 space-y-3 pt-3">
       <PageTabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
         <PageTabsList scrollable>
           <PageTabsTrigger value="active" className="gap-1.5">
@@ -363,7 +359,8 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
           }}
         />
       )}
-    </div>
+      </div>
+    </Section>
   );
 }
 
@@ -416,50 +413,66 @@ function ActiveList({
   connecting: string | null;
 }) {
   if (groups.length === 0 && !loading && !query) {
+    // Majordomo §1.2: never a bordered empty state. The sentence says what
+    // will fill it, which is the description §1.5 keeps.
     return (
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         {composioError && <ComposioErrorBanner message={composioError} />}
-        <div className="flex flex-col items-center justify-center gap-2 rounded-xl border bg-muted/30 p-6 text-center">
-          <LinkIcon className="size-7 text-muted-foreground" aria-hidden />
-          <p className="text-sm font-semibold">Nothing activated yet</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            Connect your first SaaS account from the catalog. Each one gives the agent a new
-            set of <code className="font-mono">composio__*</code> tools.
-          </p>
-          <Button onClick={onBrowse} size="sm" className="mt-1">
-            Browse catalog
-          </Button>
-        </div>
+        <EmptyState
+          icon={LinkIcon}
+          align="top"
+          className="pt-8"
+          title="Nothing activated yet"
+          description={
+            <>
+              Connect your first SaaS account from the catalog. Each one gives the agent a new set
+              of <code className="font-mono text-[11px]">composio__*</code> tools.
+            </>
+          }
+          action={
+            <Button onClick={onBrowse} size="sm">
+              Browse catalog
+            </Button>
+          }
+        />
       </div>
     );
   }
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2">
       {composioError && <ComposioErrorBanner message={composioError} />}
       <SearchInput value={query} onChange={onQueryChange} placeholder="Search by name, alias, or tool…" />
       {query && (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[12px] text-quiet">
           {groups.length} group{groups.length === 1 ? "" : "s"} match
         </p>
       )}
-      <ul className="space-y-1.5">
-        {groups.map((g) => (
-          <ActiveGroupCard
-            key={g.key}
-            group={g}
-            highlightTool={query}
-            onDisconnect={onDisconnect}
-            onAliasSave={onAliasSave}
-            onAddAnother={onAddAnother}
-            onReconnect={onReconnect}
-            connecting={connecting}
-          />
-        ))}
-      </ul>
+      {groups.map((g) => (
+        <ActiveGroupCard
+          key={g.key}
+          group={g}
+          highlightTool={query}
+          onDisconnect={onDisconnect}
+          onAliasSave={onAliasSave}
+          onAddAnother={onAddAnother}
+          onReconnect={onReconnect}
+          connecting={connecting}
+        />
+      ))}
     </div>
   );
 }
 
+/**
+ * One toolkit = a GroupLabel + one row per connected account.
+ *
+ * Was: a bordered card whose header bar you tapped to reveal a tinted panel
+ * of bordered sub-rows — three containers deep for what is a list of accounts
+ * (Majordomo §2). The group label carries the source and the "Add another"
+ * action; each account is a `ListRow` with its own status dot, alias editing,
+ * reconnect and disconnect. Multi-account routing is untouched: every account
+ * still gets its own row, its own alias, and its own controls.
+ */
 function ActiveGroupCard({
   group,
   highlightTool,
@@ -477,99 +490,66 @@ function ActiveGroupCard({
   onReconnect: (account: ActiveAccount) => void;
   connecting: string | null;
 }) {
-  const matchedTool = Boolean(
-    highlightTool &&
-      group.accounts.some((a) => a.tools?.some((t) => t.toLowerCase().includes(highlightTool.toLowerCase()))),
-  );
-  // Multi-account groups open by default so the boss can see all accounts
-  // without an extra tap. Single-account groups stay collapsed to keep
-  // the list scannable.
-  const [open, setOpen] = useState(group.accounts.length > 1);
-  const isOpen = open || matchedTool;
   const totalTools = group.accounts.reduce((sum, a) => sum + (a.tools?.length ?? 0), 0);
+  const adding = connecting === connectKey(group.slug);
 
   return (
-    <li className="overflow-hidden rounded-md border bg-background">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/40"
-      >
-        {group.kind === "composio" && group.logo ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img src={group.logo} alt="" className="size-5 shrink-0 rounded object-contain" />
-        ) : group.accounts[0].ok ? (
-          <Check className="size-3.5 shrink-0 text-success" aria-hidden />
-        ) : group.accounts[0].error ? (
-          <X className="size-3.5 shrink-0 text-danger" aria-hidden />
-        ) : (
-          <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        )}
-        <span className="truncate text-xs font-semibold">{group.name}</span>
-        <Badge variant="secondary" className="h-4 shrink-0 px-1 font-mono text-[9px] uppercase">
-          {group.source}
-        </Badge>
-        {group.accounts.length > 1 && (
-          <Badge className="h-4 shrink-0 bg-info/15 px-1 font-mono text-[9px] text-info">
-            {group.accounts.length} accounts
-          </Badge>
-        )}
-        {totalTools > 0 && (
-          <Badge variant="secondary" className="h-4 shrink-0 px-1 font-mono text-[9px]">
-            {totalTools}
-          </Badge>
-        )}
-        <span className="ml-auto flex items-center gap-1">
-          <ChevronDown
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform",
-              isOpen && "rotate-180",
-            )}
-            aria-hidden
-          />
-        </span>
-      </button>
-      {isOpen && (
-        <div className="space-y-2 border-t bg-muted/30 px-3 py-2.5">
-          {group.kind === "composio" && (
-            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-              <span>
-                Tools register as{" "}
-                <code className="font-mono">composio__{group.slug.toUpperCase()}_*</code>. Add another
-                account to authorise a second mailbox/workspace/org.
-              </span>
-              <button
-                type="button"
+    <div className="min-w-0">
+      <GroupLabel
+        label={group.name}
+        count={group.accounts.length > 1 ? group.accounts.length : undefined}
+        trailing={
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-quiet">
+              {group.source}
+              {totalTools > 0 ? ` · ${totalTools} tools` : ""}
+            </span>
+            {group.kind === "composio" && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 gap-1"
                 onClick={() => onAddAnother(group.slug, group.name, group.logo)}
-                disabled={connecting === connectKey(group.slug)}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded border bg-background px-2 text-[11px] font-medium hover:bg-accent"
+                disabled={adding}
+                title={`Authorise another ${group.name} account`}
               >
-                <Plus className="size-3" />
-                {connecting === connectKey(group.slug) ? "Opening…" : "Add another"}
-              </button>
-            </div>
-          )}
-          <ul className="space-y-1.5">
-            {group.accounts.map((a) => (
-              <AccountSubRow
-                key={a.id}
-                account={a}
-                groupName={group.name}
-                kind={group.kind}
-                onDisconnect={onDisconnect}
-                onAliasSave={onAliasSave}
-                onReconnect={() => onReconnect(a)}
-                reconnecting={Boolean(a.accountId && connecting === reconnectKey(a.accountId))}
-                highlightTool={highlightTool}
-              />
-            ))}
-          </ul>
-        </div>
+                <Plus className="size-3.5" aria-hidden />
+                {adding ? "Opening…" : "Add another"}
+              </Button>
+            )}
+          </span>
+        }
+      />
+      {group.kind === "composio" && (
+        <p className="pb-1 text-[12px] leading-relaxed text-quiet">
+          Tools register as{" "}
+          <code className="font-mono text-[11px]">composio__{group.slug.toUpperCase()}_*</code>. Add
+          another account to authorise a second mailbox, workspace, or org.
+        </p>
       )}
-    </li>
+      {group.accounts.map((a) => (
+        <AccountSubRow
+          key={a.id}
+          account={a}
+          groupName={group.name}
+          kind={group.kind}
+          onDisconnect={onDisconnect}
+          onAliasSave={onAliasSave}
+          onReconnect={() => onReconnect(a)}
+          reconnecting={Boolean(a.accountId && connecting === reconnectKey(a.accountId))}
+          highlightTool={highlightTool}
+        />
+      ))}
+    </div>
   );
 }
 
+/**
+ * One connected account = one row. The alias is edited in place (tap the
+ * name), the status is the row's tone dot, and reconnect/disconnect live in
+ * the trailing slot. Native MCP servers reuse the same row and open their
+ * tool list in an `Inset` — the only container allowed inside a row.
+ */
 function AccountSubRow({
   account,
   groupName,
@@ -591,6 +571,7 @@ function AccountSubRow({
 }) {
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(account.alias ?? "");
+  const [showTools, setShowTools] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -612,136 +593,132 @@ function AccountSubRow({
     account.identityHint ||
     (kind === "composio" ? account.accountId?.slice(-8) ?? "account" : account.id);
   const reconnectable = kind === "composio" && isReconnectableAccount(account);
+  const tools = account.tools ?? [];
+  const matchedTool = Boolean(
+    highlightTool && tools.some((t) => t.toLowerCase().includes(highlightTool.toLowerCase())),
+  );
+  const toolsOpen = showTools || matchedTool;
+
+  const meta = [
+    account.statusText,
+    kind === "composio" && account.identityHint && account.alias?.trim()
+      ? account.identityHint
+      : "",
+    kind === "composio" && account.accountId ? `id=${account.accountId}` : "",
+    tools.length > 0 ? `${tools.length} tools` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <li className="flex items-start gap-2 rounded-md border border-border/40 bg-background px-2.5 py-2">
-      {/* Status icon */}
-      {account.ok ? (
-        <Check className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />
-      ) : account.error ? (
-        <X className="mt-0.5 size-3.5 shrink-0 text-danger" aria-hidden />
-      ) : (
-        <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      )}
-
-      <div className="min-w-0 flex-1 space-y-1">
-        {/* Alias / identity row */}
-        <div className="flex flex-wrap items-center gap-2">
-          {kind === "composio" && editingAlias ? (
-            <input
-              ref={inputRef}
-              value={aliasDraft}
-              onChange={(e) => setAliasDraft(e.target.value)}
-              onBlur={commitAlias}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitAlias();
-                if (e.key === "Escape") {
-                  setAliasDraft(account.alias ?? "");
-                  setEditingAlias(false);
-                }
-              }}
-              placeholder="alias (e.g. work, personal)"
-              className="h-6 max-w-[220px] flex-1 rounded border bg-background px-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-info"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => kind === "composio" && setEditingAlias(true)}
-              className={cn(
-                "flex items-center gap-1 text-xs font-medium",
-                kind === "composio" && "rounded px-1 hover:bg-accent/50",
-              )}
-              disabled={kind !== "composio"}
-            >
-              {displayLabel}
-              {kind === "composio" && <Pencil className="size-3 text-muted-foreground" aria-hidden />}
-            </button>
-          )}
-          <Badge
-            variant="secondary"
-            className={cn(
-              "h-4 px-1 font-mono text-[9px] uppercase",
-              account.ok ? "bg-success/10 text-success" : "bg-danger/10 text-danger",
-            )}
+    <ListRow
+      tone={account.ok ? "success" : account.error ? "danger" : "quiet"}
+      title={
+        kind === "composio" && editingAlias ? (
+          <input
+            ref={inputRef}
+            value={aliasDraft}
+            onChange={(e) => setAliasDraft(e.target.value)}
+            onBlur={commitAlias}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitAlias();
+              if (e.key === "Escape") {
+                setAliasDraft(account.alias ?? "");
+                setEditingAlias(false);
+              }
+            }}
+            placeholder="alias (e.g. work, personal)"
+            aria-label={`Alias for ${displayLabel}`}
+            className="h-8 w-full max-w-[240px] rounded-[8px] bg-muted px-2 text-[13.5px] focus:outline-none focus:ring-2 focus:ring-ring/60"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              if (kind === "composio") setEditingAlias(true);
+              else if (tools.length) setShowTools((v) => !v);
+            }}
+            disabled={kind !== "composio" && tools.length === 0}
+            className="flex min-w-0 items-center gap-1.5 py-1 text-left"
+            title={kind === "composio" ? "Rename this account" : "Show tools"}
           >
-            {account.statusText}
-          </Badge>
-        </div>
-
-        {/* Secondary line - identity hint (if alias is set, also surface
-            email for disambiguation) + account id tail. */}
-        {kind === "composio" && (account.identityHint || account.accountId) && (
-          <p className="truncate text-[10px] text-muted-foreground">
-            {account.identityHint && (
-              <span className="mr-2">{account.identityHint}</span>
+            <span className="min-w-0 truncate">{displayLabel}</span>
+            {kind === "composio" && <Pencil className="size-3 shrink-0 text-quiet" aria-hidden />}
+          </button>
+        )
+      }
+      meta={meta || undefined}
+      chevron={false}
+      trailing={
+        kind === "composio" && account.accountId ? (
+          <>
+            {reconnectable && (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={onReconnect}
+                disabled={reconnecting}
+                className="size-9 text-info hover:bg-info/10 hover:text-info"
+                aria-label={`Reconnect ${displayLabel}`}
+                title={`Reconnect ${displayLabel}`}
+              >
+                <RefreshCcw className={cn("size-4", reconnecting && "animate-spin")} aria-hidden />
+              </Button>
             )}
-            {account.accountId && (
-              <code className="font-mono">id={account.accountId}</code>
-            )}
-          </p>
-        )}
-
-        {/* Tools (native only - composio tools live under the gateway entry) */}
-        {(account.tools?.length ?? 0) > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {(account.tools ?? []).map((t) => {
-              const m =
-                highlightTool && t.toLowerCase().includes(highlightTool.toLowerCase());
-              return (
-                <Badge
-                  key={t}
-                  variant="secondary"
-                  className={cn(
-                    "font-mono text-[10px]",
-                    m && "bg-info/15 text-info ring-1 ring-info/40",
-                  )}
-                >
-                  {t}
-                </Badge>
-              );
-            })}
-          </div>
-        )}
-
-        {account.error && (
-          <p className="break-words rounded-sm bg-danger/10 p-1.5 text-[10px] text-danger">
-            {account.error}
-          </p>
-        )}
-      </div>
-
-      {kind === "composio" && account.accountId && (
-        <div className="flex shrink-0 items-center gap-1">
-          {reconnectable && (
             <Button
               type="button"
               size="icon"
               variant="ghost"
-              onClick={onReconnect}
-              disabled={reconnecting}
-              className="size-7 text-info hover:bg-info/10 hover:text-info"
-              aria-label={`Reconnect ${displayLabel}`}
-              title={`Reconnect ${displayLabel}`}
+              onClick={() => onDisconnect(account.accountId!, displayLabel)}
+              className="size-9 text-quiet hover:bg-danger/10 hover:text-danger"
+              aria-label={`Disconnect ${displayLabel}`}
+              title={`Disconnect ${displayLabel}`}
             >
-              <RefreshCcw className={cn("size-3", reconnecting && "animate-spin")} aria-hidden />
+              <X className="size-4" aria-hidden />
             </Button>
-          )}
+          </>
+        ) : tools.length > 0 ? (
           <Button
             type="button"
-            size="icon"
+            size="sm"
             variant="ghost"
-            onClick={() => onDisconnect(account.accountId!, displayLabel)}
-            className="size-7 text-muted-foreground hover:bg-danger/10 hover:text-danger"
-            aria-label={`Disconnect ${displayLabel}`}
-            title={`Disconnect ${displayLabel}`}
+            className="h-8"
+            onClick={() => setShowTools((v) => !v)}
+            aria-expanded={toolsOpen}
           >
-            <X className="size-3" aria-hidden />
+            {toolsOpen ? "Hide tools" : "Tools"}
           </Button>
-        </div>
-      )}
-      {/* Suppress unused-prop warning */}
+        ) : undefined
+      }
+    >
+      {account.error ? (
+        <p className="min-w-0 whitespace-pre-wrap text-[12px] text-danger [overflow-wrap:anywhere]">
+          {account.error}
+        </p>
+      ) : null}
+      {toolsOpen && tools.length > 0 ? (
+        <Inset>
+          <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-[12px]">
+            {tools.map((t) => (
+              <span
+                key={t}
+                className={cn(
+                  "min-w-0 [overflow-wrap:anywhere]",
+                  highlightTool &&
+                    t.toLowerCase().includes(highlightTool.toLowerCase()) &&
+                    "text-info",
+                )}
+              >
+                {t}
+              </span>
+            ))}
+          </span>
+        </Inset>
+      ) : null}
+      {/* groupName is kept in the props for callers and screen-reader context. */}
       <span className="sr-only">{groupName}</span>
-    </li>
+    </ListRow>
   );
 }
 
@@ -846,52 +823,37 @@ function BrowseList({
           hint="If the error mentions undeployed routes, push core. If it mentions 401/invalid key, set COMPOSIO_API_KEY to the Composio Project API Key."
         />
       ) : toolkits.length === 0 && loading ? (
-        <p className="text-sm text-muted-foreground">Loading catalog…</p>
+        <p className="py-2 text-[13.5px] text-quiet">Loading catalog…</p>
       ) : toolkits.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {query ? `No integrations match "${query}".` : "No integrations returned."}
+        <p className="py-2 text-[13.5px] text-quiet">
+          {query ? `No integrations match “${query}”.` : "No integrations returned."}
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        // A catalog is a list, not 250 bordered cards (Majordomo §2): logo,
+        // name, what it does, and the one action, on a hairline row.
+        <div className="min-w-0">
           {toolkits.map((t) => {
             const isConnected = connectedSlugs.has((t.slug ?? "").toLowerCase());
             const busy = connecting === connectKey(t.slug);
             return (
-              <article
+              <ListRow
                 key={t.slug}
-                className="flex h-full flex-col gap-2 rounded-xl border bg-card p-3"
-              >
-                <div className="flex items-center gap-2">
-                  <ToolkitLogo logo={t.meta?.logo} slug={t.slug} className="size-7 shrink-0" />
-                  <p className="min-w-0 flex-1 truncate text-sm font-semibold">
-                    {t.name ?? t.slug}
-                  </p>
-                  {isConnected && (
-                    <Badge className="bg-success/15 text-success">
-                      <Check className="mr-0.5 size-3" />
-                      Active
-                    </Badge>
-                  )}
-                </div>
-                {t.meta?.description ? (
-                  <p className="line-clamp-2 text-xs text-muted-foreground">
-                    {t.meta.description}
-                  </p>
-                ) : (
-                  <p className="text-xs italic text-muted-foreground/70">No description.</p>
-                )}
-                <div className="mt-auto flex gap-2">
+                tone={isConnected ? "success" : "quiet"}
+                leading={<ToolkitLogo logo={t.meta?.logo} slug={t.slug} className="size-5" />}
+                title={t.name ?? t.slug}
+                meta={t.meta?.description || "No description."}
+                chevron={false}
+                trailing={
                   <Button
                     size="sm"
                     variant={isConnected ? "ghost" : "default"}
-                    className="h-9 flex-1"
                     disabled={busy}
                     onClick={() => onConnect(t.slug, t.name ?? t.slug, t.meta?.logo)}
                   >
                     {busy ? "Opening…" : isConnected ? "Add another" : "Connect"}
                   </Button>
-                </div>
-              </article>
+                }
+              />
             );
           })}
         </div>
@@ -968,17 +930,15 @@ function ToolkitLogo({
 }
 
 function ComposioErrorBanner({ message, hint }: { message: string; hint?: string }) {
+  // A real failure, said plainly and never as an empty list (CLAUDE.md →
+  // "never hide errors"). Tinted, borderless, radius 10 — the Inset ground.
   return (
-    <div className="rounded-xl border border-danger/30 bg-danger/5 p-3">
-      <div className="flex items-start gap-2">
-        <AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-danger">Composio request failed</p>
-          <p className="mt-1 break-words text-xs text-danger/80">{message}</p>
-          {hint && (
-            <p className="mt-2 break-words text-[11px] text-muted-foreground">{hint}</p>
-          )}
-        </div>
+    <div className="flex min-w-0 items-start gap-2 rounded-[10px] bg-danger/10 px-3 py-2.5">
+      <AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+      <div className="min-w-0">
+        <p className="text-[13.5px] font-medium text-danger">Composio request failed</p>
+        <p className="mt-1 break-words text-[12px] text-danger/90">{message}</p>
+        {hint && <p className="mt-2 break-words text-[12px] text-quiet">{hint}</p>}
       </div>
     </div>
   );

@@ -1,50 +1,48 @@
 "use client";
 
-import { AtSign, Hash, Inbox, Workflow, MessageCircle, type LucideIcon } from "lucide-react";
-import { Section, TileCard } from "./Section";
+import { ListRow } from "@/components/ui/list-row";
+import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
-import { Chip, classificationTone, intentTone, modeTone } from "./Chip";
-import { cn } from "@/lib/utils";
+import { DASHBOARD_LIST_ROWS } from "./listHeight";
 import { relTime } from "@/lib/dashboard/format";
-import type { DashboardItem, FollowUp, FollowUpSource } from "@/lib/dashboard/types";
+import type { DashboardItem, FollowUp } from "@/lib/dashboard/types";
 
 /* Follow-ups - humans (or connector-surfaced systems) waiting on you.
  *
  * Reads a unified `followUps` array sourced from BOTH mem_followups
  * (connector polls) and mem_surface_items with surface='followups' /
- * 'inbox' / 'email' (agent-surfaced triage). Same card, same chips,
+ * 'inbox' / 'email' (agent-surfaced triage). Same card, same signals,
  * same dismiss path - Rule #1: one surface concept, one place to
  * render. A triage skill the agent invents drops its output here just
  * by calling surface_item with surface='followups'; no new card is
  * spawned.
  *
- * Row shape:
- *   line 1: bold sender + relative time on the right
- *   line 2: chips - [account] [intent] [mode] - replaces the noisy
- *           preview subtext. Each chip is data-driven from metadata,
- *           so a new chip the agent attaches shows up automatically
- *           if its key matches a known signal.
+ * Row shape (Majordomo): sender as the title, and everything that used to be
+ * a bordered chip - the account, the triager's classification, the intent, the
+ * recommended mode - as one quiet meta line under it, with the subject and the
+ * timestamp. Unread reads as an INFO dot in the leading slot, which is the
+ * same 7px glyph every other row in the app uses.
  *
- * ScrollList max={4} keeps the card a calm 4 rows tall; the rest
- * scrolls internally so the dashboard never towers when the inbox is
- * busy.
+ * WHAT CHANGED, AND WHY: the row was a `TileCard` with a `size-9 rounded-md
+ * border` source tile, a bordered chip row, and its own unread dot with a glow
+ * shadow - four pieces of chrome to say "an email came in". Chips are boxes
+ * inside a box (§1.2), and four of them made a two-line row into a four-line
+ * one. Nothing is lost: every chip's TEXT survives in the meta line, so the
+ * classification a triage skill attached is still readable, and the source
+ * (gmail / slack / imessage) is named in words instead of drawn as a glyph.
+ *
+ * The dashed empty box is gone too - §1.2 forbids a bordered empty state, and
+ * "Inbox zero" deserves quiet text, not a dotted rectangle.
  */
 
-const SOURCE_META: Record<
-  FollowUpSource,
-  { Icon: LucideIcon; tone: string; label: string }
-> = {
-  gmail: { Icon: AtSign, tone: "text-info", label: "email" },
-  slack: { Icon: Hash, tone: "text-rose-400", label: "slack" },
-  imessage: { Icon: MessageCircle, tone: "text-success", label: "imsg" },
-  linear: { Icon: Workflow, tone: "text-muted-foreground", label: "linear" },
-  other: { Icon: Inbox, tone: "text-muted-foreground", label: "other" },
+/** gmail → "email", slack → "slack", …. A word, not a glyph. */
+const SOURCE_LABEL: Record<string, string> = {
+  gmail: "email",
+  slack: "slack",
+  imessage: "imsg",
+  linear: "linear",
+  other: "",
 };
-
-function metaFor(source: string): { Icon: LucideIcon; tone: string; label: string } {
-  if (source in SOURCE_META) return SOURCE_META[source as FollowUpSource];
-  return SOURCE_META.other;
-}
 
 export function FollowUpsCard({
   followUps,
@@ -54,42 +52,42 @@ export function FollowUpsCard({
   followUps: FollowUp[];
   onOpen: (item: DashboardItem) => void;
   /**
-   * Reports this card's measured 4-row clip height (px) so the Upcoming
-   * card beside it can match the same fade line. Follow-ups is the
-   * reference height; Upcoming consumes it. See ScrollList "matched" mode.
+   * Legacy hook: this card used to MEASURE its rendered list and hand the
+   * pixel height to its neighbours (see `./listHeight`). The dashboard no
+   * longer threads it - every list card clips at `DASHBOARD_LIST_ROWS`
+   * instead, so the row aligns on the first paint. Still accepted so a
+   * surface that genuinely needs the measurement can ask for it.
    */
   onMeasure?: (px: number | null) => void;
 }) {
   return (
     <Section
       title="Email"
-      Icon={Inbox}
-      delay={0.3}
       badge={followUps.length}
       action={{ label: "see inbox", href: "/memory" }}
     >
       {followUps.length === 0 ? (
-        <div className="rounded-xl border border-dashed bg-card/30 p-4 text-center text-xs text-muted-foreground">
-          Inbox zero - no one is waiting on you.
-        </div>
+        <p className="py-2 text-[13px] text-quiet">Inbox zero - no one is waiting on you.</p>
       ) : (
-        <ScrollList max={4} onMeasure={onMeasure}>
-          <ul className="space-y-1.5">
+        <ScrollList max={DASHBOARD_LIST_ROWS} onMeasure={onMeasure}>
+          <div className="flex min-w-0 flex-col">
             {followUps.map((f) => (
-              <li key={f.id}>
-                <FollowUpRow f={f} onClick={() => onOpen({ kind: "followup", data: f })} />
-              </li>
+              <FollowUpRow
+                key={f.id}
+                f={f}
+                onClick={() => onOpen({ kind: "followup", data: f })}
+              />
             ))}
-          </ul>
+          </div>
         </ScrollList>
       )}
     </Section>
   );
 }
 
-// Pull a string-valued chip from the row's metadata. The agent attaches
-// {intent, mode, classification, ...} when it triages; this is the
-// reader. Returns "" when the key is missing or not a string.
+// Pull a string-valued signal from the row's metadata. The agent attaches
+// {intent, mode, classification, ...} when it triages; this is the reader.
+// Returns "" when the key is missing or not a string.
 function metaString(m: Record<string, unknown> | undefined, ...keys: string[]): string {
   if (!m) return "";
   for (const k of keys) {
@@ -100,7 +98,7 @@ function metaString(m: Record<string, unknown> | undefined, ...keys: string[]): 
 }
 
 function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
-  const meta = metaFor(String(f.source ?? "other"));
+  const source = String(f.source ?? "other");
   const account = (f.account ?? "").trim();
   // classification: triager output - "newsletter" | "personal" | "work" |
   // "promotion" | "transaction" | "notification" | "automated" | "spam"
@@ -110,64 +108,26 @@ function FollowUpRow({ f, onClick }: { f: FollowUp; onClick: () => void }) {
   // mode: "reply" | "read" | "skim" | "ignore" - recommended action.
   const mode = metaString(f.metadata, "mode", "action");
 
+  // Subject first (it is what the mail is ABOUT), then the triager's read of
+  // it, then who it landed with, then when. Falls back to the preview when
+  // triage has not run yet, so the row never collapses to "name + time".
+  const signals = [classification, intent, mode].filter(Boolean);
+  const meta = [
+    f.subject || f.preview || "",
+    ...signals,
+    account || SOURCE_LABEL[source] || source,
+    relTime(f.receivedAt),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  // An unread thread is the one waiting on him; a read one is resting.
   return (
-    <TileCard onClick={onClick}>
-      <span
-        className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted",
-          meta.tone,
-        )}
-      >
-        <meta.Icon className="size-4" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{f.from}</span>
-          <span
-            className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground"
-            suppressHydrationWarning
-          >
-            {relTime(f.receivedAt)}
-          </span>
-        </div>
-        {f.subject ? (
-          // Subject lives on its own line under the sender so it gets
-          // the full row width before truncation kicks in. line-clamp-2
-          // lets long subjects ("Your digital statement is ready for
-          // review for account ending …") show two lines max instead
-          // of the prior single inline-with-name ellipsis.
-          <p className="mt-0.5 line-clamp-2 break-words text-[12px] text-muted-foreground">
-            {f.subject}
-          </p>
-        ) : null}
-        {account || classification || intent || mode ? (
-          // Account → classification → intent → mode. Rectangular
-          // rounded chips with thin borders so they read as distinct
-          // tags, not flowing prose.
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {account ? <Chip tone="muted">{account}</Chip> : null}
-            {classification ? (
-              <Chip tone={classificationTone(classification)}>{classification}</Chip>
-            ) : null}
-            {intent ? <Chip tone={intentTone(intent)}>{intent}</Chip> : null}
-            {mode ? <Chip tone={modeTone(mode)}>{mode}</Chip> : null}
-          </div>
-        ) : f.preview ? (
-          // No chips yet - fall back to the preview so the row never
-          // collapses to just "name + time". Triage hasn't run yet
-          // (cron tick incoming) or producer skipped it.
-          <p className="line-clamp-1 break-words text-[12px] text-muted-foreground">
-            {f.preview}
-          </p>
-        ) : null}
-      </div>
-      {f.unread ? (
-        <span
-          aria-label="unread"
-          className="size-2 shrink-0 rounded-full bg-info shadow-[0_0_6px_hsl(var(--info))]"
-        />
-      ) : null}
-    </TileCard>
+    <ListRow
+      tone={f.unread ? "info" : "quiet"}
+      title={f.from}
+      meta={<span suppressHydrationWarning>{meta}</span>}
+      onClick={onClick}
+    />
   );
 }
-

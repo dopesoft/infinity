@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TabFrame } from "@/components/TabFrame";
+import { SectionBand } from "./Section";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
 import { TodosCard } from "./TodosCard";
@@ -42,11 +43,21 @@ import type {
  * tab. Holds local mock state (toggle habits/todos optimistically),
  * routes taps into the ObjectViewer, and lays out every section.
  *
- * Layout rules:
+ * Layout rules (Majordomo §2, §8):
  *   • Mobile (<lg): single column scroll, sections stacked top-to-bottom.
- *   • Desktop (lg+): TODAY row is 3-column (Pursuits | Todos | Upcoming),
- *     then Reflection full-width, then Approvals | Follow-ups 2-col,
- *     then Agent Work + Saved + Activity each full-width.
+ *   • Desktop (lg+): two 3-up rows (what is being raised TO him, then his own
+ *     commitments), then Agent work, Reflection, Saved, Activity full-width.
+ *   • Sections separate by GROUND, not by chrome: the page alternates plain
+ *     and `band` (a full-bleed muted strip) down its length, so neighbouring
+ *     areas read as distinct without a single card, header bar, or divider
+ *     between them. `card` tone is spent once, on Reflection, because that is
+ *     the one section that is a single object he acts on.
+ *   • Never nest tones: the sections inside a `SectionBand` are all plain.
+ *
+ * Alignment: cards in a row line up because they clip at the same ROW COUNT
+ * and the grid stretches the cells - not because one card measures itself and
+ * hands a pixel height to its neighbours. See `./listHeight` for the bug that
+ * rule came from.
  *
  * Search filters across every section's content. When active, sections
  * with zero matches are still rendered so the page structure stays
@@ -118,23 +129,6 @@ export function DashboardClient() {
   // grouped by `surface` key. A new surface the agent invents renders here
   // automatically - no new state field, no new card component.
   const [surfaceItems, setSurfaceItems] = useState<Record<string, SurfaceItem[]>>({});
-  // The dashboard's ONE list height, in px, measured off the Email card and
-  // shared by every single-list card (Surfaced, Phone, Upcoming, Todos).
-  //
-  // Why a shared PIXEL height and not each card's own row count: the cards sit
-  // in `lg:grid-cols-3`, and grid columns stretch to a common height set by the
-  // tallest. Email's rows are ~3 lines, everyone else's are ~2, so a card that
-  // clipped itself at "4 rows" ended up half the height the grid had already
-  // given it — dead white space below, and a scrollbox that stopped mid-card
-  // while 7 more calls sat just out of reach. Row counts cannot fill a shared
-  // height when the rows are different heights; a shared pixel line can. Email
-  // is the reference because its tall rows make it the one that sets the row.
-  //
-  // Null until Email reports (first paint, or an empty/short inbox with nothing
-  // to clip), and each card falls back to its own `max` row count until then.
-  // This is ScrollList's "matched" mode, which existed and was documented but
-  // was never actually wired up to anything.
-  const [listHeight, setListHeight] = useState<number | null>(null);
   // `loading` covers both the first paint and every realtime-driven
   // refetch. The header spinner reads from this so the boss can see the
   // page is in flight instead of staring at empty cards. Initial value
@@ -475,68 +469,67 @@ export function DashboardClient() {
           loading={loading}
         />
 
-        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-5 px-3 pb-2 sm:px-4 sm:space-y-6">
-          {/* Row 1 - what's being raised TO the boss: Surfaced by Jarvis,
-              the Phone line, and Email (follow-ups). `grid-cols-1` default is
-              REQUIRED so an implicit max-content track can't blow the column
-              past the viewport on mobile; lg splits to three. */}
+        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-6 px-4 pb-2 sm:px-6">
+          {/* PLAIN - what is being raised TO the boss: Surfaced by Jarvis, the
+              Phone line, and Email. `grid-cols-1` default is REQUIRED so an
+              implicit max-content track can't blow the column past the
+              viewport on mobile; lg splits to three. */}
           {(s.approvals || s.followups) && (
-            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
-              {s.approvals && (
-                <SurfacedCard items={surfaced} onOpen={openViewer} matchHeight={listHeight} />
-              )}
-              <PhoneCard items={calls} onOpen={openViewer} matchHeight={listHeight} />
+            <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-3">
+              {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
+              <PhoneCard items={calls} onOpen={openViewer} />
               {s.followups && (
-                <FollowUpsCard
-                  followUps={filtered.followUps}
-                  onOpen={openViewer}
-                  onMeasure={setListHeight}
-                />
+                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
               )}
             </div>
           )}
 
-          {/* Row 2 - the boss's own commitments: Calendar, Todos, Pursuits. */}
+          {/* BAND - the boss's own commitments: Calendar, Todos, Pursuits. One
+              band under all three so the row reads as one area of the page. */}
           {(s.upcoming || s.todos || s.pursuits) && (
-            <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
-              {s.upcoming && (
-                <UpcomingCard
-                  events={filtered.events}
-                  onOpen={openViewer}
-                  matchHeight={listHeight}
-                />
-              )}
-              {s.todos && (
-                <TodosCard
-                  todos={filtered.todos}
-                  onOpen={openViewer}
-                  onToggle={toggleTodo}
-                  onAdd={() => setAddingTodo(true)}
-                  matchHeight={listHeight}
-                />
-              )}
-              {s.pursuits && (
-                <PursuitsCard
-                  pursuits={filtered.pursuits}
-                  onOpen={openViewer}
-                  onToggleHabit={toggleHabit}
-                />
-              )}
-            </div>
+            <SectionBand>
+              <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-3">
+                {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
+                {s.todos && (
+                  <TodosCard
+                    todos={filtered.todos}
+                    onOpen={openViewer}
+                    onToggle={toggleTodo}
+                    onAdd={() => setAddingTodo(true)}
+                  />
+                )}
+                {s.pursuits && (
+                  <PursuitsCard
+                    pursuits={filtered.pursuits}
+                    onOpen={openViewer}
+                    onToggleHabit={toggleHabit}
+                  />
+                )}
+              </div>
+            </SectionBand>
           )}
 
-          {/* Row 3 - Agent Work: the live picture of what Jarvis is doing
-              right now (crons, plans, skills, …). Kanban unchanged. */}
+          {/* PLAIN - Agent work: the live picture of what Jarvis is doing
+              right now (crons, plans, skills, …), as one grouped ledger. */}
           {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
 
+          {/* CARD - the one section that is a single object he acts on. */}
           {s.reflection && reflection && (
             <ReflectionCard reflection={reflection} onOpen={openViewer} />
           )}
 
+          {/* BAND */}
           {s.saved && (
-            <SavedCard saved={filtered.saved} artifacts={filtered.artifacts} onOpen={openViewer} />
+            <SectionBand>
+              <SavedCard
+                saved={filtered.saved}
+                artifacts={filtered.artifacts}
+                onOpen={openViewer}
+              />
+            </SectionBand>
           )}
 
+          {/* PLAIN */}
           {s.activity && <ActivityCard activity={filtered.activity} onOpen={openViewer} />}
         </main>
 

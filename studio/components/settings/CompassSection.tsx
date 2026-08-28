@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Compass, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Section } from "@/components/dashboard/Section";
+import { SettingRow } from "@/components/ui/setting-row";
 import { useRealtime } from "@/lib/realtime/provider";
 import {
   fetchCompass,
@@ -72,33 +74,25 @@ export function CompassSection() {
   }
 
   return (
-    <div className="space-y-3">
-      <div className="space-y-1">
-        <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
-          <Compass className="size-4" /> Compass
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          Your north-star, in your words. Jarvis reads this on every turn and lets it frame what
-     matters, it&apos;s authored by you, not inferred. Leave a field blank to skip it.
-        </p>
-      </div>
-
+    // Majordomo §1.3/§1.5: the nav rail and the page header already say
+    // "Compass", so the duplicated <h2> + paragraph become the Section title
+    // plus a count. What each field is FOR still shows, as the textarea's own
+    // placeholder — a decision aid at the point of decision.
+    <Section title="Compass" Icon={Compass} badge={loaded ? sections.length : undefined} noPad>
       {!loaded ? (
         <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> Loading…
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="min-w-0">
           {sections.map((s) => (
-            <div
+            <SettingRow
               key={s.section}
-              className="rounded-xl border border-border bg-card/40 p-4 min-w-0 max-w-full"
-            >
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{s.label || s.section}</span>
-                <div className="flex items-center gap-2">
+              label={s.label || s.section}
+              control={
+                <>
                   {savedAt[s.section] && !dirty[s.section] ? (
-                    <span className="flex items-center gap-1 text-xs text-emerald-500">
+                    <span className="flex items-center gap-1 text-[12px] text-brand">
                       <Check className="size-3" /> Saved
                     </span>
                   ) : null}
@@ -110,8 +104,9 @@ export function CompassSection() {
                   >
                     {saving === s.section ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
                   </Button>
-                </div>
-              </div>
+                </>
+              }
+            >
               <Textarea
                 value={drafts[s.section] ?? ""}
                 onChange={(e) =>
@@ -123,11 +118,12 @@ export function CompassSection() {
                 placeholder={PLACEHOLDERS[s.section] ?? ""}
                 rows={3}
                 className="min-h-[80px] resize-y"
+                aria-label={s.label || s.section}
               />
-            </div>
+            </SettingRow>
           ))}
         </div>
       )}
-    </div>
+    </Section>
   );
 }

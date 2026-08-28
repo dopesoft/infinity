@@ -1,15 +1,31 @@
 "use client";
 
-import { ChevronRight, Globe, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { RiskBadge } from "@/components/RiskBadge";
+import { ListRow, type RowTone } from "@/components/ui/list-row";
 import type { SkillSummaryDTO } from "@/lib/api";
 
-const statusDot = {
-  active: "bg-success",
-  candidate: "bg-warning",
-  archived: "bg-muted-foreground/40",
-} as const;
+/**
+ * SkillCard — one skill, one row (Majordomo §2: surface → sections → rows).
+ *
+ * Was a `rounded-xl border bg-card` tile with three stacked chip rows inside
+ * a bordered column. Now it composes `ListRow`, so the hairline, the 44px
+ * touch target, the hover ground, the truncation chain and the chevron all
+ * come from the primitive and this file only decides WHAT is said:
+ *
+ *   title  the plain-English description (the readable name rule) and only
+ *          the skill's id when it has no description.
+ *   meta   the engine detail on one line: id · version · risk · network.
+ *   dot    status (active / candidate / archived), the one bit of colour.
+ *
+ * The name keeps its export and prop shape, so /skills is the only consumer
+ * that had to change.
+ */
+const statusTone: Record<SkillSummaryDTO["status"], RowTone> = {
+  active: "success",
+  candidate: "warning",
+  archived: "quiet",
+};
 
 export function SkillCard({
   skill,
@@ -27,45 +43,35 @@ export function SkillCard({
         ? skill.network_egress[0]
         : `${skill.network_egress.length} domains`;
 
+  const meta = [
+    skill.name,
+    `v${skill.version || "-"}`,
+    `${skill.risk_level} risk`,
+    networkEgress,
+    `importance ${skill.importance ?? 50}`,
+  ].join(" · ");
+
   return (
-    <button
-      type="button"
+    <ListRow
+      tone={statusTone[skill.status]}
+      title={skill.description?.trim() || skill.name}
+      meta={meta}
       onClick={onClick}
-      className={cn(
-        "w-full rounded-xl border bg-card px-3 py-2 text-left transition-colors",
-        "hover:bg-accent",
-        active && "border-info ring-1 ring-info",
-      )}
-    >
-      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className={cn("inline-block size-1.5 rounded-full", statusDot[skill.status])} />
-          <code className="truncate font-mono text-foreground">{skill.name}</code>
-          <span className="font-mono">v{skill.version || "-"}</span>
-        </div>
-        {skill.source === "auto_evolved" && (
-          <Sparkles className="size-3 text-info" aria-hidden />
-        )}
-      </div>
-      <p className="mt-1 line-clamp-2 break-words text-sm">
-        {skill.description || <span className="text-muted-foreground">no description</span>}
-      </p>
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-        <RiskBadge level={skill.risk_level} />
-        <span className="rounded-full bg-info/10 px-1.5 py-0.5 font-mono uppercase text-info">
-          imp {skill.importance ?? 50}
-        </span>
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 font-mono uppercase text-muted-foreground">
-          <Globe className="size-2.5" aria-hidden />
-          {networkEgress}
-        </span>
-        {skill.success_rate > 0 && (
-          <span className="ml-auto font-mono text-muted-foreground">
-            {Math.round(skill.success_rate * 100)}%
-          </span>
-        )}
-        <ChevronRight className="size-3 text-muted-foreground" aria-hidden />
-      </div>
-    </button>
+      trailing={
+        <>
+          {skill.source === "auto_evolved" ? (
+            <span title="Evolved by Voyager" className="inline-flex">
+              <Sparkles className="size-3.5 text-info" aria-hidden />
+            </span>
+          ) : null}
+          {skill.success_rate > 0 ? (
+            <span className="font-mono text-[12px] tabular-nums text-quiet">
+              {Math.round(skill.success_rate * 100)}%
+            </span>
+          ) : null}
+        </>
+      }
+      className={cn(active && "bg-accent")}
+    />
   );
 }

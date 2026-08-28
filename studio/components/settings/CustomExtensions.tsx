@@ -3,19 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  Check,
-  CircleDashed,
   ExternalLink,
   Plus,
   RefreshCcw,
   Trash2,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { EmptyState } from "@/components/EmptyState";
 import { ModalSection, ModalUrl, ModalField } from "@/components/ui/modal-content";
 import { RunIndicator } from "@/lib/runs";
 import { cn } from "@/lib/utils";
@@ -55,42 +53,45 @@ export function CustomExtensions() {
   }, [load]);
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-xs text-muted-foreground">
-          Bring your own capability. MCP servers and REST endpoints connect instantly; CLI tools
-          install into the always-on cloud workspace (so crons can use them even when your Mac is
-          offline) and walk you through any sign-in. Jarvis can register these himself too.
-        </p>
-        <Button size="sm" className="shrink-0" onClick={() => setAdding(true)}>
-          <Plus className="size-4" /> Add
-        </Button>
-      </div>
+    <div className="min-w-0 space-y-3">
+      <GroupLabel
+        label="Your own tools"
+        count={items.length || undefined}
+        trailing={
+          <Button size="sm" onClick={() => setAdding(true)}>
+            <Plus className="size-4" /> Add
+          </Button>
+        }
+      />
+      <p className="text-[12px] leading-relaxed text-quiet">
+        MCP servers and REST endpoints connect instantly; CLI tools install into the always-on cloud
+        workspace (so crons can use them even when your Mac is offline) and walk you through any
+        sign-in. Jarvis can register these himself too.
+      </p>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/5 p-3">
+        <div className="flex min-w-0 items-start gap-2 rounded-[10px] bg-danger/10 px-3 py-2.5">
           <AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
-          <p className="min-w-0 break-words text-xs text-danger/80">{error}</p>
+          <p className="min-w-0 break-words text-[12.5px] text-danger">{error}</p>
         </div>
       )}
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="py-2 text-[13.5px] text-quiet">Loading…</p>
       ) : items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-xl border bg-muted/30 p-6 text-center">
-          <Plus className="size-7 text-muted-foreground" aria-hidden />
-          <p className="text-sm font-semibold">No custom tools yet</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            Add an MCP server, a REST endpoint, or a command-line tool. Then ask Jarvis to use it or
-            build a cron around it.
-          </p>
-        </div>
+        <EmptyState
+          icon={Plus}
+          align="top"
+          className="pt-8"
+          title="No custom tools yet"
+          description="Add an MCP server, a REST endpoint, or a command-line tool. Then ask Jarvis to use it or build a cron around it."
+        />
       ) : (
-        <ul className="space-y-1.5">
+        <div className="min-w-0">
           {items.map((e) => (
             <ExtensionRow key={e.id || e.name} ext={e} onChanged={load} />
           ))}
-        </ul>
+        </div>
       )}
 
       {adding && (
@@ -129,99 +130,66 @@ function ExtensionRow({ ext, onChanged }: { ext: Extension; onChanged: () => voi
 
   const pending = ext.status === "pending_auth";
   const errored = ext.status === "error";
+  const meta = [
+    ext.kind,
+    ext.status === "pending_auth" ? "needs sign-in" : ext.status,
+    ext.source === "agent" ? "registered by Jarvis" : "",
+    ext.tool_name || "",
+    ext.description || "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <li className="overflow-hidden rounded-md border bg-background">
-      <div className="flex items-start gap-2 px-3 py-2.5">
-        <StatusIcon status={ext.status} />
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-xs font-semibold">{ext.name}</span>
-            <Badge variant="secondary" className="h-4 px-1 font-mono text-[9px] uppercase">
-              {ext.kind}
-            </Badge>
-            <StatusBadge status={ext.status} />
-            {ext.source === "agent" && (
-              <Badge className="h-4 bg-info/15 px-1 font-mono text-[9px] text-info">jarvis</Badge>
-            )}
-            {ext.tool_name && (
-              <Badge variant="secondary" className="h-4 px-1 font-mono text-[9px]">
-                {ext.tool_name}
-              </Badge>
-            )}
-          </div>
-
-          {ext.description && (
-            <p className="text-[11px] text-muted-foreground">{ext.description}</p>
-          )}
-
-          {pending && (
-            <div className="space-y-1.5 rounded-md bg-warning/10 p-2">
-              <p className="text-[11px] text-foreground/80">
-                {ext.auth_instructions || "Sign-in needed to finish setup."}
-              </p>
-              {ext.auth_url && (
-                <ModalUrl href={ext.auth_url} icon={<ExternalLink className="size-3.5" />}>
-                  {ext.auth_url}
-                </ModalUrl>
-              )}
-              <div>
-                <Button size="sm" variant="secondary" disabled={busy} onClick={onCheck}>
-                  <RefreshCcw className={cn("size-3.5", busy && "animate-spin")} /> I&apos;ve signed in
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {errored && ext.last_error && (
-            <p className="break-words rounded-sm bg-danger/10 p-1.5 text-[10px] text-danger">
-              {ext.last_error}
-            </p>
-          )}
-
-          {/* cli install progress survives navigation via mem_runs. */}
-          {ext.kind === "cli" && (
-            <RunIndicator kind="extension.register" targetId={ext.name} mode="inline" />
-          )}
-        </div>
-
-        <button
-          type="button"
+    <ListRow
+      tone={ext.status === "active" ? "success" : errored ? "danger" : pending ? "warning" : "quiet"}
+      title={ext.name}
+      meta={meta}
+      chevron={false}
+      trailing={
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-9 text-quiet hover:bg-danger/10 hover:text-danger"
           onClick={onRemove}
           disabled={busy}
-          className="size-7 shrink-0 rounded text-muted-foreground hover:bg-danger/10 hover:text-danger"
           aria-label={`Remove ${ext.name}`}
           title={`Remove ${ext.name}`}
         >
-          <Trash2 className="mx-auto size-3.5" aria-hidden />
-        </button>
-      </div>
-    </li>
-  );
-}
+          <Trash2 className="size-4" aria-hidden />
+        </Button>
+      }
+    >
+      {pending && (
+        // The sign-in hand-off: what to do, where to go, and the button that
+        // resumes once it's done (project memory: auth is a pause/resume,
+        // never a dead end).
+        <div className="min-w-0 space-y-2">
+          <p className="text-[12.5px] leading-relaxed text-foreground/85">
+            {ext.auth_instructions || "Sign-in needed to finish setup."}
+          </p>
+          {ext.auth_url && (
+            <ModalUrl href={ext.auth_url} icon={<ExternalLink className="size-3.5" />}>
+              {ext.auth_url}
+            </ModalUrl>
+          )}
+          <Button size="sm" variant="secondary" disabled={busy} onClick={onCheck}>
+            <RefreshCcw className={cn("size-3.5", busy && "animate-spin")} /> I&apos;ve signed in
+          </Button>
+        </div>
+      )}
 
-function StatusIcon({ status }: { status: string }) {
-  if (status === "active")
-    return <Check className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />;
-  if (status === "error")
-    return <X className="mt-0.5 size-3.5 shrink-0 text-danger" aria-hidden />;
-  return <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
-}
+      {errored && ext.last_error && (
+        <p className="min-w-0 whitespace-pre-wrap text-[12px] text-danger [overflow-wrap:anywhere]">
+          {ext.last_error}
+        </p>
+      )}
 
-function StatusBadge({ status }: { status: string }) {
-  const tone =
-    status === "active"
-      ? "bg-success/10 text-success"
-      : status === "error"
-        ? "bg-danger/10 text-danger"
-        : status === "pending_auth"
-          ? "bg-warning/15 text-warning"
-          : "bg-muted-foreground/15 text-muted-foreground";
-  const label = status === "pending_auth" ? "needs sign-in" : status;
-  return (
-    <Badge variant="secondary" className={cn("h-4 px-1 font-mono text-[9px] uppercase", tone)}>
-      {label}
-    </Badge>
+      {/* cli install progress survives navigation via mem_runs. */}
+      {ext.kind === "cli" && (
+        <RunIndicator kind="extension.register" targetId={ext.name} mode="inline" />
+      )}
+    </ListRow>
   );
 }
 

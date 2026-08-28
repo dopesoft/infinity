@@ -4,14 +4,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatBubble } from "@/components/ChatBubble";
-import { ToolCallCard } from "@/components/ToolCallCard";
 import { AgentTeamCard } from "@/components/AgentTeamCard";
-import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { SkillProposalCard } from "@/components/SkillProposalCard";
 import { PlanProposalCard, PLAN_PROPOSAL_TOOLS } from "@/components/PlanProposalCard";
-import { TurnWorkBlock } from "@/components/chat/TurnWorkBlock";
+import { ActivityLedger } from "@/components/chat/ActivityLedger";
+import { ActivityStepFor } from "@/components/chat/ActivityStep";
 import { DashboardContextCard } from "@/components/DashboardContextCard";
 import { WorkingIndicator } from "@/components/WorkingIndicator";
+import { describeStep } from "@/lib/chat/activity";
 import type { ChatMessage } from "@/hooks/useChat";
 
 const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
@@ -30,11 +30,16 @@ function workingState(
   if (!working) return { show: false, label: "" };
   const last = messages[messages.length - 1];
   if (last) {
-    if (last.role === "thinking" && last.pending) return { show: false, label: "" };
+    // The trailing message belongs to a ledger, and a live ledger's headline
+    // IS the working row - it shimmers and it carries the one spinner (§6).
+    // Rendering this row too would put two "still working" signals, and two
+    // spinners, on the same screen.
+    if (isFoldable(last)) return { show: false, label: "" };
     if (last.role === "tool" && last.pending) {
+      // A decision card mid-flight (a plan being laid out, a team starting).
+      // The label comes from the vocabulary, never from the tool id.
       if (last.toolCall?.awaiting_approval) return { show: false, label: "" };
-      const name = last.toolCall?.name?.trim();
-      return { show: true, label: name ? `Running ${name}…` : "Running tool…" };
+      return { show: true, label: describeStep(last.toolCall).verb };
     }
     if (last.role === "assistant" && last.pending) {
       return { show: true, label: "Responding…" };
@@ -54,8 +59,8 @@ function isDecisionCard(m: ChatMessage): boolean {
   return false;
 }
 
-// Working churn: tool cards, thinking blocks and the interim narration that
-// streams before a tool call. Folded into one TurnWorkBlock per run so the
+// Working churn: tool calls, thinking blocks and the interim narration that
+// streams before a tool call. Folded into one ActivityLedger per run so the
 // transcript reads message → what he did (one line) → reply, instead of a
 // wall of narration and cards (2026-08-26: "zillions of messages").
 function isFoldable(m: ChatMessage): boolean {
@@ -95,21 +100,20 @@ function renderConversation(messages: ChatMessage[], onQuickReply?: (text: strin
                   </div>
                 </div>
               ) : (
-                // Tool/Thinking/Context cards all share the same left-
-                // anchored max-w-[80%] as the assistant ChatBubble so the
-                // "agent voice" column reads as one consistent rail -
-                // earlier slim widths (1/2 / 3/4) made long INPUT/OUTPUT
-                // payloads unreadable, especially the indented JSON.
+                // A step that reached the top level on its own (a tool
+                // message with nothing to fold it into). Same left-anchored
+                // column as the ledger and the assistant bubble, so the
+                // "agent voice" rail reads as one thing.
                 <div className="flex justify-start">
                   <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
-                    <ToolCallCard message={m} />
+                    <ActivityStepFor message={m} />
                   </div>
                 </div>
               )
             ) : m.role === "thinking" ? (
               <div className="flex justify-start">
                 <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
-                  <ThinkingBlock message={m} />
+                  <ActivityStepFor message={m} />
                 </div>
               </div>
             ) : m.seeded ? (
@@ -134,7 +138,7 @@ function renderConversation(messages: ChatMessage[], onQuickReply?: (text: strin
     if (fold) {
       out.push(
         <div key={`work-${group[0].id}`} className="min-w-0 max-w-full" data-message>
-          <TurnWorkBlock items={group} renderItem={renderMessage} />
+          <ActivityLedger items={group} />
         </div>,
       );
     } else {

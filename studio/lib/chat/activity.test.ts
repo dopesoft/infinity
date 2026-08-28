@@ -540,3 +540,47 @@ describe("formatDuration", () => {
     expect(formatDuration(ms)).toBe(want);
   });
 });
+
+// ─── the seam between this file and the component layer ──────────────────────
+//
+// `glyph` is a Lucide icon NAME, so `activity.ts` can stay pure and testable.
+// That only works if the component layer can resolve every name this file can
+// emit. These two tests hold that seam shut; without them a new row in the
+// verb table renders as the generic wrench and nobody finds out.
+
+describe("the component seam", () => {
+  it("gives a single message exactly one item", () => {
+    // WHY: ActivityStep renders a lone message (a thinking block outside a
+    // run, PlanProposalCard's fallback) by coalescing a one-element array and
+    // taking [0]. If that ever returned zero or two items, the row vanishes or
+    // duplicates. Same call the opened group makes for each of its members.
+    expect(coalesce([toolMessage("bash_run", { input: { command: "ls" }, at: T0 })])).toHaveLength(1);
+    expect(coalesce([thinking("hmm", T0)])).toHaveLength(1);
+    expect(coalesce([narration("checking", T0)])).toHaveLength(1);
+  });
+
+  it("only ever emits glyph names the ledger can render", async () => {
+    // WHY: components/chat/ActivityStep.tsx maps NAME → Lucide component and
+    // falls back to Wrench for anything it does not know. A silent fallback is
+    // indistinguishable from an intentional wrench, so the failure is
+    // invisible in review AND in the UI. Parse the map out of the component
+    // and prove every name this module can produce is in it.
+    const fs = await import("node:fs");
+    const url = await import("node:url");
+    const path = await import("node:path");
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const componentPath = path.join(here, "..", "..", "components", "chat", "ActivityStep.tsx");
+    const component = fs.readFileSync(componentPath, "utf8");
+    const mapBody = component.match(/const GLYPHS: Record<string, LucideIcon> = \{([\s\S]*?)\n\};/);
+    expect(mapBody, "GLYPHS map not found in ActivityStep.tsx").toBeTruthy();
+    const known = new Set(
+      (mapBody![1].match(/[A-Za-z0-9]+(?=\s*[,:])/g) ?? []).map((s) => s.trim()),
+    );
+    expect(known.size).toBeGreaterThan(50);
+
+    const source = fs.readFileSync(path.join(here, "activity.ts"), "utf8");
+    const emitted = new Set((source.match(/glyph: "([A-Za-z0-9]+)"/g) ?? []).map((m) => m.slice(8, -1)));
+    expect(emitted.size).toBeGreaterThan(50);
+    expect([...emitted].filter((g) => !known.has(g))).toEqual([]);
+  });
+});

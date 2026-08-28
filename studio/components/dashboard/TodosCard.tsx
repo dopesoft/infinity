@@ -1,9 +1,12 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CheckCheck, Circle, ListTodo, Plus, Sparkles } from "lucide-react";
+import { Check, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ListRow } from "@/components/ui/list-row";
 import { Section } from "./Section";
 import { ScrollList } from "./ScrollList";
+import { DASHBOARD_LIST_ROWS } from "./listHeight";
 import { cn } from "@/lib/utils";
 import { dayLabel } from "@/lib/dashboard/format";
 import type { DashboardItem, Todo } from "@/lib/dashboard/types";
@@ -11,8 +14,16 @@ import type { DashboardItem, Todo } from "@/lib/dashboard/types";
 /* Todos - your tasks, not the agent's work board.
  *
  * Each row is tappable to open the ObjectViewer. The check button toggles
- * inline (optimistic). Source badge on rows the agent created - visible
- * proof Jarvis is filling these in for you.
+ * inline (optimistic). Rows the agent created say so in their meta line -
+ * visible proof Jarvis is filling these in for you.
+ *
+ * MAJORDOMO SWEEP: the row is a `ListRow` with the tick box in the new
+ * `leadingAction` slot, so the checkbox sits OUTSIDE the row's own button
+ * instead of the card hand-rolling a two-button flex to avoid nesting them.
+ * The "agent" / "email" source pills and the due-date stamp were three
+ * separate coloured badges; they are one quiet meta line now. "Add todo" was a
+ * full-width dashed rectangle - §1.2 has no dashed boxes, so it is a plain
+ * ghost button, which is also a 44px touch target for the first time.
  */
 export function TodosCard({
   todos,
@@ -25,8 +36,8 @@ export function TodosCard({
   onOpen: (item: DashboardItem) => void;
   onToggle: (id: string) => void;
   onAdd: () => void;
-  /** Shared dashboard list height (px) off the Email card. See ScrollList
-   *  "matched" mode; null → fall back to the `max` row count. */
+  /** Legacy explicit pixel cap (ScrollList "matched" mode). No longer threaded
+   *  by the dashboard - see `./listHeight` for why. */
   matchHeight?: number | null;
 }) {
   const open = todos.filter((t) => !t.done);
@@ -35,34 +46,36 @@ export function TodosCard({
   return (
     <Section
       title="Todos"
-      Icon={ListTodo}
-      delay={0.1}
       badge={open.length}
       action={doneCount > 0 ? { label: `${doneCount} done`, href: "/memory" } : undefined}
     >
-      {/* No inner card wrapper - Section already provides chrome. */}
-      <div className="space-y-2">
-        <ScrollList max={4} maxHeight={matchHeight ?? undefined}>
-          <ul className="space-y-1">
-            {open.map((t) => (
-              <TodoRow
-                key={t.id}
-                t={t}
-                onOpen={() => onOpen({ kind: "todo", data: t })}
-                onToggle={() => onToggle(t.id)}
-              />
-            ))}
-          </ul>
-        </ScrollList>
+      <div className="min-w-0">
+        {open.length === 0 ? (
+          <p className="py-2 text-[13px] text-quiet">Nothing on your list.</p>
+        ) : (
+          <ScrollList max={DASHBOARD_LIST_ROWS} maxHeight={matchHeight ?? undefined}>
+            <div className="flex min-w-0 flex-col">
+              {open.map((t) => (
+                <TodoRow
+                  key={t.id}
+                  t={t}
+                  onOpen={() => onOpen({ kind: "todo", data: t })}
+                  onToggle={() => onToggle(t.id)}
+                />
+              ))}
+            </div>
+          </ScrollList>
+        )}
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={onAdd}
-          className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+          className="mt-1 h-11 w-full justify-start px-0 text-[13.5px] font-medium text-quiet hover:bg-transparent hover:text-foreground"
         >
-          <Plus className="size-3.5" aria-hidden />
+          <Plus className="size-4" aria-hidden />
           Add todo
-        </button>
+        </Button>
       </div>
     </Section>
   );
@@ -77,60 +90,54 @@ function TodoRow({
   onOpen: () => void;
   onToggle: () => void;
 }) {
-  const priorityTone =
-    t.priority === "high" ? "text-danger" : t.priority === "med" ? "text-rose-400" : "text-muted-foreground";
+  // Due dates carry the urgency: high priority reads danger, medium warning,
+  // everything else stays grey (§1.4 - colour means something).
+  const dueTone =
+    t.priority === "high" ? "text-danger" : t.priority === "med" ? "text-warning" : "text-quiet";
+  const source = t.source === "agent" ? "from Jarvis" : t.source === "email" ? "from email" : "";
+
   return (
-    <li className="group flex items-center gap-2">
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.85 }}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        aria-label="Mark done"
-        className={cn(
-          "inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-all",
-          "border-border bg-background hover:border-foreground/40",
-        )}
-      >
-        <Circle className="size-3.5 text-muted-foreground/60 transition-opacity group-hover:opacity-100" aria-hidden />
-      </motion.button>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/50"
-      >
-        <span className="min-w-0 flex-1 truncate text-sm text-foreground">{t.title}</span>
-        {t.source === "agent" ? (
-          <span
-            aria-label="Created by Jarvis"
-            title="Created by Jarvis"
-            className="inline-flex items-center gap-0.5 rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-info"
-          >
-            <Sparkles className="size-2.5" aria-hidden />
-            agent
+    <ListRow
+      title={t.title}
+      onClick={onOpen}
+      meta={
+        source ? (
+          <span>{source}</span>
+        ) : null
+      }
+      leadingAction={
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.85 }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          aria-label="Mark done"
+          /* 18px on the page, 44px to a thumb: the padding grows the hit area
+             and the matching negative margin gives the space back to layout,
+             so the tick lines up with every other row's 18px leading glyph
+             while still clearing the touch-target rule. */
+          className="group -m-[13px] inline-flex size-11 shrink-0 items-center justify-center text-quiet transition-colors hover:text-foreground"
+        >
+          <span className="inline-flex size-[18px] items-center justify-center rounded-full border border-border transition-colors group-hover:border-foreground/50">
+            <Check
+              className="size-3 opacity-0 transition-opacity group-hover:opacity-100"
+              aria-hidden
+            />
           </span>
-        ) : t.source === "email" ? (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            email
-          </span>
-        ) : null}
-        {t.dueAt ? (
+        </motion.button>
+      }
+      trailing={
+        t.dueAt ? (
           <span
-            className={cn(
-              "shrink-0 font-mono text-[10px] uppercase tracking-wider",
-              priorityTone,
-            )}
+            className={cn("shrink-0 text-[12px] tabular-nums", dueTone)}
             suppressHydrationWarning
           >
             {dayLabel(t.dueAt).toLowerCase()}
           </span>
-        ) : null}
-      </button>
-    </li>
+        ) : null
+      }
+    />
   );
 }
-
-// (CheckCheck import is referenced for tree-shake safety even though we use Circle.)
-void CheckCheck;

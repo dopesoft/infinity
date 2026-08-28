@@ -92,7 +92,10 @@ export function todayHeader(): { title: string; sub: string } {
   const d = new Date();
   return {
     title: d.toLocaleDateString([], { weekday: "long" }),
-    sub: d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" }),
+    // No year: this line always describes TODAY, so the year is noise the
+    // boss has to read past every time ("Friday, August 28, 2026 · 2:24pm"
+    // → "Friday, August 28 · 2:24pm").
+    sub: d.toLocaleDateString([], { month: "long", day: "numeric" }),
   };
 }
 

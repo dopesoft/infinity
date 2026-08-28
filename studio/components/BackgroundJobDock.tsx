@@ -8,11 +8,11 @@ import {
   ChevronUp,
   Circle,
   FileText,
-  Loader2,
   Minus,
   X,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { StatusDot } from "@/components/ui/list-row";
 import { useRuns } from "@/lib/runs/useRuns";
 import { usePlan } from "@/lib/plans/usePlan";
 import type { PlanStep } from "@/lib/dashboard/types";
@@ -80,8 +80,11 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
         aria-label={expanded ? "Collapse plan" : "Expand plan"}
         className="flex w-full min-w-0 items-center gap-2.5"
       >
+        {/* A pulsing dot, not a spinner: MAJORDOMO §6 reserves the one
+            spinner on screen for the ledger's running step, and this dock
+            sits on the same screen as the ledger. */}
         {running ? (
-          <Loader2 className="size-4 shrink-0 animate-spin text-info" />
+          <StatusDot tone="info" pulse className="mx-[5px]" />
         ) : plan?.status === "paused" ? (
           <AlertTriangle className="size-4 shrink-0 text-warning" />
         ) : (
@@ -101,16 +104,25 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
         )}
       </button>
 
-      {!expanded && (
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-[26px] text-[11px] text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate font-mono text-foreground/80">{status}</span>
-          {others.length > 0 && (
-            <span className="ml-auto shrink-0 rounded-full bg-info/15 px-1.5 text-info">
-              +{others.length}
-            </span>
-          )}
-        </div>
-      )}
+      {/* One line naming the step he is on (MAJORDOMO §6). It is the plan's
+          current step in the voice face - what is actually happening - with
+          the count as quiet data beside it. Rendered whether or not the dock
+          is expanded, because "17%" alone never told the boss anything. */}
+      <div className="mt-1 flex min-w-0 items-center gap-2 pl-[26px]">
+        <span className="min-w-0 flex-1 truncate font-voice text-[13.5px] leading-[1.45] text-foreground">
+          {current || status}
+        </span>
+        {hasPlan && (
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-quiet">
+            {done}/{total}
+          </span>
+        )}
+        {others.length > 0 && (
+          <span className="shrink-0 rounded-full bg-info/15 px-1.5 font-mono text-[11px] text-info">
+            +{others.length}
+          </span>
+        )}
+      </div>
 
       {expanded && (
         <div className="mt-2.5 space-y-2.5 border-t border-info/20 pt-2.5">
@@ -164,7 +176,7 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
             <div className="space-y-1.5 border-t border-info/20 pt-2.5">
               {others.map((run) => (
                 <div key={run.id} className="flex min-w-0 items-center gap-2 text-[11px]">
-                  <Loader2 className="size-3 shrink-0 animate-spin text-info/70" />
+                  <StatusDot tone="info" pulse className="mx-[4px]" />
                   <span className="min-w-0 flex-1 truncate text-foreground/80">
                     {run.label?.trim() || "Background build"}
                   </span>
@@ -183,7 +195,8 @@ function StepIcon({ status }: { status: PlanStep["status"] }) {
     case "done":
       return <Check className="mt-0.5 size-3.5 shrink-0 text-success" />;
     case "in_progress":
-      return <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-info" />;
+      // Pulsing dot, not a spinner - see the header note above.
+      return <StatusDot tone="info" pulse className="mt-[7px] mx-[5px]" />;
     case "blocked":
       return <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />;
     case "failed":

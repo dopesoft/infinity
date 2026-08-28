@@ -778,14 +778,18 @@ export function ModalChips({
       )}
     >
       {items.map((child, i) => (
-        <React.Fragment key={i}>
+        // The separator travels INSIDE the segment it precedes, so a wrap can
+        // never leave a dangling "·" at the end of a line (it did, at 375px,
+        // on a follow-up's triage line). Each segment is its own flex item, so
+        // the row still wraps between segments rather than mid-segment.
+        <span key={i} className="inline-flex min-w-0 items-center gap-x-1.5">
           {i > 0 ? (
             <span aria-hidden className="text-quiet/60">
               ·
             </span>
           ) : null}
           {child}
-        </React.Fragment>
+        </span>
       ))}
     </div>
   );

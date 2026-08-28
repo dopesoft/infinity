@@ -212,7 +212,10 @@ export function ChatBubble({
               first. */}
           <div
             className={cn(
-              "min-w-0 max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 text-sm leading-relaxed text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
+              // Jarvis speaks in the voice face (MAJORDOMO §1.1, §6): larger and
+              // lighter in ink than the chrome around it, so his words read as
+              // HIM and the interface reads as the machine.
+              "min-w-0 max-w-full rounded-2xl rounded-tl-sm bg-zinc-200/80 px-3 py-2 font-voice text-[15.5px] leading-[1.55] text-foreground sm:max-w-[80%] dark:bg-zinc-800/80",
               message.proactive && "border border-info/40",
               message.proactiveKind === "skill_promoted" &&
                 "border-success/40 bg-success/5 dark:bg-success/10",

@@ -30,10 +30,18 @@ import type { PlanStep, PlanStepStatus } from "@/lib/dashboard/types";
  * verdict and its evidence, the live `RunIndicator` for an executing step
  * (which survives navigation), the result summary and the ended-at stamp.
  *
- * TODO(majordomo-phase-2b): replace the per-step row with <ActivityStep> once
- * phase 2b lands it. The glyph/verb/meta/detail anatomy here is deliberately
- * the same one so the swap is a straight substitution, not a redesign - do NOT
- * grow this into a general-purpose step component in the meantime. */
+ * Phase 2b resolved the open question here: this row stays, and it does NOT
+ * become <ActivityStep>. They share an anatomy on purpose (glyph, title, quiet
+ * meta, detail) and they must keep sharing it, but they are two different
+ * things underneath. ActivityStep renders an `ActivityItem` - a coalesced run
+ * of tool calls off the WebSocket, whose words come from the tested vocabulary
+ * in lib/chat/activity.ts and whose one interaction is open/close. A PlanStep
+ * is a durable `mem_plans` row with a verify verdict, evidence, a checkpoint
+ * flag, a result summary and a live RunIndicator keyed by run id. Feeding one
+ * into the other means either dropping half of that or teaching ActivityStep a
+ * second data model and five more content slots - which is precisely the
+ * "general-purpose step component" the phase-3 note warned against. Keep the
+ * shape identical by copying the classes; keep the components separate. */
 export function PlanTimeline({ steps }: { steps: PlanStep[] }) {
   if (!steps.length) {
     return <p className="text-[13px] text-quiet">No steps yet.</p>;

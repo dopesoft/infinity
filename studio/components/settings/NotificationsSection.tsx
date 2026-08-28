@@ -13,8 +13,11 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
+import { Section } from "@/components/dashboard/Section";
+import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { Inset } from "@/components/ui/inset";
+import { SettingRow } from "@/components/ui/setting-row";
 import {
   fetchDevices,
   fetchPushPrefs,
@@ -149,19 +152,17 @@ export function NotificationsSection() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <Bell className="size-4 text-muted-foreground" aria-hidden />
-          <h2 className="text-base font-semibold tracking-tight">Notifications</h2>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Receive iOS-style banners on your iPhone and Mac when Jarvis needs
-          you. Each device is subscribed independently - enable on every
-          device you want pushes on.
-        </p>
-      </div>
-
+    // Majordomo §1.3: the rail and the page title already said
+    // "Notifications", so the duplicated heading + paragraph collapse into
+    // the Section title and its count. The per-device and per-kind
+    // descriptions below are decision aids and stay (§1.5).
+    <Section
+      title="Notifications"
+      Icon={Bell}
+      badge={devices.length ? `${devices.length} device${devices.length === 1 ? "" : "s"}` : undefined}
+      noPad
+    >
+      <div className="min-w-0 space-y-3 pt-3">
       <CapabilityBlock status={status} />
 
       <ActionBlock
@@ -173,22 +174,23 @@ export function NotificationsSection() {
       />
 
       {status?.subscribed && Boolean(vapid) && (
-        <div className="flex flex-wrap items-center justify-end gap-2 rounded-md border bg-background p-3">
-          <p className="mr-auto text-[12px] text-muted-foreground">
-            Send a test banner to every registered device.
-          </p>
-          <Button variant="ghost" onClick={onTest} disabled={busy !== null} className="gap-1.5">
-            {busy === "test" ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
-            Send test
-          </Button>
-        </div>
+        <SettingRow
+          label="Send a test banner"
+          description="Fires one push to every registered device so you can confirm delivery."
+          control={
+            <Button variant="ghost" onClick={onTest} disabled={busy !== null} className="gap-1.5">
+              {busy === "test" ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              Send test
+            </Button>
+          }
+        />
       )}
 
       {testResult && (
-        <p className="rounded-sm bg-success/10 p-2 text-[11px] text-success">{testResult}</p>
+        <p className="rounded-[8px] bg-success/10 px-3 py-2 text-[12px] text-success">{testResult}</p>
       )}
       {err && (
-        <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
+        <p className="rounded-[8px] bg-danger/10 px-3 py-2 text-[12px] text-danger">{err}</p>
       )}
 
       <DeviceList devices={devices} onRemove={refresh} />
@@ -196,7 +198,8 @@ export function NotificationsSection() {
       <PrefsBlock subscribed={Boolean(status?.subscribed)} />
 
       <WhyBlock />
-    </div>
+      </div>
+    </Section>
   );
 }
 
@@ -234,46 +237,33 @@ function PrefsBlock({ subscribed }: { subscribed: boolean }) {
   if (kinds.length === 0 && !prefs) return null;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-baseline justify-between">
-        <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          notify me about
-        </h3>
-        {!subscribed && (
-          <span className="text-[10px] text-muted-foreground">
-            subscribe this device first to receive any of these
-          </span>
-        )}
-      </div>
-      <ul className="overflow-hidden rounded-md border bg-background">
-        {kinds.map((k, i) => {
-          const on = prefs?.[k.kind] ?? false;
-          return (
-            <li
-              key={k.kind}
-              className={cn(
-                "flex items-center gap-3 px-3 py-3",
-                i > 0 && "border-t border-border",
-              )}
-            >
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-foreground">{k.label}</div>
-                <div className="text-[11px] leading-snug text-muted-foreground">
-                  {k.description}
-                </div>
-              </div>
-              <Switch
-                checked={on}
-                disabled={saving === k.kind}
-                onCheckedChange={(v) => void onToggle(k.kind, v)}
-                aria-label={k.label}
-              />
-            </li>
-          );
-        })}
-      </ul>
+    <div className="min-w-0">
+      <GroupLabel
+        label="Notify me about"
+        count={kinds.length}
+        trailing={
+          !subscribed ? (
+            <span className="text-[11px] text-quiet">subscribe this device first</span>
+          ) : undefined
+        }
+      />
+      {kinds.map((k) => (
+        <SettingRow
+          key={k.kind}
+          label={k.label}
+          description={k.description}
+          control={
+            <Switch
+              checked={prefs?.[k.kind] ?? false}
+              disabled={saving === k.kind}
+              onCheckedChange={(v) => void onToggle(k.kind, v)}
+              aria-label={k.label}
+            />
+          }
+        />
+      ))}
       {err && (
-        <p className="rounded-sm bg-danger/10 p-2 text-[11px] text-danger">{err}</p>
+        <p className="mt-2 rounded-[8px] bg-danger/10 px-3 py-2 text-[12px] text-danger">{err}</p>
       )}
     </div>
   );
@@ -282,29 +272,23 @@ function PrefsBlock({ subscribed }: { subscribed: boolean }) {
 function DeviceList({ devices, onRemove }: { devices: Device[]; onRemove: () => void }) {
   if (devices.length === 0) return null;
   return (
-    <div className="space-y-2">
-      <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-        Devices · {devices.length}
-      </h3>
-      <ul className="space-y-1.5">
-        {devices.map((d) => (
-          <li
-            key={d.id}
-            className={cn(
-              "flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-[12px]",
-              d.revoked && "opacity-60",
-            )}
-          >
-            <Smartphone className="size-3.5 text-muted-foreground" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-foreground">{d.label || "Browser"}</p>
-              <p className="font-mono text-[10px] text-muted-foreground">
-                {d.revoked ? "revoked" : d.lastSeenAt ? "active" : "not yet delivered"}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={async () => {
+    <div className="min-w-0">
+      <GroupLabel label="Devices" count={devices.length} />
+      {devices.map((d) => (
+        <ListRow
+          key={d.id}
+          tone={d.revoked ? "quiet" : d.lastSeenAt ? "success" : "warning"}
+          leading={<Smartphone className="size-3.5" aria-hidden />}
+          title={d.label || "Browser"}
+          meta={d.revoked ? "revoked" : d.lastSeenAt ? "active" : "not yet delivered"}
+          disabled={d.revoked}
+          chevron={false}
+          trailing={
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-9"
+              onClick={() => {
                 // For revoked rows the endpoint is truncated; we can still
                 // unsubscribe-by-endpoint locally if this is the current
                 // device. For other devices, surfacing a remote remove
@@ -312,30 +296,26 @@ function DeviceList({ devices, onRemove }: { devices: Device[]; onRemove: () => 
                 // local row + re-fetch.
                 onRemove();
               }}
-              className="text-muted-foreground hover:text-foreground"
               aria-label="Refresh device list"
               title="Refresh"
             >
-              <Trash2 className="size-3.5" aria-hidden />
-            </button>
-          </li>
-        ))}
-      </ul>
+              <Trash2 className="size-4 text-quiet" aria-hidden />
+            </Button>
+          }
+        />
+      ))}
     </div>
   );
 }
 
 function CapabilityBlock({ status }: { status: PushStatus | null }) {
   if (!status) {
-    return (
-      <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
-        Checking browser capability…
-      </div>
-    );
+    return <p className="py-2 text-[13.5px] text-quiet">Checking browser capability…</p>;
   }
   const iosNotInstalled = isIos() && !isIosStandalone();
   return (
-    <ul className="space-y-1.5 rounded-md border bg-background p-3 text-[12px]">
+    <div className="min-w-0">
+      <GroupLabel label="This device" />
       <CapRow
         label="Browser support"
         ok={status.supported}
@@ -375,7 +355,7 @@ function CapabilityBlock({ status }: { status: PushStatus | null }) {
               : "Not yet subscribed."
         }
       />
-    </ul>
+    </div>
   );
 }
 
@@ -391,21 +371,21 @@ function CapRow({
   detail: string;
 }) {
   return (
-    <li className="flex items-start gap-2">
-      <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
-        {ok ? (
+    <ListRow
+      tone={ok ? "success" : warn ? "warning" : "quiet"}
+      leading={
+        ok ? (
           <CheckCircle2 className="size-4 text-success" aria-hidden />
         ) : warn ? (
-          <AlertCircle className="size-4 text-rose-400" aria-hidden />
+          <AlertCircle className="size-4 text-warning" aria-hidden />
         ) : (
-          <BellOff className="size-4 text-muted-foreground" aria-hidden />
-        )}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[12px] font-medium text-foreground">{label}</p>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">{detail}</p>
-      </div>
-    </li>
+          <BellOff className="size-4 text-quiet" aria-hidden />
+        )
+      }
+      title={label}
+      meta={detail}
+      chevron={false}
+    />
   );
 }
 
@@ -424,16 +404,16 @@ function ActionBlock({
 }) {
   if (!status?.supported) {
     return (
-      <div className="rounded-md border border-dashed bg-muted/20 p-3 text-[12px] text-muted-foreground">
-        This browser doesn&apos;t support Web Push. Try Chrome/Edge on desktop
-        or Safari on iOS (after installing as PWA).
-      </div>
+      <Inset>
+        This browser doesn&apos;t support Web Push. Try Chrome/Edge on desktop or Safari on iOS
+        (after installing as PWA).
+      </Inset>
     );
   }
   if (status.blocker === "ios-needs-install") {
     return (
-      <div className="space-y-2 rounded-md border border-dashed bg-muted/20 p-3">
-        <p className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
+      <Inset>
+        <p className="flex items-center gap-1.5 text-[13.5px] font-medium text-foreground">
           <Smartphone className="size-3.5" aria-hidden />
           Install Studio on the Home Screen first
         </p>
@@ -443,63 +423,60 @@ function ActionBlock({
           <li>Choose <span className="font-semibold">Add to Home Screen</span>.</li>
           <li>Open Infinity from the Home Screen icon and come back here.</li>
         </ol>
-      </div>
+      </Inset>
     );
   }
   if (!vapidConfigured) {
     return (
-      <div className="rounded-md border border-dashed bg-muted/20 p-3 text-[12px] text-muted-foreground">
-        Push delivery isn&apos;t configured on Core yet - the VAPID public
-        key is missing. Once it&apos;s set (
-        <code className="font-mono">NEXT_PUBLIC_VAPID_PUBLIC_KEY</code>),
+      <Inset>
+        Push delivery isn&apos;t configured on Core yet - the VAPID public key is missing. Once
+        it&apos;s set (<code className="font-mono text-[12px]">NEXT_PUBLIC_VAPID_PUBLIC_KEY</code>),
         this button activates.
-      </div>
+      </Inset>
     );
   }
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-2 rounded-md border bg-background p-3">
-      {status.subscribed ? (
-        <>
-          <p className="mr-auto text-[12px] text-muted-foreground">
-            Subscribed on this device. Banners arrive when Jarvis needs you.
-          </p>
-          <Button
-            variant="ghost"
-            onClick={onUnsubscribe}
-            disabled={busy !== null}
-            className="gap-1.5"
-          >
-            {busy === "unsubscribe" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <BellOff className="size-3.5" />
-            )}
-            Disable on this device
-          </Button>
-        </>
-      ) : (
-        <>
-          <p className="mr-auto text-[12px] text-muted-foreground">
-            Enable to get iOS-style banners on this device.
-          </p>
-          <Button onClick={onSubscribe} disabled={busy !== null} className="gap-1.5">
-            {busy === "subscribe" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="size-3.5" />
-            )}
-            Enable notifications
-          </Button>
-        </>
-      )}
-    </div>
+  return status.subscribed ? (
+    <SettingRow
+      label="Push on this device"
+      description="Subscribed. Banners arrive when Jarvis needs you."
+      control={
+        <Button
+          variant="ghost"
+          onClick={onUnsubscribe}
+          disabled={busy !== null}
+          className="gap-1.5"
+        >
+          {busy === "unsubscribe" ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <BellOff className="size-3.5" />
+          )}
+          Disable on this device
+        </Button>
+      }
+    />
+  ) : (
+    <SettingRow
+      label="Push on this device"
+      description="Enable to get iOS-style banners on this device."
+      control={
+        <Button onClick={onSubscribe} disabled={busy !== null} className="gap-1.5">
+          {busy === "subscribe" ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Sparkles className="size-3.5" />
+          )}
+          Enable notifications
+        </Button>
+      }
+    />
   );
 }
 
 function WhyBlock() {
   return (
-    <details className="rounded-md border bg-muted/20 p-3 text-[12px]">
-      <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+    <details className="min-w-0 py-2 text-[12.5px]">
+      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
         what triggers a notification?
       </summary>
       <ul className="mt-2 space-y-1.5 text-foreground/80">
