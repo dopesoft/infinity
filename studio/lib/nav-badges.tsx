@@ -68,17 +68,23 @@ export function NavBadgesProvider({ children }: { children: ReactNode }) {
     try {
       const counts = await fetchNavCounts();
       if (!counts) return;
+      // Keyed by the SEVEN routes in `NAV`. The folds mean two of these are
+      // sums: Skills absorbed Lab, so a skill candidate and a code proposal
+      // both light the same badge; Activity absorbed Heartbeat and Logs, so
+      // a finding and a failed job do too. Summing here rather than in Core
+      // keeps /api/nav/counts a plain per-table count that nothing else has
+      // to agree with.
+      const lab = counts.overflow?.lab ?? 0;
+      const heartbeat = counts.overflow?.heartbeat ?? 0;
+      const logs = counts.overflow?.logs ?? 0;
       const next: NavBadges = {
         "/": counts.dashboard,
-        "/dashboard": counts.dashboard,
         "/live": counts.chat,
         "/memory": counts.memory,
-        "/skills": counts.skills,
-        "/lab": counts.overflow?.lab ?? 0,
-        "/heartbeat": counts.overflow?.heartbeat ?? 0,
-        "/logs": counts.overflow?.logs ?? 0,
+        "/skills": counts.skills + lab,
+        "/automations": 0,
+        "/activity": heartbeat + logs,
         "/settings": counts.chat,
-        "/trust": counts.chat,
       };
       setBadges((prev) => {
         const sameKeys = Object.keys(next).length === Object.keys(prev).length;

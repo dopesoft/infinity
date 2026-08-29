@@ -377,6 +377,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/work/cancel", s.handleWorkCancel)
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/mcp", s.handleMCP)
+	// Global search — one generic contract behind ⌘K and every scoped page
+	// search. See search_api.go for why this is not the RRF endpoint below.
+	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/memory/counts", s.handleMemoryCounts)
 	mux.HandleFunc("/api/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/api/memory/observations", s.handleObservations)

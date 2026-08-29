@@ -70,7 +70,7 @@ export function UpcomingCard({
   }, [events]);
 
   return (
-    <Section title="Calendar" action={{ label: "next 6 months", href: "/cron" }}>
+    <Section title="Today" action={{ label: "next 6 months", href: "/cron" }}>
       {rows.length === 0 ? (
         <p className="py-2 text-[13px] text-quiet">Nothing scheduled in the next 6 months.</p>
       ) : (

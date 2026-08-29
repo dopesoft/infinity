@@ -47,7 +47,10 @@ export function DashboardHeader({
   // staring at empty sections wondering.
   loading?: boolean;
 }) {
-  const { title, sub } = todayHeader();
+  // todayHeader still supplies the day for screen readers and for the
+  // greeting's boundary; it is no longer printed as a middot-joined line.
+  const { title } = todayHeader();
+  void title;
 
   // Local clock, filled after mount and refreshed each minute. Empty on the
   // server and on the first client paint, so it can never mismatch.
@@ -65,18 +68,23 @@ export function DashboardHeader({
     return () => window.clearInterval(t);
   }, []);
 
+  // A greeting, not four facts joined by middots. "Thursday, August 28 ·
+  // 9:40pm · 3 need you" is a status bar wearing a sentence's clothes: you
+  // read past the date and the clock every single time to reach the only
+  // number that matters. The date and time are on your device already; what
+  // is not is how many things are waiting.
   const meta = (
     <span suppressHydrationWarning>
-      {title}, {sub}
-      {clock ? ` · ${clock}` : ""}
-      {badgeCount > 0 ? ` · ${badgeCount} need you` : ""}
+      {badgeCount > 0
+        ? `${countWord(badgeCount)} ${badgeCount === 1 ? "thing needs" : "things need"} you.`
+        : "Nothing needs you right now."}
     </span>
   );
 
   return (
     <div className="mx-auto w-full min-w-0 max-w-6xl space-y-3 px-4 pb-3 pt-1 sm:px-6 sm:pt-2">
       <PageHeader
-        title="Jarvis"
+        title={greeting(clock)}
         live
         meta={meta}
         actions={
@@ -104,4 +112,26 @@ export function DashboardHeader({
       />
     </div>
   );
+}
+
+/**
+ * "Good morning" / "Good afternoon" / "Good evening" — derived from the same
+ * client clock the header already keeps, so it can never mismatch between
+ * server and client. Empty clock (first paint) falls back to the neutral
+ * form rather than guessing at a time of day.
+ */
+function greeting(clock: string): string {
+  if (!clock) return "Hello";
+  const hour = parseInt(clock, 10);
+  const pm = clock.includes("pm");
+  const h24 = pm ? (hour === 12 ? 12 : hour + 12) : hour === 12 ? 0 : hour;
+  if (h24 < 12) return "Good morning";
+  if (h24 < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/** Small counts read better as words in a sentence. */
+function countWord(n: number): string {
+  const words = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+  return words[n] ?? String(n);
 }

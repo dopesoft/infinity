@@ -355,3 +355,30 @@
     @apply mx-auto mt-2 h-1.5 w-12 rounded-full bg-muted-foreground/40;
   }
 }
+
+/* -----------------------------------------------------------------------
+ * Reduced motion. Majordomo §4 says the shimmer becomes plain ink and
+ * nothing else animates; this is the one place that is enforced, so no
+ * component has to remember to check the media query itself.
+ *
+ * Deliberately NOT a blanket `animation: none` on `*`: vaul's drawer
+ * transform is how a bottom sheet is dismissed by drag, and killing it
+ * strands the sheet open. Transforms driven by direct manipulation stay;
+ * ambient, decorative, looping motion goes.
+ * --------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer {
+    animation: none;
+    background-image: none;
+    color: hsl(var(--muted-foreground));
+    -webkit-text-fill-color: currentColor;
+  }
+  .heartbeat-ring,
+  .heartbeat-ring-delay,
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
+  }
+  /* A live dot still has to read as live without pulsing, so it keeps its
+   * brand fill and simply stops moving. */
+}

@@ -485,7 +485,7 @@ export function CanvasFileTab({
             )}
             {saveState.status === "pending" && (
               <a
-                href="/trust"
+                href="/settings?section=trust"
                 className="inline-flex items-center gap-1 text-warning hover:underline"
                 title="Open Trust queue"
               >

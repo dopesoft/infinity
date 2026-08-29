@@ -1729,9 +1729,11 @@ function FollowUpBody({ f }: { f: FollowUp }) {
 
       {/* From. The SUBJECT is the modal's title, so repeating it here would be
           the second title §1.3 forbids — it is gone from the body. */}
-      <ModalSection label="From">
-        <span className="break-words font-medium text-foreground">{f.from}</span>
-      </ModalSection>
+      {f.from?.trim() ? (
+        <ModalSection label="From">
+          <span className="break-words font-medium text-foreground">{f.from}</span>
+        </ModalSection>
+      ) : null}
 
       {/* Context (summary) - ABOVE the email. Stays silent when there's no
           triage summary (raw poll rows). */}

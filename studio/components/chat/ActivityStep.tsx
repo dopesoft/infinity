@@ -662,7 +662,7 @@ function ApprovalDetail({ item }: { item: ActivityItem }) {
 
       {item.gated ? (
         <Link
-          href={contractId ? `/trust?focus=${contractId}` : "/trust"}
+          href={contractId ? `/settings?section=trust&focus=${contractId}` : "/settings?section=trust"}
           className="inline-flex min-h-11 items-center gap-1.5 font-sans text-[13px] font-medium text-quiet transition-colors hover:text-foreground"
         >
           <ShieldCheck className="size-4" aria-hidden />

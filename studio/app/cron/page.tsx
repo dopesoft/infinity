@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Clock, Pause, Power, Plus, Trash2, Zap } from "lucide-react";
-import { TabFrame } from "@/components/TabFrame";
+import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -43,7 +43,7 @@ export default function CronPage() {
   // Active tab persists in ?tab=<id> so a refresh keeps the chosen lens.
   const [tab, setTab] = useTabParam<CronTab>("tab", "workflows", CRON_TABS);
   return (
-    <TabFrame>
+    <AppShell>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-safe scroll-touch">
         <div className="flex items-center justify-between gap-3 px-4 py-5 sm:px-6 lg:px-8">
           <h1 className="text-base font-semibold tracking-tight text-foreground">
@@ -57,9 +57,9 @@ export default function CronPage() {
         >
           <div className="px-4 pb-3 sm:px-6 lg:px-8">
             <PageTabsList scrollable>
-              <PageTabsTrigger value="workflows">Workflows</PageTabsTrigger>
-              <PageTabsTrigger value="cron">Cron</PageTabsTrigger>
-              <PageTabsTrigger value="sentinel">Sentinels</PageTabsTrigger>
+              <PageTabsTrigger value="workflows">Routines</PageTabsTrigger>
+              <PageTabsTrigger value="cron">On a schedule</PageTabsTrigger>
+              <PageTabsTrigger value="sentinel">Watching</PageTabsTrigger>
             </PageTabsList>
           </div>
           <TabsContent value="workflows" className="flex flex-col px-4 py-5 sm:px-6 lg:px-8">
@@ -73,7 +73,7 @@ export default function CronPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </TabFrame>
+    </AppShell>
   );
 }
 
@@ -118,7 +118,7 @@ function CronSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <PageSectionHeader title="scheduled jobs" count={items.length}>
+      <PageSectionHeader title="On a schedule" count={items.length}>
         <HeaderAction
           icon={<Plus className="size-4" />}
           label={showCreate ? "Cancel" : "New cron"}
@@ -375,7 +375,7 @@ function SentinelSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <PageSectionHeader title="sentinels" count={items.length}>
+      <PageSectionHeader title="Watching for something" count={items.length}>
         <HeaderAction
           icon={<Plus className="size-4" />}
           label={showCreate ? "Cancel" : "New sentinel"}

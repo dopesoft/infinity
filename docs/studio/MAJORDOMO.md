@@ -182,11 +182,26 @@ Replaces the folded stack of `ToolCallCard`s with one quiet ledger per turn.
   `ResponsiveModalHeader` keeps its export but drops eyebrow/subtitle chrome
   in favour of the same title + context line (props stay accepted so consumers
   compile; unused ones are ignored with a code comment saying why).
-- `ModalSection` becomes a labelled row: mono uppercase label in a 92px left
-  column, content on the right, hairline between sections, **no border**. Same
-  prop names. `ModalDiff`, `ModalHtml`, `ModalPre`, `ModalCode` render inside
-  `Inset`. `ModalChips` becomes plain comma-separated text unless the chips are
-  interactive.
+- `ModalSection` is a labelled row **stacked at every width**: mono uppercase
+  label on its own line, content at full width beneath it, hairline between
+  sections, **no border**. Same prop names. `ModalDiff`, `ModalHtml`,
+  `ModalPre`, `ModalCode` render inside `Inset`. `ModalChips` becomes plain
+  comma-separated text unless the chips are interactive.
+
+  **Amended 2026-08-29.** This section previously mandated a 92px left label
+  column with the content beside it. That shape was wrong and is retired: it
+  spent a third of an already narrow sheet on labels, squeezed every value
+  (code, quotes, diffs) into the remainder, and wrapped any label longer than
+  one short word to two lines while its neighbours stayed on one, so no two
+  rows in a sheet ever started at the same height. Label above, content at
+  full width. Do not reintroduce the two-column form.
+
+- `SheetTabs` (`ui/responsive-modal.tsx`) for one object with genuinely
+  different faces (a job's *What happened* / *Output* / *Code it changed*).
+  Same tab-vs-chip test as everywhere: a tab is a different KIND of content,
+  never a subset. The plain answer is always the default tab; pass only the
+  faces that have content, because a count is what tells the boss whether the
+  others are worth opening.
 - Footer: `justify-between`; secondary/destructive left, primary right, one
   primary.
 - `ObjectViewer` sweep: only sections with data render; plan steps render with

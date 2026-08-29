@@ -16,7 +16,7 @@ import {
   Square,
   Wrench,
 } from "lucide-react";
-import { TabFrame } from "@/components/TabFrame";
+import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TurnStatusPip } from "@/components/logs/TurnStatusPip";
@@ -150,7 +150,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
   }, [turn]);
 
   return (
-    <TabFrame>
+    <AppShell>
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Header strip — three rows of decreasing visual weight:
        1. Toolbar (back + status pill + actions), single-row chrome
@@ -398,7 +398,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
           )}
         </div>
       </div>
-    </TabFrame>
+    </AppShell>
   );
 }
 

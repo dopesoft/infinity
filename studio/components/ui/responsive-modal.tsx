@@ -420,3 +420,76 @@ export function ResponsiveModalHeader({
     </header>
   );
 }
+
+/**
+ * SheetTabs — tabs INSIDE a sheet, for one object with genuinely different
+ * faces.
+ *
+ * The same tab-vs-chip test applies here as anywhere: a tab is a different
+ * KIND of content, not a subset. A job has *what happened* (a narrative),
+ * *output* (a wall of log lines) and *the code it changed* (a diff). Three
+ * shapes, one object, so tabs are right. Three filters over one list would
+ * be chips.
+ *
+ * The plain answer is always the default tab and it is the only one most
+ * people ever need; raw output and diffs are one tap away rather than dumped
+ * underneath, which is what used to make these sheets a wall. The count in a
+ * tab is what tells you whether the other faces are even worth opening — a
+ * face with nothing in it should not be offered at all, so pass only the
+ * tabs that have content.
+ *
+ * MOBILE: the strip scrolls sideways rather than wrapping, so the body below
+ * never shifts down as you switch.
+ */
+export function SheetTabs({
+  tabs,
+  active,
+  onChange,
+  className,
+}: {
+  tabs: { id: string; label: string; count?: number | string }[];
+  active: string;
+  onChange: (id: string) => void;
+  className?: string;
+}) {
+  if (tabs.length < 2) return null;
+  return (
+    <div
+      role="tablist"
+      className={cn(
+        "-mx-1 flex min-w-0 gap-1.5 overflow-x-auto scroll-touch no-scrollbar border-b border-hairline px-1 pb-2",
+        className,
+      )}
+    >
+      {tabs.map((tab) => {
+        const on = tab.id === active;
+        return (
+          <button
+            key={tab.id}
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(tab.id)}
+            className={cn(
+              "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[12px] transition-colors",
+              on
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            )}
+          >
+            <span>{tab.label}</span>
+            {tab.count !== undefined && tab.count !== "" ? (
+              <span
+                className={cn(
+                  "font-mono text-[10px] tabular-nums",
+                  on ? "text-background/65" : "text-quiet",
+                )}
+              >
+                {tab.count}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

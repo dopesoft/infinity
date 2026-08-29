@@ -2,16 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
 import { WorkspaceChatColumn } from "@/components/workspace/WorkspaceChatColumn";
-import { WorkspaceFilesColumn } from "@/components/workspace/WorkspaceFilesColumn";
-import { CanvasRightPane } from "@/components/canvas/CanvasRightPane";
-import { WorkspaceMobile, useWorkspaceMode } from "@/components/workspace/WorkspaceMobile";
-import { useCanvasStore } from "@/lib/canvas/store";
+import { WorkbenchPane } from "@/components/canvas/WorkbenchPane";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { useIsDesktop } from "@/lib/use-media-query";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
+import { useSessionArtifacts } from "@/lib/canvas/useSessionArtifacts";
+import { useRuns } from "@/lib/runs/useRuns";
+import {
+  docMetaFromArtifact,
+  takePendingDoc,
+  useCanvasStore,
+  type LayoutMode,
+} from "@/lib/canvas/store";
 import {
   useCurrentProject,
   CurrentProjectProvider,
@@ -24,6 +27,8 @@ import {
   extractToolPreview,
 } from "@/lib/canvas/detection";
 import { fetchCanvasConfig, fetchBridgeStatus } from "@/lib/canvas/api";
+import { cn } from "@/lib/utils";
+import type { DocArtifact } from "@/lib/api";
 import type { useChat } from "@/hooks/useChat";
 
 type ChatHook = ReturnType<typeof useChat>;
@@ -54,7 +59,6 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   const store = useCanvasStore();
   const ws = useWebSocket();
   const current = useCurrentProject();
-  const { mode, setMode } = useWorkspaceMode("chat");
 
   // Server-configured fallback path (INFINITY_DEFAULT_PROJECT_PATH on
   // core). Sessions without their own project_path land here - typically
@@ -292,9 +296,92 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     }
   }, [store.tabs]);
 
-  // Mount gate - react-resizable-panels reads localStorage on first paint
-  // so SSR vs CSR diverge; render a stable skeleton until the client takes
-  // over.
+  // ── Doc + media ownership ────────────────────────────────────────────────
+  // These used to live inside the right pane, which is unmounted whenever the
+  // boss is on a phone looking at the conversation — which is exactly when a
+  // document finishes. Owning them HERE, at the always-mounted seam, is what
+  // stops a generated report losing its tab and its PDF on the phone.
+  const {
+    artifacts: docArtifacts,
+    loading: docsLoading,
+    forSession: docsForSession,
+    refresh: refreshDocs,
+  } = useSessionArtifacts(chat.sessionId);
+  const { runs: mediaRuns } = useRuns({
+    kind: "media.generate",
+    targetId: chat.sessionId,
+    limit: 50,
+    enabled: !!chat.sessionId,
+  });
+  const changeCount = useGitPendingCount(store.root, chat.sessionId);
+  const isDesktop = useIsDesktop();
+
+  // Rehydrate the open document tabs once per session from that session's own
+  // artifacts. `restoreDocuments` is called unconditionally: an empty set is
+  // the correct answer for a fresh conversation, and skipping the call is what
+  // used to strand the previous session's tabs on screen.
+  const rehydratedRef = useRef<string>("");
+  useEffect(() => {
+    const sid = chat.sessionId;
+    if (!sid || docsForSession !== sid) return;
+    if (rehydratedRef.current === sid) return;
+    rehydratedRef.current = sid;
+    const { openIds, activeId } = readOpenDocSet(sid);
+    const byPath = new Map(docArtifacts.map((a) => [a.path, a] as const));
+    const docs = openIds
+      .map((p) => byPath.get(p))
+      .filter((a): a is DocArtifact => !!a)
+      .map(docMetaFromArtifact);
+    store.restoreDocuments(docs, activeId);
+    const pending = takePendingDoc();
+    if (pending) store.openDocument(pending);
+  }, [chat.sessionId, docsForSession, docArtifacts, store]);
+
+  // Persist which tabs are open, AFTER rehydration, so neither the empty
+  // initial state nor a mid-switch state clobbers the saved set.
+  useEffect(() => {
+    const sid = chat.sessionId;
+    if (!sid || rehydratedRef.current !== sid) return;
+    writeOpenDocSet(sid, store.documents.map((d) => d.id), store.activeTabId);
+  }, [chat.sessionId, store.documents, store.activeTabId]);
+
+  // ── The layout moves itself ──────────────────────────────────────────────
+  // Five rules, and a sixth that makes them safe: one deliberate move by the
+  // boss turns all of this off for the session (enforced inside the store's
+  // `suggestLayout`, which is a no-op once `layoutAuto` is false).
+  const hadWorkRef = useRef(false);
+  useEffect(() => {
+    const hasWork = store.tabs.some((t) => t.kind === "file" || t.kind === "document");
+    if (hasWork && !hadWorkRef.current) {
+      // He started writing: open beside the conversation.
+      hadWorkRef.current = true;
+      store.suggestLayout("split");
+    } else if (!hasWork && hadWorkRef.current) {
+      // Nothing open any more: the conversation is the page again.
+      hadWorkRef.current = false;
+      store.suggestLayout("chat");
+    }
+  }, [store]);
+
+  useEffect(() => {
+    // The preview rebuilt while he is still working: put the browser in front.
+    if (store.previewRefreshKey > 0) store.suggestLayout("build");
+  }, [store.previewRefreshKey, store]);
+
+  const mediaCountRef = useRef(0);
+  useEffect(() => {
+    const n = mediaRuns.reduce(
+      (acc, r) => acc + (r.status === "ok" ? (r.meta?.media?.length ?? 0) : 0),
+      0,
+    );
+    // Something finished rendering: you should never have to go looking for a
+    // thing he just made.
+    if (n > mediaCountRef.current && mediaCountRef.current > 0) store.suggestLayout("build");
+    mediaCountRef.current = n;
+  }, [mediaRuns, store]);
+
+  // Mount gate: the layout reads client-only state, so render a stable
+  // skeleton until the client takes over rather than mismatching on hydrate.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) {
@@ -305,42 +392,111 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     );
   }
 
+  const open = store.layout !== "chat";
+  const pane = (
+    <WorkbenchPane
+      sessionId={chat.sessionId}
+      documents={docArtifacts}
+      mediaRuns={mediaRuns}
+      docsLoading={docsLoading}
+      onRefreshDocs={refreshDocs}
+      onDiscussDoc={(doc) =>
+        void chat.send(
+          `I want to discuss the document **${doc.filename}**. Open and read it from \`${doc.path}\` for context, then ask me what I would like to do with it.`,
+        )
+      }
+      changeCount={changeCount}
+      onClose={() => store.setLayout("chat")}
+    />
+  );
+
+  const chatColumn = (
+    <WorkspaceChatColumn chat={chat} minimalComposer={store.layout === "build"} />
+  );
+
   return (
     <CurrentProjectProvider value={current}>
-      {/* Desktop - three horizontally-resizable columns */}
-      <div className="hidden min-h-0 flex-1 lg:flex">
-        {/* No autoSaveId - column widths reset to defaults on every refresh.
-            Dragging the dividers still works in-session, but a reload always
-            returns to the 25 / 18 / 57 layout. The boss explicitly wants the
-            workspace to feel "fresh" on each visit instead of accumulating
-            stuck layouts from random drag sessions. */}
-        <ResizablePanelGroup direction="horizontal">
-          <ResizablePanel defaultSize={25} minSize={15} maxSize={50}>
-            <div className="flex h-full min-h-0 flex-col border-r bg-muted/30 dark:bg-zinc-900/40">
-              <WorkspaceChatColumn chat={chat} />
-            </div>
-          </ResizablePanel>
-          <ResizableHandle />
-          <ResizablePanel defaultSize={18} minSize={12} maxSize={40}>
-            <div className="flex h-full min-h-0 flex-col border-r bg-muted/20 dark:bg-zinc-900/30">
-              <WorkspaceFilesColumn sessionId={chat.sessionId} />
-            </div>
-          </ResizablePanel>
-          <ResizableHandle />
-          <ResizablePanel defaultSize={57} minSize={30}>
-            <div className="flex h-full min-h-0 flex-col">
-              <CanvasRightPane chat={chat} />
-            </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
+      {/* Desktop: one grid whose template IS the layout mode. 180ms so the
+          change reads as a movement rather than a jump cut. */}
+      <div
+        className={cn(
+          "hidden min-h-0 min-w-0 flex-1 lg:grid",
+          "transition-[grid-template-columns] duration-layout ease-out motion-reduce:transition-none",
+        )}
+        style={{ gridTemplateColumns: templateFor(store.layout) }}
+      >
+        <div className="flex h-full min-h-0 min-w-0 flex-col">{chatColumn}</div>
+        {open ? (
+          <div className="flex h-full min-h-0 min-w-0 flex-col border-l border-hairline">
+            {pane}
+          </div>
+        ) : (
+          <div className="min-w-0" />
+        )}
       </div>
 
-      {/* Mobile - single-column with mode pills */}
-      <div className="flex min-h-0 flex-1 flex-col lg:hidden">
-        <WorkspaceMobile chat={chat} mode={mode} onModeChange={setMode} />
+      {/* Phone: the conversation is the page and the workbench is a sheet you
+          pull up. No mode pills taxing every screen — it still opens itself
+          the first time he writes a file, which is the behaviour that
+          mattered. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:hidden">
+        {chatColumn}
+        {!isDesktop ? (
+          <ResponsiveModal
+            open={open}
+            onOpenChange={(o) => store.setLayout(o ? "split" : "chat")}
+            title="Workbench"
+            size="lg"
+            contentClassName="p-0"
+          >
+            <div className="flex h-[70dvh] min-h-0 flex-col">{pane}</div>
+          </ResponsiveModal>
+        ) : null}
       </div>
     </CurrentProjectProvider>
   );
+}
+
+/**
+ * The three widths, as grid templates.
+ *
+ *   chat   the conversation is the page
+ *   split  42 / 58 — reading a diff while you talk
+ *   build  a 286px chat rail and the rest to the workbench: the conversation
+ *          becomes a running commentary and the browser gets real room
+ */
+function templateFor(mode: LayoutMode): string {
+  if (mode === "build") return "286px minmax(0,1fr)";
+  if (mode === "split") return "42% minmax(0,1fr)";
+  return "minmax(0,1fr) 0px";
+}
+
+// Which document tabs were open, per session. The documents themselves are
+// server-tracked (mem_artifacts); this is view state only.
+const OPEN_DOCS_PREFIX = "infinity:canvas:opendocs:";
+
+function readOpenDocSet(sid: string): { openIds: string[]; activeId?: string } {
+  if (typeof window === "undefined") return { openIds: [] };
+  try {
+    const raw = window.localStorage.getItem(OPEN_DOCS_PREFIX + sid);
+    if (!raw) return { openIds: [] };
+    const p = JSON.parse(raw) as { openIds?: string[]; activeId?: string };
+    return {
+      openIds: Array.isArray(p.openIds) ? p.openIds.filter((x) => typeof x === "string") : [],
+      activeId: typeof p.activeId === "string" ? p.activeId : undefined,
+    };
+  } catch {
+    return { openIds: [] };
+  }
+}
+
+function writeOpenDocSet(sid: string, openIds: string[], activeId?: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(OPEN_DOCS_PREFIX + sid, JSON.stringify({ openIds, activeId }));
+  } catch {
+    /* private mode / quota — view state only, safe to lose */
+  }
 }
 
 // parseStartLine pulls the authoritative `start_line` the backend's fs_edit

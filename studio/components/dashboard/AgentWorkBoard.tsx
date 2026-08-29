@@ -83,9 +83,9 @@ export function AgentWorkBoard({
 
   return (
     <Section
-      title="Agent work"
+      title="In progress"
       badge={totalAwaiting > 0 ? `${totalAwaiting} awaiting` : undefined}
-      action={{ label: "open cron", href: "/cron" }}
+      action={{ label: "see all", href: "/automations" }}
     >
       {active.length === 0 ? (
         /* Every group empty: one quiet line rather than four labelled empties,

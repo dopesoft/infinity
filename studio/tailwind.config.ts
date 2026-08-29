@@ -30,7 +30,40 @@ const config: Config = {
         mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       height: { dvh: "100dvh", svh: "100svh", lvh: "100lvh" },
-      minHeight: { dvh: "100dvh", svh: "100svh" },
+      minHeight: {
+        dvh: "100dvh",
+        svh: "100svh",
+        // The touch-target floor AND the resting height of a tappable row.
+        // `min-h-row` instead of a hand-picked `min-h-11` per consumer, so
+        // raising the floor later is one edit here.
+        row: "2.75rem", // 44px
+      },
+      // ── The width law ────────────────────────────────────────────────────
+      // Line length is capped by what a surface is FOR, and width past the cap
+      // becomes another board column rather than longer rows. These exist as
+      // tokens so the law is enforced by class name instead of by memory, and
+      // so retuning a cap is one edit rather than a grep.
+      //
+      //   stream  the chat conversation column
+      //   sheet   a drill-in sheet, reading width
+      //   list    a focused list (one type, searchable)
+      //   board   a glance board; past this a 4th column appears
+      maxWidth: {
+        stream: "42.5rem", // 680px
+        sheet: "47.5rem", // 760px
+        list: "55rem", // 880px
+        board: "77.5rem", // 1240px
+      },
+      // The desktop nav rail. One number, used by the rail itself and by
+      // anything that needs to sit beside it.
+      width: { rail: "3.5rem" }, // 56px
+      spacing: { rail: "3.5rem" },
+      transitionDuration: {
+        // Majordomo §4 motion: a chevron rotates in 150ms, a layout mode
+        // settles in 180ms. Named so no consumer invents a third duration.
+        chevron: "150ms",
+        layout: "180ms",
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

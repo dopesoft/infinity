@@ -45,7 +45,7 @@ export function SurfacedCard({
   matchHeight?: number | null;
 }) {
   return (
-    <Section title="Surfaced by Jarvis" delay={delay} badge={items.length}>
+    <Section title="Needs you" delay={delay} badge={items.length}>
       {items.length === 0 ? (
         <p className="py-2 text-[13px] text-quiet">Nothing surfaced right now.</p>
       ) : (

@@ -72,7 +72,7 @@ export function TrustQueuePanel() {
       )}
       {count > 3 ? (
         <Button asChild variant="ghost" size="sm" className="mt-2 h-8 w-full justify-between">
-          <Link href="/trust">
+          <Link href="/settings?section=trust">
             Review all {count}
             <ArrowRight className="size-3.5" aria-hidden />
           </Link>

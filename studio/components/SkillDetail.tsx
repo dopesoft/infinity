@@ -191,7 +191,7 @@ export function SkillDetail({
             <PageTabsTrigger value="overview">Overview</PageTabsTrigger>
             <PageTabsTrigger value="run">Run</PageTabsTrigger>
             <PageTabsTrigger value="tests">Tests</PageTabsTrigger>
-            <PageTabsTrigger value="runs">Runs</PageTabsTrigger>
+            <PageTabsTrigger value="runs">Times it ran</PageTabsTrigger>
             <PageTabsTrigger value="versions">Versions</PageTabsTrigger>
             <PageTabsTrigger value="code">Code</PageTabsTrigger>
           </PageTabsList>

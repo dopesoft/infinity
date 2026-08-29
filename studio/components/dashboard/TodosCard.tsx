@@ -45,7 +45,7 @@ export function TodosCard({
 
   return (
     <Section
-      title="Todos"
+      title="To do"
       badge={open.length}
       action={doneCount > 0 ? { label: `${doneCount} done`, href: "/memory" } : undefined}
     >

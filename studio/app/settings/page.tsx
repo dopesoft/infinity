@@ -6,7 +6,6 @@ import {
   Check,
   ExternalLink,
   Bell,
-  Compass,
   LayoutDashboard,
   Shield,
   LayoutPanelLeft,
@@ -19,7 +18,7 @@ import {
   Unplug,
   Wrench,
 } from "lucide-react";
-import { TabFrame } from "@/components/TabFrame";
+import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
@@ -94,17 +93,27 @@ type SectionMeta = {
   icon: typeof Sliders;
 };
 
+/**
+ * Named for what each one does for the boss, not for the machinery behind
+ * it. "Connectors / MCP" meant nothing to a person: to you they are Gmail,
+ * Slack and GitHub, so they are Accounts. "Tools" was a list of 112 raw ids;
+ * they are the things he can do, so they are Abilities. "Trust" is the
+ * mechanism; approving is the thing you actually do.
+ *
+ * Compass is NOT in this list any more. Your mission is a fact about you, so
+ * it lives with the rest of what he knows, at the top of Memory. The editor
+ * itself is unchanged — the same <CompassSection/> renders there.
+ */
 const SECTIONS: SectionMeta[] = [
-  { id: "general", label: "General", description: "LLM provider, model, version", icon: Sliders },
-  { id: "chat", label: "Chat", description: "Live chat behavior, agent teams, budgets", icon: MessageSquare },
-  { id: "compass", label: "Compass", description: "Your mission, goals + principles, Jarvis reads this every turn", icon: Compass },
-  { id: "trust", label: "Trust", description: "Approve high-risk actions Jarvis is asking for + audit what you've already trusted", icon: ShieldCheck },
-  { id: "privacy", label: "Privacy", description: "Wards, paths Jarvis must not freely read", icon: Shield },
-  { id: "dashboard", label: "Dashboard", description: "Pick which Dashboard sections show on /", icon: LayoutDashboard },
-  { id: "notifications", label: "Notifications", description: "iOS-style push notifications on iPhone + Mac", icon: Bell },
-  { id: "mcp", label: "Connectors", description: "MCP servers + Composio integrations the agent can call", icon: Plug },
-  { id: "tools", label: "Tools", description: "Native + MCP tools the agent can call", icon: Wrench },
-  { id: "canvas", label: "Canvas", description: "Workspace root, preview URL, auto-open", icon: LayoutPanelLeft },
+  { id: "general", label: "Brain", description: "Which model answers, and what it falls back to", icon: Sliders },
+  { id: "chat", label: "Chat", description: "How he behaves in a conversation, and what he may spend", icon: MessageSquare },
+  { id: "trust", label: "Approvals", description: "What he is asking to do, and what you have already allowed", icon: ShieldCheck },
+  { id: "privacy", label: "Privacy", description: "Paths he must never read freely", icon: Shield },
+  { id: "mcp", label: "Accounts", description: "Gmail, Slack, GitHub and the rest, and what he may do with each", icon: Plug },
+  { id: "tools", label: "Abilities", description: "Everything he can do, and what each one touches", icon: Wrench },
+  { id: "canvas", label: "Workbench", description: "Where he works, what the preview points at", icon: LayoutPanelLeft },
+  { id: "notifications", label: "Alerts", description: "When he is allowed to interrupt you, and how", icon: Bell },
+  { id: "dashboard", label: "Home layout", description: "Which cards show on your home screen", icon: LayoutDashboard },
 ];
 
 const SECTION_IDS = SECTIONS.map((s) => s.id) as SectionId[];
@@ -156,7 +165,7 @@ export default function SettingsPage() {
   }, [tools.length, mcp.length, status?.version]);
 
   return (
-    <TabFrame>
+    <AppShell>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="px-4 pt-4 sm:px-6 lg:px-8">
           <PageHeader title="Settings" meta={meta || undefined} />
@@ -235,7 +244,7 @@ export default function SettingsPage() {
           </ResizablePanelGroup>
         </div>
       </div>
-    </TabFrame>
+    </AppShell>
   );
 }
 
@@ -256,6 +265,9 @@ function SectionContent({
     case "chat":
       return <ChatSettingsSection />;
     case "compass":
+      // Compass lives in Memory now ("About you"). The id and this case stay
+      // so an old /settings?section=compass link is not a dead end — it
+      // renders the same editor rather than a blank pane.
       return <CompassSection />;
     case "privacy":
       return (

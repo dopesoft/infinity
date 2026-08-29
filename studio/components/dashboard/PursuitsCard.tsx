@@ -45,7 +45,7 @@ export function PursuitsCard({
   const goals = pursuits.filter((p) => p.cadence === "goal" || p.cadence === "quarterly");
 
   return (
-    <Section title="Pursuits" action={{ label: "manage", href: "/memory" }}>
+    <Section title="Ongoing" action={{ label: "manage", href: "/memory" }}>
       <div className="min-w-0">
         {habits.length === 0 && goals.length === 0 ? (
           <p className="py-2 text-[13px] text-quiet">

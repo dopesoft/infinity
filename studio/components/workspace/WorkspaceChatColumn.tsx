@@ -5,6 +5,9 @@ import { ConversationStream } from "@/components/ConversationStream";
 import { CodingSessionBanner } from "@/components/CodingSessionBanner";
 import { BackgroundJobDock } from "@/components/BackgroundJobDock";
 import { PendingApprovalsDock } from "@/components/PendingApprovalsDock";
+import { CommitBar } from "@/components/canvas/CommitBar";
+import { useCanvasStore } from "@/lib/canvas/store";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
 import { standbyLabel, useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
@@ -28,6 +31,25 @@ export function WorkspaceChatColumn({
   minimalComposer?: boolean;
 }) {
   const { setting, setModel } = useGlobalModel();
+  const store = useCanvasStore();
+
+  // The commit bar: the moment a turn ends with changed files it appears
+  // above the composer, in EVERY layout mode, so saving his work is never a
+  // trip to a tab you have to remember exists. It never commits on its own,
+  // and push stays a separate deliberate act.
+  const changeCount = useGitPendingCount(store.root, chat.sessionId);
+  const [commitMessage, setCommitMessage] = useState("");
+  // The draft is whatever he last said he did. `result_summary` on the run
+  // ledger is already that sentence; using it means the message describes the
+  // work rather than the diff. If there is nothing to quote it stays empty and
+  // the bar asks you to write one rather than inventing a message.
+  useEffect(() => {
+    if (chat.isStreaming) return;
+    const last = [...chat.messages].reverse().find((m) => m.role === "assistant");
+    const text = last?.text?.trim();
+    if (!text) return;
+    setCommitMessage((cur) => cur || firstSentence(text));
+  }, [chat.isStreaming, chat.messages]);
 
   // steal C: the boss's effort pin ("auto" = let Jarvis size each turn, or a
   // level). Persisted to localStorage so it survives reload / navigation on this
@@ -79,6 +101,17 @@ export function WorkspaceChatColumn({
           is in flight and no background job is running. */}
       <PendingApprovalsDock />
       <BackgroundJobDock sessionId={chat.sessionId} />
+      {!chat.isStreaming && store.root ? (
+        <CommitBar
+          repo={store.root}
+          sessionId={chat.sessionId}
+          fileCount={changeCount}
+          message={commitMessage}
+          onMessageChange={setCommitMessage}
+          onReview={() => store.setLayout("split")}
+          onCommitted={() => setCommitMessage("")}
+        />
+      ) : null}
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <PromptInputBox
           onSend={(text, files) => {
@@ -127,4 +160,20 @@ export function WorkspaceChatColumn({
       </div>
     </div>
   );
+}
+
+/**
+ * The first sentence of what he just said, capped so a commit subject stays a
+ * subject. Deliberately NOT a summarisation call: the sentence he already
+ * wrote describes the work, and inventing a second one would cost a round
+ * trip to say the same thing worse.
+ */
+function firstSentence(text: string): string {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[*_`#>]/g, "")
+    .trim();
+  const stop = plain.search(/[.!?](\s|$)/);
+  const line = (stop > 0 ? plain.slice(0, stop) : plain.split("\n")[0]).trim();
+  return line.length > 72 ? line.slice(0, 69).trimEnd() + "…" : line;
 }

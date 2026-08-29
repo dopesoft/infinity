@@ -35,6 +35,18 @@ import type { DocArtifact } from "@/lib/api";
 
 export type DevicePreset = "mobile" | "tablet" | "desktop";
 
+/**
+ * How much room the workbench takes beside the conversation.
+ *
+ *   chat   the conversation is the page; nothing else is open
+ *   split  42 / 58 — reading a diff while you talk
+ *   build  a 286px chat rail and the rest to the workbench — watching a
+ *          preview redraw itself while he types. The IDE feeling.
+ *
+ * One split was wrong because you do two different things here.
+ */
+export type LayoutMode = "chat" | "split" | "build";
+
 export type CanvasTabKind = "preview" | "terminal" | "media" | "file" | "document";
 
 export type CanvasTab =
@@ -182,6 +194,22 @@ type CanvasStoreValue = {
   envPreviewUrl: string;
   device: DevicePreset;
   setDevice: (next: DevicePreset) => void;
+
+  /** Current width of the workbench beside the chat. */
+  layout: LayoutMode;
+  /**
+   * Move it by hand. Doing so turns AUTO OFF for the rest of the session:
+   * auto that fights you is worse than no auto, so one deliberate move ends
+   * the guessing until the next conversation.
+   */
+  setLayout: (next: LayoutMode) => void;
+  /** True while the layout is still choosing for itself. */
+  layoutAuto: boolean;
+  /**
+   * Let the workbench move itself — an edit lands, a preview rebuilds, a
+   * render finishes. A no-op once the boss has taken the wheel.
+   */
+  suggestLayout: (next: LayoutMode) => void;
   previewRefreshKey: number;
   refreshPreview: () => void;
 
@@ -263,6 +291,15 @@ export function CanvasStoreProvider({
   const [root, setRootInternal] = useState<string>(initialRoot);
   const [previewUrl, setPreviewUrlInternal] = useState<string>("");
   const [device, setDeviceInternal] = useState<DevicePreset>("desktop");
+  // Layout mode is session state, NOT persisted: a fresh conversation should
+  // open as a conversation, not in whatever width the last coding session
+  // left behind. `layoutAuto` flips off the moment the boss moves it himself.
+  const [layout, setLayoutInternal] = useState<LayoutMode>("chat");
+  const [layoutAuto, setLayoutAuto] = useState(true);
+  // Read inside suggestLayout without making it re-create on every toggle:
+  // the workbench subscribes to it from a WS handler that must mount once.
+  const autoRef = useRef(true);
+  autoRef.current = layoutAuto;
   const [previewRefreshKey, setRefreshKey] = useState(0);
   const [bridgeOk, setBridgeOk] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
@@ -374,6 +411,24 @@ export function CanvasStoreProvider({
         /* ignore */
       }
     }
+  }, []);
+
+  /**
+   * The boss moving the layout by hand ends auto for this session. This is
+   * the rule that makes the other five safe: an auto that yanks you back to
+   * a pane you just closed is worse than no auto at all.
+   */
+  const setLayout = useCallback((next: LayoutMode) => {
+    setLayoutAuto(false);
+    setLayoutInternal(next);
+  }, []);
+
+  /** The workbench asking to move itself. Silent once the boss has decided. */
+  const suggestLayout = useCallback((next: LayoutMode) => {
+    setLayoutInternal((cur) => {
+      if (!autoRef.current) return cur;
+      return next;
+    });
   }, []);
 
   const setDevice = useCallback((next: DevicePreset) => {
@@ -653,7 +708,11 @@ export function CanvasStoreProvider({
       setPreviewUrl,
       envPreviewUrl,
       device,
+      layout,
+      layoutAuto,
       setDevice,
+      setLayout,
+      suggestLayout,
       previewRefreshKey,
       refreshPreview,
       tabs,
@@ -696,6 +755,10 @@ export function CanvasStoreProvider({
       envPreviewUrl,
       device,
       setDevice,
+      layout,
+      layoutAuto,
+      setLayout,
+      suggestLayout,
       previewRefreshKey,
       refreshPreview,
       tabs,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TabFrame } from "@/components/TabFrame";
+import { AppShell } from "@/components/AppShell";
 import { SectionBand } from "./Section";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
@@ -454,7 +454,7 @@ export function DashboardClient() {
       .filter((it) => (it.importance ?? 0) >= 80).length;
 
   return (
-    <TabFrame>
+    <AppShell>
       {/* min-w-0 + overflow-x-hidden keep the dashboard page-locked on
           mobile: any card with wider-than-viewport content (heartbeat
           artifact JSON, long titles, etc.) gets clipped at the page
@@ -557,6 +557,6 @@ export function DashboardClient() {
         onOpenChange={setAddingTodo}
         onCreated={() => void load({ background: true })}
       />
-    </TabFrame>
+    </AppShell>
   );
 }

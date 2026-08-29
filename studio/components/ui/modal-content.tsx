@@ -39,8 +39,10 @@ export type ModalSectionTone = "default" | "error" | "warning" | "success";
  *    meta    - quiet right-aligned line above the content (timestamp, count,
  *              a "open in gmail" link). Kept: it carries real information.
  *
- *  On a phone the label stacks above its content; from `sm` up it sits in the
- *  left column. Mobile-first, no horizontal scroll at 375px.
+ *  The label stacks above its content at EVERY width. That is a deliberate
+ *  amendment to Majordomo §7, which mandated a 92px left column: it cost a
+ *  third of the sheet, squeezed code, quotes and diffs into the remainder,
+ *  and wrapped longer labels to two lines so the rows never lined up.
  */
 export function ModalSection({
   label = "Context",
@@ -78,13 +80,19 @@ export function ModalSection({
   return (
     <section
       className={cn(
-        "grid min-w-0 max-w-full grid-cols-1 gap-1.5 border-t border-hairline py-3.5 first:border-t-0 first:pt-0 sm:grid-cols-[5.75rem_minmax(0,1fr)] sm:gap-4",
+        // ALWAYS stacked. The 92px left label column that Majordomo §7 used
+        // to mandate is gone: it spent a third of the sheet on labels,
+        // squeezed every value into what was left, and wrapped any label
+        // longer than one short word while its neighbours did not — so no
+        // two rows in a sheet ever started at the same height. Label on its
+        // own line, content at full width, hairline between.
+        "flex min-w-0 max-w-full flex-col gap-1.5 border-t border-hairline py-3 first:border-t-0 first:pt-0",
         className,
       )}
     >
       <div
         className={cn(
-          "min-w-0 font-mono text-[10.5px] uppercase leading-5 tracking-[0.14em] sm:pt-px",
+          "min-w-0 font-mono text-[10.5px] uppercase leading-5 tracking-[0.14em]",
           labelCls,
         )}
       >
@@ -92,7 +100,7 @@ export function ModalSection({
       </div>
       <div className={cn("min-w-0 max-w-full text-[13px] leading-relaxed", bodyCls)}>
         {meta ? (
-          <div className="mb-1.5 flex min-w-0 max-w-full justify-end break-words text-[11px] text-quiet">
+          <div className="mb-1.5 flex min-w-0 max-w-full break-words text-[11px] text-quiet">
             {meta}
           </div>
         ) : null}

@@ -918,6 +918,41 @@ export const fetchMemories = (
   return getJSON<MemoryDTO[]>(`/api/memory/memories${suffix}`, signal);
 };
 
+/**
+ * Global search - the one contract behind ⌘K and behind every scoped page
+ * search. `kind` is free-form on the Core side so a newly searchable table
+ * shows up without a change here; the palette groups by it and falls back to
+ * the raw string as a heading.
+ *
+ * NOT the same thing as `searchMemory` below, which is the RRF recall
+ * endpoint answering "what does he remember about this". This answers "where
+ * is the thing called X".
+ */
+export type SearchHitKind =
+  | "memory"
+  | "skill"
+  | "automation"
+  | "surfaced"
+  | "session"
+  | (string & {});
+
+export type SearchHit = {
+  kind: SearchHitKind;
+  id: string;
+  title: string;
+  meta: string;
+  href: string;
+};
+
+export type SearchResponse = {
+  query: string;
+  hits: SearchHit[];
+  counts_by_kind: Record<string, number>;
+};
+
+export const searchAll = (q: string, signal?: AbortSignal) =>
+  getJSON<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`, signal);
+
 export const searchMemory = (q: string, signal?: AbortSignal) =>
   getJSON<SearchResult[]>(`/api/memory/search?q=${encodeURIComponent(q)}`, signal);
 

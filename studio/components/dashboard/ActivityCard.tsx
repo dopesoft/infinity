@@ -55,7 +55,7 @@ export function ActivityCard({
   const firstPast = sorted.findIndex((e) => !e.future);
 
   return (
-    <Section title="Activity" action={{ label: "open heartbeat", href: "/heartbeat" }}>
+    <Section title="Recently" action={{ label: "see all", href: "/activity" }}>
       {sorted.length === 0 ? (
         <p className="py-2 text-[13px] text-quiet">Nothing has happened yet today.</p>
       ) : (

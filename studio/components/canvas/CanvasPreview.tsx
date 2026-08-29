@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MonitorPlay, MonitorX, Sparkles, Loader2, AlertTriangle } from "lucide-react";
-import { CanvasPreviewToolbar } from "@/components/canvas/CanvasPreviewToolbar";
 import { CanvasBrowserView } from "@/components/canvas/CanvasBrowser";
 import { CanvasAuthCard, usePendingAuthExtension } from "@/components/canvas/CanvasAuthCard";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
@@ -321,7 +320,6 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   if (projectCtx && !hasProject && !projectCtx.loading) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <CanvasPreviewToolbar effectiveUrl={baseUrl} />
         <div className="relative min-h-0 flex-1 overflow-auto bg-gradient-to-br from-zinc-200/60 to-zinc-300/40 dark:from-zinc-900/40 dark:to-black">
           <NoProjectPreview />
         </div>
@@ -331,7 +329,6 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <CanvasPreviewToolbar effectiveUrl={baseUrl} />
       {projectStatus && projectStatus !== "running" ? (
         <ProjectStatusBanner status={projectStatus} error={projectCtx?.project?.last_error} />
       ) : null}

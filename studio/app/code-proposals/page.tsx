@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
-// /code-proposals folded into /lab. See nav-tabs.ts for rationale.
+// /code-proposals folded into Skills: a fix he drafted for his own code is a
+// skill of his that is not working.
 export default function CodeProposalsRedirect() {
-  redirect("/lab?tab=proposals");
+  redirect("/skills");
 }

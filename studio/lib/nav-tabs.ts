@@ -1,52 +1,78 @@
 import {
   Activity,
   Brain,
-  FlaskConical,
+  Clock,
   LayoutDashboard,
   type LucideIcon,
   MessageSquare,
-  ScrollText,
   Settings,
-  Workflow,
-  Wrench,
+  Sparkles,
 } from "lucide-react";
 
 /**
- * Single source of truth for the primary nav.
+ * NAV - the single registry of every destination in Studio.
  *
- * The boss's mental model (2026-05-16):
+ * Seven entries, all visible at once in the rail on desktop and in the
+ * drawer on mobile. There is no primary/overflow split any more: the old
+ * shape put four routes in a centre pill strip and hid five behind a kebab,
+ * which meant half the app lived behind a control that read as an
+ * afterthought AND the phone flattened both into one list, so the hierarchy
+ * you learned at the desk was wrong in your hand.
  *
- *   Dashboard - info at a glance + agent notifications
- *   Chat (Live) - where the agent works in the open; trust + skill
- *                 proposals approved inline
- *   Memory - the brain (read-only browse)
- *   Skills - capabilities library, auto-authored or manual
+ * The folds that got us from nine destinations to seven:
  *
- * Everything else lives in the overflow (3-dot) menu. Trust is folded
- * into Settings (audit + bulk pending); real-time approvals still come
- * through Chat as inline ToolCallCard.
+ *   /lab        -> Skills      a candidate skill, a broken skill and a
+ *                              learned lesson are all skills
+ *   /heartbeat  -> Activity    "what he noticed"
+ *   /logs       -> Activity    "what he did" - never two questions
+ *   /cron       -> Automations schedules and watchers are both "fires
+ *                              without me"
  *
- * `NAV_TABS` = primary (top bar on desktop, top of mobile drawer).
- * `NAV_OVERFLOW` = secondary (mobile drawer "More" section, desktop
- * header overflow kebab). Deep-linkable but demoted.
+ * Every folded route still resolves; they are permanent redirects, the same
+ * way /sessions has been since the Live drawer absorbed it.
+ *
+ * `label` is what a person would say out loud. The engine's word for a thing
+ * (heartbeat, cron, sentinel, observation) lives in the detail sheet, in
+ * mono, where it is useful for debugging and nowhere else.
  */
-export type NavTab = {
+export type NavEntry = {
   href: string;
   label: string;
   Icon: LucideIcon;
+  /** One line, used only by the drawer where there is room for it. */
+  hint?: string;
 };
 
-export const NAV_TABS: NavTab[] = [
-  { href: "/", label: "Dashboard", Icon: LayoutDashboard },
-  { href: "/live", label: "Chat", Icon: MessageSquare },
-  { href: "/memory", label: "Memory", Icon: Brain },
-  { href: "/skills", label: "Skills", Icon: Wrench },
+export const NAV: NavEntry[] = [
+  { href: "/", label: "Home", Icon: LayoutDashboard, hint: "What needs you, what he is doing" },
+  { href: "/live", label: "Chat", Icon: MessageSquare, hint: "The conversation and the workbench" },
+  { href: "/memory", label: "Memory", Icon: Brain, hint: "Everything he knows about you" },
+  { href: "/skills", label: "Skills", Icon: Sparkles, hint: "What he knows how to do" },
+  { href: "/automations", label: "Automations", Icon: Clock, hint: "What he does without being asked" },
+  { href: "/activity", label: "Activity", Icon: Activity, hint: "What he did and what broke" },
+  { href: "/settings", label: "Settings", Icon: Settings, hint: "How he behaves and what he can reach" },
 ];
 
-export const NAV_OVERFLOW: NavTab[] = [
-  { href: "/lab", label: "Lab", Icon: FlaskConical },
-  { href: "/cron", label: "Workflows", Icon: Workflow },
-  { href: "/heartbeat", label: "Heartbeat", Icon: Activity },
-  { href: "/logs", label: "Logs", Icon: ScrollText },
-  { href: "/settings", label: "Settings", Icon: Settings },
-];
+/** True when `pathname` is inside `href`. Root only matches itself. */
+export function isNavActive(pathname: string | null, href: string): boolean {
+  if (!pathname) return false;
+  if (href === "/") return pathname === "/";
+  return pathname === href || pathname.startsWith(href + "/");
+}
+
+/**
+ * Retired route -> where it lives now. Used by the redirect stubs and by the
+ * command palette so an old bookmark or an old link in chat history still
+ * lands somewhere real.
+ */
+export const NAV_REDIRECTS: Record<string, string> = {
+  "/lab": "/skills",
+  "/gym": "/skills",
+  "/code-proposals": "/skills",
+  "/heartbeat": "/activity",
+  "/logs": "/activity",
+  "/audit": "/activity",
+  "/cron": "/automations",
+  "/sessions": "/live",
+  "/trust": "/settings?section=approvals",
+};

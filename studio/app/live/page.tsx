@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { TabFrame } from "@/components/TabFrame";
+import { AppShell } from "@/components/AppShell";
 import { SessionHeader } from "@/components/SessionHeader";
 import { InfoModal } from "@/components/workspace/InfoModal";
 import { Workspace } from "@/components/workspace/Workspace";
@@ -11,13 +11,13 @@ import { CanvasStoreProvider, useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasConfig } from "@/lib/canvas/api";
 import { fetchSessions } from "@/lib/api";
 import { useChat } from "@/hooks/useChat";
-import type { AgentState } from "@/components/StatusPill";
+import { StatusPill, type AgentState } from "@/components/StatusPill";
 import { useRealtime } from "@/lib/realtime/provider";
 
 /**
  * /live - the unified workspace.
  *
- *   <TabFrame>
+ *   <AppShell>
  *     <SessionHeader>    chat-app name + chevron switcher + new + info
  *     <Workspace>        desktop = 3 cols, mobile = 3 modes (Chat / Files / Canvas)
  *
@@ -109,7 +109,7 @@ function LivePageInner() {
           : "idle";
 
   return (
-    <TabFrame agentState={agentState}>
+    <AppShell>
       <div className="flex min-h-0 flex-1 flex-col">
         <SessionHeader
           sessionId={chat.sessionId}
@@ -121,6 +121,7 @@ function LivePageInner() {
           onRewind={undefined}
           extraActions={
             <>
+              <StatusPill state={agentState} />
               <ProjectBreadcrumb sessionId={chat.sessionId || null} />
               <BridgePill
                 sessionId={chat.sessionId || null}
@@ -136,6 +137,6 @@ function LivePageInner() {
         />
         <Workspace chat={chat} />
       </div>
-    </TabFrame>
+    </AppShell>
   );
 }
