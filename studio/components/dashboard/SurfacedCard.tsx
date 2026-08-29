@@ -1,8 +1,6 @@
 "use client";
 
-import { Section } from "./Section";
-import { ScrollList } from "./ScrollList";
-import { DASHBOARD_LIST_ROWS } from "./listHeight";
+import { BoardCard } from "@/components/ui/board";
 import { ApprovalRow } from "./ApprovalsCard";
 import { SurfaceRow } from "./SurfaceCard";
 import type { DashboardItem } from "@/lib/dashboard/types";
@@ -42,33 +40,25 @@ export function SurfacedCard({
    * line up by layout instead of by a measured pixel handed across rows. Kept
    * for a surface that genuinely needs to match a specific pixel line.
    */
+  /** Accepted and ignored: BoardCard aligns by layout, not by a measured
+   *  pixel threaded between siblings. Kept so callers compile unchanged. */
   matchHeight?: number | null;
 }) {
+  void matchHeight;
   return (
-    <Section title="Needs you" delay={delay} badge={items.length}>
-      {items.length === 0 ? (
-        <p className="py-2 text-[13px] text-quiet">Nothing surfaced right now.</p>
-      ) : (
-        <ScrollList max={DASHBOARD_LIST_ROWS} maxHeight={matchHeight ?? undefined}>
-          <div className="flex min-w-0 flex-col">
-            {items.map((it) =>
-              it.kind === "approval" ? (
-                <ApprovalRow
-                  key={`${it.kind}-${it.data.id}`}
-                  a={it.data}
-                  onClick={() => onOpen(it)}
-                />
-              ) : it.kind === "surface" ? (
-                <SurfaceRow
-                  key={`${it.kind}-${it.data.id}`}
-                  item={it.data}
-                  onClick={() => onOpen(it)}
-                />
-              ) : null,
-            )}
-          </div>
-        </ScrollList>
+    <BoardCard
+      title="Needs you"
+      count={items.length}
+      delay={delay}
+      empty="Nothing needs you right now. I will put anything that does right here."
+    >
+      {items.map((it) =>
+        it.kind === "approval" ? (
+          <ApprovalRow key={`${it.kind}-${it.data.id}`} a={it.data} onClick={() => onOpen(it)} />
+        ) : it.kind === "surface" ? (
+          <SurfaceRow key={`${it.kind}-${it.data.id}`} item={it.data} onClick={() => onOpen(it)} />
+        ) : null,
       )}
-    </Section>
+    </BoardCard>
   );
 }

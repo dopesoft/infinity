@@ -118,6 +118,37 @@ export type GitStatusResponse = {
   entries: GitStatusEntry[];
 };
 
+/**
+ * Per-file "what changed in this one". Deterministic on the Core side: every
+ * field comes from `git diff --numstat` and the path. `summary` is EMPTY when
+ * the facts do not support a sentence — the UI must render nothing there
+ * rather than filling the gap.
+ */
+export type ChangeFile = {
+  path: string;
+  added: number;
+  removed: number;
+  summary: string;
+  is_new: boolean;
+  is_test: boolean;
+};
+
+export type ChangesSummary = {
+  repo: string;
+  /** null means "could not look", which is NOT the same as "nothing changed". */
+  files: ChangeFile[] | null;
+};
+
+export const fetchCanvasChangesSummary = (
+  repo: string,
+  sessionId = "",
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams({ repo });
+  if (sessionId) qs.set("session_id", sessionId);
+  return getJSON<ChangesSummary>(`/api/canvas/changes/summary?${qs.toString()}`, signal);
+};
+
 export type GitDiffResponse = {
   path: string;
   staged: boolean;

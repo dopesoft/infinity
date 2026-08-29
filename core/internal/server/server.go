@@ -426,6 +426,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/attachments/", s.handleAttachmentRaw)
 	mux.HandleFunc("/api/workspace/docpages", s.handleWorkspaceDocPages)
 	mux.HandleFunc("/api/canvas/artifact/delete", s.handleArtifactDelete)
+	// Per-file "what changed in this one", derived from git numstat. See
+	// canvas_changes_api.go for why it is deterministic and never a model call.
+	mux.HandleFunc("/api/canvas/changes/summary", s.handleCanvasChangesSummary)
 	mux.HandleFunc("/api/canvas/fs/ls", s.handleCanvasFSList)
 	mux.HandleFunc("/api/canvas/fs/read", s.handleCanvasFSRead)
 	mux.HandleFunc("/api/canvas/fs/save", s.handleCanvasFSSave)

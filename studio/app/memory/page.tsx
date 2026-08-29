@@ -6,6 +6,8 @@ import { AppShell } from "@/components/AppShell";
 import { EmptyState } from "@/components/EmptyState";
 import { CountLine } from "@/components/ui/count-line";
 import { SearchPage } from "@/components/ui/search-page";
+import { ScopedTabs } from "@/components/ui/scoped-tabs";
+import { searchAll } from "@/lib/api";
 import { GroupLabel } from "@/components/ui/list-row";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { MemoryCard } from "@/components/MemoryCard";
@@ -183,15 +185,63 @@ export default function MemoryPage() {
 
   const searching = query.trim().length > 0;
 
+  // Per-kind match counts for the CURRENT query, from the one generic search
+  // endpoint. This is what lets an empty tab say "nothing in Facts, but 3 in
+  // Lessons" instead of leaving you to conclude the thing does not exist.
+  const [matchCounts, setMatchCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setMatchCounts({});
+      return;
+    }
+    const ac = new AbortController();
+    const t = window.setTimeout(async () => {
+      const res = await searchAll(q, ac.signal);
+      if (!res) return;
+      // Core counts by SOURCE kind; the page thinks in VIEWS. One map, here,
+      // so neither side has to know the other's vocabulary.
+      setMatchCounts({
+        facts: res.counts_by_kind.memory ?? 0,
+        lessons: res.counts_by_kind.lesson ?? 0,
+        wrong: res.counts_by_kind.prediction ?? 0,
+        seen: res.counts_by_kind.observation ?? 0,
+      });
+    }, 220);
+    return () => {
+      window.clearTimeout(t);
+      ac.abort();
+    };
+  }, [query]);
+
+  const TABS = [
+    { id: "facts", label: "Facts", count: numeric(counts?.memories) },
+    { id: "lessons", label: "Lessons" },
+    { id: "wrong", label: "Wrong guesses" },
+    { id: "seen", label: "Everything seen", count: numeric(counts?.observations) },
+  ];
+
   return (
     <AppShell>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-touch">
         <div className="mx-auto flex w-full min-w-0 max-w-list flex-col gap-4 px-4 py-5 sm:px-6">
           <h1 className="font-voice text-[26px] font-medium tracking-tight">Memory</h1>
 
+          {view !== "about" && view !== "connections" ? (
+            <ScopedTabs
+              tabs={TABS}
+              activeTab={view}
+              onTabChange={(id) => pick(id as View)}
+              query={query}
+              onQueryChange={setQuery}
+              matchCounts={searching ? matchCounts : undefined}
+            />
+          ) : null}
+
           <SearchPage
             query={query}
             onQueryChange={setQuery}
+            hideField={view !== "about" && view !== "connections"}
             counts={
               <CountLine
                 items={[
@@ -444,4 +494,9 @@ function selectedId(item: ListItem | null): string | null {
   if (!item) return null;
   if ("observation_id" in item) return item.observation_id;
   return item.id;
+}
+
+/** A count Core has not sent yet is unknown, not zero. */
+function numeric(n: number | undefined): number | undefined {
+  return typeof n === "number" ? n : undefined;
 }

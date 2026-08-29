@@ -29,6 +29,12 @@ export function SearchPage({
   query,
   onQueryChange,
   placeholder = "Ask me what I know",
+  /**
+   * Hide the field when a <ScopedTabs> above already owns the search. Two
+   * search boxes on one page is the ambiguity the scope rule exists to
+   * prevent — whichever one is nearest the results is the real one.
+   */
+  hideField = false,
   /** Rendered directly under the field: a <CountLine>, usually. */
   counts,
   className,
@@ -37,6 +43,7 @@ export function SearchPage({
   query: string;
   onQueryChange: (q: string) => void;
   placeholder?: string;
+  hideField?: boolean;
   counts?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
@@ -45,8 +52,8 @@ export function SearchPage({
   const ref = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
-    if (isDesktop) ref.current?.focus();
-  }, [isDesktop]);
+    if (isDesktop && !hideField) ref.current?.focus();
+  }, [isDesktop, hideField]);
 
   // `/` focuses the field, the same way ⌘K opens the palette. Ignored while
   // you are already typing somewhere, so it can never steal a keystroke.
@@ -65,6 +72,7 @@ export function SearchPage({
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-3.5", className)}>
+      {hideField ? null : (
       <div className="relative min-w-0">
         <Search
           className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-quiet"
@@ -84,6 +92,7 @@ export function SearchPage({
           /
         </kbd>
       </div>
+      )}
       {counts}
       {children}
     </div>

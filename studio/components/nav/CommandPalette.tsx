@@ -47,6 +47,9 @@ const KIND_META: Record<string, { label: string; Icon: LucideIcon; order: number
   skill: { label: "Skills", Icon: Sparkles, order: 2 },
   automation: { label: "Automations", Icon: Clock, order: 3 },
   session: { label: "Conversations", Icon: MessageSquare, order: 4 },
+  lesson: { label: "Lessons", Icon: Brain, order: 5 },
+  prediction: { label: "Where he was wrong", Icon: Brain, order: 6 },
+  observation: { label: "Everything seen", Icon: Brain, order: 7 },
 };
 
 function kindMeta(kind: string) {

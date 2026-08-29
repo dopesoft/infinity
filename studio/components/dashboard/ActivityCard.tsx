@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { GroupLabel, ListRow, type RowTone } from "@/components/ui/list-row";
-import { Section } from "./Section";
+import { BoardCard } from "@/components/ui/board";
 import { clockTime, relTime } from "@/lib/dashboard/format";
 import type { ActivityEvent, ActivityKind, DashboardItem } from "@/lib/dashboard/types";
 
@@ -55,12 +55,14 @@ export function ActivityCard({
   const firstPast = sorted.findIndex((e) => !e.future);
 
   return (
-    <Section title="Recently" action={{ label: "see all", href: "/activity" }}>
-      {sorted.length === 0 ? (
-        <p className="py-2 text-[13px] text-quiet">Nothing has happened yet today.</p>
-      ) : (
-        <div className="flex max-h-[420px] min-w-0 flex-col overflow-y-auto scroll-touch">
-          {sorted.map((e, i) => (
+    <BoardCard
+      title="Recently"
+      count={sorted.length}
+      href="/activity"
+      seeAll={{ label: "See everything", href: "/activity" }}
+      empty="Nothing has happened yet today. Every job and every conversation lands here."
+    >
+      {sorted.map((e, i) => (
             <div key={e.id} className="flex min-w-0 flex-col">
               {/* The "now" line: everything above it is still to come. */}
               {i === firstPast && i !== 0 ? <GroupLabel label="now" /> : null}
@@ -77,9 +79,7 @@ export function ActivityCard({
                 onClick={() => onOpen({ kind: "activity", data: e })}
               />
             </div>
-          ))}
-        </div>
-      )}
-    </Section>
+      ))}
+    </BoardCard>
   );
 }

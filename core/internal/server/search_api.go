@@ -91,7 +91,70 @@ func searchSources() []searchSource {
 		{kind: "automation", run: searchAutomations},
 		{kind: "surfaced", run: searchSurfaced},
 		{kind: "session", run: searchSessions},
+		// These three exist so Memory's per-tab match counts are REAL. Without
+		// them a search in Facts that actually matched a lesson would report
+		// zero everywhere else, and the boss would conclude the thing was not
+		// there — the exact trap the scoped-search empty state exists to close.
+		{kind: "lesson", run: searchLessons},
+		{kind: "prediction", run: searchPredictions},
+		{kind: "observation", run: searchObservations},
 	}
+}
+
+func searchLessons(ctx context.Context, pool *pgxpool.Pool, like string) []searchHit {
+	return scanHits(ctx, pool, `
+		SELECT id::text, critique, COALESCE(kind, 'reflection')
+		  FROM mem_reflections
+		 WHERE critique ILIKE $1
+		 ORDER BY created_at DESC
+		 LIMIT $2
+	`, like, func(id, text, kind string) searchHit {
+		return searchHit{
+			Kind:  "lesson",
+			ID:    id,
+			Title: firstLine(text),
+			Meta:  "Something he learned",
+			Href:  "/memory?view=lessons&focus=" + id,
+		}
+	})
+}
+
+func searchPredictions(ctx context.Context, pool *pgxpool.Pool, like string) []searchHit {
+	return scanHits(ctx, pool, `
+		SELECT id::text,
+		       COALESCE(NULLIF(expected, ''), tool_name),
+		       COALESCE(tool_name, '')
+		  FROM mem_predictions
+		 WHERE expected ILIKE $1 OR actual ILIKE $1 OR tool_name ILIKE $1
+		 ORDER BY created_at DESC
+		 LIMIT $2
+	`, like, func(id, expected, tool string) searchHit {
+		return searchHit{
+			Kind:  "prediction",
+			ID:    id,
+			Title: firstLine(expected),
+			Meta:  "Where he was wrong",
+			Href:  "/memory?view=wrong&focus=" + id,
+		}
+	})
+}
+
+func searchObservations(ctx context.Context, pool *pgxpool.Pool, like string) []searchHit {
+	return scanHits(ctx, pool, `
+		SELECT id::text, raw_text, COALESCE(hook_name, '')
+		  FROM mem_observations
+		 WHERE raw_text ILIKE $1
+		 ORDER BY created_at DESC
+		 LIMIT $2
+	`, like, func(id, text, hook string) searchHit {
+		return searchHit{
+			Kind:  "observation",
+			ID:    id,
+			Title: firstLine(text),
+			Meta:  "Something he saw",
+			Href:  "/memory?view=seen&focus=" + id,
+		}
+	})
 }
 
 // scanHits runs one query and maps every row through `row`. A query error

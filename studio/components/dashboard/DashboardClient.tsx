@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { SectionBand } from "./Section";
+import { Board, BoardBand } from "@/components/ui/board";
 import { DashboardHeader } from "./DashboardHeader";
 import { PursuitsCard } from "./PursuitsCard";
 import { TodosCard } from "./TodosCard";
@@ -475,20 +476,20 @@ export function DashboardClient() {
               implicit max-content track can't blow the column past the
               viewport on mobile; lg splits to three. */}
           {(s.approvals || s.followups) && (
-            <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-3">
+            <Board>
               {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
-              <PhoneCard items={calls} onOpen={openViewer} />
+              <PhoneCard items={calls} onOpen={openViewer} delay={0.04} />
               {s.followups && (
                 <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
               )}
-            </div>
+            </Board>
           )}
 
           {/* BAND - the boss's own commitments: Calendar, Todos, Pursuits. One
               band under all three so the row reads as one area of the page. */}
           {(s.upcoming || s.todos || s.pursuits) && (
-            <SectionBand>
-              <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-3">
+            <BoardBand>
+              <Board>
                 {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
                 {s.todos && (
                   <TodosCard
@@ -505,8 +506,8 @@ export function DashboardClient() {
                     onToggleHabit={toggleHabit}
                   />
                 )}
-              </div>
-            </SectionBand>
+              </Board>
+            </BoardBand>
           )}
 
           {/* PLAIN - Agent work: the live picture of what Jarvis is doing

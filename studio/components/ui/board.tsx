@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
 import { ChevronRight } from "lucide-react";
 import { ScrollList } from "@/components/dashboard/ScrollList";
 import { DASHBOARD_LIST_ROWS } from "@/components/dashboard/listHeight";
@@ -67,6 +68,10 @@ export function BoardCard({
   action,
   seeAll,
   rows = DASHBOARD_LIST_ROWS,
+  /** Stagger index. Cards fade in 40ms apart; fades only, per Majordomo §4. */
+  delay = 0,
+  /** Shown instead of the list when there is nothing. Say what will fill it. */
+  empty,
   className,
   children,
 }: {
@@ -80,6 +85,8 @@ export function BoardCard({
   /** Footer link text. Only render it when there is genuinely more to see. */
   seeAll?: { label: string; href: string };
   rows?: number;
+  delay?: number;
+  empty?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -95,8 +102,13 @@ export function BoardCard({
     </div>
   );
 
+  const isEmpty = React.Children.toArray(children).length === 0;
+
   return (
-    <section
+    <motion.section
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.22, delay, ease: "easeOut" }}
       className={cn(
         // The cell: hairline between columns on desktop, nothing on mobile
         // where the columns become stacked sections.
@@ -116,11 +128,15 @@ export function BoardCard({
         head
       )}
 
-      <ScrollList max={rows} className="min-w-0">
-        <div className="flex min-w-0 flex-col">{children}</div>
-      </ScrollList>
+      {isEmpty && empty ? (
+        <p className="py-2 text-[13px] text-quiet">{empty}</p>
+      ) : (
+        <ScrollList max={rows} className="min-w-0">
+          <div className="flex min-w-0 flex-col">{children}</div>
+        </ScrollList>
+      )}
 
-      {seeAll ? (
+      {seeAll && !isEmpty ? (
         <Link
           href={seeAll.href}
           className="min-w-0 truncate pt-1.5 text-[11.5px] text-quiet transition-colors hover:text-foreground"
@@ -128,7 +144,7 @@ export function BoardCard({
           {seeAll.label}
         </Link>
       ) : null}
-    </section>
+    </motion.section>
   );
 }
 

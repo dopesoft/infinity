@@ -2,8 +2,7 @@
 
 import { useMemo } from "react";
 import { GroupLabel, ListRow } from "@/components/ui/list-row";
-import { Section } from "./Section";
-import { ScrollList } from "./ScrollList";
+import { BoardCard } from "@/components/ui/board";
 import { clockTime, dayLabel, eventDate, startOfDay } from "@/lib/dashboard/format";
 import type { CalendarEvent, DashboardItem } from "@/lib/dashboard/types";
 
@@ -40,10 +39,11 @@ export function UpcomingCard({
 }: {
   events: CalendarEvent[];
   onOpen: (item: DashboardItem) => void;
-  /** Legacy explicit pixel cap (ScrollList "matched" mode). No longer threaded
-   *  by the dashboard - see `./listHeight` for why. */
+  /** Accepted and ignored: BoardCard aligns by layout, not by a measured
+   *  pixel threaded between siblings. Kept so callers compile unchanged. */
   matchHeight?: number | null;
 }) {
+  void matchHeight;
   const rows = useMemo<Row[]>(() => {
     const today = startOfDay(new Date());
     const future = events
@@ -70,27 +70,24 @@ export function UpcomingCard({
   }, [events]);
 
   return (
-    <Section title="Today" action={{ label: "next 6 months", href: "/cron" }}>
-      {rows.length === 0 ? (
-        <p className="py-2 text-[13px] text-quiet">Nothing scheduled in the next 6 months.</p>
-      ) : (
-        <ScrollList max={CALENDAR_ROWS} maxHeight={matchHeight ?? undefined}>
-          <div className="flex min-w-0 flex-col">
-            {rows.map((row, i) =>
-              row.kind === "month" ? (
-                <GroupLabel key={`m-${row.label}-${i}`} label={row.label} />
-              ) : (
-                <EventRow
-                  key={row.event.id}
-                  e={row.event}
-                  onClick={() => onOpen({ kind: "event", data: row.event })}
-                />
-              ),
-            )}
-          </div>
-        </ScrollList>
+    <BoardCard
+      title="Today"
+      count={rows.filter((r) => r.kind !== "month").length}
+      rows={CALENDAR_ROWS}
+      empty="Nothing on your calendar."
+    >
+      {rows.map((row, i) =>
+        row.kind === "month" ? (
+          <GroupLabel key={`m-${row.label}-${i}`} label={row.label} />
+        ) : (
+          <EventRow
+            key={row.event.id}
+            e={row.event}
+            onClick={() => onOpen({ kind: "event", data: row.event })}
+          />
+        ),
       )}
-    </Section>
+    </BoardCard>
   );
 }
 

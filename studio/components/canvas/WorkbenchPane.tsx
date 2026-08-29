@@ -5,7 +5,7 @@ import { CanvasPreview } from "@/components/canvas/CanvasPreview";
 import { CanvasTerminal } from "@/components/canvas/CanvasTerminal";
 import { CanvasMediaGallery } from "@/components/canvas/CanvasMediaGallery";
 import { CanvasFileTab } from "@/components/canvas/CanvasFileTab";
-import { CanvasGitPanel } from "@/components/canvas/CanvasGitPanel";
+import { ChangesReview } from "@/components/canvas/ChangesReview";
 import { DocumentTab } from "@/components/canvas/DocumentTab";
 import { BrowserFrame } from "@/components/canvas/BrowserFrame";
 import { FileSwitcher } from "@/components/canvas/FileSwitcher";
@@ -65,9 +65,11 @@ export function WorkbenchPane({
   const fileName = activeFile && activeFile.kind === "file" ? basename(activeFile.path) : activeDoc?.filename;
 
   // A file opening (he started writing) makes it the thing you are looking at.
+  // Documents are deliberately NOT here: a finished document is something he
+  // MADE, and the media snap below owns that case.
   React.useEffect(() => {
-    if (activeFile || activeDoc) setInstrument("file");
-  }, [activeFile, activeDoc]);
+    if (activeFile) setInstrument("file");
+  }, [activeFile]);
 
   const mediaCount =
     documents.length +
@@ -75,6 +77,21 @@ export function WorkbenchPane({
       (n, r) => n + (r.status !== "running" && r.status !== "error" ? (r.meta?.media?.length ?? 0) : 0),
       0,
     );
+
+  // Something finished rendering: SNAP TO IT. Widening the layout was only
+  // half the promise — you should never have to go looking for a thing he
+  // just made, so the pane switches to Made as well.
+  //
+  // Guarded on a rising count from a KNOWN previous value, so the first paint
+  // of a session that already has media cannot yank you off what you were
+  // reading.
+  const mediaSeenRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const prev = mediaSeenRef.current;
+    mediaSeenRef.current = mediaCount;
+    if (prev === null) return;
+    if (mediaCount > prev) setInstrument("made");
+  }, [mediaCount]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -101,8 +118,8 @@ export function WorkbenchPane({
         </Layer>
 
         <Layer on={instrument === "changes"}>
-          <CanvasGitPanel
-            sessionId={sessionId || null}
+          <ChangesReview
+            sessionId={sessionId}
             onFileOpen={(p) => {
               store.openFile(p);
               setInstrument("file");

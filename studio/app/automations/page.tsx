@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { ListRow } from "@/components/ui/list-row";
 import { DayRibbon } from "@/components/ui/day-ribbon";
 import { EmptyState } from "@/components/EmptyState";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { CronCreateCard, SentinelCreateCard } from "@/components/cron/CreateForms";
 import type { RibbonMark } from "@/lib/schedule/ribbon";
 import {
   fetchCrons,
@@ -46,6 +48,11 @@ export default function AutomationsPage() {
   const [sentinels, setSentinels] = useState<SentinelDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState<number | null>(null);
+  // Making a new automation is a sheet over this page, not a trip to another
+  // route. Two kinds, because a schedule and a watcher genuinely take
+  // different fields — same test as everywhere: different shape, different
+  // form.
+  const [creating, setCreating] = useState<null | "schedule" | "watcher">(null);
 
   useEffect(() => {
     setNow(Date.now());
@@ -102,7 +109,7 @@ export default function AutomationsPage() {
                 {summaryLine(crons.length + sentinels.length, failing, loading)}
               </p>
             </div>
-            <Button size="sm" className="h-9 shrink-0 gap-1.5" onClick={() => router.push("/cron?new=1")}>
+            <Button size="sm" className="h-9 shrink-0 gap-1.5" onClick={() => setCreating("schedule")}>
               <Plus className="size-4" aria-hidden />
               <span className="hidden sm:inline">New</span>
             </Button>
@@ -183,6 +190,54 @@ export default function AutomationsPage() {
           </div>
         </div>
       </div>
+
+      <ResponsiveModal
+        open={creating !== null}
+        onOpenChange={(o) => setCreating(o ? (creating ?? "schedule") : null)}
+        title={creating === "watcher" ? "Watch for something" : "Do this on a schedule"}
+        description={
+          creating === "watcher"
+            ? "He checks for a condition and acts when it is met."
+            : "He runs this without being asked, on the clock you set."
+        }
+        size="lg"
+      >
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex gap-1.5">
+            <Button
+              size="sm"
+              variant={creating === "schedule" ? "default" : "outline"}
+              className="h-8 text-[12px]"
+              onClick={() => setCreating("schedule")}
+            >
+              On a schedule
+            </Button>
+            <Button
+              size="sm"
+              variant={creating === "watcher" ? "default" : "outline"}
+              className="h-8 text-[12px]"
+              onClick={() => setCreating("watcher")}
+            >
+              Watch for something
+            </Button>
+          </div>
+          {creating === "watcher" ? (
+            <SentinelCreateCard
+              onCreated={() => {
+                setCreating(null);
+                void load();
+              }}
+            />
+          ) : (
+            <CronCreateCard
+              onCreated={() => {
+                setCreating(null);
+                void load();
+              }}
+            />
+          )}
+        </div>
+      </ResponsiveModal>
     </AppShell>
   );
 }
