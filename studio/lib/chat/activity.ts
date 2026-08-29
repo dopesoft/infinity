@@ -25,6 +25,9 @@
 // Type-only: erased at compile time, so this module pulls in neither React nor
 // next/navigation at runtime even though useChat does.
 import type { ChatMessage } from "@/hooks/useChat";
+// Relative, like the other value import below: the test runner does not
+// resolve the "@/" alias in this module.
+import { stripMarkdown } from "./plainText";
 import type { WSToolEvent } from "@/lib/ws/client";
 // Value import, deliberately relative so the module resolves without the "@/"
 // bundler alias (it is executed directly by the test runner).
@@ -133,6 +136,35 @@ export function detectGated(output?: string): { gated: boolean; contractId?: str
   if (!output || !output.startsWith("BLOCKED:")) return { gated: false };
   const m = output.match(TRUST_CONTRACT_RE);
   return { gated: true, contractId: m?.[1] };
+}
+
+/**
+ * A refusal, said rather than dumped.
+ *
+ * A gate result is a page of machine copy — "BLOCKED: …", a Trust contract
+ * uuid, a paragraph of what to do instead — and rendering the whole slab in a
+ * monospace box is the single ugliest thing in the transcript: the boss's eye
+ * has to find the one sentence that matters inside a wall of grey.
+ *
+ * So it is split: the LEAD is the first real sentence, set in the voice face
+ * like anything Jarvis says, and the REST goes behind the inset for whoever
+ * wants it. The `BLOCKED:` marker itself and the contract uuid are chrome —
+ * the row is already amber and already links to Trust — so neither survives.
+ */
+export function splitRefusal(output?: string): { lead: string; rest: string } {
+  const text = (output ?? "").trim();
+  if (!text) return { lead: "", rest: "" };
+  const body = text
+    .replace(/^BLOCKED\s*[:\-–—]\s*/i, "")
+    .replace(TRUST_CONTRACT_RE, "")
+    .trim();
+  const cut = body.indexOf("\n\n");
+  if (cut < 0) {
+    // One paragraph: if it is short enough to read as a sentence, it IS the
+    // whole explanation and there is nothing to hide behind an inset.
+    return body.length <= 320 ? { lead: body, rest: "" } : { lead: firstSentence(body), rest: body };
+  }
+  return { lead: body.slice(0, cut).trim(), rest: body.slice(cut).trim() };
 }
 
 /**
@@ -504,7 +536,12 @@ const VERBS: Record<string, VerbSpec> = {
   domain_hint_add: { present: "Recording", past: "Recorded", object: "a mapping", plural: "mappings", glyph: "Network", kind: "kv", meta: (i) => oneLine(str(i, "table", "tool_prefix")) },
   domain_hint_list: { present: "Checking", past: "Checked", object: "his mappings", plural: "his mappings", glyph: "Network", kind: "kv", group: timesGroup },
   tool_search: { present: "Looking for", past: "Looked for", object: "a tool", plural: "tools", glyph: "ScanSearch", kind: "search", meta: (i) => oneLine(str(i, "query", "q")) },
-  load_tools: { present: "Picking up", past: "Picked up", object: "a tool", plural: "tools", glyph: "Wrench", kind: "kv", meta: (i) => oneLine(namesOf(i)) },
+  // Plumbing, and it must READ as plumbing. "Picked up a tool · plan_cancel"
+  // put a bare identifier on a row that sounded like it was describing work,
+  // which is exactly the junk the boss called out. "Loaded" is what it is; the
+  // identifier stays in the quiet mono meta where an identifier belongs, and a
+  // run of them always folds into one line.
+  load_tools: { present: "Loading", past: "Loaded", object: "a tool", plural: "tools", glyph: "Wrench", kind: "kv", group: (n, p) => `${p} ${n} tools`, meta: (i) => oneLine(namesOf(i)) },
   unload_tools: { present: "Putting away", past: "Put away", object: "a tool", plural: "tools", glyph: "Wrench", kind: "kv", meta: (i) => oneLine(namesOf(i)) },
   state_set: { present: "Saving", past: "Saved", object: "a setting", plural: "settings", glyph: "Settings", kind: "kv", meta: (i) => oneLine(str(i, "key")) },
   state_get: { present: "Reading", past: "Read", object: "a setting", plural: "settings", glyph: "Settings", kind: "kv", meta: (i) => oneLine(str(i, "key")) },
@@ -852,7 +889,12 @@ type Described = {
 function describeMessage(m: ChatMessage): Described {
   if (m.role === "thinking" || (m.role === "assistant" && m.interim)) {
     const spec = m.role === "thinking" ? THINKING_SPEC : NARRATION_SPEC;
-    const meta = oneLine(m.text ?? "");
+    // Thinking and narration are PROSE, and the runtime brain writes prose in
+    // markdown - so the preview showed the boss `**Planning agent
+    // termination**` with the asterisks in it. Stripped here, on the prose
+    // branch only: a tool's meta is a path or a command, where `*` is a glob
+    // and must survive untouched.
+    const meta = oneLine(stripMarkdown(m.text ?? ""));
     return {
       message: m,
       spec,

@@ -359,8 +359,10 @@ type bridgeBash struct {
 
 func (t *bridgeBash) Name() string { return "bash_run" }
 func (t *bridgeBash) Description() string {
-	return "Run a bash command on the active bridge. Output is truncated past 64KB " +
-		"and wall-time limited to 5 minutes. cwd is the workspace root unless specified. " +
+	return "Run a bash command on the active bridge. Output is truncated past 64KB and the command is KILLED at " +
+		"5 minutes - so it must be a command that DOES something and exits, never one that waits. Do not poll, sleep-loop, " +
+		"or babysit a background job here: a detached coding job reports back into the chat on its own, and `watch_until` " +
+		"covers anything else worth waiting for. cwd is the workspace root unless specified. " +
 		"Installed CLI tools (yt-dlp, ffmpeg, …) work with the bare command: this tool puts " +
 		"them on PATH and runs them on the cloud workspace where they live, automatically. " +
 		"bridge=\"cloud\"|\"mac\" pins an ordinary command to a specific machine."
@@ -384,6 +386,12 @@ func (t *bridgeBash) Schema() map[string]any {
 func (t *bridgeBash) Execute(ctx context.Context, in map[string]any) (string, error) {
 	cmd := strString(in, "cmd")
 	if redirect, blocked := guardInteractiveLogin(cmd); blocked {
+		return redirect, nil
+	}
+	// Waiting on / killing / poking at a detached coding job by hand is never
+	// the move: the substrate already reports back, shows live progress, and
+	// reserves stopping for the boss. See bash_wait_guard.go.
+	if redirect, blocked := guardJobBabysitting(cmd); blocked {
 		return redirect, nil
 	}
 	// Claude Code runs through code_agent (tracked, stoppable, delete-gated,

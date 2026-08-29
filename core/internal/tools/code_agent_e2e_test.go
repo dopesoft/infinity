@@ -159,7 +159,7 @@ func TestClaudeCodeRunner_EndToEnd_RunsOnTheSubscription(t *testing.T) {
 	summary, err := r.Run(context.Background(), ClaudeCodeJob{
 		Bridge: mac, JobID: "job-e2e", Task: "edit core/x.go", Repo: repo,
 		Model: "claude-opus-5[1m]", Effort: "high", MaxWait: 20 * time.Second, KillOnCancel: true,
-		Heartbeat: func(label, _, _ string) { mu.Lock(); labels = append(labels, label); mu.Unlock() },
+		Heartbeat: func(label, _, _ string, _ int) { mu.Lock(); labels = append(labels, label); mu.Unlock() },
 		SetMeta:   func(k, v string) { mu.Lock(); meta[k] = v; mu.Unlock() },
 	})
 	if err != nil {
@@ -302,6 +302,78 @@ func assertRepoRefused(t *testing.T, mac *localMacBridge, repo, reason string) {
 	}
 	if strings.Contains(g, "write the code yourself") && !strings.Contains(g, "Do NOT write the code yourself") {
 		t.Fatalf("a refusal must never steer the chat model into coding on its own plan: %s", g)
+	}
+}
+
+// mcpHeldClaude is the fake that reproduces the 2026-08-29 failure exactly: it
+// does real work, writes its terminal result, and then NEVER EXITS — because
+// `claude -p` waits on its MCP servers, and that build was holding eight of
+// them plus a headless Chrome. No `.status` file is ever written.
+//
+// Before the terminal-result signal, this run was invisible to the harness
+// forever: 47 minutes of successful work reported to the boss as a failure.
+const mcpHeldClaude = `#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"3f2a9c11-0000-4000-8000-abcdef123456"}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_a1","name":"Edit","input":{"file_path":"core/x.go","old_string":"a","new_string":"b"}}]}}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a1","content":"applied","is_error":false}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"duration_ms":2844766,"num_turns":170,"result":"Done. Here is the report.","modelUsage":{"claude-opus-5":{"inputTokens":1}}}'
+# The MCP servers keep the process resident long after the work is over.
+sleep 120
+`
+
+// Why: THE bug. A build that succeeds must be recognised as finished from its
+// own terminal result, without waiting for a process exit that never comes —
+// and its step must reach the boss's chat while it happens, not never.
+func TestClaudeCodeRunner_EndToEnd_FinishesWhenClaudeNeverExits(t *testing.T) {
+	mac, repo := setupLocalMac(t, `{"emailAddress":"kai@example.com","organizationType":"claude_max","billingType":"stripe_subscription"}`)
+	if err := os.WriteFile(filepath.Join(mac.bin, "claude"), []byte(mcpHeldClaude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu    sync.Mutex
+		steps []NestedStep
+		meta  = map[string]string{}
+	)
+	r := NewClaudeCodeRunner(nil, nil)
+	r.AttachStepSink(func(_ context.Context, s NestedStep) {
+		mu.Lock()
+		steps = append(steps, s)
+		mu.Unlock()
+	})
+	summary, err := r.Run(context.Background(), ClaudeCodeJob{
+		Bridge: mac, JobID: "job-mcp-held", Task: "edit core/x.go", Repo: repo,
+		ParentSession: "11111111-2222-3333-4444-555555555555",
+		MaxWait:       20 * time.Second, KillOnCancel: true,
+		SetMeta: func(k, v string) { mu.Lock(); meta[k] = v; mu.Unlock() },
+	})
+	if err != nil {
+		t.Fatalf("a job whose process never exits must still finish: %v", err)
+	}
+	if !strings.Contains(summary, "Done. Here is the report.") {
+		t.Fatalf("Claude's own report must be the receipt: %q", summary)
+	}
+	// The resident process (and everything under it — eight MCP servers and a
+	// Chrome, in the real case) has to be reaped, or every build leaks a tree.
+	mac.mu.Lock()
+	cmds := strings.Join(mac.cmds, "\n")
+	mac.mu.Unlock()
+	if !strings.Contains(cmds, "kill -TERM") {
+		t.Fatalf("finishing on the result must reap the still-resident process group:\n%s", cmds)
+	}
+	// And the boss has to have SEEN it work.
+	mu.Lock()
+	defer mu.Unlock()
+	var sawEdit bool
+	for _, s := range steps {
+		if s.Tool == "claude_code__edit" && !s.Done {
+			sawEdit = true
+		}
+	}
+	if !sawEdit {
+		t.Fatalf("the nested edit must reach the chat as its own step: %+v", steps)
+	}
+	if meta["claude_session_id"] != "3f2a9c11-0000-4000-8000-abcdef123456" {
+		t.Fatalf("the session id must be captured so the job can be resumed: %+v", meta)
 	}
 }
 

@@ -459,6 +459,12 @@ function markTrailingAssistantInterim(messages: ChatMessage[]): ChatMessage[] {
 function settleInFlight(messages: ChatMessage[], now: number): ChatMessage[] {
   return messages.map((m) => {
     if (m.role === "assistant" && m.pending) return { ...m, pending: false };
+    // A NESTED step belongs to a coding job, not to this turn. The job runs on
+    // past the turn by design — that is the whole point of a detached build —
+    // so stamping it "interrupted" here would put a stopped row on screen for
+    // work that is still, visibly, editing files. Its own result frame settles
+    // it, whenever that lands.
+    if (m.toolCall?.nested) return m;
     if (m.role === "tool" && m.toolCall && !m.toolResult && !m.interrupted) {
       return { ...m, interrupted: true, endedAt: now };
     }
@@ -982,6 +988,13 @@ export function useChat() {
           break;
         }
         case "tool_call": {
+          // A NESTED step is a coding job reporting from inside its own run —
+          // Claude Code on the Mac, or the settings model in the cloud
+          // workspace. Those keep arriving for as long as the build lasts,
+          // which is routinely long after the reply landed, so they must NOT
+          // touch this turn's watchdog: a detached build that goes quiet for
+          // two minutes mid-`go test` is not "the agent went silent".
+          const nested = !!ev.tool_call.nested;
           // When the gate parks a call on a Trust contract, the agent
           // loop blocks inside WaitForDecision for up to 15 min. The
           // 90s "agent went silent" watchdog would fire long before
@@ -989,7 +1002,7 @@ export function useChat() {
           // can sit waiting indefinitely. tool_result re-arms it.
           if (ev.tool_call.awaiting_approval) {
             clearWatchdog();
-          } else {
+          } else if (!nested) {
             armWatchdog();
           }
           // Tell the status chrome (bridge pill) what is in flight this
@@ -1000,7 +1013,12 @@ export function useChat() {
           setMessages((prev0) => {
             // The narration streamed just before this call is interim, not
             // the reply: mark it so the stream folds it with the tool cards.
-            const prev = markTrailingAssistantInterim(prev0);
+            //
+            // NEVER for a nested step. A build reports for another forty
+            // minutes after Jarvis has answered, and re-marking on each one
+            // would fold his actual reply away into the ledger — the boss
+            // would watch his answer vanish while the job kept working.
+            const prev = nested ? prev0 : markTrailingAssistantInterim(prev0);
             // Upsert by tool_call.id - NEVER blind-append. The same tool_call
             // frame can reach this handler more than once during a long
             // blocking call (iOS Safari focus/visibility churn -> reconnect ->
@@ -1039,7 +1057,7 @@ export function useChat() {
           break;
         }
         case "tool_result": {
-          armWatchdog();
+          if (!ev.tool_result.nested) armWatchdog();
           clearLiveTool(ev.tool_result.id);
           setMessages((prev) =>
             prev.map((m) =>

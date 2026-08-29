@@ -170,3 +170,77 @@ func TestHumanDuration(t *testing.T) {
 		}
 	}
 }
+
+// ─── the job that FINISHED and was never reported ────────────────────────────
+
+func completedFixture() candidate {
+	return candidate{
+		runID:     "33333333-3333-4333-8333-333333333333",
+		label:     "Claude Code: redesign the coach conversation",
+		sessionID: "22222222-2222-4222-8222-222222222222",
+		repo:      "/Users/n0m4d/Dev/infinity",
+		claudeSes: "f4fcf5d1-dffc-407e-bf64-9330f8b4b329",
+		status:    "ok",
+		reason:    "still_working",
+		startedAt: time.Date(2026, 8, 29, 0, 15, 0, 0, time.UTC),
+	}
+}
+
+// Why: this is the 2026-08-29 failure. A 47-minute build succeeded, wrote a
+// full report, and the boss was told it had FAILED. The brief that wakes Jarvis
+// has to make the correction the first thing he says, hand him the report, and
+// stop him relaunching work that is already on disk.
+func TestBuildCompletedBrief_LeadsWithTheCorrectionAndCarriesTheReport(t *testing.T) {
+	b := buildCompletedBrief(completedFixture(), Verdict{
+		Found:  true,
+		Done:   true,
+		Report: "Done. Rewrote the coach panel and the four call sites; go build and pnpm test both clean.",
+		Files:  []string{"studio/components/CoachConversation.tsx", "core/internal/coach/panel.go"},
+	})
+
+	if !strings.Contains(b, "DID finish") {
+		t.Fatalf("the brief must open by saying it finished — he was last told the opposite:\n%s", b)
+	}
+	if !strings.Contains(b, "Rewrote the coach panel") {
+		t.Fatalf("Claude's own report is the whole point of reading the transcript:\n%s", b)
+	}
+	if !strings.Contains(b, "CoachConversation.tsx") {
+		t.Fatalf("the files it touched are the evidence the boss can check:\n%s", b)
+	}
+	if !strings.Contains(b, "plan_update") {
+		t.Fatalf("a step still sitting blocked for finished work is the visible half of this bug:\n%s", b)
+	}
+	if !strings.Contains(b, "Do NOT relaunch") {
+		t.Fatalf("relaunching work whose report is already written is the failure made autonomous:\n%s", b)
+	}
+	if strings.Contains(b, "resume_session") {
+		t.Fatalf("nothing here should read as an invitation to continue a finished job:\n%s", b)
+	}
+}
+
+// Why: a run that ran to the end and REPORTED a failure is not a success with
+// an awkward summary. The correction must not launder it.
+func TestBuildCompletedBrief_KeepsAFailureAFailure(t *testing.T) {
+	b := buildCompletedBrief(completedFixture(), Verdict{
+		Found: true, Done: true, IsError: true,
+		Report: "The production build failed: type error in CoachConversation.tsx:212.",
+	})
+	if !strings.Contains(b, "FAILURE") {
+		t.Fatalf("a reported failure must be named as one:\n%s", b)
+	}
+	if !strings.Contains(b, "type error in CoachConversation.tsx:212") {
+		t.Fatalf("its own account of what went wrong is what makes it actionable:\n%s", b)
+	}
+}
+
+// Why: "it finished" with no report must never read as "it finished cleanly".
+// An empty report is a reason to go and look, not a reason to reassure him.
+func TestBuildCompletedBrief_RefusesToInventAReport(t *testing.T) {
+	b := buildCompletedBrief(completedFixture(), Verdict{Found: true, Done: true})
+	if !strings.Contains(b, "it wrote none") {
+		t.Fatalf("a missing report must be stated plainly:\n%s", b)
+	}
+	if !strings.Contains(b, "Look at the repo") {
+		t.Fatalf("with no report, the instruction is to go and check:\n%s", b)
+	}
+}

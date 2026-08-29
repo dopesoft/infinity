@@ -89,9 +89,11 @@ func (f *fakeCodeRunner) DefaultEffort() string { return "high" }
 func (f *fakeCodeRunner) Run(_ context.Context, job tools.ClaudeCodeJob) (string, error) {
 	f.ran = &job
 	job.SetMeta("auth", "Max subscription · kai@example.com")
-	job.Heartbeat("Claude Code · Edit core/x.go · 5s", "Edit", "core/x.go")
-	job.Heartbeat("Claude Code · Edit core/x.go · 20s", "Edit", "core/x.go")
-	job.Heartbeat("Claude Code · Bash go test ./... · 35s", "Bash", "go test ./...")
+	// The runner counts steps; a repeat of the same tool+target is the SAME
+	// step, which is what keeps the bar from advancing while nothing happens.
+	job.Heartbeat("Claude Code · Edit core/x.go · 5s", "Edit", "core/x.go", 1)
+	job.Heartbeat("Claude Code · Edit core/x.go · 20s", "Edit", "core/x.go", 1)
+	job.Heartbeat("Claude Code · Bash go test ./... · 35s", "Bash", "go test ./...", 2)
 	return "Done. Build is clean.", nil
 }
 

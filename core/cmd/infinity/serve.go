@@ -500,6 +500,16 @@ func serveCmd() *cobra.Command {
 					// my ChatGPT plan." See CLAUDE.md "Coding via Claude Code".
 					claudeRunner = tools.NewClaudeCodeRunner(activeBridgeRouter, activeBridgePrefs)
 					tools.RegisterCodeAgentTool(registry, claudeRunner, runs.New(p))
+					// ONE coding job per conversation, enforced at the single
+					// launcher both code_agent and background_build go through.
+					// Without it, on 2026-08-29 a background build (05:14:07)
+					// and a code_agent run (05:15:12) both went at the same
+					// repo for the same task, and Jarvis tried to referee them
+					// by hand with `kill` and a bash wait loop.
+					codePool := p
+					claudeRunner.AttachLiveRunLookup(func(ctx context.Context, sessionID string) (string, string, bool) {
+						return runs.LiveCodingRun(ctx, codePool, sessionID)
+					})
 					// Generic artifact CRUD + high-level project_create.
 					// project_create is the boss-asked-for end-to-end
 					// app-bootstrap tool; it routes through the bridge
@@ -2384,18 +2394,80 @@ func serveCmd() *cobra.Command {
 			// cheap. Reuses the reauth replayer verbatim: there is one
 			// implementation of "wake him up in this session", not two.
 			if pool != nil && loop != nil {
+				prefFor := func(ctx context.Context, sessionID string) bridge.Preference {
+					if activeBridgePrefs == nil {
+						return bridge.PrefAuto
+					}
+					return activeBridgePrefs(ctx, sessionID)
+				}
 				fin := finish.NewPoller(pool,
 					&reauthReplayer{loop: loop},
-					finish.NewBridgeEvidence(activeBridgeRouter, func(ctx context.Context, sessionID string) bridge.Preference {
-						if activeBridgePrefs == nil {
-							return bridge.PrefAuto
-						}
-						return activeBridgePrefs(ctx, sessionID)
-					}))
+					finish.NewBridgeEvidence(activeBridgeRouter, prefFor),
+					// The transcript reader is what lets a job that FINISHED
+					// with nobody watching be recognised as finished instead
+					// of continued: the 2026-08-29 build that succeeded, wrote
+					// a full report, and was announced as a failure.
+					finish.NewBridgeTranscript(activeBridgeRouter, prefFor))
 				if fin != nil {
 					go fin.Start(cmd.Context())
 					fmt.Println("  finish: coding-continuation poller started")
 				}
+			}
+
+			// SHOW HIM THE CODING. A `code_agent` build is a whole agent
+			// working inside one tool call: on 2026-08-29 one of them wrote
+			// 829 stream events — 112 commands, 59 reads, 37 file-changing
+			// calls across 7 files — and the chat showed a single spinning row
+			// for 47 minutes while files appeared in his Changes tab.
+			//
+			// Late-bound here for the same reason the browser sink is: the
+			// server owns the per-session broadcaster. It goes on the RUNNER,
+			// which is the one launcher `code_agent` and `background_build`
+			// both go through, so neither engine can be the one that forgot.
+			//
+			// Two deliveries per step, because a step has to be visible while
+			// it runs, not only once it is over: the live frame to the socket,
+			// and — when it settles — a PostToolUse observation so the row is
+			// rebuilt on reload like every other step in the transcript.
+			{
+				stepPipeline := pipeline
+				codingStepSink := func(ctx context.Context, step tools.NestedStep) {
+					srv.BroadcastNestedStep(step)
+					if !step.Done || stepPipeline == nil {
+						return
+					}
+					// Filed as PostToolUse with is_error in the PAYLOAD, never
+					// as PostToolUseFailure: a grep inside a build that found
+					// nothing is not a failure of Infinity's, and must not
+					// feed the self-improve backlog as one.
+					stepPipeline.Emit(hooks.Event{
+						Name:      hooks.PostToolUse,
+						SessionID: tools.SessionForPublish(step.SessionID),
+						Text:      step.Tool,
+						Payload: map[string]any{
+							"name":         step.Tool,
+							"input":        step.Input,
+							"output":       step.Output,
+							"tool_call_id": step.CallID,
+							"is_error":     step.IsError,
+							// Marks the row as work done INSIDE a coding job
+							// rather than by the chat brain itself.
+							"nested_run_id": step.RunID,
+						},
+					})
+				}
+				// ONE sink, BOTH engines. Claude Code on the Mac and the
+				// settings model in the cloud workspace hand their steps to
+				// the same function, so the boss sees the same worklog either
+				// way — the bridge decides which model writes the code, and
+				// nothing else about how the work reads.
+				if claudeRunner != nil {
+					claudeRunner.AttachStepSink(codingStepSink)
+				}
+				if bgAgent != nil {
+					bgAgent.OnStep = codingStepSink
+				}
+				fmt.Println("  coding: every step streams into the chat (Mac and cloud)")
 			}
 
 			// Late-bind the browser frame sink now that the server (which

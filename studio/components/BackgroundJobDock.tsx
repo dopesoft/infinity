@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Circle,
   FileText,
+  Loader2,
   Minus,
   X,
 } from "lucide-react";
@@ -68,10 +69,17 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
       : null;
   const pct = hasPlan ? Math.round((done / total) * 100) : runPct;
 
+  // What is happening RIGHT NOW, in preference order. A live coding run
+  // outranks a blocked step: a step goes 'blocked' when an earlier run was
+  // interrupted, and leaving that stale title on screen while a new job is
+  // actively editing files is what had the boss looking at a warning sign for
+  // work that was in full flight.
+  const liveWork = activeBuilds.length > 0 ? (build?.progress_label?.trim() ?? "") : "";
   const current =
-    steps.find((s) => s.status === "in_progress")?.title ??
-    steps.find((s) => s.status === "blocked")?.title ??
-    steps.find((s) => s.status === "pending")?.title ??
+    steps.find((s) => s.status === "in_progress")?.title ||
+    liveWork ||
+    steps.find((s) => s.status === "blocked")?.title ||
+    steps.find((s) => s.status === "pending")?.title ||
     (steps.length > 0 ? steps[steps.length - 1].title : "");
 
   const running =
@@ -82,8 +90,14 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
   const title = plan?.title?.trim() || build?.label?.trim() || "Background build";
   const workerDetail = [worker, backend].filter(Boolean).join(" · ");
 
+  // ONE working state across the whole app (MAJORDOMO §1.4). This strip used
+  // to be info-blue with its own chevrons and its own bold percentage while
+  // the ledger three inches above it was brand-tinted with quiet mono
+  // counters — the boss's "three different inventions" for the same idea.
+  // Brand means work is happening here, exactly as it does in the ledger, and
+  // the numbers are quiet because the sentence is the point, not the maths.
   return (
-    <div className="min-w-0 shrink-0 border-t border-info/30 bg-info/[0.06] px-3 py-2 sm:px-4">
+    <div className="min-w-0 shrink-0 border-t border-hairline bg-brand/[0.05] px-3 py-2.5 sm:px-4">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -91,27 +105,30 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
         aria-label={expanded ? "Collapse plan" : "Expand plan"}
         className="flex w-full min-w-0 items-center gap-2.5"
       >
-        {/* A pulsing dot, not a spinner: MAJORDOMO §6 reserves the one
-            spinner on screen for the ledger's running step, and this dock
-            sits on the same screen as the ledger. */}
         {running ? (
-          <StatusDot tone="info" pulse className="mx-[5px]" />
+          // A spinner, not a dot. MAJORDOMO §6 reserved the one spinner for
+          // the ledger's running step, and the dot that replaced it here read
+          // as a dead bullet sitting slightly off the bar's centre line - the
+          // boss's words. This strip is the persistent "work is happening"
+          // surface, so it gets the moving affordance, sized and centred to
+          // match the icons in the other two states.
+          <Loader2 className="size-4 shrink-0 animate-spin text-brand" aria-hidden />
         ) : plan?.status === "paused" ? (
           <AlertTriangle className="size-4 shrink-0 text-warning" />
         ) : (
-          <Circle className="size-4 shrink-0 text-info" />
+          <Circle className="size-4 shrink-0 text-quiet" />
         )}
         <Progress
           value={pct ?? 8}
-          className={cn("h-1.5 flex-1 bg-info/15", pct == null && "animate-pulse")}
+          className={cn("h-1.5 flex-1 bg-brand/15", pct == null && "animate-pulse")}
         />
-        <span className="w-9 shrink-0 text-right text-xs font-semibold tabular-nums text-info">
+        <span className="w-9 shrink-0 text-right font-mono text-[12px] tabular-nums text-quiet">
           {pct != null ? `${pct}%` : ""}
         </span>
         {expanded ? (
-          <ChevronDown className="size-4 shrink-0 text-info/70" />
+          <ChevronDown className="size-4 shrink-0 text-quiet" />
         ) : (
-          <ChevronUp className="size-4 shrink-0 text-info/70" />
+          <ChevronUp className="size-4 shrink-0 text-quiet" />
         )}
       </button>
 
@@ -129,14 +146,14 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
           </span>
         )}
         {others.length > 0 && (
-          <span className="shrink-0 rounded-full bg-info/15 px-1.5 font-mono text-[11px] text-info">
+          <span className="shrink-0 rounded-full bg-brand/15 px-1.5 font-mono text-[11px] text-brand">
             +{others.length}
           </span>
         )}
       </div>
 
       {expanded && (
-        <div className="mt-2.5 space-y-2.5 border-t border-info/20 pt-2.5">
+        <div className="mt-2.5 max-h-[38dvh] space-y-2.5 overflow-y-auto border-t border-hairline pt-2.5 scroll-touch">
           <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-foreground/80">
             <span className="min-w-0 truncate">{title}</span>
           </div>
@@ -168,11 +185,7 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
                 </li>
               ))}
             </ul>
-          ) : (
-            <p className="min-w-0 break-words [overflow-wrap:anywhere] text-xs leading-snug text-foreground">
-              {title}
-            </p>
-          )}
+          ) : null}
 
           {currentFile && (
             <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -184,10 +197,10 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
           )}
 
           {others.length > 0 && (
-            <div className="space-y-1.5 border-t border-info/20 pt-2.5">
+            <div className="space-y-1.5 border-t border-hairline pt-2.5">
               {others.map((run) => (
                 <div key={run.id} className="flex min-w-0 items-center gap-2 text-[11px]">
-                  <StatusDot tone="info" pulse className="mx-[4px]" />
+                  <StatusDot tone="brand" pulse className="mx-[4px]" />
                   <span className="min-w-0 flex-1 truncate text-foreground/80">
                     {run.label?.trim() || "Background build"}
                   </span>
@@ -206,8 +219,9 @@ function StepIcon({ status }: { status: PlanStep["status"] }) {
     case "done":
       return <Check className="mt-0.5 size-3.5 shrink-0 text-success" />;
     case "in_progress":
-      // Pulsing dot, not a spinner - see the header note above.
-      return <StatusDot tone="info" pulse className="mt-[7px] mx-[5px]" />;
+      // The step actually being worked gets the moving affordance, aligned to
+      // the first line of its label like every other status glyph here.
+      return <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-brand" aria-hidden />;
     case "blocked":
       return <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />;
     case "failed":
@@ -215,6 +229,6 @@ function StepIcon({ status }: { status: PlanStep["status"] }) {
     case "skipped":
       return <Minus className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/50" />;
     default:
-      return <Circle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/40" />;
+      return <Circle className="mt-0.5 size-3.5 shrink-0 text-quiet/50" />;
   }
 }

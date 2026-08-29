@@ -105,14 +105,17 @@ function renderConversation(messages: ChatMessage[], onQuickReply?: (text: strin
                 // column as the ledger and the assistant bubble, so the
                 // "agent voice" rail reads as one thing.
                 <div className="flex justify-start">
-                  <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+                  {/* Full column, like the ledger: a step that reached the top
+                      level on its own is still WORK, not a message. */}
+                  <div className="w-full min-w-0 max-w-full">
                     <ActivityStepFor message={m} />
                   </div>
                 </div>
               )
             ) : m.role === "thinking" ? (
               <div className="flex justify-start">
-                <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+                {/* Work, not a message: full column (see ActivityLedger). */}
+                <div className="w-full min-w-0 max-w-full">
                   <ActivityStepFor message={m} />
                 </div>
               </div>
@@ -173,25 +176,63 @@ export function ConversationStream({
   working?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [showJump, setShowJump] = useState(false);
   const stickToBottomRef = useRef(true);
   const work = workingState(messages, working);
 
+  // WHY A ResizeObserver AND NOT JUST AN EFFECT ON `messages`.
+  //
+  // The transcript's height changes constantly WITHOUT the message list
+  // changing identity: a ledger row streams more output, a thinking trace
+  // grows line by line, a row is expanded, and - the one that hurt most - the
+  // plan dock above the composer opens and takes height away from this
+  // scroller. None of those re-run an effect keyed on `messages`, so the
+  // content grew below the fold, nothing re-pinned, and "Jump to latest" sat
+  // there permanently while the boss had to scroll by hand to watch his own
+  // agent work.
+  //
+  // Observing the CONTENT (it got taller) and the CONTAINER (it got shorter)
+  // covers every one of those causes at once, including ones added later,
+  // which an ever-growing dependency array never would.
   useEffect(() => {
     const el = scrollRef.current;
+    const content = contentRef.current;
     if (!el) return;
-    if (stickToBottomRef.current) {
+
+    const pin = () => {
+      if (!stickToBottomRef.current) return;
+      // scrollTo with no behavior is instant, which is what we want while
+      // content streams - a smooth scroll would never catch up.
       el.scrollTop = el.scrollHeight;
-    }
-    // Re-pin when the working row toggles/changes too, so the indicator
-    // doesn't appear just below the fold.
+    };
+
+    pin();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(pin);
+    if (content) ro.observe(content);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Message-driven re-pin as well: a brand-new row must land pinned even in
+  // the frame before the observer fires.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages, work.show, work.label]);
 
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const stick = distanceFromBottom < 80;
+    // A generous threshold: while a ledger row is streaming, the content can
+    // grow by more than a tight margin between two scroll events, and a
+    // too-tight test would read that growth as "the boss scrolled up" and
+    // unstick a view he never touched. That is the bug that made the jump
+    // button appear on its own.
+    const stick = distanceFromBottom < 160;
     stickToBottomRef.current = stick;
     setShowJump(!stick);
   }
@@ -255,14 +296,16 @@ export function ConversationStream({
         // steals their internal scroll.
         className="flex-1 min-w-0 space-y-3 overflow-y-auto overflow-x-hidden px-3 pt-3 pb-8 scroll-touch sm:px-4"
       >
-        {renderConversation(messages, onQuickReply)}
-        {work.show && (
-          <div className="min-w-0 max-w-full" data-message>
-            <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
-              <WorkingIndicator label={work.label} />
+        <div ref={contentRef} className="min-w-0 space-y-3">
+          {renderConversation(messages, onQuickReply)}
+          {work.show && (
+            <div className="min-w-0 max-w-full" data-message>
+              <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+                <WorkingIndicator label={work.label} />
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {showJump && (
         <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">

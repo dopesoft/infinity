@@ -180,6 +180,12 @@ export type WSToolEvent = {
   awaiting_approval?: boolean;
   contract_id?: string;
   preview?: string;
+  // nested marks a step taken INSIDE a coding job (Claude Code on the Mac, or
+  // the settings model in the cloud workspace) rather than by the chat brain
+  // in this turn. Those arrive on their own schedule — often minutes after the
+  // reply — so they must not touch the turn's watchdog and must not re-fold
+  // the reply into the ledger as if it were interim narration.
+  nested?: boolean;
 };
 
 export type WSStatus = "connected" | "connecting" | "disconnected";

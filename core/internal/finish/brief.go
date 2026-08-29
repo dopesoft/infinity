@@ -69,6 +69,45 @@ func buildBrief(s stranded, r Report, maxPasses int) string {
 	return b.String()
 }
 
+// buildCompletedBrief wakes Jarvis with a job that ACTUALLY FINISHED and was
+// never reported.
+//
+// This is the other half of the 2026-08-29 failure. The build succeeded, wrote
+// a full report, and the boss was told it had failed — so the mechanics
+// (noticing, reading the transcript, correcting the run row) have already
+// happened in Go by the time this is written, and what is left is the judgment
+// a model is for: telling him in his own voice, and settling the plan step
+// that is still sitting there `blocked` for work that is done.
+func buildCompletedBrief(c candidate, v Verdict) string {
+	var b strings.Builder
+
+	b.WriteString("[Automatic check, no one asked for this] A coding job you started DID finish, and its result was never reported. ")
+	b.WriteString("I have already corrected the run — this is not something to re-run.\n\n")
+
+	fmt.Fprintf(&b, "**The job:** %s\n", firstNonEmpty(strings.TrimSpace(c.label), "a Claude Code run"))
+	fmt.Fprintf(&b, "**Repo:** %s\n", c.repo)
+	if v.IsError {
+		b.WriteString("**How it ended:** it ran to the end and reported a FAILURE. What it says below is its own account of what went wrong.\n")
+	} else {
+		fmt.Fprintf(&b, "**How it ended:** successfully, after %s.\n", humanDuration(time.Since(c.startedAt)))
+	}
+	if len(v.Files) > 0 {
+		fmt.Fprintf(&b, "**Files it touched:** %s\n", strings.Join(clipList(v.Files, 10), ", "))
+	}
+	if report := strings.TrimSpace(v.Report); report != "" {
+		fmt.Fprintf(&b, "\n**Its own report:**\n%s\n", clip(report, 4000))
+	} else {
+		b.WriteString("\n**Its own report:** it wrote none. Look at the repo before you say anything about what landed.\n")
+	}
+
+	b.WriteString("\n**Your call:** tell the boss plainly, in your own words, that this finished and what it did — " +
+		"he was last told it had stalled or failed, so lead with the correction. If a plan step is still sitting `blocked` " +
+		"or `in_progress` for this work, settle it now with `plan_update` (verify first if the step asked for proof). " +
+		"Do NOT relaunch this job, and do NOT start a fresh `code_agent` pass for work the report says is already done.\n")
+
+	return b.String()
+}
+
 // reasonLine turns a stopped_reason into something a person would say.
 func reasonLine(reason string) string {
 	switch strings.TrimSpace(reason) {

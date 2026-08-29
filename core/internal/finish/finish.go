@@ -83,6 +83,11 @@ type Poller struct {
 	pool     *pgxpool.Pool
 	replayer Replayer
 	evidence Evidence
+	// transcript reads a job's OWN files, which is the only way to learn that
+	// a job finished after everybody stopped watching it. Optional; without it
+	// the poller still continues stranded work, it just cannot tell the
+	// already-finished ones apart first.
+	transcript Transcript
 
 	interval time.Duration
 	// settleGrace is how long after a run closes we wait before acting, so
@@ -98,25 +103,37 @@ type Poller struct {
 	// duration, and a healthy test run must never be called stalled.
 	stallAfter time.Duration
 	maxPasses  int
+	// settleEach is the minimum gap between two probes of the SAME run, and
+	// maxSettleTries bounds consecutive FAILED probes so a Mac that has gone
+	// to sleep is not woken every minute forever. A probe that succeeds resets
+	// the counter, so a genuinely long job never exhausts its attempts.
+	settleEach     time.Duration
+	maxSettleTries int
 }
 
 // NewPoller returns a Poller, or nil when a dependency is missing (chat-only
 // or migrate-only processes then simply have no continuation loop).
+//
 // evidence may be nil: the continuation still happens, and says plainly that
-// it went in without a look at the repo.
-func NewPoller(pool *pgxpool.Pool, replayer Replayer, evidence Evidence) *Poller {
+// it went in without a look at the repo. transcript may be nil: stranded work
+// is still continued, but a job that finished unwatched is no longer told
+// apart from one that stopped short, which is the bug SettleOne exists for.
+func NewPoller(pool *pgxpool.Pool, replayer Replayer, evidence Evidence, transcript Transcript) *Poller {
 	if pool == nil || replayer == nil {
 		return nil
 	}
 	return &Poller{
-		pool:        pool,
-		replayer:    replayer,
-		evidence:    evidence,
-		interval:    60 * time.Second,
-		settleGrace: 2 * time.Minute,
-		lookback:    3 * time.Hour,
-		stallAfter:  12 * time.Minute,
-		maxPasses:   3,
+		pool:       pool,
+		replayer:   replayer,
+		evidence:   evidence,
+		transcript: transcript,
+		interval:   60 * time.Second,
+		settleGrace:    2 * time.Minute,
+		lookback:       6 * time.Hour,
+		stallAfter:     12 * time.Minute,
+		maxPasses:      3,
+		settleEach:     3 * time.Minute,
+		maxSettleTries: 4,
 	}
 }
 
@@ -147,6 +164,17 @@ func (p *Poller) tick(ctx context.Context) {
 		log.Printf("finish: marking stalled runs: %v", err)
 	} else if n > 0 {
 		infoLog.Printf("marked %d run(s) as showing no new activity", n)
+	}
+	// READ BEFORE YOU RE-RUN. A job that already finished must be recognised
+	// as finished before anything decides to continue it: relaunching work
+	// whose report is sitting unread on the Mac is the same failure the boss
+	// hit, only autonomous. Continuing waits a tick when this settles a row.
+	settled, err := p.SettleOne(ctx)
+	if err != nil {
+		log.Printf("finish: settling from transcript: %v", err)
+	}
+	if settled {
+		return
 	}
 	if err := p.ContinueOne(ctx); err != nil {
 		log.Printf("finish: continuation pass: %v", err)
@@ -275,6 +303,21 @@ func (p *Poller) claim(ctx context.Context) (*stranded, error) {
 		                THEN (r.meta->>'finish_passes')::int ELSE 0 END) < $4
 		      AND COALESCE(r.meta->>'session_id','') <> ''
 		      AND COALESCE(r.meta->>'repo','')       <> ''
+		      -- READ IT BEFORE YOU RE-RUN IT. When a transcript reader is
+		      -- wired, a Claude Code run is only continued after SettleOne has
+		      -- actually looked at its own files ($5). Without this gate the
+		      -- two claims pick rows by different orderings, and a job whose
+		      -- report is sitting unread on the Mac gets relaunched — the
+		      -- 2026-08-29 failure, made autonomous.
+		      --
+		      -- A CLOUD build is exempt, because there is nothing to read:
+		      -- Jarvis writes that code himself inside the agent loop, so no
+		      -- transcript exists and SettleOne skips it by design. Without
+		      -- this clause the gate would never open and cloud work would
+		      -- silently stop being continued at all.
+		      AND (NOT $5::bool
+		           OR COALESCE(r.meta->>'engine','') <> 'claude_code'
+		           OR COALESCE(r.meta->>'settle_last_at','') <> '')
 		      -- Never while newer coding work is live in the same chat: that
 		      -- job may BE the continuation, and two drivers on one repo is
 		      -- how the same edit gets made twice.
@@ -297,7 +340,7 @@ func (p *Poller) claim(ctx context.Context) (*stranded, error) {
 		          (`+passesSQL+`),
 		          started_at,
 		          ended_at
-	`, codingKinds, p.settleGrace.String(), p.lookback.String(), p.maxPasses)
+	`, codingKinds, p.settleGrace.String(), p.lookback.String(), p.maxPasses, p.transcript != nil)
 
 	var s stranded
 	err := row.Scan(&s.runID, &s.label, &s.sessionID, &s.repo, &s.claudeSes,

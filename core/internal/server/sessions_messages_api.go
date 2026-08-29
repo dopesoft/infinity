@@ -192,6 +192,14 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				Input      json.RawMessage `json:"input"`
 				Output     string          `json:"output"`
 				ToolCallID string          `json:"tool_call_id"`
+				// IsError rides the payload for steps captured OUTSIDE the
+				// agent loop — a nested Claude Code job's own tool calls,
+				// forwarded into the chat. Those must be able to render red
+				// without being filed as PostToolUseFailure, which carries a
+				// higher importance and feeds the self-improve backlog: a
+				// grep that found nothing inside a build is not a failure of
+				// Infinity's, and must not read as one.
+				IsError bool `json:"is_error"`
 			}
 			_ = json.Unmarshal([]byte(payload), &p)
 			if strings.TrimSpace(p.ToolCallID) == "" {
@@ -204,7 +212,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				ToolName:    p.Name,
 				ToolInput:   p.Input,
 				ToolOutput:  p.Output,
-				ToolIsError: hook == "PostToolUseFailure",
+				ToolIsError: hook == "PostToolUseFailure" || p.IsError,
 			})
 			continue
 		}

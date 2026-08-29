@@ -1,44 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Brain, Loader2, MessageSquare } from "lucide-react";
+import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ResponsiveModal, ResponsiveModalHeader } from "@/components/ui/responsive-modal";
-import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
-import { TabsContent } from "@/components/ui/tabs";
-import { seedSession } from "@/lib/dashboard/seed";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { StatusDot } from "@/components/ui/list-row";
+import { cn } from "@/lib/utils";
 import { fetchCockpit } from "@/lib/pursuits/pc/api";
-import { PCOnboarding } from "./PCOnboarding";
-import { TodayPanel } from "./TodayPanel";
-import { IdentityPanel } from "./IdentityPanel";
-import { MemoriesPanel } from "./MemoriesPanel";
-import { HistoryPanel } from "./HistoryPanel";
-import { EmptyNote, PCCard } from "./PCPrimitives";
+import { describeProgress } from "@/lib/pursuits/pc/coaching";
+import { CoachConversation } from "./CoachConversation";
+import { ProgrammePanel } from "./ProgrammePanel";
 import type { PCCockpit as PCCockpitData } from "@/lib/pursuits/pc/types";
 
-/* The Psycho-Cybernetics cockpit.
+/* The Psycho-Cybernetics pursuit.
  *
- * Opened by tapping the coached pursuit on the dashboard. It is the whole
- * experience in one surface rather than a preview, so it uses the full-screen
- * mode of the shared ResponsiveModal (92dvh on both breakpoints) instead of
- * hand-rolling an overlay.
+ * Opened by tapping the coached pursuit on the dashboard. It is a coaching
+ * SESSION, not a dashboard: the conversation is the surface, and everything
+ * that used to be a stacked card (today, identity, memories, history) lives
+ * behind one "Programme" affordance.
  *
- * Two states only:
- *   • identity or objective not set  → guided onboarding, nothing else
- *   • otherwise                      → Today first, everything else behind tabs
+ * The chrome is deliberately almost nothing. One hairline bar carrying the day
+ * counter and that affordance, then the conversation, then the composer. There
+ * is no tab strip, no repeated title, no permanent footer of buttons: those are
+ * exactly what made the previous version read as a form.
  *
  * Every mutation returns the refreshed cockpit from the server, so this
- * component never patches its own copy of the state and can't drift from what
+ * component never patches its own copy of the state and cannot drift from what
  * a coaching chat would see.
  */
-
-const TABS = [
-  { value: "today", label: "today" },
-  { value: "identity", label: "identity" },
-  { value: "memories", label: "memories" },
-  { value: "history", label: "history" },
-] as const;
 
 export function PCCockpit({
   pursuitId,
@@ -51,12 +40,10 @@ export function PCCockpit({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const router = useRouter();
   const [cockpit, setCockpit] = useState<PCCockpitData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [seeding, setSeeding] = useState(false);
-  const [tab, setTab] = useState<string>("today");
+  const [programmeOpen, setProgrammeOpen] = useState(false);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -67,8 +54,7 @@ export function PCCockpit({
       } catch (e) {
         if (signal?.aborted) return;
         // A cockpit we could not read is NOT an empty cockpit. Say so, rather
-        // than rendering blank panels that look like a programme with nothing
-        // in it.
+        // than opening a coaching session on a programme we cannot see.
         setError(e instanceof Error ? e.message : "Could not load this programme.");
       } finally {
         if (!signal?.aborted) setLoading(false);
@@ -80,116 +66,123 @@ export function PCCockpit({
   useEffect(() => {
     if (!open) return;
     const ac = new AbortController();
-    setTab("today");
+    setProgrammeOpen(false);
     void load(ac.signal);
     return () => ac.abort();
   }, [open, load]);
-
-  /* Discuss with Jarvis uses the same seeded-session convention as every
-   * other dashboard surface. The `pursuit_pc` kind is what makes the server
-   * hydrate the full cockpit into turn one, so the coach opens already knowing
-   * his identity, objective, day, evidence, memories and patterns. */
-  async function discuss() {
-    setSeeding(true);
-    try {
-      const sessionId = await seedSession("pursuit_pc", pursuitId);
-      onOpenChange(false);
-      router.push(sessionId ? `/live?session=${encodeURIComponent(sessionId)}` : "/live");
-    } finally {
-      setSeeding(false);
-    }
-  }
-
-  const state = cockpit?.state;
-  const needsOnboarding =
-    !!cockpit &&
-    (!state?.current_identity.trim() || !state?.current_objective.trim());
-
-  const subtitle = state
-    ? [
-        `day ${state.current_day} of ${state.cycle_length_days}`,
-        state.cycle_number > 1 ? `cycle ${state.cycle_number}` : null,
-        state.missed_days_count > 0 ? `${state.missed_days_count} missed` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : undefined;
 
   return (
     <ResponsiveModal
       open={open}
       onOpenChange={onOpenChange}
       title={title}
-      description="Psycho-Cybernetics programme"
+      description="Psycho-Cybernetics coaching session"
       size="full"
       desktopHeight="full"
+      bodyClassName="flex min-h-0 min-w-0 flex-col overflow-y-hidden p-0 sm:p-0"
       header={
-        <ResponsiveModalHeader
-          icon={<Brain className="size-4" aria-hidden />}
+        <SessionBar
           title={title}
-          subtitle={subtitle}
-          titleSize="lg"
+          progress={cockpit ? describeProgress(cockpit) : undefined}
+          programmeOpen={programmeOpen}
+          onToggleProgramme={() => setProgrammeOpen((v) => !v)}
+          showProgramme={Boolean(cockpit)}
         />
-      }
-      footer={
-        <>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-          <Button onClick={() => void discuss()} disabled={seeding}>
-            {seeding ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <MessageSquare className="size-4" aria-hidden />
-            )}
-            Discuss with Jarvis
-          </Button>
-        </>
       }
     >
       {error ? (
-        <PCCard className="border-danger/40 bg-danger/5">
-          <p className="text-sm font-medium text-danger">This programme would not load.</p>
-          <p className="mt-1 break-words text-sm text-muted-foreground">{error}</p>
-          <Button variant="secondary" className="mt-3" onClick={() => void load()}>
+        <div className="mx-auto flex w-full max-w-[38rem] flex-col items-start gap-3 px-4 py-10 sm:px-6">
+          <p className="font-voice text-[15.5px] leading-[1.6] text-danger">
+            I could not open your programme just now. {error}
+          </p>
+          <Button variant="outline" onClick={() => void load()}>
             Try again
           </Button>
-        </PCCard>
-      ) : loading && !cockpit ? (
-        <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-          Loading your programme
         </div>
-      ) : !cockpit ? (
-        <PCCard>
-          <EmptyNote>Nothing to show yet.</EmptyNote>
-        </PCCard>
-      ) : needsOnboarding ? (
-        <PCOnboarding cockpit={cockpit} onDone={setCockpit} />
-      ) : (
-        <PageTabs value={tab} onValueChange={setTab} className="min-w-0">
-          <PageTabsList scrollable>
-            {TABS.map((t) => (
-              <PageTabsTrigger key={t.value} value={t.value}>
-                {t.label}
-              </PageTabsTrigger>
-            ))}
-          </PageTabsList>
+      ) : loading && !cockpit ? (
+        <div className="mx-auto flex w-full max-w-[38rem] items-center gap-2 px-4 py-10 text-[13.5px] text-quiet sm:px-6">
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          Opening your programme
+        </div>
+      ) : !cockpit ? null : (
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              // On a phone the programme takes the whole surface, so the
+              // conversation steps aside rather than sitting behind a sheet.
+              programmeOpen && "hidden lg:flex",
+            )}
+          >
+            <CoachConversation
+              key={cockpit.pursuit.id}
+              cockpit={cockpit}
+              onUpdated={setCockpit}
+              onLeave={() => onOpenChange(false)}
+            />
+          </div>
 
-          <TabsContent value="today" className="mt-4 min-w-0">
-            <TodayPanel cockpit={cockpit} onUpdated={setCockpit} />
-          </TabsContent>
-          <TabsContent value="identity" className="mt-4 min-w-0">
-            <IdentityPanel cockpit={cockpit} onUpdated={setCockpit} />
-          </TabsContent>
-          <TabsContent value="memories" className="mt-4 min-w-0">
-            <MemoriesPanel cockpit={cockpit} onUpdated={setCockpit} />
-          </TabsContent>
-          <TabsContent value="history" className="mt-4 min-w-0">
-            <HistoryPanel cockpit={cockpit} />
-          </TabsContent>
-        </PageTabs>
+          {programmeOpen ? (
+            <aside
+              id="pc-programme"
+              aria-label="Programme"
+              className="min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden scroll-touch lg:w-[23rem] lg:shrink-0 lg:border-l lg:border-hairline"
+            >
+              <div className="px-4 pt-3 sm:px-5 lg:hidden">
+                <Button variant="ghost" size="sm" onClick={() => setProgrammeOpen(false)}>
+                  <ArrowLeft className="size-4" aria-hidden />
+                  Back to the session
+                </Button>
+              </div>
+              <ProgrammePanel title={title} cockpit={cockpit} onUpdated={setCockpit} />
+            </aside>
+          ) : null}
+        </div>
       )}
     </ResponsiveModal>
+  );
+}
+
+/* The whole of the chrome: a live dot, where the boss is in the cycle, and the
+ * way through to the programme. The pursuit title stays as the modal's
+ * accessible name (ResponsiveModal renders it sr-only when a custom header is
+ * supplied) and is repeated at the top of the programme, so nothing is lost by
+ * keeping it out of the boss's eyeline during a session. */
+function SessionBar({
+  title,
+  progress,
+  programmeOpen,
+  onToggleProgramme,
+  showProgramme,
+}: {
+  title: string;
+  progress?: string;
+  programmeOpen: boolean;
+  onToggleProgramme: () => void;
+  showProgramme: boolean;
+}) {
+  return (
+    <header className="flex shrink-0 items-center gap-3 border-b border-hairline px-4 py-2.5 pr-12 sm:px-5 sm:pr-14">
+      <StatusDot tone="brand" pulse />
+      <span className="min-w-0 flex-1 truncate font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
+        {progress ?? title}
+      </span>
+      {showProgramme ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleProgramme}
+          aria-expanded={programmeOpen}
+          aria-controls="pc-programme"
+          className="shrink-0 text-quiet"
+        >
+          Programme
+          <ChevronRight
+            className={cn("size-4 transition-transform duration-150", programmeOpen && "rotate-90")}
+            aria-hidden
+          />
+        </Button>
+      ) : null}
+    </header>
   );
 }

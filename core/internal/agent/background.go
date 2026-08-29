@@ -66,6 +66,11 @@ type BackgroundAgent struct {
 	// serve.go to broadcast proactive chat bubbles that share the run id,
 	// so Studio can render an updating progress card tied to mem_runs.
 	OnProgress func(ctx context.Context, p BackgroundProgress)
+	// OnStep receives each individual step the build takes, for the boss's
+	// chat ledger. Wired in serve.go to the SAME sink the Mac path uses, so a
+	// cloud build and a Mac build are equally visible — the bridge picks which
+	// model codes, never how much of the work he can see.
+	OnStep func(ctx context.Context, step tools.NestedStep)
 
 	// inflight is the one background build allowed per originating chat
 	// session (parent → run id). 2026-08-26: three builds of the SAME feature
@@ -150,8 +155,12 @@ type BackgroundProgress struct {
 }
 
 const (
-	backgroundDefaultTimeout  = 30 * time.Minute
-	backgroundTimeoutCeiling  = 60 * time.Minute
+	backgroundDefaultTimeout = 30 * time.Minute
+	// backgroundTimeoutCeiling matches tools.codeAgentMaxWait so the two
+	// engines give the same work the same amount of room. It was 60 minutes
+	// against code_agent's 20, which meant the same build had two different
+	// lifetimes depending on which door it came through.
+	backgroundTimeoutCeiling  = 90 * time.Minute
 	backgroundSessionIDPrefix = "background:"
 )
 
@@ -452,7 +461,8 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 		wg            sync.WaitGroup
 		toolCallCount int
 	)
-	publishProgress := b.progressPublisher(runID, parentSession, task, persist)
+	publishProgress := b.progressPublisher(runID, parentSession, task, persist,
+		func(k, v string) { handle.SetMetaString(ctx, k, v) })
 	publishProgress("starting background build", "setup", "", 0, func() *float32 { v := float32(0.1); return &v }())
 	wg.Add(1)
 	go func() {
@@ -479,6 +489,31 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 						handle.SetMetaString(ctx, "currentFile", detail)
 					}
 					publishProgress(backgroundProgressLabel(ev.ToolCall.Name, toolCallCount), action, detail, toolCallCount, &phase)
+					// SAME VISIBILITY ON BOTH BRIDGES. A Mac build forwards
+					// Claude Code's own steps into the boss's chat; a cloud
+					// build runs the settings model in a CHILD session whose
+					// tool calls never reached him at all, so the identical
+					// work read as one progress label on one bridge and a full
+					// worklog on the other. The bridge decides which model
+					// codes — never how much of it he gets to see.
+					b.forwardStep(runID, parentSession, tools.NestedStep{
+						CallID:    ev.ToolCall.ID,
+						Tool:      ev.ToolCall.Name,
+						Input:     ev.ToolCall.Input,
+						StartedAt: startedOr(ev.ToolCall.StartedAt),
+					})
+				}
+			case EventToolResult:
+				if ev.ToolResult != nil {
+					b.forwardStep(runID, parentSession, tools.NestedStep{
+						CallID:    ev.ToolResult.ID,
+						Tool:      ev.ToolResult.Name,
+						Output:    ev.ToolResult.Output,
+						IsError:   ev.ToolResult.IsError,
+						Done:      true,
+						StartedAt: startedOr(ev.ToolResult.StartedAt),
+						EndedAt:   startedOr(ev.ToolResult.EndedAt),
+					})
 				}
 			case EventThinking:
 				if text := strings.TrimSpace(ev.ThinkingDelta); text != "" {
@@ -508,6 +543,54 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 	return summary, runErr
 }
 
+// forwardStep sends one step of a cloud build into the chat that started it,
+// addressed and id-namespaced exactly the way the Mac path does so the two
+// produce identical rows. Nil-safe: unwired, the build is as opaque as before.
+func (b *BackgroundAgent) forwardStep(runID, parentSession string, step tools.NestedStep) {
+	if b == nil || b.OnStep == nil || strings.TrimSpace(step.CallID) == "" || strings.TrimSpace(step.Tool) == "" {
+		return
+	}
+	// A build fired from a cron or a sub-agent has no conversation to report
+	// into; forwarding there would be a dropped frame and a failed observation
+	// write per step. Its run row still carries the progress, as it always did.
+	if !isChatSessionID(parentSession) {
+		return
+	}
+	step.RunID = runID
+	step.SessionID = parentSession
+	step.CallID = tools.NestedStepID(runID, step.CallID)
+	b.OnStep(context.Background(), step)
+}
+
+// isChatSessionID reports whether sid is a real conversation (a uuid), rather
+// than an ephemeral child a build cannot deliver anything into.
+func isChatSessionID(sid string) bool {
+	if len(sid) != 36 {
+		return false
+	}
+	for i := 0; i < 36; i++ {
+		c := sid[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// startedOr returns t, or now when the event carried no stamp.
+func startedOr(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now().UTC()
+	}
+	return t
+}
+
 // progressForToolCalls maps a running tool-call count onto the dock's bar:
 // stage-based, asymptotic (setup 0.05, each call advances, wrap-up reserved).
 // The curve itself lives in tools so code_agent's inline runs draw the SAME
@@ -522,9 +605,31 @@ func progressForToolCalls(count int) float32 {
 // into the parent chat (deduped on label) and, via persist, mirrors it onto
 // the mem_runs row so the pinned dock stays current across navigation /
 // refresh / device.
-func (b *BackgroundAgent) progressPublisher(runID, parentSession, task string, persist func(float32, string)) func(label, action, detail string, step int, progress *float32) {
+func (b *BackgroundAgent) progressPublisher(runID, parentSession, task string, persist func(float32, string), meta func(string, string)) func(label, action, detail string, step int, progress *float32) {
 	lastProgress := ""
+	lastActivity := ""
 	return func(label, action, detail string, step int, progress *float32) {
+		// THE ACTIVITY FINGERPRINT, stamped for BOTH engines at the one place
+		// both of them pass through.
+		//
+		// It has to key on the tool and its target, never on the label: a
+		// label embeds elapsed time, so it changes every beat whether or not
+		// anything happened, and "no new activity for 12 minutes" would stop
+		// meaning anything. That fingerprint is what the stall detector and
+		// the continuation poller both read.
+		//
+		// The cloud path had NO fingerprint at all, so `lastActivitySQL` fell
+		// back to started_at and a perfectly healthy cloud build got its
+		// progress line rewritten to "no new activity for 12m" while it was
+		// mid-edit — the same false status the boss keeps catching, on the
+		// bridge nobody remembered to cover.
+		if key := strings.TrimSpace(action) + "\x00" + strings.TrimSpace(detail); key != "\x00" && key != lastActivity {
+			lastActivity = key
+			if meta != nil {
+				meta("activity_key", key)
+				meta("activity_at", time.Now().UTC().Format(time.RFC3339))
+			}
+		}
 		trimmed := strings.TrimSpace(label)
 		if trimmed == "" || trimmed == lastProgress {
 			return
@@ -566,7 +671,7 @@ func (b *BackgroundAgent) runOnClaudeCode(ctx context.Context, parentSession, ru
 
 	publish := b.progressPublisher(runID, parentSession, task, func(fraction float32, label string) {
 		handle.Progress(ctx, fraction, label)
-	})
+	}, func(k, v string) { handle.SetMetaString(ctx, k, v) })
 	publish("starting Claude Code on the Mac", "setup", "", 0, func() *float32 { v := float32(0.1); return &v }())
 
 	full := task
@@ -577,25 +682,27 @@ func (b *BackgroundAgent) runOnClaudeCode(ctx context.Context, parentSession, ru
 	if dl, ok := ctx.Deadline(); ok {
 		maxWait = time.Until(dl) - 15*time.Second
 	}
-	steps := 0
-	lastKey := ""
 	summary, err := b.Code.Run(ctx, tools.ClaudeCodeJob{
-		Bridge:       mac,
-		JobID:        runID,
-		Task:         full,
-		Repo:         repo,
-		Model:        model,
-		Effort:       effort,
-		MaxWait:      maxWait,
-		KillOnCancel: false,
-		Heartbeat: func(label, action, detail string) {
-			// A new tool call (name + target) is a new step for the bar.
-			if key := action + "\x00" + detail; detail != "" && key != lastKey {
-				lastKey = key
-				steps++
-			}
-			phase := progressForToolCalls(steps)
-			publish(label, action, detail, steps, &phase)
+		Bridge: mac,
+		JobID:  runID,
+		Task:   full,
+		Repo:   repo,
+		Model:  model,
+		Effort: effort,
+		// A background build runs on a DETACHED context by design, so there is
+		// no session on it to infer the chat from. Naming it here is what puts
+		// the nested job's steps in the boss's conversation instead of nowhere
+		// — the same omission that once left background builds out of the
+		// activity fingerprint entirely.
+		ParentSession: parentSession,
+		MaxWait:       maxWait,
+		KillOnCancel:  false,
+		Heartbeat: func(label, action, detail string, step int) {
+			// step is counted by the runner's own poll loop, so this bar and
+			// code_agent's advance identically for identical work. Both used
+			// to keep their own tally with slightly different rules.
+			phase := progressForToolCalls(step)
+			publish(label, action, detail, step, &phase)
 		},
 		SetMeta: func(key, value string) {
 			handle.SetMetaString(ctx, key, value)

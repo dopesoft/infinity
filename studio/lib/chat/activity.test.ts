@@ -29,6 +29,7 @@ import {
   firstSentence,
   formatDuration,
   headlineFor,
+  splitRefusal,
   summaryFor,
 } from "./activity";
 
@@ -582,5 +583,36 @@ describe("the component seam", () => {
     const emitted = new Set((source.match(/glyph: "([A-Za-z0-9]+)"/g) ?? []).map((m) => m.slice(8, -1)));
     expect(emitted.size).toBeGreaterThan(50);
     expect([...emitted].filter((g) => !known.has(g))).toEqual([]);
+  });
+});
+
+/**
+ * Why: a gate refusal used to render as one giant raw monospace slab with a
+ * contract uuid buried in the middle of it — the boss's eye had to find the one
+ * sentence that mattered inside a wall of grey. The split is what lets the row
+ * SAY the refusal in Jarvis's voice and keep the machine copy behind the inset.
+ */
+describe("splitRefusal", () => {
+  it("leads with the sentence that matters and hides the machinery", () => {
+    const out =
+      "BLOCKED: I can't run that delete without your say-so.\n\n" +
+      "Trust contract: 4f2a1c88-0000-4000-8000-abcdef123456\n" +
+      "Approve it in the Trust tab and I'll carry on from here.";
+    const { lead, rest } = splitRefusal(out);
+    expect(lead).toBe("I can't run that delete without your say-so.");
+    expect(lead).not.toContain("BLOCKED");
+    expect(rest).not.toContain("4f2a1c88");
+    expect(rest).toContain("Approve it in the Trust tab");
+  });
+
+  it("keeps a short refusal whole rather than inventing a second panel", () => {
+    const { lead, rest } = splitRefusal("BLOCKED: that command deletes files.");
+    expect(lead).toBe("that command deletes files.");
+    expect(rest).toBe("");
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(splitRefusal(undefined)).toEqual({ lead: "", rest: "" });
+    expect(splitRefusal("   ")).toEqual({ lead: "", rest: "" });
   });
 });

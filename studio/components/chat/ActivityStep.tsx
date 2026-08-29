@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { stripMarkdown } from "@/lib/chat/plainText";
 import Link from "next/link";
 import {
   Ban,
@@ -77,6 +78,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { CodeChangeView } from "@/components/chat/CodeChange";
 import { Inset } from "@/components/ui/inset";
 import { StatusDot } from "@/components/ui/list-row";
 import { decideTrust } from "@/lib/api";
@@ -85,10 +87,16 @@ import {
   firstSentence,
   formatDuration,
   previewFor,
+  splitRefusal,
   type ActivityItem,
   type StepStatus,
 } from "@/lib/chat/activity";
-import { isCodeChangeTool, isRepoWriteTool, extractToolFilePaths } from "@/lib/canvas/detection";
+import {
+  isCodeChangeTool,
+  isRepoWriteTool,
+  extractToolFilePath,
+  extractToolFilePaths,
+} from "@/lib/canvas/detection";
 import { looksLikeDiff } from "@/lib/diff";
 import { useNow } from "@/lib/useNow";
 import { cn } from "@/lib/utils";
@@ -172,6 +180,33 @@ function isDelegate(item: ActivityItem): boolean {
   return name === "delegate" || name === "delegate_parallel";
 }
 
+/**
+ * The before/after pair behind a write, whichever tool made it.
+ *
+ * Deliberately keyed on the FIELDS rather than the tool name, so it covers
+ * `claude_code__edit` on the Mac, `fs_edit` in the cloud workspace, a nested
+ * step forwarded out of a Claude Code run, and any future editor verb — all of
+ * which carry an old/new pair or a whole new body under one of these names.
+ * The bridge picks which model writes the code; it does not get to pick how
+ * much of it the boss can see.
+ */
+function codeChangeOf(
+  input: Record<string, unknown> | undefined,
+): { path?: string; before: string; after: string } | null {
+  if (!input) return null;
+  const str = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = input[k];
+      if (typeof v === "string" && v !== "") return v;
+    }
+    return "";
+  };
+  const before = str("old_string", "old_str", "old_text");
+  const after = str("new_string", "new_str", "new_text", "content", "text");
+  if (!before && !after) return null;
+  return { path: extractToolFilePath(input) || undefined, before, after };
+}
+
 export interface ActivityStepProps {
   item: ActivityItem;
   /**
@@ -232,7 +267,12 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
           setOpen((v) => !v);
         }}
         aria-expanded={open}
-        className="flex min-h-11 w-full min-w-0 max-w-full items-center gap-3 py-2 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        // No row-wide background on hover or press. A full-bleed grey block
+        // behind a ledger line reads as a chunky list item, which is exactly
+        // the vibe-coded look this replaces - the affordance is the text and
+        // the chevron warming up, nothing moving and nothing filling in.
+        // The focus ring stays: keyboard users need to see where they are.
+        className="group flex min-h-12 w-full min-w-0 max-w-full items-center gap-3.5 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       >
         <span className="flex size-[18px] shrink-0 items-center justify-center">
           {showSpinner ? (
@@ -243,11 +283,12 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
             <Glyph className={cn("size-[18px]", GLYPH_TONE[item.status])} aria-hidden />
           )}
         </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span
             className={cn(
-              "min-w-0 truncate font-sans text-[13.5px] font-medium",
+              "min-w-0 truncate font-sans text-[13.5px] font-medium transition-colors",
               item.status === "stopped" ? "text-quiet" : "text-foreground",
+              "group-hover:text-foreground",
             )}
           >
             {item.label}
@@ -268,7 +309,7 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
         ) : null}
         <ChevronRight
           className={cn(
-            "size-4 shrink-0 text-quiet transition-transform duration-150",
+            "size-4 shrink-0 text-quiet transition-all duration-150 group-hover:text-foreground",
             open && "rotate-90",
           )}
           aria-hidden
@@ -276,7 +317,7 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
       </button>
 
       {open ? (
-        <div className="min-w-0 max-w-full space-y-2 pb-3 pl-[30px]">
+        <div className="min-w-0 max-w-full space-y-2.5 pb-4 pl-[32px]">
           {item.count > 1 ? (
             <GroupDetail item={item} />
           ) : (
@@ -324,12 +365,21 @@ function StepDetail({
   const preview = previewFor(call);
   const write = isWriteItem(item);
   const paths = extractToolFilePaths(call?.input);
+  const change = codeChangeOf(call?.input);
 
   return (
     <>
       {/* The live code write. It is the reason a running write opens itself:
-          the boss wants to watch the file being written, not tap for it. */}
-      {write && preview ? (
+          the boss wants to watch the file being written, not tap for it — and
+          now he sees WHAT changed, not just that something was written. */}
+      {write && change ? (
+        <CodeChangeView
+          path={change.path}
+          before={change.before}
+          after={change.after}
+          moreFiles={Math.max(0, paths.length - 1)}
+        />
+      ) : write && preview ? (
         <>
           <Inset variant={looksLikeDiff(preview) ? "diff" : "plain"} text={preview} />
           {paths.length > 1 ? (
@@ -502,7 +552,13 @@ function ThoughtTrace({ message }: { message: ChatMessage | undefined }) {
     el.scrollTop = el.scrollHeight;
   }, [pending, text]);
 
-  if (!text.trim()) return null;
+  // A thinking trace is prose the model wrote, and it writes prose in
+  // markdown - so this used to render `**Planning agent termination**` with
+  // the asterisks showing, in a monospace block, as if it were output from a
+  // program. It is neither code nor output: strip the syntax and set it in the
+  // reading face.
+  const prose = stripMarkdown(text);
+  if (!prose) return null;
   return (
     <Inset>
       <div
@@ -510,11 +566,11 @@ function ThoughtTrace({ message }: { message: ChatMessage | undefined }) {
         className={cn(
           // [overflow-wrap:anywhere] because a thinking trace is full of the
           // exact tokens that don't break: paths, URLs, hashes.
-          "max-h-40 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-muted-foreground scroll-touch [overflow-wrap:anywhere]",
+          "max-h-40 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words font-sans text-[13px] leading-[1.6] text-muted-foreground scroll-touch [overflow-wrap:anywhere]",
           pending && "thinking-fade-mask",
         )}
       >
-        {text}
+        {prose}
       </div>
     </Inset>
   );
@@ -547,16 +603,26 @@ function ApprovalDetail({ item }: { item: ActivityItem }) {
     if (ok) setDecision(next);
   }
 
+  // The gate's own copy, said rather than dumped: the sentence that matters in
+  // the voice face, the rest behind the inset. A refusal used to render as one
+  // giant raw monospace slab with a contract uuid in the middle of it.
+  const refusal = splitRefusal(output);
+
   return (
     <>
       <p className="font-voice text-[15.5px] leading-[1.55] text-foreground">
         {item.awaiting
           ? "I've paused on this one until you say so. Approve it and I carry on from here, you don't have to message me back."
-          : "This needs your approval before I can run it."}
+          : refusal.lead || "This needs your approval before I can run it."}
       </p>
 
       {call?.preview ? <Inset variant="plain" text={call.preview} /> : null}
-      {output ? <Inset variant="plain" text={output} /> : null}
+      {item.awaiting && refusal.lead ? (
+        <p className="font-voice text-[15.5px] leading-[1.55] text-muted-foreground">
+          {refusal.lead}
+        </p>
+      ) : null}
+      {refusal.rest ? <Inset variant="plain" text={refusal.rest} /> : null}
 
       {contractId ? (
         decision ? (

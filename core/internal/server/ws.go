@@ -233,6 +233,11 @@ type wsToolEvent struct {
 	AwaitingApproval bool   `json:"awaiting_approval,omitempty"`
 	ContractID       string `json:"contract_id,omitempty"`
 	Preview          string `json:"preview,omitempty"`
+	// Nested marks a step taken INSIDE a coding job rather than by the chat
+	// brain in this turn. Those keep arriving after the reply has landed — a
+	// detached build runs for another forty minutes — so the browser must not
+	// read one as "the turn is still going" (see BroadcastNestedStep).
+	Nested bool `json:"nested,omitempty"`
 }
 
 var upgrader = websocket.Upgrader{

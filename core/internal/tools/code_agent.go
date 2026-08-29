@@ -106,7 +106,18 @@ func codeAgentSettingsJSON() string {
 }
 
 const (
-	codeAgentMaxWait = 20 * time.Minute // the job's own ceiling; longer jobs → background_build
+	// codeAgentMaxWait is the job's own ceiling.
+	//
+	// It was 20 minutes, which is HALF the size of the work the boss actually
+	// asks for: the run he watched on 2026-08-29 took 47 minutes, 170 turns
+	// and 37 file edits, and finished successfully with nobody left watching.
+	// Wall-clock is no longer the completion mechanism either way — a job now
+	// finishes on the terminal `result` event in its own stream (see
+	// claudeTerminalResult) — so a generous ceiling costs one sub-second poll
+	// per 15s and buys the difference between "I can't rely on him" and "I can
+	// walk away". Genuinely dead work is caught by the stall detector and the
+	// liveness reaper, not by cutting a healthy build off at twenty minutes.
+	codeAgentMaxWait = 90 * time.Minute
 	// codeAgentJobGrace is the slack on top of MaxWait that the job's OWN
 	// context gets, so the final read of the transcript is never cut off by
 	// the same clock that ended the polling.
@@ -121,6 +132,31 @@ const (
 	claudeTailBytes       = 12000
 	claudeResultTailBytes = 30000
 	claudeInitHeadBytes   = 4000
+	// claudeLastLineBytes bounds the LAST line of the stream, read on every
+	// poll so completion is detected from Claude's own terminal `result`
+	// event. It is read separately from the slice because a long report can be
+	// bigger than the activity window, and reading it as `tail -n 1` means the
+	// completion check never depends on how much of the stream fits in a tail.
+	claudeLastLineBytes = 24000
+	// The incremental read of the stream, which is what feeds both the live
+	// activity line and the nested steps forwarded into the chat.
+	//
+	// It is LINE-based, not byte-based, because a byte window cuts events in
+	// half and the bookkeeping to stitch them back together is the kind of
+	// thing that is subtly wrong forever. Lines are whole events by
+	// construction. Each is capped at claudeLineMaxCols so one `Read` of a
+	// 400KB file cannot drown a poll — such a line stops being valid JSON and
+	// is simply skipped, and the CALL that produced it (which carries the file
+	// path, the part worth showing) is its own, small line.
+	//
+	// 80 lines per 15s poll is ~18x the event rate of the busiest real build
+	// we have measured (829 events in 47 minutes), so it never falls behind;
+	// claudeMaxDrains lets a BURST of large events catch up inside one poll
+	// instead of trickling out over the next minute.
+	claudeLinesPerPoll = 80
+	claudeLineMaxCols  = 8000
+	claudeChunkBytes   = 32000
+	claudeMaxDrains    = 4
 )
 
 // codeAgentPollEach / codeAgentTmpDir are vars so the end-to-end test can
@@ -481,12 +517,64 @@ func (e *stillRunningError) inlineMessage() string {
 	return b.String()
 }
 
+// duplicateJobError: a coding job is ALREADY running for this chat, so this
+// launch was refused before it spent anything.
+type duplicateJobError struct {
+	runID string
+	label string
+}
+
+func (e *duplicateJobError) Error() string {
+	return fmt.Sprintf("code_agent: a coding job is already running for this conversation (run %s)", e.runID)
+}
+
+// guidance is what the model reads. It has to make the RIGHT next move
+// obvious, because the wrong one - refereeing two jobs by hand with `kill`
+// and a bash wait loop - is exactly what happened when nothing refused the
+// second launch.
+func (e *duplicateJobError) guidance() string {
+	what := strings.TrimSpace(e.label)
+	if what == "" {
+		what = "a coding job"
+	}
+	return fmt.Sprintf("ALREADY RUNNING - nothing was launched, and nothing is wrong. %s is still working in this conversation (run %s). "+
+		"Two coding jobs on one repo make conflicting edits and bill the boss twice, so this second launch was refused.\n\n"+
+		"Do NOT try to manage it by hand: no `kill`, no `pgrep`, no bash loop that waits for a file. It reports back into this chat on "+
+		"its own when it lands. Tell the boss plainly what is running and what it is doing right now. If it genuinely needs to be "+
+		"replaced, ask him first - only he can call for that.", what, e.runID)
+}
+
+// LiveRunLookup answers "is a coding job already running for this chat?".
+// Supplied by serve.go over mem_runs so the check is durable and shared, not
+// an in-process map per tool.
+type LiveRunLookup func(ctx context.Context, sessionID string) (runID, label string, found bool)
+
 // ClaudeCodeRunner launches Claude Code (`claude -p`) on the Mac bridge under
 // the boss's Claude subscription. It is the single launcher behind
 // code_agent and background_build-on-Mac.
 type ClaudeCodeRunner struct {
 	router *bridge.Router
 	prefs  PreferenceFetcher
+	// liveRuns is the one-job-per-conversation guard. Optional; without it
+	// the old behaviour (no guard) applies.
+	liveRuns LiveRunLookup
+	// steps forwards the nested job's own tool calls into the parent chat.
+	// Optional; without it the job is as opaque as it used to be.
+	steps StepSink
+}
+
+// AttachLiveRunLookup installs the one-coding-job-per-conversation guard.
+//
+// It goes on the RUNNER, not on either tool, because the runner is the single
+// launcher both `code_agent` and `background_build`-on-Mac go through. Putting
+// it on a tool is how the gap happened: BackgroundAgent had a per-session
+// in-process guard, `code_agent` had none, and neither could see the other -
+// so on 2026-08-29 a background build (05:14:07) and a code_agent run
+// (05:15:12) both went at the same repo for the same task.
+func (r *ClaudeCodeRunner) AttachLiveRunLookup(fn LiveRunLookup) {
+	if r != nil {
+		r.liveRuns = fn
+	}
 }
 
 // NewClaudeCodeRunner wires the runner to the bridge router + session prefs.
@@ -543,6 +631,13 @@ type ClaudeCodeJob struct {
 	// the subscription proof and the delete gate behind), and there was no
 	// sanctioned way in. This is it.
 	ResumeSessionID string
+	// ParentSession is the chat this job's steps are forwarded into. Empty →
+	// the session on ctx, which is right for an inline `code_agent` call. A
+	// background build has no session on its context (it runs on a detached
+	// one by design) and must pass the originating chat explicitly, or its
+	// steps would have nowhere to land — the same omission that left
+	// background builds out of the activity fingerprint.
+	ParentSession string
 	// MaxWait bounds how long Run polls before reporting the job still
 	// running (it is never killed for this). Zero → codeAgentMaxWait.
 	MaxWait time.Duration
@@ -577,9 +672,12 @@ type ClaudeCodeJob struct {
 	// "was STOPPED" summary is the false green this whole path exists to
 	// prevent (runs.StoppedInterrupted).
 	Stopped func(summary string)
-	// Heartbeat receives live progress: a label for the run row, plus the
-	// current tool (action) and its target (detail) when known.
-	Heartbeat func(label, action, detail string)
+	// Heartbeat receives live progress: a label for the run row, the current
+	// tool (action) and its target (detail) when known, and step - how many
+	// distinct things the job has done. The runner counts steps itself so
+	// both engines count the same way; they used to each keep their own
+	// tally with slightly different rules.
+	Heartbeat func(label, action, detail string, step int)
 	// SetMeta receives run-row facts as they are learned: auth (the
 	// subscription proof), model, effort, currentFile.
 	SetMeta func(key, value string)
@@ -596,7 +694,7 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	}
 	heartbeat := job.Heartbeat
 	if heartbeat == nil {
-		heartbeat = func(string, string, string) {}
+		heartbeat = func(string, string, string, int) {}
 	}
 	setMeta := job.SetMeta
 	if setMeta == nil {
@@ -614,6 +712,15 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	// A cloud-flavored repo path (e.g. /workspace/infinity) still resolves on
 	// the Mac: translate it to the Mac layout before launching.
 	repo := bridge.NormalizePath(b, job.Repo)
+
+	// One coding job per conversation. Checked FIRST, before the quota ledger
+	// and before preflight, because the cheapest duplicate is the one that
+	// never touches the Mac at all.
+	if r.liveRuns != nil {
+		if id, label, found := r.liveRuns(ctx, SessionIDFromContext(ctx)); found && id != job.JobID {
+			return "", &duplicateJobError{runID: id, label: label}
+		}
+	}
 
 	// Stop retrying something dead: while the boss's Claude plan is known
 	// spent (the last run said "out of extra usage"), don't launch another
@@ -663,7 +770,7 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	// spent a token: which repo, which binary, which model, whose plan.
 	setMeta("preflight", preflightEvidence(info, job.Model, auth))
 	codeAgentInfo().Printf("code_agent preflight ok: %s", preflightEvidence(info, job.Model, auth))
-	heartbeat("Claude Code · signed in on your "+auth.Label(), "auth", "")
+	heartbeat("Claude Code · signed in on your "+auth.Label(), "auth", "", 0)
 
 	// 2. Launch, detached.
 	//
@@ -698,25 +805,32 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 		return "", fmt.Errorf("code_agent: launch via %s failed (status=%d): %s", b.Name(), code, string(body))
 	}
 	started := time.Now()
-	heartbeat("Claude Code · launched claude -p · working…", "launch", "")
+	heartbeat("Claude Code · launched claude -p · working…", "launch", "", 0)
 
 	// 3. Poll the status file. Each call is sub-second, so the 60s bridge
 	// client cap and the 600s server cap never bite the long run. Each poll
 	// also reads the tail of Claude's stream so the run row says what it is
 	// doing right now.
+	parent := strings.TrimSpace(job.ParentSession)
+	if parent == "" {
+		parent = SessionForPublish(SessionIDFromContext(ctx))
+	}
 	p := &claudePoll{
-		runner:    r,
-		b:         b,
-		files:     files,
-		repo:      repo,
-		auth:      auth,
-		jobID:     job.JobID,
-		started:   started,
-		deadline:  started.Add(job.MaxWait),
-		heartbeat: heartbeat,
-		setMeta:   setMeta,
-		pollEach:  codeAgentPollEach,
-		tmpDir:    codeAgentTmpDir,
+		runner:        r,
+		b:             b,
+		files:         files,
+		repo:          repo,
+		auth:          auth,
+		jobID:         job.JobID,
+		started:       started,
+		deadline:      started.Add(job.MaxWait),
+		heartbeat:     heartbeat,
+		setMeta:       setMeta,
+		pollEach:      codeAgentPollEach,
+		tmpDir:        codeAgentTmpDir,
+		sink:          r.steps,
+		parentSession: parent,
+		sinkStamp:     nestedStepPrefix(job.JobID),
 	}
 	inline := job.Inline
 	if inline == nil {
@@ -769,7 +883,7 @@ type claudePoll struct {
 	jobID     string
 	started   time.Time
 	deadline  time.Time
-	heartbeat func(label, action, detail string)
+	heartbeat func(label, action, detail string, step int)
 	setMeta   func(key, value string)
 	// pollEach / tmpDir are snapshotted at launch rather than read from the
 	// package vars mid-run: once a job is launched, its cadence and its file
@@ -783,14 +897,140 @@ type claudePoll struct {
 	lastAction  string
 	lastDetail  string
 	sessionSeen bool
+	// activityKey / steps are the fingerprint the stall detector reads. See
+	// noteActivity for why they live here rather than in a caller's heartbeat.
+	activityKey string
+	steps       int
+	// line is the 1-based line the next incremental read of the stream starts
+	// at, advanced only past COMPLETE lines (see consume). It is what makes
+	// each poll yield the events that are NEW since the last one, which is
+	// what the chat ledger is fed from.
+	line int
+	// sink forwards the nested job's own steps into the parent chat. Nil when
+	// nothing is wired, in which case the whole forwarding path is inert.
+	sink StepSink
+	// parentSession is the chat those steps belong to, and sinkStamp is the
+	// id prefix that keeps two concurrent jobs from colliding on a nested id.
+	parentSession string
+	sinkStamp     string
+	// sunk is the set of nested call ids already forwarded (call half and
+	// result half keyed separately), so a line read twice can never produce a
+	// duplicate row. sunkAt / sunkTool carry a call's start time and name
+	// across to its result. sunkFull latches the runaway guard.
+	sunk     map[string]bool
+	sunkAt   map[string]time.Time
+	sunkTool map[string]string
+	sunkFull bool
+}
+
+// pollScript is the one sub-second round trip each poll makes. It asks three
+// things at once:
+//
+//   - the exit status file, which is written only after `claude -p` EXITS;
+//   - the slice of the stream that is NEW since the last poll;
+//   - the LAST LINE, which is where Claude writes its terminal `result`.
+//
+// The last line is the one that decides completion, and that is the fix. The
+// status file cannot be the signal for a real job: `claude -p` does not exit
+// while its MCP servers are attached, and every serious run uses at least one.
+// On 2026-08-29 the result landed at 01:02 and the process was still resident
+// at 01:16 with no `.status` in sight, so a 47-minute build that SUCCEEDED was
+// recorded as never finishing and reported to the boss as a failure.
+func (p *claudePoll) pollScript() string {
+	if p.line <= 0 {
+		p.line = 1
+	}
+	// ORDER MATTERS. The Mac bridge hard-caps a /bash reply at 64KB and
+	// truncates the TAIL, so the completion signals go FIRST and the
+	// incremental slice — the only part that can be re-read next poll — goes
+	// last. The two budgets below sum to well under the cap on purpose.
+	//
+	// `RESULT:` is an anchored grep over the UNtruncated last line, so a
+	// report too long to decode inside the byte budget is still recognised as
+	// completion. A stream-json line always opens with its event type, and
+	// there is no event type but the terminal one whose type is `result`.
+	return fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi
+if tail -n 1 %s 2>/dev/null | head -c 64 | grep -q '^{"type":"result"'; then echo "RESULT:yes"; else echo "RESULT:no"; fi
+echo "===LAST==="
+tail -n 1 %s 2>/dev/null | head -c %d
+echo ""
+echo "===NEW==="
+tail -n +%d %s 2>/dev/null | head -n %d | cut -c 1-%d | head -c %d`,
+		p.files.status, p.files.status,
+		p.files.out,
+		p.files.out, claudeLastLineBytes,
+		p.line, p.files.out, claudeLinesPerPoll, claudeLineMaxCols, claudeChunkBytes)
+}
+
+// pollRead is one reading of a running job.
+type pollRead struct {
+	// head carries the DONE:/RESULT: lines.
+	head string
+	// fresh is the COMPLETE new lines of the stream since the last read.
+	fresh string
+	// done: Claude wrote its terminal result. The job is finished whether or
+	// not `claude -p` has exited (it usually has not — see pollScript).
+	done bool
+	// full: the slice filled its budget, so there is more waiting to be read.
+	full bool
+}
+
+// pollOnce runs one poll round trip and advances the read position. ok=false
+// means the bridge did not answer this time, which is not a verdict about the
+// job — the next poll simply tries again.
+func (p *claudePoll) pollOnce(ctx context.Context) (pollRead, bool) {
+	pb, pc, pok := p.b.Post(ctx, "/bash", map[string]any{"cmd": p.pollScript(), "cwd": p.repo, "timeout_sec": 15})
+	if !pok || pc >= 300 {
+		return pollRead{}, false
+	}
+	raw, _ := bridgeBashOutput(pb)
+	head, rest := splitMarker(raw, "", "===LAST===")
+	last, region := splitMarker(rest, "", "===NEW===")
+	// The marker's own `echo` contributes the newline that follows it, so the
+	// slice starts one byte in. Counting that newline as a line would advance
+	// the read position past a real event on EVERY poll — which is exactly how
+	// the first version of this silently skipped every other step.
+	region = strings.TrimPrefix(region, "\n")
+	r := pollRead{head: head}
+	r.full = len(region) >= claudeChunkBytes
+	r.fresh = p.consume(region, r.full)
+	if strings.Contains(head, "RESULT:yes") {
+		r.done = true
+	} else if _, ok := claudeTerminalResult(last); ok {
+		r.done = true
+	}
+	return r, true
+}
+
+// consume advances the read position past the COMPLETE lines in a slice and
+// returns just those lines.
+//
+// Two things can leave a trailing half-line: the byte cap, and Claude being
+// mid-write when the poll landed. Only lines that arrived with their newline
+// count as read, so the half is re-read whole next time — nothing is dropped
+// and nothing is parsed twice. `full` distinguishes the two cases: a half-line
+// in a slice that filled its budget can never complete inside the window, so
+// that one is stepped over rather than wedging the read forever.
+func (p *claudePoll) consume(slice string, full bool) string {
+	if slice == "" {
+		return ""
+	}
+	cut := strings.LastIndexByte(slice, '\n')
+	if cut < 0 {
+		if full {
+			p.line++
+		}
+		return ""
+	}
+	whole := slice[:cut+1]
+	p.line += strings.Count(whole, "\n")
+	return whole
 }
 
 // wait polls the job until it finishes, its own lifetime (ctx) ends, or the
 // inline window closes. It NEVER kills anything itself; waitKill is a request
 // the caller acts on.
 func (p *claudePoll) wait(ctx, inline context.Context, detach <-chan struct{}, killOnCancel bool) (string, error, waitOutcome) {
-	pollCmd := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi; echo "===TAIL==="; tail -c %d %s 2>/dev/null`,
-		p.files.status, p.files.status, claudeTailBytes, p.files.out)
 	// When the caller gave no separate inline window, ctx IS the window;
 	// listening on both would make the outcome a coin flip.
 	var jobDone <-chan struct{}
@@ -817,24 +1057,50 @@ func (p *claudePoll) wait(ctx, inline context.Context, detach <-chan struct{}, k
 		case <-time.After(p.pollEach):
 		}
 
-		pb, pc, pok := p.b.Post(ctx, "/bash", map[string]any{"cmd": pollCmd, "cwd": p.repo, "timeout_sec": 15})
-		if pok && pc < 300 {
-			raw, _ := bridgeBashOutput(pb)
-			head, tail := splitMarker(raw, "", "===TAIL===")
+		// Drain rather than read once. A burst of large events can exceed one
+		// read's budget, and a ledger a minute behind the work is not
+		// transparency. Bounded, so a runaway stream can never hold the loop.
+		for drains := 0; drains < claudeMaxDrains; drains++ {
+			r, ok := p.pollOnce(ctx)
+			if !ok {
+				break
+			}
 			// Claude's own session id rides the stream from its first line;
-			// capture it early, while the head is still inside the tail
-			// window, so even a killed job can be resumed later.
-			p.noteSession(tail)
-			if strings.Contains(head, "DONE:") {
-				out, err := p.finish(ctx, exitCodeFromDone(head))
+			// the incremental read starts at line 1, so the very first slice
+			// carries it and even a killed job can be resumed later.
+			p.noteSession(r.fresh)
+			// Every step the nested job took since the last read, forwarded
+			// into the chat as real rows. This is the whole reason the read is
+			// incremental: a fixed tail would show the same step twice and
+			// drop the ones that scrolled past between polls.
+			//
+			// BEFORE the completion checks, deliberately. A short job writes
+			// its work and its result inside one poll window, and returning on
+			// the result first would show the boss a job that finished having
+			// visibly done nothing at all.
+			p.forwardSteps(ctx, r.fresh)
+			if strings.Contains(r.head, "DONE:") {
+				out, err := p.finish(ctx, exitCodeFromDone(r.head), false)
 				return out, err, waitFinished
 			}
-			if action, detail, found := claudeStreamActivity(tail); found {
+			// Claude said it is done. That is the authoritative signal, and it
+			// arrives long before (or instead of) the process exiting. Reap
+			// the group on the way out so a build does not leave eight MCP
+			// servers and a headless Chrome resident on the boss's Mac.
+			if r.done {
+				out, err := p.finish(ctx, 0, true)
+				return out, err, waitFinished
+			}
+			if action, detail, found := claudeStreamActivity(r.fresh); found {
 				p.lastAction, p.lastDetail = action, detail
 			}
+			if !r.full {
+				break
+			}
 		}
+		p.noteActivity()
 		elapsed := time.Since(p.started).Round(time.Second)
-		p.heartbeat(claudeProgressLabel(p.lastAction, p.lastDetail, elapsed), p.lastAction, p.lastDetail)
+		p.heartbeat(claudeProgressLabel(p.lastAction, p.lastDetail, elapsed), p.lastAction, p.lastDetail, p.steps)
 		if p.lastDetail != "" {
 			p.setMeta("currentFile", p.lastDetail)
 		}
@@ -845,10 +1111,53 @@ func (p *claudePoll) wait(ctx, inline context.Context, detach <-chan struct{}, k
 	}
 }
 
+// noteActivity stamps the ACTIVITY FINGERPRINT when the job starts doing
+// something new: which tool on which target, and when that last changed.
+//
+// It has to live HERE, in the shared poll loop, and not in a caller's
+// heartbeat closure. It was written in code_agent's closure first, and
+// `background_build` — which reaches Claude Code through this same runner but
+// supplies its own heartbeat — therefore never stamped it at all. The stall
+// detector then fell back to started_at and flagged a perfectly healthy build
+// as stalled twelve minutes in, while its progress line was still naming the
+// file it was reading (run a327070c, 2026-08-29 05:26). A mechanic in one of
+// two call sites is a mechanic that is missing (Rule #1b).
+//
+// progress_label cannot serve this purpose: it embeds elapsed time, so it
+// changes on every 15s poll whether or not anything happened. Only a real
+// change of tool+target moves the fingerprint, which is what makes "no
+// evidence for N minutes" a fact rather than a guess.
+func (p *claudePoll) noteActivity() {
+	if strings.TrimSpace(p.lastAction) == "" {
+		return
+	}
+	key := p.lastAction + "\x00" + p.lastDetail
+	if key == p.activityKey {
+		return
+	}
+	p.activityKey = key
+	p.steps++
+	p.setMeta("activity_key", key)
+	p.setMeta("activity_at", time.Now().UTC().Format(time.RFC3339))
+}
+
+// Steps is how many distinct things the job has done so far, for a caller's
+// progress bar. Counted here so both engines count the same way.
+func (p *claudePoll) Steps() int { return p.steps }
+
 // finish reads the completed job's transcript, turns it into the receipt, and
 // clears its files off the Mac.
-func (p *claudePoll) finish(ctx context.Context, exitCode int) (string, error) {
+//
+// reap is set when completion was detected from Claude's own terminal result
+// rather than from the process exiting. In that case the process group is
+// still resident — `claude -p` waits on its MCP servers — so it is torn down
+// AFTER the transcript is read. Without that, every MCP-using build would
+// leave a claude, eight MCP servers and a headless Chrome running on the Mac.
+func (p *claudePoll) finish(ctx context.Context, exitCode int, reap bool) (string, error) {
 	t, err := p.fetch(ctx)
+	if reap {
+		p.runner.kill(p.b, p.repo, p.files)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -1491,7 +1800,41 @@ type claudeResult struct {
 	Subtype        string                     `json:"subtype"`
 	APIErrorStatus int                        `json:"api_error_status"`
 	ModelUsage     map[string]json.RawMessage `json:"modelUsage"`
-	parsed         bool
+	// DurationMS / NumTurns ride the terminal result object and nothing else,
+	// which is what makes them usable as proof that a line IS that object.
+	DurationMS int `json:"duration_ms"`
+	NumTurns   int `json:"num_turns"`
+	parsed     bool
+}
+
+// claudeTerminalResult finds Claude's TERMINAL result event in a stream-json
+// fragment, and is deliberately stricter than parseClaudeStreamResult.
+//
+// This one decides that a job is FINISHED, so a false positive would close a
+// live build and throw away the rest of its work. It therefore never falls
+// back to the whole-blob decode (which happily accepts any JSON object,
+// including a half-read assistant event), and it requires the line to actually
+// be the result object: `"type":"result"` plus at least one of the two fields
+// only that object carries.
+func claudeTerminalResult(s string) (claudeResult, bool) {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var res claudeResult
+		if json.Unmarshal([]byte(line), &res) != nil {
+			continue
+		}
+		if res.Type != "result" || (res.DurationMS <= 0 && res.NumTurns <= 0) {
+			continue
+		}
+		res.Result = strings.TrimSpace(res.Result)
+		res.parsed = true
+		return res, true
+	}
+	return claudeResult{}, false
 }
 
 // parseClaudeStreamResult finds the final `result` message in a stream-json
@@ -1597,7 +1940,7 @@ func (t *codeAgent) Schema() map[string]any {
 			},
 			"repo": map[string]any{
 				"type":        "string",
-				"description": "REQUIRED: absolute path of the ONE git repository to work in (on the Mac they live under ~/Dev/<repo>; Infinity itself is ~/Dev/infinity). It must be a git repo - a missing path, a plain folder, or the ~/Dev umbrella is refused and nothing runs.",
+				"description": "REQUIRED: the ONE git repository to work in. `~/Dev/<repo>` is the preferred spelling and always correct on the Mac (Infinity itself is `~/Dev/infinity`) - prefer it over an absolute path, and NEVER invent a home directory from the boss's name or email. An absolute path is accepted too; the Bridge section of your context states his real home. It must be a git repo - a missing path, a plain folder, or the ~/Dev umbrella is refused and nothing runs.",
 			},
 			"model": map[string]any{
 				"type":        "string",
@@ -1643,6 +1986,12 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	if t.runner == nil {
 		return "", errors.New("code_agent: runner not configured")
 	}
+	// One call is one PASS. A brief carrying a whole plan is redirected before
+	// anything launches or bills — see code_agent_brief.go for why this is a
+	// mechanic in code rather than a sentence in the skill.
+	if guidance, split := splitBriefGuidance(task); split {
+		return guidance, nil
+	}
 	repo := strString(in, "repo")
 	// Model + effort for the nested Claude Code: the call's own choice first,
 	// else Infinity's defaults (INFINITY_CODE_AGENT_MODEL / _EFFORT, e.g.
@@ -1686,30 +2035,17 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 			handle.SetMetaString(context.Background(), key, value)
 		}
 	}
-	// The heartbeat is the one place a live coding job says anything about
-	// itself, so both consumers are fed from it: the run row (durable,
-	// survives refresh and a second device - it is what the pinned dock above
-	// the composer draws) and the ACTIVITY FINGERPRINT the stall detector
-	// reads.
-	//
-	// The fingerprint matters because progress_label is not evidence of
-	// progress: it embeds elapsed time, so it changes every 15s whether or not
-	// Claude did anything. activity_key/activity_at move ONLY when the tool or
-	// its target actually changes, which is what makes "no evidence for N
-	// minutes" a fact rather than a guess.
-	lastKey := ""
-	steps := 0
-	heartbeat := func(note, action string, detail string) {
-		if key := action + "\x00" + detail; key != lastKey && strings.TrimSpace(action) != "" {
-			lastKey = key
-			steps++
-			setMeta("activity_key", key)
-			setMeta("activity_at", time.Now().UTC().Format(time.RFC3339))
-		}
+	// The run row is the one live surface a coding job has: it survives
+	// refresh and a second device, and it is what the pinned dock above the
+	// composer draws. The activity fingerprint the stall detector reads is
+	// stamped by the runner's own poll loop (claudePoll.noteActivity), which
+	// is the chokepoint BOTH engines share - keeping it here meant
+	// background_build never stamped it at all.
+	heartbeat := func(note, _ string, detail string, step int) {
 		// A real fraction, not the hardcoded 0 that made the dock's bar
 		// unmovable: the same curve background_build draws, so the same
 		// amount of work looks the same whichever engine ran it.
-		handle.Progress(context.Background(), ProgressForSteps(steps), note)
+		handle.Progress(context.Background(), ProgressForSteps(step), note)
 		if detail != "" {
 			setMeta("currentFile", detail)
 		}
@@ -1720,6 +2056,7 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	setMeta("engine", "claude_code")
 	setMeta("model", model)
 	setMeta("effort", effort)
+	setMeta("brief", briefSummary(task))
 	// The chat this job belongs to, on the row itself. Without it a run that
 	// settles after the turn is gone has no address to report back to, which
 	// is the whole problem the continuation poller exists to fix - it reads
@@ -1791,6 +2128,16 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 			}
 			handle.FinishInterrupted(finCtx, runs.StoppedStillWorking, still.inlineMessage())
 			return still.inlineMessage(), nil
+		}
+		// A refused DUPLICATE is not a failure and must not be recorded as one:
+		// nothing was launched, nothing broke, and the job that IS running is
+		// fine. Closing this row 'error' would put a red card on the board for
+		// the guard working correctly. Handled BEFORE Finish, because Finish
+		// closes the row and the later branches can no longer change it.
+		var dup *duplicateJobError
+		if errors.As(runErr, &dup) {
+			handle.FinishInterrupted(finCtx, runs.StoppedInterrupted, dup.guidance())
+			return dup.guidance(), nil
 		}
 		handle.Finish(finCtx, runErr, summary)
 		// A bridge/launch failure (the Mac is unreachable — the 404 that used to

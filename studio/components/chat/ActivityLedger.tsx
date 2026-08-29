@@ -136,8 +136,13 @@ export function ActivityLedger({
   const steps = rows.reduce((n, i) => n + i.count, 0);
 
   return (
+    // WORK IS NOT A CHAT BUBBLE. This used to be capped at 80% like a message,
+    // which squeezed a diff and a command log into a speech balloon; Claude and
+    // Codex both give work the full column, and so does this now. Messages stay
+    // bubble-width — the contrast is what makes the two read as different
+    // things.
     <div className={cn("flex justify-start", className)}>
-      <div className="w-full min-w-0 max-w-full sm:max-w-[80%]">
+      <div className="w-full min-w-0 max-w-full">
         <button
           type="button"
           onClick={() => {

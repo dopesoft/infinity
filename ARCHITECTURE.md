@@ -576,6 +576,102 @@ Railway core ── MCP SSE  + CF-Access service-token headers ──┐
 We re-use the existing `jarvis-mac` tunnel (UUID `8e5bd68f-…`) — `coder.dopesoft.io`
 is added as a third ingress alongside SSH + VNC.
 
+### Build-to-done — a coding job survives the turn, and gets finished
+
+A long `code_agent` run used to die of its own success: the chat turn timed out
+(`INFINITY_TURN_TIMEOUT`, 15 min) or the boss typed a question, the job was
+killed, its transcript was orphaned in `/tmp/inf-code`, the interruption was
+recorded as a FAILURE, and nothing ever picked the work back up. Plan `2f1508a2`
+is the monument: the plan to fix this was killed by the thing it was fixing.
+The chain, end to end:
+
+1. **The job outlives the turn.** `code_agent.Execute` runs the job on a context
+   derived by `context.WithoutCancel` (`codeAgentJobContext`) — every value the
+   turn carries survives, only cancellation and the turn's clock are dropped.
+   The turn ctx is passed separately as `ClaudeCodeJob.Inline` and decides one
+   thing: how long we wait *here*. A timeout or a steer returns
+   `*stillRunningError`; `claude -p` keeps working on the Mac.
+2. **Only an explicit stop kills.** `agent.isStopIntent` (deterministic keyword
+   matching, negation-aware, curly-apostrophe normalised — never an LLM call)
+   plus the Stop button, which cancels outright. A non-stop steer DETACHES via
+   the generic `tools.SteerDetachable` / `WithDetachSignal` seam: the loop knows
+   only that a tool declared itself detachable. A real kill signals the process
+   GROUP (`set -m` at launch), so a `go build` the job spawned dies with it
+   instead of being orphaned.
+3. **The receipt is always salvaged.** Kill, timeout and detach all read the
+   transcript on a fresh context through the same parser as the clean path, and
+   `parseClaudeSessionID` stamps Claude's own session id onto
+   `mem_runs.meta.claude_session_id`.
+4. **Interrupted is never failed.** `runs.FinishInterrupted` closes `ok` +
+   `meta.stopped_reason`, so `plan.ReconcileStranded` routes it to `blocked`
+   rather than `failed`, coding kinds are exempt from the blanket reaper, and
+   `watch.Poller` reports such a row as still running instead of announcing a
+   green nobody earned.
+5. **Live progress.** The 15s heartbeat writes a real fraction
+   (`tools.ProgressForSteps`, the same curve `background_build` draws) plus an
+   ACTIVITY FINGERPRINT — `meta.activity_key` / `activity_at` move only when the
+   tool or its target actually changes, because `progress_label` embeds elapsed
+   time and so changes every beat regardless. Studio's `BackgroundJobDock` (the
+   strip above the composer) reads both coding kinds through the shared
+   `useCodingRuns` primitive.
+6. **Real resume.** `code_agent(resume_session: <uuid>)` launches
+   `claude -r <id> -p …` from inside the tool — the sanctioned path. The
+   raw-shell guard still blocks the MODEL from shelling out to `claude --resume`
+   (that path would leave the subscription proof and the delete gate behind).
+   Deliberately no `--fork-session`: the resumed run keeps the original session
+   id, so one handle covers the whole chain.
+7. **Automatic continuation** — `core/internal/finish`, started in `serve.go`.
+   A deterministic ticker (never LLM cognition) finds coding runs that ended
+   WITHOUT a verdict, gathers real git evidence off the repo through
+   `bridge.Router.Call` (so a sleeping Mac fails over to cloud rather than
+   meaning "no evidence"), and re-enters the loop in the originating chat via
+   the SAME `Replayer` the reauth poller uses. Jarvis then makes the only
+   genuine judgment — continue, replan, or say it needs the boss. Mechanics in
+   Go: the claim is a single atomic `UPDATE … FOR UPDATE SKIP LOCKED` that books
+   the pass, capped at 3, and it never fires while newer coding work is live in
+   the same session. Runs that closed `error` are deliberately excluded — those
+   failed for a reason, and relaunching them is the "stop retrying something
+   dead" anti-pattern.
+   A run that has shown no new activity for 12 min has its label rewritten to
+   say so. It is NOT killed: the only stall signature available is
+   indistinguishable from a healthy `go test ./...`, and the job's own ceiling
+   already ends it — after which the continuation fires anyway.
+8. **Completion is Claude's own `result` event, not the process exiting.**
+   `claude -p` does NOT exit while its MCP servers are attached, and every
+   serious build uses at least one — so the `/tmp/inf-code/<id>.status` file the
+   poll used to wait for never appeared. On 2026-08-29 a 47-minute build
+   SUCCEEDED (`duration_ms: 2844766`, 170 turns, 37 file edits, a full written
+   report), stayed resident for another 14 minutes, and was reported to the boss
+   as a failure. `claudeTerminalResult` now finishes the job on the terminal
+   `result` line — strictly: `"type":"result"` plus a field only that object
+   carries — and reaps the process group on the way out so eight MCP servers and
+   a headless Chrome don't accumulate per build. `.status` remains as
+   corroboration for MCP-less jobs; whichever lands first wins. The ceiling went
+   20 min → 90 min, because wall-clock is no longer the completion mechanism.
+9. **A job that finished unwatched is READ, never re-run.** `finish.SettleOne`
+   probes a coding run's own files through `tools.ReadClaudeJobVerdict` (are
+   they there, is the process alive, did Claude write a result) BEFORE
+   `ContinueOne` may claim it. A terminal result closes the row green with
+   Claude's own report and wakes Jarvis with `buildCompletedBrief` — tell him,
+   settle the plan step, do not relaunch. No files and no process closes a dead
+   `running` row that was otherwise blocking the duplicate guard and the
+   continuation poller behind it. Scoped to `meta.engine='claude_code'`: a cloud
+   build has no transcript to read, and probing one would close a healthy run.
+10. **Every step reaches the chat, on BOTH bridges.** A coding job is a whole
+   agent inside one tool call: that 47-minute run wrote 829 stream events (112
+   commands, 59 reads, 37 file-changing calls across 7 files) and the chat showed
+   ONE spinning row. `claudePoll` now reads the stream incrementally (line-based,
+   `tail -n +N | head -n K | cut -c 1-C`, advancing only past complete lines) and
+   forwards each nested `tool_use`/`tool_result` through `tools.StepSink` →
+   `server.BroadcastNestedStep` as ordinary `tool_call`/`tool_result` frames plus
+   a `PostToolUse` observation, so they render in the existing ledger vocabulary
+   and survive a reload. The cloud path does the same from its child session via
+   `BackgroundAgent.OnStep`. One sink, wired once in `serve.go`, feeding both —
+   the bridge decides which model writes the code and nothing else.
+
+Proof-gated completion (a Mandate gating the plan step, and "migrations applied"
+verified against `schema_migrations` rather than believed) is in §19.
+
 ## 11. Honcho — dialectic peer modelling
 
 Honcho ([plastic-labs/honcho](https://github.com/plastic-labs/honcho)) sits
@@ -1317,8 +1413,28 @@ safe.
   the criteria + verification verdict render inline in the ObjectViewer
   (`AgentWorkBoard.tsx` reuses the plan progress bar; `ObjectViewer.tsx` adds the
   "Definition of done" + "Verification" sections).
-- Judgment lives in the seeded **`frame-the-mandate`** skill (migration 131):
-  when to open one, how to decompose into binary criteria, when it's high-stakes.
+- **A Mandate can GATE a plan step** (`plan_id`/`step_id`, migration 194). Bind
+  one with `mandate_open(step_id: …)` and that step cannot be marked done until
+  every criterion passes: `mandate.Store.CheckStepDone` is attached to
+  `plan_update` via the generic `tools.StepDoneGate` seam
+  (`tools/step_done_gate.go`, wired in `serve.go`) — the ONE chokepoint every
+  route to `done` flows through, so no path can be added later that bypasses it.
+  Before this, a step's only gate was `verify_required`, which most steps never
+  set, so the green tick the boss reads was the model's opinion. `Store.Close`
+  and the step gate share one `mandate.Blockers()`, so the two can never drift
+  into disagreeing about whether the same work is finished.
+- **"Migrations applied" is PROVEN, not believed** (`mandate/gate.go`
+  `UnprovenMigrations` → `db.Pending`). A criterion claiming the schema is live
+  is checked against `schema_migrations`; the model cannot tick it off while
+  there is drift, and a probe that could not run blocks too. This is the one
+  criterion the model is not trusted on, because it is the one with a track
+  record (011–014). `GET /readyz` reports the same `schema_version` +
+  `pending_migrations` for the off-box watchdog.
+- Judgment lives in the seeded **`frame-the-mandate`** skill (migrations 131 +
+  195): when to open one, how to decompose into binary criteria, when it's
+  high-stakes, and — for coding work — to bind it to the plan step and use the
+  boss's four proofs as the criteria (builds+tests, migrations applied, the real
+  user path exercised, committed with a clean tree).
 
 ### Crosscheck — independent verification on the boss's OWN model (no migration; uses `mem_runs`)
 - `core/internal/crosscheck/crosscheck.go` + `tools/crosscheck_tools.go`
