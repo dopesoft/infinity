@@ -530,6 +530,19 @@ type ClaudeCodeJob struct {
 	// INFINITY_CODE_AGENT_MODEL, applied in Run so no path falls to Sonnet.
 	Model  string
 	Effort string
+	// ResumeSessionID continues an EARLIER Claude Code session instead of
+	// starting cold: `claude --resume <id>`. Claude reloads that session's
+	// full context - what it already read, wrote and tried - so a job that
+	// was interrupted picks up where it stopped rather than re-deriving the
+	// work from scratch and possibly redoing edits already on disk.
+	//
+	// The id comes off mem_runs.meta.claude_session_id, which every run
+	// stamps from the first line of its own stream. Until this field existed
+	// that id was captured and then unusable: the raw-shell guard blocks the
+	// MODEL from running `claude --resume` (correctly - that path would leave
+	// the subscription proof and the delete gate behind), and there was no
+	// sanctioned way in. This is it.
+	ResumeSessionID string
 	// MaxWait bounds how long Run polls before reporting the job still
 	// running (it is never killed for this). Zero → codeAgentMaxWait.
 	MaxWait time.Duration
@@ -653,8 +666,22 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 	heartbeat("Claude Code · signed in on your "+auth.Label(), "auth", "")
 
 	// 2. Launch, detached.
+	//
+	// A resume id that isn't a real Claude session id would make `claude
+	// --resume` fail seconds in, and the run would report a launch failure
+	// for what is actually a bad argument. Refuse it here with a message the
+	// model can act on, and never silently drop it - silently starting COLD
+	// after being asked to resume is how work gets redone from scratch.
+	resume := strings.TrimSpace(job.ResumeSessionID)
+	if resume != "" && !isClaudeSessionID(resume) {
+		return "", fmt.Errorf("code_agent: %q is not a Claude session id — resume_session takes the uuid from a previous run's "+
+			"meta.claude_session_id (check the run with that id), or leave it empty to start fresh", resume)
+	}
+	if resume != "" {
+		setMeta("resumed_from", resume)
+	}
 	files := newClaudeJobFiles(job.JobID)
-	launch := claudeLaunchScript(files, job.Task, job.Model, job.Effort)
+	launch := claudeLaunchScript(files, job.Task, job.Model, job.Effort, resume)
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{
 		"cmd":         launch,
 		"cwd":         repo,
@@ -1025,6 +1052,29 @@ func (p *claudePoll) noteSession(stream string) {
 	p.setMeta("claude_session_id", id)
 }
 
+// isClaudeSessionID reports whether s has the shape of a Claude Code session
+// id (a uuid). Used to refuse a bogus resume_session before it becomes a
+// launch failure the model would read as "the Mac is broken".
+func isClaudeSessionID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < 36; i++ {
+		c := s[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
+}
+
 // parseClaudeSessionID finds the session id in a stream-json fragment. The
 // `{"type":"system","subtype":"init","session_id":…}` line is the first, but
 // every event carries it, so any decodable line will do.
@@ -1170,9 +1220,15 @@ func newClaudeJobFiles(jobID string) claudeJobFiles {
 // env so the inner single-quoted bash -c needs no fragile nested quoting.
 // stream-json (+ --verbose, required with it) makes Claude's activity
 // readable mid-run; its last line is the final result message.
-func claudeLaunchScript(f claudeJobFiles, task, model, effort string) string {
+//
+// resume, when set, continues that Claude session (`-r/--resume <id>`) with
+// the new task as the next prompt, so an interrupted job resumes with its own
+// context instead of starting cold. Deliberately WITHOUT --fork-session: the
+// resumed run keeps the original session id, so meta.claude_session_id stays
+// the one handle to the whole chain however many passes it takes.
+func claudeLaunchScript(f claudeJobFiles, task, model, effort, resume string) string {
 	inner := fmt.Sprintf(
-		`claude -p "$INF_TASK" ${INF_MODEL:+--model "$INF_MODEL"} ${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose `+
+		`claude -p "$INF_TASK" ${INF_RESUME:+--resume "$INF_RESUME"} ${INF_MODEL:+--model "$INF_MODEL"} ${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose `+
 			`--permission-mode bypassPermissions --settings %s > %s 2> %s; echo $? > %s`,
 		f.settings, f.out, f.err, f.status,
 	)
@@ -1185,6 +1241,7 @@ func claudeLaunchScript(f claudeJobFiles, task, model, effort string) string {
 		"export INF_TASK=" + shellQuote(task),
 		"export INF_MODEL=" + shellQuote(model),
 		"export INF_EFFORT=" + shellQuote(effort),
+		"export INF_RESUME=" + shellQuote(resume),
 		// Monitor mode puts a background job in its OWN process group even in
 		// a non-interactive shell (no `setsid` on macOS). That is what makes
 		// the wrapper a group leader, so a Stop can reap the WHOLE tree -
@@ -1526,7 +1583,8 @@ func (t *codeAgent) Description() string {
 		"are fine; for anything real, use this. The job OUTLIVES this turn: if the boss says something while it works, " +
 		"or the turn times out, you get a STILL RUNNING result naming its run id - the job was not stopped, its completion " +
 		"is reported back into the chat on its own, and calling code_agent again for the same work would run it twice. " +
-		"Only an explicit stop from him kills it."
+		"Only an explicit stop from him kills it. To pick a job back up later, pass resume_session (the run's " +
+		"meta.claude_session_id) with just what is LEFT to do - it continues that session's context instead of starting over."
 }
 
 func (t *codeAgent) Schema() map[string]any {
@@ -1549,6 +1607,13 @@ func (t *codeAgent) Schema() map[string]any {
 				"type":        "string",
 				"enum":        []string{"low", "medium", "high", "xhigh", "max"},
 				"description": "Optional Claude Code effort for this run. Leave empty for the configured default (INFINITY_CODE_AGENT_EFFORT, else the Mac's setting).",
+			},
+			"resume_session": map[string]any{
+				"type": "string",
+				"description": "Optional: CONTINUE an earlier Claude Code session instead of starting cold. Pass the uuid from that run's " +
+					"meta.claude_session_id. Claude reloads everything it already read, wrote and tried, so 'task' should be only what is LEFT " +
+					"to do, not the whole brief again. Use this whenever you are picking a job back up after it was interrupted, stalled, or " +
+					"came back STILL RUNNING - starting fresh makes it re-derive work that is already on disk.",
 			},
 		},
 		"required": []string{"task", "repo"},
@@ -1621,8 +1686,30 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 			handle.SetMetaString(context.Background(), key, value)
 		}
 	}
-	heartbeat := func(note, _ string, detail string) {
-		handle.Progress(context.Background(), 0, note)
+	// The heartbeat is the one place a live coding job says anything about
+	// itself, so both consumers are fed from it: the run row (durable,
+	// survives refresh and a second device - it is what the pinned dock above
+	// the composer draws) and the ACTIVITY FINGERPRINT the stall detector
+	// reads.
+	//
+	// The fingerprint matters because progress_label is not evidence of
+	// progress: it embeds elapsed time, so it changes every 15s whether or not
+	// Claude did anything. activity_key/activity_at move ONLY when the tool or
+	// its target actually changes, which is what makes "no evidence for N
+	// minutes" a fact rather than a guess.
+	lastKey := ""
+	steps := 0
+	heartbeat := func(note, action string, detail string) {
+		if key := action + "\x00" + detail; key != lastKey && strings.TrimSpace(action) != "" {
+			lastKey = key
+			steps++
+			setMeta("activity_key", key)
+			setMeta("activity_at", time.Now().UTC().Format(time.RFC3339))
+		}
+		// A real fraction, not the hardcoded 0 that made the dock's bar
+		// unmovable: the same curve background_build draws, so the same
+		// amount of work looks the same whichever engine ran it.
+		handle.Progress(context.Background(), ProgressForSteps(steps), note)
 		if detail != "" {
 			setMeta("currentFile", detail)
 		}
@@ -1633,6 +1720,11 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	setMeta("engine", "claude_code")
 	setMeta("model", model)
 	setMeta("effort", effort)
+	// The chat this job belongs to, on the row itself. Without it a run that
+	// settles after the turn is gone has no address to report back to, which
+	// is the whole problem the continuation poller exists to fix - it reads
+	// rows, not contexts. Same meta key the cron scheduler already uses.
+	setMeta("session_id", SessionIDFromContext(ctx))
 
 	// The job gets a lifetime of its OWN, derived from context.Background()
 	// via context.WithoutCancel: every value the tool ctx carries (the
@@ -1663,12 +1755,14 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	stopReason := ""
 
 	summary, runErr := t.runner.Run(jobCtx, ClaudeCodeJob{
-		Bridge:       b,
-		JobID:        jobID,
-		Task:         task,
-		Repo:         repo,
-		Model:        model,
-		Effort:       effort,
+		Bridge:          b,
+		JobID:           jobID,
+		Task:            task,
+		Repo:            repo,
+		Model:           model,
+		Effort:          effort,
+		ResumeSessionID: strString(in, "resume_session"),
+
 		MaxWait:      codeAgentMaxWait,
 		KillOnCancel: true,
 		Inline:       ctx,
@@ -1818,14 +1912,7 @@ func claudeCodeHeldGuidance(until time.Time, detail string) string {
 // Falls back to the raw body when it is not that JSON so a bridge that
 // answers plain text still reads.
 func bridgeBashOutput(body []byte) (string, int) {
-	var r struct {
-		Output   string `json:"output"`
-		ExitCode int    `json:"exit_code"`
-	}
-	if err := json.Unmarshal(body, &r); err != nil {
-		return string(body), 0
-	}
-	return r.Output, r.ExitCode
+	return bridge.BashOutput(body)
 }
 
 // splitMarker carves a "===A===…===B===…" blob into its two parts. An empty

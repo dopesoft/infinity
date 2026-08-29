@@ -313,6 +313,13 @@ func (b *BackgroundAgent) runDetached(parentSession, runID, label, task, brief, 
 	// navigation, refresh, and a second device (it reads mem_runs, not the
 	// transient WS stream).
 	handle := runs.BeginGlobal(ctx, runs.KindBackgroundBuild, runID, label, runs.SourceAgent)
+	// The chat this build belongs to, and the repo it works in, ON THE ROW.
+	// Without them a build that ends without a verdict is a row nothing can
+	// act on: the continuation poller reads rows, not contexts, so a run with
+	// no session has no address to report back to and gets skipped silently.
+	// Same meta keys code_agent and the cron scheduler already use.
+	handle.SetMetaString(ctx, "session_id", parentSession)
+	handle.SetMetaString(ctx, "repo", repo)
 	if b.OnProgress != nil {
 		phase := float32(0.05)
 		b.OnProgress(context.Background(), BackgroundProgress{
@@ -503,15 +510,11 @@ func (b *BackgroundAgent) runToCompletion(ctx context.Context, parentSession, ru
 
 // progressForToolCalls maps a running tool-call count onto the dock's bar:
 // stage-based, asymptotic (setup 0.05, each call advances, wrap-up reserved).
+// The curve itself lives in tools so code_agent's inline runs draw the SAME
+// bar for the same amount of work - two curves would make the same job look
+// like different amounts of progress depending on which engine ran it.
 func progressForToolCalls(count int) float32 {
-	if count <= 0 {
-		return 0.15
-	}
-	progress := float32(0.15 + 0.1*float32(count))
-	if progress > 0.9 {
-		progress = 0.9
-	}
-	return progress
+	return tools.ProgressForSteps(count)
 }
 
 // progressPublisher returns the one function both engines (the settings-model

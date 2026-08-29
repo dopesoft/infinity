@@ -32,6 +32,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/errs"
 	"github.com/dopesoft/infinity/core/internal/eval"
 	"github.com/dopesoft/infinity/core/internal/extensions"
+	"github.com/dopesoft/infinity/core/internal/finish"
 	"github.com/dopesoft/infinity/core/internal/gauge"
 	"github.com/dopesoft/infinity/core/internal/honcho"
 	"github.com/dopesoft/infinity/core/internal/hooks"
@@ -102,19 +103,19 @@ func serveCmd() *cobra.Command {
 
 			// Memory + hooks + tools wiring (best-effort).
 			var (
-				pool                *pgxpool.Pool
-				store               *memory.Store
-				searcher            *memory.Searcher
-				compressor          *memory.Compressor
-				reflector           *memory.Reflector
-				procedural          *memory.ProceduralStore
-				pipeline            *hooks.Pipeline
-				embedder            embed.Embedder
-				llmRegistry         *llm.Registry
-				activeModel         *activeModelProvider
-				activeBridgeRouter  *bridge.Router
+				pool               *pgxpool.Pool
+				store              *memory.Store
+				searcher           *memory.Searcher
+				compressor         *memory.Compressor
+				reflector          *memory.Reflector
+				procedural         *memory.ProceduralStore
+				pipeline           *hooks.Pipeline
+				embedder           embed.Embedder
+				llmRegistry        *llm.Registry
+				activeModel        *activeModelProvider
+				activeBridgeRouter *bridge.Router
 				// claudeRunner is the ONE Claude Code launcher (code_agent + background_build on the Mac).
-				claudeRunner *tools.ClaudeCodeRunner
+				claudeRunner        *tools.ClaudeCodeRunner
 				activeBridgePrefs   tools.PreferenceFetcher
 				browserReg          *browser.Registry
 				docCreate           *tools.DocumentCreate
@@ -2033,7 +2034,17 @@ func serveCmd() *cobra.Command {
 				if pushSender != nil {
 					mandateStore.SetAnnouncer(&mandateAnnouncer{sender: pushSender})
 				}
-				tools.RegisterMandateTools(registry, mandateStore)
+				tools.RegisterMandateTools(registry, mandateStore, pool)
+				// Couple the two substrates that both answer "is this
+				// finished?" and never talked to each other. A Mandate bound
+				// to a plan step now GATES that step: plan_update can't mark
+				// it done while a criterion is unproven, so the green tick the
+				// boss reads stops being the model's opinion. Attached at
+				// plan_update, the one chokepoint every route to `done` flows
+				// through, rather than at each caller.
+				if tools.AttachStepDoneGate(registry, mandateStore) {
+					fmt.Println("  mandates: plan-step done-gate attached")
+				}
 				if llmRegistry != nil {
 					mandateSettings := settings.New(pool)
 					// Verify on the boss's OWN selected brain (provider+model) —
@@ -2355,6 +2366,35 @@ func serveCmd() *cobra.Command {
 				if rp := reauth.NewPoller(reauthStore, &reauthProber{loop: loop}, &reauthReplayer{loop: loop}, reauthNotify); rp != nil {
 					go rp.Start(cmd.Context())
 					fmt.Println("  reauth: model re-auth poller started")
+				}
+			}
+
+			// Nobody picks a coding job back up. That is the last open link in
+			// the chain: a job now outlives the turn, an interruption is no
+			// longer laundered into a failure, and the transcript is salvaged -
+			// which leaves a run row honestly saying "this never reached a
+			// verdict" and no one reading it. Plan 2f1508a2 sat paused for
+			// exactly that reason: the plan to fix this was killed by the thing
+			// it was fixing, and then nothing continued it.
+			//
+			// This poller reads those rows, gathers real git evidence off the
+			// repo, and re-enters the loop in the originating chat so JARVIS
+			// decides what happens next - continue, replan, or say it needs the
+			// boss - with `code_agent`'s new resume_session making continuing
+			// cheap. Reuses the reauth replayer verbatim: there is one
+			// implementation of "wake him up in this session", not two.
+			if pool != nil && loop != nil {
+				fin := finish.NewPoller(pool,
+					&reauthReplayer{loop: loop},
+					finish.NewBridgeEvidence(activeBridgeRouter, func(ctx context.Context, sessionID string) bridge.Preference {
+						if activeBridgePrefs == nil {
+							return bridge.PrefAuto
+						}
+						return activeBridgePrefs(ctx, sessionID)
+					}))
+				if fin != nil {
+					go fin.Start(cmd.Context())
+					fmt.Println("  finish: coding-continuation poller started")
 				}
 			}
 

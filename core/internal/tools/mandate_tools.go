@@ -17,16 +17,25 @@ import (
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/mandate"
+	"github.com/dopesoft/infinity/core/internal/plan"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // RegisterMandateTools wires mandate_open / _check / _close / _abandon against a
 // shared store (the same instance the ambient announcer is set on). No-op when
 // the store is nil so chat-only deployments don't break registration.
-func RegisterMandateTools(r *Registry, store *mandate.Store) {
+// pool is optional: with it, mandate_open can bind a mandate to a plan step by
+// its 1-based number as well as its uuid, resolved the same way every other
+// plan tool resolves a step ref. Without it, only an explicit step id works.
+func RegisterMandateTools(r *Registry, store *mandate.Store, pool *pgxpool.Pool) {
 	if r == nil || store == nil {
 		return
 	}
-	r.Register(&mandateOpenTool{store: store})
+	var plans *plan.Store
+	if pool != nil {
+		plans = plan.NewStore(pool)
+	}
+	r.Register(&mandateOpenTool{store: store, plans: plans})
 	r.Register(&mandateCheckTool{store: store})
 	r.Register(&mandateCloseTool{store: store})
 	r.Register(&mandateAbandonTool{store: store})
@@ -50,7 +59,12 @@ func resolveMandateID(ctx context.Context, store *mandate.Store, explicit string
 
 // ── mandate_open ──────────────────────────────────────────────────────────────
 
-type mandateOpenTool struct{ store *mandate.Store }
+type mandateOpenTool struct {
+	store *mandate.Store
+	// plans resolves a positional step ref ("2") to a step id, and names the
+	// plan the step belongs to. Nil without a pool.
+	plans *plan.Store
+}
 
 func (t *mandateOpenTool) Name() string { return "mandate_open" }
 func (t *mandateOpenTool) Description() string {
@@ -78,6 +92,13 @@ func (t *mandateOpenTool) Schema() map[string]any {
 			},
 			"high_stakes": map[string]any{"type": "boolean", "description": "True when being wrong is expensive/irreversible. Requires mandate_verify (cross-model audit) before close. Default false."},
 			"importance":  map[string]any{"type": "integer", "description": "0-100 optional ranking for the dashboard."},
+			"step_id": map[string]any{
+				"type": "string",
+				"description": "Optional: bind this mandate to a plan step (its id, or its 1-based number in the current plan). " +
+					"That step then CANNOT be marked done until every criterion here passes — the definition of done stops being " +
+					"a separate note and becomes the gate on the thing the boss is watching. Use it whenever the mandate is the " +
+					"definition of done for one step of the plan you're working.",
+			},
 		},
 		"required": []string{"title", "criteria"},
 	}
@@ -102,12 +123,41 @@ func (t *mandateOpenTool) Execute(ctx context.Context, in map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
+
+	// Bind it to the plan step it defines done for, if one was named. The step
+	// then inherits this mandate's gate: plan_update can't mark it done until
+	// every criterion here passes.
+	gated := ""
+	if ref := strings.TrimSpace(strString(in, "step_id")); ref != "" && t.plans != nil {
+		stepID, rerr := resolveStepRef(ctx, t.plans, ref)
+		if rerr != nil {
+			// The mandate exists and is useful; only the coupling failed. Say
+			// which, rather than failing the whole call or claiming a gate
+			// that isn't there.
+			gated = "could not bind it to a plan step: " + rerr.Error()
+		} else {
+			planID := ""
+			if st, gerr := t.plans.GetStep(ctx, stepID); gerr == nil && st != nil {
+				planID = st.PlanID
+			}
+			if lerr := t.store.LinkPlanStep(ctx, id, planID, stepID); lerr != nil {
+				gated = "could not bind it to that plan step: " + lerr.Error()
+			} else {
+				gated = "That plan step is now gated on this mandate — it can't be marked done until every criterion passes."
+			}
+		}
+	}
+
+	msg := fmt.Sprintf("Mandate opened with %d criteria. Check each off with mandate_check as you satisfy it; mandate_close when all pass.", len(m.Criteria))
+	if gated != "" {
+		msg += " " + gated
+	}
 	out, _ := json.Marshal(map[string]any{
 		"ok":          true,
 		"mandate_id":  id,
 		"criteria":    m.Criteria,
 		"high_stakes": m.HighStakes,
-		"message":     fmt.Sprintf("Mandate opened with %d criteria. Check each off with mandate_check as you satisfy it; mandate_close when all pass.", len(m.Criteria)),
+		"message":     msg,
 	})
 	return string(out), nil
 }

@@ -167,7 +167,7 @@ func TestParseClaudeAuth_RefusesAnythingButTheSubscription(t *testing.T) {
 // so progress is readable. Both are mechanics in the script, not prose.
 func TestClaudeLaunchScript_GuardsTheSubscriptionAndStreams(t *testing.T) {
 	f := newClaudeJobFiles("job-1")
-	script := claudeLaunchScript(f, "fix the thing", "claude-opus-5[1m]", "high")
+	script := claudeLaunchScript(f, "fix the thing", "claude-opus-5[1m]", "high", "")
 	unset := strings.Index(script, "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN")
 	launch := strings.Index(script, "nohup bash -c")
 	if unset < 0 || launch < 0 || unset > launch {

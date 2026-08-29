@@ -277,12 +277,21 @@ func (s *Store) Close(ctx context.Context, mandateID string) (*Mandate, error) {
 	if m.Status == StatusDone {
 		return m, nil
 	}
-	if !m.AllPass() {
+	// One definition of done, shared with the plan-step gate (gate.go), so the
+	// two can never drift into disagreeing about whether the same work is
+	// finished.
+	if blockers := Blockers(m); len(blockers) > 0 {
+		if m.HighStakes && m.VerifiedAt == nil && len(blockers) == 1 {
+			return nil, errors.New("this is a high-stakes mandate — run mandate_verify first: a fresh, independent pass audits the result against the criteria; it can't close on your word alone")
+		}
 		return nil, fmt.Errorf("can't close this mandate yet — not done: %s. Check each off with mandate_check (with evidence) once it's actually satisfied",
-			strings.Join(m.FailingCriteria(), "; "))
+			strings.Join(blockers, "; "))
 	}
-	if m.HighStakes && m.VerifiedAt == nil {
-		return nil, errors.New("this is a high-stakes mandate — run mandate_verify first: a fresh, independent pass audits the result against the criteria; it can't close on your word alone")
+	// "Migrations applied" is a fact about the live database, not an opinion,
+	// so it is proven here rather than taken on the model's word — the exact
+	// claim that went unchecked while 011-014 sat unapplied for weeks.
+	if drift := s.UnprovenMigrations(ctx, m); drift != "" {
+		return nil, errors.New("can't close this mandate yet — " + drift)
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE mem_mandates SET status = 'done', updated_at = NOW() WHERE id = $1::uuid

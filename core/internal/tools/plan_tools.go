@@ -565,7 +565,13 @@ func pickResumeStep(p *plan.Plan, ref string) (*plan.Step, error) {
 
 // ── plan_update ──────────────────────────────────────────────────────────
 
-type planUpdate struct{ store *plan.Store }
+type planUpdate struct {
+	store *plan.Store
+	// doneGate, when attached, is the definition-of-done check a step must
+	// pass before it can go green. Nil-safe: without it the only gate is
+	// verify_required, as before.
+	doneGate StepDoneGate
+}
 
 func (t *planUpdate) Name() string { return "plan_update" }
 func (t *planUpdate) Description() string {
@@ -626,6 +632,16 @@ func (t *planUpdate) Execute(ctx context.Context, in map[string]any) (string, er
 		verdict, _ := prev.VerifyResult["verdict"].(string)
 		if verdict != "pass" {
 			return "", fmt.Errorf("step %q requires verification before it can be marked done - call plan_verify with the evidence it actually worked first", prev.Title)
+		}
+	}
+
+	// The definition-of-done gate. When a Mandate is bound to this step, its
+	// criteria ARE the step's criteria, and the step cannot go green while any
+	// of them is unproven. This is the one chokepoint every route to `done`
+	// flows through, so nothing can be added later that slips past it.
+	if status == plan.StepDone && t.doneGate != nil {
+		if err := t.doneGate.CheckStepDone(ctx, stepID); err != nil {
+			return "", err
 		}
 	}
 

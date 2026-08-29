@@ -579,3 +579,26 @@ func healthyText(up bool) string {
 	}
 	return "down"
 }
+
+// BashOutput decodes the bridge's `/bash` reply into (stdout, exit code).
+//
+// The shape is the bridge's own wire contract, so it is decoded here rather
+// than re-implemented by each caller. A body that isn't the expected JSON is
+// handed back verbatim with exit 0 — the bridge occasionally answers with a
+// plain string, and losing the text would turn a readable failure into
+// silence.
+//
+// Decoding it properly matters more than it looks: the first version of this
+// scanned to the first quote, which cut Claude Code's own JSON at its first
+// escaped quote, so every result — including "You're out of extra usage" —
+// came back as `{\` and was reported ok (2026-08-26).
+func BashOutput(body []byte) (string, int) {
+	var r struct {
+		Output   string `json:"output"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return string(body), 0
+	}
+	return r.Output, r.ExitCode
+}

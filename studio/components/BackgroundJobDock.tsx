@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { StatusDot } from "@/components/ui/list-row";
-import { useRuns } from "@/lib/runs/useRuns";
+import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 import { usePlan } from "@/lib/plans/usePlan";
 import type { PlanStep } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
@@ -24,24 +24,27 @@ import { cn } from "@/lib/utils";
 // chat and dashboard stay in sync (one substrate: mem_plans).
 //
 // It reads the session's active plan via usePlan (server state + realtime, so
-// it survives navigation / refresh / second device). It ALSO watches
-// background.build runs via useRuns purely for execution telemetry - whether a
-// detached build is in flight and which file it's currently touching - since
-// that lives on the run, not the plan. The checklist itself is always the plan;
-// there is no second todo list anymore.
+// it survives navigation / refresh / second device). It ALSO watches CODING
+// runs via useCodingRuns purely for execution telemetry - whether a build is in
+// flight and which file it's currently touching - since that lives on the run,
+// not the plan. The checklist itself is always the plan; there is no second
+// todo list anymore.
 //
-// Shows whenever there's an active plan for this session OR a background build
-// running. ONE progress bar: % from the plan's done/total, or indeterminate
-// (pulsing) when a build is running without a plan yet.
-
-const BACKGROUND_KIND = "background.build";
+// It used to watch only `background.build`, which meant the far more common
+// case - a `code_agent` run, the boss delegating a coding job inside a turn -
+// was invisible in the one place he looks for it, and he was left with a bare
+// spinner for eight minutes. Both coding kinds now feed the dock.
+//
+// Shows whenever there's an active plan for this session OR a coding run is
+// live. ONE progress bar: % from the plan's done/total when there's a plan,
+// otherwise the run's own progress fraction, and only indeterminate (pulsing)
+// when neither has said anything yet.
 
 export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
   const plan = usePlan(sessionId);
-  const { runs } = useRuns({ kind: BACKGROUND_KIND });
+  const { runs: activeBuilds } = useCodingRuns({ runningOnly: true });
   const [expanded, setExpanded] = useState(false);
 
-  const activeBuilds = runs.filter((r) => r.status === "running");
   const build = activeBuilds[0];
   const others = activeBuilds.slice(1);
   const currentFile = build?.meta?.currentFile?.trim() ?? "";
@@ -55,7 +58,15 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
   const done = plan?.doneCount ?? 0;
   const total = plan?.totalCount ?? 0;
   const hasPlan = total > 0;
-  const pct = hasPlan ? Math.round((done / total) * 100) : null;
+  // The plan's own done/total is the truest measure of "how far in are we",
+  // so it wins. Without a plan, fall back to the run's live fraction - which
+  // the coding tools now actually write (it was hardcoded 0, so this bar
+  // could never move for a code_agent run no matter how long it worked).
+  const runPct =
+    typeof build?.progress === "number" && build.progress > 0
+      ? Math.round(build.progress * 100)
+      : null;
+  const pct = hasPlan ? Math.round((done / total) * 100) : runPct;
 
   const current =
     steps.find((s) => s.status === "in_progress")?.title ??

@@ -5,7 +5,7 @@ import { Check, Loader2, RefreshCw, X } from "lucide-react";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useRuns } from "@/lib/runs/useRuns";
+import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 import type { RunDTO } from "@/lib/api";
 import { isCodingTool, useLiveTool, type LiveTool } from "@/lib/live-tool";
 import { effectiveModelLabel, useGlobalModel, type ModelSetting } from "@/lib/use-model";
@@ -146,10 +146,10 @@ export function BridgePill({
   // (the boss's ask: no extra chrome, the same button tells the truth).
   // code_agent runs come from mem_runs (survive refresh); the chat model's
   // own edits come from the live tool stream.
-  const { runs: codeRuns } = useRuns({ kind: "code_agent", status: "running", limit: 1, enabled: !!sessionId });
-  // A background build on the Mac is a Claude Code run too (meta.engine).
-  const { runs: bgRuns } = useRuns({ kind: "background.build", status: "running", limit: 3, enabled: !!sessionId });
-  const claudeRun = codeRuns[0] ?? bgRuns.find((r) => r.meta?.engine === "claude_code") ?? null;
+  // A background build on the Mac is a Claude Code run too (meta.engine), so
+  // both kinds resolve through the one shared primitive rather than each
+  // surface hand-merging its own pair of useRuns calls.
+  const { claudeRun } = useCodingRuns({ runningOnly: true, limit: 3, enabled: !!sessionId });
   const liveTool = useLiveTool();
   const { setting } = useGlobalModel();
   const pill = codingPill({ base: basePill, codeRun: claudeRun, liveTool, setting });
