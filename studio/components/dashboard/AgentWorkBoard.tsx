@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
-import { GroupLabel, WorkRow, type RowTone } from "@/components/ui/list-row";
+import { WorkRow, type RowTone } from "@/components/ui/list-row";
+import { Board, BoardCard } from "@/components/ui/board";
 import { Section } from "./Section";
 import { clockTime, formatDuration, relTime } from "@/lib/dashboard/format";
 import type {
@@ -11,26 +12,27 @@ import type {
   WorkItemKind,
 } from "@/lib/dashboard/types";
 
-/* Agent work - the ledger of what Jarvis is doing.
+/* Agent work - what Jarvis is doing, as a board.
  *
- * WHAT CHANGED, AND WHY (Majordomo §2, §5)
+ * IT IS COLUMNS AGAIN, AND THAT WAS THE POINT
  *
- * This was the deepest surface in the app: a bordered `Section` → four
- * `rounded-xl border` Kanban columns, each with its OWN `border-b bg-muted/20`
- * header bar carrying an uppercase label and a count pill → a `WorkRow` → a
- * `size-6 rounded-md border` icon tile. Two stacked header bars and four
- * levels of box to say "a cron ran". On a phone it was worse: the four columns
- * became a horizontal snap-rail with pager dots and prev/next buttons, so
- * three quarters of what Jarvis was doing lived off-screen behind a swipe.
+ * This surface was four Kanban columns wrapped in four levels of box: a
+ * bordered `Section` → four `rounded-xl border` columns → a `border-b
+ * bg-muted/20` header bar each → a `size-6 rounded-md border` icon tile per
+ * row. On a phone the columns became a horizontal snap-rail with pager dots,
+ * so three quarters of the board lived off-screen behind a swipe.
  *
- * It is now ONE list. Each column is a `GroupLabel` (mono, uppercase, with its
- * count) followed by its `WorkRow`s, in the order that matches how the boss
- * reads the board: what is happening now, what is waiting on him, what is
- * coming, what is finished. Everything the columns carried is still here -
- * counts, the plan/mandate progress bar (now the primitive's, tinted danger
- * when the plan failed), the skills a job ran, the run's narrative summary,
- * and the per-column timing meta - and the rail is gone, so nothing hides
- * off-screen and the page cannot scroll sideways.
+ * The correction removed the boxes and the rail. It ALSO removed the columns,
+ * flattening everything into one grouped list, and that was wrong: status is
+ * the axis you scan this surface on, and four columns answer "what is running
+ * / what needs me / what is queued / what finished" in one glance, where a
+ * single list makes you read it. The boxes were the problem, not the columns.
+ *
+ * So: four columns on `lg`, two at `sm`, one stacked list on a phone - which
+ * is the grouped list, and is right there, because a phone has one column of
+ * room and a snap-rail hides work. `BoardCard` owns all of that, plus the
+ * clip-at-four-rows and the fade that only appears when there is genuinely a
+ * fifth row. Each column keeps its count in the head and its own empty line.
  *
  * Titles stay plain English; the engine (cron id, raw skill name) lives in the
  * detail on tap, never in the row.
@@ -79,7 +81,7 @@ export function AgentWorkBoard({
   }, [items]);
 
   const totalAwaiting = grouped.awaiting.length;
-  const active = GROUPS.filter((g) => grouped[g.key].length > 0);
+  const anything = GROUPS.some((g) => grouped[g.key].length > 0);
 
   return (
     <Section
@@ -87,15 +89,20 @@ export function AgentWorkBoard({
       badge={totalAwaiting > 0 ? `${totalAwaiting} awaiting` : undefined}
       action={{ label: "see all", href: "/automations" }}
     >
-      {active.length === 0 ? (
-        /* Every group empty: one quiet line rather than four labelled empties,
-         * which is all noise and no information. */
+      {!anything ? (
+        /* Every column empty: one quiet line rather than four labelled
+         * empties, which is all noise and no information. */
         <p className="py-2 text-[13px] text-quiet">Nothing waiting on you.</p>
       ) : (
-        <div className="flex min-w-0 flex-col">
-          {active.map((g) => (
-            <div key={g.key} className="flex min-w-0 flex-col">
-              <GroupLabel label={g.label} count={grouped[g.key].length} />
+        <Board columns={4}>
+          {GROUPS.map((g, i) => (
+            <BoardCard
+              key={g.key}
+              title={g.label}
+              count={grouped[g.key].length || undefined}
+              delay={i * 0.04}
+              empty={g.empty}
+            >
               {grouped[g.key].map((it) => (
                 <Row
                   key={it.id}
@@ -104,9 +111,9 @@ export function AgentWorkBoard({
                   onClick={() => onOpen({ kind: "work", data: it })}
                 />
               ))}
-            </div>
+            </BoardCard>
           ))}
-        </div>
+        </Board>
       )}
     </Section>
   );

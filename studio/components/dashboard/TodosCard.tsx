@@ -4,9 +4,7 @@ import { motion } from "framer-motion";
 import { Check, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ListRow } from "@/components/ui/list-row";
-import { Section } from "./Section";
-import { ScrollList } from "./ScrollList";
-import { DASHBOARD_LIST_ROWS } from "./listHeight";
+import { BoardCard } from "@/components/ui/board";
 import { cn } from "@/lib/utils";
 import { dayLabel } from "@/lib/dashboard/format";
 import type { DashboardItem, Todo } from "@/lib/dashboard/types";
@@ -43,30 +41,18 @@ export function TodosCard({
   const open = todos.filter((t) => !t.done);
   const doneCount = todos.length - open.length;
 
-  return (
-    <Section
-      title="To do"
-      badge={open.length}
-      action={doneCount > 0 ? { label: `${doneCount} done`, href: "/memory" } : undefined}
-    >
-      <div className="min-w-0">
-        {open.length === 0 ? (
-          <p className="py-2 text-[13px] text-quiet">Nothing on your list.</p>
-        ) : (
-          <ScrollList max={DASHBOARD_LIST_ROWS} maxHeight={matchHeight ?? undefined}>
-            <div className="flex min-w-0 flex-col">
-              {open.map((t) => (
-                <TodoRow
-                  key={t.id}
-                  t={t}
-                  onOpen={() => onOpen({ kind: "todo", data: t })}
-                  onToggle={() => onToggle(t.id)}
-                />
-              ))}
-            </div>
-          </ScrollList>
-        )}
+  // Accepted and ignored: BoardCard aligns its columns by layout, not by a
+  // pixel measured in one sibling and threaded into another.
+  void matchHeight;
 
+  return (
+    <BoardCard
+      title="To do"
+      count={open.length}
+      delay={0.04}
+      seeAll={doneCount > 0 ? { label: `${doneCount} done`, href: "/memory" } : undefined}
+      empty="Nothing on your list."
+      footer={
         <Button
           type="button"
           variant="ghost"
@@ -76,8 +62,17 @@ export function TodosCard({
           <Plus className="size-4" aria-hidden />
           Add todo
         </Button>
-      </div>
-    </Section>
+      }
+    >
+      {open.map((t) => (
+        <TodoRow
+          key={t.id}
+          t={t}
+          onOpen={() => onOpen({ kind: "todo", data: t })}
+          onToggle={() => onToggle(t.id)}
+        />
+      ))}
+    </BoardCard>
   );
 }
 

@@ -139,6 +139,39 @@ func (a *API) planSkillsBySession(ctx context.Context, sessionIDs []string) map[
 //
 // Steps ride inline so tapping the card opens the full timeline in ObjectViewer
 // with no second fetch.
+// planStaleAfter is how long a non-terminal plan may sit untouched before the
+// board stops calling it live.
+//
+// The bound comes from the runtime, not taste: a cron agent turn runs under a
+// 30 minute context budget, so a genuinely-working plan updates a step well
+// inside that. 45 minutes gives a slow step half again as long as the longest
+// legitimate one before we call it quiet. Anything past that is not running -
+// it is a row nobody closed.
+const planStaleAfter = 45 * time.Minute
+
+// planStaleness answers the two questions that decide whether a plan belongs
+// on the board at all, given only its status and when it was last touched.
+//
+// Pure and separate from the query so the rule can be tested against the exact
+// rows that were lying in production, rather than living as three inline
+// branches nobody can exercise without a database.
+func planStaleness(status string, updatedAt, now time.Time) (terminal, stale bool) {
+	terminal = status == plan.PlanCompleted || status == plan.PlanFailed || status == plan.PlanCancelled
+
+	// A PROPOSAL is exempt, and this is the important carve-out. It is not
+	// work that stalled, it is a question addressed to the boss, and it waits
+	// as long as he takes. Its age says nothing about whether it is still
+	// live, so ageing one out would quietly retire a decision he never made -
+	// which is the same crime as the phantom "Running" row, pointed at
+	// something he actually cares about.
+	if status == plan.PlanProposed {
+		return terminal, false
+	}
+
+	stale = !terminal && updatedAt.Before(now.Add(-planStaleAfter))
+	return terminal, stale
+}
+
 func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 	if a == nil || a.Pool == nil {
 		return nil, nil
@@ -164,13 +197,33 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 	// stranded on the folded-away run card.
 	runInfo := a.cronRunsBySession(ctx, sessionIDs)
 
-	startOfDay := time.Now().UTC().Truncate(24 * time.Hour)
+	now := time.Now().UTC()
+	startOfDay := now.Truncate(24 * time.Hour)
 	out := make([]WorkItem, 0, len(plans))
 	for _, p := range plans {
 		// Terminal plans only surface if they finished today, so the Done
 		// column reflects "today" like every other work item.
-		terminal := p.Status == plan.PlanCompleted || p.Status == plan.PlanFailed || p.Status == plan.PlanCancelled
-		if terminal && p.UpdatedAt.Before(startOfDay) {
+		// A plan that has not been touched in `planStaleAfter` is NOT running,
+		// whatever its row still says. This is the same law as "empty because
+		// broken must never read as empty because fine", pointed the other
+		// way: DEAD MUST NEVER READ AS ALIVE.
+		//
+		// The rescue below can only fire for a plan whose session produced a
+		// finished run. A plan orphaned hard enough - the process died, the
+		// session was never written, the retry minted a new one and left this
+		// row behind - has no run to consult, so nothing could ever move it
+		// and it sat in Running forever. Verified in prod on 2026-08-29: four
+		// plans stuck 'active' for three days with no session id at all, plus
+		// ten 'paused' rows in the needs-you lane, the oldest quiet since 8
+		// June. Every one of them read to the boss as work in flight.
+		//
+		// Time is the one signal that does not depend on any of that
+		// bookkeeping having survived, so time is what decides.
+		terminal, stale := planStaleness(p.Status, p.UpdatedAt, now)
+
+		if (terminal || stale) && p.UpdatedAt.Before(startOfDay) {
+			// Not today's work. The board is what is going on now, and a job
+			// that went quiet days ago is history, not status.
 			continue
 		}
 
@@ -202,6 +255,14 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 			sub = "cancelled"
 		}
 
+		// Went quiet today: it is honestly finished-without-finishing. Not
+		// "done" (it completed nothing) and not "awaiting" (it is not waiting
+		// on him) - it stopped, and the row says so in those words.
+		if stale {
+			column = "done"
+			sub = "stopped without finishing"
+		}
+
 		// Outcome-driven placement + narrative fold. When the cron run that
 		// drove this plan has FINISHED (not still in-flight), its outcome class
 		// decides where the card lands: only a genuine pending decision
@@ -209,7 +270,7 @@ func (a *API) planWorkItems(ctx context.Context) ([]WorkItem, error) {
 		// on its own reads as "stopped early" in Done with its reason on the
 		// card — never a cryptic "paused at checkpoint" in the needs-you lane.
 		summary := ""
-		if info, ok := runInfo[p.SessionID]; ok {
+		if info, ok := runInfo[p.SessionID]; ok && !stale {
 			summary = info.summary
 			finished := info.status != "" && info.status != "running"
 			if finished && (p.Status == plan.PlanActive || p.Status == plan.PlanPaused) {

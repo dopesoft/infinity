@@ -36,13 +36,28 @@ import { cn } from "@/lib/utils";
  * MOBILE: one column, borders off, gap on. Checked at 375.
  */
 
+const COLS: Record<2 | 3 | 4, string> = {
+  2: "sm:grid-cols-2",
+  3: "sm:grid-cols-3",
+  // Four is the status board: one column per state. It goes straight from
+  // stacked to four at `lg`, with no 2-up middle state, and that is
+  // deliberate. The column hairline is a per-card `border-r` that only knows
+  // DOM order, so at 2-up it would draw a rule down the middle of row two and
+  // pad the third card as though it started a row. Wrapping needs per-row
+  // edges, which a card cannot know. Below `lg` the stack IS the right shape
+  // anyway - a phone has one column of room, and the old fix for that was a
+  // snap-rail that hid three quarters of the work behind a swipe.
+  4: "lg:grid-cols-4",
+};
+
 export function Board({
   columns = 3,
   className,
   children,
 }: {
-  /** 3 by default; 2 for a pair. Past `max-w-board` add a column, never widen rows. */
-  columns?: 2 | 3;
+  /** 3 by default; 2 for a pair; 4 for a status board. Past `max-w-board` add
+   *  a column, never widen rows. */
+  columns?: 2 | 3 | 4;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -52,7 +67,7 @@ export function Board({
         // grid-cols-1 default is REQUIRED: an implicit max-content track can
         // blow the column past the viewport on a phone.
         "grid min-w-0 grid-cols-1 gap-6 sm:gap-0",
-        columns === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2",
+        COLS[columns],
         className,
       )}
     >
@@ -70,8 +85,14 @@ export function BoardCard({
   rows = DASHBOARD_LIST_ROWS,
   /** Stagger index. Cards fade in 40ms apart; fades only, per Majordomo §4. */
   delay = 0,
+  /** Content between the head and the list, OUTSIDE the clip: a banner, an
+   *  inline form. It must not scroll away with the rows. */
+  lead,
   /** Shown instead of the list when there is nothing. Say what will fill it. */
   empty,
+  /** One quiet action under the list ("+ Add todo"). Renders whether or not
+   *  the card is empty - you must be able to add the first one. */
+  footer,
   className,
   children,
 }: {
@@ -86,7 +107,9 @@ export function BoardCard({
   seeAll?: { label: string; href: string };
   rows?: number;
   delay?: number;
+  lead?: React.ReactNode;
   empty?: React.ReactNode;
+  footer?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -128,6 +151,8 @@ export function BoardCard({
         head
       )}
 
+      {lead}
+
       {isEmpty && empty ? (
         <p className="py-2 text-[13px] text-quiet">{empty}</p>
       ) : (
@@ -144,6 +169,8 @@ export function BoardCard({
           {seeAll.label}
         </Link>
       ) : null}
+
+      {footer ? <div className="min-w-0">{footer}</div> : null}
     </motion.section>
   );
 }

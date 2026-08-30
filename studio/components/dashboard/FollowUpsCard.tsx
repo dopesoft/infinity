@@ -1,9 +1,7 @@
 "use client";
 
 import { ListRow } from "@/components/ui/list-row";
-import { Section } from "./Section";
-import { ScrollList } from "./ScrollList";
-import { DASHBOARD_LIST_ROWS } from "./listHeight";
+import { BoardCard } from "@/components/ui/board";
 import { relTime } from "@/lib/dashboard/format";
 import type { DashboardItem, FollowUp } from "@/lib/dashboard/types";
 
@@ -60,28 +58,22 @@ export function FollowUpsCard({
    */
   onMeasure?: (px: number | null) => void;
 }) {
+  // Accepted and ignored: BoardCard aligns its columns by layout, not by a
+  // pixel measured in one sibling and threaded into another.
+  void onMeasure;
+
   return (
-    <Section
+    <BoardCard
       title="Email"
-      badge={followUps.length}
-      action={{ label: "see inbox", href: "/memory" }}
+      count={followUps.length}
+      href="/memory"
+      delay={0.08}
+      empty="Inbox zero - no one is waiting on you."
     >
-      {followUps.length === 0 ? (
-        <p className="py-2 text-[13px] text-quiet">Inbox zero - no one is waiting on you.</p>
-      ) : (
-        <ScrollList max={DASHBOARD_LIST_ROWS} onMeasure={onMeasure}>
-          <div className="flex min-w-0 flex-col">
-            {followUps.map((f) => (
-              <FollowUpRow
-                key={f.id}
-                f={f}
-                onClick={() => onOpen({ kind: "followup", data: f })}
-              />
-            ))}
-          </div>
-        </ScrollList>
-      )}
-    </Section>
+      {followUps.map((f) => (
+        <FollowUpRow key={f.id} f={f} onClick={() => onOpen({ kind: "followup", data: f })} />
+      ))}
+    </BoardCard>
   );
 }
 

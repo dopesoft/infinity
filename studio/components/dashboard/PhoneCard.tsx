@@ -3,9 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, BookUser, Building2, Grip, Loader2, Pencil, Phone, PhoneIncoming, PhoneOutgoing, Plus, Trash2, User } from "lucide-react";
-import { Section } from "./Section";
-import { ScrollList } from "./ScrollList";
-import { DASHBOARD_LIST_ROWS } from "./listHeight";
+import { BoardCard } from "@/components/ui/board";
 import { SurfaceRow } from "./SurfaceCard";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { ModalSection } from "@/components/ui/modal-content";
@@ -161,13 +159,18 @@ export function PhoneCard({
     }
   }
 
+  // Accepted and ignored: BoardCard aligns its columns by layout, not by a
+  // pixel measured in one sibling and threaded into another.
+  void matchHeight;
+
   return (
     <>
-      <Section
+      <BoardCard
         title="Phone"
         delay={delay}
-        badge={items.length}
-        headerExtra={
+        count={items.length}
+        empty="No calls yet, Jarvis answers his line and logs every call here."
+        action={
           callRunning ? (
             <button
               type="button"
@@ -212,7 +215,8 @@ export function PhoneCard({
             </>
           )
         }
-      >
+        lead={
+          <>
         {askRun?.status === "error" ? (
           <div className="mb-3 min-w-0 rounded-[10px] bg-danger/10 px-3 py-2.5">
             <p className="text-[13.5px] font-medium text-danger">Your call errand failed</p>
@@ -290,26 +294,19 @@ export function PhoneCard({
           ) : null}
         </AnimatePresence>
 
-        {items.length === 0 ? (
-          <p className="py-2 text-[13px] text-quiet">
-            No calls yet, Jarvis answers his line and logs every call here.
-          </p>
-        ) : (
-          <ScrollList max={DASHBOARD_LIST_ROWS} maxHeight={matchHeight ?? undefined}>
-            <div className="flex min-w-0 flex-col">
-              {items.map((it) =>
-                it.kind === "surface" ? (
-                  <SurfaceRow
-                    key={`${it.kind}-${it.data.id}`}
-                    item={it.data}
-                    onClick={() => onOpen(it)}
-                  />
-                ) : null,
-              )}
-            </div>
-          </ScrollList>
+          </>
+        }
+      >
+        {items.map((it) =>
+          it.kind === "surface" ? (
+            <SurfaceRow
+              key={`${it.kind}-${it.data.id}`}
+              item={it.data}
+              onClick={() => onOpen(it)}
+            />
+          ) : null,
         )}
-      </Section>
+      </BoardCard>
 
       <ContactBookModal
         onChanged={() => void phoneContacts().then(setContacts)}

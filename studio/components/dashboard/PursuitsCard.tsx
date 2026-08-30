@@ -4,9 +4,7 @@ import { motion } from "framer-motion";
 import { Brain, Check, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GroupLabel, ListRow, WorkRow, type RowTone } from "@/components/ui/list-row";
-import { Section } from "./Section";
-import { ScrollList } from "./ScrollList";
-import { DASHBOARD_LIST_ROWS } from "./listHeight";
+import { BoardCard } from "@/components/ui/board";
 import { cn } from "@/lib/utils";
 import type { DashboardItem, Pursuit } from "@/lib/dashboard/types";
 
@@ -45,38 +43,13 @@ export function PursuitsCard({
   const goals = pursuits.filter((p) => p.cadence === "goal" || p.cadence === "quarterly");
 
   return (
-    <Section title="Ongoing" action={{ label: "manage", href: "/memory" }}>
-      <div className="min-w-0">
-        {habits.length === 0 && goals.length === 0 ? (
-          <p className="py-2 text-[13px] text-quiet">
-            Nothing being pursued yet - habits and goals land here.
-          </p>
-        ) : null}
-
-        {habits.length > 0 ? (
-          <ScrollList max={DASHBOARD_LIST_ROWS}>
-            <div className="flex min-w-0 flex-col">
-              {habits.map((p) => (
-                <HabitRow
-                  key={p.id}
-                  p={p}
-                  onOpen={() => onOpen({ kind: "pursuit", data: p })}
-                  onToggle={() => onToggleHabit(p.id)}
-                />
-              ))}
-            </div>
-          </ScrollList>
-        ) : null}
-
-        {goals.length > 0 ? (
-          <div className="flex min-w-0 flex-col">
-            <GroupLabel label="Goals" count={goals.length} />
-            {goals.map((p) => (
-              <GoalRow key={p.id} p={p} onOpen={() => onOpen({ kind: "pursuit", data: p })} />
-            ))}
-          </div>
-        ) : null}
-
+    <BoardCard
+      title="Ongoing"
+      count={habits.length + goals.length}
+      href="/memory"
+      delay={0.08}
+      empty="Nothing being pursued yet - habits and goals land here."
+      footer={
         <Button
           type="button"
           variant="ghost"
@@ -85,8 +58,21 @@ export function PursuitsCard({
           <Plus className="size-4" aria-hidden />
           New pursuit
         </Button>
-      </div>
-    </Section>
+      }
+    >
+      {habits.map((p) => (
+        <HabitRow
+          key={p.id}
+          p={p}
+          onOpen={() => onOpen({ kind: "pursuit", data: p })}
+          onToggle={() => onToggleHabit(p.id)}
+        />
+      ))}
+      {goals.length > 0 ? <GroupLabel key="goals" label="Goals" count={goals.length} /> : null}
+      {goals.map((p) => (
+        <GoalRow key={p.id} p={p} onOpen={() => onOpen({ kind: "pursuit", data: p })} />
+      ))}
+    </BoardCard>
   );
 }
 
