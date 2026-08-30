@@ -36,18 +36,47 @@ import { cn } from "@/lib/utils";
  * MOBILE: one column, borders off, gap on. Checked at 375.
  */
 
-const COLS: Record<2 | 3 | 4, string> = {
-  2: "sm:grid-cols-2",
-  3: "sm:grid-cols-3",
-  // Four is the status board: one column per state. It goes straight from
-  // stacked to four at `lg`, with no 2-up middle state, and that is
-  // deliberate. The column hairline is a per-card `border-r` that only knows
-  // DOM order, so at 2-up it would draw a rule down the middle of row two and
-  // pad the third card as though it started a row. Wrapping needs per-row
-  // edges, which a card cannot know. Below `lg` the stack IS the right shape
-  // anyway - a phone has one column of room, and the old fix for that was a
-  // snap-rail that hid three quarters of the work behind a swipe.
-  4: "lg:grid-cols-4",
+/* The layout per column count, complete rather than concatenated: `flex` and
+ * `grid` are both unprefixed display utilities, so mixing them across two
+ * strings would leave the winner up to stylesheet order. Each entry here owns
+ * its whole display story, and every override across it is behind a
+ * breakpoint, where the cascade is deterministic. */
+const LAYOUT: Record<2 | 3 | 4, string> = {
+  2: "grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 sm:gap-0",
+  3: "grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-3 sm:gap-0",
+
+  /* Four is the status board, and it is the one shape that SCROLLS SIDEWAYS on
+   * a phone rather than stacking.
+   *
+   * Stacking four columns puts three screens of scrolling between "what is
+   * running" and "what finished", and reading a board vertically is reading a
+   * list - which is the thing a board exists not to be. The old mobile version
+   * did scroll sideways but drove it with pager dots and prev/next buttons,
+   * and that was the actual problem: a column was either fully on screen or
+   * completely invisible, with a widget in between telling you it existed.
+   *
+   * A column is 78vw here, so the next one is always peeking at the edge. The
+   * peek IS the affordance - it says "there is more that way" continuously and
+   * without a control - and snap points mean a swipe lands a column square
+   * instead of halfway. Nothing is hidden behind a button.
+   *
+   * `overscroll-x-contain` stops a swipe past the last column from chaining
+   * into the page, which on iOS is what triggers back-navigation. */
+  4: [
+    "flex min-w-0 snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain scroll-touch no-scrollbar pb-1",
+    "[&>*]:w-[78vw] [&>*]:max-w-[19rem] [&>*]:shrink-0 [&>*]:snap-start",
+    /* The card draws its own column hairline for the grid layouts. In the
+     * scroller the gap does that job and a trailing rule would just hang off
+     * each card, so the parent overrides it - `!` because a parent overriding
+     * a child's layout is exactly the case the cascade cannot settle on its
+     * own, both being one class deep at the same breakpoint. */
+    "[&>*]:!border-r-0 [&>*]:!px-0",
+    /* Back to a real grid the moment there is room for four abreast. */
+    "lg:grid lg:grid-cols-4 lg:gap-0 lg:overflow-visible lg:pb-0",
+    "lg:[&>*]:w-auto lg:[&>*]:max-w-none",
+    "lg:[&>*]:!border-r lg:[&>*]:!px-4 lg:[&>*:first-child]:!pl-0",
+    "lg:[&>*:last-child]:!border-r-0 lg:[&>*:last-child]:!pr-0",
+  ].join(" "),
 };
 
 export function Board({
@@ -62,17 +91,10 @@ export function Board({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      className={cn(
-        // grid-cols-1 default is REQUIRED: an implicit max-content track can
-        // blow the column past the viewport on a phone.
-        "grid min-w-0 grid-cols-1 gap-6 sm:gap-0",
-        COLS[columns],
-        className,
-      )}
-    >
-      {children}
-    </div>
+    // grid-cols-1 as the stacked default is REQUIRED on the grid layouts: an
+    // implicit max-content track can blow a column past the viewport on a
+    // phone. See LAYOUT.
+    <div className={cn(LAYOUT[columns], className)}>{children}</div>
   );
 }
 

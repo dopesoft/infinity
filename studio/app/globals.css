@@ -264,6 +264,23 @@
     padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
   }
 
+  /* Indeterminate progress: a short segment sweeping a track it never fills.
+   * The honest shape for "moving, extent unknown" - it asserts activity
+   * without ever quoting a percentage it does not have, which is the whole
+   * reason it exists rather than a bar parked at some invented number. */
+  .bar-sweep {
+    animation: bar-sweep 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  @keyframes bar-sweep {
+    0% {
+      transform: translateX(-110%);
+    }
+    100% {
+      transform: translateX(340%);
+    }
+  }
+
   /* "Jarvis is thinking" header: shimmer animation that sweeps a lighter
    * highlight across the text. Falls back gracefully on browsers that don't
    * support background-clip:text (the text is just visible without shimmer).
@@ -367,6 +384,14 @@
  * ambient, decorative, looping motion goes.
  * --------------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
+  /* The sweep parks rather than vanishing: the row must still read as
+     in-progress, it just stops moving. */
+  .bar-sweep {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.5;
+  }
   .thinking-shimmer {
     animation: none;
     background-image: none;

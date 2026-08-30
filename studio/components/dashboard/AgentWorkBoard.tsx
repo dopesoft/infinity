@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useNow } from "@/lib/useNow";
 import { WorkRow, type RowTone } from "@/components/ui/list-row";
 import { Board, BoardCard } from "@/components/ui/board";
 import { Section } from "./Section";
@@ -67,6 +68,15 @@ const GROUPS: { key: WorkColumn; label: string; tone: RowTone; empty: string }[]
   { key: "done", label: "Done today", tone: "quiet", empty: "No completions yet today." },
 ];
 
+/** How long after its last beat a row may still be animated as live.
+ *
+ *  Long enough to ride out a slow tool call (a build, a long fetch) without
+ *  flickering, short enough that a dead run stops claiming to work within a
+ *  couple of minutes rather than the 45 the liveness guard allows. The two are
+ *  different jobs: this decides whether we may ANIMATE it, the server guard
+ *  decides whether it may still be CALLED running. */
+const MOVING_WITHIN_MS = 90_000;
+
 export function AgentWorkBoard({
   items,
   onOpen,
@@ -79,6 +89,12 @@ export function AgentWorkBoard({
     for (const it of items) m[it.column].push(it);
     return m;
   }, [items]);
+
+  // A local clock, ticking only while something is in the running column, so
+  // a row's animation decays on its own when the beats stop - without a
+  // refetch and without waiting for the server to notice.
+  const anyRunning = grouped.running.length > 0;
+  const now = useNow(anyRunning, 5_000);
 
   const totalAwaiting = grouped.awaiting.length;
   const anything = GROUPS.some((g) => grouped[g.key].length > 0);
@@ -108,6 +124,7 @@ export function AgentWorkBoard({
                   key={it.id}
                   it={it}
                   tone={g.tone}
+                  now={now}
                   onClick={() => onOpen({ kind: "work", data: it })}
                 />
               ))}
@@ -122,10 +139,13 @@ export function AgentWorkBoard({
 function Row({
   it,
   tone,
+  now,
   onClick,
 }: {
   it: WorkItem;
   tone: RowTone;
+  /** Ticking clock, 0 before the client takes over. */
+  now: number;
   onClick: () => void;
 }) {
   // Timing reads differently per column: when it is due, how long it has been
@@ -145,18 +165,45 @@ function Row({
             ? `${formatDuration(it.durationMs)} · ${relTime(it.finishedAt)}`
             : relTime(it.finishedAt);
 
-  // Plans and mandates carry a step count; a mandate's steps are its criteria.
-  const measurable =
+  // Two shapes of progress, and the bar renders for either.
+  //
+  //   a step count   plans and mandates, where the fraction is countable work
+  //                  and "3/7" is worth printing beside the bar
+  //   a fraction     any run reporting its own progress as it goes, which is
+  //                  the same live beat the chat dock has always shown
+  //
+  // Anything that cannot say gets the pulsing dot and no bar. A bar that
+  // creeps while nothing is happening is worse than no bar.
+  const counted =
     (it.kind === "plan" || it.kind === "mandate") &&
     typeof it.totalCount === "number" &&
     it.totalCount > 0;
   const done = it.doneCount ?? 0;
+  // Is it MOVING, on evidence rather than on the say-so of a status column?
+  // `now === 0` is the pre-hydration paint: assume nothing is animating, so
+  // the server and the first client render agree.
+  const movedAt = it.lastMovedAt ? new Date(it.lastMovedAt).getTime() : 0;
+  const moving =
+    it.column === "running" && now > 0 && movedAt > 0 && now - movedAt < MOVING_WITHIN_MS;
+
+  const fraction = counted
+    ? done / (it.totalCount as number)
+    : typeof it.progress === "number" && it.progress > 0
+      ? Math.min(1, it.progress)
+      : undefined;
+
+  // The bar, in three honest states. A row that is moving but cannot quote a
+  // number gets the sweep - which says "working" without claiming a
+  // percentage - instead of the old answer, which was no bar at all and a
+  // pulsing dot carrying the whole claim on no evidence.
+  const bar: number | "indeterminate" | undefined =
+    fraction !== undefined ? fraction : moving ? "indeterminate" : undefined;
   const failed = it.subtitle === "failed" || it.subtitle === "abandoned";
 
   // The job is the headline; the skills it ran are the ingredients, named in
   // the meta line so one row tells the whole story without two titles.
   const meta = [
-    measurable ? `${done}/${it.totalCount}` : "",
+    counted ? `${done}/${it.totalCount}` : "",
     it.subtitle,
     it.skills?.length ? it.skills.join(", ") : "",
     timing,
@@ -171,10 +218,10 @@ function Row({
       kind={KIND_LABEL[it.kind] ?? "Work"}
       title={it.title}
       tone={rowTone}
-      live={it.column === "running"}
+      live={moving}
       meta={<span suppressHydrationWarning>{meta}</span>}
       summary={it.summary}
-      progress={measurable ? done / (it.totalCount as number) : undefined}
+      progress={bar}
       onClick={onClick}
     />
   );

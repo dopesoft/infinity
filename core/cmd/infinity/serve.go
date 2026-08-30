@@ -321,6 +321,11 @@ func serveCmd() *cobra.Command {
 					// the pool is missing, Track no-ops cleanly. See
 					// CLAUDE.md → "Server-tracked progress".
 					runs.SetGlobal(p)
+					// Let a run find the agent session doing its work, so todo_write's
+					// live x/y checklist lands on that run's row (and therefore on the
+					// chat dock AND the Agent Work board). One wiring, every producer
+					// that calls Handle.BindSession.
+					runs.SetSessionBinder(tools.RunSessionBinder{})
 
 					// OAuth-backed OpenAI provider needs a pool-backed token
 					// store; FromEnv returns nil for this case so we build it
@@ -400,6 +405,21 @@ func serveCmd() *cobra.Command {
 
 					pipeline = hooks.NewPipeline()
 					hooks.RegisterDefaults(pipeline, p, store, embedder, compressor)
+
+					// The universal movement beat. Every tool call an agent
+					// makes is proof that its run is alive, so it stamps
+					// last_moved_at on whichever mem_runs row that session is
+					// bound to. This is what lets a surface animate a row
+					// because it is genuinely moving rather than because a
+					// status column claims it is - and it covers every
+					// agent-driven run (cron, skill, background, voice) with
+					// one registration, without any of them knowing.
+					pipeline.RegisterFunc("runs.movement", func(ctx context.Context, ev hooks.Event) error {
+						if rid := tools.RunIDForSession(ev.SessionID); rid != "" {
+							runs.MarkMoved(ctx, rid)
+						}
+						return nil
+					}, hooks.PostToolUse, hooks.PostToolUseFailure)
 
 					// Predict-then-act: every PreToolUse writes an expected
 					// outcome; PostToolUse resolves with a surprise score.

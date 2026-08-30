@@ -239,7 +239,11 @@ func (s *Scheduler) makeFireFn(j Job) func() {
 		// here, once, for every fire.
 		s.ensureSession(ctx, j.RunSessionID, j)
 		handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceScheduled)
-		handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
+		// BindSession, not SetMeta: it stamps session_id exactly as before AND
+		// registers the session→run mapping, which is what lets this job's
+		// todo_write checklist push a live "3/7 - verifying deploy" onto this
+		// row. Without the binding the beats were computed and discarded.
+		handle.BindSession(ctx, j.RunSessionID)
 		summary, execErr, attempts := s.executeWithRetries(ctx, j)
 
 		// Finalize on a FRESH context — never the (possibly expired/cancelled)
@@ -658,7 +662,10 @@ func (s *Scheduler) RunOnce(ctx context.Context, j Job) error {
 	j.RunSessionID = uuid.NewString()
 	s.ensureSession(ctx, j.RunSessionID, j) // FK: mem_plans.session_id → mem_sessions (see makeFireFn)
 	handle := runs.BeginGlobal(ctx, runs.KindCron, j.ID, j.Name, runs.SourceManual)
-	handle.SetMeta(ctx, map[string]any{"session_id": j.RunSessionID})
+	// Same as the scheduled path: bind, so a manual fire reports live progress
+	// too. A run the boss kicked off by hand is the one he is most likely to be
+	// watching.
+	handle.BindSession(ctx, j.RunSessionID)
 	summary, execErr, attempts := s.executeWithRetries(ctx, j)
 	handle.SetMeta(ctx, runMetaWithAttempts(summary.Meta, attempts))
 	handle.Finish(ctx, execErr, summary.Summary)

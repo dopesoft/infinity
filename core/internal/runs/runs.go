@@ -38,13 +38,13 @@ import (
 type Kind string
 
 const (
-	KindCron            Kind = "cron"
-	KindSkill           Kind = "skill"
+	KindCron  Kind = "cron"
+	KindSkill Kind = "skill"
 	// KindSkillPromote is a candidate-skill promotion: it RUNS the skill's
 	// verification harness (an ephemeral LLM session, up to ~90s) before
 	// promoting, so the decide endpoint books this and works in the background
 	// while the Studio card shows a live spinner. target_id is the proposal id.
-	KindSkillPromote Kind = "skill.promote"
+	KindSkillPromote    Kind = "skill.promote"
 	KindHeartbeat       Kind = "heartbeat"
 	KindVoyagerOptimize Kind = "voyager.optimize"
 	KindVoyagerExtract  Kind = "voyager.extract"
@@ -198,6 +198,62 @@ type Handle struct {
 	start   time.Time
 	kind    string
 	label   string
+	// boundSession is set by BindSession so Finish can release the binding
+	// without the caller having to remember a defer.
+	boundSession string
+}
+
+// SessionBinder maps an agent SESSION to the mem_runs row its work is booked
+// under, so a native tool running inside that loop can find the row.
+//
+// It is an interface set once at boot rather than a direct call because the
+// registry lives in internal/tools, which already depends on this package.
+type SessionBinder interface {
+	Bind(sessionID, runID string)
+	Unbind(sessionID string)
+}
+
+var sessionBinder SessionBinder
+
+// SetSessionBinder wires the registry. Called once from serve.go.
+func SetSessionBinder(b SessionBinder) { sessionBinder = b }
+
+// BindSession ties a run to the agent session doing its work.
+//
+// # WHY THIS IS A METHOD AND NOT A LINE IN EACH PRODUCER
+//
+// Live progress on a run already works end to end: `todo_write` writes a real
+// x/y fraction and a "3/7 - verifying deploy" label onto mem_runs, the row is
+// replicated, and the chat dock renders it. The whole chain is generic except
+// its FIRST link - the session→run binding was registered in exactly one
+// place, the background-build path. Everything else booked a run, ran an agent
+// that kept a checklist, and threw every progress beat away, because the tool
+// had no way to discover which row to write.
+//
+// So the binding is a method on the handle, next to SetMeta, and it also
+// stamps session_id - which every producer was writing by hand anyway. One
+// call now does both, and Finish releases it, so a producer cannot bind
+// without also getting progress, or leak a mapping by forgetting a defer.
+func (h *Handle) BindSession(ctx context.Context, sessionID string) {
+	if h == nil || sessionID == "" {
+		return
+	}
+	h.SetMetaString(ctx, "session_id", sessionID)
+	h.boundSession = sessionID
+	if sessionBinder != nil {
+		sessionBinder.Bind(sessionID, h.id)
+	}
+}
+
+// releaseSession drops the binding a finished run no longer needs.
+func (h *Handle) releaseSession() {
+	if h == nil || h.boundSession == "" {
+		return
+	}
+	if sessionBinder != nil {
+		sessionBinder.Unbind(h.boundSession)
+	}
+	h.boundSession = ""
 }
 
 // ID returns the mem_runs row id, mostly for logging.
@@ -273,6 +329,9 @@ func (h *Handle) Finish(ctx context.Context, err error, summary string) {
 	if h == nil || h.tracker == nil || h.tracker.pool == nil || h.id == "" {
 		return
 	}
+	// Release the session→run mapping here rather than asking every producer
+	// to remember a defer. A finished run has nothing left to report.
+	h.releaseSession()
 	end := time.Now().UTC()
 	status := "ok"
 	errStr := ""
@@ -652,12 +711,38 @@ func (h *Handle) Progress(ctx context.Context, fraction float32, label string) {
 	if h == nil || h.tracker == nil || h.tracker.pool == nil || h.id == "" {
 		return
 	}
+	// A progress beat IS movement, so it stamps both. Keeping these in one
+	// statement is deliberate: a caller cannot report progress without also
+	// leaving evidence that it was alive to report it.
 	_, _ = h.tracker.pool.Exec(ctx, `
 		UPDATE mem_runs
 		   SET progress = $2,
-		       progress_label = $3
+		       progress_label = $3,
+		       last_moved_at = NOW()
 		 WHERE id = $1::uuid
 	`, h.id, fraction, label)
+}
+
+// MarkMoved records that a run did something, without claiming how far along
+// it is.
+//
+// This is the universal beat. Most work cannot honestly quote a fraction - a
+// cron agent turn has no denominator - but ALL agent work makes tool calls,
+// and a tool call is proof of life. Stamping it here is what lets a surface
+// animate a row because it is genuinely moving rather than because a status
+// column says so.
+//
+// Package-level and by id, because the caller is a hook handler holding a
+// session id rather than a Handle.
+func MarkMoved(ctx context.Context, runID string) {
+	if runID == "" || global == nil || global.pool == nil {
+		return
+	}
+	_, _ = global.pool.Exec(ctx, `
+		UPDATE mem_runs
+		   SET last_moved_at = NOW()
+		 WHERE id = $1::uuid AND status = 'running'
+	`, runID)
 }
 
 // SetMeta shallow-merges the given key/values into mem_runs.meta, preserving

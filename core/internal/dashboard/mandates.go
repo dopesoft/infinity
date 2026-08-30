@@ -93,9 +93,12 @@ func (a *API) mandateWorkItems(ctx context.Context) ([]WorkItem, error) {
 			StartedAt:       &created,
 			FinishedAt:      &updated,
 			MandateCriteria: crit,
-			DoneCount:       &doneCount,
-			TotalCount:      &totalCount,
-			Instruction:     m.Summary,
+			// updated_at is this row's movement evidence: it moves when a step
+			// passes or a criterion is verified, and not otherwise.
+			LastMovedAt: &updated,
+			DoneCount:   &doneCount,
+			TotalCount:  &totalCount,
+			Instruction: m.Summary,
 		}
 		if len(m.Crosscheck) > 0 {
 			wi.Crosscheck = m.Crosscheck

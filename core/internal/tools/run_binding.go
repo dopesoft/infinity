@@ -123,3 +123,16 @@ func SessionHasTodos(sessionID string) bool {
 	}
 	return false
 }
+
+// RunSessionBinder adapts this registry to runs.SessionBinder, so the runs
+// package can bind a session to its row without importing this one. Wired once
+// in serve.go via runs.SetSessionBinder.
+type RunSessionBinder struct{}
+
+func (RunSessionBinder) Bind(sessionID, runID string) {
+	RegisterRunForSession(sessionID, runID, "")
+}
+
+func (RunSessionBinder) Unbind(sessionID string) {
+	UnregisterRunForSession(sessionID)
+}

@@ -260,10 +260,22 @@ export interface WorkRowProps {
    * outcome). Distinct from `meta`, which is a single truncating fact line.
    */
   summary?: React.ReactNode;
-  /** 0..1. Renders the progress bar, coloured by `tone`. Omit when unknown. */
-  progress?: number;
+  /**
+   * 0..1 for a known fraction, "indeterminate" when the work is genuinely
+   * moving but cannot quote one, omitted when there is no evidence it is
+   * doing anything. Coloured by `tone`. Never pass a made-up number: a bar
+   * that creeps while nothing happens is the lie this prop exists to avoid.
+   */
+  progress?: number | "indeterminate";
   tone?: RowTone;
-  /** Pulse the tone dot and animate nothing else — the one alive signal. */
+  /**
+   * Pulse the tone dot and animate nothing else — the one alive signal.
+   *
+   * Pass this ONLY on evidence the row moved recently, never because its
+   * column says "running". A status column is set once at the start and
+   * nothing guarantees anything sets it back, so a dot driven by one goes on
+   * animating "I am working on it" long after the process died.
+   */
   live?: boolean;
   onClick?: () => void;
   href?: string;
@@ -325,8 +337,25 @@ export function WorkRow({
   className,
 }: WorkRowProps) {
   const tappable = Boolean(onClick || href);
+  // Three honest states, and no fourth:
+  //
+  //   a number        we know how far along it is. A real fraction of real work.
+  //   "indeterminate" it is genuinely moving and cannot quote a fraction. The
+  //                   bar sweeps and never fills, so it says "working" without
+  //                   ever claiming a percentage.
+  //   undefined       we have no evidence it is doing anything. Nothing draws.
+  //
+  // The middle state exists because the alternative was worse: showing no bar
+  // and letting a PULSING DOT carry the claim instead. A dot driven by a
+  // status column asserts "this is alive right now" with no evidence behind
+  // it, and an animation is the strongest assertion an interface can make. A
+  // sweep that quotes no number is the honest way to say "moving, extent
+  // unknown".
+  const indeterminate = progress === "indeterminate";
   const pct =
-    progress === undefined ? null : Math.max(0, Math.min(100, Math.round(progress * 100)));
+    typeof progress === "number"
+      ? Math.max(0, Math.min(100, Math.round(progress * 100)))
+      : null;
 
   const inner = (
     <>
@@ -350,8 +379,22 @@ export function WorkRow({
             {summary}
           </span>
         ) : null}
-        {pct !== null ? (
-          <span className="mt-0.5 flex h-[3px] w-full min-w-0 overflow-hidden rounded-full bg-hairline">
+        {indeterminate ? (
+          <span
+            className="mt-0.5 flex h-[3px] w-full min-w-0 overflow-hidden rounded-full bg-hairline"
+            role="progressbar"
+            aria-label="Working, no percentage available"
+          >
+            <span className={cn("h-full w-1/3 rounded-full bar-sweep", BAR_TONE[tone])} />
+          </span>
+        ) : pct !== null ? (
+          <span
+            className="mt-0.5 flex h-[3px] w-full min-w-0 overflow-hidden rounded-full bg-hairline"
+            role="progressbar"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
             {/* The only inline value in this file. Width IS the datum here —
                 a runtime percentage cannot be a static utility class, and
                 Tailwind cannot generate a class per value. Matches how every

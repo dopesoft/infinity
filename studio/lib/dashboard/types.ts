@@ -325,6 +325,16 @@ export type WorkItem = {
   planSteps?: PlanStep[];
   doneCount?: number;
   totalCount?: number;
+  /** 0..1 reported by the work ITSELF - mem_runs.progress, written by
+   *  todo_write as the agent ticks its checklist - for work whose shape is not
+   *  a step count. Absent means "cannot say", which must render as no bar
+   *  rather than as a guess that creeps while nothing happens. */
+  progress?: number;
+  /** ISO timestamp of the last EVIDENCE this item did something - a progress
+   *  beat or a tool call. A surface must consult this before animating
+   *  anything as live: an animation is the strongest assertion an interface
+   *  can make, so it needs evidence rather than a status column's word. */
+  lastMovedAt?: string;
   // populated only for kind === "mandate" - the binary acceptance criteria with
   // pass/fail + evidence, carried inline so the card opens the full
   // definition-of-done in ObjectViewer. doneCount/totalCount drive the same

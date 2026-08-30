@@ -432,6 +432,18 @@ type WorkItem struct {
 	PlanSteps  []PlanStep `json:"planSteps,omitempty"`
 	DoneCount  *int       `json:"doneCount,omitempty"`
 	TotalCount *int       `json:"totalCount,omitempty"`
+	// Progress is a 0..1 fraction reported by the work ITSELF (mem_runs.progress,
+	// written by todo_write as the agent ticks its checklist), for work whose
+	// shape is not a step count. Nil means "cannot say", which renders as no bar
+	// rather than as a guess. Plans and mandates use DoneCount/TotalCount
+	// instead, because for them the fraction IS a step count worth printing.
+	Progress *float32 `json:"progress,omitempty"`
+	// LastMovedAt is the last moment there was EVIDENCE this item did something
+	// - a progress beat or a tool call. It is what a surface must consult before
+	// animating anything as live; a status column is a claim, and an animation
+	// is the strongest assertion an interface can make, so it needs the
+	// strongest evidence rather than the weakest. Nil means we have none.
+	LastMovedAt *time.Time `json:"lastMovedAt,omitempty"`
 	// Skills lists the skill(s) this item runs. For plans it's what the agent
 	// actually invoked (from the session's skills_invoke calls); for crons it's
 	// what the job is set to invoke (parsed from its instruction). Either way the
@@ -450,6 +462,19 @@ type WorkItem struct {
 	// confidence, auditing model, notes), shown in the ObjectViewer. Empty until
 	// mandate_verify has run.
 	Crosscheck map[string]any `json:"crosscheck,omitempty"`
+
+	// ── Liveness, declared by the producer, enforced in liveness.go ──────
+	// Server-side only: these say what KIND of aliveness this item has, so
+	// the one guard can tell a job that stalled from a question nobody has
+	// answered. See liveness.go for why this is not six separate rules.
+
+	// AwaitsDecision marks an item whose "awaiting you" is a QUESTION put to
+	// the boss. It waits as long as he takes, so its age is not evidence and
+	// it never goes stale.
+	AwaitsDecision bool `json:"-"`
+	// Armed marks a watcher: continuously ready, nothing in flight. It is not
+	// "running" in the sense a job is, and time cannot judge it either way.
+	Armed bool `json:"-"`
 }
 
 // MandateCriterionDTO is one acceptance criterion of a mandate WorkItem.
@@ -1815,15 +1840,17 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				title = description
 			}
 			out = append(out, WorkItem{
-				ID:         "vop-" + id,
-				Kind:       "voyager_opt",
-				Title:      title,
-				Subtitle:   "awaiting review",
-				Summary:    reasoning, // the specifics: which session, tools, failures
-				Engine:     engine,
-				Ref:        name,
-				Column:     "queued",
-				DetailHref: "/skills",
+				ID:       "vop-" + id,
+				Kind:     "voyager_opt",
+				Title:    title,
+				Subtitle: "awaiting review",
+				// A question put to him. It waits as long as he takes.
+				AwaitsDecision: true,
+				Summary:        reasoning, // the specifics: which session, tools, failures
+				Engine:         engine,
+				Ref:            name,
+				Column:         "queued",
+				DetailHref:     "/skills",
 			})
 		}
 		propRows.Close()
@@ -1848,13 +1875,16 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				return nil, err
 			}
 			out = append(out, WorkItem{
-				ID:         "sent-" + id,
-				Kind:       "sentinel",
-				Title:      humanizeName(name),
-				Subtitle:   "watching · cooldown " + humanSeconds(cooldown),
-				Engine:     "Sentinel",
-				Ref:        watch,
-				Column:     "running",
+				ID:       "sent-" + id,
+				Kind:     "sentinel",
+				Title:    humanizeName(name),
+				Subtitle: "watching · cooldown " + humanSeconds(cooldown),
+				Engine:   "Sentinel",
+				Ref:      watch,
+				Column:   "running",
+				// Armed, not in flight: an enabled watcher has no run behind
+				// it, so it can neither go quiet nor be judged by time.
+				Armed:      true,
 				DetailHref: "/cron",
 			})
 		}
@@ -1869,9 +1899,16 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	// why the Running column always looked empty even while a cron was firing.
 	// 1h cap so a row orphaned by a crash (swept to 'error' at boot anyway)
 	// can't linger.
+	// progress / progress_label are the LIVE beat: todo_write writes a real
+	// x/y fraction and a "3/7 - verifying deploy" caption onto the row as the
+	// agent works, the row is replicated, and the chat dock has rendered it
+	// for months. The board selected neither, so a job that was reporting its
+	// own progress showed up here as a bare title with a pulsing dot.
 	runningRows, err := a.Pool.Query(ctx, `
 		SELECT id::text, kind, COALESCE(NULLIF(label,''), kind) AS label, source, started_at,
-		       COALESCE(meta->>'session_id', '') AS session_id
+		       COALESCE(meta->>'session_id', '') AS session_id,
+		       progress, COALESCE(progress_label, '') AS progress_label,
+		       last_moved_at
 		FROM mem_runs
 		WHERE status = 'running' AND started_at >= NOW() - INTERVAL '1 hour'
 		ORDER BY started_at DESC
@@ -1879,9 +1916,12 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 	`, perCol)
 	if err == nil {
 		for runningRows.Next() {
-			var id, kind, label, source, sessionID string
+			var id, kind, label, source, sessionID, progressLabel string
 			var startedAt time.Time
-			if err := runningRows.Scan(&id, &kind, &label, &source, &startedAt, &sessionID); err != nil {
+			var progress *float32
+			var lastMoved *time.Time
+			if err := runningRows.Scan(&id, &kind, &label, &source, &startedAt, &sessionID,
+				&progress, &progressLabel, &lastMoved); err != nil {
 				runningRows.Close()
 				return nil, err
 			}
@@ -1893,18 +1933,46 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			}
 			wkind, href, engine := runWorkKind(kind)
 			s := startedAt
-			out = append(out, WorkItem{
+			// What it is DOING beats where it came from. "3/7 - verifying
+			// deploy" is the sentence he wants; "running · via scheduled" is
+			// the sentence he already knows from the column it is sitting in.
+			sub := "running · via " + source
+			if pl := strings.TrimSpace(progressLabel); pl != "" {
+				sub = pl
+			}
+			item := WorkItem{
 				ID:         "run-" + id,
 				Kind:       wkind,
 				Title:      humanizeName(label),
-				Subtitle:   "running · via " + source,
+				Subtitle:   sub,
 				Engine:     engine,
 				Ref:        label,
 				Column:     "running",
 				SessionID:  sessionID,
 				StartedAt:  &s,
 				DetailHref: href,
-			})
+			}
+			// The bar is a fraction of real work or it is absent. A run that
+			// cannot say how far along it is gets the pulsing dot and no bar,
+			// never an invented percentage that creeps while nothing happens.
+			//
+			// Progress, not DoneCount/TotalCount: a run reports 0..1, and
+			// encoding that as 42/100 would put a meaningless "42/100" in the
+			// meta line beside a label that already says "3/7".
+			if progress != nil && *progress > 0 {
+				f := *progress
+				item.Progress = &f
+			}
+			// Evidence, not the status column. NULL means this run has never
+			// reported movement, which is true of every row written before
+			// migration 197 - fall back to when it started rather than
+			// inventing a beat it never sent.
+			if lastMoved != nil {
+				item.LastMovedAt = lastMoved
+			} else {
+				item.LastMovedAt = &s
+			}
+			out = append(out, item)
 		}
 		runningRows.Close()
 	}
@@ -1939,15 +2007,17 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 			}
 			c := created
 			out = append(out, WorkItem{
-				ID:         "trust-" + id,
-				Kind:       "trust",
-				Title:      title,
-				Subtitle:   sub,
-				Engine:     "Approval",
-				Ref:        tool,
-				Column:     "awaiting",
-				StartedAt:  &c,
-				DetailHref: "/trust",
+				ID:       "trust-" + id,
+				Kind:     "trust",
+				Title:    title,
+				Subtitle: sub,
+				Engine:   "Approval",
+				// A question put to him. It waits as long as he takes.
+				AwaitsDecision: true,
+				Ref:            tool,
+				Column:         "awaiting",
+				StartedAt:      &c,
+				DetailHref:     "/trust",
 			})
 		}
 		trustRows.Close()
@@ -1992,13 +2062,15 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 				// the actual context (what Jarvis noticed + what it proposes + the
 				// ask) so the card isn't a contextless title. Without this the
 				// dashboard read only the title and dropped the whole draft.
-				Subtitle:   sub,
-				Summary:    codeProposalReport(rationale, change),
-				Engine:     "Code",
-				Ref:        path,
-				Column:     "awaiting",
-				StartedAt:  &c,
-				DetailHref: "/code-proposals",
+				Subtitle: sub,
+				Summary:  codeProposalReport(rationale, change),
+				Engine:   "Code",
+				// A question put to him. It waits as long as he takes.
+				AwaitsDecision: true,
+				Ref:            path,
+				Column:         "awaiting",
+				StartedAt:      &c,
+				DetailHref:     "/code-proposals",
 			})
 		}
 		codeRows.Close()
@@ -2307,7 +2379,11 @@ func (a *API) loadWork(ctx context.Context) ([]WorkItem, error) {
 		a.Logger.Warn("dashboard: mandate work items", "err", perr)
 	}
 
-	return out, nil
+	// Every producer above decided its own column from its own table's status
+	// column. A status column is a claim, not a fact. This is the one seam
+	// where those claims are checked against evidence, so no producer - and no
+	// producer added after this - can put a corpse in Running.
+	return applyLiveness(out, time.Now().UTC()), nil
 }
 
 // humanizeName turns a machine identifier (kebab/snake case like
