@@ -119,13 +119,7 @@ type sessionLister interface {
 // bouncing off "max 2 concurrent sessions" while browser_close insisted there
 // was nothing to close, then wandered off toward scraper sites.)
 func (r *Registry) Open(ctx context.Context, chatID, url string) (*SessionInfo, error) {
-	info, err := r.backend.CreateSession(ctx, url)
-	if err != nil && strings.Contains(err.Error(), "concurrent browser sessions") {
-		if n := r.reconcileZombies(ctx); n > 0 {
-			infoLog.Printf("browser: closed %d zombie session(s) at capacity, retrying open", n)
-			info, err = r.backend.CreateSession(ctx, url)
-		}
-	}
+	info, err := r.createSession(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +152,119 @@ func (r *Registry) Open(ctx context.Context, chatID, url string) (*SessionInfo, 
 	go r.relay(relayCtx, e)
 	infoLog.Printf("browser: opened session %s for chat %s", info.SessionID, chatID)
 	return info, nil
+}
+
+// createSession creates a sidecar session, recovering from the two ways the
+// sidecar can hand back something unusable:
+//
+//   - AT CAPACITY, because core and the sidecar diverged — sessions the
+//     sidecar holds that core can no longer name. reconcileZombies closes
+//     those and the create retries.
+//   - DEAD ON ARRIVAL, because the create-time navigate came back reporting a
+//     dead browser context. The id looks live, so core would track it, hand it
+//     to the agent, and every verb would answer "context canceled" while the
+//     slot stayed occupied until the sidecar's 30m idle reap. Two of those and
+//     the agent is walled off behind "max 2 concurrent browser sessions" while
+//     browser_close insists there is nothing open.
+//
+// Each is retried exactly once, then surfaced loudly. Never hand back a dead
+// id: a session that cannot be driven is a failure, not a session with a note.
+func (r *Registry) createSession(ctx context.Context, url string) (*SessionInfo, error) {
+	info, err := r.backend.CreateSession(ctx, url)
+	if err != nil && strings.Contains(err.Error(), "concurrent browser sessions") {
+		if n := r.reconcileZombies(ctx); n > 0 {
+			infoLog.Printf("browser: closed %d zombie session(s) at capacity, retrying open", n)
+			info, err = r.backend.CreateSession(ctx, url)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !r.deadOnArrival(info) {
+		return info, nil
+	}
+	log.Printf("browser: session %s dead on arrival (%s) — reclaiming the slot and retrying", info.SessionID, info.Error)
+	r.discard(ctx, info.SessionID)
+	info, err = r.backend.CreateSession(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	if r.deadOnArrival(info) {
+		r.discard(ctx, info.SessionID)
+		return nil, fmt.Errorf("browser sidecar could not start a usable session: %s", info.Error)
+	}
+	return info, nil
+}
+
+// deadOnArrival reports whether a freshly created session is already unusable.
+func (r *Registry) deadOnArrival(info *SessionInfo) bool {
+	return info != nil && info.SessionID != "" && isDeadSessionText(info.Error)
+}
+
+// discard closes a sidecar session core never started tracking, so there is no
+// relay or mem_runs row to tear down — the only point is giving the slot back.
+// Detached from the caller's ctx: reclaiming capacity must still happen when
+// the turn that triggered it is being cancelled.
+func (r *Registry) discard(ctx context.Context, browserID string) {
+	if browserID == "" {
+		return
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	_ = r.backend.Close(cctx, browserID)
+}
+
+// deadSessionSignals are the sidecar error texts that mean a session id is
+// terminal: chromedp's browser/target context is gone, or the sidecar has
+// already forgotten the id. No verb will ever succeed on it again, so the only
+// correct response is to evict it from both registries instead of continuing
+// to hand it to the agent.
+var deadSessionSignals = []string{
+	"context canceled",
+	"context cancelled",
+	"session not found",
+	"session died",
+	"session closed",
+	"target closed",
+	"websocket: close",
+}
+
+func isDeadSessionText(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return false
+	}
+	for _, sig := range deadSessionSignals {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// EvictIfDead closes both halves of a session when err says the id is
+// terminal, and reports whether it did. This is the single chokepoint for
+// "the browser went away": the sidecar half must close (it holds the slot
+// against maxSessions otherwise) and the core half must be forgotten (so
+// Resolve stops handing the agent an id that can only fail).
+//
+// callerCtx guards the ambiguous case. "context canceled" is also what we see
+// when OUR OWN request context died — the turn ended, the tool was cancelled —
+// and that says nothing about the browser. Only evict while the caller's
+// context is still live.
+func (r *Registry) EvictIfDead(callerCtx context.Context, browserID string, err error) bool {
+	if err == nil || browserID == "" {
+		return false
+	}
+	if callerCtx != nil && callerCtx.Err() != nil {
+		return false
+	}
+	if !isDeadSessionText(err.Error()) {
+		return false
+	}
+	log.Printf("browser: evicting dead session %s: %v", browserID, err)
+	r.closeAndFinish(browserID, err)
+	return true
 }
 
 // relay streams frames from the sidecar to the chat session until ctx ends

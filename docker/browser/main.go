@@ -41,6 +41,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -62,6 +63,7 @@ import (
 const (
 	defaultMaxSessions = 2
 	idleTimeout        = 30 * time.Minute // janitor closes sessions idle longer than this
+	bootTimeout        = 60 * time.Second // hard cap on Chromium coming up, enforced by watchdog
 	settleTimeout      = 8 * time.Second  // hard cap on auto-wait after nav/act
 	netQuietWindow     = 500 * time.Millisecond
 	actionTimeout      = 45 * time.Second // hard cap on any single CDP action
@@ -351,9 +353,25 @@ func newSession(id string) (*Session, error) {
 	})
 
 	// Boot the browser, enable domains, start the screencast.
-	bootCtx, bootCancel := context.WithTimeout(ctx, 60*time.Second)
-	defer bootCancel()
-	err := chromedp.Run(bootCtx,
+	//
+	// This first chromedp.Run is what allocates Chromium, and chromedp binds
+	// the browser process (exec.CommandContext) AND the CDP connection to
+	// whatever context that first Run receives. It must therefore be s.ctx —
+	// the session-lifetime context — never a derived cancel-on-return one.
+	//
+	// The bug this replaces: boot ran on `context.WithTimeout(ctx, 60s)` with
+	// a `defer bootCancel()`. That deferred cancel fired the instant
+	// newSession returned, which killed Chromium, dropped the CDP connection,
+	// and (via chromedp's LostConnection watcher) cancelled s.ctx too. Every
+	// verb from then on — the create-time navigate included — returned
+	// "context canceled" on a session the manager still held against
+	// maxSessions. chromedp documents this exact trap on Run: "it's generally
+	// a bad idea to use a context timeout on the first Run call, as it will
+	// stop the entire browser."
+	//
+	// The boot deadline still applies; it is enforced by a watchdog that
+	// reports the timeout instead of a context that destroys what it times.
+	err := runWithDeadline(ctx, bootTimeout,
 		network.Enable(),
 		page.Enable(),
 		page.StartScreencast().
@@ -369,16 +387,33 @@ func newSession(id string) (*Session, error) {
 		return nil, fmt.Errorf("boot chromium: %w", err)
 	}
 
-	// Warm up: run one lightweight action on ctx (not bootCtx) to anchor the
-	// chromedp target against s.ctx before defer bootCancel() fires.  Without
-	// this warm-up, the first external navigate on a no-URL session races with
-	// the bootCtx teardown and returns "context canceled".
-	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
-	var warmTitle string
-	_ = chromedp.Run(warmCtx, chromedp.Title(&warmTitle))
-	warmCancel()
-
 	return s, nil
+}
+
+// runWithDeadline runs CDP actions on ctx, capping the wait at d.
+func runWithDeadline(ctx context.Context, d time.Duration, actions ...chromedp.Action) error {
+	return awaitWithDeadline(ctx, d, func() error { return chromedp.Run(ctx, actions...) })
+}
+
+// awaitWithDeadline runs fn and gives up after d WITHOUT cancelling ctx. That
+// distinction is the whole point, and it is why this is not just
+// context.WithTimeout: chromedp ties the browser process and the CDP
+// connection to the context of the FIRST Run, so a deadline context around
+// boot caps the browser's LIFE at d instead of capping the boot. On timeout
+// the caller decides what to tear down.
+func awaitWithDeadline(ctx context.Context, d time.Duration, fn func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-t.C:
+		return fmt.Errorf("timed out after %s", d)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Session) shutdown() {
@@ -535,6 +570,19 @@ func handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.URL) != "" {
 		title, err := s.navigate(req.URL)
 		if err != nil {
+			// A navigate that failed because the browser context is gone means
+			// this session is dead on arrival — no verb will ever work on it.
+			// Give the slot back now instead of pinning it against maxSessions
+			// until the 30m idle reap, and say so plainly rather than handing
+			// Core a live-looking id with a note attached (empty-because-broken
+			// must never read as empty-because-fine).
+			if s.ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				mgr.remove(id)
+				log.Printf("browser bridge: session %s died during create-navigate: %v", id, err)
+				writeJSON(w, http.StatusInternalServerError,
+					errBody("browser session died before it could be used: "+err.Error()))
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"session_id": id, "url": s.url(), "error": err.Error(),
 			})

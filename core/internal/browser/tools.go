@@ -51,6 +51,37 @@ func (r *Registry) resolveOrOpen(ctx context.Context, input map[string]any) (str
 	return info.SessionID, nil
 }
 
+// recoverSession is the shared dead-session mechanic. When a verb fails
+// because the session is gone, evict it (BOTH halves — the sidecar keeps
+// holding the slot against its cap otherwise) and open a replacement, at
+// atURL when the caller has a target or at the session's last known URL when
+// it doesn't. Returns the fresh session so the caller can carry on.
+//
+// Rule #1b: "the session died, open another" is a mechanic, so it lives in
+// code. It must not depend on the model remembering to call browser_open
+// again — the reference failure is exactly that, an agent bouncing off
+// "context canceled" and punting the task back to the boss.
+//
+// Returns the ORIGINAL error untouched when the session is not actually dead,
+// so a real page-level failure is never laundered into a session restart.
+func (r *Registry) recoverSession(ctx context.Context, browserID, atURL string, cause error) (*SessionInfo, error) {
+	if strings.TrimSpace(atURL) == "" {
+		if last := r.URL(browserID); last != "about:blank" {
+			atURL = last
+		}
+	}
+	if !r.EvictIfDead(ctx, browserID, cause) {
+		return nil, cause
+	}
+	chatID := tools.SessionIDFromContext(ctx)
+	info, err := r.Open(ctx, chatID, strings.TrimSpace(atURL))
+	if err != nil {
+		return nil, fmt.Errorf("the browser session had closed unexpectedly and opening a replacement failed: %w", err)
+	}
+	r.UpdateURL(info.SessionID, info.URL)
+	return info, nil
+}
+
 // ── browser_open ─────────────────────────────────────────────────────────
 
 type OpenTool struct{ Reg *Registry }
@@ -141,28 +172,18 @@ func (t *NavigateTool) Execute(ctx context.Context, input map[string]any) (strin
 	}
 	res, err := t.Reg.backend.Navigate(ctx, id, url)
 	if err != nil {
-		// When the sidecar's chromedp target died (context canceled after the
-		// client-level retry) but the outer request is still live, evict the
-		// stale session and open a fresh one straight onto the target URL.
-		// Rule #1b: the model must not need to know "call browser_open again".
-		if ctx.Err() == nil && strings.Contains(err.Error(), "context canceled") {
-			_ = t.Reg.Close(ctx, id) // best-effort; may fail if sidecar is gone
-			info, openErr := t.Reg.Open(ctx, chatID, url)
-			if openErr == nil {
-				t.Reg.UpdateURL(info.SessionID, info.URL)
-				out := fmt.Sprintf("The previous browser session had closed unexpectedly. Opened a fresh session and navigated to %s\nTitle: %s\n\nCall browser_observe to see the page.", info.URL, info.Title)
-				if info.Error != "" {
-					out += "\nNote: " + info.Error
-				}
-				return out, nil
-			}
-			// Recovery failed: return why the re-open failed rather than the
-			// original (now-stale) sidecar "context canceled" error so the
-			// agent has an actionable signal instead of a symptom of the dead
-			// session.
-			return "", fmt.Errorf("browser session closed unexpectedly; could not open a recovery session: %w", openErr)
+		// The session died under us: evict it and open a fresh one straight
+		// onto the target URL. recoverSession returns the original error
+		// unchanged when the session was fine and the navigate simply failed.
+		info, rerr := t.Reg.recoverSession(ctx, id, url, err)
+		if rerr != nil {
+			return "", rerr
 		}
-		return "", err
+		out := fmt.Sprintf("The previous browser session had closed unexpectedly. Opened a fresh session and navigated to %s\nTitle: %s\n\nCall browser_observe to see the page.", info.URL, info.Title)
+		if info.Error != "" {
+			out += "\nNote: " + info.Error
+		}
+		return out, nil
 	}
 	t.Reg.UpdateURL(id, res.URL)
 	out := fmt.Sprintf("Navigated to %s\nTitle: %s\n\nCall browser_observe to see what's on the page.", res.URL, res.Title)
@@ -196,7 +217,15 @@ func (t *ObserveTool) Execute(ctx context.Context, input map[string]any) (string
 	}
 	res, err := t.Reg.backend.Observe(ctx, id)
 	if err != nil {
-		return "", err
+		info, rerr := t.Reg.recoverSession(ctx, id, "", err)
+		if rerr != nil {
+			return "", rerr
+		}
+		if res, err = t.Reg.backend.Observe(ctx, info.SessionID); err != nil {
+			return "", err
+		}
+		t.Reg.UpdateURL(info.SessionID, res.URL)
+		return "(the browser session had closed unexpectedly, so I reopened it before looking)\n\n" + formatObserve(res), nil
 	}
 	t.Reg.UpdateURL(id, res.URL)
 	return formatObserve(res), nil
@@ -293,6 +322,14 @@ func (t *ActTool) Execute(ctx context.Context, input map[string]any) (string, er
 	value, _ := input["value"].(string)
 	res, err := t.Reg.backend.Act(ctx, id, ActRequest{Index: idx, Action: action, Value: value})
 	if err != nil {
+		// Evict a dead session so it stops occupying a sidecar slot, but do
+		// NOT silently retry on a fresh one the way the read verbs do: a
+		// replacement browser is a different page, so the element indexes from
+		// the last observe mean nothing and a blind re-click could act on the
+		// wrong thing.
+		if t.Reg.EvictIfDead(ctx, id, err) {
+			return "", errors.New("the browser session closed before that action could run, so I cleaned it up. Call browser_navigate to get back to the page and browser_observe again before acting — the element indexes from the last observe are stale now")
+		}
 		return "", err
 	}
 	if !res.OK && res.Error != "" {
@@ -334,9 +371,17 @@ func (t *ExtractTool) Execute(ctx context.Context, input map[string]any) (string
 	}
 	res, err := t.Reg.backend.Extract(ctx, id, "markdown")
 	if err != nil {
-		return "", err
+		info, rerr := t.Reg.recoverSession(ctx, id, "", err)
+		if rerr != nil {
+			return "", rerr
+		}
+		if res, err = t.Reg.backend.Extract(ctx, info.SessionID, "markdown"); err != nil {
+			return "", err
+		}
+		t.Reg.UpdateURL(info.SessionID, res.URL)
+	} else {
+		t.Reg.UpdateURL(id, res.URL)
 	}
-	t.Reg.UpdateURL(id, res.URL)
 	return fmt.Sprintf("# %s\nSource: %s\n\n%s", res.Title, res.URL, res.Content), nil
 }
 
