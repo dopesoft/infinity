@@ -470,7 +470,9 @@ export function DashboardClient() {
           loading={loading}
         />
 
-        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-6 px-4 pb-2 sm:px-6">
+        {/* max-w-board, the token — not max-w-6xl. The width law lives in
+            tailwind.config so it is one number, not a magic value per page. */}
+        <main className="mx-auto w-full min-w-0 max-w-board flex-1 space-y-6 px-4 pb-2 sm:px-6">
           {/* PLAIN - what is being raised TO the boss: Surfaced by Jarvis, the
               Phone line, and Email. `grid-cols-1` default is REQUIRED so an
               implicit max-content track can't blow the column past the

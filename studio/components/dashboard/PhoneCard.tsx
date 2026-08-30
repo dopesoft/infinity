@@ -502,11 +502,20 @@ function ContactBookModal({
                   key={c.number}
                   type="button"
                   onClick={() => select(c)}
+                  /* Selected is ink and a marker, not a filled block — the
+                     same law the nav rail and every PickList rail follow. */
                   className={cn(
-                    "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent",
-                    selected?.number === c.number && "bg-accent",
+                    "relative flex w-full min-w-0 items-center gap-2.5 rounded-lg py-2 pl-3 pr-2.5 text-left transition-colors hover:bg-accent/40",
+                    selected?.number === c.number && "font-medium",
                   )}
                 >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute inset-y-1.5 left-0 w-[2px] rounded-full transition-colors",
+                      selected?.number === c.number ? "bg-foreground" : "bg-transparent",
+                    )}
+                  />
                   <ContactIcon kind={c.kind} className="size-4 shrink-0 text-muted-foreground" />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-sm font-medium">{c.name ?? c.number}</span>

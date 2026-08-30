@@ -145,16 +145,32 @@ export function PickListGroup({
   );
 }
 
+/**
+ * A row in the rail.
+ *
+ * THE ACTIVE STATE IS INK AND A MARKER, NEVER A FILLED BLOCK. A `bg-accent`
+ * rectangle behind the selected row is the single loudest thing on a quiet
+ * page: it is a hard-edged shape competing with type for attention, and it
+ * fights the whole design language, which says tone and hairlines rather
+ * than boxes. Selection is shown the way a well-set page shows it — the name
+ * goes to full-strength ink, everything else stays a step back, and a 2px
+ * rule marks the edge. Hover still gets a wash, because a wash that appears
+ * under your cursor and leaves again is feedback; one that sits there
+ * permanently is furniture.
+ */
 export function PickListItem({
   label,
   /** At most ONE number. Usage count, not a second description. */
   meta,
+  /** Optional glyph. One size, one colour, never a coloured badge. */
+  leading,
   selected,
   onSelect,
   className,
 }: {
   label: string;
   meta?: string | number;
+  leading?: React.ReactNode;
   selected?: boolean;
   onSelect: () => void;
   className?: string;
@@ -165,11 +181,37 @@ export function PickListItem({
       onClick={onSelect}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex min-h-row w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors",
-        selected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        "group relative flex min-h-row w-full min-w-0 items-center gap-2.5 rounded-md py-1.5 pl-3 pr-2 text-left text-[13px] transition-colors",
+        selected
+          ? "font-medium text-foreground"
+          : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
         className,
       )}
     >
+      {/* The marker. Sits in the row's left padding, so the label's left edge
+          is identical whether or not the row is selected — nothing shifts
+          sideways as you move down the rail. */}
+      <span
+        aria-hidden
+        className={cn(
+          "absolute inset-y-1 left-0 w-[2px] rounded-full transition-colors",
+          selected ? "bg-foreground" : "bg-transparent",
+        )}
+      />
+      {leading ? (
+        <span
+          /* size-4 on the SLOT, not just the glyph: the icon column has to be
+             one width for every row or the labels sit on five different left
+             edges and the rail reads crooked. The primitive guarantees it
+             rather than trusting each caller to pass a same-sized icon. */
+          className={cn(
+            "grid size-4 shrink-0 place-items-center transition-colors [&>svg]:size-4",
+            selected ? "text-foreground" : "text-quiet group-hover:text-muted-foreground",
+          )}
+        >
+          {leading}
+        </span>
+      ) : null}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {meta !== undefined && meta !== "" ? (
         <span className="shrink-0 font-mono text-[10px] tabular-nums text-quiet">{meta}</span>

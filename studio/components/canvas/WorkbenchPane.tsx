@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { CanvasFileTree } from "@/components/canvas/CanvasFileTree";
 import { CanvasPreview } from "@/components/canvas/CanvasPreview";
 import { CanvasTerminal } from "@/components/canvas/CanvasTerminal";
 import { CanvasMediaGallery } from "@/components/canvas/CanvasMediaGallery";
@@ -10,7 +11,6 @@ import { DocumentTab } from "@/components/canvas/DocumentTab";
 import { BrowserFrame } from "@/components/canvas/BrowserFrame";
 import { FileSwitcher } from "@/components/canvas/FileSwitcher";
 import { InstrumentBar, type Instrument } from "@/components/canvas/InstrumentBar";
-import { LayoutModeSwitch } from "@/components/canvas/LayoutModeSwitch";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { DocArtifact, RunDTO } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -49,7 +49,11 @@ export function WorkbenchPane({
   onClose: () => void;
 }) {
   const store = useCanvasStore();
-  const [instrument, setInstrument] = React.useState<Instrument>("browser");
+  // Files, not Browser. You open the workbench to see what is here; a preview
+  // of a project that may not be serving anything is a blank screen with a
+  // reload button on it. The three snaps below move you off this the moment
+  // there is something better to look at.
+  const [instrument, setInstrument] = React.useState<Instrument>("files");
   const [switcherOpen, setSwitcherOpen] = React.useState(false);
   const [rebuiltAt, setRebuiltAt] = React.useState<number | null>(null);
 
@@ -57,7 +61,11 @@ export function WorkbenchPane({
   // emits; stamping it here is what lets the gutter answer "is what I am
   // looking at current".
   React.useEffect(() => {
-    if (store.previewRefreshKey > 0) setRebuiltAt(Date.now());
+    if (store.previewRefreshKey === 0) return;
+    setRebuiltAt(Date.now());
+    // Widening the layout was only half of "watch it redraw itself" — the
+    // browser also has to be the thing in front of you.
+    setInstrument("browser");
   }, [store.previewRefreshKey]);
 
   const activeFile = store.tabs.find((t) => t.id === store.activeTabId && t.kind === "file");
@@ -103,10 +111,20 @@ export function WorkbenchPane({
         changes={changeCount}
         madeCount={mediaCount}
         onClose={onClose}
-        trailing={<LayoutModeSwitch />}
       />
 
       <div className="relative min-h-0 flex-1">
+        {/* The project tree, the deploy row, the workspace status and the
+            Library of everything he has made — all of it lives in here. */}
+        <Layer on={instrument === "files"}>
+          <CanvasFileTree
+            onFileOpen={(p) => {
+              store.openFile(p);
+              setInstrument("file");
+            }}
+          />
+        </Layer>
+
         <Layer on={instrument === "browser"}>
           <BrowserFrame
             url={store.previewUrl}

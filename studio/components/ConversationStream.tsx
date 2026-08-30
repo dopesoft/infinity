@@ -296,7 +296,12 @@ export function ConversationStream({
         // steals their internal scroll.
         className="flex-1 min-w-0 space-y-3 overflow-y-auto overflow-x-hidden px-3 pt-3 pb-8 scroll-touch sm:px-4"
       >
-        <div ref={contentRef} className="min-w-0 space-y-3">
+        {/* max-w-stream: the conversation is a column you read, not a band
+            that stretches to whatever the window happens to be. The scroller
+            above stays full width so the scrollbar sits at the edge; only the
+            content is capped, and in Split/Build the column is already
+            narrower than the cap so this costs nothing there. */}
+        <div ref={contentRef} className="mx-auto min-w-0 w-full max-w-stream space-y-3">
           {renderConversation(messages, onQuickReply)}
           {work.show && (
             <div className="min-w-0 max-w-full" data-message>

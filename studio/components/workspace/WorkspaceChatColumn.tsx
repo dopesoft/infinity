@@ -7,7 +7,6 @@ import { BackgroundJobDock } from "@/components/BackgroundJobDock";
 import { PendingApprovalsDock } from "@/components/PendingApprovalsDock";
 import { CommitBar } from "@/components/canvas/CommitBar";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
 import { standbyLabel, useGlobalModel } from "@/lib/use-model";
 import type { useChat } from "@/hooks/useChat";
@@ -25,9 +24,12 @@ type ChatHook = ReturnType<typeof useChat>;
  */
 export function WorkspaceChatColumn({
   chat,
+  changeCount,
   minimalComposer = false,
 }: {
   chat: ChatHook;
+  /** Files differing from HEAD, polled once by the page. */
+  changeCount: number;
   minimalComposer?: boolean;
 }) {
   const { setting, setModel } = useGlobalModel();
@@ -37,7 +39,6 @@ export function WorkspaceChatColumn({
   // above the composer, in EVERY layout mode, so saving his work is never a
   // trip to a tab you have to remember exists. It never commits on its own,
   // and push stays a separate deliberate act.
-  const changeCount = useGitPendingCount(store.root, chat.sessionId);
   const [commitMessage, setCommitMessage] = useState("");
   // The draft is whatever he last said he did. `result_summary` on the run
   // ledger is already that sentence; using it means the message describes the
@@ -99,20 +100,27 @@ export function WorkspaceChatColumn({
           background_build telemetry. Sits above the composer so the boss can
           keep chatting and still watch progress. Renders nothing when no plan
           is in flight and no background job is running. */}
-      <PendingApprovalsDock />
-      <BackgroundJobDock sessionId={chat.sessionId} />
-      {!chat.isStreaming && store.root ? (
-        <CommitBar
-          repo={store.root}
-          sessionId={chat.sessionId}
-          fileCount={changeCount}
-          message={commitMessage}
-          onMessageChange={setCommitMessage}
-          onReview={() => store.setLayout("split")}
-          onCommitted={() => setCommitMessage("")}
-        />
-      ) : null}
+      {/* Docks and the commit bar share the conversation's column so the
+          left edge of everything in this surface is one line. */}
+      <div className="mx-auto w-full min-w-0 max-w-stream">
+        <PendingApprovalsDock />
+        <BackgroundJobDock sessionId={chat.sessionId} />
+        {!chat.isStreaming && store.root ? (
+          <CommitBar
+            repo={store.root}
+            sessionId={chat.sessionId}
+            fileCount={changeCount}
+            message={commitMessage}
+            onMessageChange={setCommitMessage}
+            onReview={() => store.setLayout("split")}
+            onCommitted={() => setCommitMessage("")}
+          />
+        ) : null}
+      </div>
+      {/* The rule runs the full width (it separates the surfaces); the box
+          inside it sits in the same column as the conversation. */}
       <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
+        <div className="mx-auto w-full min-w-0 max-w-stream">
         <PromptInputBox
           onSend={(text, files) => {
             const t = text.trim();
@@ -157,6 +165,7 @@ export function WorkspaceChatColumn({
           onVoiceSend={(t) => void chat.send(t, undefined, { voice: true, effort })}
           minimal={minimalComposer}
         />
+        </div>
       </div>
     </div>
   );

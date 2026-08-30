@@ -92,7 +92,13 @@ export function SessionHeader({
           </span>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-0.5">
+      {/* The action cluster can never push the PAGE sideways. It is the one
+          row on /live that keeps growing (status, project, bridge, workbench,
+          info, compact, new), and on a 375px phone that is more than fits.
+          It scrolls inside itself rather than overflowing the document, so
+          nothing is hidden and nothing is lost - the guard is containment,
+          not truncation. */}
+      <div className="flex min-w-0 shrink items-center gap-0.5 overflow-x-auto scroll-touch no-scrollbar sm:shrink-0">
         {extraActions}
         {onRewind ? (
           <Button

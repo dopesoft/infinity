@@ -6,7 +6,6 @@ import { WorkspaceChatColumn } from "@/components/workspace/WorkspaceChatColumn"
 import { WorkbenchPane } from "@/components/canvas/WorkbenchPane";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { useIsDesktop } from "@/lib/use-media-query";
-import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { useSessionArtifacts } from "@/lib/canvas/useSessionArtifacts";
 import { useRuns } from "@/lib/runs/useRuns";
 import {
@@ -55,7 +54,15 @@ const MAX_AUTO_OPEN_TABS = 8;
  * surfaces (handled inside CanvasFileTree / CanvasPreview empty states),
  * so chat-only sessions don't leak the workspace folder.
  */
-export function Workspace({ chat }: { chat: ChatHook }) {
+export function Workspace({
+  chat,
+  changeCount,
+}: {
+  chat: ChatHook;
+  /** Files differing from HEAD. Polled once by the page and handed down, so
+   *  the door badge, the Changes instrument and the commit bar agree. */
+  changeCount: number;
+}) {
   const store = useCanvasStore();
   const ws = useWebSocket();
   const current = useCurrentProject();
@@ -313,7 +320,6 @@ export function Workspace({ chat }: { chat: ChatHook }) {
     limit: 50,
     enabled: !!chat.sessionId,
   });
-  const changeCount = useGitPendingCount(store.root, chat.sessionId);
   const isDesktop = useIsDesktop();
 
   // Rehydrate the open document tabs once per session from that session's own
@@ -411,7 +417,11 @@ export function Workspace({ chat }: { chat: ChatHook }) {
   );
 
   const chatColumn = (
-    <WorkspaceChatColumn chat={chat} minimalComposer={store.layout === "build"} />
+    <WorkspaceChatColumn
+      chat={chat}
+      changeCount={changeCount}
+      minimalComposer={store.layout === "build"}
+    />
   );
 
   return (

@@ -88,14 +88,18 @@ function DrawerRow({
       href={href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex min-h-12 items-center gap-3 rounded-lg px-3 transition-colors",
-        active ? "bg-accent text-foreground" : "text-muted-foreground active:bg-accent/60",
+        "relative flex min-h-12 items-center gap-3 rounded-lg px-3 transition-colors",
+        // Same law as the rail: ink and a marker, not a filled block.
+        active ? "text-foreground" : "text-muted-foreground active:bg-accent/60",
       )}
     >
       <Icon
         className={cn("size-[18px] shrink-0", active ? "text-foreground" : "text-quiet")}
       />
       <span className={cn("flex-1 text-[15px]", active && "font-medium")}>{label}</span>
+      {active ? (
+        <span aria-hidden className="absolute inset-y-2 left-0 w-[2px] rounded-full bg-foreground" />
+      ) : null}
       {count > 0 && (
         <span className="font-mono text-[11px] tabular-nums text-warning">
           {count > 99 ? "99+" : count}

@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
 import { PageHeader } from "@/components/ui/page-header";
 import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { PickListItem } from "@/components/ui/pick-list";
 import { Inset, type InsetField } from "@/components/ui/inset";
 import { NativeSelect } from "@/components/ui/native-select";
 import { SettingRow } from "@/components/ui/setting-row";
@@ -209,25 +210,27 @@ export default function SettingsPage() {
         <div className="hidden min-h-0 flex-1 lg:flex">
           <ResizablePanelGroup direction="horizontal" autoSaveId="settings:h">
             <ResizablePanel defaultSize={22} minSize={16} maxSize={36}>
-              <nav className="flex h-full flex-col overflow-y-auto px-4 py-1 scroll-touch">
+              {/* The rail is a PickListItem list, not ListRow + a local
+                  `bg-accent` override. ListRow draws a hairline under every
+                  row — correct for a list of records, wrong for a rail of
+                  names, where it turns nine words into a nine-row table. And
+                  the override was a one-off copy of a selected state that
+                  the primitive already owns. */}
+              <nav className="flex h-full flex-col gap-0.5 overflow-y-auto px-3 py-2 scroll-touch">
                 {SECTIONS.map((s) => {
                   const Icon = s.icon;
-                  const isActive = active === s.id;
                   return (
-                    <ListRow
+                    <PickListItem
                       key={s.id}
                       leading={<Icon className="size-4" aria-hidden />}
-                      title={s.label}
-                      trailing={
-                        typeof counts[s.id] === "number" && counts[s.id] ? (
-                          <span className="font-mono text-[11px] tabular-nums text-quiet">
-                            {counts[s.id]}
-                          </span>
-                        ) : undefined
+                      label={s.label}
+                      meta={
+                        typeof counts[s.id] === "number" && counts[s.id]
+                          ? counts[s.id]
+                          : undefined
                       }
-                      chevron={false}
-                      onClick={() => setActive(s.id)}
-                      className={cn(isActive && "bg-accent")}
+                      selected={active === s.id}
+                      onSelect={() => setActive(s.id)}
                     />
                   );
                 })}

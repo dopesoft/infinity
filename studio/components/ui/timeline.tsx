@@ -96,7 +96,17 @@ export function TimelineRow({
 
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="min-w-0 break-words text-[13px] leading-snug">{title}</span>
-        {meta ? <span className="min-w-0 truncate text-[11px] text-quiet">{meta}</span> : null}
+        {/* Two lines, wrapped — not one truncated line. These carry humanised
+            failure sentences ("the plan has used up its allowance, so it
+            turned me away"), and a sentence cut mid-word at the right edge
+            tells you less than nothing: you can see there was a reason and
+            not what it was. Two lines is enough for every one of them, and
+            the row is still a fixed, scannable height. */}
+        {meta ? (
+          <span className="min-w-0 break-words text-[11px] leading-snug text-quiet line-clamp-2">
+            {meta}
+          </span>
+        ) : null}
       </span>
 
       <span className="flex shrink-0 items-start gap-2 pt-0.5">

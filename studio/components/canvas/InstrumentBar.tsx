@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Eye,
   FileText,
+  FolderTree,
   GitBranch,
   Sparkles,
   SquareTerminal,
@@ -27,14 +28,17 @@ import { cn } from "@/lib/utils";
  * switcher on its chevron). On the right, the INSTRUMENTS, each carrying its
  * own live signal — the Changes count in amber, the error count in red.
  *
- * The tree is not an instrument, it is a switcher, so it lives on the
- * chevron rather than owning a permanent column.
+ * Files is an instrument and the chevron is a switcher, and they are not the
+ * same thing. The switcher answers "take me to the one I am thinking of";
+ * the tree answers "show me what is here" — the project, the folders, the
+ * library of everything he has made. Collapsing the second into the first
+ * was the mistake that left the boss with no way to see his own files.
  *
  * MOBILE: scrolls sideways rather than wrapping, so the content below never
  * shifts down when a tab appears.
  */
 
-export type Instrument = "file" | "browser" | "changes" | "terminal" | "made";
+export type Instrument = "files" | "file" | "browser" | "changes" | "terminal" | "made";
 
 export function InstrumentBar({
   active,
@@ -72,6 +76,11 @@ export function InstrumentBar({
           <ChevronDown className="size-3 shrink-0 text-quiet" aria-hidden />
         </Tab>
       ) : null}
+
+      <Tab on={active === "files"} onClick={() => onSelect("files")}>
+        <FolderTree className="size-3.5 shrink-0" aria-hidden />
+        <span>Files</span>
+      </Tab>
 
       <Tab on={active === "browser"} onClick={() => onSelect("browser")}>
         <Eye className="size-3.5 shrink-0" aria-hidden />

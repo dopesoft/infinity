@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { ListRow } from "@/components/ui/list-row";
 import { DayRibbon } from "@/components/ui/day-ribbon";
+import { clockTime } from "@/lib/dashboard/format";
 import { EmptyState } from "@/components/EmptyState";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CronCreateCard, SentinelCreateCard } from "@/components/cron/CreateForms";
@@ -80,7 +81,10 @@ export default function AutomationsPage() {
         .filter((c) => c.enabled && c.next_run_at)
         .map((c) => ({
           id: c.id,
-          label: humanName(c),
+          // The TIME, not the name. The name is the row title six lines
+          // below; printing it twice made the ribbon a second copy of the
+          // list and pushed a whole sentence off the left edge.
+          label: clockTime(c.next_run_at as string),
           at: new Date(c.next_run_at as string).getTime(),
           tone: c.last_run_status === "error" ? ("danger" as const) : ("default" as const),
         })),

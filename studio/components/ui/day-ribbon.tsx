@@ -76,24 +76,28 @@ export function DayRibbon({
             className="absolute bottom-3 left-0 top-3.5 w-px bg-brand"
           />
 
+          {/* The dot and its label are positioned SEPARATELY. They used to be
+              one centred flex column, which meant a mark near either end
+              dragged its label off the ribbon and the label got clipped —
+              "ry night at 11pm". The dot must sit exactly on its minute; the
+              label only has to be legible, so it anchors to the nearest edge
+              inside the first and last eighth and is capped in width. */}
           {placed.map((m) => (
-            <span
-              key={m.id}
-              className="absolute top-1.5 flex -translate-x-1/2 flex-col items-center gap-1 whitespace-nowrap"
-              style={{ left: `${m.pct}%` }}
-            >
+            <React.Fragment key={m.id}>
               <span
                 className={cn(
-                  "text-[10px]",
+                  "absolute top-1.5 max-w-[8.5rem] truncate text-[10px]",
                   m.tone === "danger" ? "text-danger" : "text-muted-foreground",
                 )}
+                style={markLabel(m.pct)}
+                title={m.label}
               >
                 {m.label}
               </span>
               <span
                 aria-hidden
                 className={cn(
-                  "size-[7px] rounded-full",
+                  "absolute top-7 size-[7px] -translate-x-1/2 rounded-full",
                   m.tone === "danger"
                     ? "bg-danger"
                     : m.tone === "warning"
@@ -102,8 +106,9 @@ export function DayRibbon({
                         ? "bg-brand"
                         : "bg-quiet",
                 )}
+                style={{ left: `${m.pct}%` }}
               />
-            </span>
+            </React.Fragment>
           ))}
         </div>
       </div>
@@ -130,5 +135,18 @@ function edge(pct: number): React.CSSProperties {
 function edgeLabel(pct: number): React.CSSProperties {
   if (pct <= 0) return { left: 0 };
   if (pct >= 100) return { right: 0 };
+  return { left: `${pct}%`, transform: "translateX(-50%)" };
+}
+
+/**
+ * A mark label anchors rather than centres near the ends. Centring a label on
+ * a mark at 2% puts half of it outside the ribbon, where it is clipped and
+ * unreadable. Inside the middle three quarters it centres as you would
+ * expect; in the first and last eighth it aligns to that edge and grows
+ * inward. The dot is unaffected and stays exactly on its minute.
+ */
+function markLabel(pct: number): React.CSSProperties {
+  if (pct <= 12) return { left: 0 };
+  if (pct >= 88) return { right: 0 };
   return { left: `${pct}%`, transform: "translateX(-50%)" };
 }

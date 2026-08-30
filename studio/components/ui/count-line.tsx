@@ -78,11 +78,9 @@ function CountItem({ item }: { item: CountLineItem }) {
   const inner = (
     <>
       {hasValue ? (
-        <>
-          <span className={cn("font-medium tabular-nums", tone ?? "text-foreground")}>
-            {item.value}
-          </span>{" "}
-        </>
+        <span className={cn("font-medium tabular-nums", tone ?? "text-foreground")}>
+          {item.value}
+        </span>
       ) : null}
       <span className={hasValue ? tone : cn(tone ?? "text-foreground", "font-medium")}>
         {item.label}
@@ -90,8 +88,11 @@ function CountItem({ item }: { item: CountLineItem }) {
     </>
   );
 
+  // gap-1, not a space character: this is an inline-FLEX box, and flex
+  // layout drops whitespace-only text nodes between items. That is what
+  // rendered "200jobs" with the number welded to the word.
   const cls = cn(
-    "inline-flex min-h-row items-center whitespace-nowrap py-1 transition-colors",
+    "inline-flex min-h-row items-center gap-1 whitespace-nowrap py-1 transition-colors",
     item.selected
       ? "border-b-[1.5px] border-foreground"
       : "border-b-[1.5px] border-transparent hover:text-foreground",

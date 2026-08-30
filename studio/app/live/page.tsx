@@ -7,8 +7,10 @@ import { InfoModal } from "@/components/workspace/InfoModal";
 import { Workspace } from "@/components/workspace/Workspace";
 import { BridgePill } from "@/components/canvas/BridgePill";
 import { ProjectBreadcrumb } from "@/components/canvas/ProjectBreadcrumb";
+import { WorkbenchControl } from "@/components/canvas/WorkbenchControl";
 import { CanvasStoreProvider, useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasConfig } from "@/lib/canvas/api";
+import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { fetchSessions } from "@/lib/api";
 import { useChat } from "@/hooks/useChat";
 import { StatusPill, type AgentState } from "@/components/StatusPill";
@@ -99,6 +101,12 @@ function LivePageInner() {
 
   const usedTokens = chat.usage.input + chat.usage.output;
 
+  // One poll for the whole page. This count drives three surfaces - the
+  // workbench door's badge, the Changes instrument's badge, and the commit
+  // bar - and each of them used to run its own 4s `git status`. Hoisting it
+  // here makes them agree with each other and costs a third of the requests.
+  const changeCount = useGitPendingCount(store.root, chat.sessionId);
+
   const agentState: AgentState =
     chat.status === "disconnected"
       ? "offline"
@@ -127,6 +135,7 @@ function LivePageInner() {
                 sessionId={chat.sessionId || null}
                 onPreferenceChange={() => store.bumpBridgeEpoch()}
               />
+              <WorkbenchControl changes={changeCount} />
               <InfoModal
                 messages={chat.messages}
                 usedTokens={usedTokens}
@@ -135,7 +144,7 @@ function LivePageInner() {
             </>
           }
         />
-        <Workspace chat={chat} />
+        <Workspace chat={chat} changeCount={changeCount} />
       </div>
     </AppShell>
   );

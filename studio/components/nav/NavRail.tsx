@@ -90,13 +90,25 @@ function RailLink({
           href={entry.href}
           aria-label={entry.label}
           aria-current={active ? "page" : undefined}
+          /* Active is INK AND A MARKER, never a filled rectangle. At 36px a
+             `bg-accent` block is a solid grey tile sitting in an otherwise
+             hairline-and-tone interface — the loudest shape on the screen,
+             marking the page you are already looking at. The glyph going to
+             full-strength foreground against quiet siblings says it, and the
+             2px rule on the rail's edge says it again for a glance. Hover
+             still washes, because a wash that comes and goes is feedback. */
           className={cn(
             "relative grid size-9 shrink-0 place-items-center rounded-lg transition-colors",
-            active
-              ? "bg-accent text-foreground"
-              : "text-quiet hover:bg-accent/60 hover:text-foreground",
+            active ? "text-foreground" : "text-quiet hover:bg-accent/60 hover:text-foreground",
           )}
         >
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inset-y-1.5 -left-[9px] w-[2px] rounded-full transition-colors",
+              active ? "bg-foreground" : "bg-transparent",
+            )}
+          />
           <Icon className="size-4" aria-hidden />
           {count > 0 && (
             <span
