@@ -53,7 +53,7 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
     description: "Emails, Slack mentions, iMessage threads - people waiting on you.",
   },
   work: {
-    title: "Agent Work board",
+    title: "Agent work",
     description: "Kanban of agent activity - what's queued, running, awaiting, and done today.",
   },
   saved: {

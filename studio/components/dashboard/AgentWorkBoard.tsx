@@ -15,6 +15,16 @@ import type {
 
 /* Agent work - what Jarvis is doing, as a board.
  *
+ * THE NAME IS LOAD-BEARING. This sat under "In progress", one section below
+ * "To do", and the two are different people's work: To do is the boss's list,
+ * this is the agent's. "In progress" reads as "my todos, in progress" and it
+ * was the only surface of the three naming this thing that disagreed -
+ * Settings called it the Agent Work board and the detail sheet called it an
+ * Agent work item. It is "Agent work" everywhere now.
+ *
+ * Deliberately not "Agent tasks": a task IS a todo, so that name would have
+ * re-created the exact collision the rename exists to remove.
+ *
  * IT IS COLUMNS AGAIN, AND THAT WAS THE POINT
  *
  * This surface was four Kanban columns wrapped in four levels of box: a
@@ -101,14 +111,18 @@ export function AgentWorkBoard({
 
   return (
     <Section
-      title="In progress"
+      title="Agent work"
       badge={totalAwaiting > 0 ? `${totalAwaiting} awaiting` : undefined}
       action={{ label: "see all", href: "/automations" }}
     >
       {!anything ? (
         /* Every column empty: one quiet line rather than four labelled
-         * empties, which is all noise and no information. */
-        <p className="py-2 text-[13px] text-quiet">Nothing waiting on you.</p>
+         * empties, which is all noise and no information.
+         *
+         * It says what is true of THIS board - Jarvis has nothing on - not
+         * "nothing waiting on you", which described one of the four columns
+         * and quietly claimed the other three were clear as well. */
+        <p className="py-2 text-[13px] text-quiet">Jarvis has nothing on right now.</p>
       ) : (
         <Board columns={4}>
           {GROUPS.map((g, i) => (
