@@ -31,7 +31,12 @@ export function DailyQuote({ quote }: { quote?: DailyQuoteData | null }) {
   return (
     <figure className="min-w-0 max-w-prose">
       <blockquote className="min-w-0 font-display text-[18px] italic leading-snug text-foreground sm:text-[20px]">
-        {quote.text}
+        {/* Curly quotes, added here rather than stored in the row - same
+            convention as `Inset variant="quote"`, which is the only other
+            place the product renders a quotation. Keeping them out of the
+            corpus means the text stays clean for anything else that reads it
+            and there is one place to change the style. */}
+        {`\u201C${quote.text}\u201D`}
       </blockquote>
       <figcaption className="mt-1.5 min-w-0 truncate font-sans text-[12px] not-italic text-quiet">
         {quote.author}
