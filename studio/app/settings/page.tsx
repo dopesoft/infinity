@@ -70,7 +70,6 @@ import {
   VENDORS,
   findVendor,
   type VendorEntry,
-  type VendorId,
 } from "@/lib/models-catalog";
 
 type SectionId =
@@ -610,99 +609,92 @@ function ErrorNote({ children }: { children: React.ReactNode }) {
 }
 
 function GeneralSection({ status }: { status: CoreStatus | null }) {
-  // Vendor picker hot-swaps Core's active provider via /api/settings/provider.
-  // The change is synchronous - the next turn (and the Live composer's chip)
-  // sees the new vendor immediately. Stored OAuth credentials persist across
-  // vendor flips, so switching back to ChatGPT later doesn't require re-auth.
-  // Model edits flow through /api/settings/model as before.
+  // The Brain section applies INSTANTLY. There is no draft and no Save.
+  //
+  // It used to hold a draft vendor + draft model behind a footer Save, next
+  // to a Reset, next to the key box's own two buttons: four controls in one
+  // card, and the only one that actually changed the brain was the least
+  // prominent. The boss pasted a DeepSeek key, saw "connected", never saw the
+  // Save, and kept running on ChatGPT while believing he had switched. A
+  // control that must be found is a control that will be missed, so picking a
+  // vendor now IS switching to it, and choosing a model IS setting it - the
+  // same instant-apply shape the rest of Settings uses.
   const { setting, setModel, setProvider, refresh } = useGlobalModel();
   const liveProvider = ((setting?.provider ?? status?.provider ?? "") as string).toLowerCase();
   const effectiveModel = setting?.model ?? status?.model ?? "";
   const defaultModel = setting?.defaultModel ?? "";
   const availableProviders = setting?.availableProviders ?? [];
 
-  // Vendor + model are both *drafts* until Save fires - selecting from
-  // either dropdown mutates local state only. Save is the deterministic
-  // commit; matches the BossProfilePanel pattern in this codebase.
-  const [draftVendor, setDraftVendor] = useState<string>(liveProvider || VENDORS[0].id);
-  const [draftModel, setDraftModel] = useState<string>(effectiveModel);
-  const [busy, setBusy] = useState(false);
+  // The vendor whose credential box is open. Normally the live one; it moves
+  // when the boss taps a vendor he cannot switch to yet, so its key box is
+  // reachable. That was the other half of the same bug: gating SELECTION on
+  // being configured made the key box unreachable for exactly the vendors
+  // that needed a key.
+  const [focusVendor, setFocusVendor] = useState<string>(liveProvider || VENDORS[0].id);
+  const [busyVendor, setBusyVendor] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // Credential state per vendor. Lifted here (rather than living inside
-  // ApiKeyBlock) because the vendor dropdown needs it too: a vendor with no
-  // key must still be SELECTABLE so its paste box can be reached. Gating
-  // selection on "configured" is what made the key box unreachable for
-  // exactly the vendors that needed one.
   const [keyRows, setKeyRows] = useState<ProviderKeyRow[] | null>(null);
 
   useEffect(() => {
+    if (liveProvider) setFocusVendor(liveProvider);
+  }, [liveProvider]);
+
+  useEffect(() => {
     const ac = new AbortController();
-    fetchProviderKeys(ac.signal).then((res) => {
-      if (res) setKeyRows(res.providers);
-    });
+    // Settle to [] on failure rather than staying null: a permanent "still
+    // loading" would hide the key box forever, which is the same dead end as
+    // greying the vendor out.
+    fetchProviderKeys(ac.signal).then((res) => setKeyRows(res?.providers ?? []));
     return () => ac.abort();
   }, []);
 
-  // Sync drafts with whatever Core broadcasts (composer chip cycle,
-  // first load, etc.). The model effect runs on every effectiveModel
-  // change - but only resets the draft when the user hasn't started
-  // editing locally yet (draft still equals the last broadcast).
-  useEffect(() => {
-    if (liveProvider) setDraftVendor(liveProvider);
-  }, [liveProvider]);
-  useEffect(() => {
-    setDraftModel(effectiveModel);
-  }, [effectiveModel]);
+  const selectedVendor = findVendor(focusVendor);
+  const liveVendor = findVendor(liveProvider);
+  const keyRow = keyRows?.find((r) => r.provider === focusVendor) ?? null;
 
-  const selectedVendor = findVendor(draftVendor);
-  const isOAuthVendor = selectedVendor.auth === "oauth";
+  function stateOf(id: string): {
+    label: string;
+    tone: "success" | "quiet" | "warning";
+    ready: boolean;
+  } {
+    const row = keyRows?.find((r) => r.provider === id) ?? null;
+    const ready = availableProviders.length === 0 || availableProviders.includes(id);
+    if (id === liveProvider) return { label: "Answering", tone: "success", ready: true };
+    if (row?.implemented === false) return { label: "No client yet", tone: "warning", ready: false };
+    if (!ready) return { label: "Needs a key", tone: "warning", ready: false };
+    return { label: "Ready", tone: "quiet", ready: true };
+  }
 
-  // Auto-reset the model dropdown when the current draft isn't in the
-  // active vendor's catalog at all (e.g. Anthropic's claude-haiku surviving
-  // a flip to openai_oauth). We check the *active vendor's catalog* rather
-  // than asking resolveModelEntry which vendor "owns" the id - that's
-  // wrong when an id is shared across multiple catalogs (gpt-5.4 lives in
-  // both `openai` and `openai_oauth`), because the lookup grabs the first
-  // match and would snap subscription picks back to the API vendor's
-  // default.
-  useEffect(() => {
-    if (!draftModel) return;
-    const inActiveVendor = selectedVendor.models.some((m) => m.id === draftModel);
-    if (!inActiveVendor) {
-      const fallback =
-        selectedVendor.models.find((m) => m.recommended) ?? selectedVendor.models[0];
-      if (fallback) setDraftModel(fallback.id);
+  // Tapping a ready vendor switches Jarvis onto it, now. Tapping one that
+  // needs a key just opens its key box - nothing is claimed that did not
+  // happen.
+  async function pickVendor(id: string) {
+    setErr(null);
+    setFocusVendor(id);
+    if (id === liveProvider) return;
+    if (!stateOf(id).ready) return;
+    setBusyVendor(id);
+    try {
+      const res = await setProvider(id);
+      if (!res.ok) setErr(res.error ?? "Could not switch to that vendor.");
+    } finally {
+      setBusyVendor(null);
     }
-  }, [draftVendor, draftModel, selectedVendor]);
+  }
 
-  const knownModelIds = new Set(selectedVendor.models.map((m) => m.id));
-  const dropdownOptions = knownModelIds.has(draftModel)
-    ? selectedVendor.models
-    : draftModel
-      ? [{ id: draftModel, label: `${draftModel} (custom)` }, ...selectedVendor.models]
-      : selectedVendor.models;
+  async function pickModel(id: string) {
+    setErr(null);
+    setBusyVendor(liveProvider);
+    try {
+      if (!(await setModel(id))) setErr("Could not save that model.");
+    } finally {
+      setBusyVendor(null);
+    }
+  }
 
-  const keyRow = keyRows?.find((r) => r.provider === draftVendor) ?? null;
-  // "Ready" means Core has this brain in its live registry and a swap will
-  // stick. Empty availableProviders means Core has not told us yet, so we
-  // assume ready rather than locking the boss out on a slow first load.
-  const vendorReady =
-    availableProviders.length === 0 || availableProviders.includes(draftVendor);
-  const vendorHasNoClient = keyRow?.implemented === false;
-  const switchingVendor = draftVendor !== liveProvider;
-
-  const dirty =
-    draftVendor !== liveProvider || draftModel !== effectiveModel;
-  // Save is the only thing that needs a working brain. Selecting an
-  // unconfigured vendor is how you get to its key box in the first place.
-  const canSave = dirty && (!switchingVendor || vendorReady);
-
-  // onKeySaved runs after a key is stored and proven. Selecting a vendor is
-  // how you reach its key box at all, so pasting a working key for the vendor
-  // on screen is the instruction to RUN on it - not a request to store a
-  // credential and wait for a second button. Making that second press the
-  // thing that switched the brain meant "connected" was true of the key and
-  // false of the conversation, which is the worst possible split.
+  // The key box saved a credential and stopped there, so a working key still
+  // left the boss on the old brain. Storing a key for the vendor on screen is
+  // the instruction to run on it.
   async function onKeySaved(
     rows: ProviderKeyRow[],
     available: string[],
@@ -710,91 +702,74 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   ): Promise<string> {
     setKeyRows(rows);
     await refresh();
-    // A removal shares this path but must never switch anything on.
-    if (!activate || draftVendor === liveProvider) return "";
-    if (!available.includes(draftVendor)) {
-      // Stored but Core did not register it: say so rather than implying a
-      // switch that cannot happen.
-      return `Saved, but ${selectedVendor.label} is not answering yet, so I have left you on ${findVendor(liveProvider).label}.`;
+    if (!activate || focusVendor === liveProvider) return "";
+    if (!available.includes(focusVendor)) {
+      return `Saved, but ${selectedVendor.label} is not answering yet, so I have left you on ${liveVendor.label}.`;
     }
-    const res = await setProvider(draftVendor);
-    if (!res.ok) {
-      return `Saved, but the switch failed: ${res.error ?? "unknown error"}`;
-    }
+    const res = await setProvider(focusVendor);
+    if (!res.ok) return `Saved, but the switch failed: ${res.error ?? "unknown error"}`;
     return `Jarvis is on ${selectedVendor.label} now.`;
   }
 
-  async function save() {
-    setBusy(true);
-    setErr(null);
-    try {
-      if (draftVendor !== liveProvider) {
-        const res = await setProvider(draftVendor);
-        if (!res.ok) {
-          setErr(res.error ?? "provider swap failed");
-          return;
-        }
-      }
-      if (draftModel !== effectiveModel) {
-        const ok = await setModel(draftModel);
-        if (!ok) {
-          setErr("model save failed");
-        }
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function clearOverride() {
-    setBusy(true);
-    try {
-      await setModel("");
-      if (defaultModel) setDraftModel(defaultModel);
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Models belong to the LIVE vendor: this row sets what is answering, so
+  // showing another vendor's catalog here would be an invitation to pick
+  // something that cannot run.
+  const modelOptions = liveVendor.models.some((m) => m.id === effectiveModel)
+    ? liveVendor.models
+    : effectiveModel
+      ? [{ id: effectiveModel, label: `${effectiveModel} (custom)` }, ...liveVendor.models]
+      : liveVendor.models;
 
   return (
     <div className="min-w-0 space-y-1">
-      <Section
-        title="Brain"
-        badge={findVendor(liveProvider).label}
-        noPad
-      >
+      <Section title="Brain" badge={liveVendor.label} noPad>
         <SettingRow
           label="Vendor"
-          description="Who answers. Switching keeps stored credentials, so you can flip back without re-auth."
+          description="Tap one to switch. Jarvis moves the moment you do."
         >
-          <NativeSelect value={draftVendor} onValueChange={setDraftVendor} aria-label="Vendor">
+          <div className="min-w-0">
             {VENDORS.map((v) => {
-              const available =
-                availableProviders.length === 0 ||
-                availableProviders.includes(v.id);
-              const row = keyRows?.find((r) => r.provider === v.id) ?? null;
-              // Never disabled. A vendor you cannot select is a vendor you
-              // can never give a key to, and "needs a key" is a step, not a
-              // wall. The suffix says which step you are on.
-              const suffix = (() => {
-                if (v.id === (liveProvider as VendorId)) return " · active";
-                if (row?.implemented === false) return " · no client yet";
-                if (!available) return " · needs a key";
-                return " · ready";
-              })();
+              const st = stateOf(v.id);
               return (
-                <option key={v.id} value={v.id}>
-                  {v.label}
-                  {suffix}
-                </option>
+                <ListRow
+                  key={v.id}
+                  title={v.label}
+                  tone={v.id === liveProvider ? "success" : st.tone}
+                  onClick={() => pickVendor(v.id)}
+                  chevron={false}
+                  trailing={
+                    <span
+                      className={cn(
+                        "text-[12px]",
+                        v.id === liveProvider ? "text-success" : "text-quiet",
+                      )}
+                    >
+                      {busyVendor === v.id ? "Switching…" : st.label}
+                    </span>
+                  }
+                />
               );
             })}
-          </NativeSelect>
+          </div>
         </SettingRow>
 
-        <SettingRow label="Model" description="The exact model Jarvis runs on for chat.">
-          <NativeSelect value={draftModel} onValueChange={setDraftModel} aria-label="Model">
-            {dropdownOptions.map((m) => (
+        <SettingRow
+          label="Model"
+          description={`Which ${liveVendor.label.replace(" (API Key)", "").replace(" (Plan)", "")} model answers.`}
+          control={
+            setting?.source === "user" && defaultModel && effectiveModel !== defaultModel ? (
+              <Button variant="ghost" onClick={() => pickModel("")}>
+                Use default
+              </Button>
+            ) : null
+          }
+        >
+          <NativeSelect
+            value={effectiveModel}
+            onValueChange={pickModel}
+            aria-label="Model"
+          >
+            {modelOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id === defaultModel ? `${m.label} · default` : m.label}
               </option>
@@ -804,7 +779,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
         {setting?.standby && (
           <p className="min-w-0 rounded-[8px] bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
-            {findVendor(liveProvider).label} is out of usage
+            {liveVendor.label} is out of usage
             {standbyResetClock(setting.standby) ? (
               <>
                 {" "}until{" "}
@@ -815,35 +790,18 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           </p>
         )}
 
-        {isOAuthVendor ? (
+        {selectedVendor.auth === "oauth" ? (
           <OAuthConnectBlock />
         ) : (
           <ApiKeyBlock
             vendor={selectedVendor}
             row={keyRow}
+            loading={keyRows === null}
             onSaved={onKeySaved}
           />
         )}
 
-        {switchingVendor && !vendorReady && !vendorHasNoClient && (
-          <p className="min-w-0 rounded-[8px] bg-info/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
-            Paste a key above and save it, then Save down here to make{" "}
-            {selectedVendor.label} the brain.
-          </p>
-        )}
-
         {err && <ErrorNote>{err}</ErrorNote>}
-
-        <div className="flex items-center justify-end gap-2 pt-3">
-          {setting?.source === "user" && defaultModel && draftModel !== defaultModel && (
-            <Button variant="ghost" onClick={clearOverride} disabled={busy}>
-              Reset to default
-            </Button>
-          )}
-          <Button onClick={save} disabled={!canSave || busy}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
-        </div>
       </Section>
 
       <PricingTable vendor={selectedVendor} />
@@ -857,23 +815,26 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 // environment variable read once at boot, so adding a brain meant a Railway
 // variable and a redeploy before the picker stopped saying "not configured".
 //
-// Generic on purpose: it renders for whichever api_key vendor is selected,
+// AT REST IT SHOWS ONE CONTROL. A stored key needs no form: it shows what is
+// stored and a single Replace. Input, Save and Remove only exist once you
+// have said you want to change something. The version that kept all three on
+// screen permanently is what buried the button that actually mattered.
+//
+// Generic on purpose: it renders for whichever api_key vendor is in focus,
 // reading the row Core returns for that id. Adding a vendor to the catalog
 // gets this block for free.
-//
-// Three states, same as the OAuth block:
-//   • stored here  - masked hint + Replace / Remove.
-//   • env-provided - read-only note naming the variable, with the option to
-//     paste one that takes precedence.
-//   • unset        - paste box.
 function ApiKeyBlock({
   vendor,
   row,
+  loading,
   onSaved,
 }: {
   vendor: VendorEntry;
+  /** True until Core has answered. Keeps the paste form from flashing over a
+   *  key that is already stored. */
+  loading: boolean;
   /** This vendor's credential state, owned by the Brain section so the
-   *  vendor dropdown and this box always agree. */
+   *  vendor list and this box always agree. */
   row: ProviderKeyRow | null;
   /** Called after every store/remove with the refreshed rows and the
    *  provider ids Core will now answer on. Returns a line to append to the
@@ -885,19 +846,27 @@ function ApiKeyBlock({
   ) => Promise<string>;
 }) {
   const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<"save" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Clear per-vendor UI state when the picker moves, so a message about
-  // DeepSeek can't linger over the Gemini row.
+  const stored = row?.source === "ui";
+  const fromEnv = row?.source === "env";
+  const unavailable = row?.implemented === false;
+  const editable = row?.editable !== false;
+  // No key yet is the one case where the form IS the resting state: there is
+  // nothing to show and exactly one thing to do.
+  const open = !loading && (editing || !row?.configured);
+
+  // Reset when the focused vendor changes, so a message about DeepSeek can
+  // never linger over the Gemini row.
   useEffect(() => {
     setDraft("");
+    setEditing(false);
     setError(null);
     setNotice(null);
   }, [vendor.id]);
-
-  const envVar = row?.env_var ?? vendor.keyEnv ?? "";
 
   async function save() {
     const key = draft.trim();
@@ -912,6 +881,7 @@ function ApiKeyBlock({
         return;
       }
       setDraft("");
+      setEditing(false);
       const base =
         res.verified === "ok"
           ? `Saved and checked. ${vendor.label} answered.`
@@ -934,24 +904,13 @@ function ApiKeyBlock({
         setError(res.error);
         return;
       }
+      setEditing(false);
       setNotice("Key removed.");
       await onSaved(res.providers, res.available_providers ?? [], false);
     } finally {
       setBusy(null);
     }
   }
-
-  // A vendor Core has no client for still lists (hiding it would only move
-  // the surprise to the moment a turn dies), but it gets an explanation
-  // instead of a paste box.
-  const unavailable = row?.implemented === false;
-  const stored = row?.source === "ui";
-  const fromEnv = row?.source === "env";
-  const description = stored
-    ? `Stored here, ending ${row?.hint ?? "****"}. Paste a new one to replace it.`
-    : fromEnv
-      ? `Coming from ${envVar} on the server. Pasting one here takes precedence.`
-      : `Paste your ${vendor.label.replace(" (API Key)", "")} key. It saves to Core and never comes back out of the browser.`;
 
   if (unavailable) {
     return (
@@ -963,49 +922,63 @@ function ApiKeyBlock({
     );
   }
 
+  const description = loading
+    ? "Checking what is stored…"
+    : stored
+    ? `Stored here, ending ${row?.hint ?? "****"}.`
+    : fromEnv
+      ? `Coming from ${row?.env_var ?? vendor.keyEnv ?? ""} on the server. A key saved here takes precedence.`
+      : `Paste your ${vendor.label.replace(" (API Key)", "")} key. It saves to Core and never comes back out of the browser.`;
+
   return (
     <div className="min-w-0 space-y-2">
       <SettingRow
         label="API key"
         description={description}
         control={
-          stored ? (
-            <Button variant="ghost" onClick={remove} disabled={busy !== null}>
-              {busy === "remove" ? "Removing…" : "Remove"}
+          !open && !loading && editable ? (
+            <Button variant="ghost" onClick={() => setEditing(true)}>
+              Replace
             </Button>
           ) : null
         }
       >
-        <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
-          <Input
-            type="password"
-            inputMode="text"
-            autoComplete="off"
-            spellCheck={false}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={stored ? "Paste a replacement key" : "Paste key"}
-            aria-label={`${vendor.label} API key`}
-            className="min-w-0 flex-1"
-            disabled={row?.editable === false}
-          />
-          <Button
-            onClick={save}
-            disabled={!draft.trim() || busy !== null || row?.editable === false}
-            className="sm:w-auto"
-          >
-            {/* "Save key" not "Save": the section footer has its own Save
-                that switches the brain, and two bare Saves on one screen is
-                a coin flip for the boss. */}
-            {busy === "save" ? "Checking…" : stored ? "Replace key" : "Save key"}
-          </Button>
-        </div>
+        {open && editable ? (
+          <div className="min-w-0 space-y-2">
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+              <Input
+                type="password"
+                inputMode="text"
+                autoComplete="off"
+                spellCheck={false}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder={stored ? "Paste a replacement key" : "Paste key"}
+                aria-label={`${vendor.label} API key`}
+                className="min-w-0 flex-1"
+              />
+              <Button onClick={save} disabled={!draft.trim() || busy !== null}>
+                {busy === "save" ? "Checking…" : "Save key"}
+              </Button>
+            </div>
+            {stored && (
+              <div className="flex items-center justify-between gap-2">
+                <Button variant="ghost" onClick={() => setEditing(false)} disabled={busy !== null}>
+                  Cancel
+                </Button>
+                <Button variant="ghost" onClick={remove} disabled={busy !== null}>
+                  {busy === "remove" ? "Removing…" : "Remove key"}
+                </Button>
+              </div>
+            )}
+          </div>
+        ) : null}
       </SettingRow>
 
-      {row?.editable === false && (
+      {!editable && (
         <p className="min-w-0 rounded-[8px] bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
           This deployment has no database attached, so I cannot store a key here.
-          Set {envVar} on the server instead.
+          Set {row?.env_var ?? vendor.keyEnv ?? "the vendor key"} on the server instead.
         </p>
       )}
       {notice && (
