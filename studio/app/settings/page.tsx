@@ -628,6 +628,20 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   const [draftModel, setDraftModel] = useState<string>(effectiveModel);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Credential state per vendor. Lifted here (rather than living inside
+  // ApiKeyBlock) because the vendor dropdown needs it too: a vendor with no
+  // key must still be SELECTABLE so its paste box can be reached. Gating
+  // selection on "configured" is what made the key box unreachable for
+  // exactly the vendors that needed one.
+  const [keyRows, setKeyRows] = useState<ProviderKeyRow[] | null>(null);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchProviderKeys(ac.signal).then((res) => {
+      if (res) setKeyRows(res.providers);
+    });
+    return () => ac.abort();
+  }, []);
 
   // Sync drafts with whatever Core broadcasts (composer chip cycle,
   // first load, etc.). The model effect runs on every effectiveModel
@@ -668,8 +682,20 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
       ? [{ id: draftModel, label: `${draftModel} (custom)` }, ...selectedVendor.models]
       : selectedVendor.models;
 
+  const keyRow = keyRows?.find((r) => r.provider === draftVendor) ?? null;
+  // "Ready" means Core has this brain in its live registry and a swap will
+  // stick. Empty availableProviders means Core has not told us yet, so we
+  // assume ready rather than locking the boss out on a slow first load.
+  const vendorReady =
+    availableProviders.length === 0 || availableProviders.includes(draftVendor);
+  const vendorHasNoClient = keyRow?.implemented === false;
+  const switchingVendor = draftVendor !== liveProvider;
+
   const dirty =
     draftVendor !== liveProvider || draftModel !== effectiveModel;
+  // Save is the only thing that needs a working brain. Selecting an
+  // unconfigured vendor is how you get to its key box in the first place.
+  const canSave = dirty && (!switchingVendor || vendorReady);
 
   async function save() {
     setBusy(true);
@@ -719,11 +745,20 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
               const available =
                 availableProviders.length === 0 ||
                 availableProviders.includes(v.id);
+              const row = keyRows?.find((r) => r.provider === v.id) ?? null;
+              // Never disabled. A vendor you cannot select is a vendor you
+              // can never give a key to, and "needs a key" is a step, not a
+              // wall. The suffix says which step you are on.
+              const suffix = (() => {
+                if (v.id === (liveProvider as VendorId)) return " · active";
+                if (row?.implemented === false) return " · no client yet";
+                if (!available) return " · needs a key";
+                return " · ready";
+              })();
               return (
-                <option key={v.id} value={v.id} disabled={!available}>
+                <option key={v.id} value={v.id}>
                   {v.label}
-                  {v.id === (liveProvider as VendorId) ? " · active" : ""}
-                  {!available ? " · not configured" : ""}
+                  {suffix}
                 </option>
               );
             })}
@@ -756,7 +791,19 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
         {isOAuthVendor ? (
           <OAuthConnectBlock />
         ) : (
-          <ApiKeyBlock vendor={selectedVendor} onChanged={refresh} />
+          <ApiKeyBlock
+            vendor={selectedVendor}
+            row={keyRow}
+            onRows={setKeyRows}
+            onChanged={refresh}
+          />
+        )}
+
+        {switchingVendor && !vendorReady && !vendorHasNoClient && (
+          <p className="min-w-0 rounded-[8px] bg-info/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
+            Paste a key above and save it, then Save down here to make{" "}
+            {selectedVendor.label} the brain.
+          </p>
         )}
 
         {err && <ErrorNote>{err}</ErrorNote>}
@@ -767,7 +814,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
               Reset to default
             </Button>
           )}
-          <Button onClick={save} disabled={!dirty || busy}>
+          <Button onClick={save} disabled={!canSave || busy}>
             {busy ? "Saving…" : "Save"}
           </Button>
         </div>
@@ -795,24 +842,22 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 //   • unset        - paste box.
 function ApiKeyBlock({
   vendor,
+  row,
+  onRows,
   onChanged,
 }: {
   vendor: VendorEntry;
+  /** This vendor's credential state, owned by the Brain section so the
+   *  vendor dropdown and this box always agree. */
+  row: ProviderKeyRow | null;
+  /** Hand back the full refreshed set after a save or a removal. */
+  onRows: (rows: ProviderKeyRow[]) => void;
   onChanged: () => void | Promise<void>;
 }) {
-  const [rows, setRows] = useState<ProviderKeyRow[] | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<"save" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    const ac = new AbortController();
-    fetchProviderKeys(ac.signal).then((res) => {
-      if (res) setRows(res.providers);
-    });
-    return () => ac.abort();
-  }, []);
 
   // Clear per-vendor UI state when the picker moves, so a message about
   // DeepSeek can't linger over the Gemini row.
@@ -822,7 +867,6 @@ function ApiKeyBlock({
     setNotice(null);
   }, [vendor.id]);
 
-  const row = rows?.find((r) => r.provider === vendor.id) ?? null;
   const envVar = row?.env_var ?? vendor.keyEnv ?? "";
 
   async function save() {
@@ -837,7 +881,7 @@ function ApiKeyBlock({
         setError(res.error);
         return;
       }
-      setRows(res.providers);
+      onRows(res.providers);
       setDraft("");
       setNotice(
         res.verified === "ok"
@@ -861,7 +905,7 @@ function ApiKeyBlock({
         setError(res.error);
         return;
       }
-      setRows(res.providers);
+      onRows(res.providers);
       setNotice("Key removed.");
       await onChanged();
     } finally {
@@ -922,7 +966,10 @@ function ApiKeyBlock({
             disabled={!draft.trim() || busy !== null || row?.editable === false}
             className="sm:w-auto"
           >
-            {busy === "save" ? "Checking…" : stored ? "Replace" : "Save"}
+            {/* "Save key" not "Save": the section footer has its own Save
+                that switches the brain, and two bare Saves on one screen is
+                a coin flip for the boss. */}
+            {busy === "save" ? "Checking…" : stored ? "Replace key" : "Save key"}
           </Button>
         </div>
       </SettingRow>
