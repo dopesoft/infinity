@@ -88,7 +88,14 @@ export function DashboardHeader({
     // max-w-board, the token, same as <main> and the footer. The page used to
     // state its column width three times in three different numbers, so the
     // greeting sat 44px inboard of the cards it was introducing.
-    <div className="mx-auto w-full min-w-0 max-w-board space-y-3 px-4 pb-3 pt-1 sm:px-6 sm:pt-2">
+    // No `space-y-*` here, deliberately. It set every gap in this block to the
+    // same 12px - title to quote, quote to search, search to the first row -
+    // so nothing read as belonging to anything else and the whole thing felt
+    // crammed against the page. The spacing is explicit per element now and it
+    // GROUPS: the quote sits tight under the greeting because they are one
+    // thought, then a real break before the search, then the biggest break of
+    // the three where the header hands over to the page.
+    <div className="mx-auto w-full min-w-0 max-w-board px-4 pb-8 pt-3 sm:px-6 sm:pb-12 sm:pt-5">
       <PageHeader
         title={greeting(clock, bossName)}
         titleFace="display"
@@ -115,16 +122,22 @@ export function DashboardHeader({
         className="pb-0"
       />
 
-      <DailyQuote quote={quote} />
+      <DailyQuote quote={quote} className="mt-2" />
 
-      <SearchInput
-        value={search}
-        onValueChange={onSearchChange}
-        placeholder="Search everything…"
-        autoCapitalize="none"
-        autoCorrect="off"
-        spellCheck={false}
-      />
+      {/* The margin goes on a wrapper, not on SearchInput's className: that
+          prop lands on the <input>, and the magnifier is absolutely centred
+          against the wrapper, so a margin there would drop the field away
+          from its own icon. */}
+      <div className="mt-6 sm:mt-7">
+        <SearchInput
+          value={search}
+          onValueChange={onSearchChange}
+          placeholder="Search everything…"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </div>
     </div>
   );
 }

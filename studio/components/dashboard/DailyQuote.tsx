@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import type { DailyQuote as DailyQuoteData } from "@/lib/dashboard/types";
 
 /**
@@ -25,11 +26,17 @@ import type { DailyQuote as DailyQuoteData } from "@/lib/dashboard/types";
  * has not been seeded yet, or a loader that errored. An empty slot reserving
  * space for a line that never comes is worse than no line.
  */
-export function DailyQuote({ quote }: { quote?: DailyQuoteData | null }) {
+export function DailyQuote({
+  quote,
+  className,
+}: {
+  quote?: DailyQuoteData | null;
+  className?: string;
+}) {
   if (!quote?.text) return null;
 
   return (
-    <figure className="min-w-0 max-w-prose">
+    <figure className={cn("min-w-0 max-w-prose", className)}>
       <blockquote className="min-w-0 font-display text-[18px] italic leading-snug text-foreground sm:text-[20px]">
         {/* Curly quotes, added here rather than stored in the row - same
             convention as `Inset variant="quote"`, which is the only other
