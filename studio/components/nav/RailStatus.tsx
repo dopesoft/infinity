@@ -13,6 +13,7 @@ import { fetchCoreStatus, type CoreStatus } from "@/lib/api";
 import { formatUptime, getBootedAt } from "@/lib/uptime";
 import { findVendor, resolveModelEntry, VENDORS } from "@/lib/models-catalog";
 import { standbyLabel, useGlobalModel } from "@/lib/use-model";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -110,17 +111,19 @@ export function RailStatus({ compact = false }: { compact?: boolean }) {
         side={compact ? "bottom" : "right"}
         align="end"
         sideOffset={8}
-        className="w-60 p-0"
+        className="w-72 p-0"
       >
-        <button
-          type="button"
-          onClick={ws.reconnect}
-          className="flex w-full items-center gap-2 border-b border-hairline px-3 py-2.5 text-left text-[13px] transition-colors hover:bg-accent/60"
-        >
+        {/* The whole row used to BE the reconnect button, with the word
+            "reconnect" as grey mono hint text on the right - which reads as a
+            label, not something you can press. The state is now text and the
+            action is a chip, so what is a control looks like one. */}
+        <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
           <span className={cn("size-2 shrink-0 rounded-full", DOT[ws.status])} aria-hidden />
-          <span className="flex-1">{LABEL[ws.status]}</span>
-          <span className="font-mono text-[10px] text-quiet">reconnect</span>
-        </button>
+          <span className="min-w-0 flex-1 truncate text-[13px]">{LABEL[ws.status]}</span>
+          <ChipGroup>
+            <Chip onClick={ws.reconnect}>Reconnect</Chip>
+          </ChipGroup>
+        </div>
 
         <dl className="flex flex-col gap-1.5 border-b border-hairline px-3 py-2.5 text-[12px]">
           <Fact label="Answering" value={standby ? `${standby} · standby` : `${vendorLabel} · ${modelLabel}`} />
@@ -128,9 +131,15 @@ export function RailStatus({ compact = false }: { compact?: boolean }) {
           <Fact label="Uptime" value={uptime || "—"} />
         </dl>
 
-        <div className="flex items-stretch gap-1 p-1.5">
-          <ThemeToggle variant="cycle-row" className="flex-1" />
-          <SignOutButton variant="row" className="flex-1" />
+        {/* These were the nav drawer's rows, reused at half width: 48px tall,
+            16px text, 20px icons, in a panel whose other text is 12px. At
+            ~113px each "Sign out" wrapped onto two lines. They are chips now,
+            the same scale as every other small control in the app. */}
+        <div className="p-1.5">
+          <ChipGroup size="md" className="w-full">
+            <ThemeToggle variant="chip" />
+            <SignOutButton variant="chip" />
+          </ChipGroup>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

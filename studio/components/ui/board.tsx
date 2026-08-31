@@ -136,7 +136,23 @@ export function BoardCard({
   children: React.ReactNode;
 }) {
   const head = (
-    <div className="flex min-w-0 items-center gap-2 border-b border-border pb-1.5">
+    /* min-h-10, and it is load-bearing rather than cosmetic.
+     *
+     * The head had no floor, so its height was whatever its tallest child
+     * happened to be. A card with nothing in `action` measured off the title
+     * text (14.5px, about 22px of line box) and put its rule at ~28px; the
+     * Phone card puts two `size-8` buttons in that slot and put its rule at
+     * ~38px. Side by side in a Board that is three columns whose hairlines sit
+     * on three different lines - which is exactly the misalignment the boss
+     * reported, and the same bug SectionTitle already fixed with min-h-11.
+     *
+     * 40px is the floor because the tallest control a head may hold is 32px
+     * (h-8 / size-8 everywhere in this codebase) and the box is border-box,
+     * so 32 + 6px of pb-1.5 = 38 still fits under it. Every card's rule now
+     * lands on the same line by construction, whether or not it has icons,
+     * and the next card someone adds with a button in its head is correct
+     * without anyone remembering this. */
+    <div className="flex min-h-10 min-w-0 items-center gap-2 border-b border-border pb-1.5">
       <span className="truncate text-[14.5px] font-medium tracking-tight">{title}</span>
       {count !== undefined && count !== "" ? (
         <span className="shrink-0 font-mono text-[11px] tabular-nums text-quiet">{count}</span>

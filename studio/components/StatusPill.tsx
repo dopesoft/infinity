@@ -14,7 +14,7 @@ export type AgentState =
  * `loud` is deliberately reserved for the two states that want the boss:
  * Jarvis is working (thinking) or the socket is gone (offline). Awake and
  * idle stay in ink so those two mean something when they appear. */
-const stateConfig: Record<
+export const agentStateChip: Record<
   AgentState,
   {
     label: string;
@@ -46,7 +46,7 @@ export function StatusPill({
   state?: AgentState;
   className?: string;
 }) {
-  const cfg = stateConfig[state];
+  const cfg = agentStateChip[state];
   return (
     <ChipGroup className={className}>
       <Chip

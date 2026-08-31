@@ -7,13 +7,14 @@ import { InfoModal } from "@/components/workspace/InfoModal";
 import { Workspace } from "@/components/workspace/Workspace";
 import { BridgePill } from "@/components/canvas/BridgePill";
 import { ProjectBreadcrumb } from "@/components/canvas/ProjectBreadcrumb";
+import { LayoutModeSwitch } from "@/components/canvas/LayoutModeSwitch";
 import { WorkbenchControl } from "@/components/canvas/WorkbenchControl";
 import { CanvasStoreProvider, useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasConfig } from "@/lib/canvas/api";
 import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { fetchSessions } from "@/lib/api";
 import { useChat } from "@/hooks/useChat";
-import { StatusPill, type AgentState } from "@/components/StatusPill";
+import { type AgentState } from "@/components/StatusPill";
 import { useRealtime } from "@/lib/realtime/provider";
 
 /**
@@ -127,17 +128,18 @@ function LivePageInner() {
           onClear={chat.clear}
           onSwitch={chat.switchSession}
           onRewind={undefined}
+          agentState={agentState}
           extraActions={
             <>
-              <StatusPill state={agentState} />
               <ProjectBreadcrumb sessionId={chat.sessionId || null} />
               <BridgePill
                 sessionId={chat.sessionId || null}
                 onPreferenceChange={() => store.bumpBridgeEpoch()}
               />
-              <WorkbenchControl changes={changeCount} />
+              <LayoutModeSwitch />
             </>
           }
+          pinnedActions={<WorkbenchControl changes={changeCount} />}
           actionChips={
             <InfoModal
               messages={chat.messages}

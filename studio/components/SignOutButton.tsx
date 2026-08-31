@@ -4,9 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { useAuth } from "@/lib/auth/session";
+import { Chip } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
-type Variant = "icon" | "row";
+type Variant = "icon" | "row" | "chip";
 
 // SignOutButton renders two ways: a square icon button for the desktop
 // header, or a full-width row to slot into the mobile drawer below the
@@ -38,6 +39,19 @@ export function SignOutButton({
   }
 
   if (!user) return null;
+
+  if (variant === "chip") {
+    return (
+      <Chip
+        icon={<LogOut />}
+        onClick={handle}
+        disabled={busy}
+        className={cn("flex-1 justify-center", className)}
+      >
+        Sign out
+      </Chip>
+    );
+  }
 
   if (variant === "row") {
     return (

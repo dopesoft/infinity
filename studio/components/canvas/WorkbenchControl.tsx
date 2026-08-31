@@ -2,9 +2,9 @@
 
 import * as React from "react";
 import { PanelRight } from "lucide-react";
-import { LayoutModeSwitch } from "@/components/canvas/LayoutModeSwitch";
 import { Chip, ChipGroup } from "@/components/ui/chip";
 import { useCanvasStore } from "@/lib/canvas/store";
+import { cn } from "@/lib/utils";
 
 /**
  * WorkbenchControl — the door to the workbench, and the only one.
@@ -20,14 +20,15 @@ import { useCanvasStore } from "@/lib/canvas/store";
  * It lives in the session header now: the row he is already looking at,
  * always mounted, in every layout mode.
  *
- * Two form factors, one job, both owned here rather than by the consumer:
+ * SCOPE, after the header tray. This is the DOOR only, below lg: on a phone
+ * the workbench is a sheet and the only question is open or shut. It carries
+ * the pending-changes count, since that is the state you would want to be
+ * interrupted for; nothing else earns a badge.
  *
- *   lg+     the three widths — Chat / Split / Build — because on a desktop
- *           the question is how much room the work gets, not whether.
- *   below   one button, because on a phone the workbench is a sheet and the
- *           only question is open or shut. It carries the pending-changes
- *           count, since that is the state you would want to be interrupted
- *           for; nothing else earns a badge.
+ * The lg+ three-width switch is <LayoutModeSwitch>, placed by the consumer.
+ * The two were bundled here until the header learned to collapse: the switch
+ * is a control that folds into the tray, the door is navigation that must
+ * stay on the row at every width, so they no longer belong to one component.
  */
 export function WorkbenchControl({
   changes = 0,
@@ -41,12 +42,10 @@ export function WorkbenchControl({
   const open = store.layout !== "chat";
 
   return (
-    <>
-      <LayoutModeSwitch className={className} />
       <ChipGroup
         count={changes}
         countLabel={`${changes} files differ from HEAD`}
-        className="lg:hidden"
+        className={cn("lg:hidden", className)}
       >
         <Chip
           iconOnly
@@ -62,6 +61,5 @@ export function WorkbenchControl({
           title="Files, browser, changes and what he made"
         />
       </ChipGroup>
-    </>
   );
 }

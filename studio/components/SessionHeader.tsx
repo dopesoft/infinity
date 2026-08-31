@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { ChevronDown, Plus, Undo2, Archive } from "lucide-react";
+import { agentStateChip, type AgentState } from "@/components/StatusPill";
+import { cn } from "@/lib/utils";
 import { Chip, ChipGroup } from "@/components/ui/chip";
 import { SessionsDrawer } from "@/components/SessionsDrawer";
 
@@ -45,6 +47,8 @@ export function SessionHeader({
   onRewind,
   extraActions,
   actionChips,
+  pinnedActions,
+  agentState = "idle",
 }: {
   sessionId: string;
   sessionName?: string;
@@ -56,9 +60,18 @@ export function SessionHeader({
   extraActions?: React.ReactNode;
   /** Chips that belong INSIDE the action track, left of Compact. */
   actionChips?: React.ReactNode;
+  /** Controls that stay on the row at every width, right of the status chip.
+   *  Navigation, not status: the workbench door belongs here. */
+  pinnedActions?: React.ReactNode;
+  /** Drives the status chip, which below lg is also the disclosure for
+   *  everything else. */
+  agentState?: AgentState;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [trayOpen, setTrayOpen] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  const status = agentStateChip[agentState];
 
   const displayName = sessionName?.trim() || shortId(sessionId);
 
@@ -66,7 +79,7 @@ export function SessionHeader({
     // Compact bar (h-10): the row sits between the global header (h-14)
     // and the workspace columns. Every control in it is a <ChipGroup> at
     // h-7, so the row has one baseline instead of the four it grew.
-    <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b bg-background/95 px-3 sm:px-4">
+    <div className="relative flex h-10 shrink-0 items-center justify-between gap-2 border-b bg-background/95 px-3 sm:px-4">
       <div className="flex min-w-0 items-center gap-2">
         <SessionsDrawer
           currentId={sessionId}
@@ -94,13 +107,62 @@ export function SessionHeader({
           </span>
         ) : null}
       </div>
-      {/* The action cluster can never push the PAGE sideways. It is the one
-          row on /live that keeps growing (status, project, bridge, workbench,
-          info, compact, new), and on a 375px phone that is more than fits.
-          It scrolls inside itself rather than overflowing the document, so
-          nothing is hidden and nothing is lost - the guard is containment,
-          not truncation. */}
-      <div className="flex min-w-0 shrink items-center gap-1.5 overflow-x-auto scroll-touch no-scrollbar sm:shrink-0">
+      {/* The row keeps growing (status, project, bridge, workbench, info,
+          compact, new) and on a phone that is more than fits. It used to
+          scroll inside itself, which contained the overflow but left the
+          session name crushed to "4bbf-…".
+
+          So below lg only two things stay on the row: the status chip, which
+          is the one fact worth a glance, and the workbench door, which is
+          navigation. The status chip carries a chevron and drops the rest
+          into a tray under the header. The tray is the SAME element as the
+          desktop cluster, repositioned - rendering it twice would mount a
+          second BridgePill and double its polling. */}
+      <div className="flex shrink-0 items-center gap-1.5">
+        <ChipGroup>
+          <Chip
+            raised
+            tone={status.tone}
+            loud={status.loud}
+            dot={status.dot}
+            aria-live="polite"
+            aria-expanded={trayOpen}
+            aria-label={`${status.label}. Show session controls.`}
+            onClick={() => setTrayOpen((v) => !v)}
+            className="lg:pointer-events-none"
+          >
+            <span className="inline-flex items-center gap-1">
+              {status.label}
+              {status.sub ? (
+                <>
+                  <span className="hidden opacity-40 sm:inline" aria-hidden>·</span>
+                  <span className="hidden opacity-75 sm:inline">{status.sub}</span>
+                </>
+              ) : null}
+              <ChevronDown
+                className={cn(
+                  "size-3 shrink-0 opacity-60 transition-transform lg:hidden",
+                  trayOpen && "rotate-180",
+                )}
+                aria-hidden
+              />
+            </span>
+          </Chip>
+        </ChipGroup>
+        {pinnedActions}
+      </div>
+
+      <div
+        className={cn(
+          "min-w-0 items-center gap-1.5",
+          // lg and up: the cluster sits on the row, as it always did.
+          "lg:flex lg:static lg:z-auto lg:flex-nowrap lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none",
+          // Below lg: a tray under the header, wrapping rather than scrolling
+          // so nothing is parked off the edge.
+          "absolute inset-x-0 top-10 z-30 flex-wrap border-b bg-background/95 p-2 backdrop-blur",
+          trayOpen ? "flex" : "hidden lg:flex",
+        )}
+      >
         {extraActions}
         {/* One track for the things you DO to the session, rather than three
             loose ghost buttons at a fourth height. New stays lifted because

@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { Monitor, Moon, Sun } from "lucide-react";
+import { Chip } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 type Theme = "light" | "dark" | "system";
-type Variant = "dropdown" | "cycle-row";
+type Variant = "dropdown" | "cycle-row" | "chip";
 
 function applyTheme(theme: Theme) {
   const root = document.documentElement;
@@ -17,16 +18,20 @@ function applyTheme(theme: Theme) {
   }
 }
 
-const OPTIONS: { value: Theme; label: string; Icon: typeof Sun }[] = [
-  { value: "light", label: "Light Mode", Icon: Sun },
-  { value: "dark", label: "Dark Mode", Icon: Moon },
-  { value: "system", label: "Auto", Icon: Monitor },
+const OPTIONS: { value: Theme; label: string; short: string; Icon: typeof Sun }[] = [
+  { value: "light", label: "Light Mode", short: "Light", Icon: Sun },
+  { value: "dark", label: "Dark Mode", short: "Dark", Icon: Moon },
+  { value: "system", label: "Auto", short: "Auto", Icon: Monitor },
 ];
 
 // Two render modes:
 //   - "dropdown" (desktop header): icon-only trigger with a radio dropdown.
 //   - "cycle-row" (mobile drawer): full-width row, icon + label, tap to
 //     advance to the next theme. Matches the nav row styling above it.
+//   - "chip" (any small panel footer): a Chip, so it sits at the same scale
+//     as every other small control in the app. The drawer row was being
+//     reused at half width in a 240px popover, where 16px text and a 48px
+//     slab do not fit and "Sign out" wrapped onto two lines.
 export function ThemeToggle({
   variant = "dropdown",
   className,
@@ -63,6 +68,24 @@ export function ThemeToggle({
     ? OPTIONS.find((o) => o.value === theme) ?? OPTIONS[2]
     : OPTIONS[2];
   const ActiveIcon = activeOption.Icon;
+
+  function cycleTo() {
+    const idx = OPTIONS.findIndex((o) => o.value === theme);
+    set(OPTIONS[(idx + 1) % OPTIONS.length].value);
+  }
+
+  if (variant === "chip") {
+    return (
+      <Chip
+        icon={<ActiveIcon />}
+        onClick={cycleTo}
+        aria-label={`Theme: ${activeOption.label}. Tap to change.`}
+        className={cn("flex-1 justify-center", className)}
+      >
+        {activeOption.short}
+      </Chip>
+    );
+  }
 
   if (variant === "cycle-row") {
     function cycle() {
