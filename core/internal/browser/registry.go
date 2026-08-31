@@ -64,6 +64,13 @@ type entry struct {
 	// controller is who is driving: ControllerAgent (default) or
 	// ControllerHuman during a takeover. Guarded by Registry.mu.
 	controller string
+	// recoveries counts how many times this session is the REPLACEMENT for one
+	// that died under a verb, carried forward across each auto-recovery.
+	// Deliberately not reset by a successful verb: a browser that dies once is
+	// a hiccup, one that dies repeatedly is a fault, and the whole point is to
+	// stop grinding through replacements while reporting progress. Opening a
+	// browser deliberately (browser_open) starts a fresh chain at 0.
+	recoveries int
 }
 
 func NewRegistry(backend Backend, tracker *runs.Tracker) *Registry {
@@ -276,28 +283,113 @@ func (r *Registry) EvictIfDead(callerCtx context.Context, browserID string, err 
 // concurrency cap for the full idle timeout, which is how the agent ended up
 // walled off from a browser it couldn't close ("max 2 concurrent" vs "no open
 // browser session to close", 30 minutes apart from any fix).
+// screencastReattempts is how many times the relay will re-subscribe to a
+// session the sidecar still reports as alive before giving up on the view.
+const screencastReattempts = 3
+
 func (r *Registry) relay(ctx context.Context, e *entry) {
-	frames, err := r.backend.SubscribeScreencast(ctx, e.browserID)
-	if err != nil {
-		// Never subscribed: the entry would otherwise sit here untouched with
-		// its mem_runs row 'running' until the idle janitor. Same rule as the
-		// stream-end path — forget AND close, together.
-		log.Printf("browser: screencast subscribe failed for %s: %v", e.browserID, err)
-		r.closeAndFinish(e.browserID, err)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		stream, err := r.backend.SubscribeScreencast(ctx, e.browserID)
+		if err != nil {
+			// Never subscribed: the entry would otherwise sit here untouched
+			// with its mem_runs row 'running' until the idle janitor. Same
+			// rule as the stream-end path — forget AND close, together.
+			log.Printf("browser: screencast subscribe failed for %s: %v", e.browserID, err)
+			r.closeAndFinish(e.browserID, err)
+			return
+		}
+		for f := range stream.Frames {
+			r.mu.Lock()
+			f.URL = e.url
+			r.mu.Unlock()
+			f.BrowserID = e.browserID
+			r.emit(e.chatID, f)
+		}
+		if err := stream.Err(); err != nil {
+			lastErr = err
+		}
+
+		// Our own teardown (Close, idle reap, core shutting down). Nothing to
+		// report and nothing to reattach to.
+		if ctx.Err() != nil {
+			return
+		}
+
+		// The stream ended but the session may be perfectly fine. The relay is
+		// the VIEWING layer, and until now its death killed live WORK: one SSE
+		// drop tore down a browser the agent was mid-task in. The anti-zombie
+		// invariant below is still right — core must never forget a session
+		// without closing it — but it must not be reached by way of a
+		// screencast hiccup.
+		//
+		// So: ask the sidecar whether the session is still there. If it is,
+		// reattach and carry on. Only tear down when the session is genuinely
+		// gone, or when the view will not come back.
+		if attempt < screencastReattempts && r.sessionAliveRemotely(ctx, e.browserID) {
+			log.Printf("browser: screencast for %s ended (%v); session is still alive, reattaching (attempt %d/%d)",
+				e.browserID, lastErr, attempt+1, screencastReattempts)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(attempt+1) * time.Second):
+			}
+			continue
+		}
+
+		// Session is gone, or the view kept dropping. Close the sidecar half
+		// so it can't linger as an unnameable zombie holding the cap, and
+		// finish with WHY. Passing nil here is what recorded six dead sessions
+		// as ok on 2026-08-30; an abnormal end must read as an error so it
+		// reaches the boss's backlog like any other honest failure.
+		if lastErr == nil && attempt > 0 {
+			lastErr = fmt.Errorf("browser screencast dropped %d times and the session did not come back", attempt+1)
+		}
+		r.closeAndFinish(e.browserID, lastErr)
 		return
 	}
-	for f := range frames {
-		r.mu.Lock()
-		f.URL = e.url
-		r.mu.Unlock()
-		f.BrowserID = e.browserID
-		r.emit(e.chatID, f)
+}
+
+// Recoveries reports how many auto-recoveries deep this session is.
+func (r *Registry) Recoveries(browserID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.sessions[browserID]; ok {
+		return e.recoveries
 	}
-	// Stream ended. Whatever ended it (sidecar session died, SSE dropped, core
-	// shutting down), this session is no longer drivable from core — Resolve
-	// forgets it the moment finish runs. Close the sidecar half as well so it
-	// can't linger as an unnameable zombie holding the cap.
-	r.closeAndFinish(e.browserID, nil)
+	return 0
+}
+
+// SetRecoveries records how many auto-recoveries deep a session is, so the
+// count survives the replacement of the session it is counting.
+func (r *Registry) SetRecoveries(browserID string, n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.sessions[browserID]; ok {
+		e.recoveries = n
+	}
+}
+
+// sessionAliveRemotely asks the sidecar whether it still holds this session.
+// Backends that cannot list report false, which keeps the old conservative
+// teardown behaviour for them rather than inventing an optimistic answer.
+func (r *Registry) sessionAliveRemotely(ctx context.Context, browserID string) bool {
+	lister, ok := r.backend.(sessionLister)
+	if !ok {
+		return false
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	remote, err := lister.ListSessions(lctx)
+	if err != nil {
+		return false
+	}
+	for _, s := range remote {
+		if s.SessionID == browserID {
+			return true
+		}
+	}
+	return false
 }
 
 // closeAndFinish tears down both halves of a session — sidecar first
@@ -406,16 +498,47 @@ func (r *Registry) Navigate(ctx context.Context, browserID, url string) error {
 }
 
 // Input forwards one raw human interaction (click/type/scroll) to a live
-// session - the boss's manual takeover of the screencast. The first manual
-// event IMPLICITLY claims control (controller=human) so the agent's write
-// verbs yield instead of clobbering the boss mid-captcha; he hands back
-// explicitly via the Studio button (SetController) or by going idle.
+// session - the boss's manual takeover of the screencast. An event that
+// expresses INTENT TO DRIVE implicitly claims control (controller=human) so the
+// agent's write verbs yield instead of clobbering the boss mid-captcha; he
+// hands back explicitly via the Studio button (SetController) or by going idle.
+//
+// Not every event is intent. Scrolling, moving the pointer and resizing the
+// pane are how you WATCH the agent work, and treating them as a takeover made
+// the browser unusable on 2026-08-30: reading the page stole control, the
+// agent's next verb was refused with "the boss is driving", it called
+// browser_request_takeover and blocked for up to five minutes waiting to be
+// handed a browser the boss never meant to take. Worse, it self-perpetuated —
+// he scrolled to see why it had stalled, and the scroll re-took control.
+//
+// So the rule is: touching the page takes it, looking at it does not.
 func (r *Registry) Input(ctx context.Context, browserID string, ev InputEvent) error {
 	if !r.isLive(browserID) {
 		return fmt.Errorf("browser session not found or already closed")
 	}
-	r.claimHumanControl(browserID)
+	if claimsControl(ev.Type) {
+		r.claimHumanControl(browserID)
+	}
 	return r.backend.Input(ctx, browserID, ev)
+}
+
+// claimsControl reports whether a raw input event means "I am driving now".
+//
+//	click / text / key  — acting on the page. Intent.
+//	scroll / move       — looking at the page. Not intent.
+//	resize              — sizing the viewer, not the page. Not intent.
+//
+// Unknown types default to claiming, because a new event we forgot to classify
+// is far more likely to be an interaction than a way of watching, and the cost
+// of being wrong that way is a takeover the boss can hand straight back rather
+// than a click landing on top of him.
+func claimsControl(evType string) bool {
+	switch strings.ToLower(strings.TrimSpace(evType)) {
+	case "scroll", "move", "resize":
+		return false
+	default:
+		return true
+	}
 }
 
 // SetControlNotify wires the controller-change broadcaster (WS event so

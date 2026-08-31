@@ -70,17 +70,34 @@ func (r *Registry) recoverSession(ctx context.Context, browserID, atURL string, 
 			atURL = last
 		}
 	}
+	priorRecoveries := r.Recoveries(browserID)
 	if !r.EvictIfDead(ctx, browserID, cause) {
 		return nil, cause
+	}
+	// Recovering forever is how a broken browser masquerades as a working one:
+	// every verb quietly reopens, the turn keeps reporting progress, and the
+	// underlying fault never surfaces. Two replacements is a hiccup; a third
+	// is a fault, and a fault must be loud enough to reach the backlog rather
+	// than be absorbed. The original cause is wrapped so the failure names the
+	// real problem instead of the symptom we happened to stop on.
+	if priorRecoveries >= maxAutoRecoveries {
+		return nil, fmt.Errorf(
+			"the browser session has died and been reopened %d times in a row, so something is wrong with the browser itself rather than with this page: %w",
+			priorRecoveries, cause)
 	}
 	chatID := tools.SessionIDFromContext(ctx)
 	info, err := r.Open(ctx, chatID, strings.TrimSpace(atURL))
 	if err != nil {
 		return nil, fmt.Errorf("the browser session had closed unexpectedly and opening a replacement failed: %w", err)
 	}
+	r.SetRecoveries(info.SessionID, priorRecoveries+1)
 	r.UpdateURL(info.SessionID, info.URL)
 	return info, nil
 }
+
+// maxAutoRecoveries caps how many times in a row a dying session may be
+// silently replaced before the failure is surfaced instead.
+const maxAutoRecoveries = 2
 
 // ── browser_open ─────────────────────────────────────────────────────────
 

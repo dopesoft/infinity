@@ -9,7 +9,7 @@ import { useWebSocket } from "@/lib/ws/provider";
 import { useRuns } from "@/lib/runs/useRuns";
 import { isCodeChangeTool } from "@/lib/canvas/detection";
 import { useProjectContext } from "@/lib/canvas/useCurrentProject";
-import { closeBrowserSession, coreBaseURL } from "@/lib/api";
+import { coreBaseURL } from "@/lib/api";
 
 /**
  * CanvasPreview - body of the Preview tab.
@@ -72,12 +72,10 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
   // below). Frames ride the per-session WS broadcaster, so they keep
   // flowing across every observe/act/extract and survive refresh.
   const [browserFrame, setBrowserFrame] = useState<string | null>(null);
-  const [browserUrl, setBrowserUrl] = useState<string>("");
-  const [stoppingBrowser, setStoppingBrowser] = useState(false);
-  // Takeover coordination: who is driving the live browser. Flips to
-  // "human" when the agent requests a hand (or the boss's first manual
-  // input claims control) and back to "agent" on hand-back.
-  const [browserController, setBrowserController] = useState<"agent" | "human">("agent");
+  // The live address and who is driving live in the canvas store, not here,
+  // because the bar that renders them is BrowserFrame one level up. Keeping a
+  // second copy down here is what produced two address bars showing two
+  // different URLs.
   const { latest: browserRun } = useRuns({ kind: "browser.session", limit: 5 });
   const browserRunning = browserRun?.status === "running";
 
@@ -85,7 +83,7 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     return ws.subscribe((ev) => {
       if (sessionId && ev.session_id && ev.session_id !== sessionId) return;
       if (ev.type === "browser_control") {
-        setBrowserController(ev.browser_control.controller);
+        store.setBrowserController(ev.browser_control.controller);
         // A takeover request must be seen: pull focus to Preview.
         if (ev.browser_control.controller === "human" && store.activeTabId !== "preview") {
           store.setActiveTabId("preview");
@@ -95,7 +93,7 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
       if (ev.type !== "browser_frame") return;
       const f = ev.browser_frame;
       setBrowserFrame(f.frame);
-      if (f.url) setBrowserUrl(f.url);
+      if (f.url) store.setBrowserUrl(f.url);
       if (f.browser_session_id) store.setBrowserSessionId(f.browser_session_id);
       if (!store.browserActive) {
         store.setBrowserActive(true);
@@ -105,18 +103,12 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     });
   }, [ws, store, sessionId]);
 
-  const handleStopBrowser = useCallback(async () => {
-    if (stoppingBrowser) return;
-    setStoppingBrowser(true);
-    try {
-      if (store.browserSessionId) await closeBrowserSession(store.browserSessionId);
-    } finally {
-      setStoppingBrowser(false);
-      store.setBrowserActive(false);
-      setBrowserFrame(null);
-      setBrowserUrl("");
-    }
-  }, [stoppingBrowser, store]);
+  // Stopping is driven from the bar in BrowserFrame now. Drop the last frame
+  // when the session ends so a later session never opens on a stale image of
+  // the previous one.
+  useEffect(() => {
+    if (!store.browserActive) setBrowserFrame(null);
+  }, [store.browserActive]);
 
   // The session decides the surface. Sessions WITHOUT a project_path are
   // chat-only - show the "no app yet" empty state and skip the iframe.
@@ -289,12 +281,8 @@ export function CanvasPreview({ sessionId = "" }: { sessionId?: string }) {
     return (
       <CanvasBrowserView
         frame={browserFrame}
-        url={browserUrl}
         running={browserRunning}
-        stopping={stoppingBrowser}
         sessionId={store.browserSessionId ?? ""}
-        controller={browserController}
-        onStop={() => void handleStopBrowser()}
       />
     );
   }

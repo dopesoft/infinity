@@ -5,10 +5,14 @@ import {
   ArrowLeft,
   ArrowRight,
   ExternalLink,
+  Hand,
+  Loader2,
   Monitor,
   RotateCw,
   Smartphone,
+  Square,
 } from "lucide-react";
+import { closeBrowserSession, navigateBrowserSession, setBrowserControl } from "@/lib/api";
 import { useCanvasStore, type DevicePreset } from "@/lib/canvas/store";
 import { useNow } from "@/lib/useNow";
 import { cn } from "@/lib/utils";
@@ -53,13 +57,37 @@ export function BrowserFrame({
   children: React.ReactNode;
 }) {
   const store = useCanvasStore();
-  const [draft, setDraft] = React.useState(url);
   const [editing, setEditing] = React.useState(false);
+  const [stopping, setStopping] = React.useState(false);
   const now = useNow(rebuiltAt != null, 1000);
 
+  // A live agent browser owns the surface: this bar is then ITS bar. Before
+  // this, the live browser rendered its own second address row inside this
+  // chrome, so two bars stacked and the outer one described the project
+  // preview — a different thing entirely, showing a URL from whichever chat
+  // last set it.
+  const live = store.browserActive && !!store.browserSessionId;
+  const liveUrl = store.browserUrl;
+  const shownUrl = live ? liveUrl : url;
+
+  const [draft, setDraft] = React.useState(shownUrl);
+
   React.useEffect(() => {
-    if (!editing) setDraft(url);
-  }, [url, editing]);
+    if (!editing) setDraft(shownUrl);
+  }, [shownUrl, editing]);
+
+  const stopLive = React.useCallback(async () => {
+    if (stopping || !store.browserSessionId) return;
+    setStopping(true);
+    try {
+      await closeBrowserSession(store.browserSessionId);
+    } finally {
+      setStopping(false);
+      store.setBrowserActive(false);
+      store.setBrowserUrl("");
+      store.setBrowserController("agent");
+    }
+  }, [stopping, store]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -81,22 +109,22 @@ export function BrowserFrame({
           >
             <ArrowRight className="size-3.5" aria-hidden />
           </button>
-          <button
-            type="button"
-            aria-label="Reload the preview"
-            onClick={() => store.refreshPreview()}
-            className="grid size-6 place-items-center rounded transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <RotateCw className={cn("size-3.5", rebuilding && "animate-spin")} aria-hidden />
-          </button>
         </span>
 
         <form
-          className="min-w-0 flex-1"
+          className="relative min-w-0 flex-1"
           onSubmit={(e) => {
             e.preventDefault();
             setEditing(false);
-            if (draft.trim() && draft !== url) onNavigate?.(draft.trim());
+            const next = draft.trim();
+            if (!next) return;
+            // While a live session owns the surface, the address bar drives
+            // THAT browser. Otherwise it drives the project preview.
+            if (live) {
+              if (next !== liveUrl) void navigateBrowserSession(store.browserSessionId, next);
+              return;
+            }
+            if (next !== url) onNavigate?.(next);
           }}
         >
           <input
@@ -105,16 +133,66 @@ export function BrowserFrame({
             onFocus={() => setEditing(true)}
             onBlur={() => {
               setEditing(false);
-              setDraft(url);
+              setDraft(shownUrl);
             }}
             spellCheck={false}
             inputMode="url"
             enterKeyHint="go"
+            autoCapitalize="off"
+            autoCorrect="off"
             aria-label="Address"
-            placeholder="Nothing is running yet"
-            className="h-6 w-full min-w-0 truncate rounded-md bg-muted px-2 font-mono text-[10.5px] text-muted-foreground outline-none transition-colors focus:text-foreground focus:ring-1 focus:ring-ring"
+            placeholder={live ? "enter a URL…" : "Nothing is running yet"}
+            className="h-6 w-full min-w-0 truncate rounded-md bg-muted py-0 pl-2 pr-7 font-mono text-[10.5px] text-muted-foreground outline-none transition-colors focus:text-foreground focus:ring-1 focus:ring-ring"
           />
+          {/* Reload and Stop are ONE control, right-aligned inside the address
+              field. They never both apply: with a live session the useful
+              action is stopping it, without one it is reloading the preview.
+              Two separate buttons made you read the bar to work out which was
+              which. */}
+          <button
+            type="button"
+            aria-label={live ? "Stop the browser session" : "Reload the preview"}
+            title={live ? "Stop the browser session" : "Reload the preview"}
+            disabled={stopping}
+            onClick={() => (live ? void stopLive() : store.refreshPreview())}
+            className={cn(
+              "absolute right-0.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40",
+              live ? "text-danger" : "text-quiet",
+            )}
+          >
+            {stopping ? (
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+            ) : live ? (
+              <Square className="size-3" aria-hidden />
+            ) : (
+              <RotateCw className={cn("size-3", rebuilding && "animate-spin")} aria-hidden />
+            )}
+          </button>
         </form>
+
+        {/* Who is driving. Sits in front of the device toggle, and the address
+            field flexes shorter to make room rather than anything wrapping. */}
+        {live && store.browserController === "human" ? (
+          <>
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+              <Hand className="size-2.5" aria-hidden />
+              <span className="hidden sm:inline">you&apos;re driving</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void setBrowserControl(store.browserSessionId, "agent")}
+              title="Give control back to Jarvis"
+              className="inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-[10.5px] text-warning transition-colors hover:bg-warning/10"
+            >
+              Hand back
+            </button>
+          </>
+        ) : live ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+            <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden />
+            <span className="hidden sm:inline">live</span>
+          </span>
+        ) : null}
 
         <span className="hidden shrink-0 items-center gap-px rounded-md bg-muted p-0.5 sm:flex">
           <DeviceButton current={store.device} target="mobile" onClick={store.setDevice}>
@@ -138,8 +216,8 @@ export function BrowserFrame({
         <button
           type="button"
           aria-label="Open in a real tab"
-          disabled={!url}
-          onClick={() => url && window.open(url, "_blank", "noopener")}
+          disabled={!shownUrl}
+          onClick={() => shownUrl && window.open(shownUrl, "_blank", "noopener")}
           className="grid size-6 shrink-0 place-items-center rounded text-quiet transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
         >
           <ExternalLink className="size-3.5" aria-hidden />
@@ -149,8 +227,16 @@ export function BrowserFrame({
       <div className="min-h-0 flex-1">{children}</div>
 
       {/* The gutter answers "is what I am looking at current". A preview that
-          silently serves a stale build is the bug this exists to prevent. */}
-      <div className="flex h-8 shrink-0 items-center gap-2 border-t border-hairline px-3 text-[11px]">
+          silently serves a stale build is the bug this exists to prevent.
+          It speaks about the PROJECT build, so it is silent while a live agent
+          browser owns the surface — a rebuild age means nothing about a page
+          on someone else's website. */}
+      <div
+        className={cn(
+          "flex h-8 shrink-0 items-center gap-2 border-t border-hairline px-3 text-[11px]",
+          live && "hidden",
+        )}
+      >
         <span
           className={cn(
             "size-1.5 shrink-0 rounded-full",

@@ -234,6 +234,15 @@ type CanvasStoreValue = {
   setBrowserActive: (on: boolean) => void;
   browserSessionId: string;
   setBrowserSessionId: (id: string) => void;
+  // The live session's own address and who is driving it. These live here,
+  // NOT in localStorage next to previewUrl, because they belong to one browser
+  // session: persisting them is what let a stale address from a previous chat
+  // (espn.com, 2026-08-30) show up in the bar of a brand new one. They are
+  // transient by design and re-announce themselves on the next frame.
+  browserUrl: string;
+  setBrowserUrl: (url: string) => void;
+  browserController: "agent" | "human";
+  setBrowserController: (c: "agent" | "human") => void;
 
   // Generated documents (each opens as its own closeable tab).
   documents: DocMeta[];
@@ -330,6 +339,8 @@ export function CanvasStoreProvider({
   const [rightMode, setRightModeInternal] = useState<"preview" | "file">("preview");
   const [browserActive, setBrowserActive] = useState(false);
   const [browserSessionId, setBrowserSessionId] = useState("");
+  const [browserUrl, setBrowserUrl] = useState("");
+  const [browserController, setBrowserController] = useState<"agent" | "human">("agent");
   const [documents, setDocuments] = useState<DocMeta[]>([]);
 
   // openPaths is the source of truth for non-preview tabs.
@@ -728,6 +739,10 @@ export function CanvasStoreProvider({
       setBrowserActive,
       browserSessionId,
       setBrowserSessionId,
+      browserUrl,
+      setBrowserUrl,
+      browserController,
+      setBrowserController,
       documents,
       openDocument,
       closeDocument,
@@ -772,6 +787,8 @@ export function CanvasStoreProvider({
       setRightMode,
       browserActive,
       browserSessionId,
+      browserUrl,
+      browserController,
       documents,
       openDocument,
       closeDocument,

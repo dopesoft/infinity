@@ -214,6 +214,6 @@ func (r *RoutingBackend) Close(ctx context.Context, sessionID string) error {
 	return err
 }
 
-func (r *RoutingBackend) SubscribeScreencast(ctx context.Context, sessionID string) (<-chan Frame, error) {
+func (r *RoutingBackend) SubscribeScreencast(ctx context.Context, sessionID string) (*Stream, error) {
 	return r.backendFor(ctx, sessionID).SubscribeScreencast(ctx, sessionID)
 }

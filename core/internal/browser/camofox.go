@@ -405,8 +405,9 @@ func (c *CamofoxBackend) Close(ctx context.Context, sessionID string) error {
 // SubscribeScreencast emulates a screencast by polling the screenshot endpoint
 // so Studio's Preview pane works identically to the chromedp backend. The
 // goroutine stops when ctx is cancelled (the registry's relay lifetime).
-func (c *CamofoxBackend) SubscribeScreencast(ctx context.Context, sessionID string) (<-chan Frame, error) {
+func (c *CamofoxBackend) SubscribeScreencast(ctx context.Context, sessionID string) (*Stream, error) {
 	out := make(chan Frame, 4)
+	stream := &Stream{Frames: out}
 	go func() {
 		defer close(out)
 		t := time.NewTicker(camofoxFramePoll)
@@ -436,5 +437,7 @@ func (c *CamofoxBackend) SubscribeScreencast(ctx context.Context, sessionID stri
 			}
 		}
 	}()
-	return out, nil
+	// This poller only ever ends on ctx cancellation, which is our own
+	// teardown rather than a stream failure, so Err stays nil by construction.
+	return stream, nil
 }

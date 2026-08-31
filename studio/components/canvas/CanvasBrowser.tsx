@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Globe, Square, Loader2, ArrowRight, MousePointerClick, Hand } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { navigateBrowserSession, sendBrowserInput, setBrowserControl, type BrowserInputEvent } from "@/lib/api";
+import { Globe, MousePointerClick } from "lucide-react";
+import { sendBrowserInput, type BrowserInputEvent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // Named keys forwarded as key events; everything else printable goes as text.
@@ -16,49 +15,42 @@ const NAMED_KEYS = new Set([
  * CanvasBrowserView - the live cloud-browser surface. The boss both WATCHES
  * Jarvis drive AND can take over by hand:
  *
- *   ┌── toolbar (globe · editable URL bar · Go · live · Stop) ──┐
- *   │                                                            │
- *   │   <img> screencast — click / type / scroll forwarded to    │
- *   │   the real browser over /api/browser/session/{id}/input    │
- *   └──────────────────────────────────────────────────────────────┘
+ *   ┌── (the address bar, who is driving, Hand back and Stop all live one ──┐
+ *   │    level up, in BrowserFrame — see below)                             │
+ *   │   <img> screencast — click / type / scroll forwarded to               │
+ *   │   the real browser over /api/browser/session/{id}/input               │
+ *   └──────────────────────────────────────────────────────────────────────┘
+ *
+ * THIS COMPONENT IS THE SURFACE ONLY. It used to carry its own toolbar with a
+ * second address bar, which rendered INSIDE BrowserFrame's chrome: two URL
+ * bars stacked, the outer one showing the project preview's address, which is
+ * a completely different thing and which persisted across chats. The toolbar
+ * moved up into BrowserFrame so there is one bar that means one thing. Nothing
+ * was dropped in the move: address, driving state, Hand back and Stop are all
+ * still there, in the bar above this surface.
  *
  * Interaction model:
- *   - URL bar is a real input. Enter (or Go) navigates the live session.
  *   - Clicking the <img> maps the click back to the source viewport (the CDP
  *     frame is emitted at native size and object-contain letterboxes it, so we
  *     undo the contain transform) and dispatches a real mouse click.
  *   - With the surface focused, keystrokes type into the focused field and
  *     scroll wheel scrolls the page. This is what makes a login the boss can
  *     actually complete, instead of a dead screenshot.
+ *   - Clicking or typing takes control; scrolling does NOT. Watching the agent
+ *     work must never take the browser off it (see Registry.claimsControl).
  */
 export function CanvasBrowserView({
   frame,
-  url,
   running,
-  stopping,
   sessionId,
-  controller = "agent",
-  onStop,
 }: {
   frame: string | null;
-  url: string;
   running: boolean;
-  stopping: boolean;
   sessionId: string;
-  /** Who is driving: "agent" (Jarvis) or "human" (takeover in progress). */
-  controller?: "agent" | "human";
-  onStop: () => void;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const [urlDraft, setUrlDraft] = useState(url);
-  const [editingUrl, setEditingUrl] = useState(false);
   const [focused, setFocused] = useState(false);
-
-  // Keep the URL bar in sync with the live location unless the boss is editing.
-  useEffect(() => {
-    if (!editingUrl) setUrlDraft(url);
-  }, [url, editingUrl]);
 
   const canControl = !!sessionId;
 
@@ -160,83 +152,8 @@ export function CanvasBrowserView({
     };
   }, [canControl, post]);
 
-  const submitUrl = useCallback(() => {
-    const u = urlDraft.trim();
-    if (!u || !sessionId) return;
-    setEditingUrl(false);
-    void navigateBrowserSession(sessionId, u);
-  }, [urlDraft, sessionId]);
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {/* Toolbar with an editable URL bar */}
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/20 px-2 dark:bg-zinc-900/40">
-        <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-        <form
-          className="flex min-w-0 flex-1 items-center gap-1"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submitUrl();
-          }}
-        >
-          <input
-            value={urlDraft}
-            onChange={(e) => setUrlDraft(e.target.value)}
-            onFocus={() => setEditingUrl(true)}
-            onBlur={() => setEditingUrl(false)}
-            placeholder={running ? "enter a URL…" : "starting browser…"}
-            disabled={!canControl}
-            inputMode="url"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className="min-w-0 flex-1 truncate rounded bg-transparent px-1 py-0.5 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:bg-background focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
-            aria-label="Browser URL"
-          />
-          {editingUrl ? (
-            <Button type="submit" size="sm" variant="ghost" className="h-7 shrink-0 px-2" title="Go">
-              <ArrowRight className="size-3.5" />
-            </Button>
-          ) : null}
-        </form>
-        {running && controller === "human" ? (
-          // Takeover in progress: the boss is driving; Jarvis waits. The
-          // hand-back button is the ONLY explicit action — taking over
-          // happens implicitly on his first click/keystroke.
-          <>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
-              <Hand className="size-3" />
-              you&apos;re driving
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 shrink-0 gap-1 px-2 text-[11px] text-warning hover:bg-warning/10"
-              onClick={() => void setBrowserControl(sessionId, "agent")}
-              title="Give control back to Jarvis"
-            >
-              Hand back
-            </Button>
-          </>
-        ) : running ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
-            <span className="size-1.5 animate-pulse rounded-full bg-success" />
-            live
-          </span>
-        ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-          onClick={onStop}
-          disabled={stopping}
-          title="Stop the browser session"
-        >
-          {stopping ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
-          Stop
-        </Button>
-      </div>
-
       {/* Interactive screencast surface. tabIndex makes it focusable so it can
           capture keystrokes; the ring shows the boss it has keyboard focus. */}
       <div
@@ -266,14 +183,18 @@ export function CanvasBrowserView({
             {canControl && !focused ? (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-3 py-2 text-[11px] text-zinc-300">
                 <MousePointerClick className="size-3.5" />
-                Click to take over — then type, scroll, and click like a normal browser.
+                Scroll to watch. Click to take over, then type and click like a normal browser.
               </div>
             ) : null}
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <Globe className="size-8 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">Waiting for the browser to start…</p>
+            <p className="text-sm text-muted-foreground">
+              {running
+                ? "Waiting for the browser to start…"
+                : "The browser session has ended."}
+            </p>
           </div>
         )}
       </div>

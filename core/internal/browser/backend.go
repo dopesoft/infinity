@@ -1,6 +1,9 @@
 package browser
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // Backend is the swappable browser engine that sits behind the browser_* verb
 // tools. The verb contract — open → navigate → observe → act → extract → close,
@@ -32,11 +35,49 @@ type Backend interface {
 	Extract(ctx context.Context, sessionID, format string) (*ExtractResult, error)
 	Screenshot(ctx context.Context, sessionID string) (*ShotResult, error)
 	Close(ctx context.Context, sessionID string) error
-	// SubscribeScreencast returns a channel of live frames for Studio's Preview
+	// SubscribeScreencast returns a live frame stream for Studio's Preview
 	// pane. The chromedp backend relays the sidecar's CDP screencast SSE; the
 	// Camoufox backend has no screencast, so it polls screenshots internally and
-	// emits frames on the same channel. The registry relay is identical for both.
-	SubscribeScreencast(ctx context.Context, sessionID string) (<-chan Frame, error)
+	// emits frames on the same stream. The registry relay is identical for both.
+	SubscribeScreencast(ctx context.Context, sessionID string) (*Stream, error)
+}
+
+// Stream is a live screencast subscription.
+//
+// It exists because a bare channel cannot say WHY it closed, and that
+// distinction is load-bearing here: the relay tears a session down when the
+// stream ends, so "the boss closed it" and "the connection broke" produced
+// identical, silent outcomes. Six browser sessions died that way on
+// 2026-08-30 and every one of them recorded its mem_runs row as ok, which is
+// precisely the empty-because-broken-reads-as-empty-because-fine failure the
+// self-healing law in CLAUDE.md forbids.
+//
+// Contract: read Frames until it closes, THEN read Err. Err is nil for a clean
+// end and non-nil when the stream died on its own.
+type Stream struct {
+	Frames <-chan Frame
+	err    atomic.Value // error, set once before Frames closes
+}
+
+// setErr records why the stream ended. Must be called before closing Frames so
+// a reader that checks Err the moment the range loop exits sees it.
+func (s *Stream) setErr(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.err.Store(err)
+}
+
+// Err reports why the stream ended, or nil if it ended cleanly. Only
+// meaningful once Frames is closed.
+func (s *Stream) Err() error {
+	if s == nil {
+		return nil
+	}
+	if v, ok := s.err.Load().(error); ok {
+		return v
+	}
+	return nil
 }
 
 // Compile-time proof every engine satisfies the contract.

@@ -255,7 +255,7 @@ func (c *Client) ListSessions(ctx context.Context) ([]RemoteSession, error) {
 // frames. The channel closes when ctx is cancelled or the stream ends. The
 // caller owns ctx cancellation (used by the registry's relay goroutine,
 // whose lifetime equals the browser session).
-func (c *Client) SubscribeScreencast(ctx context.Context, sessionID string) (<-chan Frame, error) {
+func (c *Client) SubscribeScreencast(ctx context.Context, sessionID string) (*Stream, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session/"+sessionID+"/screencast", nil)
 	if err != nil {
 		return nil, err
@@ -274,6 +274,7 @@ func (c *Client) SubscribeScreencast(ctx context.Context, sessionID string) (<-c
 	}
 
 	out := make(chan Frame, 8)
+	stream := &Stream{Frames: out}
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
@@ -297,8 +298,19 @@ func (c *Client) SubscribeScreencast(ctx context.Context, sessionID string) (<-c
 				// stall the stream — the next frame supersedes it anyway.
 			}
 		}
+		// Why the scan stopped. A read error or an over-long line (the sidecar
+		// panicking mid-frame looks exactly like this) used to be swallowed
+		// here and was indistinguishable from the sidecar closing the stream
+		// politely. The relay needs the difference to decide between "the
+		// session is gone" and "the view broke, the session is fine".
+		//
+		// ctx cancellation is OUR teardown, not a stream failure, so it is
+		// deliberately not recorded as one.
+		if err := sc.Err(); err != nil && ctx.Err() == nil {
+			stream.setErr(fmt.Errorf("screencast stream: %w", err))
+		}
 	}()
-	return out, nil
+	return stream, nil
 }
 
 // ── transport ──────────────────────────────────────────────────────────────

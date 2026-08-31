@@ -31,6 +31,12 @@ type fakeSidecar struct {
 
 	// verbErr is returned by navigate/observe/extract/act for these ids.
 	verbErr map[string]error
+
+	// subscribes counts screencast attachments; dropStreams makes that many
+	// of them end immediately with an error while the session stays alive,
+	// which is the "the view broke, the browser is fine" case.
+	subscribes  int
+	dropStreams int
 }
 
 func newFakeSidecar(max int) *fakeSidecar {
@@ -60,6 +66,14 @@ func (f *fakeSidecar) killSession(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.verbErr[id] = errors.New("browser sidecar: context canceled")
+}
+
+// forget drops a session from the sidecar's own registry, so ListSessions no
+// longer names it — the session is genuinely gone, not merely broken.
+func (f *fakeSidecar) forget(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.live, id)
 }
 
 func (f *fakeSidecar) errFor(id string) error {
@@ -149,13 +163,55 @@ func (f *fakeSidecar) Health(ctx context.Context) error { return nil }
 // SubscribeScreencast stays open for the life of the relay context. A channel
 // that closed immediately would make the registry tear the session down on its
 // own and hide the behaviour under test.
-func (f *fakeSidecar) SubscribeScreencast(ctx context.Context, id string) (<-chan Frame, error) {
+func (f *fakeSidecar) SubscribeScreencast(ctx context.Context, id string) (*Stream, error) {
+	f.mu.Lock()
+	f.subscribes++
+	drop := f.dropStreams > 0
+	if drop {
+		f.dropStreams--
+	}
+	f.mu.Unlock()
+
 	ch := make(chan Frame)
+	s := &Stream{Frames: ch}
+	if drop {
+		// The view dies while the session underneath it is perfectly fine.
+		s.setErr(errors.New("screencast stream: unexpected EOF"))
+		close(ch)
+		return s, nil
+	}
 	go func() {
 		<-ctx.Done()
 		close(ch)
 	}()
-	return ch, nil
+	return s, nil
+}
+
+// ListSessions makes the fake a sessionLister, which is what lets the registry
+// ask "is this session actually gone, or did only the view break?".
+func (f *fakeSidecar) ListSessions(ctx context.Context) ([]RemoteSession, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]RemoteSession, 0, len(f.live))
+	for id := range f.live {
+		out = append(out, RemoteSession{SessionID: id})
+	}
+	return out, nil
+}
+
+// subscribeCount reports how many times the relay has attached to a stream.
+func (f *fakeSidecar) subscribeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subscribes
+}
+
+// dropNextStreams makes the next n subscriptions end immediately with an
+// error, simulating a screencast that keeps dropping while the browser lives.
+func (f *fakeSidecar) dropNextStreams(n int) {
+	f.mu.Lock()
+	f.dropStreams = n
+	f.mu.Unlock()
 }
 
 var _ Backend = (*fakeSidecar)(nil)
@@ -215,25 +271,42 @@ func TestOpenFailsLoudlyAndLeaksNoSlotsWhenSidecarStaysDead(t *testing.T) {
 // sidecar, so a couple of rounds walled the agent off behind "max 2 concurrent
 // browser sessions" while browser_close insisted there was nothing open.
 // Capacity must hold no matter how many times a session dies.
+//
+// Two invariants, and they pull in opposite directions on purpose. Capacity
+// must never leak, however many sessions die — that is the original outage.
+// But recovery must also not be INFINITE: a browser that dies over and over is
+// a fault, and silently reopening through it lets a broken browser report
+// progress forever, which is the same empty-because-broken-reads-as-fine
+// failure in a different costume. So the recovery chain caps
+// (maxAutoRecoveries) and surfaces the fault, and the eviction still runs on
+// the way out so refusing to reopen never costs a slot.
 func TestDeadSessionsNeverExhaustCapacityAcrossVerbs(t *testing.T) {
 	f := newFakeSidecar(2)
 	r := NewRegistry(f, nil)
 	observe := &ObserveTool{Reg: r}
 
+	surfaced := 0
 	for i := 0; i < 6; i++ {
 		if id, ok := r.Resolve("chat-1", ""); ok {
 			f.killSession(id) // the browser dies between turns
 		}
 		out, err := observe.Execute(testCtx(), map[string]any{})
 		if err != nil {
-			t.Fatalf("iteration %d: browser_observe could not recover: %v", i, err)
-		}
-		if !strings.Contains(out, "example.com") {
+			surfaced++
+			// A capped recovery must blame the browser, not the page — that
+			// is the whole point of stopping.
+			if !strings.Contains(err.Error(), "browser itself") {
+				t.Fatalf("iteration %d: failure does not name the browser as the fault: %v", i, err)
+			}
+		} else if !strings.Contains(out, "example.com") {
 			t.Fatalf("iteration %d: no page content returned:\n%s", i, out)
 		}
 		if got := f.liveCount(); got > 1 {
 			t.Fatalf("iteration %d: %d sessions held on the sidecar, want at most 1 — dead sessions are leaking slots", i, got)
 		}
+	}
+	if surfaced == 0 {
+		t.Fatal("six sessions died in a row and every one was absorbed silently — a permanently broken browser would report progress forever")
 	}
 }
 

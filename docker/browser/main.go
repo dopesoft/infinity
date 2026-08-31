@@ -497,8 +497,20 @@ func (s *Session) subscribe() (chan string, func()) {
 	return ch, func() {
 		once.Do(func() {
 			s.scMu.Lock()
-			delete(s.subs, ch)
-			close(ch)
+			// shutdown() closes and unregisters every subscriber channel, and
+			// it can get here first: closing the session wakes this handler's
+			// receive with !open, the handler returns, and its deferred
+			// unsubscribe runs. sync.Once only guards this closure against
+			// ITSELF, so without the membership check that second close is a
+			// close of a closed channel — which panicked the handler and, with
+			// it, the connection, on every single teardown (2026-08-30).
+			//
+			// Membership is the ownership test: present means this closure
+			// still owns the close, absent means shutdown already did it.
+			if _, live := s.subs[ch]; live {
+				delete(s.subs, ch)
+				close(ch)
+			}
 			s.scMu.Unlock()
 		})
 	}
@@ -675,6 +687,27 @@ type actRequest struct {
 	Value  string `json:"value,omitempty"`
 }
 
+// idempotentAct reports whether re-running an action after a failed attempt is
+// safe. Safe means: running it twice has the same effect as running it once,
+// even if the first attempt partly succeeded before erroring.
+//
+//	scroll  — position is absolute-ish and nothing is committed
+//	clear   — empties a field; empty twice is empty
+//	type    — clears the field first (see Session.act), so it overwrites
+//	select  — assigns a value
+//
+// click and press are NOT here, and must never be added: both can commit
+// something (submit, place order, send) whose side effect survives the error
+// that made us want to retry.
+func idempotentAct(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "scroll", "clear", "type", "select":
+		return true
+	default:
+		return false
+	}
+}
+
 func handleAct(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req actRequest
 	if err := readJSON(r, &req); err != nil {
@@ -684,6 +717,23 @@ func handleAct(w http.ResponseWriter, r *http.Request, s *Session) {
 	if err := s.act(req); err != nil {
 		// One auto-retry: the DOM may have shifted since the last observe.
 		// Re-tag and try once more before surfacing the failure.
+		//
+		// IDEMPOTENT VERBS ONLY. The retry re-runs observe(), which re-tags
+		// data-jarvis-idx from scratch, so index N after the re-tag is not
+		// necessarily the node index N addressed before it — it may be a
+		// different element, on a different page if the first attempt
+		// navigated. Re-running that is harmless for a scroll and unacceptable
+		// for a click: the classic shape is a submit whose node is torn down
+		// by the navigation it just caused, which errors AFTER the click
+		// already dispatched. Retrying there clicks a second, arbitrary
+		// element — and on a checkout page that is a second charge.
+		//
+		// press is excluded for the same reason: the key may be Enter, and
+		// Enter on a form is a submit.
+		if !idempotentAct(req.Action) {
+			writeJSON(w, http.StatusUnprocessableEntity, errBody(err.Error()))
+			return
+		}
 		if _, oerr := s.observe(); oerr == nil {
 			if err2 := s.act(req); err2 == nil {
 				s.settle()
