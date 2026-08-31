@@ -11,7 +11,6 @@ export async function middleware(request: NextRequest) {
   // Don't break local dev when env isn't set yet — let it through and
   // surface the misconfiguration in the login page.
   if (!url || !anon) return NextResponse.next();
-  if (process.env.TEMP_LOCAL_VISUAL_CHECK === "1") return NextResponse.next();
 
   let response = NextResponse.next({ request });
 
