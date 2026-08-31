@@ -23,6 +23,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { sessionDisplayName } from "@/lib/sessions";
 import { SearchInput } from "@/components/ui/search-input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -468,10 +469,10 @@ export function SessionsDrawer({
                   const isConfirming = confirmingId === s.id;
                   const isDeleting = deletingId === s.id;
                   const isSelected = selectedIds.has(s.id);
-                  // Title first, then the stored name, and only a hex slug if
-                  // both are somehow empty (a session with no row and no text).
-                  const displayName =
-                    s.title?.trim() || s.name?.trim() || `${s.id.slice(0, 8)}…`;
+                  // Title first, then the stored name, and "New Conversation"
+                  // while it is still unnamed - same helper the header uses so
+                  // a session cannot read two different ways in two places.
+                  const displayName = sessionDisplayName(s);
                   const isAutomated = !!s.kind && s.kind !== "user";
                   const rowMeta = (
                     <>

@@ -6,13 +6,7 @@ import { agentStateChip, type AgentState } from "@/components/StatusPill";
 import { cn } from "@/lib/utils";
 import { Chip, ChipGroup } from "@/components/ui/chip";
 import { SessionsDrawer } from "@/components/SessionsDrawer";
-
-function shortId(id: string): string {
-  if (!id) return "-";
-  const tail = id.replace(/-/g, "").slice(-8);
-  if (tail.length < 8) return tail;
-  return `${tail.slice(0, 4)}-${tail.slice(4)}`;
-}
+import { sessionDisplayName } from "@/lib/sessions";
 
 function formatStarted(ms: number): string {
   if (!ms) return "";
@@ -33,9 +27,10 @@ function formatStarted(ms: number): string {
  * Picking a session swaps the conversation in place - no /sessions route
  * to navigate to anymore (we collapsed that surface into this drawer).
  *
- * Falls back to a short hex ID when the session hasn't been auto-named
- * yet (first turn hasn't completed). Once Haiku names it, the title
- * updates live via the realtime mem_sessions subscription.
+ * Reads "New Conversation" until the namer runs at the end of the first
+ * turn - a hex slug of the id is a machine reference, not a name. Once it
+ * is named the title updates live via the realtime mem_sessions
+ * subscription. The label comes from lib/sessions so the drawer agrees.
  */
 export function SessionHeader({
   sessionId,
@@ -73,14 +68,14 @@ export function SessionHeader({
 
   const status = agentStateChip[agentState];
 
-  const displayName = sessionName?.trim() || shortId(sessionId);
+  const displayName = sessionDisplayName({ name: sessionName, id: sessionId });
 
   return (
     // Compact bar (h-10): the row sits between the global header (h-14)
     // and the workspace columns. Every control in it is a <ChipGroup> at
     // h-7, so the row has one baseline instead of the four it grew.
-    <div className="relative flex h-10 shrink-0 items-center justify-between gap-2 border-b bg-background/95 px-3 sm:px-4">
-      <div className="flex min-w-0 items-center gap-2">
+    <div className="relative flex h-10 shrink-0 items-center gap-2 border-b bg-background/95 px-3 sm:px-4">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <SessionsDrawer
           currentId={sessionId}
           onSelect={onSwitch}
@@ -112,12 +107,17 @@ export function SessionHeader({
           scroll inside itself, which contained the overflow but left the
           session name crushed to "4bbf-…".
 
-          So below lg only two things stay on the row: the status chip, which
-          is the one fact worth a glance, and the workbench door, which is
-          navigation. The status chip carries a chevron and drops the rest
-          into a tray under the header. The tray is the SAME element as the
-          desktop cluster, repositioned - rendering it twice would mount a
-          second BridgePill and double its polling. */}
+          So below lg only three things stay on the row: the status chip,
+          which is the one fact worth a glance, New, which he reaches for
+          constantly and should never be behind a disclosure, and the
+          workbench door, which is navigation. The status chip carries a
+          chevron and drops the rest into a tray under the header. The tray is
+          the SAME element as the desktop cluster, repositioned - rendering it
+          twice would mount a second BridgePill and double its polling.
+
+          Everything right of the name lives in ONE track, tray included, so
+          at lg the status chip is simply the first chip of the cluster
+          instead of a lone control marooned mid-row by justify-between. */}
       <div className="flex shrink-0 items-center gap-1.5">
         <ChipGroup>
           <Chip
@@ -150,57 +150,75 @@ export function SessionHeader({
           </Chip>
         </ChipGroup>
         {pinnedActions}
-      </div>
-
-      <div
-        className={cn(
-          "min-w-0 items-center gap-1.5",
-          // lg and up: the cluster sits on the row, as it always did.
-          "lg:flex lg:static lg:z-auto lg:flex-nowrap lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none",
-          // Below lg: a tray under the header, wrapping rather than scrolling
-          // so nothing is parked off the edge.
-          "absolute inset-x-0 top-10 z-30 flex-wrap border-b bg-background/95 p-2 backdrop-blur",
-          trayOpen ? "flex" : "hidden lg:flex",
-        )}
-      >
-        {extraActions}
-        {/* One track for the things you DO to the session, rather than three
-            loose ghost buttons at a fourth height. New stays lifted because
-            it is the one he reaches for; the rest rest until touched. */}
-        <ChipGroup>
-          {actionChips}
-          {onRewind ? (
-            <Chip
-              responsiveLabel
-              icon={<Undo2 />}
-              onClick={onRewind}
-              disabled
-              aria-label="Rewind to a prior turn"
-              title="Rewind (coming soon)"
-            >
-              Rewind
-            </Chip>
-          ) : null}
-          <Chip
-            responsiveLabel
-            icon={<Archive />}
-            onClick={onClear}
-            aria-label="Compact session - fold into memory and clear visible context"
-            title="Compact session"
-          >
-            Compact
-          </Chip>
+        {/* New, on the row, and LAST - the same place it sits at lg+, so the
+            control does not move when the row collapses. It was reachable
+            only by first opening the tray, which made the status chip a menu
+            button. The tray copy below is the lg+ one; exactly one of the two
+            is ever visible. */}
+        <ChipGroup className="lg:hidden">
           <Chip
             raised
-            responsiveLabel
+            iconOnly
             icon={<Plus />}
             onClick={onNew}
             aria-label="Start a new session"
             title="New session"
-          >
-            New
-          </Chip>
+          />
         </ChipGroup>
+
+        <div
+          className={cn(
+            "min-w-0 items-center gap-1.5",
+            // lg and up: the cluster sits on the row, as it always did.
+            "lg:flex lg:static lg:z-auto lg:flex-nowrap lg:justify-start lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none",
+            // Below lg: a tray under the header, wrapping rather than
+            // scrolling so nothing is parked off the edge. It hangs off the
+            // chip that opened it, so it lines up right - a menu opens under
+            // its trigger, not across the page from it.
+            "absolute inset-x-0 top-10 z-30 flex-wrap justify-end border-b bg-background/95 px-3 py-2 backdrop-blur sm:px-4",
+            trayOpen ? "flex" : "hidden lg:flex",
+          )}
+        >
+          {extraActions}
+          {/* One track for the things you DO to the session, rather than
+              three loose ghost buttons at a fourth height. New stays lifted
+              because it is the one he reaches for; the rest rest until
+              touched. */}
+          <ChipGroup>
+            {actionChips}
+            {onRewind ? (
+              <Chip
+                responsiveLabel
+                icon={<Undo2 />}
+                onClick={onRewind}
+                disabled
+                aria-label="Rewind to a prior turn"
+                title="Rewind (coming soon)"
+              >
+                Rewind
+              </Chip>
+            ) : null}
+            <Chip
+              responsiveLabel
+              icon={<Archive />}
+              onClick={onClear}
+              aria-label="Compact session - fold into memory and clear visible context"
+              title="Compact session"
+            >
+              Compact
+            </Chip>
+            <Chip
+              raised
+              icon={<Plus />}
+              onClick={onNew}
+              aria-label="Start a new session"
+              title="New session"
+              className="max-lg:hidden"
+            >
+              New
+            </Chip>
+          </ChipGroup>
+        </div>
       </div>
     </div>
   );
