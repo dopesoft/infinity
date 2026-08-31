@@ -697,6 +697,33 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   // unconfigured vendor is how you get to its key box in the first place.
   const canSave = dirty && (!switchingVendor || vendorReady);
 
+  // onKeySaved runs after a key is stored and proven. Selecting a vendor is
+  // how you reach its key box at all, so pasting a working key for the vendor
+  // on screen is the instruction to RUN on it - not a request to store a
+  // credential and wait for a second button. Making that second press the
+  // thing that switched the brain meant "connected" was true of the key and
+  // false of the conversation, which is the worst possible split.
+  async function onKeySaved(
+    rows: ProviderKeyRow[],
+    available: string[],
+    activate = true,
+  ): Promise<string> {
+    setKeyRows(rows);
+    await refresh();
+    // A removal shares this path but must never switch anything on.
+    if (!activate || draftVendor === liveProvider) return "";
+    if (!available.includes(draftVendor)) {
+      // Stored but Core did not register it: say so rather than implying a
+      // switch that cannot happen.
+      return `Saved, but ${selectedVendor.label} is not answering yet, so I have left you on ${findVendor(liveProvider).label}.`;
+    }
+    const res = await setProvider(draftVendor);
+    if (!res.ok) {
+      return `Saved, but the switch failed: ${res.error ?? "unknown error"}`;
+    }
+    return `Jarvis is on ${selectedVendor.label} now.`;
+  }
+
   async function save() {
     setBusy(true);
     setErr(null);
@@ -794,8 +821,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           <ApiKeyBlock
             vendor={selectedVendor}
             row={keyRow}
-            onRows={setKeyRows}
-            onChanged={refresh}
+            onSaved={onKeySaved}
           />
         )}
 
@@ -843,16 +869,20 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 function ApiKeyBlock({
   vendor,
   row,
-  onRows,
-  onChanged,
+  onSaved,
 }: {
   vendor: VendorEntry;
   /** This vendor's credential state, owned by the Brain section so the
    *  vendor dropdown and this box always agree. */
   row: ProviderKeyRow | null;
-  /** Hand back the full refreshed set after a save or a removal. */
-  onRows: (rows: ProviderKeyRow[]) => void;
-  onChanged: () => void | Promise<void>;
+  /** Called after every store/remove with the refreshed rows and the
+   *  provider ids Core will now answer on. Returns a line to append to the
+   *  notice (e.g. the outcome of switching onto the vendor). */
+  onSaved: (
+    rows: ProviderKeyRow[],
+    available: string[],
+    activate?: boolean,
+  ) => Promise<string>;
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<"save" | "remove" | null>(null);
@@ -881,15 +911,14 @@ function ApiKeyBlock({
         setError(res.error);
         return;
       }
-      onRows(res.providers);
       setDraft("");
-      setNotice(
+      const base =
         res.verified === "ok"
-          ? `Saved and checked. ${vendor.label} answered, so it is selectable now.`
-          : res.note ??
-              "Saved. I could not check it against the vendor, so the first turn will be the proof.",
-      );
-      await onChanged();
+          ? `Saved and checked. ${vendor.label} answered.`
+          : (res.note ??
+            "Saved. I could not check it against the vendor, so the first turn will be the proof.");
+      const switched = await onSaved(res.providers, res.available_providers ?? []);
+      setNotice(switched ? `${base} ${switched}` : base);
     } finally {
       setBusy(null);
     }
@@ -905,9 +934,8 @@ function ApiKeyBlock({
         setError(res.error);
         return;
       }
-      onRows(res.providers);
       setNotice("Key removed.");
-      await onChanged();
+      await onSaved(res.providers, res.available_providers ?? [], false);
     } finally {
       setBusy(null);
     }
