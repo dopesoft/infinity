@@ -34,6 +34,16 @@ type OpenAI struct {
 	// (prompt_cache_key, reasoning.effort). A compatible vendor that has
 	// never seen them gets a clean request instead of an unexplained 400.
 	openaiExtras bool
+	// nativeAttachments gates the OpenAI-native image_url / file content
+	// parts. Only OpenAI itself is known to accept them: DeepSeek's Chat
+	// Completions schema wants file_id/file_data directly on the content
+	// part, so the SDK's nested {"file":{...}} object comes back as
+	// `.messages[1]: file must have a file_id or file_data` (HTTP 400) and
+	// the turn dies with the file never reaching the brain. Off by default,
+	// so a newly wired compatible vendor degrades to the labelled text
+	// rendering (which every Chat Completions vendor accepts) instead of
+	// inheriting a shape only OpenAI serves.
+	nativeAttachments bool
 	// baseURL is empty for OpenAI (SDK default) and set for a compatible
 	// vendor. Verify() uses it to probe the credential.
 	baseURL string
@@ -48,12 +58,13 @@ func NewOpenAI(apiKey, model string) *OpenAI {
 	}
 	c := openai.NewClient(option.WithAPIKey(apiKey))
 	return &OpenAI{
-		client:       c,
-		model:        model,
-		name:         "openai",
-		normalize:    normalizeOpenAIModel,
-		openaiExtras: true,
-		apiKey:       apiKey,
+		client:            c,
+		model:             model,
+		name:              "openai",
+		normalize:         normalizeOpenAIModel,
+		openaiExtras:      true,
+		nativeAttachments: true,
+		apiKey:            apiKey,
 	}
 }
 
@@ -109,11 +120,7 @@ func (o *OpenAI) StreamCached(
 	for _, m := range messages {
 		switch m.Role {
 		case RoleUser:
-			if len(m.Attachments) == 0 {
-				apiMessages = append(apiMessages, openai.UserMessage(m.Content))
-			} else {
-				apiMessages = append(apiMessages, openai.UserMessage(openaiUserParts(m)))
-			}
+			apiMessages = append(apiMessages, o.userMessage(m))
 		case RoleAssistant:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			if m.Content != "" {
@@ -319,6 +326,21 @@ func normalizeOpenAIModel(model string) string {
 
 var _ ssestream.Stream[openai.ChatCompletionChunk] // keep import for clarity
 
+// userMessage renders one user turn for THIS vendor. It is the single place
+// the native-vs-text attachment decision is made, so a test can prove what
+// the loop actually sends instead of asserting against a second copy of the
+// rule that could drift from it.
+func (o *OpenAI) userMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	switch {
+	case len(m.Attachments) == 0:
+		return openai.UserMessage(m.Content)
+	case o.nativeAttachments:
+		return openai.UserMessage(openaiUserParts(m))
+	default:
+		return openai.UserMessage(openaiAttachmentText(m))
+	}
+}
+
 // openaiUserParts renders a user message with attachments as Chat Completions
 // content parts: images as image_url data URLs, PDFs as `file` parts
 // (file_data + filename, per the OpenAI PDF guide), everything else as the
@@ -347,4 +369,26 @@ func openaiUserParts(m Message) []openai.ChatCompletionContentPartUnionParam {
 		parts = append(parts, openai.TextContentPart(m.Content))
 	}
 	return parts
+}
+
+// openaiAttachmentText renders a user message with attachments as ONE plain
+// string: each attachment's labelled TextBlock (extracted text, page-count,
+// path and any Note) followed by the typed text. This is the rendering for a
+// vendor that speaks Chat Completions but does not accept OpenAI's native
+// image_url / file parts.
+//
+// It is deliberately a string rather than a text content-part array: the
+// failure being fixed was a content part the vendor rejected, so the safest
+// shape is the one with no content parts at all. The file's CONTENT still
+// reaches the brain, which is the invariant that matters - the attachment
+// path's original bug was metadata-only prompt stuffing, and this is not a
+// return to it.
+func openaiAttachmentText(m Message) string {
+	var b strings.Builder
+	for _, a := range m.Attachments {
+		b.WriteString(a.TextBlock())
+		b.WriteString("\n\n")
+	}
+	b.WriteString(m.Content)
+	return strings.TrimRight(b.String(), "\n")
 }

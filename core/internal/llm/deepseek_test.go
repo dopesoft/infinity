@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,5 +202,108 @@ func TestFirstHealthySkipsSpentProvider(t *testing.T) {
 	MarkExhausted("openai", time.Now().Add(time.Hour), "spent")
 	if p, ok := reg.FirstHealthy("deepseek", "openai"); ok || p != nil {
 		t.Errorf("expected no healthy brain, got %v", p)
+	}
+}
+
+// A PDF attached to DeepSeek must arrive as extracted TEXT, never as an
+// OpenAI-native file part.
+//
+// The regression this pins: production turn 63524f02-e2f7-438a-8ae0-3bfd331a9bc7
+// died with HTTP 400 `.messages[1]: file must have a file_id or file_data`
+// after a 3-page PDF was attached. Every OpenAI-compatible vendor shared one
+// renderer, so DeepSeek was handed the SDK's nested {"file":{...}} content
+// part, which its schema does not accept (it wants file_id/file_data on the
+// part itself), and deepseek-v4-pro is not the vision model anyway. The boss's
+// file never reached the brain and the turn failed outright.
+func TestDeepSeekSendsAttachmentsAsTextNotFileParts(t *testing.T) {
+	m := Message{
+		Role:    RoleUser,
+		Content: "summarize this resume",
+		Attachments: []Attachment{{
+			Name:      "resume.pdf",
+			MIME:      "application/pdf",
+			Kind:      AttachmentDocument,
+			PageCount: 3,
+			Data:      []byte("%PDF-1.7 binary"),
+			Text:      "Kai Malabie - Founder, DopeSoft",
+		}},
+	}
+
+	msg := NewDeepSeek("k", "").userMessage(m)
+
+	// (1) The content the boss actually attached, plus what he typed, must
+	// both be in the request. A vendor-safe shape that drops the file would
+	// be the older, quieter version of the same bug.
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal deepseek user message: %v", err)
+	}
+	body := string(raw)
+	for _, want := range []string{"Kai Malabie - Founder, DopeSoft", "summarize this resume", `name=\"resume.pdf\"`, `pages=\"3\"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("deepseek request is missing %q:\n%s", want, body)
+		}
+	}
+
+	// (2) Nothing in the marshaled message may carry the shape that produced
+	// the 400: a file part, an image part, or the raw PDF bytes.
+	for _, banned := range []string{`"type":"file"`, `"file":{`, `"type":"image_url"`, `"image_url"`, "base64,"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("deepseek request contains %q, which is what 400s:\n%s", banned, body)
+		}
+	}
+	if msg.OfUser == nil {
+		t.Fatal("expected a user message")
+	}
+	if parts := msg.OfUser.Content.OfArrayOfContentParts; len(parts) > 0 {
+		t.Fatalf("deepseek must send a plain string, got %d content parts", len(parts))
+	}
+	if !msg.OfUser.Content.OfString.Valid() {
+		t.Fatal("deepseek user content must be a plain string")
+	}
+}
+
+// The fix is scoped to the compatible vendors: OpenAI itself still gets the
+// native image / file parts, because those are the shape its own PDF and
+// vision guides document.
+func TestOpenAIStillSendsNativeAttachmentParts(t *testing.T) {
+	m := Message{
+		Role:    RoleUser,
+		Content: "summarize this resume",
+		Attachments: []Attachment{
+			{Name: "resume.pdf", MIME: "application/pdf", Kind: AttachmentDocument, PageCount: 3, Data: []byte("%PDF"), Text: "Kai Malabie"},
+			{Name: "photo.png", MIME: "image/png", Kind: AttachmentImage, Data: []byte{1, 2, 3}},
+		},
+	}
+
+	msg := NewOpenAI("k", "").userMessage(m)
+	if msg.OfUser == nil {
+		t.Fatal("expected a user message")
+	}
+	parts := msg.OfUser.Content.OfArrayOfContentParts
+	// caption + file, caption + image, typed text
+	if len(parts) != 5 {
+		t.Fatalf("openai parts = %d, want caption+file+caption+image+text", len(parts))
+	}
+	if parts[1].OfFile == nil {
+		t.Fatal("openai must keep the native PDF file part")
+	}
+	if parts[3].OfImageURL == nil {
+		t.Fatal("openai must keep the native image part")
+	}
+	if parts[4].OfText == nil || parts[4].OfText.Text != "summarize this resume" {
+		t.Fatalf("typed text must come last, got %+v", parts[4])
+	}
+}
+
+// A message with no attachments is untouched on either vendor: this fix must
+// not change the shape of an ordinary turn.
+func TestUserMessageWithoutAttachmentsIsPlainStringEverywhere(t *testing.T) {
+	m := Message{Role: RoleUser, Content: "hello"}
+	for _, p := range []*OpenAI{NewDeepSeek("k", ""), NewOpenAI("k", "")} {
+		msg := p.userMessage(m)
+		if msg.OfUser == nil || msg.OfUser.Content.OfString.Or("") != "hello" {
+			t.Fatalf("%s: plain turn must stay a plain string, got %+v", p.Name(), msg.OfUser)
+		}
 	}
 }
