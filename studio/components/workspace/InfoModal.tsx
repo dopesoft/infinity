@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Info, Brain, Activity } from "lucide-react";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { Chip, ChipTrigger } from "@/components/ui/chip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeftPanels, RightPanels } from "@/components/LiveSidePanels";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -30,15 +31,13 @@ export function InfoModal({
   const [open, setOpen] = useState(false);
 
   const triggerNode = trigger ?? (
-    <button
-      type="button"
+    <Chip
+      iconOnly
+      icon={<Info />}
       aria-label="Workspace info"
       title="Brain · Activity"
       onClick={() => setOpen(true)}
-      className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-    >
-      <Info className="size-4" />
-    </button>
+    />
   );
 
   return (
@@ -46,7 +45,7 @@ export function InfoModal({
       {/* Trigger lives outside the modal so callers can pass an arbitrary
           node and the click-to-open is wired locally. */}
       {trigger ? (
-        <span onClick={() => setOpen(true)}>{triggerNode}</span>
+        <ChipTrigger onOpen={() => setOpen(true)}>{triggerNode}</ChipTrigger>
       ) : (
         triggerNode
       )}

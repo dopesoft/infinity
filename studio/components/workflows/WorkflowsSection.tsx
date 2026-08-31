@@ -14,6 +14,7 @@ import {
   type WorkflowDTO,
   type WorkflowInputDef,
 } from "@/lib/api";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 const KIND_TINT: Record<string, string> = {
@@ -248,23 +249,18 @@ function InputField({
         {def.required && <span className="ml-0.5 text-danger">*</span>}
       </label>
       {def.type === "enum" && def.options?.length ? (
-        <div className="flex flex-wrap gap-1.5">
+        <ChipGroup wrap aria-label={label}>
           {def.options.map((opt) => (
-            <button
+            <Chip
               key={opt}
-              type="button"
+              raised={value === opt}
+              aria-pressed={value === opt}
               onClick={() => onChange(opt)}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs transition-colors",
-                value === opt
-                  ? "border-foreground/40 bg-foreground text-background"
-                  : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/60",
-              )}
             >
               {opt}
-            </button>
+            </Chip>
           ))}
-        </div>
+        </ChipGroup>
       ) : (
         <Input
           value={value}

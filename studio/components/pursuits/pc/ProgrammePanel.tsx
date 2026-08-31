@@ -8,6 +8,7 @@ import { Inset } from "@/components/ui/inset";
 import { GroupLabel, ListRow, StatusDot, type RowTone } from "@/components/ui/list-row";
 import { MetricRow } from "@/components/ui/metric-row";
 import { Textarea } from "@/components/ui/textarea";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 import { writeCockpit } from "@/lib/pursuits/pc/api";
 import type {
@@ -420,14 +421,14 @@ function CaptureGroup({
         label="captures today"
         count={cockpit.today_evidence.length}
         trailing={
-          <div className="flex gap-1" role="group" aria-label="Capture kind">
+          <ChipGroup role="group" aria-label="Capture kind">
             <KindToggle active={kind === "evidence"} onClick={() => setKind("evidence")}>
               evidence
             </KindToggle>
             <KindToggle active={kind === "resistance"} onClick={() => setKind("resistance")}>
               resistance
             </KindToggle>
-          </div>
+          </ChipGroup>
         }
       />
       <Quiet>
@@ -522,20 +523,15 @@ function KindToggle({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <Chip
+      mono
+      raised={active}
       aria-pressed={active}
-      className={cn(
-        "inline-flex h-8 shrink-0 items-center rounded-full border px-3 font-mono text-[11px] uppercase tracking-wider transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-        active
-          ? "border-foreground bg-foreground text-background"
-          : "border-border bg-muted text-quiet hover:bg-accent",
-      )}
+      onClick={onClick}
+      className="uppercase tracking-wider"
     >
       {children}
-    </button>
+    </Chip>
   );
 }
 

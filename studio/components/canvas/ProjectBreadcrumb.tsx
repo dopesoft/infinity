@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, Check, FolderGit2, Sparkles } from "lucide-react";
+import { Check, FolderGit2, Sparkles } from "lucide-react";
 import { useCanvasStore } from "@/lib/canvas/store";
 import {
   fetchLibraryTree,
@@ -26,6 +26,7 @@ import {
   type LibraryEntry,
 } from "@/lib/canvas/api";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 export function ProjectBreadcrumb({ sessionId }: { sessionId: string | null }) {
@@ -78,23 +79,22 @@ export function ProjectBreadcrumb({ sessionId }: { sessionId: string | null }) {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => {
-          setOpen(true);
-          void load();
-        }}
-        title={current ? current.storage_path : "Jarvis's own code"}
-        className="inline-flex h-7 max-w-[180px] items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-      >
-        {current ? (
-          <FolderGit2 className="size-3 shrink-0 text-info" />
-        ) : (
-          <Sparkles className="size-3 shrink-0 text-info" />
-        )}
-        <span className="min-w-0 truncate">{label}</span>
-        <ChevronDown className="size-3 shrink-0 opacity-60" />
-      </button>
+      <ChipGroup className="max-w-[180px]">
+        <Chip
+          raised
+          chevron
+          iconTone="info"
+          icon={current ? <FolderGit2 /> : <Sparkles />}
+          onClick={() => {
+            setOpen(true);
+            void load();
+          }}
+          title={current ? current.storage_path : "Jarvis's own code"}
+          aria-label="Switch project"
+        >
+          {label}
+        </Chip>
+      </ChipGroup>
 
       <ResponsiveModal
         open={open}

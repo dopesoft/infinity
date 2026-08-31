@@ -136,12 +136,14 @@ function LivePageInner() {
                 onPreferenceChange={() => store.bumpBridgeEpoch()}
               />
               <WorkbenchControl changes={changeCount} />
-              <InfoModal
-                messages={chat.messages}
-                usedTokens={usedTokens}
-                wsConnected={chat.status === "connected"}
-              />
             </>
+          }
+          actionChips={
+            <InfoModal
+              messages={chat.messages}
+              usedTokens={usedTokens}
+              wsConnected={chat.status === "connected"}
+            />
           }
         />
         <Workspace chat={chat} changeCount={changeCount} />

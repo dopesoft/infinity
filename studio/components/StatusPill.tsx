@@ -1,3 +1,4 @@
+import { Chip, ChipGroup, type ChipTone } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 export type AgentState =
@@ -7,43 +8,37 @@ export type AgentState =
   | "idle"
   | "offline";
 
+/* One row per state: the label, the optional qualifier, the tone the dot
+ * carries, how the dot moves, and whether the label shouts too.
+ *
+ * `loud` is deliberately reserved for the two states that want the boss:
+ * Jarvis is working (thinking) or the socket is gone (offline). Awake and
+ * idle stay in ink so those two mean something when they appear. */
 const stateConfig: Record<
   AgentState,
-  { label: string; sub?: string; dot: string; bg: string; fg: string }
+  {
+    label: string;
+    sub?: string;
+    tone: ChipTone;
+    dot: true | "pulse" | "ping";
+    loud?: boolean;
+  }
 > = {
-  awake: {
-    label: "Awake",
-    dot: "bg-success",
-    bg: "bg-success/10",
-    fg: "text-success",
-  },
-  listening: {
-    label: "Awake",
-    sub: "Listening",
-    dot: "bg-success animate-pulse",
-    bg: "bg-success/10",
-    fg: "text-success",
-  },
-  thinking: {
-    label: "Thinking",
-    dot: "bg-info animate-pulse",
-    bg: "bg-info/10",
-    fg: "text-info",
-  },
-  idle: {
-    label: "Idle",
-    dot: "bg-muted-foreground",
-    bg: "bg-muted",
-    fg: "text-muted-foreground",
-  },
-  offline: {
-    label: "Offline",
-    dot: "bg-destructive",
-    bg: "bg-destructive/10",
-    fg: "text-destructive",
-  },
+  awake: { label: "Awake", tone: "success", dot: true },
+  listening: { label: "Awake", sub: "Listening", tone: "success", dot: "pulse" },
+  thinking: { label: "Thinking", tone: "info", dot: "ping", loud: true },
+  idle: { label: "Idle", tone: "neutral", dot: true },
+  offline: { label: "Offline", tone: "danger", dot: true, loud: true },
 };
 
+/**
+ * StatusPill - is Jarvis awake, working, or gone.
+ *
+ * Reports state, it does not take a click, so the chip is non-interactive.
+ * Thinking stays lit for the ENTIRE turn (thinking, tool calls, streaming)
+ * because chat.isStreaming drives it, not the local ThinkingBlock: a glance
+ * at the header has to answer "is he still going".
+ */
 export function StatusPill({
   state = "idle",
   className,
@@ -52,36 +47,26 @@ export function StatusPill({
   className?: string;
 }) {
   const cfg = stateConfig[state];
-  // Thinking gets a louder pulse: a real ping-ring around a solid dot,
-  // not just an animate-pulse opacity tick. Stays visible for the ENTIRE
-  // turn (thinking → tool calls → streaming) because chat.isStreaming
-  // drives the state, not just the local ThinkingBlock - so the boss can
-  // glance at the header and know Jarvis is still working.
-  const isThinking = state === "thinking";
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
-        cfg.bg,
-        cfg.fg,
-        className,
-      )}
-    >
-      {isThinking ? (
-        <span className="relative inline-flex size-2 shrink-0" aria-hidden>
-          <span className="absolute inset-0 inline-flex animate-ping rounded-full bg-info opacity-70" />
-          <span className="relative inline-flex size-2 rounded-full bg-info" />
+    <ChipGroup className={className}>
+      <Chip
+        interactive={false}
+        raised
+        tone={cfg.tone}
+        loud={cfg.loud}
+        dot={cfg.dot}
+        aria-live="polite"
+      >
+        <span className={cn("inline-flex items-center gap-1")}>
+          {cfg.label}
+          {cfg.sub ? (
+            <>
+              <span className="opacity-40" aria-hidden>·</span>
+              <span className="opacity-75">{cfg.sub}</span>
+            </>
+          ) : null}
         </span>
-      ) : (
-        <span className={cn("size-1.5 rounded-full", cfg.dot)} aria-hidden />
-      )}
-      <span>{cfg.label}</span>
-      {cfg.sub ? (
-        <>
-          <span className="opacity-50">·</span>
-          <span className="opacity-80">{cfg.sub}</span>
-        </>
-      ) : null}
-    </span>
+      </Chip>
+    </ChipGroup>
   );
 }

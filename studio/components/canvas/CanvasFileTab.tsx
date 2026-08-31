@@ -17,7 +17,7 @@ import { useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasFSReadResult, fetchCanvasGitShow, saveCanvasFile } from "@/lib/canvas/api";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
 import { INFINITY_DARK, INFINITY_LIGHT, registerInfinityThemes } from "@/lib/canvas/monaco-theme";
-import { cn } from "@/lib/utils";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 
 /**
  * CanvasFileTab - Monaco-backed view of a single file.
@@ -357,10 +357,10 @@ export function CanvasFileTab({
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={path}>
           {path}
         </span>
-        <div className="inline-flex items-center gap-0 rounded-md border bg-background p-0.5">
-          <ModeButton active={mode === "diff"} onClick={() => setMode("diff")} icon={<GitCompare className="size-3" />} label="Diff" />
-          <ModeButton active={mode === "edit"} onClick={() => setMode("edit")} icon={<Pencil className="size-3" />} label="Edit" />
-        </div>
+        <ChipGroup>
+          <ModeButton active={mode === "diff"} onClick={() => setMode("diff")} icon={<GitCompare />} label="Diff" />
+          <ModeButton active={mode === "edit"} onClick={() => setMode("edit")} icon={<Pencil />} label="Edit" />
+        </ChipGroup>
       </div>
 
       {/* Body */}
@@ -536,18 +536,9 @@ function ModeButton({
   label: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "inline-flex h-6 items-center gap-1 rounded-sm px-2 text-[11px] font-medium transition-colors",
-        active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {icon}
+    <Chip raised={active} icon={icon} onClick={onClick} aria-pressed={active}>
       {label}
-    </button>
+    </Chip>
   );
 }
 

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 import { createTodo } from "@/lib/api";
 import { useIsDesktop } from "@/lib/use-media-query";
@@ -185,31 +186,23 @@ export function AddTodoModal({
         {/* Due date - quick chips + custom picker */}
         <div className="space-y-1.5">
           <Label htmlFor="todo-due">Due date</Label>
-          <div className="flex flex-wrap gap-2">
+          <ChipGroup wrap size="md" aria-label="Due date presets">
             {quickDue.map((c) => (
-              <button
+              <Chip
                 key={c.label}
-                type="button"
-                data-on={due === c.value}
+                raised={due === c.value}
+                aria-pressed={due === c.value}
                 onClick={() => setDue(due === c.value ? "" : c.value)}
-                className={cn(
-                  "inline-flex h-8 items-center gap-1 rounded-full border border-input bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent",
-                  "data-[on=true]:border-transparent data-[on=true]:bg-info/15 data-[on=true]:text-info",
-                )}
               >
                 {c.label}
-              </button>
+              </Chip>
             ))}
             {due ? (
-              <button
-                type="button"
-                onClick={() => setDue("")}
-                className="inline-flex h-8 items-center rounded-full px-2 text-xs text-muted-foreground underline-offset-2 hover:underline"
-              >
+              <Chip tone="danger" loud onClick={() => setDue("")}>
                 Clear
-              </button>
+              </Chip>
             ) : null}
-          </div>
+          </ChipGroup>
           <div className="relative">
             <CalendarDays className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input

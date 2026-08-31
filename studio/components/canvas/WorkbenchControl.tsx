@@ -3,8 +3,8 @@
 import * as React from "react";
 import { PanelRight } from "lucide-react";
 import { LayoutModeSwitch } from "@/components/canvas/LayoutModeSwitch";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { useCanvasStore } from "@/lib/canvas/store";
-import { cn } from "@/lib/utils";
 
 /**
  * WorkbenchControl — the door to the workbench, and the only one.
@@ -43,34 +43,25 @@ export function WorkbenchControl({
   return (
     <>
       <LayoutModeSwitch className={className} />
-      <button
-        type="button"
-        onClick={() => store.setLayout(open ? "chat" : "split")}
-        aria-pressed={open}
-        aria-label={
-          open
-            ? "Close the workbench"
-            : "Open the workbench: files, browser, changes and what he made"
-        }
-        title="Files, browser, changes and what he made"
-        /* The `after` pseudo is the touch target: 44px to a thumb without
-           the button itself growing past the 40px header row. */
-        className={cn(
-          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors lg:hidden",
-          "after:absolute after:left-1/2 after:top-1/2 after:size-11 after:-translate-x-1/2 after:-translate-y-1/2 after:content-['']",
-          open ? "bg-muted text-foreground" : "text-quiet hover:bg-accent hover:text-foreground",
-        )}
+      <ChipGroup
+        count={changes}
+        countLabel={`${changes} files differ from HEAD`}
+        className="lg:hidden"
       >
-        <PanelRight className="size-4" aria-hidden />
-        {changes > 0 ? (
-          <span
-            className="absolute -right-1 -top-1 grid min-w-[1rem] place-items-center rounded-full bg-warning px-1 font-mono text-[9px] leading-4 tabular-nums text-warning-foreground"
-            aria-hidden
-          >
-            {changes > 99 ? "99+" : changes}
-          </span>
-        ) : null}
-      </button>
+        <Chip
+          iconOnly
+          raised={open}
+          icon={<PanelRight />}
+          onClick={() => store.setLayout(open ? "chat" : "split")}
+          aria-pressed={open}
+          aria-label={
+            open
+              ? "Close the workbench"
+              : "Open the workbench: files, browser, changes and what he made"
+          }
+          title="Files, browser, changes and what he made"
+        />
+      </ChipGroup>
     </>
   );
 }

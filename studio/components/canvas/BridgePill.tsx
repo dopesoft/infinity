@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, RefreshCw, X } from "lucide-react";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
+import { Chip, ChipGroup, ChipTrigger, chipDotClass, chipTextClass, type ChipTone } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 import type { RunDTO } from "@/lib/api";
@@ -35,7 +36,9 @@ import {
  */
 type Preference = "auto" | "mac" | "cloud";
 
-type Tone = "success" | "info" | "warning" | "danger" | "muted";
+/* Tone now comes from the chip primitive; "muted" was this file's private
+   name for the same idea and maps to "neutral". */
+type Tone = Exclude<ChipTone, "brand">;
 
 const POLL_MS = 10_000;
 
@@ -155,45 +158,30 @@ export function BridgePill({
   const pill = codingPill({ base: basePill, codeRun: claudeRun, liveTool, setting });
 
   const triggerNode = (
-    <button
-      type="button"
-      aria-label="Bridge for this session"
-      title={pill.title}
-      className={cn(
-        // Compact pill - sits in the top bar next to other small status
-        // chips. Padding + gap chosen so the longest label ("Connecting…")
-        // breathes away from the rounded border instead of kissing it.
-        "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[10px] font-medium transition-colors",
-        "hover:bg-accent/60",
-        pill.toneClasses.border,
-        pill.toneClasses.bg,
-        pill.toneClasses.text,
-      )}
-      disabled={!sessionId}
-    >
-      <span
-        className={cn(
-          "inline-block size-1.5 shrink-0 rounded-full",
-          pill.toneClasses.dot,
-          pill.spin && "animate-pulse",
-        )}
-        aria-hidden
-      />
-      <span className="font-mono tracking-tight">{pill.label}</span>
-    </button>
+    <ChipGroup>
+      <Chip
+        raised
+        mono
+        tone={pill.tone}
+        loud={pill.loud}
+        dot={pill.spin ? "pulse" : true}
+        aria-label="Bridge for this session"
+        title={pill.title}
+        disabled={!sessionId}
+      >
+        {pill.label}
+      </Chip>
+    </ChipGroup>
   );
 
   // No session → render the muted placeholder and skip the modal entirely.
   if (!sessionId) {
     return (
-      <span
-        className="inline-flex h-7 items-center gap-1 rounded-full border border-border/60 px-2 text-[10px] font-medium text-muted-foreground"
-        aria-label="No session"
-        title="No active session"
-      >
-        <span className="inline-block size-1.5 rounded-full bg-muted-foreground/40" aria-hidden />
-        <span className="font-mono tracking-tight">-</span>
-      </span>
+      <ChipGroup>
+        <Chip interactive={false} mono dot aria-label="No session" title="No active session">
+          No session
+        </Chip>
+      </ChipGroup>
     );
   }
 
@@ -210,7 +198,7 @@ export function BridgePill({
 
   return (
     <>
-      <span onClick={() => setOpen(true)}>{triggerNode}</span>
+      <ChipTrigger onOpen={() => setOpen(true)}>{triggerNode}</ChipTrigger>
       <ResponsiveModal
         open={open}
         onOpenChange={setOpen}
@@ -230,7 +218,9 @@ type PillRender = {
   label: string;
   title: string;
   spin: boolean;
-  toneClasses: ReturnType<typeof toneToClasses>;
+  tone: Tone;
+  /** Only a bridge that is actually broken colours its label. */
+  loud?: boolean;
 };
 
 // codingPill overlays the live coding engine on the bridge pill:
@@ -255,7 +245,7 @@ function codingPill({
       label: `Claude Code · ${model}`,
       title: `Claude Code is coding on the Mac on ${plan} (${codeRun.meta?.model ?? "default model"}${codeRun.meta?.effort ? `, effort ${codeRun.meta.effort}` : ""}). Billed to your Claude subscription, not the chat model.`,
       spin: true,
-      toneClasses: toneToClasses("success"),
+      tone: "success",
     };
   }
   if (liveTool && isCodingTool(liveTool.name) && liveTool.name !== "code_agent") {
@@ -264,7 +254,7 @@ function codingPill({
       label: `${model} · coding`,
       title: `${model} is editing directly (${liveTool.name}); this bills the chat model's plan, not Claude Code.`,
       spin: true,
-      toneClasses: toneToClasses(setting?.standby ? "warning" : "info"),
+      tone: setting?.standby ? "warning" : "info",
     };
   }
   return base;
@@ -297,7 +287,7 @@ function renderPill({
       label: "-",
       title: "No active session",
       spin: false,
-      toneClasses: toneToClasses("muted"),
+      tone: "neutral",
     };
   }
 
@@ -307,7 +297,7 @@ function renderPill({
       label: "Connecting…",
       title: "Probing bridges",
       spin: true,
-      toneClasses: toneToClasses("warning"),
+      tone: "warning",
     };
   }
 
@@ -316,7 +306,8 @@ function renderPill({
       label: "No bridge",
       title: "No bridge URLs configured on Core",
       spin: false,
-      toneClasses: toneToClasses("danger"),
+      tone: "danger",
+      loud: true,
     };
   }
 
@@ -330,7 +321,8 @@ function renderPill({
       label: "No bridge",
       title: session.bridge_error || "Pinned bridge offline",
       spin: false,
-      toneClasses: toneToClasses("danger"),
+      tone: "danger",
+      loud: true,
     };
   }
 
@@ -341,7 +333,8 @@ function renderPill({
       label: bothDown ? "No bridge" : "Connecting…",
       title: session.bridge_error || "Waiting for a healthy bridge",
       spin: !bothDown,
-      toneClasses: toneToClasses(bothDown ? "danger" : "warning"),
+      tone: bothDown ? "danger" : "warning",
+      loud: bothDown,
     };
   }
 
@@ -360,7 +353,7 @@ function renderPill({
         session.why_active ||
         (isAuto ? "Auto routing — Mac is up, so it's preferred" : "Mac bridge active"),
       spin: false,
-      toneClasses: toneToClasses("success"),
+      tone: "success",
     };
   }
 
@@ -370,49 +363,8 @@ function renderPill({
       session.why_active ||
       (isAuto ? "Auto routing — using the cloud workspace" : "Cloud bridge active"),
     spin: false,
-    toneClasses: toneToClasses("info"),
+    tone: "info",
   };
-}
-
-function toneToClasses(tone: Tone) {
-  switch (tone) {
-    case "success":
-      return {
-        border: "border-success/40",
-        bg: "bg-success/10",
-        text: "text-success",
-        dot: "bg-success",
-      };
-    case "info":
-      return {
-        border: "border-info/40",
-        bg: "bg-info/10",
-        text: "text-info",
-        dot: "bg-info",
-      };
-    case "warning":
-      return {
-        border: "border-warning/40",
-        bg: "bg-warning/10",
-        text: "text-warning",
-        dot: "bg-warning",
-      };
-    case "danger":
-      return {
-        border: "border-danger/40",
-        bg: "bg-danger/10",
-        text: "text-danger",
-        dot: "bg-danger",
-      };
-    case "muted":
-    default:
-      return {
-        border: "border-border/60",
-        bg: "bg-transparent",
-        text: "text-muted-foreground",
-        dot: "bg-muted-foreground/40",
-      };
-  }
 }
 
 // --------------------------------------------------------------------------
@@ -579,14 +531,15 @@ function StatusLine({
   healthy: boolean;
   configured: boolean;
 }) {
-  const tone: Tone = !configured ? "muted" : healthy ? "success" : "danger";
-  const cls = toneToClasses(tone);
+  const tone: Tone = !configured ? "neutral" : healthy ? "success" : "danger";
   const text = !configured ? "not configured" : healthy ? "up" : "down";
   return (
     <div className="flex items-center gap-1.5">
-      <span className={cn("inline-block size-2 rounded-full", cls.dot)} aria-hidden />
+      <span className={cn("inline-block size-2 rounded-full", chipDotClass[tone])} aria-hidden />
       <span className="font-semibold text-foreground">{label}</span>
-      <span className={cn("font-mono text-[10px]", cls.text)}>{text}</span>
+      <span className={cn("font-mono text-[10px]", tone === "neutral" ? "text-muted-foreground" : chipTextClass[tone])}>
+        {text}
+      </span>
     </div>
   );
 }

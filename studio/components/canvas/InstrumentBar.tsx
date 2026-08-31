@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import {
-  ChevronDown,
   Eye,
   FileText,
   FolderTree,
@@ -11,6 +10,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -61,111 +61,113 @@ export function InstrumentBar({
   trailing?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto scroll-touch no-scrollbar border-b border-hairline px-2">
-      {fileName ? (
-        <Tab
-          on={active === "file"}
-          onClick={() => {
-            onSelect("file");
-            onOpenSwitcher?.();
-          }}
-          title={fileName}
+    <div className="flex h-10 shrink-0 items-center gap-1.5 overflow-x-auto scroll-touch no-scrollbar border-b border-hairline px-2">
+      {/* One track, so the instrument selector reads as the same object as the
+          layout switch in the header rather than a second style of tab. */}
+      <ChipGroup role="tablist" aria-label="Workbench instrument">
+        {fileName ? (
+          <Chip
+            role="tab"
+            aria-selected={active === "file"}
+            raised={active === "file"}
+            chevron
+            icon={<FileText />}
+            onClick={() => {
+              onSelect("file");
+              onOpenSwitcher?.();
+            }}
+            title={fileName}
+            className="max-w-[11rem]"
+          >
+            {fileName}
+          </Chip>
+        ) : null}
+
+        <Chip
+          role="tab"
+          aria-selected={active === "files"}
+          raised={active === "files"}
+          icon={<FolderTree />}
+          onClick={() => onSelect("files")}
         >
-          <FileText className="size-3.5 shrink-0" aria-hidden />
-          <span className="max-w-[9rem] truncate">{fileName}</span>
-          <ChevronDown className="size-3 shrink-0 text-quiet" aria-hidden />
-        </Tab>
-      ) : null}
+          Files
+        </Chip>
 
-      <Tab on={active === "files"} onClick={() => onSelect("files")}>
-        <FolderTree className="size-3.5 shrink-0" aria-hidden />
-        <span>Files</span>
-      </Tab>
+        <Chip
+          role="tab"
+          aria-selected={active === "browser"}
+          raised={active === "browser"}
+          icon={<Eye />}
+          onClick={() => onSelect("browser")}
+        >
+          Browser
+        </Chip>
 
-      <Tab on={active === "browser"} onClick={() => onSelect("browser")}>
-        <Eye className="size-3.5 shrink-0" aria-hidden />
-        <span>Browser</span>
-      </Tab>
+        <Chip
+          role="tab"
+          aria-selected={active === "changes"}
+          raised={active === "changes"}
+          tone="warning"
+          loud={!!changes && active !== "changes"}
+          icon={<GitBranch />}
+          onClick={() => onSelect("changes")}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            Changes
+            {changes ? <Count on={active === "changes"}>{changes}</Count> : null}
+          </span>
+        </Chip>
 
-      <Tab
-        on={active === "changes"}
-        onClick={() => onSelect("changes")}
-        tone={changes ? "warning" : undefined}
-      >
-        <GitBranch className="size-3.5 shrink-0" aria-hidden />
-        <span>Changes</span>
-        {changes ? <Badge on={active === "changes"}>{changes}</Badge> : null}
-      </Tab>
+        <Chip
+          role="tab"
+          aria-selected={active === "terminal"}
+          raised={active === "terminal"}
+          icon={<SquareTerminal />}
+          onClick={() => onSelect("terminal")}
+        >
+          Terminal
+        </Chip>
 
-      <Tab on={active === "terminal"} onClick={() => onSelect("terminal")}>
-        <SquareTerminal className="size-3.5 shrink-0" aria-hidden />
-        <span>Terminal</span>
-      </Tab>
-
-      <Tab on={active === "made"} onClick={() => onSelect("made")}>
-        <Sparkles className="size-3.5 shrink-0" aria-hidden />
-        <span>Made</span>
-        {madeCount ? <Badge on={active === "made"}>{madeCount}</Badge> : null}
-      </Tab>
+        <Chip
+          role="tab"
+          aria-selected={active === "made"}
+          raised={active === "made"}
+          icon={<Sparkles />}
+          onClick={() => onSelect("made")}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            Made
+            {madeCount ? <Count on={active === "made"}>{madeCount}</Count> : null}
+          </span>
+        </Chip>
+      </ChipGroup>
 
       <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
         {trailing}
         {onClose ? (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close the workbench"
-            title="Close the workbench"
-            className="grid size-7 place-items-center rounded-md text-quiet transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <X className="size-3.5" aria-hidden />
-          </button>
+          <ChipGroup>
+            <Chip
+              iconOnly
+              icon={<X />}
+              onClick={onClose}
+              aria-label="Close the workbench"
+              title="Close the workbench"
+            />
+          </ChipGroup>
         ) : null}
       </span>
     </div>
   );
 }
 
-function Tab({
-  on,
-  tone,
-  title,
-  onClick,
-  children,
-}: {
-  on: boolean;
-  tone?: "warning";
-  title?: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={on}
-      title={title}
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11.5px] transition-colors",
-        on
-          ? "bg-muted text-foreground"
-          : tone === "warning"
-            ? "text-warning hover:bg-accent/60"
-            : "text-quiet hover:bg-accent/60 hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Badge({ on, children }: { on: boolean; children: React.ReactNode }) {
+/* The inline count inside an instrument chip. Distinct from ChipGroup's
+ * corner count, which is for a control whose label has no room for it. */
+function Count({ on, children }: { on: boolean; children: React.ReactNode }) {
   return (
     <span
       className={cn(
         "rounded-full px-1.5 font-mono text-[9.5px] tabular-nums",
-        on ? "bg-accent" : "bg-muted",
+        on ? "bg-muted" : "bg-accent",
       )}
     >
       {children}

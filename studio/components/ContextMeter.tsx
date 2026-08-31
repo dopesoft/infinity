@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { DatabaseZap } from "lucide-react";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { Chip } from "@/components/ui/chip";
 import { useGlobalModel } from "@/lib/use-model";
 import { resolveModelEntry } from "@/lib/models-catalog";
 import {
@@ -57,22 +58,20 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
 
   return (
     <>
-      <button
-        type="button"
+      <Chip
+        iconOnly
+        icon={<Ring pct={pct} />}
         onClick={() => setOpen(true)}
         title={
           data
             ? `${formatTokens(data.used_tokens)} / ${formatTokens(data.context_window)} (${Math.round(pct * 100)}%)`
             : "Context usage"
         }
-        className={cn(
-          "inline-flex h-8 w-8 items-center justify-center rounded-full",
-          "text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-        )}
         aria-label="Context usage"
-      >
-        <Ring pct={pct} />
-      </button>
+        /* The ring is data, not a glyph: keep it at its drawn 18px rather
+           than letting the chip's icon sizing shrink the stroke. */
+        className="[&_svg]:size-[18px]"
+      />
 
       <ResponsiveModal open={open} onOpenChange={setOpen} size="sm" title="Context usage">
         <UsageBody data={data} />

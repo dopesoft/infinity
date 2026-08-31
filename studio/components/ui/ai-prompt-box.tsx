@@ -3,7 +3,7 @@
 import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw, FileText, ChevronDown, ChevronRight, Check } from "lucide-react";
+import { ArrowUp, Paperclip, Square, X, Mic, MicOff, AlertCircle, RotateCcw, FileText, ChevronRight, Check } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -19,6 +19,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { useVoice } from "@/lib/voice/use-voice";
 import { emitVoiceActive, onWakeDetected } from "@/lib/voice/wake-bus";
@@ -221,28 +222,26 @@ function ModelChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Chip
+          raised
+          chevron
+          dot
+          tone={onStandby ? "warning" : "success"}
+          loud={onStandby}
           title={
             onStandby
               ? `${current.label} is out of usage; answering on ${standbyLabel} for now`
               : `${vendor.label} · model & effort`
           }
-          className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium",
-            "border-border bg-muted/50 text-foreground/90 transition-colors",
-            "hover:bg-muted hover:text-foreground active:scale-[0.98]",
-            onStandby && "border-warning/50",
-          )}
         >
-          <span className={cn("h-1.5 w-1.5 rounded-full", onStandby ? "bg-warning" : "bg-success")} aria-hidden />
-          <span>{onStandby ? standbyLabel : current.label}</span>
-          {onStandby ? <span className="text-muted-foreground">standby</span> : null}
-          {showEffort ? (
-            <span className="text-muted-foreground">{effortDisplay(effort, appliedEffort)}</span>
-          ) : null}
-          <ChevronDown className="size-3 opacity-60" aria-hidden />
-        </button>
+          <span className="inline-flex items-center gap-1.5">
+            <span>{onStandby ? standbyLabel : current.label}</span>
+            {onStandby ? <span className="text-muted-foreground">standby</span> : null}
+            {showEffort ? (
+              <span className="text-muted-foreground">{effortDisplay(effort, appliedEffort)}</span>
+            ) : null}
+          </span>
+        </Chip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
         {vendor.models.map((m) => (
@@ -871,33 +870,29 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                 </Tooltip>
               ) : (
                 <>
-                  <ModelChip
-                    modelId={modelId}
-                    vendorId={vendorId}
-                    onSelect={cycleModel}
-                    effort={effort}
-                    appliedEffort={appliedEffort}
-                    onEffortChange={onEffortChange}
-                    standbyLabel={standbyLabel}
-                  />
-                  <ContextMeter sessionId={sessionId} />
-
-  
-                  {!minimal && (
+                  {/* Which brain, how much of it is left, and what you are
+                      handing it: one instrument, not three loose shapes. */}
+                  <ChipGroup size="md">
+                    <ModelChip
+                      modelId={modelId}
+                      vendorId={vendorId}
+                      onSelect={cycleModel}
+                      effort={effort}
+                      appliedEffort={appliedEffort}
+                      onEffortChange={onEffortChange}
+                      standbyLabel={standbyLabel}
+                    />
+                    <ContextMeter sessionId={sessionId} />
+                    {!minimal && (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
-                          type="button"
+                        <Chip
+                          iconOnly
                           onClick={() => uploadRef.current?.click()}
                           disabled={disabled || voiceActive}
-                          className={cn(
-                            "inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground",
-                            "transition-colors hover:bg-muted hover:text-foreground",
-                            "disabled:cursor-not-allowed disabled:opacity-50",
-                          )}
                           aria-label="Attach files"
+                          icon={<Paperclip />}
                         >
-                          <Paperclip className="h-4 w-4" />
                           <input
                             ref={uploadRef}
                             type="file"
@@ -910,11 +905,12 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                               if (e.target) e.target.value = "";
                             }}
                           />
-                        </button>
+                        </Chip>
                       </TooltipTrigger>
                       <TooltipContent side="top">Attach files</TooltipContent>
                     </Tooltip>
-                  )}
+                    )}
+                  </ChipGroup>
                 </>
               )}
             </div>

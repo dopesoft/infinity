@@ -117,9 +117,9 @@ export function WorkspaceChatColumn({
           />
         ) : null}
       </div>
-      {/* The rule runs the full width (it separates the surfaces); the box
-          inside it sits in the same column as the conversation. */}
-      <div className="min-w-0 shrink-0 border-t bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
+      {/* No rule above the input. The blurred ground is what separates it
+          from the conversation; a line as well was one edge too many. */}
+      <div className="min-w-0 shrink-0 bg-background/95 px-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4 keyboard-safe-bottom">
         <div className="mx-auto w-full min-w-0 max-w-stream">
         <PromptInputBox
           onSend={(text, files) => {

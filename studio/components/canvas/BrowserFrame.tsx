@@ -15,6 +15,7 @@ import {
 import { closeBrowserSession, navigateBrowserSession, setBrowserControl } from "@/lib/api";
 import { useCanvasStore, type DevicePreset } from "@/lib/canvas/store";
 import { useNow } from "@/lib/useNow";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -174,54 +175,61 @@ export function BrowserFrame({
             field flexes shorter to make room rather than anything wrapping. */}
         {live && store.browserController === "human" ? (
           <>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
-              <Hand className="size-2.5" aria-hidden />
-              <span className="hidden sm:inline">you&apos;re driving</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => void setBrowserControl(store.browserSessionId, "agent")}
-              title="Give control back to Jarvis"
-              className="inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-[10.5px] text-warning transition-colors hover:bg-warning/10"
-            >
-              Hand back
-            </button>
+            <ChipGroup>
+              <Chip
+                interactive={false}
+                raised
+                responsiveLabel
+                tone="warning"
+                loud
+                icon={<Hand />}
+              >
+                you&apos;re driving
+              </Chip>
+              <Chip
+                tone="warning"
+                loud
+                onClick={() => void setBrowserControl(store.browserSessionId, "agent")}
+                title="Give control back to Jarvis"
+              >
+                Hand back
+              </Chip>
+            </ChipGroup>
           </>
         ) : live ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
-            <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden />
-            <span className="hidden sm:inline">live</span>
-          </span>
+          <ChipGroup>
+            <Chip interactive={false} raised tone="success" dot="pulse">
+              live
+            </Chip>
+          </ChipGroup>
         ) : null}
 
-        <span className="hidden shrink-0 items-center gap-px rounded-md bg-muted p-0.5 sm:flex">
+        <ChipGroup className="hidden sm:inline-flex">
           <DeviceButton current={store.device} target="mobile" onClick={store.setDevice}>
-            <Smartphone className="size-3" aria-hidden />
+            <Smartphone aria-hidden />
           </DeviceButton>
           <DeviceButton current={store.device} target="desktop" onClick={store.setDevice}>
-            <Monitor className="size-3" aria-hidden />
+            <Monitor aria-hidden />
           </DeviceButton>
-        </span>
+        </ChipGroup>
 
         {errorCount > 0 ? (
-          <button
-            type="button"
-            onClick={onShowErrors}
-            className="inline-flex h-6 shrink-0 items-center rounded-full border border-danger/40 px-2 text-[10.5px] text-danger transition-colors hover:bg-danger/10"
-          >
-            {errorCount} {errorCount === 1 ? "error" : "errors"}
-          </button>
+          <ChipGroup>
+            <Chip raised loud dot tone="danger" onClick={onShowErrors}>
+              {errorCount} {errorCount === 1 ? "error" : "errors"}
+            </Chip>
+          </ChipGroup>
         ) : null}
 
-        <button
-          type="button"
-          aria-label="Open in a real tab"
-          disabled={!shownUrl}
-          onClick={() => shownUrl && window.open(shownUrl, "_blank", "noopener")}
-          className="grid size-6 shrink-0 place-items-center rounded text-quiet transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-        >
-          <ExternalLink className="size-3.5" aria-hidden />
-        </button>
+        <ChipGroup>
+          <Chip
+            iconOnly
+            icon={<ExternalLink />}
+            aria-label="Open in a real tab"
+            disabled={!shownUrl}
+            onClick={() => shownUrl && window.open(shownUrl, "_blank", "noopener")}
+          />
+        </ChipGroup>
       </div>
 
       <div className="min-h-0 flex-1">{children}</div>
@@ -272,18 +280,14 @@ function DeviceButton({
 }) {
   const active = current === target;
   return (
-    <button
-      type="button"
+    <Chip
+      iconOnly
+      raised={active}
+      icon={children}
       onClick={() => onClick(target)}
       aria-pressed={active}
       aria-label={`${target} width`}
-      className={cn(
-        "grid size-5 place-items-center rounded transition-colors",
-        active ? "bg-background text-foreground shadow-sm" : "text-quiet hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
+    />
   );
 }
 

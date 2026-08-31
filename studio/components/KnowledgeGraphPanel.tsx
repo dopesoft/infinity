@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Search, Network, X, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 import { fetchGraph, type GraphEdgeDTO, type GraphNodeDTO, type GraphResponse } from "@/lib/api";
 
@@ -356,37 +357,37 @@ export function KnowledgeGraphPanel() {
 
       {/* Type filter chips */}
       {data && (data.node_types ?? []).length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2">
-          <button
-            onClick={() => setFilterType("")}
-            className={cn(
-              "inline-flex min-h-9 items-center rounded-full border px-3 font-mono text-[11px] uppercase tracking-wide lg:min-h-7 lg:px-2 lg:text-[10px]",
-              filterType === ""
-                ? "border-info bg-info/10 text-info"
-                : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
-            )}
-          >
-            all
-          </button>
-          {(data.node_types ?? []).map((t) => (
-            <button
-              key={t}
-              onClick={() => setFilterType(t)}
-              className={cn(
-                "inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 font-mono text-[11px] uppercase tracking-wide lg:min-h-7 lg:px-2 lg:text-[10px]",
-                filterType === t
-                  ? "border-info bg-info/10 text-info"
-                  : "border-transparent bg-muted text-muted-foreground hover:bg-accent",
-              )}
+        <div className="border-b px-3 py-2">
+          <ChipGroup wrap aria-label="Filter by type">
+            <Chip
+              mono
+              raised={filterType === ""}
+              onClick={() => setFilterType("")}
+              className="uppercase tracking-wide"
             >
-              <span
-                className="inline-block size-2 rounded-full"
-                style={{ backgroundColor: colorFor(t) }}
-                aria-hidden
-              />
-              {t}
-            </button>
-          ))}
+              all
+            </Chip>
+            {(data.node_types ?? []).map((t) => (
+              <Chip
+                key={t}
+                mono
+                raised={filterType === t}
+                onClick={() => setFilterType(t)}
+                className="uppercase tracking-wide"
+                icon={
+                  /* The graph's own colour for this type, so the swatch is
+                     data rather than styling. */
+                  <span
+                    className="inline-block size-2 rounded-full"
+                    style={{ backgroundColor: colorFor(t) }}
+                    aria-hidden
+                  />
+                }
+              >
+                {t}
+              </Chip>
+            ))}
+          </ChipGroup>
         </div>
       )}
 

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useCanvasStore, type LayoutMode } from "@/lib/canvas/store";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,35 +26,26 @@ const MODES: { id: LayoutMode; label: string }[] = [
 export function LayoutModeSwitch({ className }: { className?: string }) {
   const store = useCanvasStore();
   return (
-    <span
+    <ChipGroup
       role="group"
       aria-label="Workbench width"
-      className={cn("relative hidden items-center gap-px rounded-lg bg-muted p-0.5 lg:flex", className)}
+      pip={store.layoutAuto}
+      pipTitle="Choosing for itself. Move this and it stops."
+      className={cn("hidden lg:inline-flex", className)}
     >
-      {store.layoutAuto ? (
-        <span
-          aria-label="Choosing for itself"
-          title="Choosing for itself. Move this and it stops."
-          className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-brand"
-        />
-      ) : null}
       {MODES.map((m) => {
         const on = store.layout === m.id;
         return (
-          <button
+          <Chip
             key={m.id}
-            type="button"
+            raised={on}
             aria-pressed={on}
             onClick={() => store.setLayout(m.id)}
-            className={cn(
-              "h-5 rounded-md px-2 text-[10.5px] transition-colors",
-              on ? "bg-background text-foreground shadow-sm" : "text-quiet hover:text-foreground",
-            )}
           >
             {m.label}
-          </button>
+          </Chip>
         );
       })}
-    </span>
+    </ChipGroup>
   );
 }

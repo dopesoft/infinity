@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ChevronDown, Plus, Undo2, Archive } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Chip, ChipGroup } from "@/components/ui/chip";
 import { SessionsDrawer } from "@/components/SessionsDrawer";
 
 function shortId(id: string): string {
@@ -44,6 +44,7 @@ export function SessionHeader({
   onSwitch,
   onRewind,
   extraActions,
+  actionChips,
 }: {
   sessionId: string;
   sessionName?: string;
@@ -53,6 +54,8 @@ export function SessionHeader({
   onSwitch: (id: string) => void;
   onRewind?: () => void;
   extraActions?: React.ReactNode;
+  /** Chips that belong INSIDE the action track, left of Compact. */
+  actionChips?: React.ReactNode;
 }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -61,9 +64,8 @@ export function SessionHeader({
 
   return (
     // Compact bar (h-10): the row sits between the global header (h-14)
-    // and the workspace columns. Buttons drop to h-7 + text-xs because
-    // the contents are dense (name chevron + 2-3 action chips) and the
-    // session name already pulls focus.
+    // and the workspace columns. Every control in it is a <ChipGroup> at
+    // h-7, so the row has one baseline instead of the four it grew.
     <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b bg-background/95 px-3 sm:px-4">
       <div className="flex min-w-0 items-center gap-2">
         <SessionsDrawer
@@ -98,44 +100,45 @@ export function SessionHeader({
           It scrolls inside itself rather than overflowing the document, so
           nothing is hidden and nothing is lost - the guard is containment,
           not truncation. */}
-      <div className="flex min-w-0 shrink items-center gap-0.5 overflow-x-auto scroll-touch no-scrollbar sm:shrink-0">
+      <div className="flex min-w-0 shrink items-center gap-1.5 overflow-x-auto scroll-touch no-scrollbar sm:shrink-0">
         {extraActions}
-        {onRewind ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onRewind}
-            aria-label="Rewind to a prior turn"
-            title="Rewind (coming soon)"
-            disabled
-            className="h-7 gap-1 px-2 text-xs"
+        {/* One track for the things you DO to the session, rather than three
+            loose ghost buttons at a fourth height. New stays lifted because
+            it is the one he reaches for; the rest rest until touched. */}
+        <ChipGroup>
+          {actionChips}
+          {onRewind ? (
+            <Chip
+              responsiveLabel
+              icon={<Undo2 />}
+              onClick={onRewind}
+              disabled
+              aria-label="Rewind to a prior turn"
+              title="Rewind (coming soon)"
+            >
+              Rewind
+            </Chip>
+          ) : null}
+          <Chip
+            responsiveLabel
+            icon={<Archive />}
+            onClick={onClear}
+            aria-label="Compact session - fold into memory and clear visible context"
+            title="Compact session"
           >
-            <Undo2 className="size-3.5" />
-            <span className="hidden sm:inline">Rewind</span>
-          </Button>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClear}
-          aria-label="Compact session - fold into memory and clear visible context"
-          title="Compact session"
-          className="h-7 gap-1 px-2 text-xs"
-        >
-          <Archive className="size-3.5" />
-          <span className="hidden sm:inline">Compact</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNew}
-          aria-label="Start a new session"
-          title="New session"
-          className="h-7 gap-1 px-2 text-xs"
-        >
-          <Plus className="size-3.5" />
-          <span className="hidden sm:inline">New</span>
-        </Button>
+            Compact
+          </Chip>
+          <Chip
+            raised
+            responsiveLabel
+            icon={<Plus />}
+            onClick={onNew}
+            aria-label="Start a new session"
+            title="New session"
+          >
+            New
+          </Chip>
+        </ChipGroup>
       </div>
     </div>
   );
