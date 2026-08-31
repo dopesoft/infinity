@@ -5,6 +5,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/llm"
 )
 
 // sweep.go — the guarantee behind session titles.
@@ -124,6 +126,20 @@ func (n *Namer) SweepUnnamed(ctx context.Context, limit int) (SweepResult, error
 			if err != nil {
 				reason = err.Error()
 			}
+			// A spent plan says nothing about this session. Counting it
+			// against the attempt budget let a few hours of quota exhaustion
+			// permanently condemn a perfectly nameable conversation to a hex
+			// slug - which is precisely what happened on 2026-08-30, when two
+			// sessions burned all three attempts against an out-of-usage
+			// ChatGPT plan. Record the reason so the failure stays visible,
+			// but leave the budget alone so the next pass tries again.
+			if _, isQuota := llm.AsQuota(err); isQuota {
+				n.noteNameError(ctx, t.id, reason)
+				log.Printf("sessions.sweep: session=%s deferred, the brain is out of usage: %s",
+					t.id, truncate(reason, 200))
+				res.Failed++
+				continue
+			}
 			// A failure to name is a real failure of our own code path, not
 			// noise: record it on the row and say so on stderr, so a namer
 			// that has quietly stopped working is visible instead of just
@@ -160,6 +176,21 @@ func (n *Namer) SweepUnnamed(ctx context.Context, limit int) (SweepResult, error
 
 // countNameAttempt records a failed titling attempt on the session so the sweep
 // gives up after maxNameAttempts, and keeps the reason where it can be read.
+// noteNameError records WHY a pass could not title a session without
+// spending one of its attempts. For transient failures (a spent plan): the
+// row still shows the real reason, and the next sweep retries.
+func (n *Namer) noteNameError(ctx context.Context, sessionID, reason string) {
+	if _, err := n.pool.Exec(ctx, `
+		UPDATE mem_sessions
+		   SET metadata = COALESCE(metadata,'{}'::jsonb) || jsonb_build_object(
+		       'name_error', $2::text,
+		       'name_last_try', NOW()::text)
+		 WHERE id = $1::uuid
+	`, sessionID, truncate(reason, 300)); err != nil {
+		log.Printf("sessions.sweep: stamp session=%s: %v", sessionID, err)
+	}
+}
+
 func (n *Namer) countNameAttempt(ctx context.Context, sessionID, reason string) {
 	if _, err := n.pool.Exec(ctx, `
 		UPDATE mem_sessions

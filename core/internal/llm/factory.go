@@ -193,6 +193,54 @@ func (r *Registry) Unregister(name string) {
 	delete(r.providers, strings.ToLower(strings.TrimSpace(name)))
 }
 
+// FirstHealthy returns the first provider that is registered AND not
+// currently held out for a spent plan, trying `prefer` in order before
+// falling back to any healthy registrant.
+//
+// This is for small housekeeping calls (session titles and the like) that
+// must never be the reason a feature stops working. The chat brain is the
+// boss's explicit choice and is left alone; a background title is not worth
+// failing over a quota, and pinning one to a plan that runs out is how
+// session naming silently died on 2026-08-30.
+//
+// Returns the RAW provider (no failover wrapper): the caller is already
+// choosing among healthy providers, so wrapping would only add a second,
+// redundant layer of the same decision.
+func (r *Registry) FirstHealthy(prefer ...string) (Provider, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, name := range prefer {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		p, ok := r.providers[name]
+		if !ok || p == nil {
+			continue
+		}
+		if _, _, spent := Exhausted(name); spent {
+			continue
+		}
+		return p, true
+	}
+	// Deterministic fallback order so two calls a second apart don't land on
+	// different brains for no reason.
+	names := make([]string, 0, len(r.providers))
+	for k := range r.providers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, _, spent := Exhausted(name); spent {
+			continue
+		}
+		if p := r.providers[name]; p != nil {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
 // Available returns the sorted list of provider ids the registry knows
 // about. Studio uses this to gray out vendor options whose credentials
 // aren't wired (e.g. ANTHROPIC_API_KEY missing → anthropic absent).

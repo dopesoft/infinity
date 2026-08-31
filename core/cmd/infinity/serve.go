@@ -1271,6 +1271,45 @@ func serveCmd() *cobra.Command {
 					// to Haiku when no model override is set.
 					if sessionNamer != nil {
 						sessionNamer.SetActiveModelFn(modelSettings.GetModel)
+						// And route the DRAFTING BRAIN through the registry
+						// rather than pinning it to whatever was wired at
+						// boot.
+						//
+						// Order, per the boss on 2026-08-30: his ChatGPT
+						// SUBSCRIPTION first, because a 7-word title on a
+						// plan he already pays for is free, then his Settings
+						// brain, then anything else healthy. He chose this
+						// knowing naming had just died on that plan - the
+						// order was never the problem.
+						//
+						// This is also the fix for naming going dark that
+						// day. It was pinned to the ChatGPT plan, the plan
+						// ran out, and two sessions burned their entire
+						// attempt budget against the quota error before
+						// anyone noticed. FirstHealthy skips a provider whose
+						// plan is currently spent, so a title now moves to
+						// the next brain instead of failing.
+						if llmRegistry != nil {
+							reg := llmRegistry
+							getProvider := modelSettings.GetProvider
+							sessionNamer.SetProviderFn(func() llm.Provider {
+								const plan = "openai_oauth"
+								prefer := []string{plan}
+								seen := map[string]bool{plan: true}
+								if sel := strings.ToLower(strings.TrimSpace(getProvider(context.Background()))); sel != "" && !seen[sel] {
+									prefer, seen[sel] = append(prefer, sel), true
+								}
+								// Then anything else registered, so a title is
+								// never the thing that fails.
+								for _, id := range reg.Available() {
+									if !seen[id] {
+										prefer, seen[id] = append(prefer, id), true
+									}
+								}
+								p, _ := reg.FirstHealthy(prefer...)
+								return p
+							})
+						}
 					}
 				}
 			}

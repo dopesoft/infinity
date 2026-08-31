@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go"
 )
@@ -168,5 +169,37 @@ func TestImplementedUnwrapsDecorators(t *testing.T) {
 	}
 	if !Implemented(WrapNoDashes(NewDeepSeek("key", ""))) {
 		t.Error("a wrapped working provider reported itself as a stub")
+	}
+}
+
+// FirstHealthy is what keeps housekeeping (session titles) alive when one
+// plan is spent. Session naming went dark on 2026-08-30 because it was pinned
+// to a single provider whose plan ran out; the preference list must skip a
+// spent brain rather than fail on it.
+func TestFirstHealthySkipsSpentProvider(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(NewDeepSeek("k", ""))
+	reg.Register(NewOpenAI("k", ""))
+	t.Cleanup(func() {
+		ClearExhausted("deepseek")
+		ClearExhausted("openai")
+	})
+
+	p, ok := reg.FirstHealthy("deepseek", "openai")
+	if !ok || p.Name() != "deepseek" {
+		t.Fatalf("preferred brain not chosen: %v %v", p, ok)
+	}
+
+	MarkExhausted("deepseek", time.Now().Add(time.Hour), "spent")
+	p, ok = reg.FirstHealthy("deepseek", "openai")
+	if !ok || p.Name() != "openai" {
+		t.Fatalf("a spent brain was handed back instead of the next one: %v %v", p, ok)
+	}
+
+	// Everything spent: report honestly rather than returning a brain that
+	// will fail on the next call.
+	MarkExhausted("openai", time.Now().Add(time.Hour), "spent")
+	if p, ok := reg.FirstHealthy("deepseek", "openai"); ok || p != nil {
+		t.Errorf("expected no healthy brain, got %v", p)
 	}
 }

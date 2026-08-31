@@ -46,6 +46,38 @@ type Namer struct {
 	// Settings. Guarded because naming runs on detached goroutines.
 	modelMu sync.RWMutex
 	modelFn func(ctx context.Context) string
+
+	// providerFn resolves the brain to draft titles on, per call. Set at
+	// boot to "the cheapest healthy provider", so a title never fails
+	// because one plan is spent - which is exactly how naming died on
+	// 2026-08-30, with two sessions burning all three attempts against an
+	// exhausted ChatGPT plan. nil falls back to the fixed provider.
+	provMu     sync.RWMutex
+	providerFn func() llm.Provider
+}
+
+// SetProviderFn wires the namer to a live brain resolver. Wired once at boot.
+func (n *Namer) SetProviderFn(fn func() llm.Provider) {
+	if n == nil {
+		return
+	}
+	n.provMu.Lock()
+	n.providerFn = fn
+	n.provMu.Unlock()
+}
+
+// brain resolves the provider for one drafting call, preferring the live
+// resolver and falling back to the one handed in at construction.
+func (n *Namer) brain() llm.Provider {
+	n.provMu.RLock()
+	fn := n.providerFn
+	n.provMu.RUnlock()
+	if fn != nil {
+		if p := fn(); p != nil {
+			return p
+		}
+	}
+	return n.provider
 }
 
 // SetActiveModelFn wires the namer to the boss's live model selection so
@@ -220,15 +252,28 @@ func (n *Namer) draftName(ctx context.Context, userMsg, assistantMsg string) (st
 	// llm.Provider). We don't want the token stream - just the final text - so
 	// we drain the event channel and read Response.Text. The caller owns the
 	// channel and closes it after Stream returns (same convention as the loop).
+	brain := n.brain()
+	if brain == nil {
+		return "", errors.New("no brain available to draft a session title")
+	}
+	// The Settings model id belongs to the Settings VENDOR. Naming may be
+	// running on a different one (the cheapest healthy brain), and handing
+	// "deepseek-v4-pro" to OpenAI is a guaranteed 400. Pass the id only when
+	// it belongs to this provider's family; otherwise let the provider use
+	// its own default.
+	model := n.activeModel(ctx)
+	if model != "" && !llm.ModelFamilyMatches(brain.Name(), model) {
+		model = ""
+	}
 	out := make(chan llm.StreamEvent, 64)
 	var resp llm.Response
 	var serr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		resp, serr = n.provider.Stream(
+		resp, serr = brain.Stream(
 			ctx,
-			n.activeModel(ctx),
+			model,
 			namingSystem,
 			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
 			nil,
