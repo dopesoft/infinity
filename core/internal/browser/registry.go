@@ -360,6 +360,51 @@ func (r *Registry) relay(ctx context.Context, e *entry) {
 	}
 }
 
+// ── direct verb access ────────────────────────────────────────────────────
+//
+// These let a trusted in-process caller drive a session WITHOUT going through
+// the tool registry, which matters for the payment fill boundary: the card is
+// typed by Go, so the value never becomes a tool input, never reaches the
+// model's context, and never lands in an observation payload. The verb tools
+// above remain the only path the agent itself has.
+
+// ObserveDirect returns the current page's elements and text.
+func (r *Registry) ObserveDirect(ctx context.Context, browserID string) (*ObserveResult, error) {
+	if !r.isLive(browserID) {
+		return nil, fmt.Errorf("browser session not found or already closed")
+	}
+	return r.backend.Observe(ctx, browserID)
+}
+
+// ActDirect performs one action. Callers driving a payment must treat a
+// charge-bearing action as single-shot: see purchase.BrowserExecutor.
+func (r *Registry) ActDirect(ctx context.Context, browserID string, req ActRequest) (*ActResult, error) {
+	if !r.isLive(browserID) {
+		return nil, fmt.Errorf("browser session not found or already closed")
+	}
+	return r.backend.Act(ctx, browserID, req)
+}
+
+// ExtractDirect returns the page as markdown.
+func (r *Registry) ExtractDirect(ctx context.Context, browserID string) (*ExtractResult, error) {
+	if !r.isLive(browserID) {
+		return nil, fmt.Errorf("browser session not found or already closed")
+	}
+	return r.backend.Extract(ctx, browserID, "markdown")
+}
+
+// ScreenshotDirect captures the page. Used for the receipt on a confirmed
+// purchase; payment fields are masked by the engine before capture.
+func (r *Registry) ScreenshotDirect(ctx context.Context, browserID string) (*ShotResult, error) {
+	if !r.isLive(browserID) {
+		return nil, fmt.Errorf("browser session not found or already closed")
+	}
+	return r.backend.Screenshot(ctx, browserID)
+}
+
+// IsLive reports whether core still tracks a drivable session.
+func (r *Registry) IsLive(browserID string) bool { return r.isLive(browserID) }
+
 // Recoveries reports how many auto-recoveries deep this session is.
 func (r *Registry) Recoveries(browserID string) int {
 	r.mu.Lock()

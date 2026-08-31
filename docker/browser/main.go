@@ -52,12 +52,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
+	"github.com/mailru/easyjson"
 )
 
 const (
@@ -279,6 +283,84 @@ type Session struct {
 	scMu      sync.Mutex
 	subs      map[chan string]struct{}
 	lastFrame string
+
+	// frameMu guards the frame bookkeeping that makes cross-frame observe and
+	// act possible.
+	//
+	//   frameCtx   frame id → its live execution context
+	//   elemFrame  global element index → the frame that element lives in
+	//
+	// elemFrame is what lets act() route an index back into the document it
+	// came from. Without it a card field in a Stripe iframe is addressable in
+	// the observe output and unreachable in practice.
+	frameMu   sync.Mutex
+	frameCtx  map[cdp.FrameID]runtime.ExecutionContextID
+	elemFrame map[int]cdp.FrameID
+}
+
+func (s *Session) setFrameCtx(fid cdp.FrameID, cid runtime.ExecutionContextID) {
+	s.frameMu.Lock()
+	if s.frameCtx == nil {
+		s.frameCtx = map[cdp.FrameID]runtime.ExecutionContextID{}
+	}
+	s.frameCtx[fid] = cid
+	s.frameMu.Unlock()
+}
+
+func (s *Session) dropFrameCtx(cid runtime.ExecutionContextID) {
+	s.frameMu.Lock()
+	for f, c := range s.frameCtx {
+		if c == cid {
+			delete(s.frameCtx, f)
+		}
+	}
+	s.frameMu.Unlock()
+}
+
+func (s *Session) clearFrameCtx() {
+	s.frameMu.Lock()
+	s.frameCtx = map[cdp.FrameID]runtime.ExecutionContextID{}
+	s.elemFrame = map[int]cdp.FrameID{}
+	s.frameMu.Unlock()
+}
+
+func (s *Session) ctxFor(fid cdp.FrameID) (runtime.ExecutionContextID, bool) {
+	s.frameMu.Lock()
+	defer s.frameMu.Unlock()
+	c, ok := s.frameCtx[fid]
+	return c, ok
+}
+
+// rememberElementFrames replaces the index→frame map after an observe. It is a
+// full replacement rather than a merge because indexes are re-assigned from
+// scratch each time, so a stale entry would point an action at the wrong
+// document.
+func (s *Session) rememberElementFrames(m map[int]cdp.FrameID) {
+	s.frameMu.Lock()
+	s.elemFrame = m
+	s.frameMu.Unlock()
+}
+
+func (s *Session) frameOf(idx int) (cdp.FrameID, bool) {
+	s.frameMu.Lock()
+	defer s.frameMu.Unlock()
+	f, ok := s.elemFrame[idx]
+	return f, ok
+}
+
+// frameIDOf digs the frameId out of an execution context's auxData, which is
+// the only place CDP reports the association.
+func frameIDOf(aux easyjson.RawMessage) (cdp.FrameID, bool) {
+	if len(aux) == 0 {
+		return "", false
+	}
+	var v struct {
+		FrameID string `json:"frameId"`
+	}
+	if err := json.Unmarshal(aux, &v); err != nil || v.FrameID == "" {
+		return "", false
+	}
+	return cdp.FrameID(v.FrameID), true
 }
 
 func (s *Session) touch()              { s.lastUsedNano.Store(time.Now().UnixNano()) }
@@ -305,7 +387,20 @@ func newSession(id string) (*Session, error) {
 		chromedp.Flag("disable-setuid-sandbox", true),
 		chromedp.Flag("hide-scrollbars", true),
 		chromedp.Flag("mute-audio", true),
-		chromedp.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+		// Removes the navigator.webdriver leak at the source rather than
+		// papering over it in JS. bot.sannysoft.com scored us "WebDriver
+		// present (failed)" on 2026-08-31 with everything else clean, and
+		// Amazon was the one site that walled us.
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		// Frame addressing (observe/act inside cross-origin payment iframes)
+		// depends on frames living in this process. chromedp's defaults
+		// already disable site isolation; pinning it here means a future edit
+		// to the default list cannot silently take it away.
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process,Translate,BlinkGenPropertyTrees"),
+		// NOTE: no chromedp.UserAgent here on purpose. A hardcoded UA string
+		// goes stale (ours still claimed Chrome/124) and then disagrees with
+		// the real build's client hints, which is itself a detection. The UA
+		// is derived from the running browser at boot instead — see deHeadless.
 	)
 	if chromePath != "" {
 		opts = append(opts, chromedp.ExecPath(chromePath))
@@ -340,6 +435,21 @@ func newSession(id string) (*Session, error) {
 			if e.Frame != nil && e.Frame.ParentID == "" {
 				s.currentURL.Store(e.Frame.URL)
 			}
+		case *runtime.EventExecutionContextCreated:
+			// Each frame gets its own execution context, and evaluating in it
+			// is how observe/act reach inside a cross-origin payment iframe.
+			// Site isolation is disabled at launch (see newSession), so these
+			// all live in this process and are reachable over CDP even though
+			// the same-origin policy hides them from document.querySelectorAll.
+			if e.Context != nil {
+				if fid, ok := frameIDOf(e.Context.AuxData); ok {
+					s.setFrameCtx(fid, e.Context.ID)
+				}
+			}
+		case *runtime.EventExecutionContextDestroyed:
+			s.dropFrameCtx(e.ExecutionContextID)
+		case *runtime.EventExecutionContextsCleared:
+			s.clearFrameCtx()
 		case *page.EventScreencastFrame:
 			data := e.Data
 			sid := e.SessionID
@@ -374,6 +484,7 @@ func newSession(id string) (*Session, error) {
 	err := runWithDeadline(ctx, bootTimeout,
 		network.Enable(),
 		page.Enable(),
+		harden(),
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(screencastQuality).
@@ -388,6 +499,101 @@ func newSession(id string) (*Session, error) {
 	}
 
 	return s, nil
+}
+
+// deHeadless turns a headless build's User-Agent into the equivalent headful
+// one. The ONLY difference Chromium emits is the product token, so this is a
+// substitution rather than a fabrication: the version, platform and WebKit
+// build all stay exactly what is really running.
+//
+// Deriving it beats hardcoding it. The hardcoded string this replaces still
+// claimed Chrome/124 long after the image had moved on, and a UA that
+// disagrees with its own Sec-CH-UA client hints is a stronger bot signal than
+// an honest headless UA would have been.
+func deHeadless(ua string) string {
+	return strings.ReplaceAll(ua, "HeadlessChrome/", "Chrome/")
+}
+
+// chromeMajor pulls the major version out of a UA so the client hints can
+// agree with it. Returns "" when there is nothing recognisable, and callers
+// then skip the metadata rather than invent a number.
+func chromeMajor(ua string) string {
+	i := strings.Index(ua, "Chrome/")
+	if i < 0 {
+		return ""
+	}
+	rest := ua[i+len("Chrome/"):]
+	if j := strings.IndexAny(rest, ". "); j > 0 {
+		return rest[:j]
+	}
+	return ""
+}
+
+// webdriverPatchJS removes the last automation tell that survives
+// --disable-blink-features=AutomationControlled on some builds. It runs via
+// Page.addScriptToEvaluateOnNewDocument, i.e. BEFORE any page script on every
+// document including iframes, so a detector cannot read the property first.
+//
+// Deleting the property off the prototype is what leaves navigator.webdriver
+// undefined the way a real browser does. Assigning false is the amateur
+// version and is itself detectable, because a real Chrome has no own-property
+// there at all.
+const webdriverPatchJS = `
+(() => {
+  try {
+    const proto = Object.getPrototypeOf(navigator);
+    if (proto && 'webdriver' in proto) delete proto.webdriver;
+    if ('webdriver' in navigator) delete navigator.webdriver;
+  } catch (e) { /* never let hardening break a page */ }
+})();
+`
+
+// harden makes the browser look like the ordinary Chrome it actually is.
+//
+// Two things, both driven by what bot.sannysoft.com reported on 2026-08-31:
+// navigator.webdriver was leaking ("present (failed)"), and the User-Agent was
+// a stale hardcoded literal. Everything else on that page already passed, so
+// this is a short list on purpose rather than a stealth framework.
+func harden() chromedp.ActionFunc {
+	return func(ctx context.Context) error {
+		_, _, _, ua, _, err := browser.GetVersion().Do(ctx)
+		if err != nil || strings.TrimSpace(ua) == "" {
+			// Never fail a boot over cosmetics. A session that runs with the
+			// stock UA is worth far more than no session at all.
+			log.Printf("browser bridge: could not read the browser version, leaving the UA alone: %v", err)
+			ua = ""
+		}
+		if ua != "" {
+			real := deHeadless(ua)
+			p := emulation.SetUserAgentOverride(real).
+				WithAcceptLanguage("en-US,en;q=0.9").
+				WithPlatform("Linux x86_64")
+			// Client hints must agree with the UA string or the disagreement
+			// is itself the signal.
+			if major := chromeMajor(real); major != "" {
+				p = p.WithUserAgentMetadata(&emulation.UserAgentMetadata{
+					Brands: []*emulation.UserAgentBrandVersion{
+						{Brand: "Chromium", Version: major},
+						{Brand: "Google Chrome", Version: major},
+						{Brand: "Not=A?Brand", Version: "99"},
+					},
+					Platform:        "Linux",
+					PlatformVersion: "6.1.0",
+					Architecture:    "x86",
+					Bitness:         "64",
+					Model:           "",
+					Mobile:          false,
+				})
+			}
+			if err := p.Do(ctx); err != nil {
+				log.Printf("browser bridge: user-agent override failed: %v", err)
+			}
+		}
+		if _, err := page.AddScriptToEvaluateOnNewDocument(webdriverPatchJS).Do(ctx); err != nil {
+			log.Printf("browser bridge: webdriver patch failed to install: %v", err)
+		}
+		return nil
+	}
 }
 
 // runWithDeadline runs CDP actions on ctx, capping the wait at d.
@@ -649,6 +855,18 @@ type Element struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	Href        string `json:"href,omitempty"`
 	Value       string `json:"value,omitempty"`
+	// Autocomplete is how a checkout actually labels its card fields
+	// (cc-number, cc-exp, cc-csc). It is the most reliable identifier there
+	// is for them, and matching on it rather than on position is what keeps
+	// filling stable across a merchant's redesign.
+	Autocomplete string `json:"autocomplete,omitempty"`
+	// FrameOrigin is the origin of the document this element lives in. For a
+	// card field inside a payment iframe that is the PSP's origin, not the
+	// merchant's, which is exactly what makes an obligation's payment_origins
+	// list enforceable rather than decorative.
+	FrameOrigin string `json:"frame_origin,omitempty"`
+	// Masked marks a field whose value was withheld. See observeJS.
+	Masked bool `json:"masked,omitempty"`
 }
 
 type observeResult struct {
@@ -667,11 +885,58 @@ func handleObserve(w http.ResponseWriter, r *http.Request, s *Session) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// maxObserveFrames bounds how many documents one observe will walk. A page can
+// carry dozens of ad iframes; the ones that matter for a checkout are few.
+const maxObserveFrames = 12
+
+// observe walks EVERY frame, not just the top document.
+//
+// The top document is observed first so its indexes stay exactly where they
+// have always been, then each child frame is evaluated in its own execution
+// context with an index offset. That matters because a modern checkout puts the
+// card number, the expiry and the security code in SEPARATE cross-origin
+// iframes (Stripe Elements, Adyen, Braintree), and document.querySelectorAll in
+// the top document cannot see any of them. Before this, those fields were not
+// merely hard to fill, they were invisible: the agent would report that a
+// checkout had no card field at all.
+//
+// The page's readable TEXT still comes from the top document only. Frame text
+// is chrome and noise, and the totals a purchase is verified against are
+// rendered by the merchant, not by the payment iframe.
 func (s *Session) observe() (*observeResult, error) {
 	var res observeResult
-	if err := s.run(chromedp.Evaluate(observeJS, &res)); err != nil {
+	call := fmt.Sprintf("(%s)(0, location.origin)", observeJS)
+	if err := s.run(chromedp.Evaluate(call, &res)); err != nil {
 		return nil, err
 	}
+
+	owner := make(map[int]cdp.FrameID, len(res.Elements))
+	topID := s.topFrameID()
+	for _, el := range res.Elements {
+		owner[el.Idx] = topID
+	}
+
+	for _, fr := range s.childFrames() {
+		if len(owner) >= 250 || len(res.Elements) >= 250 {
+			break
+		}
+		cid, ok := s.ctxFor(fr)
+		if !ok {
+			continue // frame has no live context (about:blank, or torn down)
+		}
+		base := len(res.Elements)
+		var sub observeResult
+		frameCall := fmt.Sprintf("(%s)(%d, location.origin)", observeJS, base)
+		if err := s.runInFrame(cid, frameCall, &sub); err != nil {
+			continue // one unreadable frame must not fail the whole observe
+		}
+		for _, el := range sub.Elements {
+			owner[el.Idx] = fr
+		}
+		res.Elements = append(res.Elements, sub.Elements...)
+	}
+	s.rememberElementFrames(owner)
+
 	if len(res.Text) > textLimit {
 		res.Text = res.Text[:textLimit] + "\n…[truncated]"
 	}
@@ -681,10 +946,167 @@ func (s *Session) observe() (*observeResult, error) {
 	return &res, nil
 }
 
+// runInFrame evaluates JS inside one frame's execution context.
+func (s *Session) runInFrame(cid runtime.ExecutionContextID, expr string, out any) error {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	ctx, cancel := context.WithTimeout(s.ctx, actionTimeout)
+	defer cancel()
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
+		res, exc, err := runtime.Evaluate(expr).
+			WithContextID(cid).
+			WithReturnByValue(true).
+			WithAwaitPromise(false).
+			Do(c)
+		if err != nil {
+			return err
+		}
+		if exc != nil {
+			return fmt.Errorf("frame eval: %s", exc.Text)
+		}
+		if out == nil || res == nil || len(res.Value) == 0 {
+			return nil
+		}
+		return json.Unmarshal(res.Value, out)
+	}))
+}
+
+// topFrameID returns the main frame's id.
+func (s *Session) topFrameID() cdp.FrameID {
+	var id cdp.FrameID
+	_ = s.run(chromedp.ActionFunc(func(c context.Context) error {
+		tree, err := page.GetFrameTree().Do(c)
+		if err != nil || tree == nil || tree.Frame == nil {
+			return nil
+		}
+		id = tree.Frame.ID
+		return nil
+	}))
+	return id
+}
+
+// childFrames flattens the frame tree, depth first, skipping the top frame.
+func (s *Session) childFrames() []cdp.FrameID {
+	var out []cdp.FrameID
+	_ = s.run(chromedp.ActionFunc(func(c context.Context) error {
+		tree, err := page.GetFrameTree().Do(c)
+		if err != nil || tree == nil {
+			return nil
+		}
+		var walk func(n *page.FrameTree)
+		walk = func(n *page.FrameTree) {
+			if n == nil || len(out) >= maxObserveFrames {
+				return
+			}
+			for _, ch := range n.ChildFrames {
+				if ch == nil || ch.Frame == nil {
+					continue
+				}
+				out = append(out, ch.Frame.ID)
+				walk(ch)
+			}
+		}
+		walk(tree)
+		return nil
+	}))
+	return out
+}
+
 type actRequest struct {
 	Index  int    `json:"index"`
 	Action string `json:"action"` // click | type | select | press | scroll | clear
 	Value  string `json:"value,omitempty"`
+}
+
+// actInFrame performs an action on an element inside a child frame.
+//
+// TYPING IS THE HARD PART, AND IT IS WHY THIS IS NOT JUST el.value = x.
+// Stripe, Adyen and Braintree card inputs ignore a programmatic value
+// assignment: they listen for real key events, which is exactly the property
+// that makes them resistant to scripted fraud. So the sequence is: focus the
+// element from inside its own frame (JS can do that, and focus is what decides
+// where keystrokes land), then dispatch REAL key events at the page level.
+// Chromium routes those to the focused element wherever it lives, so they
+// arrive as trusted input and the field accepts them.
+func (s *Session) actInFrame(cid runtime.ExecutionContextID, req actRequest) error {
+	sel := fmt.Sprintf(`[data-jarvis-idx="%d"]`, req.Index)
+	focusJS := fmt.Sprintf(
+		`(()=>{const el=document.querySelector(%q);if(!el)return false;el.scrollIntoView({block:'center'});el.focus();return true;})()`, sel)
+
+	action := strings.ToLower(req.Action)
+	switch action {
+	case "scroll":
+		var ok bool
+		return s.runInFrame(cid, focusJS, &ok)
+
+	case "select":
+		js := fmt.Sprintf(
+			`(()=>{const el=document.querySelector(%q);if(!el)return false;el.value=%q;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`,
+			sel, req.Value)
+		var ok bool
+		if err := s.runInFrame(cid, js, &ok); err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("element %d not found in its frame for select", req.Index)
+		}
+		return nil
+
+	case "click":
+		// A click on a button inside a frame is fine as a DOM click: buttons
+		// react to the event, not to its trustedness. Card FIELDS never take
+		// this path, they take "type" below.
+		js := fmt.Sprintf(
+			`(()=>{const el=document.querySelector(%q);if(!el)return false;el.scrollIntoView({block:'center'});el.click();return true;})()`, sel)
+		var ok bool
+		if err := s.runInFrame(cid, js, &ok); err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("element %d not found in its frame for click", req.Index)
+		}
+		return nil
+
+	case "clear", "type", "press":
+		var focused bool
+		if err := s.runInFrame(cid, focusJS, &focused); err != nil {
+			return err
+		}
+		if !focused {
+			return fmt.Errorf("element %d not found in its frame", req.Index)
+		}
+		if action == "clear" || action == "type" {
+			// Select-all then type over it, so "type" overwrites the way it
+			// does in the top document. Done with real keys for the same
+			// trusted-event reason.
+			if err := s.pressCombo("a"); err != nil {
+				return err
+			}
+			if err := s.sendKeys(kb.Delete); err != nil {
+				return err
+			}
+		}
+		if action == "clear" {
+			return nil
+		}
+		v := req.Value
+		if action == "press" {
+			v = keyFor(req.Value)
+		}
+		return s.sendKeys(v)
+	}
+	return fmt.Errorf("unknown action %q (use click|type|select|press|scroll|clear)", req.Action)
+}
+
+// sendKeys dispatches real key events to whatever currently has focus, which is
+// how a value gets into a cross-origin payment field.
+func (s *Session) sendKeys(text string) error {
+	return s.run(chromedp.KeyEvent(text))
+}
+
+// pressCombo sends ctrl/cmd + key to the focused element (used for select-all).
+func (s *Session) pressCombo(key string) error {
+	return s.run(chromedp.KeyEvent(key, chromedp.KeyModifiers(input.ModifierCtrl)))
 }
 
 // idempotentAct reports whether re-running an action after a failed attempt is
@@ -756,6 +1178,13 @@ func handleAct(w http.ResponseWriter, r *http.Request, s *Session) {
 }
 
 func (s *Session) act(req actRequest) error {
+	// An element that came from a child frame has to be acted on INSIDE that
+	// frame. The top-document selector below simply would not find it.
+	if fid, ok := s.frameOf(req.Index); ok && fid != "" && fid != s.topFrameID() {
+		if cid, ok := s.ctxFor(fid); ok {
+			return s.actInFrame(cid, req)
+		}
+	}
 	sel := fmt.Sprintf(`[data-jarvis-idx="%d"]`, req.Index)
 	switch strings.ToLower(req.Action) {
 	case "click":
@@ -984,8 +1413,14 @@ func handleClose(w http.ResponseWriter, r *http.Request, s *Session) {
 // data-jarvis-idx and returns the numbered list + the page's readable text.
 // The agent acts by index; act() resolves [data-jarvis-idx="N"] in the live
 // DOM, so the handle survives re-render as long as the node persists.
+// observeJS tags and returns every visible interactive element in ONE
+// document. It is a FUNCTION of a base index and is evaluated once per frame,
+// because a checkout's card fields live in a cross-origin payment iframe and
+// document.querySelectorAll cannot see across that boundary. Offsetting by
+// base keeps the global index space flat, so every existing caller that passes
+// a bare integer keeps working exactly as before.
 const observeJS = `
-(() => {
+((base, frameOrigin) => {
   const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=checkbox], [role=radio], [role=tab], [role=menuitem], [role=option], [role=switch], [contenteditable=true], [onclick], summary, label';
   const isVisible = (el) => {
     const st = window.getComputedStyle(el);
@@ -996,36 +1431,56 @@ const observeJS = `
     return true;
   };
   const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  // A field is sensitive when the page itself says so. Its VALUE never leaves
+  // the browser: observe output becomes an observation's raw_text, which is
+  // embedded and stored, so echoing a card number back would ship it to the
+  // embedding provider and write it into the memory graph. Masking at the
+  // source means no downstream consumer has to remember to do it.
+  const SENSITIVE_AC = ['cc-number','cc-exp','cc-csc','cc-type'];
+  const isSensitive = (el) => {
+    try {
+      if ((el.getAttribute('type') || '').toLowerCase() === 'password') return true;
+      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      if (SENSITIVE_AC.some(a => ac.indexOf(a) >= 0)) return true;
+      const hay = ((el.getAttribute('name')||'') + ' ' + (el.getAttribute('id')||'') + ' ' + (el.getAttribute('placeholder')||'')).toLowerCase();
+      return /(card.?number|cardnum|cc-?num|cvc|cvv|csc|security.?code|expiry|exp-?date)/.test(hay);
+    } catch (e) { return false; }
+  };
   const nodes = Array.from(document.querySelectorAll(SEL)).filter(isVisible);
   const seen = new Set();
   const elements = [];
-  let idx = 0;
+  let idx = base;
   for (const el of nodes) {
     if (seen.has(el)) continue;
     seen.add(el);
     el.setAttribute('data-jarvis-idx', String(idx));
     const tag = el.tagName.toLowerCase();
-    const label = norm(el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || el.name || '');
+    const secret = isSensitive(el);
+    const rawLabel = el.getAttribute('aria-label') || el.innerText || (secret ? '' : el.value) || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || el.name || '';
+    const isField = (tag === 'input' || tag === 'textarea' || tag === 'select');
     elements.push({
       idx,
       tag,
       role: el.getAttribute('role') || '',
-      text: label,
+      text: norm(rawLabel),
       type: el.getAttribute('type') || '',
       name: el.getAttribute('name') || '',
       placeholder: el.getAttribute('placeholder') || '',
+      autocomplete: el.getAttribute('autocomplete') || '',
+      frame_origin: frameOrigin || '',
       href: tag === 'a' ? (el.getAttribute('href') || '') : '',
-      value: (tag === 'input' || tag === 'textarea' || tag === 'select') ? norm(el.value) : '',
+      value: (isField && !secret) ? norm(el.value) : '',
+      masked: secret && isField && !!el.value,
     });
     idx++;
-    if (idx >= 250) break;
+    if (idx - base >= 250) break;
   }
   // Readable text: clone, strip noise, take innerText of the densest content.
-  const clone = document.body.cloneNode(true);
+  const clone = (document.body || document.documentElement).cloneNode(true);
   clone.querySelectorAll('script,style,noscript,svg,iframe,nav,footer,header,aside,[aria-hidden=true]').forEach(n => n.remove());
   let text = (clone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
   return { title: document.title, url: location.href, text, elements };
-})()
+})
 `
 
 // extractJS returns a Readability-flavoured markdown of the main content of

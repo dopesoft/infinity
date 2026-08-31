@@ -267,6 +267,29 @@ func formatObserve(res *ObserveResult) string {
 	return b.String()
 }
 
+// sensitiveFieldMarkers name a field that must never have its value echoed
+// back. Kept as data so a new payment vendor's field naming is one entry, not
+// a new branch.
+var sensitiveFieldMarkers = []string{
+	"cc-number", "cc-exp", "cc-csc", "cardnumber", "card-number", "card_number",
+	"cvc", "cvv", "csc", "securitycode", "security-code", "expiry", "exp-date",
+	"encryptedcardnumber", "encryptedsecuritycode", "encryptedexpirydate",
+}
+
+// sensitiveField reports whether an element is a credential or payment input.
+func sensitiveField(el Element) bool {
+	if strings.EqualFold(el.Type, "password") {
+		return true
+	}
+	hay := strings.ToLower(strings.Join([]string{el.Autocomplete, el.Name, el.Placeholder}, " "))
+	for _, m := range sensitiveFieldMarkers {
+		if strings.Contains(hay, m) {
+			return true
+		}
+	}
+	return false
+}
+
 func formatElement(el Element) string {
 	label := el.Text
 	if label == "" {
@@ -283,8 +306,21 @@ func formatElement(el Element) string {
 	if el.Placeholder != "" && el.Placeholder != label {
 		extra = append(extra, "placeholder: "+el.Placeholder)
 	}
-	if el.Value != "" {
+	// Defence in depth on the value. The chromedp engine already withholds
+	// sensitive values before they cross the network, but this formatter also
+	// serves Camoufox, whose snapshot has no such notion, and this output
+	// becomes an observation's raw_text: embedded, stored, searchable. One
+	// engine remembering is not a guarantee; two independent refusals is.
+	switch {
+	case el.Masked:
+		extra = append(extra, "value: [hidden]")
+	case el.Value != "" && sensitiveField(el):
+		extra = append(extra, "value: [hidden]")
+	case el.Value != "":
 		extra = append(extra, "value: "+el.Value)
+	}
+	if el.FrameOrigin != "" {
+		extra = append(extra, "frame: "+el.FrameOrigin)
 	}
 	if el.Href != "" {
 		href := el.Href

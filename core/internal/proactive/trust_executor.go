@@ -191,6 +191,18 @@ func (e *TrustExecutor) claim(ctx context.Context) ([]claimedContract, error) {
 		      WHERE status = 'approved'
 		        AND COALESCE(action_spec->>'tool', '') <> ''
 		        AND jsonb_typeof(action_spec->'input') = 'object'
+		        -- Never re-run something that has already run once. status is
+		        -- a claim; executed_at is evidence. Decide() now refuses to
+		        -- move a decided row, but a row that somehow returns to
+		        -- 'approved' must still not be executed twice, and for a
+		        -- side-effecting call "twice" can mean a second charge.
+		        AND executed_at IS NULL
+		        -- Opt-out for actions that are only meaningful in the session
+		        -- that queued them. Replaying a purchase hours later would
+		        -- re-check a cart against a browser session that no longer
+		        -- exists, so the gate marks it non-deferrable and it simply
+		        -- expires instead. Generic predicate: no tool name lives here.
+		        AND COALESCE((action_spec->>'deferrable')::boolean, true)
 		        AND created_at < NOW() - $1::interval
 		      ORDER BY created_at
 		      LIMIT $2

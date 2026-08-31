@@ -39,6 +39,7 @@ import {
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { CompassSection } from "@/components/settings/CompassSection";
 import { PrivacySection, PhoneVaultCard } from "@/components/settings/PrivacySection";
+import { WalletCard } from "@/components/settings/WalletCard";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { DashboardSettings } from "@/components/settings/DashboardSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
@@ -278,6 +279,7 @@ function SectionContent({
     case "privacy":
       return (
         <>
+          <WalletCard />
           <PrivacySection />
           <PhoneVaultCard />
         </>

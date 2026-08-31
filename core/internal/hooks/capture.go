@@ -111,10 +111,18 @@ func (c *CaptureHook) Fire(ctx context.Context, ev Event) error {
 	// pages can rebuild the timeline by joining on turn_id.
 	turnID, _ := ev.Payload["turn_id"].(string)
 
+	// The payload carries the verbatim tool input, so it needs the same
+	// redaction the text got. Scrubbing only RawText meant a redacted
+	// transcript sat in the same row as an unredacted copy of the same secret.
+	safePayload, _ := memory.StripSecretsDeep(ev.Payload).(map[string]any)
+	if safePayload == nil {
+		safePayload = ev.Payload
+	}
+
 	obsID, err := c.store.InsertObservation(ctx, memory.ObservationInput{
 		SessionID:  sessionID,
 		HookName:   string(ev.Name),
-		Payload:    ev.Payload,
+		Payload:    safePayload,
 		RawText:    cleaned,
 		Embedding:  emb,
 		Importance: importanceFor(ev.Name),

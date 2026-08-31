@@ -29,6 +29,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/skills"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/turnctx"
+	"github.com/dopesoft/infinity/core/internal/vault"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/dopesoft/infinity/core/internal/workflow"
@@ -78,6 +79,10 @@ type Config struct {
 	// file saves queue contracts here and block on user approval before
 	// touching the home Mac. Same store the agent gate uses.
 	Trust *proactive.TrustStore
+
+	// Vault holds the boss's cards, sealed. The wallet endpoints read only
+	// its clear half; nothing here can return a card number.
+	Vault *vault.Store
 	// Namer auto-renames sessions via Haiku after the first complete
 	// exchange. Nil-safe: the rename endpoint just returns 503 when
 	// unconfigured.
@@ -217,6 +222,7 @@ type Server struct {
 	llmKeys     *llm.KeyStore
 	connectors  *connectors.Cache
 	voice       *voice.Minter
+	vault       *vault.Store
 	speaker     *voice.Speaker
 	started     time.Time
 
@@ -266,6 +272,7 @@ func New(cfg Config) *Server {
 		searcher:       cfg.Searcher,
 		skillsAPI:      cfg.SkillsAPI,
 		trust:          cfg.Trust,
+		vault:          cfg.Vault,
 		namer:          cfg.Namer,
 		auth:           cfg.Auth,
 		settings:       settings.New(cfg.Pool),
@@ -471,6 +478,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/chat", s.handleSettingsChat)
 	mux.HandleFunc("/api/context/usage", s.handleContextUsage)
 	mux.HandleFunc("/api/meta", s.handleMeta)
+	mux.HandleFunc("/api/wallet/cards", s.handleWalletCards)
+	mux.HandleFunc("/api/wallet/cards/revoke", s.handleWalletRevoke)
 	mux.HandleFunc("/api/auth/openai/start", s.handleOpenAIOAuthStart)
 	mux.HandleFunc("/api/auth/openai/exchange", s.handleOpenAIOAuthExchange)
 	mux.HandleFunc("/api/auth/openai/status", s.handleOpenAIOAuthStatus)

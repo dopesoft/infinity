@@ -462,13 +462,13 @@ func (g *LoopGate) WaitForDecision(ctx context.Context, contractID string, timeo
 		case <-waitCtx.Done():
 			return false, "timed out waiting for loop-gate approval (" + timeout.String() + ")"
 		case <-tick.C:
-			status, sessionID, toolName, err := g.trust.LookupForGate(waitCtx, contractID)
+			status, sessionID, _, err := g.trust.LookupForGate(waitCtx, contractID)
 			if err != nil {
 				continue
 			}
 			switch status {
 			case "approved":
-				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
+				_, _ = g.trust.ConsumeByID(waitCtx, contractID)
 				// KEEP GOING: grant the session another full budget so the next
 				// over-ceiling call passes without a fresh card.
 				g.grantGrace(sessionID)

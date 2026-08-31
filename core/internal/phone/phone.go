@@ -91,6 +91,10 @@ type Manager struct {
 	// number on the way out, and a ringing number into "Ariana, his wife" on
 	// the way in. Nil = no book; the number-only paths still work.
 	book *contacts.Store
+	// secrets is the encrypted store the vault.* keys moved into. Nil falls
+	// back to infinity_meta, which is what keeps a not-yet-migrated
+	// deployment working rather than silently losing the card mid-errand.
+	secrets SecretReader
 	// lookup answers the live call agent's find_contact function: the phone
 	// book first, then the web for a business he has never called. Wired in
 	// serve.go (it needs the tool registry); nil = the agent is told the book
@@ -213,16 +217,46 @@ const (
 	vaultBossCellKey   = "vault.boss_cell"
 )
 
+// SecretReader is the sealed store the vault keys moved into. Late-bound from
+// serve.go so this package keeps no build-time dependency on the vault.
+type SecretReader interface {
+	Secret(ctx context.Context, key string) (string, error)
+}
+
+// SetSecretReader points the vault lookups at the encrypted store.
+func (m *Manager) SetSecretReader(r SecretReader) {
+	if m != nil {
+		m.secrets = r
+	}
+}
+
+// metaValue is the ONE read path for every vault.* key, which is why moving
+// these secrets out of plaintext was a change to this function rather than a
+// change to every caller.
+//
+// The sealed store is tried first and infinity_meta remains the fallback, so a
+// deployment where the key is not set yet keeps working exactly as before
+// instead of silently losing the boss's card mid-errand. Once migrated the
+// meta row holds a sentinel, which reads as absent.
 func (m *Manager) metaValue(ctx context.Context, key string) (string, error) {
 	if m == nil || m.pool == nil {
 		return "", fmt.Errorf("phone: no database pool")
+	}
+	if m.secrets != nil {
+		if v, err := m.secrets.Secret(ctx, key); err == nil && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v), nil
+		}
 	}
 	var v string
 	err := m.pool.QueryRow(ctx, `SELECT value FROM infinity_meta WHERE key = $1`, key).Scan(&v)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(v), nil
+	v = strings.TrimSpace(v)
+	if v == "moved:vault" {
+		return "", fmt.Errorf("phone: %s lives in the encrypted vault and I cannot open it (INFINITY_VAULT_KEY is not set on core)", key)
+	}
+	return v, nil
 }
 
 func (m *Manager) vaultPaymentCard(ctx context.Context) (string, error) {

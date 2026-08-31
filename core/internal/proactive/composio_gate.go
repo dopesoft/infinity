@@ -227,14 +227,14 @@ func (g *ComposioGate) WaitForDecision(ctx context.Context, contractID string, t
 			}
 			return false, "session ended before approval"
 		case <-tick.C:
-			status, sessionID, toolName, err := g.trust.LookupForGate(waitCtx, contractID)
+			status, _, _, err := g.trust.LookupForGate(waitCtx, contractID)
 			if err != nil {
 				continue
 			}
 			switch status {
 			case "approved":
 				infoLog.Printf("ComposioGate: contract %s approved", contractID)
-				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
+				_, _ = g.trust.ConsumeByID(waitCtx, contractID)
 				return true, ""
 			case "denied":
 				return false, "denied by the boss"

@@ -11,6 +11,7 @@ import {
   RotateCw,
   Smartphone,
   Square,
+  X,
 } from "lucide-react";
 import { closeBrowserSession, navigateBrowserSession, setBrowserControl } from "@/lib/api";
 import { useCanvasStore, type DevicePreset } from "@/lib/canvas/store";
@@ -77,7 +78,46 @@ export function BrowserFrame({
     if (!editing) setDraft(shownUrl);
   }, [shownUrl, editing]);
 
-  const stopLive = React.useCallback(async () => {
+  const driving = store.browserController === "human";
+
+  // STOP MEANS STOP, NOT LEAVE.
+  //
+  // This button used to close the whole session, which dropped the surface
+  // back to the project preview - so hitting stop on a page threw you onto
+  // preview.dopesoft.io, a different website entirely. No browser does that.
+  // Stop halts what the page is doing and leaves you standing on it.
+  //
+  // So it hands control to the boss instead. The agent's write verbs yield the
+  // moment the controller is human (core/internal/browser/tools.go), so the
+  // driving genuinely stops - and the session, the page and the address all
+  // stay exactly where they were, which is the point. He can then read it,
+  // click around it, or hand it back.
+  //
+  // Ending the session is its own button now (see closeLive). An abandoned
+  // session is not a leak either way: the registry reaps idle ones after 35m.
+  const stopAgent = React.useCallback(async () => {
+    if (stopping || !store.browserSessionId) return;
+    setStopping(true);
+    // Optimistic: the bar flips to "you're driving" on the tap, and the WS
+    // browser_control event reconciles it.
+    store.setBrowserController("human");
+    try {
+      await setBrowserControl(store.browserSessionId, "human", "stopped by the boss");
+    } finally {
+      setStopping(false);
+    }
+  }, [stopping, store]);
+
+  // Reload THIS page, not the project preview - a live session's refresh is a
+  // navigate to where it already is.
+  const reloadLive = React.useCallback(() => {
+    if (!store.browserSessionId || !liveUrl) return;
+    void navigateBrowserSession(store.browserSessionId, liveUrl);
+  }, [store.browserSessionId, liveUrl]);
+
+  // Ending the session IS leaving the page, so this is the one that returns
+  // the surface to the project preview - because he asked it to.
+  const closeLive = React.useCallback(async () => {
     if (stopping || !store.browserSessionId) return;
     setStopping(true);
     try {
@@ -146,24 +186,41 @@ export function BrowserFrame({
             className="h-6 w-full min-w-0 truncate rounded-md bg-muted py-0 pl-2 pr-7 font-mono text-[10.5px] text-muted-foreground outline-none transition-colors focus:text-foreground focus:ring-1 focus:ring-ring"
           />
           {/* Reload and Stop are ONE control, right-aligned inside the address
-              field. They never both apply: with a live session the useful
-              action is stopping it, without one it is reloading the preview.
-              Two separate buttons made you read the bar to work out which was
-              which. */}
+              field - the same square-becomes-arrow every browser has. It is
+              Stop only while something is actually driving the page; once the
+              driving stops it becomes Reload, exactly as Chrome and Safari do.
+              Reload here means reload THIS page when a session is live, and
+              the project preview when one is not. */}
           <button
             type="button"
-            aria-label={live ? "Stop the browser session" : "Reload the preview"}
-            title={live ? "Stop the browser session" : "Reload the preview"}
+            aria-label={
+              live && !driving
+                ? "Stop Jarvis and take over this page"
+                : live
+                  ? "Reload this page"
+                  : "Reload the preview"
+            }
+            title={
+              live && !driving
+                ? "Stop Jarvis and take over this page"
+                : live
+                  ? "Reload this page"
+                  : "Reload the preview"
+            }
             disabled={stopping}
-            onClick={() => (live ? void stopLive() : store.refreshPreview())}
+            onClick={() => {
+              if (live && !driving) return void stopAgent();
+              if (live) return reloadLive();
+              store.refreshPreview();
+            }}
             className={cn(
               "absolute right-0.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40",
-              live ? "text-danger" : "text-quiet",
+              live && !driving ? "text-danger" : "text-quiet",
             )}
           >
             {stopping ? (
               <Loader2 className="size-3 animate-spin" aria-hidden />
-            ) : live ? (
+            ) : live && !driving ? (
               <Square className="size-3" aria-hidden />
             ) : (
               <RotateCw className={cn("size-3", rebuilding && "animate-spin")} aria-hidden />
@@ -201,6 +258,22 @@ export function BrowserFrame({
             <Chip interactive={false} raised tone="success" dot="pulse">
               live
             </Chip>
+          </ChipGroup>
+        ) : null}
+
+        {/* Closing the session is the only thing that takes him off the page,
+            so it is its own labelled button rather than something Stop does
+            behind his back. */}
+        {live ? (
+          <ChipGroup>
+            <Chip
+              iconOnly
+              icon={<X />}
+              disabled={stopping}
+              onClick={() => void closeLive()}
+              aria-label="Close the browser session"
+              title="Close the browser session and go back to the preview"
+            />
           </ChipGroup>
         ) : null}
 

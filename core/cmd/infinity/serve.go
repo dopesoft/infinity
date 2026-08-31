@@ -48,6 +48,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
+	"github.com/dopesoft/infinity/core/internal/purchase"
 	"github.com/dopesoft/infinity/core/internal/projects"
 	"github.com/dopesoft/infinity/core/internal/proposals"
 	"github.com/dopesoft/infinity/core/internal/push"
@@ -62,6 +63,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/vault"
 	"github.com/dopesoft/infinity/core/internal/triage"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
@@ -119,6 +121,9 @@ func serveCmd() *cobra.Command {
 				claudeRunner        *tools.ClaudeCodeRunner
 				activeBridgePrefs   tools.PreferenceFetcher
 				browserReg          *browser.Registry
+				purchaseStore       *purchase.Store
+				cardVault           *vault.Store
+				phoneSecrets        *vault.SecretStore
 				docCreate           *tools.DocumentCreate
 				projectTools        *tools.ProjectTools
 				previewTools        *tools.PreviewTools
@@ -672,6 +677,60 @@ func serveCmd() *cobra.Command {
 						for _, t := range browserReg.AllTools() {
 							registry.Register(t)
 						}
+
+						// Buying. The obligation store, the card vault and the
+						// purchase tools all hang off the browser registry
+						// because the fill boundary drives a live session
+						// directly rather than through the tool registry —
+						// which is what keeps a card number out of the model's
+						// context entirely.
+						purchaseStore = purchase.NewStore(p)
+						cardVault = vault.New(p)
+
+						// Any purchase still 'submitted' at boot is one where
+						// the process died between the click and the
+						// confirmation. It resolves to 'uncertain' and stops
+						// there. It is NOT retried: the whole reason
+						// submitted_at is stamped before the click would be
+						// wasted if the recovery re-ran the charge.
+						go func(st *purchase.Store) {
+							sweepCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+							defer cancel()
+							if n, err := st.SweepStranded(sweepCtx, 5*time.Minute); err != nil {
+								log.Printf("purchase: stranded sweep failed: %v", err)
+							} else if n > 0 {
+								log.Printf("purchase: %d purchase(s) were interrupted mid-charge and are now marked uncertain — they have NOT been retried", n)
+							}
+							if _, err := st.ExpireStale(sweepCtx); err != nil {
+								log.Printf("purchase: expiry sweep failed: %v", err)
+							}
+						}(purchaseStore)
+						purchase.Register(registry, purchaseStore, cardVault, browserReg,
+							strings.TrimSpace(os.Getenv("INFINITY_PUBLIC_URL")))
+						if cardVault.Healthy() {
+							fmt.Printf("  purchases: on (card vault sealed with INFINITY_VAULT_KEY)\n")
+							// Move the phone vault's plaintext card / identity /
+							// passphrase out of infinity_meta, where GET /api/meta
+							// used to hand them to anything with a session. One
+							// shot, idempotent, and it repoints the phone briefs at
+							// the sealed copy without changing how they behave.
+							secretStore := vault.NewSecretStore(cardVault)
+							migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							n, migErr := vault.MigrateFromMeta(migCtx, p, cardVault)
+							migCancel()
+							if err := migErr; err != nil {
+								log.Printf("vault: could not move the plaintext secrets out of infinity_meta: %v", err)
+							} else if n > 0 {
+								fmt.Printf("  vault: sealed %d plaintext secret(s) that were readable over /api/meta\n", n)
+							}
+							phoneSecrets = secretStore
+						} else {
+							// Say this plainly at boot. A vault that is not
+							// configured must never be discovered halfway
+							// through a checkout.
+							fmt.Printf("  purchases: on, but the card vault is LOCKED (INFINITY_VAULT_KEY unset) — " +
+								"merchant-stored-card purchases work, entering a card does not\n")
+						}
 					} else {
 						fmt.Printf("  browser: unset (set CAMOFOX_URL / CAMOFOX_URL_MAC or BROWSER_SIDECAR_URL to enable)\n")
 					}
@@ -1114,6 +1173,14 @@ func serveCmd() *cobra.Command {
 						// unattended; only transactional acts (buy/pay/
 						// checkout/delete-account) queue a Trust contract.
 						proactive.NewBrowserGate(earlyTrust),
+						// PurchaseGate → purchase_execute. Unlike every other
+						// gate this approves an OBLIGATION, not a tool call:
+						// merchant, cart, exact total, card, deadline. It has
+						// no standing-approval shortcut, so every purchase
+						// stops every time, and it marks its contract
+						// non-deferrable so TrustExecutor can never replay a
+						// charge hours later against a dead browser session.
+						proactive.NewPurchaseGate(earlyTrust, purchaseStore),
 						// PhoneGate → phone_call. Channel-based: a call the
 						// boss commissioned from inside the app (session
 						// kind='user') flows free — his ask IS the approval.
@@ -2036,6 +2103,12 @@ func serveCmd() *cobra.Command {
 			var phoneManager *phone.Manager
 			if pool != nil {
 				phoneManager = phone.NewManager(pool, surface.NewStore(pool, slog.Default()), pushSender)
+				// The card and identity details the call briefs splice in are
+				// no longer plaintext in infinity_meta. Point the one read
+				// helper at the sealed store; with no vault key this stays nil
+				// and the old meta path still answers, so a deployment mid-
+				// migration keeps working rather than losing the card.
+				phoneManager.SetSecretReader(phoneSecrets)
 				phoneWebhook = phoneManager.HandleWebhook
 				phoneStatusWebhook = phoneManager.HandleStatusCallback
 				phoneAmdWebhook = phoneManager.HandleAmdCallback
@@ -2236,6 +2309,7 @@ func serveCmd() *cobra.Command {
 				VoyagerAPI:         voyagerAPI,
 				Auth:               authVerifier,
 				Trust:              trustStore,
+				Vault:              cardVault,
 				Namer:              sessionNamer,
 				IntentDetector:     intentDetector,
 				IntentStore:        intentDB,

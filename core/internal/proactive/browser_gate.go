@@ -40,7 +40,11 @@ type BrowserGate struct {
 	autoAllow     map[string]struct{}
 	transactional []string
 	gateAllActs   bool
-	ttl           time.Duration
+	// purchasePath is on when the obligation flow exists to redirect to.
+	// Without it the old queue-a-contract behaviour stands, so this file is
+	// still correct on its own if the purchase package is ever unwired.
+	purchasePath bool
+	ttl          time.Duration
 }
 
 // defaultTransactional are the substrings that mark a browser_act as
@@ -63,6 +67,7 @@ func NewBrowserGate(trust *TrustStore) *BrowserGate {
 		autoAllow:     parseToolSet(os.Getenv("INFINITY_BROWSER_AUTOAPPROVE")),
 		transactional: append(append([]string{}, defaultTransactional...), extra...),
 		gateAllActs:   strings.EqualFold(strings.TrimSpace(os.Getenv("INFINITY_BROWSER_GATE_ACTS")), "true"),
+		purchasePath:  !strings.EqualFold(strings.TrimSpace(os.Getenv("INFINITY_BROWSER_PURCHASE_REDIRECT")), "false"),
 		ttl:           loadApprovalTTL(),
 	}
 }
@@ -99,6 +104,31 @@ func (g *BrowserGate) Authorize(ctx context.Context, sessionID, project, toolNam
 	}
 	if !g.gateAllActs && !g.isTransactionalAct(input) {
 		return agent.GateDecision{Allow: true}
+	}
+
+	// A charge-bearing click is REDIRECTED, not queued.
+	//
+	// This gate can only ever see a label the model volunteered, so approving
+	// on that basis was approving a sentence rather than a purchase: a button
+	// reading "Continue" slipped past it entirely, and an approval given for a
+	// $40 cart still fired when the cart had become $400. Neither problem is
+	// fixable by a better word list.
+	//
+	// So spending money is no longer something browser_act is allowed to do.
+	// The agent is told to bind the purchase instead, which puts the merchant,
+	// the cart and the exact total in front of the boss and re-checks them
+	// against the live page before paying. Redirect rather than deny, because
+	// this is a correction to the agent, not a question for the boss (see
+	// GateDecision.Redirect).
+	if g.purchasePath && !g.gateAllActs {
+		return agent.GateDecision{
+			Allow:    false,
+			Redirect: true,
+			Reason: "Do not spend money with browser_act: a click cannot carry what the boss is agreeing to. " +
+				"Read the merchant, the line items and the exact total off this checkout, call purchase_propose " +
+				"with them, then call purchase_execute with the id it gives you. That is what shows him the cart " +
+				"and the total before anything is charged.",
+		}
 	}
 
 	// Standing per-session approval shortcut — same pattern as the other
@@ -174,13 +204,13 @@ func (g *BrowserGate) WaitForDecision(ctx context.Context, contractID string, ti
 			}
 			return false, "session ended before approval"
 		case <-tick.C:
-			status, sessionID, toolName, err := g.trust.LookupForGate(waitCtx, contractID)
+			status, _, _, err := g.trust.LookupForGate(waitCtx, contractID)
 			if err != nil {
 				continue
 			}
 			switch status {
 			case "approved":
-				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
+				_, _ = g.trust.ConsumeByID(waitCtx, contractID)
 				return true, ""
 			case "denied":
 				return false, "denied by the boss"

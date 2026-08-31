@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/auth"
+	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -67,6 +68,15 @@ func (s *TrustStore) Queue(ctx context.Context, c *TrustContract) (string, error
 	}
 	if c.ID == "" {
 		c.ID = uuid.NewString()
+	}
+	// action_spec stores the tool input verbatim and TrustExecutor can replay
+	// it later, so a gated call carrying a card number or a token would both
+	// persist it in the clear and keep it replayable. Redact once, here, at
+	// the single point every gate goes through.
+	if c.ActionSpec != nil {
+		if safe, ok := memory.StripSecretsDeep(c.ActionSpec).(map[string]any); ok && safe != nil {
+			c.ActionSpec = safe
+		}
 	}
 	if c.Status == "" {
 		c.Status = "pending"
@@ -373,6 +383,19 @@ func (s *TrustStore) PreApproveTools(ctx context.Context, sessionID string, tool
 	}
 }
 
+// Decide records the boss's answer. It only moves a contract that is still
+// PENDING.
+//
+// Without that guard a second tap re-decides a contract that has already run:
+// the push notification and the Studio dock both offer the same Approve
+// button, a stale client can post an old id, and a retried request is
+// indistinguishable from a new one. Flipping a 'consumed' row back to
+// 'approved' hands it to TrustExecutor as fresh work, which for a
+// side-effecting call means doing it twice. For a purchase that is a second
+// charge, which is why this is a guard rather than a nicety.
+//
+// Re-deciding an already-decided contract is not an error the boss needs to
+// see: the outcome he asked for is already the outcome. It is simply a no-op.
 func (s *TrustStore) Decide(ctx context.Context, id, decision, note string) error {
 	if s == nil || s.pool == nil {
 		return nil
@@ -381,8 +404,43 @@ func (s *TrustStore) Decide(ctx context.Context, id, decision, note string) erro
 		UPDATE mem_trust_contracts
 		   SET status = $2, decided_at = NOW(), decision_note = $3
 		 WHERE id = $1::uuid
+		   AND status = 'pending'
 	`, id, decision, note)
 	return err
+}
+
+// ConsumeByID marks ONE named contract consumed, and reports whether it was
+// still approved when it got there.
+//
+// This is what a gate must call while it waits, rather than
+// ConsumeApprovedForTool, which matches on (tool, session) and takes the most
+// recently decided row. With two gated calls of the same tool in one session,
+// the gate waiting on contract A would consume contract B: A stays 'approved'
+// with nobody waiting on it, and twenty minutes later TrustExecutor claims it
+// and replays the call. The boss approved two things and got three.
+//
+// Matching the contract you are actually waiting on removes the ambiguity
+// entirely.
+func (s *TrustStore) ConsumeByID(ctx context.Context, id string) (bool, error) {
+	if s == nil || s.pool == nil || strings.TrimSpace(id) == "" {
+		return false, nil
+	}
+	var got string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE mem_trust_contracts
+		   SET status = 'consumed', decided_at = COALESCE(decided_at, NOW())
+		 WHERE id = $1::uuid
+		   AND status = 'approved'
+		 RETURNING id::text
+	`, id).Scan(&got)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return false, nil
+		}
+		return false, err
+	}
+	infoLog.Printf("trust.consume_by_id: contract=%s", got)
+	return true, nil
 }
 
 // DecideBatch applies the same decision to every pending contract sharing

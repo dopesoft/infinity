@@ -352,7 +352,7 @@ export function Workspace({
   }, [chat.sessionId, store.documents, store.activeTabId]);
 
   // ── The layout moves itself ──────────────────────────────────────────────
-  // Five rules, and a sixth that makes them safe: one deliberate move by the
+  // Six rules, and a seventh that makes them safe: one deliberate move by the
   // boss turns all of this off for the session (enforced inside the store's
   // `suggestLayout`, which is a no-op once `layoutAuto` is false).
   const hadWorkRef = useRef(false);
@@ -363,9 +363,11 @@ export function Workspace({
       hadWorkRef.current = true;
       store.suggestLayout("split");
     } else if (!hasWork && hadWorkRef.current) {
-      // Nothing open any more: the conversation is the page again.
+      // Nothing open any more: the conversation is the page again - unless a
+      // browser is live, in which case closing the last file would have
+      // yanked the page he is watching off the screen.
       hadWorkRef.current = false;
-      store.suggestLayout("chat");
+      if (!store.browserActive) store.suggestLayout("chat");
     }
   }, [store]);
 
@@ -373,6 +375,47 @@ export function Workspace({
     // The preview rebuilt while he is still working: put the browser in front.
     if (store.previewRefreshKey > 0) store.suggestLayout("build");
   }, [store.previewRefreshKey, store]);
+
+  // Jarvis opened a browser: put it beside the conversation, on its own.
+  //
+  // Split rather than build, deliberately - the point is following along while
+  // he works, and if he is buying something the boss wants to see the page AND
+  // what Jarvis is saying about it at the same time.
+  //
+  // WHY THIS SUBSCRIPTION IS HERE AND NOT IN CanvasPreview, which is where the
+  // rest of the browser_frame handling lives. CanvasPreview only mounts once
+  // the workbench is already open (`{open ? pane : …}` below), so in chat mode
+  // NOTHING was listening for a browser starting. The one component that could
+  // have asked for the layout to open was the component that only exists after
+  // it opens. So a browser session could come and go and the layout never
+  // heard about it, and the boss had to notice a small control appear and
+  // click it himself to see what was going on.
+  //
+  // It only acts on the transition into a session, so a screencast streaming
+  // at speed costs one early return per frame here and never re-renders.
+  // Reads the store and session through the refs above and depends on `ws`
+  // alone - the same shape as the subscription higher up this file. Depending
+  // on `store` would tear down and re-register the listener on every single
+  // store change, which is both wasteful and a window in which an event can
+  // land on nobody.
+  useEffect(() => {
+    return ws.subscribe((ev) => {
+      if (ev.type !== "browser_frame") return;
+      const store = storeRef.current;
+      const sessionId = sessionIdRef.current;
+      if (sessionId && ev.session_id && ev.session_id !== sessionId) return;
+      if (store.browserActive) return;
+      const f = ev.browser_frame;
+      store.setBrowserActive(true);
+      if (f.url) store.setBrowserUrl(f.url);
+      if (f.browser_session_id) store.setBrowserSessionId(f.browser_session_id);
+      store.setActiveTabId("preview");
+      // `suggestLayout`, not `setLayout`: silent if he has already moved the
+      // layout himself this session. An auto that yanks him back to a pane he
+      // just closed is worse than no auto at all.
+      store.suggestLayout("split");
+    });
+  }, [ws]);
 
   const mediaCountRef = useRef(0);
   useEffect(() => {

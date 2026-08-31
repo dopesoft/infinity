@@ -269,13 +269,13 @@ func (g *WardGate) WaitForDecision(ctx context.Context, contractID string, timeo
 			}
 			return false, "session ended before approval"
 		case <-tick.C:
-			status, sessionID, toolName, err := g.trust.LookupForGate(waitCtx, contractID)
+			status, _, _, err := g.trust.LookupForGate(waitCtx, contractID)
 			if err != nil {
 				continue
 			}
 			switch status {
 			case "approved":
-				_, _ = g.trust.ConsumeApprovedForTool(waitCtx, sessionID, toolName)
+				_, _ = g.trust.ConsumeByID(waitCtx, contractID)
 				return true, ""
 			case "denied":
 				return false, "denied by the boss"

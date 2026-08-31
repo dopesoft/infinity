@@ -15,6 +15,27 @@ import (
 // app-level flags like boss_onboarded so a one-time wizard doesn't replay
 // on every login. Not a substitute for typed settings - meant for booleans,
 // timestamps, and lightweight markers the agent loop doesn't care about.
+// secretMetaPrefixes name keys this endpoint must never read or write.
+//
+// infinity_meta was designed for booleans, timestamps and one-time markers, and
+// the handler treats every key alike. The phone vault then started keeping the
+// boss's card number, security code, date of birth and account number under
+// `vault.*` here, which made GET /api/meta?key=vault.payment_card a way to read
+// a live card over HTTP with nothing but a session. Those secrets now live
+// sealed in mem_vault_cards, and this denylist is what stops anything from
+// quietly putting them back.
+var secretMetaPrefixes = []string{"vault."}
+
+func secretMetaKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	for _, p := range secretMetaPrefixes {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no database pool"})
@@ -26,6 +47,12 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		key := strings.TrimSpace(r.URL.Query().Get("key"))
 		if key == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key required"})
+			return
+		}
+		if secretMetaKey(key) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "that is a vault key and is not readable here; secrets live encrypted and are only opened inside the boundary that uses them",
+			})
 			return
 		}
 		var value string
@@ -50,6 +77,12 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		in.Key = strings.TrimSpace(in.Key)
 		if in.Key == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key required"})
+			return
+		}
+		if secretMetaKey(in.Key) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "that is a vault key; add a card through the private wallet flow instead, which never stores it in the clear",
+			})
 			return
 		}
 		_, err := s.pool.Exec(r.Context(), `

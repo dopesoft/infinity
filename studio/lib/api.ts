@@ -595,12 +595,15 @@ export async function deletePhoneContact(number: string): Promise<boolean> {
 export async function setBrowserControl(
   id: string,
   controller: "agent" | "human",
+  /** Why control moved, in his words. Rides the control event so "who is
+   *  driving and why" is answerable later; the server supplies a default. */
+  reason?: string,
 ): Promise<boolean> {
   try {
     const res = await authedFetch(`/api/browser/session/${encodeURIComponent(id)}/control`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ controller }),
+      body: JSON.stringify(reason ? { controller, reason } : { controller }),
     });
     return res.ok;
   } catch {
@@ -2710,5 +2713,82 @@ export async function deleteProviderKey(
     return body;
   } catch (e) {
     return { error: String(e) };
+  }
+}
+
+// ── wallet ──────────────────────────────────────────────────────────────────
+//
+// The clear half of a stored card and nothing else. There is no endpoint that
+// returns a card number, so there is deliberately no type here that could hold
+// one. A card is decrypted in exactly one place on the server: inside the
+// boundary that types it into a checkout.
+
+export type WalletCardDTO = {
+  id: string;
+  label: string;
+  brand: string;
+  last4: string;
+  exp_month?: number;
+  exp_year?: number;
+  billing_complete: boolean;
+  created_at: string;
+  last_used_at?: string | null;
+};
+
+/** A locked vault is reported as locked, never as "no cards". */
+export async function fetchWalletCards(): Promise<{
+  cards: WalletCardDTO[];
+  locked: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await authedFetch("/api/wallet/cards");
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 503) return { cards: [], locked: true, error: body?.error };
+    if (!res.ok) return { cards: [], locked: false, error: body?.error };
+    return { cards: body?.cards ?? [], locked: false };
+  } catch {
+    return { cards: [], locked: false, error: "Could not reach the wallet." };
+  }
+}
+
+export type AddWalletCardIn = {
+  label: string;
+  number: string;
+  cvc: string;
+  name: string;
+  exp_month: number;
+  exp_year: number;
+  billing: Record<string, string>;
+  token?: string;
+};
+
+/** The only path a card number takes. It is sealed before it is stored, and
+ *  only the label, brand and last four come back. */
+export async function addWalletCard(input: AddWalletCardIn): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await authedFetch("/api/wallet/cards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (res.ok) return { ok: true };
+    const body = await res.json().catch(() => ({}));
+    return { ok: false, error: body?.error };
+  } catch {
+    return { ok: false, error: "Could not reach the wallet." };
+  }
+}
+
+export async function revokeWalletCard(id: string): Promise<boolean> {
+  try {
+    const res = await authedFetch("/api/wallet/cards/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }

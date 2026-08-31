@@ -66,6 +66,18 @@ type Element struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	Href        string `json:"href,omitempty"`
 	Value       string `json:"value,omitempty"`
+	// Autocomplete is the most reliable identifier a checkout gives its card
+	// fields (cc-number, cc-exp, cc-csc). Matching a field by what it says it
+	// is beats matching it by where it sits.
+	Autocomplete string `json:"autocomplete,omitempty"`
+	// FrameOrigin is the origin of the document the element lives in. For a
+	// card field inside a payment iframe that is the PSP's origin rather than
+	// the merchant's, which is what makes an obligation's payment_origins list
+	// something we can actually enforce.
+	FrameOrigin string `json:"frame_origin,omitempty"`
+	// Masked means the engine withheld this field's value because the page
+	// marked it sensitive. Nothing downstream should try to recover it.
+	Masked bool `json:"masked,omitempty"`
 }
 
 type ObserveResult struct {
@@ -110,6 +122,8 @@ type ShotResult struct {
 // Studio when the boss takes over the live browser by hand (clicks the
 // screencast, types, scrolls). Mirrors docker/browser inputRequest. Distinct
 // from ActRequest, which is the agent's index-based verb set.
+// (Element gains Autocomplete / FrameOrigin / Masked alongside the sidecar.)
+
 type InputEvent struct {
 	Type   string  `json:"type"`             // click | move | scroll | text | key
 	X      float64 `json:"x,omitempty"`      // viewport px

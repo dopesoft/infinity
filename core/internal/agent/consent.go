@@ -38,6 +38,11 @@ const stanceWait = 2500 * time.Millisecond
 // creates a durable thing, sends, runs, spawns, or edits code.
 var consentToolPattern = regexp.MustCompile(`^(` +
 	`project_create|project_clone|code_agent|background_build|document_create|media_job|phone_call|` +
+	// purchase_execute spends real money, so it is the last tool that should
+	// ever fire during a "let's discuss" turn. purchase_propose is absent on
+	// purpose: binding what a purchase WOULD be is exactly the kind of
+	// groundwork discussing is for, and it charges nothing.
+	`purchase_execute|` +
 	`claude_code__(Edit|Write|Bash|NotebookEdit)|fs_save|fs_edit|git_commit|git_push|` +
 	`delegate|delegate_parallel|agent_team_start|skills_invoke|todo_write|mandate_open|` +
 	`plan_update|plan_verify|workflow_run|cron_run_now|preview_start|` +
