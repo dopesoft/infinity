@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChevronRight } from "lucide-react";
 import { ScrollList } from "@/components/dashboard/ScrollList";
+import { BAND_GROUND } from "@/components/dashboard/Section";
 import { DASHBOARD_LIST_ROWS } from "@/components/dashboard/listHeight";
 import { cn } from "@/lib/utils";
 
@@ -220,6 +221,10 @@ export function BoardCard({
  * plain row with a banded row is what stops a long page reading as one wall,
  * without putting a box around anything. The negative margins exactly cancel
  * the page column's padding so banding can never introduce horizontal scroll.
+ *
+ * The ground itself comes from `BAND_GROUND` in dashboard/Section.tsx. This
+ * file used to carry its own copy of that class string, so the two bands on
+ * the dashboard were one edit away from being different colours.
  */
 export function BoardBand({
   className,
@@ -229,8 +234,6 @@ export function BoardBand({
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("-mx-4 min-w-0 bg-muted px-4 py-5 sm:-mx-6 sm:px-6", className)}>
-      {children}
-    </div>
+    <div className={cn(BAND_GROUND, className)}>{children}</div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { Infinity as InfinityIcon, Search } from "lucide-react";
 import { NavRail } from "@/components/nav/NavRail";
@@ -9,6 +10,7 @@ import {
   CommandPalette,
   useCommandPalette,
 } from "@/components/nav/CommandPalette";
+import { FocusSheet } from "@/components/search/FocusSheet";
 import { WakeNavButton } from "@/components/WakeNavButton";
 
 /**
@@ -87,6 +89,12 @@ export function AppShell({
       </div>
 
       <CommandPalette open={palette.open} onOpenChange={palette.setOpen} />
+
+      {/* Every `?focus=<id>&kind=<kind>` link in the app, made to open
+          something. Mounted once here rather than per page — see the file. */}
+      <Suspense fallback={null}>
+        <FocusSheet />
+      </Suspense>
     </div>
   );
 }

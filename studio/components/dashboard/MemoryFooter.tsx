@@ -23,7 +23,8 @@ export function MemoryFooter({ stats }: { stats: MemoryStats }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.35, delay: 0.15 }}
-      className="mx-auto w-full min-w-0 max-w-6xl px-4 pb-4 pt-2 sm:px-6 sm:pb-6"
+      // max-w-board, the token — the same column the header and <main> use.
+      className="mx-auto w-full min-w-0 max-w-board px-4 pb-4 pt-2 sm:px-6 sm:pb-6"
     >
       <ListRow
         href="/memory"

@@ -483,6 +483,54 @@ export type MemoryStats = {
   streakDays: number;
 };
 
+// ── Daily quote ──────────────────────────────────────────────────────────────
+// One per day under the greeting, assigned server-side against the boss's
+// local day so every device reads the same line. Arrives inside the dashboard
+// payload rather than on its own endpoint - it is header context, not a
+// section, and it should never cost a second round trip.
+export type DailyQuote = {
+  id: string;
+  text: string;
+  author: string;
+  source?: string;
+};
+
+// ── Generic record (search hits) ─────────────────────────────────────────────
+// The schema-driven shape GET /api/object returns for ANY kind the global
+// search can find - a memory, a skill, an automation, a session, a lesson, a
+// prediction, an observation. Go decides what the fields and the link are
+// called; Studio renders them without a single per-kind branch, so a new
+// searchable table opens in the sheet the day Core learns to search it, with
+// no change here at all.
+export type RecordField = {
+  label: string;
+  value: string;
+  /** ids, tiers, cron expressions, tool names - things that want mono. */
+  mono?: boolean;
+};
+
+export type RecordDetail = {
+  /** The SEARCH kind ("memory", "skill", …). Drives the seeded session's
+   *  context line - never a widget switch. */
+  kind: string;
+  id: string;
+  title: string;
+  subtitle: string;
+  body: string;
+  fields: RecordField[];
+  /** Canonical page for this object, and the label Go wants on the button. */
+  href: string;
+  hrefLabel: string;
+  createdAt?: string;
+  /** Client-only. The sheet opens instantly from the search hit and fills in
+   *  when /api/object answers, so a tap never buys a spinner before a modal. */
+  loading?: boolean;
+  /** Client-only. The fetch failed. Rendered as an explicit line, never as an
+   *  empty body — a record that could not load must not look like a record
+   *  with nothing in it. */
+  failed?: boolean;
+};
+
 // ── ObjectViewer routing ─────────────────────────────────────────────────────
 // Discriminated union of every item type that can be opened in the
 // ObjectViewer modal/drawer. The viewer renders a kind-specific body.
@@ -497,4 +545,7 @@ export type DashboardItem =
   | { kind: "work"; data: WorkItem }
   | { kind: "saved"; data: Saved }
   | { kind: "artifact"; data: Artifact }
-  | { kind: "activity"; data: ActivityEvent };
+  | { kind: "activity"; data: ActivityEvent }
+  // Anything the global search found that the dashboard does not already hold
+  // hydrated. One variant, every kind - see RecordDetail above.
+  | { kind: "record"; data: RecordDetail };

@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import localFont from "next/font/local";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { AuthProvider } from "@/lib/auth/session";
@@ -31,7 +32,28 @@ export const revalidate = 0;
 //
 // Next 14 needs `transpilePackages: ["geist"]` in next.config.mjs - the
 // package ships ESM that the 14.x server bundler will not resolve otherwise.
-const fontVariables = `${GeistSans.variable} ${GeistMono.variable}`;
+//
+// Instrument Serif is the DISPLAY register (MAJORDOMO §4, amended
+// 2026-08-30): the dashboard greeting and the daily quote, and nothing
+// else. It is committed under app/fonts rather than pulled through
+// next/font/google for the same reason Geist is - no build-time call to
+// fonts.googleapis.com and no runtime call to fonts.gstatic.com. See
+// app/fonts/README.md for why these are the latin-subset files.
+const displaySerif = localFont({
+  src: [
+    { path: "./fonts/InstrumentSerif-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/InstrumentSerif-Italic.woff2", weight: "400", style: "italic" },
+  ],
+  variable: "--font-display",
+  display: "swap",
+  preload: true,
+  // Georgia is the metric-nearest serif on both Mac and Windows, so the
+  // swap moves the least. It is also what Tailwind's `display` family
+  // falls back to (tailwind.config.ts).
+  fallback: ["Georgia", "ui-serif", "serif"],
+});
+
+const fontVariables = `${GeistSans.variable} ${GeistMono.variable} ${displaySerif.variable}`;
 
 export const metadata: Metadata = {
   title: "Infinity",

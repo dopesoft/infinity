@@ -29,6 +29,7 @@ import type {
   Approval,
   Artifact,
   CalendarEvent,
+  DailyQuote,
   DashboardItem,
   FollowUp,
   MemoryStats,
@@ -39,6 +40,10 @@ import type {
   Todo,
   WorkItem,
 } from "@/lib/dashboard/types";
+import type { SearchHit } from "@/lib/api";
+import { useGlobalSearch } from "@/lib/search/useGlobalSearch";
+import { useRecordSheet } from "@/components/search/RecordSheet";
+import { SearchResults } from "@/components/dashboard/SearchResults";
 
 /* DashboardClient - the orchestrating client component for the Dashboard
  * tab. Holds local mock state (toggle habits/todos optimistically),
@@ -136,6 +141,11 @@ export function DashboardClient() {
   // is true so the spinner shows immediately while the first fetch
   // hasn't resolved yet.
   const [loading, setLoading] = useState(true);
+  // Header context: who he is and today's line. Both ride the dashboard
+  // payload, so they are on screen from the localStorage cache before the
+  // network answers rather than popping in a beat later.
+  const [bossName, setBossName] = useState("");
+  const [quote, setQuote] = useState<DailyQuote | null>(null);
 
   // Distribute a payload into the section slices. Shared by the cache-first
   // hydrate and every fetch/realtime refresh so they can't drift.
@@ -151,6 +161,8 @@ export function DashboardClient() {
     setWork(data.work ?? []);
     setReflection(data.reflection ?? null);
     setSurfaceItems(data.surfaceItems ?? {});
+    setBossName(data.bossName ?? "");
+    setQuote(data.quote ?? null);
     if (data.memoryStats) setMemoryStats(data.memoryStats);
   }, []);
 
@@ -206,7 +218,15 @@ export function DashboardClient() {
   );
   useRealtime("*", debouncedRefetch);
 
+  // The search box runs the SAME global search as the ⌘K palette (one hook,
+  // two consumers). It used to filter only the rows already on screen, which
+  // made the one search field on the page he looks at the one that could not
+  // find anything he could not already see.
   const [search, setSearch] = useState("");
+  const searching = search.trim().length > 0;
+  const { groups: searchGroups, hits: searchHits, loading: searchLoading, failed: searchFailed } =
+    useGlobalSearch(search);
+  const recordSheet = useRecordSheet();
   const [addingTodo, setAddingTodo] = useState(false);
   const [viewing, setViewing] = useState<DashboardItem | null>(null);
   // A pursuit running a bespoke experience opens its own cockpit rather than
@@ -228,6 +248,48 @@ export function DashboardClient() {
     setViewing(item);
   }, []);
   const closeViewer = useCallback(() => setViewing(null), []);
+
+  // Every dashboard row the page is currently holding, by id. Built once so
+  // a search hit that IS on the dashboard opens its real, hydrated item -
+  // with its Dismiss button, its email body, its progress bar - instead of
+  // being downgraded to a generic record fetched back off the server. One id
+  // lookup, no per-kind branching.
+  const itemsById = useMemo(() => {
+    const m = new Map<string, DashboardItem>();
+    const put = (item: DashboardItem) => {
+      const id = (item.data as { id?: string }).id;
+      if (id) m.set(id, item);
+    };
+    approvals.forEach((a) => put({ kind: "approval", data: a }));
+    followUps.forEach((f) => put({ kind: "followup", data: f }));
+    Object.values(surfaceItems)
+      .flat()
+      .forEach((it) => put({ kind: "surface", data: it }));
+    work.forEach((w) => put({ kind: "work", data: w }));
+    events.forEach((e) => put({ kind: "event", data: e }));
+    todos.forEach((t) => put({ kind: "todo", data: t }));
+    pursuits.forEach((p) => put({ kind: "pursuit", data: p }));
+    saved.forEach((v) => put({ kind: "saved", data: v }));
+    artifacts.forEach((a) => put({ kind: "artifact", data: a }));
+    activity.forEach((a) => put({ kind: "activity", data: a }));
+    return m;
+  }, [approvals, followUps, surfaceItems, work, events, todos, pursuits, saved, artifacts, activity]);
+
+  // The one routing decision for a search result. Hydrated if we have it,
+  // otherwise the generic record sheet, which fetches the detail from
+  // /api/object. Either way it opens IN PLACE - modal on a desktop, drawer on
+  // a phone - rather than pushing a route.
+  const openHit = useCallback(
+    (hit: SearchHit) => {
+      const held = itemsById.get(hit.id);
+      if (held) {
+        openViewer(held);
+        return;
+      }
+      recordSheet.open(hit);
+    },
+    [itemsById, openViewer, recordSheet],
+  );
   const liveViewing = useMemo<DashboardItem | null>(() => {
     if (!viewing) return null;
     const id = (viewing.data as { id?: string }).id;
@@ -365,54 +427,6 @@ export function DashboardClient() {
     });
   }, []);
 
-  // Lightweight client-side search. Each section gets a pre-filtered
-  // slice based on the same query, applied across the most-relevant
-  // textual fields per kind.
-  const q = search.trim().toLowerCase();
-  const filtered = useMemo(() => {
-    if (!q) {
-      return {
-        pursuits,
-        todos,
-        events,
-        approvals,
-        followUps,
-        work,
-        saved,
-        artifacts,
-        activity,
-        surfaceItems,
-      };
-    }
-    const match = (...parts: (string | undefined | null)[]) =>
-      parts.some((p) => (p ?? "").toLowerCase().includes(q));
-    // Surface groups filter per-item; a group with zero matches drops out.
-    const surfaceFiltered: Record<string, SurfaceItem[]> = {};
-    for (const [key, items] of Object.entries(surfaceItems)) {
-      const m = items.filter((it) =>
-        match(it.title, it.subtitle, it.body, it.kind, it.source),
-      );
-      if (m.length) surfaceFiltered[key] = m;
-    }
-    return {
-      pursuits: pursuits.filter((p) => match(p.title, p.cadence)),
-      todos: todos.filter((t) => match(t.title, t.priority, t.source)),
-      events: events.filter((e) =>
-        match(e.title, e.classification, e.location, ...(e.prep ?? []).map((p) => p.label)),
-      ),
-      approvals: approvals.filter((a) =>
-        match(a.title, a.subtitle, a.rationale, a.question),
-      ),
-      followUps: followUps.filter((f) =>
-        match(f.from, f.subject, f.preview, f.body, f.account),
-      ),
-      work: work.filter((w) => match(w.title, w.subtitle, w.kind)),
-      saved: saved.filter((s) => match(s.title, s.body, s.source, s.url)),
-      artifacts: artifacts.filter((a) => match(a.name, a.description, a.kind, a.virtualPath)),
-      activity: activity.filter((e) => match(e.title, e.detail)),
-      surfaceItems: surfaceFiltered,
-    };
-  }, [q, pursuits, todos, events, approvals, followUps, work, saved, artifacts, activity, surfaceItems]);
 
   // The unified "Surfaced by Jarvis" list - approvals + every agent surface
   // (alerts, insights, digest, …) merged into one importance-sorted stream.
@@ -421,8 +435,8 @@ export function DashboardClient() {
   // routed elsewhere by the backend so they never appear.
   const surfaced = useMemo<DashboardItem[]>(() => {
     const merged: DashboardItem[] = [
-      ...filtered.approvals.map((a) => ({ kind: "approval", data: a }) as DashboardItem),
-      ...Object.entries(filtered.surfaceItems)
+      ...approvals.map((a) => ({ kind: "approval", data: a }) as DashboardItem),
+      ...Object.entries(surfaceItems)
         // Calls get their own PhoneCard; excluding the key here is what
         // keeps a call from rendering twice.
         .filter(([key]) => key !== "calls")
@@ -434,25 +448,17 @@ export function DashboardClient() {
       return w !== 0 ? w : surfacedCreatedAt(b) - surfacedCreatedAt(a);
     });
     return merged;
-  }, [filtered.approvals, filtered.surfaceItems]);
+  }, [approvals, surfaceItems]);
 
   // Jarvis's phone line: the surface='calls' group, newest first.
   const calls = useMemo<DashboardItem[]>(() => {
-    const items = (filtered.surfaceItems["calls"] ?? []).map(
+    const items = (surfaceItems["calls"] ?? []).map(
       (it) => ({ kind: "surface", data: it }) as DashboardItem,
     );
     items.sort((a, b) => surfacedCreatedAt(b) - surfacedCreatedAt(a));
     return items;
-  }, [filtered.surfaceItems]);
+  }, [surfaceItems]);
 
-  // Counter for the "need you" badge in the header - anything actionable.
-  // High-importance surfaced items (80+) count too.
-  const needYouCount =
-    approvals.length +
-    followUps.filter((f) => f.unread).length +
-    Object.values(surfaceItems)
-      .flat()
-      .filter((it) => (it.importance ?? 0) >= 80).length;
 
   return (
     <AppShell>
@@ -464,7 +470,8 @@ export function DashboardClient() {
           of the app relies on. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden scroll-touch">
         <DashboardHeader
-          badgeCount={needYouCount}
+          bossName={bossName}
+          quote={quote}
           search={search}
           onSearchChange={setSearch}
           loading={loading}
@@ -473,6 +480,20 @@ export function DashboardClient() {
         {/* max-w-board, the token — not max-w-6xl. The width law lives in
             tailwind.config so it is one number, not a magic value per page. */}
         <main className="mx-auto w-full min-w-0 max-w-board flex-1 space-y-6 px-4 pb-2 sm:px-6">
+          {/* A query takes the page over. The sections are what the dashboard
+              is FOR when he is not looking for something specific; while he
+              is, they are noise between him and the thing he typed. */}
+          {searching ? (
+            <SearchResults
+              query={search}
+              groups={searchGroups}
+              count={searchHits.length}
+              loading={searchLoading}
+              failed={searchFailed}
+              onOpen={openHit}
+            />
+          ) : (
+          <>
           {/* PLAIN - what is being raised TO the boss: Surfaced by Jarvis, the
               Phone line, and Email. `grid-cols-1` default is REQUIRED so an
               implicit max-content track can't blow the column past the
@@ -482,7 +503,7 @@ export function DashboardClient() {
               {s.approvals && <SurfacedCard items={surfaced} onOpen={openViewer} />}
               <PhoneCard items={calls} onOpen={openViewer} delay={0.04} />
               {s.followups && (
-                <FollowUpsCard followUps={filtered.followUps} onOpen={openViewer} />
+                <FollowUpsCard followUps={followUps} onOpen={openViewer} />
               )}
             </Board>
           )}
@@ -492,10 +513,10 @@ export function DashboardClient() {
           {(s.upcoming || s.todos || s.pursuits) && (
             <BoardBand>
               <Board>
-                {s.upcoming && <UpcomingCard events={filtered.events} onOpen={openViewer} />}
+                {s.upcoming && <UpcomingCard events={events} onOpen={openViewer} />}
                 {s.todos && (
                   <TodosCard
-                    todos={filtered.todos}
+                    todos={todos}
                     onOpen={openViewer}
                     onToggle={toggleTodo}
                     onAdd={() => setAddingTodo(true)}
@@ -503,7 +524,7 @@ export function DashboardClient() {
                 )}
                 {s.pursuits && (
                   <PursuitsCard
-                    pursuits={filtered.pursuits}
+                    pursuits={pursuits}
                     onOpen={openViewer}
                     onToggleHabit={toggleHabit}
                   />
@@ -514,7 +535,7 @@ export function DashboardClient() {
 
           {/* PLAIN - Agent work: the live picture of what Jarvis is doing
               right now (crons, plans, skills, …), as one grouped ledger. */}
-          {s.work && <AgentWorkBoard items={filtered.work} onOpen={openViewer} />}
+          {s.work && <AgentWorkBoard items={work} onOpen={openViewer} />}
 
           {/* CARD - the one section that is a single object he acts on. */}
           {s.reflection && reflection && (
@@ -525,21 +546,27 @@ export function DashboardClient() {
           {s.saved && (
             <SectionBand>
               <SavedCard
-                saved={filtered.saved}
-                artifacts={filtered.artifacts}
+                saved={saved}
+                artifacts={artifacts}
                 onOpen={openViewer}
               />
             </SectionBand>
           )}
 
           {/* PLAIN */}
-          {s.activity && <ActivityCard activity={filtered.activity} onOpen={openViewer} />}
+          {s.activity && <ActivityCard activity={activity} onOpen={openViewer} />}
+          </>
+          )}
         </main>
 
         {s.memoryFooter && <MemoryFooter stats={memoryStats} />}
       </div>
 
       <ObjectViewer item={liveViewing} onClose={closeViewer} onResolved={resolveViewerItem} />
+
+      {/* A search hit the dashboard does not already hold, opened in place.
+          Same sheet the ⌘K palette uses, so one hit behaves one way. */}
+      {recordSheet.sheet}
 
       {pcPursuit ? (
         <PCCockpit

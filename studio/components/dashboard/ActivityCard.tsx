@@ -56,7 +56,7 @@ export function ActivityCard({
 
   return (
     <BoardCard
-      title="Recently"
+      title="Recent Activity"
       count={sorted.length}
       href="/activity"
       seeAll={{ label: "See everything", href: "/activity" }}

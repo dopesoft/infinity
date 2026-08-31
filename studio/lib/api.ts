@@ -1,5 +1,5 @@
 import { getAccessToken } from "@/lib/auth/session";
-import type { Plan } from "@/lib/dashboard/types";
+import type { Plan, RecordDetail } from "@/lib/dashboard/types";
 
 export type CoreStatus = {
   version: string;
@@ -949,6 +949,15 @@ export type SearchResponse = {
   hits: SearchHit[];
   counts_by_kind: Record<string, number>;
 };
+
+/** One search hit, opened. Generic by kind — see core/internal/server/object_api.go.
+ *  Returns null on any failure, which callers MUST render differently from a
+ *  record with nothing in it. */
+export const fetchObject = (kind: string, id: string, signal?: AbortSignal) =>
+  getJSON<RecordDetail>(
+    `/api/object?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`,
+    signal,
+  );
 
 export const searchAll = (q: string, signal?: AbortSignal) =>
   getJSON<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`, signal);

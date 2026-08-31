@@ -18,6 +18,15 @@ styles, server-tracked progress) and never overrides them.
    (`font-voice`). The interface is medium weight, one size down (`font-sans`).
    Data is mono (`font-mono`). One family (Geist) carries voice and chrome; the
    difference is size, weight, and colour, never a second typeface.
+
+   **Amended 2026-08-31.** There is now a fourth register, `display`
+   (Instrument Serif), and it is scoped to **exactly two elements**: the
+   dashboard greeting and the daily quote beneath it. That is the one moment in
+   the product where a person is being *spoken to* rather than a surface being
+   labelled, and it is the only thing a second typeface is allowed to mean.
+   Everywhere else the sentence above stands unchanged. A third consumer of
+   `font-display` is a bug by contract, not a style choice — the register only
+   works while it is rare.
 2. **Tone, not boxes.** Sections separate by ground, not by chrome. A section
    sits either on the page (`plain`, hairline under its title), on a quiet
    full-width band of `muted` (`band`, the "web style" alternation that keeps a
@@ -69,6 +78,7 @@ stays). Convert these hex values to the existing `H S% L%` triplet format.
 | `--muted` | `#f5f3ee` | `#0e0d0c` | inset ground (opened detail, terminal, quote, schema) |
 | `--muted-foreground` | `#5f5b53` | `#a8a49b` | secondary text |
 | `--foreground-quiet` (new) | `#918c82` | `#6f6b63` | meta, timestamps, resting glyphs |
+| `--band` (new 2026-08-31) | `#faf9f6` | `#0a0a09` | the full-width band ground (§1.2) |
 | `--card` | `#fffefb` | `#0e0d0c` | the rare real card (modal, proposal) |
 | `--popover` | `#fffefb` | `#0a0a09` | popovers, drawers |
 | `--border` / `--input` | `#e4e1d9` | `#262523` | hairline |
@@ -83,8 +93,17 @@ stays). Convert these hex values to the existing `H S% L%` triplet format.
 | `--danger` | `#d93a3a` | `#ef6363` | failed |
 
 Tailwind additions: `text-quiet` / `bg-quiet` → `hsl(var(--foreground-quiet))`,
-`border-hairline` → `hsl(var(--hairline))`. Keep `--success` and the tier
-palette as they are.
+`border-hairline` → `hsl(var(--hairline))`, `bg-band` → `hsl(var(--band))`.
+Keep `--success` and the tier palette as they are.
+
+**On `--band` vs `--muted` (amended 2026-08-31).** The band and the inset used
+to share `--muted`, which made them one dial: lightening the full-width band
+lightened every inset in the product with it. They are different roles. A band
+separates two areas of a long page and only has to be *just* visible; an inset
+sits inside a row and has to read as a container. `BAND_GROUND`
+(`dashboard/Section.tsx`, exported, and the only definition — `BoardBand` had a
+second copy of the class string until this date) is the one place the band
+ground is named.
 
 ## 4. Type
 
@@ -92,9 +111,18 @@ palette as they are.
   `geist` npm package (`geist/font/sans`, `geist/font/mono`, Vercel's own
   package, works with next/font on Next 14). Read the package README before
   wiring it. Expose as CSS variables `--font-geist-sans`, `--font-geist-mono`.
+- **Display (amended 2026-08-31):** Instrument Serif, committed under
+  `studio/app/fonts/` and loaded with `next/font/local` — same discipline as
+  Geist, no Google Fonts round trip at build time or run time. Exposed as
+  `--font-display`, reached through `font-display`. **Two consumers only:**
+  `PageHeader titleFace="display"` on the dashboard greeting (30px, rising to
+  34 at `sm`, Regular — the face ships one weight and a synthesized bold is a
+  different typeface) and `DailyQuote` (19–20px italic, author in `font-sans`
+  at 12 quiet). See `studio/app/fonts/README.md` for why those are the latin
+  subset files.
 - **Tailwind `fontFamily`:** `sans` → Geist, `voice` → Geist (same family; the
   utility exists so voice can be retuned later in one place), `mono` → Geist
-  Mono. **Stop aliasing `mono` to the sans.**
+  Mono, `display` → Instrument Serif. **Stop aliasing `mono` to the sans.**
 - **Registers:**
   - Voice (`font-voice text-[15.5px] leading-[1.55] text-foreground`): Jarvis's
     replies, the working headline, thoughts, notes he saves, the reason behind

@@ -27,6 +27,12 @@
     --foreground: 45 8.3% 9.4%; /* #1a1916 */
 
     --muted: 42.9 25.9% 94.7%; /* #f5f3ee - inset ground */
+    /* The band ground, a role of its own rather than a second use of --muted.
+       A band separates two areas of a long page and only has to be *just*
+       visible; an inset sits inside a row and has to read as a container. The
+       two wanted different weights, and sharing a token meant lightening one
+       lightened the other. Half a step off the page ground. */
+    --band: 43 26% 96.3%; /* #f8f7f2 - a step lighter than --muted's 94.7% */
     --muted-foreground: 40 7% 35%; /* #5f5b53 */
     --foreground-quiet: 40 6.4% 53.9%; /* #918c82 */
 
@@ -86,6 +92,9 @@
     --foreground: 42 26.3% 92.5%; /* #f1eee7 */
 
     --muted: 30 8% 5%; /* #0e0d0c - inset ground */
+    /* Dark: the page is true black (house rule), so the band lifts off it
+       rather than sinking into it, and by less than the inset does. */
+    --band: 30 8% 4.2%; /* #0b0b0a - a step lighter than --muted's 5% */
     --muted-foreground: 41.5 7% 63.3%; /* #a8a49b */
     --foreground-quiet: 40 5.7% 41.2%; /* #6f6b63 */
 

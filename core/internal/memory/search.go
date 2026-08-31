@@ -363,6 +363,128 @@ func (s *Searcher) fetchBossProfile(ctx context.Context) (string, error) {
 	return out.String(), rows.Err()
 }
 
+// BossName returns what the boss is called, for surfaces that greet him by
+// name rather than describe him. Empty string when he has not told us - and
+// an empty string is the CORRECT answer there, not a placeholder: a greeting
+// with no name reads fine, a greeting with a guessed name reads wrong.
+//
+// It reads the same rows the always-on identity primer above reads, so the
+// greeting and the system prompt can never disagree about who they are
+// talking to. Package-level rather than a *Searcher method so a caller
+// needing one string does not have to build the whole retrieval stack.
+//
+// SEVERAL TITLES, NOT ONE. The onboarding wizard writes title='Name', but the
+// profile is hand-editable and the live one says "Who am I" -> "I am Kai..
+// real name Khaya.. but sometimes you call me boss." A lookup pinned to
+// 'Name' returned nothing against the real database, so the greeting would
+// have shipped permanently nameless. Titles are tried most-specific first,
+// and a row only wins if a name can actually be pulled out of it.
+//
+// No capitalisation is applied. The profile explicitly permits "boss", and
+// "Good evening, boss" is correct as typed.
+func BossName(ctx context.Context, pool *pgxpool.Pool) string {
+	if pool == nil {
+		return ""
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT lower(btrim(title)), COALESCE(content, '')
+		FROM mem_memories
+		WHERE tier = 'semantic'
+		  AND status = 'active'
+		  AND project = '_self'
+		  AND lower(btrim(title)) = ANY($1)
+	`, bossNameTitles)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	found := map[string]string{}
+	for rows.Next() {
+		var title, content string
+		if err := rows.Scan(&title, &content); err != nil {
+			continue
+		}
+		found[title] = content
+	}
+	if rows.Err() != nil {
+		return ""
+	}
+	for _, title := range bossNameTitles {
+		if name := normalizeBossName(found[title]); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// bossNameTitles are the profile rows that can carry a name, most explicit
+// first. Extend this rather than widening the parser: a title that MEANS
+// "this is his name" is a far better signal than fishing one out of prose.
+var bossNameTitles = []string{"name", "my name", "who am i", "identity"}
+
+// nameLeadIns are what people put in front of their own name when the field
+// invited a sentence instead of a word. Longest first, because "i am called "
+// contains "i am ".
+var nameLeadIns = []string{
+	"my name is ", "my name's ", "i am called ", "i'm called ",
+	"they call me ", "you call me ", "call me ",
+	"i am ", "i'm ", "this is ",
+}
+
+// normalizeBossName turns whatever was typed into the profile field into
+// something addressable. Formatting, not judgment: the field is free text and
+// people write "Kai, but Khaya on legal docs" or a whole sentence.
+// Deterministic and total - every input maps to a name or to "".
+func normalizeBossName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return ""
+	}
+
+	// Strip a lead-in, so "I am Kai.. real name Khaya" yields "Kai" and not
+	// "I am Kai".
+	lower := strings.ToLower(name)
+	for _, lead := range nameLeadIns {
+		// A value that is ONLY the lead-in ("I am") carries no name at all.
+		// Checked before the prefix match, which needs the trailing space.
+		if lower == strings.TrimSpace(lead) {
+			return ""
+		}
+		if strings.HasPrefix(lower, lead) {
+			name = strings.TrimSpace(name[len(lead):])
+			break
+		}
+	}
+
+	// Cut at the first sentence or clause boundary: "Kai, though everyone at
+	// work says Khaya" -> "Kai".
+	if i := strings.IndexAny(name, ",.\n\r;:("); i >= 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	name = strings.Trim(name, `"'` + "`" + ` `)
+
+	// Still a phrase? Take the first word. "Kai Malabie the third" -> "Kai".
+	if fields := strings.Fields(name); len(fields) > 2 || len(name) > 24 {
+		if len(fields) > 0 {
+			name = fields[0]
+		} else {
+			name = ""
+		}
+	}
+	if len(name) > 32 {
+		name = name[:32]
+	}
+	name = strings.TrimSpace(name)
+
+	// A single character or a stray fragment is not a name. Better to greet
+	// him with nothing than with a piece of his own sentence.
+	if len([]rune(name)) < 2 {
+		return ""
+	}
+	return name
+}
+
 // stringBuilder mirrors strings.Builder but adds Fprintf via fmt's Write.
 type stringBuilder struct {
 	buf []byte

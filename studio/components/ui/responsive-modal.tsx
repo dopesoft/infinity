@@ -204,14 +204,45 @@ export function ResponsiveModal({
         // room above the buttons; `pb-safe` is now sane (max(safe,
         // 0.75rem)) so the buttons get matching bottom space on every
         // viewport - no more buttons glued to the modal's bottom
-        // border on desktop. `gap-2` separates stacked actions when
-        // they wrap on a narrow viewport.
+        // border on desktop.
         // Majordomo §7: the footer is a hairline, not a tinted box. The
         // `bg-muted/20` tint that used to live here made the action bar read
         // as a third stacked container under the body. Consumers that WANT a
         // tint (the event RSVP bar) still pass one via footerClassName.
+        //
+        // BELOW lg - the drawer - every action is a FULL-WIDTH ROW of its
+        // own, at the 44px touch height, stacked. The footer was using the
+        // desktop shape on a phone: buttons sized to their labels, pushed to
+        // the right, so two of them ("Open in Memory", "Discuss with Jarvis")
+        // overflowed a 375px sheet and landed as two fat content-width blocks
+        // with ragged dead space beside them. A sheet that slides up from the
+        // bottom of a phone gets sheet buttons.
+        //
+        // DOM order is secondary-then-primary, so stacked the primary lands
+        // LAST - nearest the thumb, furthest from the destructive action at
+        // the top. That is the right order for a bottom sheet and it falls
+        // out of the existing markup rather than needing per-consumer props.
+        //
+        // Owned HERE, not in each consumer, so a drawer added later gets it
+        // without anyone remembering to. At lg+ the dialog is unchanged:
+        // content-width buttons, right-aligned, since stretching two buttons
+        // across a 760px sheet would look absurd.
         <div className={cn(
           "flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-4 pt-3 sm:px-5 pb-safe",
+          "max-lg:flex-col max-lg:flex-nowrap max-lg:items-stretch max-lg:gap-2.5",
+          // `[&>div]:contents` dissolves the one level of action wrapper most
+          // footers pass (`<div className="flex justify-end gap-2">`), so its
+          // buttons become items of THIS column instead of staying a nested
+          // right-aligned row inside one stretched block. Sizing is restated
+          // for that level because a child selector still matches the wrapper
+          // div, not the buttons within it.
+          //
+          // Blanket, in the primitive, on purpose: a footer's direct div is
+          // always an action cluster, and doing it per consumer means the next
+          // drawer someone adds is wrong again.
+          "max-lg:[&>div]:contents",
+          "max-lg:[&>*]:h-11 max-lg:[&>*]:w-full max-lg:[&>*]:justify-center",
+          "max-lg:[&>div>*]:h-11 max-lg:[&>div>*]:w-full max-lg:[&>div>*]:justify-center",
           footerClassName,
         )}>
           {footer}

@@ -28,6 +28,13 @@ const config: Config = {
         sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui"],
         voice: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui"],
         mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
+        // `display` - Instrument Serif, the fourth register (MAJORDOMO §4,
+        // amended 2026-08-30). Scoped by contract to exactly two elements:
+        // the dashboard greeting and the daily quote. Anything else
+        // reaching for `font-display` is a bug, not a style choice: the
+        // whole point of one family everywhere else is that a second
+        // typeface MEANS something when it finally appears.
+        display: ["var(--font-display)", "Georgia", "ui-serif", "serif"],
       },
       height: { dvh: "100dvh", svh: "100svh", lvh: "100lvh" },
       minHeight: {
@@ -52,7 +59,13 @@ const config: Config = {
         stream: "42.5rem", // 680px
         sheet: "47.5rem", // 760px
         list: "55rem", // 880px
-        board: "77.5rem", // 1240px
+        // 1152px. Retuned down from 1240px on 2026-08-30: the dashboard
+        // header, main and footer had drifted to three different caps, and
+        // this is the one the boss reads from - it leaves real breathing
+        // room at the page edges instead of running the cards out to meet
+        // the viewport. All three now say `max-w-board`, so the next retune
+        // is this number and nothing else.
+        board: "72rem",
       },
       // The desktop nav rail. One number, used by the rail itself and by
       // anything that needs to sit beside it.
@@ -75,6 +88,10 @@ const config: Config = {
         // muted-foreground (meta, timestamps, resting glyphs) - `text-quiet`,
         // `bg-quiet`, and `border-quiet` all resolve from the one token.
         hairline: "hsl(var(--hairline))",
+        // The band ground (Majordomo §1.2 "tone, not boxes"). Its own token
+        // rather than `muted`, so the weight of a full-width band and the
+        // weight of an inset inside a row can be tuned independently.
+        band: "hsl(var(--band))",
         quiet: "hsl(var(--foreground-quiet))",
         primary: {
           DEFAULT: "hsl(var(--primary))",

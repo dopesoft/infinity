@@ -54,8 +54,13 @@ export type SectionTone = "plain" | "band" | "card";
  * horizontal scroll. Shared by `Section tone="band"` (one section on a band)
  * and `SectionBand` (a row of sections sharing one band), so the two can never
  * drift apart by a pixel.
+ *
+ * `bg-band`, not `bg-muted`. A band separates two areas of a long page and
+ * only needs to be just visible; an inset sits inside a row and has to read as
+ * a container. They shared a token until 2026-08-31, which meant lightening
+ * the band lightened every inset in the product with it.
  */
-const BAND_GROUND = "-mx-4 min-w-0 bg-muted px-4 py-5 sm:-mx-6 sm:px-6";
+export const BAND_GROUND = "-mx-4 min-w-0 bg-band px-4 py-5 sm:-mx-6 sm:px-6";
 
 /**
  * SectionBand — one muted band carrying SEVERAL plain sections.

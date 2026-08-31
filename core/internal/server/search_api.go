@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -79,25 +80,31 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// searchSource declares a kind ONCE, with both of its projections: how it is
+// found, and what it looks like when opened. They live on the same struct
+// deliberately (Rule #1c) - two parallel lists would let a kind be added to
+// the search and forgotten in the detail, and a hit that opens an empty sheet
+// is worse than a hit that does not exist.
 type searchSource struct {
-	kind string
-	run  func(ctx context.Context, pool *pgxpool.Pool, like string) []searchHit
+	kind   string
+	run    func(ctx context.Context, pool *pgxpool.Pool, like string) []searchHit
+	detail func(ctx context.Context, pool *pgxpool.Pool, id string) (*recordDetail, error)
 }
 
 func searchSources() []searchSource {
 	return []searchSource{
-		{kind: "memory", run: searchMemories},
-		{kind: "skill", run: searchSkills},
-		{kind: "automation", run: searchAutomations},
-		{kind: "surfaced", run: searchSurfaced},
-		{kind: "session", run: searchSessions},
+		{kind: "memory", run: searchMemories, detail: detailMemory},
+		{kind: "skill", run: searchSkills, detail: detailSkill},
+		{kind: "automation", run: searchAutomations, detail: detailAutomation},
+		{kind: "surfaced", run: searchSurfaced, detail: detailSurfaced},
+		{kind: "session", run: searchSessions, detail: detailSession},
 		// These three exist so Memory's per-tab match counts are REAL. Without
 		// them a search in Facts that actually matched a lesson would report
 		// zero everywhere else, and the boss would conclude the thing was not
 		// there — the exact trap the scoped-search empty state exists to close.
-		{kind: "lesson", run: searchLessons},
-		{kind: "prediction", run: searchPredictions},
-		{kind: "observation", run: searchObservations},
+		{kind: "lesson", run: searchLessons, detail: detailLesson},
+		{kind: "prediction", run: searchPredictions, detail: detailPrediction},
+		{kind: "observation", run: searchObservations, detail: detailObservation},
 	}
 }
 
@@ -114,7 +121,7 @@ func searchLessons(ctx context.Context, pool *pgxpool.Pool, like string) []searc
 			ID:    id,
 			Title: firstLine(text),
 			Meta:  "Something he learned",
-			Href:  "/memory?view=lessons&focus=" + id,
+			Href:  "/memory?view=lessons&focus=" + id + "&kind=lesson",
 		}
 	})
 }
@@ -134,7 +141,7 @@ func searchPredictions(ctx context.Context, pool *pgxpool.Pool, like string) []s
 			ID:    id,
 			Title: firstLine(expected),
 			Meta:  "Where he was wrong",
-			Href:  "/memory?view=wrong&focus=" + id,
+			Href:  "/memory?view=wrong&focus=" + id + "&kind=prediction",
 		}
 	})
 }
@@ -152,14 +159,22 @@ func searchObservations(ctx context.Context, pool *pgxpool.Pool, like string) []
 			ID:    id,
 			Title: firstLine(text),
 			Meta:  "Something he saw",
-			Href:  "/memory?view=seen&focus=" + id,
+			Href:  "/memory?view=seen&focus=" + id + "&kind=observation",
 		}
 	})
 }
 
 // scanHits runs one query and maps every row through `row`. A query error
-// yields no rows; it never propagates, so one unreachable table cannot take
+// yields no rows rather than propagating, so one unreachable table cannot take
 // the whole palette down with it.
+//
+// But it is LOGGED, loudly, on stderr. Returning nil silently is how a source
+// stays broken for months: the boss searches, finds nothing, and concludes the
+// thing is not there - which is indistinguishable from the truth and so never
+// gets reported. That is exactly what happened here. This query referenced a
+// `skill_name` column that mem_skills has never had, so every skill search
+// errored, returned nil, and read as "no skills match" from the day it
+// shipped. Empty-because-broken must never read as empty-because-fine.
 func scanHits(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -169,6 +184,7 @@ func scanHits(
 ) []searchHit {
 	rows, err := pool.Query(ctx, sql, arg, perKindLimit)
 	if err != nil {
+		log.Printf("search: source query failed: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -176,6 +192,7 @@ func scanHits(
 	for rows.Next() {
 		var id, a, b string
 		if err := rows.Scan(&id, &a, &b); err != nil {
+			log.Printf("search: row scan failed: %v", err)
 			continue
 		}
 		out = append(out, row(id, a, b))
@@ -199,7 +216,7 @@ func searchMemories(ctx context.Context, pool *pgxpool.Pool, like string) []sear
 			ID:    id,
 			Title: title,
 			Meta:  memoryTierLabel(tier),
-			Href:  "/memory?focus=" + id,
+			Href:  "/memory?focus=" + id + "&kind=memory",
 		}
 	})
 }
@@ -223,13 +240,15 @@ func memoryTierLabel(tier string) string {
 }
 
 func searchSkills(ctx context.Context, pool *pgxpool.Pool, like string) []searchHit {
+	// mem_skills is keyed by `name` (migration 004) and has never had a
+	// `skill_name` column - that one belongs to mem_skill_versions. This query
+	// used to reference it, so it errored on every keystroke and skills were
+	// silently unsearchable. Verified against the live database 2026-08-31.
 	return scanHits(ctx, pool, `
-		SELECT COALESCE(NULLIF(skill_name, ''), name),
-		       COALESCE(NULLIF(name, ''), skill_name),
-		       COALESCE(description, '')
+		SELECT name, name, COALESCE(description, '')
 		  FROM mem_skills
 		 WHERE COALESCE(status, 'active') <> 'archived'
-		   AND (name ILIKE $1 OR skill_name ILIKE $1 OR description ILIKE $1)
+		   AND (name ILIKE $1 OR description ILIKE $1)
 		 ORDER BY updated_at DESC NULLS LAST
 		 LIMIT $2
 	`, like, func(id, name, desc string) searchHit {
@@ -238,7 +257,7 @@ func searchSkills(ctx context.Context, pool *pgxpool.Pool, like string) []search
 			ID:    id,
 			Title: name,
 			Meta:  firstLine(desc),
-			Href:  "/skills?focus=" + id,
+			Href:  "/skills?focus=" + id + "&kind=skill",
 		}
 	})
 }
@@ -266,7 +285,7 @@ func searchAutomations(ctx context.Context, pool *pgxpool.Pool, like string) []s
 			ID:    id,
 			Title: label,
 			Meta:  sub,
-			Href:  "/automations?focus=" + id,
+			Href:  "/automations?focus=" + id + "&kind=automation",
 		}
 	})
 }
@@ -285,7 +304,7 @@ func searchSurfaced(ctx context.Context, pool *pgxpool.Pool, like string) []sear
 			ID:    id,
 			Title: title,
 			Meta:  firstLine(sub),
-			Href:  "/?focus=" + id,
+			Href:  "/?focus=" + id + "&kind=surfaced",
 		}
 	})
 }

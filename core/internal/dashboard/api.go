@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/connectors"
+	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -101,6 +102,12 @@ type Response struct {
 	// grouped by `surface` key. Studio renders each group with one
 	// generic SurfaceCard.
 	SurfaceItems map[string][]SurfaceItem `json:"surfaceItems"`
+
+	// Header context. Both are omitempty and additive: an older cached
+	// payload without them renders a nameless greeting and no quote, which
+	// is why the Studio cache key did not need bumping for this.
+	BossName string `json:"bossName,omitempty"`
+	Quote    *Quote `json:"quote,omitempty"`
 }
 
 // ── DTOs (mirror studio/lib/dashboard/types.ts) ───────────────────────────
@@ -649,6 +656,29 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		mu.Lock()
 		resp.SurfaceItems = v
+		mu.Unlock()
+		return nil
+	})
+
+	// The greeting greets him by name. Same row the always-on identity primer
+	// reads (memory.BossName), so the dashboard and the system prompt can
+	// never disagree about who they are talking to. Empty when he has not
+	// said - and then the greeting simply has no name in it.
+	run("boss_name", func() error {
+		v := memory.BossName(ctx, a.Pool)
+		mu.Lock()
+		resp.BossName = v
+		mu.Unlock()
+		return nil
+	})
+
+	run("quote", func() error {
+		v, err := a.loadQuote(ctx)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		resp.Quote = v
 		mu.Unlock()
 		return nil
 	})

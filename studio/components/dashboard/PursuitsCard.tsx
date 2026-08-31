@@ -44,7 +44,7 @@ export function PursuitsCard({
 
   return (
     <BoardCard
-      title="Ongoing"
+      title="Pursuits"
       count={habits.length + goals.length}
       href="/memory"
       delay={0.08}

@@ -61,7 +61,7 @@ export const SECTION_LABELS: Record<DashboardSectionKey, { title: string; descri
     description: "Articles, links, notes, and quotes you've stashed for later.",
   },
   activity: {
-    title: "Activity",
+    title: "Recent Activity",
     description: "Rolling event stream - agent runs, memory ops, sentinel fires, reflections.",
   },
   memoryFooter: {

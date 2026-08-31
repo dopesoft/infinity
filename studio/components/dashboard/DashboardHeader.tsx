@@ -4,7 +4,9 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
+import { DailyQuote } from "@/components/dashboard/DailyQuote";
 import { todayHeader } from "@/lib/dashboard/format";
+import type { DailyQuote as DailyQuoteData } from "@/lib/dashboard/types";
 
 /* Dashboard page header — Majordomo §5 (`PageHeader`) + §1.3 (one title).
  *
@@ -25,8 +27,18 @@ import { todayHeader } from "@/lib/dashboard/format";
  * The search field routes through `<SearchInput>` rather than a hand-rolled
  * input + magnifier + clear button (reuse-first: that primitive already owns
  * the 16px iOS font, the inputMode, the focus ring, and the one-tap clear).
- * Search still filters everything visible on the dashboard; it is NOT the
- * eventual global cmd-K palette.
+ * It runs the SAME global search as the ⌘K palette (GET /api/search) — it used
+ * to only filter the rows already on screen, which meant the one box on the
+ * page he would reach for to find something could not find anything he could
+ * not already see. Results replace the sections; DashboardClient owns that
+ * swap.
+ *
+ * The greeting is set in the display register and says his name. It is the
+ * only place in the product where somebody is being spoken to rather than a
+ * surface being labelled, which is the entire justification for a second
+ * typeface existing at all (MAJORDOMO §4, amended 2026-08-30). The name comes
+ * down inside the dashboard payload from the boss profile — never a literal in
+ * this file, and absent it the greeting is simply nameless.
  *
  * HYDRATION: `todayHeader()` and the clock are locale/clock dependent. The date
  * carries `suppressHydrationWarning`; the clock starts EMPTY and is filled in
@@ -34,12 +46,16 @@ import { todayHeader } from "@/lib/dashboard/format";
  * never `Date.now()` in a `useState` initializer.
  */
 export function DashboardHeader({
-  badgeCount,
+  bossName,
+  quote,
   search,
   onSearchChange,
   loading = false,
 }: {
-  badgeCount: number;
+  /** From the boss profile via /api/dashboard. Empty until he has told us. */
+  bossName?: string;
+  /** Today's line. Undefined on a cold cache; the block then renders nothing. */
+  quote?: DailyQuoteData | null;
   search: string;
   onSearchChange: (v: string) => void;
   // True while the dashboard is fetching/refetching. Surfaces a small spinner
@@ -68,25 +84,22 @@ export function DashboardHeader({
     return () => window.clearInterval(t);
   }, []);
 
-  // A greeting, not four facts joined by middots. "Thursday, August 28 ·
-  // 9:40pm · 3 need you" is a status bar wearing a sentence's clothes: you
-  // read past the date and the clock every single time to reach the only
-  // number that matters. The date and time are on your device already; what
-  // is not is how many things are waiting.
-  const meta = (
-    <span suppressHydrationWarning>
-      {badgeCount > 0
-        ? `${countWord(badgeCount)} ${badgeCount === 1 ? "thing needs" : "things need"} you.`
-        : "Nothing needs you right now."}
-    </span>
-  );
-
   return (
-    <div className="mx-auto w-full min-w-0 max-w-6xl space-y-3 px-4 pb-3 pt-1 sm:px-6 sm:pt-2">
+    // max-w-board, the token, same as <main> and the footer. The page used to
+    // state its column width three times in three different numbers, so the
+    // greeting sat 44px inboard of the cards it was introducing.
+    <div className="mx-auto w-full min-w-0 max-w-board space-y-3 px-4 pb-3 pt-1 sm:px-6 sm:pt-2">
       <PageHeader
-        title={greeting(clock)}
+        title={greeting(clock, bossName)}
+        titleFace="display"
         live
-        meta={meta}
+        // No `meta`. The line under the greeting used to be "Nothing needs
+        // you right now.", which said nothing on the good days and duplicated
+        // the count already sitting on the "Needs you" section on the bad
+        // ones. The quote holds that slot instead — as a SIBLING below, not
+        // through `meta`: meta renders inside a <p>, and a <figure> inside a
+        // <p> is invalid, so the parser closes the <p> early and the server
+        // and client disagree about the DOM.
         actions={
           loading ? (
             <span
@@ -102,10 +115,12 @@ export function DashboardHeader({
         className="pb-0"
       />
 
+      <DailyQuote quote={quote} />
+
       <SearchInput
         value={search}
         onValueChange={onSearchChange}
-        placeholder="Search the dashboard…"
+        placeholder="Search everything…"
         autoCapitalize="none"
         autoCorrect="off"
         spellCheck={false}
@@ -115,23 +130,25 @@ export function DashboardHeader({
 }
 
 /**
- * "Good morning" / "Good afternoon" / "Good evening" — derived from the same
- * client clock the header already keeps, so it can never mismatch between
- * server and client. Empty clock (first paint) falls back to the neutral
- * form rather than guessing at a time of day.
+ * "Good morning, Kai" — derived from the same client clock the header already
+ * keeps, so it can never mismatch between server and client. Empty clock
+ * (first paint) falls back to the neutral form rather than guessing at a time
+ * of day.
+ *
+ * A missing name yields "Good evening" with no trailing comma. That is the
+ * correct output, not a degraded one: a greeting with no name reads fine, a
+ * greeting with a guessed name reads wrong.
  */
-function greeting(clock: string): string {
-  if (!clock) return "Hello";
-  const hour = parseInt(clock, 10);
-  const pm = clock.includes("pm");
-  const h24 = pm ? (hour === 12 ? 12 : hour + 12) : hour === 12 ? 0 : hour;
-  if (h24 < 12) return "Good morning";
-  if (h24 < 18) return "Good afternoon";
-  return "Good evening";
-}
-
-/** Small counts read better as words in a sentence. */
-function countWord(n: number): string {
-  const words = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
-  return words[n] ?? String(n);
+function greeting(clock: string, name?: string): string {
+  const timeOfDay = (() => {
+    if (!clock) return "Hello";
+    const hour = parseInt(clock, 10);
+    const pm = clock.includes("pm");
+    const h24 = pm ? (hour === 12 ? 12 : hour + 12) : hour === 12 ? 0 : hour;
+    if (h24 < 12) return "Good morning";
+    if (h24 < 18) return "Good afternoon";
+    return "Good evening";
+  })();
+  const who = name?.trim();
+  return who ? `${timeOfDay}, ${who}` : timeOfDay;
 }

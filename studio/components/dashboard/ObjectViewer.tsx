@@ -56,6 +56,7 @@ import type {
   DashboardItem,
   FollowUp,
   Pursuit,
+  RecordDetail,
   Reflection,
   Saved,
   SurfaceItem,
@@ -362,6 +363,7 @@ function getViewerTitle(item: DashboardItem): string {
     case "saved": return item.data.title;
     case "artifact": return item.data.name;
     case "activity": return item.data.title;
+    case "record": return item.data.title;
   }
 }
 
@@ -378,6 +380,9 @@ function getViewerKindLabel(item: DashboardItem): string {
     case "saved": return "Saved item";
     case "artifact": return "Made by Jarvis";
     case "activity": return "Activity event";
+    // Go names the kind ("Memory", "Skill", …) in `subtitle`; Studio does not
+    // keep a second copy of that mapping to drift out of sync.
+    case "record": return item.data.subtitle || item.data.kind;
   }
 }
 
@@ -559,9 +564,14 @@ function ViewerActions({
 
   async function discuss() {
     const id = (item.data as { id?: string }).id ?? "";
+    // A record's OWN kind is what the seeded session needs in its turn-1
+    // context block: "Kind: memory" tells Jarvis what he is looking at,
+    // "Kind: record" tells him nothing. `record` is a rendering variant, not
+    // a thing that exists in the database.
+    const seedKind = item.kind === "record" ? item.data.kind : item.kind;
     setSeeding(true);
     try {
-      const sessionId = await seedSession(item.kind, id, item.data);
+      const sessionId = await seedSession(seedKind, id, item.data);
       if (sessionId) {
         router.push(`/live?session=${encodeURIComponent(sessionId)}`);
       } else {
@@ -632,6 +642,20 @@ function ViewerActions({
           <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
           {dismissing ? "Dismissing..." : "Dismiss"}
         </button>
+      );
+    }
+    if (item.kind === "record") {
+      // A search hit that lives on some other page. Go supplies both the
+      // destination and its label, so this stays one branch no matter how
+      // many kinds the search learns; "Discuss with Jarvis" still trails as
+      // the universal CTA. No link while the detail is in flight or failed -
+      // an href we have not confirmed is a link to nowhere.
+      if (!item.data.href || item.data.loading || item.data.failed) return null;
+      return (
+        <OpenInButton
+          href={item.data.href}
+          label={item.data.hrefLabel || "Open"}
+        />
       );
     }
     if (item.kind === "artifact") {
@@ -824,6 +848,9 @@ function ViewerActions({
   // It renders even when empty so the primary stays pinned right.
   return (
     <>
+      {/* §7's left cluster on lg+. Below lg ResponsiveModal's footer dissolves
+          this wrapper and stacks the buttons full width - the primitive owns
+          that, so nothing here needs a breakpoint. */}
       <div className="flex min-w-0 flex-wrap items-center gap-2">{renderSecondary()}</div>
       <button
         type="button"
@@ -1140,7 +1167,63 @@ function ViewerContent({ item }: { item: DashboardItem }) {
     case "saved": return <SavedBody s={item.data} />;
     case "artifact": return <ArtifactBody a={item.data} />;
     case "activity": return <ActivityBody e={item.data} />;
+    case "record": return <RecordBody r={item.data} />;
   }
+}
+
+// ── Record ────────────────────────────────────────────────────────────────
+/* RecordBody - anything the global search found that the dashboard does not
+ * already hold hydrated: a memory, a skill, an automation, a session, a
+ * lesson, a prediction, an observation.
+ *
+ * There is deliberately NO per-kind branch here, and there never should be.
+ * Go's /api/object decides what this object's fields are called and where
+ * "Open in …" points; Studio renders whatever it is handed. That is what makes
+ * a ninth searchable table open in this sheet on the day Core learns to search
+ * it, with zero changes to this file — the alternative is eight bodies here
+ * that drift out of sync with eight queries there.
+ *
+ * `loading` is the optimistic state: the sheet opens instantly from the search
+ * hit (title + meta) while the detail is still in flight, so a tap never buys
+ * a spinner before a modal. `failed` is NOT the same as "no detail" and must
+ * never render as a clean empty body - a record that could not be fetched says
+ * so. */
+function RecordBody({ r }: { r: RecordDetail }) {
+  const loading = !!r.loading;
+  const failed = !!r.failed;
+  const hasBody = !!r.body?.trim();
+  const entries = (r.fields ?? [])
+    .filter((f) => f.value?.trim())
+    .map((f) => ({
+      k: f.label,
+      v: f.mono ? <span className="font-mono text-[12px]">{f.value}</span> : f.value,
+    }));
+
+  return (
+    <ViewerSections>
+      {failed ? (
+        <QuietNote>
+          I could not load this one. It may have been removed since the search
+          found it, or Core is not answering right now.
+        </QuietNote>
+      ) : null}
+      {hasBody ? (
+        <ModalSection label="Detail">
+          <ModalPre>{r.body.trim()}</ModalPre>
+        </ModalSection>
+      ) : null}
+      {entries.length > 0 ? (
+        <ModalSection label="Details">
+          <ModalDl entries={entries} />
+        </ModalSection>
+      ) : null}
+      {!failed && !hasBody && entries.length === 0 ? (
+        <QuietNote>
+          {loading ? "Opening…" : "Nothing else is recorded against this one."}
+        </QuietNote>
+      ) : null}
+    </ViewerSections>
+  );
 }
 
 // ── Pursuit ───────────────────────────────────────────────────────────────
@@ -2826,6 +2909,8 @@ function headerMeta(item: DashboardItem): { label: string } {
       return { label: "Made by Jarvis" };
     case "activity":
       return { label: "Activity" };
+    case "record":
+      return { label: item.data.subtitle || item.data.kind };
   }
 }
 

@@ -6,6 +6,7 @@ import type {
   Approval,
   Artifact,
   CalendarEvent,
+  DailyQuote,
   FollowUp,
   MemoryStats,
   Pursuit,
@@ -41,6 +42,12 @@ export type DashboardResponse = {
   memoryStats: MemoryStats | null;
   // Generic surface contract: items grouped by `surface` key.
   surfaceItems: Record<string, SurfaceItem[]> | null;
+  // Header context. Both are OPTIONAL on purpose: they are additive, so a
+  // payload cached before they existed is still structurally valid and just
+  // renders a nameless greeting with no quote until the revalidate lands.
+  // That is why the cache key below did NOT need bumping - see the note there.
+  bossName?: string;
+  quote?: DailyQuote | null;
 };
 
 type RawResponse = {
@@ -62,12 +69,19 @@ type RawResponse = {
   work?: WorkItem[] | null;
   memoryStats?: MemoryStats | null;
   surfaceItems?: Record<string, SurfaceItem[]> | null;
+  bossName?: string | null;
+  quote?: DailyQuote | null;
 };
 
 // Stale-while-revalidate cache. The dashboard renders instantly from the
 // last-known payload (localStorage) on mount, then fetchDashboard refreshes
 // in the background. Modern-app feel: no blank-cards-for-5-seconds cold
-// start. Bump the version suffix if DashboardResponse's shape changes.
+// start.
+//
+// Bump the version suffix only when the shape changes INCOMPATIBLY. Adding an
+// optional field is not that: bumping throws away every section and hands the
+// boss a completely blank dashboard on his first load after a deploy, which is
+// a far bigger flash than the one field arriving a beat late.
 const DASHBOARD_CACHE_KEY = "infinity:dashboard:v2";
 
 export function readDashboardCache(): DashboardResponse | null {
@@ -108,6 +122,8 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardRes
       work: raw.work ?? null,
       memoryStats: raw.memoryStats ?? null,
       surfaceItems: raw.surfaceItems ?? null,
+      bossName: raw.bossName ?? "",
+      quote: raw.quote ?? null,
     };
     writeDashboardCache(data);
     return data;

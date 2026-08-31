@@ -1,18 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  Activity,
-  Brain,
-  Clock,
-  CornerDownLeft,
-  MessageSquare,
-  Plus,
-  Search,
-  Sparkles,
-  type LucideIcon,
-} from "lucide-react";
+import { CornerDownLeft, Plus, Search } from "lucide-react";
 import {
   Command,
   CommandEmpty,
@@ -22,7 +12,9 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { searchAll, type SearchHit } from "@/lib/api";
+import { type SearchHit } from "@/lib/api";
+import { kindMeta, useGlobalSearch } from "@/lib/search/useGlobalSearch";
+import { useRecordSheet } from "@/components/search/RecordSheet";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,29 +32,6 @@ import { cn } from "@/lib/utils";
  * with the LAST group always being "Do something" - so the same two
  * keystrokes that find a thing can also start a job.
  */
-
-const KIND_META: Record<string, { label: string; Icon: LucideIcon; order: number }> = {
-  surfaced: { label: "Needs you", Icon: Sparkles, order: 0 },
-  memory: { label: "Memory", Icon: Brain, order: 1 },
-  skill: { label: "Skills", Icon: Sparkles, order: 2 },
-  automation: { label: "Automations", Icon: Clock, order: 3 },
-  session: { label: "Conversations", Icon: MessageSquare, order: 4 },
-  lesson: { label: "Lessons", Icon: Brain, order: 5 },
-  prediction: { label: "Where he was wrong", Icon: Brain, order: 6 },
-  observation: { label: "Everything seen", Icon: Brain, order: 7 },
-};
-
-function kindMeta(kind: string) {
-  return (
-    KIND_META[kind] ?? {
-      // An unknown kind is a table Core learned to search after this shipped.
-      // It renders under its own name rather than being dropped.
-      label: kind.charAt(0).toUpperCase() + kind.slice(1),
-      Icon: Activity,
-      order: 50,
-    }
-  );
-}
 
 /** What "Do something" offers for the text currently typed. */
 function actionsFor(query: string): { label: string; href: string }[] {
@@ -83,55 +52,16 @@ export function CommandPalette({
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const seq = useRef(0);
-
-  // Debounced fetch. The palette is keystroke-driven, so an in-flight
-  // response for an older query must never overwrite a newer one - hence the
-  // sequence guard as well as the abort.
-  useEffect(() => {
-    if (!open) return;
-    const q = query.trim();
-    if (!q) {
-      setHits([]);
-      setLoading(false);
-      return;
-    }
-    const mine = ++seq.current;
-    const ac = new AbortController();
-    setLoading(true);
-    const t = window.setTimeout(async () => {
-      const res = await searchAll(q, ac.signal);
-      if (mine !== seq.current) return;
-      setHits(res?.hits ?? []);
-      setLoading(false);
-    }, 140);
-    return () => {
-      window.clearTimeout(t);
-      ac.abort();
-    };
-  }, [query, open]);
+  // Same hook the dashboard search uses. The debounce, the abort and the
+  // stale-response guard used to live here in full; two copies of that is how
+  // two boxes start answering the same question differently.
+  const { hits, groups, loading, failed } = useGlobalSearch(query, open);
+  const recordSheet = useRecordSheet();
 
   // Reset on close so reopening never flashes the previous search.
   useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setHits([]);
-    }
+    if (!open) setQuery("");
   }, [open]);
-
-  const groups = useMemo(() => {
-    const by = new Map<string, SearchHit[]>();
-    for (const hit of hits) {
-      const list = by.get(hit.kind);
-      if (list) list.push(hit);
-      else by.set(hit.kind, [hit]);
-    }
-    return [...by.entries()].sort(
-      (a, b) => kindMeta(a[0]).order - kindMeta(b[0]).order,
-    );
-  }, [hits]);
 
   const go = useCallback(
     (href: string) => {
@@ -141,9 +71,28 @@ export function CommandPalette({
     [onOpenChange, router],
   );
 
+  // A hit opens IN PLACE — the same sheet the dashboard opens, so one result
+  // behaves one way wherever it was found. It used to route-push `?focus=<id>`
+  // at a page that never read the parameter, which meant six of the eight
+  // kinds landed you somewhere with no sign of the thing you searched for.
+  // A conversation still navigates: /live?session= genuinely goes somewhere,
+  // and "open the conversation" is the whole intent of finding one.
+  const openHit = useCallback(
+    (hit: SearchHit) => {
+      if (hit.kind === "session") {
+        go(hit.href);
+        return;
+      }
+      onOpenChange(false);
+      recordSheet.open(hit);
+    },
+    [go, onOpenChange, recordSheet],
+  );
+
   const actions = actionsFor(query);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="top-[12%] max-w-xl translate-y-0 gap-0 overflow-hidden p-0"
@@ -159,7 +108,11 @@ export function CommandPalette({
           />
           <CommandList className="max-h-[min(60dvh,420px)]">
             {query.trim() && !loading && hits.length === 0 && (
-              <CommandEmpty>Nothing matches that.</CommandEmpty>
+              <CommandEmpty>
+                {failed
+                  ? "I could not run that search — Core is not responding."
+                  : "Nothing matches that."}
+              </CommandEmpty>
             )}
 
             {groups.map(([kind, list]) => {
@@ -171,7 +124,7 @@ export function CommandPalette({
                     <CommandItem
                       key={`${kind}:${hit.id}`}
                       value={`${kind}:${hit.id}`}
-                      onSelect={() => go(hit.href)}
+                      onSelect={() => openHit(hit)}
                       className="gap-2.5"
                     >
                       <Icon className="size-4 shrink-0 text-quiet" aria-hidden />
@@ -221,6 +174,10 @@ export function CommandPalette({
         </Command>
       </DialogContent>
     </Dialog>
+    {/* Sibling of the palette, not a child: opening a hit CLOSES the palette,
+        and a sheet mounted inside it would go with it. */}
+    {recordSheet.sheet}
+    </>
   );
 }
 
