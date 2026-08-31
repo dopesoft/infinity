@@ -82,7 +82,7 @@ func (f *failoverProvider) standby() Provider {
 		if _, _, spent := Exhausted(name); spent {
 			continue
 		}
-		if p, ok := f.reg.providers[name]; ok && p != nil {
+		if p, ok := f.reg.lookup(name); ok && p != nil {
 			return p
 		}
 	}
@@ -160,6 +160,8 @@ func ProviderLabel(name string) string {
 		return "Claude (API)"
 	case "google":
 		return "Gemini (API)"
+	case "deepseek":
+		return "DeepSeek (API)"
 	case "claude_code":
 		return "Claude Code (your Claude plan)"
 	}

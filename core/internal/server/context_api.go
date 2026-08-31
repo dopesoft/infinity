@@ -106,8 +106,9 @@ func contextWindowFor(model string) int {
 		return 128_000
 	}
 
-	// DeepSeek - V4 flash/pro ship a 1M window (not in the Studio catalog yet,
-	// kept for when the boss wires it).
+	// DeepSeek - V4 flash/pro/flash-vision all ship a 1M window (vendor
+	// pricing page, checked 2026-08-30). Wired: the vendor is in the Studio
+	// catalog and the provider registry.
 	if strings.HasPrefix(m, "deepseek") {
 		return 1_000_000
 	}

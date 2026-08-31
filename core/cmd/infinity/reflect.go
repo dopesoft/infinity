@@ -53,7 +53,7 @@ have a reflection. Pass --session <id> to target a single session, or
 			// Route reflection through the boss's active model (Settings),
 			// same as the server — no longer Anthropic-only.
 			am := &activeModelProvider{
-				registry: llm.BuildRegistry(llm.NewOAuthStore(pool)),
+				registry: llm.BuildRegistry(llm.NewOAuthStore(pool), llm.NewKeyStore(pool)),
 				settings: settings.New(pool),
 				fallback: provider,
 			}

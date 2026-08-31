@@ -57,7 +57,7 @@ func consolidateCmd() *cobra.Command {
 				// Route compression through the boss's active model (Settings),
 				// same as the server — no longer Anthropic-only.
 				am := &activeModelProvider{
-					registry: llm.BuildRegistry(llm.NewOAuthStore(pool)),
+					registry: llm.BuildRegistry(llm.NewOAuthStore(pool), llm.NewKeyStore(pool)),
 					settings: settings.New(pool),
 					fallback: provider,
 				}

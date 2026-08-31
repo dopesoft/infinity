@@ -14,9 +14,32 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
+// OpenAI is the Chat Completions provider. It also serves every
+// OpenAI-COMPATIBLE vendor (DeepSeek today), because the wire format is
+// identical and the differences are data, not code: an id, a base URL, a
+// model-normalizer, and a flag for the request fields only OpenAI accepts.
+// That is the whole reason a second vendor costs a constructor here instead
+// of a second 300-line streaming implementation to keep in sync forever.
 type OpenAI struct {
 	client openai.Client
 	model  string
+	// name is the registry id this instance answers to ("openai",
+	// "deepseek"). Never hardcoded at the Name() call site.
+	name string
+	// normalize maps a requested model id or tier nickname onto something
+	// THIS vendor can serve, returning "" so the caller falls back to the
+	// configured default rather than shipping a foreign id upstream.
+	normalize func(string) string
+	// openaiExtras gates request fields only OpenAI itself accepts
+	// (prompt_cache_key, reasoning.effort). A compatible vendor that has
+	// never seen them gets a clean request instead of an unexplained 400.
+	openaiExtras bool
+	// baseURL is empty for OpenAI (SDK default) and set for a compatible
+	// vendor. Verify() uses it to probe the credential.
+	baseURL string
+	// apiKey is retained solely so Verify() can probe the credential; the
+	// SDK client does not expose it back. Never logged, never serialized.
+	apiKey string
 }
 
 func NewOpenAI(apiKey, model string) *OpenAI {
@@ -24,11 +47,27 @@ func NewOpenAI(apiKey, model string) *OpenAI {
 		model = "gpt-5"
 	}
 	c := openai.NewClient(option.WithAPIKey(apiKey))
-	return &OpenAI{client: c, model: model}
+	return &OpenAI{
+		client:       c,
+		model:        model,
+		name:         "openai",
+		normalize:    normalizeOpenAIModel,
+		openaiExtras: true,
+		apiKey:       apiKey,
+	}
 }
 
-func (o *OpenAI) Name() string  { return "openai" }
+func (o *OpenAI) Name() string  { return o.name }
 func (o *OpenAI) Model() string { return o.model }
+
+// normalizeModel resolves a per-call model override through this vendor's
+// normalizer, nil-safe so a zero-value struct can't panic a turn.
+func (o *OpenAI) normalizeModel(model string) string {
+	if o.normalize == nil {
+		return normalizeOpenAIModel(model)
+	}
+	return o.normalize(model)
+}
 
 func (o *OpenAI) Stream(
 	ctx context.Context,
@@ -56,7 +95,7 @@ func (o *OpenAI) StreamCached(
 	system := sys.Render()
 	effectiveModel := o.model
 	if model != "" {
-		if normalized := normalizeOpenAIModel(model); normalized != "" {
+		if normalized := o.normalizeModel(model); normalized != "" {
 			effectiveModel = normalized
 		}
 		// Unknown nickname (e.g. "haiku"/"sonnet") silently falls back to
@@ -118,15 +157,31 @@ func (o *OpenAI) StreamCached(
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
 	}
+	// Ask for token usage on the stream. Without this OpenAI sends NO usage
+	// object on a streamed response at all, so resp.Usage comes back as
+	// zeros - which is not "this turn was free", it is "I never looked".
+	// Those zeros flow straight into Session.RecordUsage, so the context
+	// meter reads 0% while the window is genuinely filling, and the cost
+	// ledger books nothing. An empty reading that is indistinguishable from
+	// a real one is the exact failure the never-hide-errors rule exists to
+	// prevent. DeepSeek returns usage on the final chunk either way and
+	// accepts this flag, so one line covers both vendors.
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: openai.Bool(true),
+	}
 	// Pin the cache shard to the session so all of a session's turns share a
-	// route, improving the auto-cache hit rate on the stable prefix.
-	if key := CacheKeyFromContext(ctx); key != "" {
-		params.PromptCacheKey = openai.String(key)
+	// route, improving the auto-cache hit rate on the stable prefix. OpenAI
+	// only: a compatible vendor caches on its own prefix rules and has no
+	// such field, so sending it risks a 400 for zero benefit.
+	if o.openaiExtras {
+		if key := CacheKeyFromContext(ctx); key != "" {
+			params.PromptCacheKey = openai.String(key)
+		}
 	}
 	// steal C: per-turn reasoning effort (ctx hint > env fallback > omit). Only
 	// on reasoning-capable models; "" omits the field (model default), so an
 	// un-escalated turn is unchanged.
-	if modelSupportsReasoning(effectiveModel) {
+	if o.openaiExtras && modelSupportsReasoning(effectiveModel) {
 		lvl := string(EffortFromContext(ctx))
 		if lvl == "" {
 			lvl = strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_EFFORT"))
@@ -202,6 +257,9 @@ func (o *OpenAI) StreamCached(
 		// get the full-priced uncached input the ledger needs; CacheRead
 		// carries the discounted portion. (No separate cache-write charge.)
 		cached := int(acc.Usage.PromptTokensDetails.CachedTokens)
+		if cached == 0 {
+			cached = compatCachedPromptTokens(acc.Usage)
+		}
 		uncached := int(acc.Usage.PromptTokens) - cached
 		if uncached < 0 {
 			uncached = 0

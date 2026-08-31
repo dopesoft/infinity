@@ -10,9 +10,13 @@
  * Pricing is per 1M tokens, USD. Numbers are best-effort snapshots and
  * tend to drift; the table caveats this in the footer so a stale row
  * doesn't get treated as authoritative.
+ *
+ * DeepSeek bills two rates by the clock (peak 01:00-04:00 and 06:00-10:00
+ * UTC Mon-Fri, off-peak the rest). The table carries the PEAK number so the
+ * figure is never an understatement, with the discount noted per row.
  */
 
-export type VendorId = "anthropic" | "openai" | "openai_oauth" | "google";
+export type VendorId = "anthropic" | "openai" | "openai_oauth" | "google" | "deepseek";
 
 export type ModelEntry = {
   /** Stable id used by Core's settings store + provider Stream() override. */
@@ -44,7 +48,7 @@ export type VendorEntry = {
 export const VENDORS: VendorEntry[] = [
   {
     id: "anthropic",
-    label: "Anthropic",
+    label: "Claude (API Key)",
     keyEnv: "ANTHROPIC_API_KEY",
     auth: "api_key",
     models: [
@@ -549,7 +553,7 @@ export const VENDORS: VendorEntry[] = [
   },
   {
     id: "google",
-    label: "Google",
+    label: "Gemini (API Key)",
     keyEnv: "GOOGLE_API_KEY",
     auth: "api_key",
     models: [
@@ -595,6 +599,39 @@ export const VENDORS: VendorEntry[] = [
         tagline: "legacy",
         input_per_mtok: 0.1,
         output_per_mtok: 0.4,
+      },
+    ],
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek (API Key)",
+    keyEnv: "DEEPSEEK_API_KEY",
+    auth: "api_key",
+    models: [
+      {
+        id: "deepseek-v4-pro",
+        label: "DeepSeek V4 Pro",
+        tagline: "flagship · 1M context",
+        recommended: true,
+        input_per_mtok: 1.32,
+        output_per_mtok: 3.96,
+        note: "peak rate; off-peak is half",
+      },
+      {
+        id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        tagline: "cheap · 1M context",
+        input_per_mtok: 0.44,
+        output_per_mtok: 1.32,
+        note: "peak rate; off-peak is half",
+      },
+      {
+        id: "deepseek-v4-flash-vision-exp",
+        label: "DeepSeek V4 Flash Vision",
+        tagline: "experimental · accepts images",
+        input_per_mtok: 0.44,
+        output_per_mtok: 1.32,
+        note: "peak rate; off-peak is half",
       },
     ],
   },

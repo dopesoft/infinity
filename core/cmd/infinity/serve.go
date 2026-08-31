@@ -112,6 +112,7 @@ func serveCmd() *cobra.Command {
 				pipeline           *hooks.Pipeline
 				embedder           embed.Embedder
 				llmRegistry        *llm.Registry
+				llmKeyStore        *llm.KeyStore
 				activeModel        *activeModelProvider
 				activeBridgeRouter *bridge.Router
 				// claudeRunner is the ONE Claude Code launcher (code_agent + background_build on the Mac).
@@ -348,7 +349,12 @@ func serveCmd() *cobra.Command {
 					// openai_oauth never wipes mem_provider_tokens - re-auth
 					// is not required to switch back.
 					oauthStoreShared := llm.NewOAuthStore(p)
-					llmRegistry = llm.BuildRegistry(oauthStoreShared)
+					// Keys pasted into Studio Settings live in
+					// mem_provider_keys and take precedence over the
+					// env vars, so a vendor added from the phone is a
+					// brain on the very next turn - no redeploy.
+					llmKeyStore = llm.NewKeyStore(p)
+					llmRegistry = llm.BuildRegistry(oauthStoreShared, llmKeyStore)
 					fmt.Printf("  llm: registered %v\n", llmRegistry.Available())
 					// Route the boot provider through the registry's failover
 					// wrapper too, so the agent loop (until Settings swaps it),
@@ -2200,6 +2206,7 @@ func serveCmd() *cobra.Command {
 				WorkingBuffer:      workingBuf,
 				Heartbeat:          heartbeat,
 				LLMRegistry:        llmRegistry,
+				LLMKeyStore:        llmKeyStore,
 				Connectors:         connectorsCache,
 				Voice:              voiceMinter,
 				Speaker:            voiceSpeaker,

@@ -2627,3 +2627,76 @@ export type GaugeReadDTO = {
 
 export const fetchGaugeRecent = (limit = 5, signal?: AbortSignal) =>
   getJSON<GaugeReadDTO[]>(`/api/gauge/recent?limit=${limit}`, signal);
+
+// ── Provider API keys (Settings → Brain) ──────────────────────────────────
+// Vendor credentials the boss pastes in the UI instead of setting an env var
+// and waiting for a deploy. Core stores them in mem_provider_keys and
+// registers the provider in the live registry on save, so a vendor added
+// here is selectable on the next turn.
+//
+// The key itself is write-only across this boundary: reads come back as a
+// masked last-4 hint, never the secret.
+
+export type ProviderKeyRow = {
+  provider: string;
+  configured: boolean;
+  /** "ui" = pasted here, "env" = deploy-time variable, "" = nothing set. */
+  source: "ui" | "env" | "";
+  hint?: string;
+  label?: string;
+  env_var: string;
+  updated_at?: string;
+  /** In the live registry right now, so the vendor picker can select it. */
+  registered: boolean;
+  /** False when Core has no key store (no DB pool): env vars only. */
+  editable: boolean;
+};
+
+export type ProviderKeysResponse = {
+  providers: ProviderKeyRow[];
+  available_providers: string[];
+  /** Save only: "ok" | "unsupported" | "unreachable". */
+  verified?: string;
+  note?: string;
+};
+
+export async function fetchProviderKeys(
+  signal?: AbortSignal,
+): Promise<ProviderKeysResponse | null> {
+  return getJSON<ProviderKeysResponse>(`/api/settings/provider-keys`, signal);
+}
+
+export async function saveProviderKey(input: {
+  provider: string;
+  api_key: string;
+  label?: string;
+}): Promise<ProviderKeysResponse | { error: string }> {
+  try {
+    const res = await authedFetch(`/api/settings/provider-keys`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json()) as ProviderKeysResponse & { error?: string };
+    if (!res.ok) return { error: body.error ?? `HTTP ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function deleteProviderKey(
+  provider: string,
+): Promise<ProviderKeysResponse | { error: string }> {
+  try {
+    const res = await authedFetch(
+      `/api/settings/provider-keys?provider=${encodeURIComponent(provider)}`,
+      { method: "DELETE" },
+    );
+    const body = (await res.json()) as ProviderKeysResponse & { error?: string };
+    if (!res.ok) return { error: body.error ?? `HTTP ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: String(e) };
+  }
+}

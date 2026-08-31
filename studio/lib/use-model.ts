@@ -190,7 +190,16 @@ export function useGlobalModel() {
     }
   }, []);
 
-  return { setting, setModel, setProvider, saving };
+  // refresh re-reads Core's answer. Needed whenever something OUTSIDE this
+  // hook changes what the picker may offer - pasting a vendor API key
+  // registers a provider, and the vendor row has to stop saying "not
+  // configured" without a page reload.
+  const refresh = useCallback(async () => {
+    const next = await fetchSetting();
+    if (next) broadcast(next);
+  }, []);
+
+  return { setting, setModel, setProvider, saving, refresh };
 }
 
 /** Human label for a standby brain, from the shared model catalog. */

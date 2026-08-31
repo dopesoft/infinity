@@ -1,10 +1,12 @@
 package llm
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // ModelForVendor resolves the model id to hand to a provider constructor.
@@ -52,6 +54,8 @@ func ModelFamilyMatches(vendor, model string) bool {
 			strings.HasPrefix(lower, "o4")
 	case "google":
 		return strings.HasPrefix(lower, "gemini-")
+	case "deepseek":
+		return strings.HasPrefix(lower, "deepseek")
 	}
 	return false
 }
@@ -93,6 +97,8 @@ func fromEnvProvider(provider string) (Provider, error) {
 		return nil, fmt.Errorf("LLM_PROVIDER=openai_oauth requires a database pool; constructed by serve cmd after pool init")
 	case "google":
 		return NewGoogle(os.Getenv("GOOGLE_API_KEY"), ModelForVendor("google")), nil
+	case "deepseek":
+		return NewDeepSeek(os.Getenv("DEEPSEEK_API_KEY"), ModelForVendor("deepseek")), nil
 	default:
 		return nil, fmt.Errorf("unknown LLM_PROVIDER=%q", provider)
 	}
@@ -117,6 +123,10 @@ func IsOpenAIOAuth() bool {
 // store is the same pool-backed instance every time, so flipping vendors
 // in Settings never wipes mem_provider_tokens.
 type Registry struct {
+	// mu guards providers. The map is no longer boot-only: pasting a key in
+	// Settings registers a vendor while turns are in flight, so reads and
+	// writes genuinely race.
+	mu        sync.RWMutex
 	providers map[string]Provider
 }
 
@@ -126,6 +136,8 @@ func (r *Registry) Register(p Provider) {
 	if p == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// Universal em/en-dash sanitizer. Every provider gets wrapped so
 	// any helper-LLM call (summarizer, critic, namer, code-proposal
 	// generator, compaction summary, etc.) AND the main agent loop's
@@ -139,41 +151,127 @@ func (r *Registry) Register(p Provider) {
 // (the agent loop via Settings, activeModelProvider for every auxiliary
 // call) gets standby routing from this one seam.
 func (r *Registry) Get(name string) (Provider, bool) {
+	r.mu.RLock()
 	p, ok := r.providers[strings.ToLower(strings.TrimSpace(name))]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
 	return WrapFailover(p, r), true
 }
 
+// lookup returns the RAW registered provider (no failover wrapper) under the
+// registry lock. The standby picker needs the unwrapped instance and must not
+// touch the map directly - it is written at runtime now that keys can be
+// pasted mid-session.
+func (r *Registry) lookup(name string) (Provider, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.providers[strings.ToLower(strings.TrimSpace(name))]
+	return p, ok
+}
+
+// Unregister drops a provider, used when its stored key is removed. The
+// vendor picker goes back to "not configured" on the next poll rather than
+// offering a brain whose credential is gone.
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.providers, strings.ToLower(strings.TrimSpace(name)))
+}
+
 // Available returns the sorted list of provider ids the registry knows
 // about. Studio uses this to gray out vendor options whose credentials
 // aren't wired (e.g. ANTHROPIC_API_KEY missing → anthropic absent).
 func (r *Registry) Available() []string {
+	r.mu.RLock()
 	out := make([]string, 0, len(r.providers))
 	for k := range r.providers {
 		out = append(out, k)
 	}
+	r.mu.RUnlock()
 	sort.Strings(out)
 	return out
 }
 
-// BuildRegistry constructs every provider whose credentials are present
-// in the environment. Pass a non-nil OAuthStore to enable the
-// openai_oauth provider. Boot prints which ones registered.
-func BuildRegistry(oauthStore *OAuthStore) *Registry {
-	reg := NewRegistry()
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		reg.Register(NewAnthropic(key, ModelForVendor("anthropic")))
+// KeyableVendors is the set of vendors whose credential is a plain API key
+// the boss can paste into Studio, in picker order. Each entry names the env
+// var that serves as the deploy-time fallback and the constructor that turns
+// a key into a brain - so adding a vendor is one row here, not a new branch
+// in the registry, the HTTP layer and the settings API.
+//
+// openai_oauth is deliberately absent: it is a subscription connected by the
+// OAuth paste flow, not an API key.
+var KeyableVendors = []KeyableVendor{
+	{ID: "anthropic", Env: "ANTHROPIC_API_KEY", New: func(key, model string) Provider { return NewAnthropic(key, model) }},
+	{ID: "openai", Env: "OPENAI_API_KEY", New: func(key, model string) Provider { return NewOpenAI(key, model) }},
+	{ID: "google", Env: "GOOGLE_API_KEY", New: func(key, model string) Provider { return NewGoogle(key, model) }},
+	{ID: "deepseek", Env: "DEEPSEEK_API_KEY", New: func(key, model string) Provider { return NewDeepSeek(key, model) }},
+}
+
+// KeyableVendor describes one API-key vendor generically.
+type KeyableVendor struct {
+	ID  string
+	Env string
+	New func(apiKey, model string) Provider
+}
+
+// FindKeyableVendor returns the descriptor for a vendor id.
+func FindKeyableVendor(id string) (KeyableVendor, bool) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	for _, v := range KeyableVendors {
+		if v.ID == id {
+			return v, true
+		}
 	}
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		reg.Register(NewOpenAI(key, ModelForVendor("openai")))
+	return KeyableVendor{}, false
+}
+
+// ResolveKey returns the credential for a vendor plus where it came from:
+// "ui" for a key pasted into Settings (mem_provider_keys), "env" for the
+// deploy-time variable, "" when there is none. The store WINS over the env -
+// a key typed in the UI is the boss's most recent explicit instruction.
+//
+// A store error is returned rather than swallowed: "the DB was unreachable"
+// must never quietly render as "no key configured", which would take a
+// working brain off the picker with no explanation.
+func ResolveKey(ctx context.Context, keys *KeyStore, v KeyableVendor) (key, source string, err error) {
+	stored, ok, err := keys.Get(ctx, v.ID)
+	if err != nil {
+		return "", "", err
+	}
+	if ok {
+		return stored, "ui", nil
+	}
+	if envKey := strings.TrimSpace(os.Getenv(v.Env)); envKey != "" {
+		return envKey, "env", nil
+	}
+	return "", "", nil
+}
+
+// BuildRegistry constructs every provider whose credentials are available -
+// pasted into Studio (mem_provider_keys) or set in the environment. Pass a
+// non-nil OAuthStore to enable the openai_oauth provider, and a non-nil
+// KeyStore to pick up UI-pasted keys. Boot prints which ones registered.
+func BuildRegistry(oauthStore *OAuthStore, keys *KeyStore) *Registry {
+	reg := NewRegistry()
+	ctx := context.Background()
+	for _, v := range KeyableVendors {
+		key, _, err := ResolveKey(ctx, keys, v)
+		if err != nil {
+			// Loud, not silent: a lookup failure means the registry may be
+			// missing a brain the boss configured, and he needs to know that
+			// rather than wonder why the picker shrank.
+			fmt.Fprintf(os.Stderr, "llm: provider key lookup failed for %s: %v\n", v.ID, err)
+			continue
+		}
+		if key == "" {
+			continue
+		}
+		reg.Register(v.New(key, ModelForVendor(v.ID)))
 	}
 	if oauthStore != nil {
 		reg.Register(NewOpenAIOAuth(oauthStore, ModelForVendor("openai_oauth")))
-	}
-	if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
-		reg.Register(NewGoogle(key, ModelForVendor("google")))
 	}
 	return reg
 }

@@ -45,13 +45,16 @@ import { NotificationsSection } from "@/components/settings/NotificationsSection
 import { TrustReviewPanel } from "@/components/TrustReviewPanel";
 import { cn } from "@/lib/utils";
 import {
+  deleteProviderKey,
   disconnectOpenAIOAuth,
   exchangeOpenAIOAuth,
   fetchCoreStatus,
   fetchChatSettings,
   fetchMCP,
   fetchOpenAIOAuthStatus,
+  fetchProviderKeys,
   fetchTools,
+  saveProviderKey,
   startOpenAIOAuth,
   saveChatSettings,
   type ChatSettings,
@@ -59,6 +62,7 @@ import {
   type MCPStatus,
   type OpenAIOAuthStartResponse,
   type OpenAIOAuthStatusResponse,
+  type ProviderKeyRow,
   type ToolDescriptor,
 } from "@/lib/api";
 import { standbyLabel, standbyResetClock, useGlobalModel } from "@/lib/use-model";
@@ -611,7 +615,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   // sees the new vendor immediately. Stored OAuth credentials persist across
   // vendor flips, so switching back to ChatGPT later doesn't require re-auth.
   // Model edits flow through /api/settings/model as before.
-  const { setting, setModel, setProvider } = useGlobalModel();
+  const { setting, setModel, setProvider, refresh } = useGlobalModel();
   const liveProvider = ((setting?.provider ?? status?.provider ?? "") as string).toLowerCase();
   const effectiveModel = setting?.model ?? status?.model ?? "";
   const defaultModel = setting?.defaultModel ?? "";
@@ -749,7 +753,11 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           </p>
         )}
 
-        {isOAuthVendor && <OAuthConnectBlock />}
+        {isOAuthVendor ? (
+          <OAuthConnectBlock />
+        ) : (
+          <ApiKeyBlock vendor={selectedVendor} onChanged={refresh} />
+        )}
 
         {err && <ErrorNote>{err}</ErrorNote>}
 
@@ -766,6 +774,157 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
       </Section>
 
       <PricingTable vendor={selectedVendor} />
+    </div>
+  );
+}
+
+// ── API key block (every api_key vendor) ──────────────────────────────────
+// The paste-a-key half of the Brain section, mirroring OAuthConnectBlock for
+// the subscription vendors. Before this, a vendor credential was an
+// environment variable read once at boot, so adding a brain meant a Railway
+// variable and a redeploy before the picker stopped saying "not configured".
+//
+// Generic on purpose: it renders for whichever api_key vendor is selected,
+// reading the row Core returns for that id. Adding a vendor to the catalog
+// gets this block for free.
+//
+// Three states, same as the OAuth block:
+//   • stored here  - masked hint + Replace / Remove.
+//   • env-provided - read-only note naming the variable, with the option to
+//     paste one that takes precedence.
+//   • unset        - paste box.
+function ApiKeyBlock({
+  vendor,
+  onChanged,
+}: {
+  vendor: VendorEntry;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [rows, setRows] = useState<ProviderKeyRow[] | null>(null);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState<"save" | "remove" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchProviderKeys(ac.signal).then((res) => {
+      if (res) setRows(res.providers);
+    });
+    return () => ac.abort();
+  }, []);
+
+  // Clear per-vendor UI state when the picker moves, so a message about
+  // DeepSeek can't linger over the Gemini row.
+  useEffect(() => {
+    setDraft("");
+    setError(null);
+    setNotice(null);
+  }, [vendor.id]);
+
+  const row = rows?.find((r) => r.provider === vendor.id) ?? null;
+  const envVar = row?.env_var ?? vendor.keyEnv ?? "";
+
+  async function save() {
+    const key = draft.trim();
+    if (!key) return;
+    setBusy("save");
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await saveProviderKey({ provider: vendor.id, api_key: key });
+      if ("error" in res) {
+        setError(res.error);
+        return;
+      }
+      setRows(res.providers);
+      setDraft("");
+      setNotice(
+        res.verified === "ok"
+          ? `Saved and checked. ${vendor.label} answered, so it is selectable now.`
+          : res.note ??
+              "Saved. I could not check it against the vendor, so the first turn will be the proof.",
+      );
+      await onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove() {
+    setBusy("remove");
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await deleteProviderKey(vendor.id);
+      if ("error" in res) {
+        setError(res.error);
+        return;
+      }
+      setRows(res.providers);
+      setNotice("Key removed.");
+      await onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const stored = row?.source === "ui";
+  const fromEnv = row?.source === "env";
+  const description = stored
+    ? `Stored here, ending ${row?.hint ?? "****"}. Paste a new one to replace it.`
+    : fromEnv
+      ? `Coming from ${envVar} on the server. Pasting one here takes precedence.`
+      : `Paste your ${vendor.label.replace(" (API Key)", "")} key. It saves to Core and never comes back out of the browser.`;
+
+  return (
+    <div className="min-w-0 space-y-2">
+      <SettingRow
+        label="API key"
+        description={description}
+        control={
+          stored ? (
+            <Button variant="ghost" onClick={remove} disabled={busy !== null}>
+              {busy === "remove" ? "Removing…" : "Remove"}
+            </Button>
+          ) : null
+        }
+      >
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+          <Input
+            type="password"
+            inputMode="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={stored ? "Paste a replacement key" : "Paste key"}
+            aria-label={`${vendor.label} API key`}
+            className="min-w-0 flex-1"
+            disabled={row?.editable === false}
+          />
+          <Button
+            onClick={save}
+            disabled={!draft.trim() || busy !== null || row?.editable === false}
+            className="sm:w-auto"
+          >
+            {busy === "save" ? "Checking…" : stored ? "Replace" : "Save"}
+          </Button>
+        </div>
+      </SettingRow>
+
+      {row?.editable === false && (
+        <p className="min-w-0 rounded-[8px] bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
+          This deployment has no database attached, so I cannot store a key here.
+          Set {envVar} on the server instead.
+        </p>
+      )}
+      {notice && (
+        <p className="min-w-0 rounded-[8px] bg-success/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90 [overflow-wrap:anywhere]">
+          {notice}
+        </p>
+      )}
+      {error && <ErrorNote>{error}</ErrorNote>}
     </div>
   );
 }

@@ -74,7 +74,7 @@ func newBackfillCircleCmd() *cobra.Command {
 				return nil
 			}
 			drafter := &activeModelProvider{
-				registry: llm.BuildRegistry(llm.NewOAuthStore(pool)),
+				registry: llm.BuildRegistry(llm.NewOAuthStore(pool), llm.NewKeyStore(pool)),
 				settings: settings.New(pool),
 				fallback: provider,
 			}

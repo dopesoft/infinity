@@ -101,6 +101,11 @@ type Config struct {
 	// a restart. Nil-safe - when absent, /api/settings/provider returns
 	// 503 and the loop sticks with its boot provider.
 	LLMRegistry *llm.Registry
+
+	// LLMKeyStore holds vendor API keys pasted into Studio Settings
+	// (mem_provider_keys). Nil-safe: without it the provider-keys API
+	// reports env-configured vendors read-only and refuses to save.
+	LLMKeyStore *llm.KeyStore
 	// Connectors caches the live picture of Composio connected accounts
 	// + boss aliases. Nil-safe: when unset, the alias endpoints return
 	// 503 and the catalog block falls back to its toolkit-summary form
@@ -209,6 +214,7 @@ type Server struct {
 	auth        *auth.Verifier
 	settings    *settings.Store
 	llmReg      *llm.Registry
+	llmKeys     *llm.KeyStore
 	connectors  *connectors.Cache
 	voice       *voice.Minter
 	speaker     *voice.Speaker
@@ -264,6 +270,7 @@ func New(cfg Config) *Server {
 		auth:           cfg.Auth,
 		settings:       settings.New(cfg.Pool),
 		llmReg:         cfg.LLMRegistry,
+		llmKeys:        cfg.LLMKeyStore,
 		connectors:     cfg.Connectors,
 		voice:          cfg.Voice,
 		speaker:        cfg.Speaker,
@@ -456,6 +463,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/preview/", s.handleCanvasPreview)
 	mux.HandleFunc("/api/settings/model", s.handleSettingsModel)
 	mux.HandleFunc("/api/settings/provider", s.handleSettingsProvider)
+	mux.HandleFunc("/api/settings/provider-keys", s.handleProviderKeys)
 	mux.HandleFunc("/api/settings/chat", s.handleSettingsChat)
 	mux.HandleFunc("/api/context/usage", s.handleContextUsage)
 	mux.HandleFunc("/api/meta", s.handleMeta)
