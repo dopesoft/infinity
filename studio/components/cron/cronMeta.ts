@@ -184,3 +184,18 @@ export function localTzAbbrev(): string {
     return "local time";
   }
 }
+
+/**
+ * A slug is storage; a title is for reading.
+ *
+ * Cron rows, sentinel rows and workflow cards were each rendering their raw
+ * kebab name in mono as the row's PRIMARY title (`inbox-triage`,
+ * `nightly-cognition`). CLAUDE.md's naming rule allows the literal in a detail
+ * view, never as the thing he reads first. app/automations already had a
+ * private copy of this; it lives here now so the three surfaces agree.
+ */
+export function readableName(slug: string | null | undefined): string {
+  const s = (slug ?? "").replace(/[-_]+/g, " ").trim();
+  if (!s) return "Untitled";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

@@ -172,7 +172,7 @@ export default function LogDetailPage({ params }: { params: { turnId: string } }
               className="-ml-2 h-8 shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="size-4" />
-              <span className="hidden sm:inline">Logs</span>
+              <span className="hidden sm:inline">Activity</span>
             </Button>
             <div className="ml-auto flex items-center gap-1">
               {turn && <TurnStatusPip status={turn.status} showLabel />}

@@ -155,7 +155,12 @@ export function BoardCard({
      * without anyone remembering this. */
     <div className="flex min-h-10 min-w-0 items-center gap-2 border-b border-border pb-1.5">
       <span className="truncate text-[14.5px] font-medium tracking-tight">{title}</span>
-      {count !== undefined && count !== "" ? (
+      {/* A zero is the empty state's job, not a badge's. `count={0}` beside
+          "Nothing on your list." is the same fact twice, and it showed up on
+          seven dashboard cards at once because this one line rendered any
+          non-undefined value. Section.tsx has excluded 0 since it was written;
+          this now matches it. */}
+      {count !== undefined && count !== "" && count !== 0 ? (
         <span className="shrink-0 font-mono text-[11px] tabular-nums text-quiet">{count}</span>
       ) : null}
       <span className="ml-auto flex shrink-0 items-center text-quiet">

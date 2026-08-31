@@ -31,7 +31,8 @@ export function MemoryFooter({ stats }: { stats: MemoryStats }) {
         tone="quiet"
         title="Memory"
         noRule
-        meta={`+${stats.newToday} today · ${stats.promotedToday} promoted · ${stats.procedural} procedural · ${stats.streakDays}d streak`}
+        // "promoted" and "procedural" are storage tiers, not words he uses.
+        meta={`+${stats.newToday} today · ${stats.promotedToday} kept · ${stats.procedural} rules · ${stats.streakDays}d streak`}
         className="border-t border-hairline"
       />
     </motion.aside>

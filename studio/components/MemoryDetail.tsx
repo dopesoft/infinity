@@ -128,7 +128,7 @@ export function MemoryDetail({
           </pre>
         </Section>
 
-        <Section title="Metadata">
+        <Section title="Details">
           <Row icon={<Calendar className="size-3.5" aria-hidden />} label="created">
             <time className="font-mono" suppressHydrationWarning>
               {new Date(item.createdAt).toLocaleString()}
@@ -147,7 +147,7 @@ export function MemoryDetail({
         </Section>
 
         {item.kind === "memory" && (
-          <Section title="Provenance chain">
+          <Section title="Where this came from">
             <ProvenanceChain memoryId={item.id} />
           </Section>
         )}

@@ -43,6 +43,7 @@ export interface SettingRowProps {
   /** Associates the row's label element with a control id (renders a label). */
   htmlFor?: string;
   /** Drop the bottom hairline (last row in a group that closes itself). */
+  /** Accepted for compatibility. Rows no longer draw a rule at all. */
   noRule?: boolean;
   /** Dim the row (control unavailable). Does not disable the control itself. */
   disabled?: boolean;
@@ -55,7 +56,6 @@ export function SettingRow({
   control,
   children,
   htmlFor,
-  noRule,
   disabled,
   className,
 }: SettingRowProps) {
@@ -64,8 +64,14 @@ export function SettingRow({
     <Tag
       {...(htmlFor ? { htmlFor } : {})}
       className={cn(
-        "flex min-h-11 min-w-0 max-w-full flex-col gap-2 py-2.5",
-        !noRule && "border-b border-hairline last:border-b-0",
+        "flex min-h-11 min-w-0 max-w-full flex-col gap-2 py-3",
+        /* No rule under each row. A hairline between every setting turns a
+           short list into a ledger and competes with the section breaks that
+           actually mean something — the boss: "that only makes sense between
+           larger sections not each fucking row". Rows separate by rhythm; a
+           SECTION separates with a rule or a band. `noRule` stays accepted so
+           no consumer breaks, and is now the default behaviour. */
+        // (rule intentionally absent)
         disabled && "opacity-60",
         className,
       )}

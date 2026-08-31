@@ -146,8 +146,8 @@ export default function ActivityPage() {
           {shown.length === 0 ? (
             <EmptyState
               icon={ActivityIcon}
+              // The page subtitle already says what lands here.
               title="Nothing here yet"
-              description="Every job he runs, every conversation you have, and everything he notices on his own lands on this line, newest first."
             />
           ) : (
             <Timeline>

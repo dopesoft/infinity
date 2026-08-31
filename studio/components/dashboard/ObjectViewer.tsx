@@ -602,19 +602,19 @@ function ViewerActions({
       return (
         <OpenInButton
           href="/settings?section=trust"
-          label="Open in Trust"
+          label="Open in Approvals"
         />
       );
     }
     if (item.kind === "approval" && item.data.kind === "code_proposal") {
-      // Dismiss sits next to "Open in Lab" so the boss can drop a proposal
+      // Dismiss sits next to "Open in Skills" so the boss can drop a proposal
       // in one tap without detouring through Lab. Same canonical decide
       // endpoint (status='rejected', durable on mem_code_proposals). The
       // proposal only re-surfaces if Voyager's source extractor re-detects
       // the same file-fight in a future session - a fresh signal, not a
       // resurrected row.
       // Order (left→right): destructive Dismiss is kept furthest from the
-      // rightmost primary (Discuss) to avoid mis-taps; neutral "Open in Lab"
+      // rightmost primary (Discuss) to avoid mis-taps; neutral "Open in Skills"
       // sits between them.
       return (
         <>
@@ -627,7 +627,7 @@ function ViewerActions({
             <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
             {dismissing ? "Dismissing..." : "Dismiss"}
           </button>
-          <OpenInButton href="/lab?tab=open" label="Open in Lab" />
+          <OpenInButton href="/skills" label="Open in Skills" />
         </>
       );
     }
@@ -683,7 +683,7 @@ function ViewerActions({
     }
     if (item.kind === "activity") {
       // Folded operational "system" notes carry a dismiss handle → clear
-      // them in one tap. Heartbeat findings have none → Open in Lab.
+      // them in one tap. Heartbeat findings have none → Open in Skills.
       if (item.data.dismiss) {
         return (
           <button
@@ -697,7 +697,7 @@ function ViewerActions({
           </button>
         );
       }
-      return <OpenInButton href="/lab?tab=open" label="Open in Lab" />;
+      return <OpenInButton href="/skills" label="Open in Skills" />;
     }
     if (item.kind === "followup") {
       // Order (left→right): destructive Dismiss is kept furthest from the
@@ -751,7 +751,7 @@ function ViewerActions({
       // own durable decide endpoints — drop them in one tap from the board, same
       // as their canonical surface, alongside an "Open in" deep-link.
       if (w.kind === "code_proposal") {
-        // Destructive Dismiss leftmost, neutral "Open in Code" between it and
+        // Destructive Dismiss leftmost, neutral "Open in Skills" between it and
         // the rightmost primary (Discuss).
         return (
           <>
@@ -764,12 +764,12 @@ function ViewerActions({
               <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
               {dismissing ? "Dismissing..." : "Dismiss"}
             </button>
-            <OpenInButton href="/code-proposals" label="Open in Code" />
+            <OpenInButton href="/skills" label="Open in Skills" />
           </>
         );
       }
       if (w.kind === "trust") {
-        // Destructive Deny leftmost, neutral "Open in Trust" between it and the
+        // Destructive Deny leftmost, neutral "Open in Approvals" between it and the
         // rightmost primary (Discuss).
         return (
           <>
@@ -783,7 +783,7 @@ function ViewerActions({
               <X className={cn("size-3.5", dismissing && "animate-pulse")} aria-hidden />
               {dismissing ? "Denying..." : "Deny"}
             </button>
-            <OpenInButton href="/settings?section=trust" label="Open in Trust" />
+            <OpenInButton href="/settings?section=trust" label="Open in Approvals" />
           </>
         );
       }

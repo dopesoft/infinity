@@ -15,6 +15,7 @@ import {
   type WorkflowInputDef,
 } from "@/lib/api";
 import { Chip, ChipGroup } from "@/components/ui/chip";
+import { readableName } from "@/components/cron/cronMeta";
 import { cn } from "@/lib/utils";
 
 const KIND_TINT: Record<string, string> = {
@@ -49,7 +50,8 @@ export function WorkflowsSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <PageSectionHeader title="saved workflows" count={items.length} />
+      {/* No title: the tab above already says "Routines". */}
+      <PageSectionHeader title="" count={items.length} />
 
       <ul className="flex flex-col gap-2">
         {items.length === 0 ? (
@@ -65,7 +67,7 @@ export function WorkflowsSection() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <WorkflowIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                    <code className="truncate font-mono text-sm text-foreground">{wf.name}</code>
+                    <span className="truncate text-sm font-medium text-foreground">{readableName(wf.name)}</span>
                     {!wf.enabled && <Badge variant="secondary">disabled</Badge>}
                   </div>
                   {wf.description && (
@@ -108,7 +110,7 @@ export function WorkflowsSection() {
 
               {wf.inputs && wf.inputs.length > 0 && (
                 <p className="mt-1.5 text-[10px] text-muted-foreground">
-                  needs: {wf.inputs.map((inp) => inp.label || inp.key).join(" · ")}
+                  Asks you for: {wf.inputs.map((inp) => inp.label || readableName(inp.key)).join(" · ")}
                 </p>
               )}
             </li>
@@ -130,17 +132,12 @@ function WorkflowsEmptyState() {
     <div className="rounded-xl border bg-card p-4">
       <div className="flex items-center gap-2">
         <WorkflowIcon className="size-4 text-muted-foreground" aria-hidden />
-        <h3 className="text-sm font-medium text-foreground">No workflows yet</h3>
+        <h3 className="text-sm font-medium text-foreground">No routines yet</h3>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
-        A workflow is a repeatable, multi-step pipeline that runs the same way every time — the
-        engine drives the steps in order, so it can&apos;t go off the rails mid-run. Cron fires at a{" "}
-        <span className="text-foreground">time</span>; a workflow runs a fixed{" "}
-        <span className="text-foreground">process</span>.
-      </p>
-      <p className="mt-3 text-xs text-muted-foreground">
-        Ask Jarvis in chat — e.g. “make a workflow that downloads a YouTube video and cuts the best
-        parts into shorts.” He saves it here; you run it with one tap.
+        A routine runs the same steps in the same order every time, so it cannot wander off
+        halfway through. Just ask him: “make a routine that downloads a YouTube video and cuts
+        the best parts into shorts.” He saves it here and you run it with one tap.
       </p>
     </div>
   );

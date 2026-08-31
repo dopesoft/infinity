@@ -5,11 +5,12 @@ import { CreditCard, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section } from "@/components/dashboard/Section";
-import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { ListRow } from "@/components/ui/list-row";
 import { SettingRow } from "@/components/ui/setting-row";
 import { Switch } from "@/components/ui/switch";
 import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import { PrivacySection } from "@/components/settings/PrivacySection";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { useTabParam } from "@/lib/useTabParam";
 import {
   addWalletCard,
@@ -64,19 +65,21 @@ export function VaultSection() {
   const [tab, setTab] = useTabParam<VaultTab>("vault", "personal", TABS);
 
   return (
-    <div className="min-w-0 space-y-4">
-      <PageTabs value={tab} onValueChange={(v) => setTab(v as VaultTab)}>
-        <PageTabsList scrollable>
-          <PageTabsTrigger value="personal">Personal info</PageTabsTrigger>
-          <PageTabsTrigger value="cards">Cards</PageTabsTrigger>
-          <PageTabsTrigger value="offlimits">Off limits</PageTabsTrigger>
-        </PageTabsList>
-      </PageTabs>
-
+    <SettingsPanel
+      tabs={
+        <PageTabs value={tab} onValueChange={(v) => setTab(v as VaultTab)}>
+          <PageTabsList level="sub">
+            <PageTabsTrigger value="personal">Personal info</PageTabsTrigger>
+            <PageTabsTrigger value="cards">Cards</PageTabsTrigger>
+            <PageTabsTrigger value="offlimits">Off limits</PageTabsTrigger>
+          </PageTabsList>
+        </PageTabs>
+      }
+    >
       {tab === "personal" ? <PersonalInfoTab /> : null}
       {tab === "cards" ? <CardsTab /> : null}
       {tab === "offlimits" ? <PrivacySection /> : null}
-    </div>
+    </SettingsPanel>
   );
 }
 
@@ -330,29 +333,18 @@ function AddCardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =>
  * replace, never re-read.
  */
 
-const GROUPS: { id: VaultDetail["group"]; title: string; blurb: string }[] = [
-  {
-    id: "about",
-    title: "Who you are",
-    blurb:
-      "Your name and how to reach you. This is what Jarvis puts in the name and contact boxes when he checks out somewhere.",
-  },
-  {
-    id: "shipping",
-    title: "Where things go",
-    blurb: "The address he ships to. Fill this in and he can finish a checkout without stopping to ask.",
-  },
-  {
-    id: "billing",
-    title: "Billing address",
-    blurb: "The address on your card statement. Tick the box if it is the same as where things ship.",
-  },
-  {
-    id: "verify",
-    title: "Proving it's you",
-    blurb:
-      "What a bank or a utility asks before it will talk to him, plus the password that proves it is you when you ring his line. These are encrypted, so you can replace one but never read it back.",
-  },
+/**
+ * Titles only. Each one already says what its fields are, so a blurb under it
+ * would be the heading again in a longer form — the thing the "say it once"
+ * rule in CLAUDE.md forbids. The two facts the titles genuinely cannot carry
+ * (what the switches do, and that the last group is write-only) are said ONCE
+ * each, at the top of the tab and on that group.
+ */
+const GROUPS: { id: VaultDetail["group"]; title: string; note?: string }[] = [
+  { id: "about", title: "Who you are" },
+  { id: "shipping", title: "Where things go" },
+  { id: "billing", title: "Billing address" },
+  { id: "verify", title: "Proving it's you", note: "Encrypted. You can replace one, never read it back." },
 ];
 
 function PersonalInfoTab() {
@@ -381,6 +373,11 @@ function PersonalInfoTab() {
   }, [load]);
 
   if (!data) return <Loading />;
+  // Could not reach it: say that once and stop. Rendering empty field groups,
+  // a second warning about the encrypted half and a Save button underneath
+  // would be three tellings of one problem, two of which we cannot actually
+  // vouch for — we do not know the vault is locked, we know we could not ask.
+  if (data.error) return <VaultLocked message={data.error} />;
 
   const dirty = data.details.filter((d) => {
     const draft = drafts[d.key];
@@ -431,7 +428,10 @@ function PersonalInfoTab() {
 
   return (
     <div className="min-w-0 space-y-4">
-      {data.error ? <VaultLocked message={data.error} /> : null}
+      <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+        Switch off anything you would rather he never passed on to a shop or a company.
+      </p>
+
       {!data.sealed_available ? (
         <VaultLocked message="The encrypted half of the vault is locked, so your date of birth, account number and spoken password cannot be saved yet. Your name and address still work." />
       ) : null}
@@ -448,14 +448,15 @@ function PersonalInfoTab() {
             tone={group.id === "verify" ? "band" : "plain"}
             noPad
           >
-            <p className="pb-1 pt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-              {group.blurb}
-            </p>
+            {group.note ? (
+              <p className="pb-1 pt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                {group.note}
+              </p>
+            ) : null}
 
             {group.id === "billing" ? (
               <SettingRow
                 label="Same as where things ship"
-                description="He reuses your shipping address on the billing boxes, so you only type it once."
                 control={
                   <Switch
                     checked={data!.billing_same_as_shipping}
@@ -472,48 +473,40 @@ function PersonalInfoTab() {
                   <SettingRow
                     key={d.key}
                     label={d.label}
-                    description={
-                      d.sealed
-                        ? d.saved
-                          ? "Saved. Type a new one to replace it."
-                          : "Not saved yet."
-                        : undefined
-                    }
+                    // Only sealed rows carry a word here, because only they
+                    // have something the empty box cannot show.
+                    description={d.sealed ? (d.saved ? "Saved" : undefined) : undefined}
                     htmlFor={`detail-${d.key}`}
-                  >
-                    <div className="flex min-w-0 flex-col gap-2">
-                      <Input
-                        id={`detail-${d.key}`}
-                        type={d.sealed ? "password" : "text"}
-                        autoComplete="off"
-                        inputMode={
-                          d.key.endsWith("postal") || d.key === "ssn_last4" ? "numeric" : "text"
-                        }
-                        placeholder={d.placeholder ?? ""}
-                        value={drafts[d.key] ?? ""}
-                        onChange={(e) => setDrafts({ ...drafts, [d.key]: e.target.value })}
-                        disabled={d.sealed && !data!.sealed_available}
-                      />
-                      {d.can_toggle ? (
-                        <label className="flex min-h-11 items-center justify-between gap-3">
-                          <span className="text-[12px] leading-relaxed text-quiet">
-                            {d.releasable
-                              ? "He can give this out when a shop or a company asks"
-                              : "He will never give this out"}
-                          </span>
-                          <Switch
-                            checked={d.releasable}
-                            onCheckedChange={(v) => void toggleRelease(d.key, v)}
-                            aria-label={`Allow Jarvis to give out your ${d.label.toLowerCase()}`}
-                          />
-                        </label>
+                    // The switch goes in the row's control slot, beside the
+                    // label, exactly like every other toggle in Settings. It
+                    // used to sit UNDER the input, which made this the one
+                    // screen where a toggle was somewhere else. What it means
+                    // is said once at the top of the tab, so the control is
+                    // bare and the aria-label carries it for a screen reader.
+                    control={
+                      d.can_toggle ? (
+                        <Switch
+                          checked={d.releasable}
+                          onCheckedChange={(v) => void toggleRelease(d.key, v)}
+                          aria-label={`Let Jarvis pass on your ${d.label.toLowerCase()}`}
+                        />
                       ) : (
-                        <span className="text-[12px] leading-relaxed text-quiet">
-                          He never says this out loud. It only ever proves that a caller is
-                          you.
-                        </span>
-                      )}
-                    </div>
+                        <span className="text-[12px] text-quiet">Never passed on</span>
+                      )
+                    }
+                  >
+                    <Input
+                      id={`detail-${d.key}`}
+                      type={d.sealed ? "password" : "text"}
+                      autoComplete="off"
+                      inputMode={
+                        d.key.endsWith("postal") || d.key === "ssn_last4" ? "numeric" : "text"
+                      }
+                      placeholder={d.placeholder ?? ""}
+                      value={drafts[d.key] ?? ""}
+                      onChange={(e) => setDrafts({ ...drafts, [d.key]: e.target.value })}
+                      disabled={d.sealed && !data!.sealed_available}
+                    />
                   </SettingRow>
                 ))}
           </Section>
@@ -524,14 +517,12 @@ function PersonalInfoTab() {
         <SettingRow
           label="Card he uses on a call"
           description={
-            data.card_count > 0
-              ? "Your first saved card, the same one he buys with online. Manage it under Cards."
-              : "Nothing saved, so he will arrange to pay on arrival instead. Add one under Cards."
+            data.card_count > 0 ? undefined : "Without one he arranges to pay on arrival."
           }
         >
           <span className="text-[12.5px] text-quiet">
             {data.card_count > 0
-              ? `${data.card_count} card${data.card_count === 1 ? "" : "s"} saved`
+              ? `Your first saved card`
               : "None saved"}
           </span>
         </SettingRow>
@@ -541,15 +532,21 @@ function PersonalInfoTab() {
         <p className="rounded-[8px] bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</p>
       ) : null}
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-        {savedAt && !dirty.length ? (
-          <span className="text-[12px] text-quiet sm:mr-2">Saved</span>
-        ) : null}
-        <Button onClick={() => void save()} disabled={saving || !dirty.length}>
-          {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
-          {dirty.length ? `Save ${dirty.length} change${dirty.length === 1 ? "" : "s"}` : "Save"}
-        </Button>
-      </div>
+      {/* No greyed-out Save sitting under an untouched form. A disabled
+          control that nothing on screen can enable is furniture: it occupies
+          the spot where a real action goes and teaches him the page is
+          broken. It appears when there is something to save and goes away
+          again once there is not. */}
+      {dirty.length || saving ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <Button onClick={() => void save()} disabled={saving}>
+            {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+            Save {dirty.length} change{dirty.length === 1 ? "" : "s"}
+          </Button>
+        </div>
+      ) : savedAt ? (
+        <p className="text-right text-[12px] text-quiet">Saved</p>
+      ) : null}
     </div>
   );
 }

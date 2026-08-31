@@ -23,10 +23,10 @@ export function ProvenanceChain({ memoryId }: { memoryId: string }) {
   }, [memoryId]);
 
   if (loading) {
-    return <p className="text-xs text-muted-foreground">Loading provenance…</p>;
+    return <p className="text-xs text-muted-foreground">Loading…</p>;
   }
   if (error) {
-    return <p className="text-xs text-muted-foreground">No provenance available.</p>;
+    return <p className="text-xs text-muted-foreground">He can&apos;t trace where this came from.</p>;
   }
   if (!chain) {
     return null;
@@ -48,8 +48,7 @@ export function ProvenanceChain({ memoryId }: { memoryId: string }) {
       </div>
       {sources.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No source observations linked. This memory was created directly (e.g. by the{" "}
-          <code className="font-mono">remember</code> tool).
+          Nothing feeds this one. You told him directly.
         </p>
       ) : (
         <ol className="space-y-2">

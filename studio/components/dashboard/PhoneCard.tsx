@@ -491,7 +491,7 @@ function ContactBookModal({
               </div>
             ) : filtered.length === 0 ? (
               <p className="p-3 text-center text-xs text-muted-foreground">
-                {query ? "No matches." : "No contacts yet. Add one, or Jarvis will as he calls."}
+                {query ? "No matches." : "No contacts yet. Jarvis adds them as he calls."}
               </p>
             ) : (
               filtered.map((c) => (

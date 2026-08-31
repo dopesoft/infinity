@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { Files, GitBranch } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -46,18 +47,13 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
           <div className="flex h-full min-h-0 flex-col">
             <Tabs value={tab} onValueChange={(v) => setTab(v as "files" | "git")} className="flex h-full min-h-0 flex-col">
               <div className="border-b px-2 py-1.5">
-                <TabsList className="grid h-9 w-full grid-cols-2 bg-transparent p-0">
-                  <TabsTrigger
-                    value="files"
-                    className="data-[state=active]:bg-background data-[state=active]:shadow-sm gap-1.5 text-xs"
-                  >
+                {/* Sub level: the instrument bar above is this pane's primary strip. */}
+                <PageTabsList level="sub" className="w-full">
+                  <PageTabsTrigger value="files">
                     <Files className="size-3.5" />
                     Files
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="git"
-                    className="data-[state=active]:bg-background data-[state=active]:shadow-sm gap-1.5 text-xs"
-                  >
+                  </PageTabsTrigger>
+                  <PageTabsTrigger value="git">
                     <GitBranch className="size-3.5" />
                     Changes
                     {badgeCount > 0 && (
@@ -65,8 +61,8 @@ export function CanvasLeftPane({ chat }: { chat: ChatHook }) {
                         {badgeCount > 99 ? "99+" : badgeCount}
                       </span>
                     )}
-                  </TabsTrigger>
-                </TabsList>
+                  </PageTabsTrigger>
+                </PageTabsList>
               </div>
               <TabsContent value="files" className="mt-0 flex-1 overflow-hidden">
                 <CanvasFileTree />

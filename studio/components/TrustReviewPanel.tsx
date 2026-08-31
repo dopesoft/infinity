@@ -185,7 +185,7 @@ export function TrustReviewPanel() {
           <p className="text-xs text-muted-foreground">Loading…</p>
         ) : pending.length === 0 ? (
           <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-            No pending approvals. New requests will appear here.
+            Nothing waiting on you. Quick calls mid-chat stay in the conversation.
           </p>
         ) : (
           <div className="space-y-3">
@@ -217,7 +217,7 @@ export function TrustReviewPanel() {
         <p className="text-xs text-muted-foreground">Loading…</p>
       ) : decided.length === 0 ? (
         <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-          No decisions yet. Approvals and denials show up here.
+          Nothing decided yet.
         </p>
       ) : (
         <ul className="space-y-2">
@@ -243,7 +243,7 @@ function TabBar({
 }) {
   return (
     <PageTabs value={tab} onValueChange={(v) => onChange(v as Tab)}>
-      <PageTabsList scrollable>
+      <PageTabsList level="sub">
         <PageTabsTrigger value="pending">
           <span>Pending</span>
           {pendingCount > 0 ? <CountBadge active={tab === "pending"} count={pendingCount} /> : null}
@@ -318,7 +318,7 @@ function DecisionBadge({
 }) {
   const label =
     status === "consumed"
-      ? "Approved · consumed"
+      ? "Approved · already used"
       : status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <span
@@ -360,9 +360,8 @@ function BatchCard({
           <div className="flex items-center gap-2">
             <span className={cn("size-1.5 shrink-0 rounded-full", RISK_DOT[highestRisk])} />
             <span className="truncate text-sm font-semibold">{title}</span>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide text-muted-foreground">
-              batch · {items.length}
-            </span>
+            {/* No count chip: "Approve all N" on this same header carries
+                it, and "batch" is our word for it rather than his. */}
           </div>
           <p className="pl-3.5 text-[11px] text-muted-foreground">
             {first?.source ?? "skill"} · queued {formatRelative(first?.created_at)}

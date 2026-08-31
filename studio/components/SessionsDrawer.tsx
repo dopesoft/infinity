@@ -455,7 +455,7 @@ export function SessionsDrawer({
             {scope === "automated"
               ? q.trim()
                 ? "No automated sessions match."
-                : "Nothing automated yet. Scheduled runs and workflows that hold a conversation show up here."
+                : "Nothing automated yet."
               : "No sessions match. Start a fresh one above."}
           </p>
         ) : (

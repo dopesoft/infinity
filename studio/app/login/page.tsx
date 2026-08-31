@@ -6,7 +6,8 @@ import { Infinity as InfinityIcon, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type AuthStatus = {
@@ -89,12 +90,12 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardContent className="pt-6">
           <Tabs value={tab} onValueChange={(v) => setTab(v as "signin" | "signup")}>
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="signin">Sign in</TabsTrigger>
-              <TabsTrigger value="signup" disabled={ownerLocked}>
+            <PageTabsList columns={2} className="w-full">
+              <PageTabsTrigger value="signin">Sign in</PageTabsTrigger>
+              <PageTabsTrigger value="signup" disabled={ownerLocked}>
                 Sign up
-              </TabsTrigger>
-            </TabsList>
+              </PageTabsTrigger>
+            </PageTabsList>
 
             <TabsContent value={tab} className="mt-4">
               <form onSubmit={handleSubmit} className="space-y-3">

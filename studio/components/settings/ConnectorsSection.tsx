@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
-import { Section } from "@/components/dashboard/Section";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { GroupLabel, ListRow } from "@/components/ui/list-row";
 import { Inset } from "@/components/ui/inset";
 import { EmptyState } from "@/components/EmptyState";
@@ -287,35 +287,33 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   }
 
   return (
-    // Majordomo §1.3/§1.5: the nav rail, the page header and this heading all
-    // said "Connectors", and the four-line paragraph restated it a third
-    // time. Title + live account count now; the one fact the boss actually
-    // acts on (connect a toolkit twice for multi-account routing) moved into
-    // the group body where that button lives.
-    <Section title="Connectors" badge={totalActiveCount || undefined} noPad>
-      <div className="min-w-0 space-y-3 pt-3">
-      <PageTabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <PageTabsList scrollable>
-          <PageTabsTrigger value="active" className="gap-1.5">
-            <span>Active</span>
-            {totalActiveCount ? (
-              <span
-                className={cn(
-                  "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                  tab === "active"
-                    ? "bg-background text-foreground"
-                    : "bg-muted-foreground/15 text-muted-foreground",
-                )}
-                aria-label={`${totalActiveCount} active`}
-              >
-                {totalActiveCount}
-              </span>
-            ) : null}
-          </PageTabsTrigger>
-          <PageTabsTrigger value="browse">Browse</PageTabsTrigger>
-          <PageTabsTrigger value="custom">Custom</PageTabsTrigger>
-        </PageTabsList>
-      </PageTabs>
+    <SettingsPanel
+      tabs={
+        <PageTabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+          <PageTabsList level="sub">
+            <PageTabsTrigger value="active" className="gap-1.5">
+              <span>Active</span>
+              {totalActiveCount ? (
+                <span
+                  className={cn(
+                    "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
+                    tab === "active"
+                      ? "bg-background text-foreground"
+                      : "bg-muted-foreground/15 text-muted-foreground",
+                  )}
+                  aria-label={`${totalActiveCount} active`}
+                >
+                  {totalActiveCount}
+                </span>
+              ) : null}
+            </PageTabsTrigger>
+            <PageTabsTrigger value="browse">Browse</PageTabsTrigger>
+            <PageTabsTrigger value="custom">Custom</PageTabsTrigger>
+          </PageTabsList>
+        </PageTabs>
+      }
+    >
+      <div className="min-w-0 space-y-3">
 
       {tab === "active" && (
         <ActiveList
@@ -360,7 +358,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
         />
       )}
       </div>
-    </Section>
+    </SettingsPanel>
   );
 }
 
@@ -423,12 +421,8 @@ function ActiveList({
           align="top"
           className="pt-8"
           title="Nothing activated yet"
-          description={
-            <>
-              Connect your first SaaS account from the catalog. Each one gives the agent a new set
-              of <code className="font-mono text-[11px]">composio__*</code> tools.
-            </>
-          }
+          // "composio__* tools" is our plumbing, not something he asked for.
+          description="Connect an account and he can act inside it."
           action={
             <Button onClick={onBrowse} size="sm">
               Browse catalog
@@ -520,13 +514,6 @@ function ActiveGroupCard({
           </span>
         }
       />
-      {group.kind === "composio" && (
-        <p className="pb-1 text-[12px] leading-relaxed text-quiet">
-          Tools register as{" "}
-          <code className="font-mono text-[11px]">composio__{group.slug.toUpperCase()}_*</code>. Add
-          another account to authorise a second mailbox, workspace, or org.
-        </p>
-      )}
       {group.accounts.map((a) => (
         <AccountSubRow
           key={a.id}
@@ -604,7 +591,6 @@ function AccountSubRow({
     kind === "composio" && account.identityHint && account.alias?.trim()
       ? account.identityHint
       : "",
-    kind === "composio" && account.accountId ? `id=${account.accountId}` : "",
     tools.length > 0 ? `${tools.length} tools` : "",
   ]
     .filter(Boolean)

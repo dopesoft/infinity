@@ -29,7 +29,7 @@ import { RunIndicator } from "@/lib/runs";
 import { CronDetailModal } from "@/components/cron/CronDetailModal";
 import { SentinelDetailModal } from "@/components/cron/SentinelDetailModal";
 import { WorkflowsSection } from "@/components/workflows/WorkflowsSection";
-import { cronKindMeta, watchTypeMeta, casualTime, cronToHuman } from "@/components/cron/cronMeta";
+import { cronKindMeta, watchTypeMeta, casualTime, cronToHuman, readableName } from "@/components/cron/cronMeta";
 
 // Workflows is the page's primary concept now (repeatable pipelines), with Cron
 // (time-fired jobs) and Sentinels (event-fired) as siblings. Workflows leads.
@@ -52,7 +52,7 @@ export default function CronPage() {
           onValueChange={(v) => setTab(v as CronTab)}
           className="flex flex-col"
         >
-          <div className="px-4 pb-3 sm:px-6 lg:px-8">
+          <div className="px-4 sm:px-6 lg:px-8">
             <PageTabsList scrollable>
               <PageTabsTrigger value="workflows">Routines</PageTabsTrigger>
               <PageTabsTrigger value="cron">On a schedule</PageTabsTrigger>
@@ -115,10 +115,11 @@ function CronSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <PageSectionHeader title="On a schedule" count={items.length}>
+      {/* No title: the tab above already says "On a schedule". */}
+      <PageSectionHeader title="" count={items.length}>
         <HeaderAction
           icon={<Plus className="size-4" />}
-          label={showCreate ? "Cancel" : "New cron"}
+          label={showCreate ? "Cancel" : "New schedule"}
           primary
           onClick={() => setShowCreate((s) => !s)}
         />
@@ -136,7 +137,7 @@ function CronSection() {
       <ul className="flex flex-col gap-2">
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            {loading ? "Loading…" : "No crons yet."}
+            {loading ? "Loading…" : "Nothing runs on a schedule yet."}
           </p>
         ) : (
           items.map((j) => (
@@ -154,7 +155,7 @@ function CronSection() {
               className="cursor-pointer rounded-xl border bg-card px-3 py-2 transition-colors hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                <code className="truncate font-mono text-foreground">{j.name}</code>
+                <span className="truncate font-medium text-foreground">{readableName(j.name)}</span>
                 {/* Readable cadence is the headline ("every 6 hours"), not the
                     raw cron expression. Author's words win; cronToHuman is the
                     fallback; the raw expression drops to the mono line below. */}
@@ -189,7 +190,7 @@ function CronSection() {
                       e.stopPropagation();
                       await toggleEnabled(j);
                     }}
-                    aria-label={j.enabled ? "Disable cron" : "Enable cron"}
+                    aria-label={j.enabled ? "Pause this schedule" : "Resume this schedule"}
                     title={
                       j.enabled
             ? "Pause this cron. It stops running on its schedule but keeps its history and config, re-enable anytime."
@@ -203,7 +204,7 @@ function CronSection() {
                     targetId={j.id}
                     mode="icon"
                     label="Run now"
-                    title="Fire this cron immediately, regardless of schedule. The next regular fire still happens on the cron expression's next tick. Progress survives navigation and refresh."
+                    title="Run it now. The next scheduled run still happens as normal."
                     onRun={() => runNow(j.id)}
                   />
                   <Button
@@ -259,10 +260,11 @@ function SentinelSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <PageSectionHeader title="Watching for something" count={items.length}>
+      {/* No title: the tab above already says "Watching". */}
+      <PageSectionHeader title="" count={items.length}>
         <HeaderAction
           icon={<Plus className="size-4" />}
-          label={showCreate ? "Cancel" : "New sentinel"}
+          label={showCreate ? "Cancel" : "New watcher"}
           primary
           onClick={() => setShowCreate((s) => !s)}
         />
@@ -298,7 +300,7 @@ function SentinelSection() {
               className="cursor-pointer rounded-xl border bg-card px-3 py-2 transition-colors hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                <code className="truncate font-mono text-foreground">{s.name}</code>
+                <span className="truncate font-medium text-foreground">{readableName(s.name)}</span>
                 <Badge variant="outline" className="shrink-0">{watchTypeMeta(s.watch_type).label}</Badge>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -359,16 +361,13 @@ function SentinelEmptyState() {
     <div className="rounded-xl border bg-card p-4">
       <div className="flex items-center gap-2">
         <Zap className="size-4 text-muted-foreground" aria-hidden />
-        <h3 className="text-sm font-medium text-foreground">No sentinels yet</h3>
+        <h3 className="text-sm font-medium text-foreground">He isn&apos;t watching for anything yet</h3>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
-        A sentinel watches for an <span className="text-foreground">event</span> and acts when it
-    happens, the event-driven sibling of a cron, which fires at a fixed{" "}
-        <span className="text-foreground">time</span>. When it trips, it runs a skill.
+        He can wait for something to <span className="text-foreground">happen</span> and act the
+        moment it does, rather than at a fixed <span className="text-foreground">time</span>.
       </p>
-      <p className="mt-3 text-xs font-medium text-foreground">
-    Easiest way: just ask Jarvis in chat,
-      </p>
+      <p className="mt-3 text-xs font-medium text-foreground">Easiest way is to ask him:</p>
       <ul className="mt-1.5 flex flex-col gap-1.5">
         {examples.map((e) => (
           <li
@@ -380,8 +379,7 @@ function SentinelEmptyState() {
         ))}
       </ul>
       <p className="mt-3 text-[11px] text-muted-foreground">
-        He picks the right watch type and wires it up. Or use{" "}
-        <span className="text-foreground">New sentinel</span> above to set one up by hand.
+        He picks how to watch for it and sets it up.
       </p>
     </div>
   );

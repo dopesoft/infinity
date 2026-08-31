@@ -10,6 +10,7 @@ import { GroupLabel, ListRow } from "@/components/ui/list-row";
 import { Inset, type InsetField } from "@/components/ui/inset";
 import { SectionTitle } from "@/components/dashboard/Section";
 import { RiskBadge } from "@/components/RiskBadge";
+import { readableName } from "@/components/cron/cronMeta";
 import { EmptyState } from "@/components/EmptyState";
 import { RunIndicator } from "@/lib/runs";
 import { cn } from "@/lib/utils";
@@ -46,6 +47,26 @@ import {
  * the local `useState(running)` it replaces (CLAUDE.md → "Server-tracked
  * progress").
  */
+/** What set a run off, in words. The stored values are enum tokens. */
+function runTrigger(src: string | null | undefined): string {
+  switch ((src ?? "").trim()) {
+    case "manual":
+      return "You ran it";
+    case "cron":
+    case "schedule":
+      return "Ran on a schedule";
+    case "agent":
+    case "auto":
+      return "He ran it himself";
+    case "sentinel":
+      return "Something tripped it";
+    case "":
+      return "Ran";
+    default:
+      return readableName(src);
+  }
+}
+
 export function SkillDetail({
   selected,
   onClose,
@@ -187,7 +208,7 @@ export function SkillDetail({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 scroll-touch">
         <PageTabs defaultValue="overview" className="min-w-0 space-y-3">
-          <PageTabsList scrollable>
+          <PageTabsList level="sub">
             <PageTabsTrigger value="overview">Overview</PageTabsTrigger>
             <PageTabsTrigger value="run">Run</PageTabsTrigger>
             <PageTabsTrigger value="tests">Tests</PageTabsTrigger>
@@ -347,7 +368,7 @@ export function SkillDetail({
                 <ListRow
                   key={r.id}
                   tone={r.success ? "success" : "danger"}
-                  title={r.trigger_source || "run"}
+                  title={runTrigger(r.trigger_source)}
                   meta={
                     <span suppressHydrationWarning>
                       {new Date(r.started_at).toLocaleString()} · {r.duration_ms}ms ·{" "}
@@ -425,7 +446,7 @@ export function SkillDetail({
 
           <TabsContent value="tests" className="min-w-0">
             <GroupLabel
-              label="Verifier tests"
+              label="Checks"
               count={tests.length}
               trailing={
                 <span className="flex items-center gap-1">

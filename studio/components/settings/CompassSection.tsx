@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Compass, Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Section } from "@/components/dashboard/Section";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { SettingRow } from "@/components/ui/setting-row";
+import { readableName } from "@/components/cron/cronMeta";
 import { useRealtime } from "@/lib/realtime/provider";
 import {
   fetchCompass,
@@ -74,11 +75,10 @@ export function CompassSection() {
   }
 
   return (
-    // Majordomo §1.3/§1.5: the nav rail and the page header already say
-    // "Compass", so the duplicated <h2> + paragraph become the Section title
-    // plus a count. What each field is FOR still shows, as the textarea's own
-    // placeholder — a decision aid at the point of decision.
-    <Section title="Compass" Icon={Compass} badge={loaded ? sections.length : undefined} noPad>
+    // What each field is FOR shows as the textarea's own placeholder, a
+    // decision aid at the point of decision. No title: Memory renders this
+    // under "What you are aiming at", and "Compass" is our codename for it.
+    <SettingsPanel>
       {!loaded ? (
         <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> Loading…
@@ -88,7 +88,7 @@ export function CompassSection() {
           {sections.map((s) => (
             <SettingRow
               key={s.section}
-              label={s.label || s.section}
+              label={s.label || readableName(s.section)}
               control={
                 <>
                   {savedAt[s.section] && !dirty[s.section] ? (
@@ -118,12 +118,12 @@ export function CompassSection() {
                 placeholder={PLACEHOLDERS[s.section] ?? ""}
                 rows={3}
                 className="min-h-[80px] resize-y"
-                aria-label={s.label || s.section}
+                aria-label={s.label || readableName(s.section)}
               />
             </SettingRow>
           ))}
         </div>
       )}
-    </Section>
+    </SettingsPanel>
   );
 }

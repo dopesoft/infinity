@@ -70,7 +70,7 @@ export function SystemPanel({ wsConnected }: { wsConnected: boolean }) {
         <dt className="text-muted-foreground">Memory store</dt>
         <dd className={memoryStoreClass}>{memoryStoreLabel}</dd>
 
-        <dt className="text-muted-foreground">LLM provider</dt>
+        <dt className="text-muted-foreground">Brain</dt>
         <dd className="font-mono capitalize">{provider}</dd>
 
         <dt className="text-muted-foreground">Observations</dt>

@@ -232,7 +232,7 @@ export function ChatBubble({
                 <Sparkles className="size-3" />
                 <span>
                   {message.proactiveKind
-                    ? `heartbeat · ${message.proactiveKind}`
+                    ? "He noticed this on his own"
                     : "heartbeat"}
                 </span>
               </div>

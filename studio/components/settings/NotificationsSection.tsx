@@ -1,20 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  AlertCircle,
-  Bell,
-  BellOff,
-  CheckCircle2,
-  Loader2,
-  Send,
-  Smartphone,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, BellOff, CheckCircle2, Loader2, Send, Smartphone, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Section } from "@/components/dashboard/Section";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { GroupLabel, ListRow } from "@/components/ui/list-row";
 import { Inset } from "@/components/ui/inset";
 import { SettingRow } from "@/components/ui/setting-row";
@@ -156,13 +146,8 @@ export function NotificationsSection() {
     // "Notifications", so the duplicated heading + paragraph collapse into
     // the Section title and its count. The per-device and per-kind
     // descriptions below are decision aids and stay (§1.5).
-    <Section
-      title="Notifications"
-      Icon={Bell}
-      badge={devices.length ? `${devices.length} device${devices.length === 1 ? "" : "s"}` : undefined}
-      noPad
-    >
-      <div className="min-w-0 space-y-3 pt-3">
+    <SettingsPanel>
+      <div className="min-w-0 space-y-3">
       <CapabilityBlock status={status} />
 
       <ActionBlock
@@ -199,7 +184,7 @@ export function NotificationsSection() {
 
       <WhyBlock />
       </div>
-    </Section>
+    </SettingsPanel>
   );
 }
 
@@ -477,48 +462,23 @@ function WhyBlock() {
   return (
     <details className="min-w-0 py-2 text-[12.5px]">
       <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
-        what triggers a notification?
+        when does he interrupt me?
       </summary>
-      <ul className="mt-2 space-y-1.5 text-foreground/80">
-        <Bullet>
-          <span className="font-semibold">Approvals</span> - Jarvis wants
-          to run a bash command, edit, or write that needs your call.
-        </Bullet>
-        <Bullet>
-          <span className="font-semibold">Agent initiative</span> - Jarvis
-          surfaces something urgent on his own (the notify tool fires).
-        </Bullet>
-        <Bullet>
-          <span className="font-semibold">New emails</span> - a fresh
-          follow-up landed in the inbox (every connector-polled message).
-        </Bullet>
-        <Bullet>
-          <span className="font-semibold">Upcoming events</span> - a
-          calendar event is starting within 15 minutes.
-        </Bullet>
-        <Bullet>
-          <span className="font-semibold">Run started / finished</span> -
-          a long server action (cron, skill, voyager, gym…) begins or wraps.
-        </Bullet>
-      </ul>
-      <p className="mt-2 text-[11px] text-muted-foreground">
-    Each kind has its own toggle above, defaults are quiet (every-email + run-started are off until you flip them).
+      {/* The bullet list that used to sit here restated every toggle above,
+          which render a label AND a description straight from the server. It
+          even ended by saying "each kind has its own toggle above", which is
+          the tell. What is left is the two things the toggles cannot say. */}
+      <p className="mt-2 text-[12.5px] text-muted-foreground">
+        He stays quiet by default. New emails and run updates stay off until you switch
+        them on.
       </p>
-      <p className="mt-2 text-[11px] italic text-muted-foreground">
-        Tap a notification to deep-link to the matching record in Studio.
+      <p className="mt-2 text-[12.5px] text-muted-foreground">
+        Tap one and it opens the thing it is about.
       </p>
     </details>
   );
 }
 
-function Bullet({ children }: { children: React.ReactNode }) {
-  return (
-    <li className="flex gap-2 leading-relaxed">
-      <span className="text-muted-foreground">·</span>
-      <span className="flex-1">{children}</span>
-    </li>
-  );
-}
 
 // Re-export so the bundle keeps tree-shake awareness of these helpers.
 void isPushSupported;

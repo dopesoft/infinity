@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/resizable";
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { CompassSection } from "@/components/settings/CompassSection";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { VaultSection } from "@/components/settings/VaultSection";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { DashboardSettings } from "@/components/settings/DashboardSection";
@@ -204,7 +205,7 @@ export default function SettingsPage() {
           {/* px-4 sm:px-6 exactly matches Section tone="band"'s negative
               margins, so a band bleeds to the screen edge without ever
               widening the page. */}
-          <div className="min-h-0 flex-1 overflow-y-auto scroll-touch px-4 pb-safe pt-2 sm:px-6">
+          <div className="min-h-0 flex-1 overflow-y-auto scroll-touch px-4 pb-safe sm:px-6">
             <SectionContent active={active} status={status} tools={tools} mcp={mcp} />
           </div>
         </div>
@@ -297,20 +298,9 @@ function SectionContent({
 
 function TrustSection() {
   return (
-    <Section
-      title="Trust"
-      // A decision aid, not a restatement: it says which approvals land here
-      // versus inline in Chat, which is what the boss needs to know before
-      // he starts clearing them.
-      headerExtra={
-        <span className="hidden text-[12px] text-quiet sm:inline">batched approvals</span>
-      }
-      noPad
-    >
-      <div className="pt-3">
-        <TrustReviewPanel />
-      </div>
-    </Section>
+    <SettingsPanel>
+      <TrustReviewPanel />
+    </SettingsPanel>
   );
 }
 
@@ -369,13 +359,14 @@ function ChatSettingsSection() {
   }
 
   return (
-    <div className="min-w-0 space-y-1">
-      <Section
-        title="Agent teams"
-        badge={loading ? "loading" : draft.team_aggressiveness.replace("_", " ")}
-        noPad
-      >
-        <SettingRow label="Agent teams" description="Whether Jarvis may split work across specialist agents.">
+    // Same frame as every other section. "Teamwork" and "Chat visibility"
+    // below are GROUP headings, not the section's name, so they stay.
+    <SettingsPanel>
+      <Section title="Teamwork" noPad>
+        <SettingRow
+          label="Use specialist agents"
+          description="Whether Jarvis may split work across specialist agents."
+        >
           <NativeSelect
             value={draft.agent_teams}
             onValueChange={(v) => patch({ agent_teams: v as ChatSettings["agent_teams"] })}
@@ -527,7 +518,7 @@ function ChatSettingsSection() {
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>
-    </div>
+    </SettingsPanel>
   );
 }
 
@@ -720,7 +711,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
   return (
     <div className="min-w-0 space-y-1">
-      <Section title="Brain" badge={liveVendor.label} noPad>
+      <SettingsPanel>
         <SettingRow
           label="Vendor"
           description="Tap one to switch. Jarvis moves the moment you do."
@@ -800,7 +791,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
         )}
 
         {err && <ErrorNote>{err}</ErrorNote>}
-      </Section>
+      </SettingsPanel>
 
       <PricingTable vendor={selectedVendor} />
     </div>
@@ -1396,19 +1387,13 @@ function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
       });
   }, [tools, q]);
 
-  const filteredCount = groups.reduce((sum, g) => sum + g.items.length, 0);
-
   return (
-    <Section
-      title="Tools"
-      badge={q ? `${filteredCount} of ${tools.length}` : `${tools.length} available`}
-      noPad
-    >
-      <div className="min-w-0 space-y-3 pt-3">
+    <SettingsPanel>
+      <div className="min-w-0 space-y-3">
         <SearchInput
           value={query}
           onValueChange={setQuery}
-          placeholder="Search tools by name or description…"
+          placeholder={`Search ${tools.length} things he can do…`}
         />
         {tools.length === 0 ? (
           <p className="py-2 text-[13.5px] text-quiet">
@@ -1447,7 +1432,7 @@ function ToolsSection({ tools }: { tools: ToolDescriptor[] }) {
           </div>
         )}
       </div>
-    </Section>
+    </SettingsPanel>
   );
 }
 

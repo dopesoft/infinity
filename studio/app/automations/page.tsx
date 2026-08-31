@@ -184,8 +184,11 @@ export default function AutomationsPage() {
             {!loading && crons.length + sentinels.length === 0 && (
               <EmptyState
                 icon={Plus}
-                title="He does nothing on his own yet"
-                description="Tell him something like “check my inbox every morning at six” and it will show up here, on the line above."
+                // The status line at the top of the page already says
+                // "Nothing runs on its own yet." This carries the half it
+                // does not: how to make the first one.
+                title="Tell him what to do and when"
+                description="Something like “check my inbox every morning at six”, and it shows up here."
               />
             )}
             {loading && crons.length === 0 && (

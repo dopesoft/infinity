@@ -69,11 +69,11 @@ export function LastHeartbeatPanel() {
   }, []);
 
   return (
-    <SidePanelCard label="Last heartbeat">
+    <SidePanelCard label="Last check">
       {!loaded ? (
         <p className="text-xs text-muted-foreground">Loading…</p>
       ) : !latest ? (
-        <p className="text-xs text-muted-foreground">No heartbeat runs yet.</p>
+        <p className="text-xs text-muted-foreground">He hasn&apos;t checked in yet.</p>
       ) : (
         <>
           <p className="text-[11px] text-muted-foreground" suppressHydrationWarning>

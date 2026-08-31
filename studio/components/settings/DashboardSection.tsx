@@ -2,7 +2,8 @@
 
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Section } from "@/components/dashboard/Section";
+import { GroupLabel } from "@/components/ui/list-row";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { SettingRow } from "@/components/ui/setting-row";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -30,17 +31,20 @@ export function DashboardSettings() {
   const visible = SECTION_ORDER.filter((k) => prefs.sections[k]).length;
 
   return (
-    <Section
-      title="Dashboard"
-      badge={`${visible} of ${SECTION_ORDER.length} visible`}
-      headerExtra={
-        <Button size="sm" variant="ghost" onClick={reset} className="gap-1.5">
-          <RotateCcw className="size-3.5" aria-hidden />
-          Reset
-        </Button>
-      }
-      noPad
+    <SettingsPanel
     >
+      {/* The count and the Reset sit on the list they act on, not in a panel
+          header only some sections would have. */}
+      <GroupLabel
+        label="Cards on your home screen"
+        count={visible}
+        trailing={
+          <Button size="sm" variant="ghost" onClick={reset} className="gap-1.5">
+            <RotateCcw className="size-3.5" aria-hidden />
+            Reset
+          </Button>
+        }
+      />
       {SECTION_ORDER.map((key) => {
         const meta = SECTION_LABELS[key];
         const on = prefs.sections[key];
@@ -60,6 +64,6 @@ export function DashboardSettings() {
           />
         );
       })}
-    </Section>
+    </SettingsPanel>
   );
 }

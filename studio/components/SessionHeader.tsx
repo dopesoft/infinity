@@ -192,7 +192,7 @@ export function SessionHeader({
                 icon={<Undo2 />}
                 onClick={onRewind}
                 disabled
-                aria-label="Rewind to a prior turn"
+                aria-label="Rewind to an earlier point"
                 title="Rewind (coming soon)"
               >
                 Rewind
@@ -202,7 +202,7 @@ export function SessionHeader({
               responsiveLabel
               icon={<Archive />}
               onClick={onClear}
-              aria-label="Compact session - fold into memory and clear visible context"
+              aria-label="Wrap this up, keep what matters and clear the rest"
               title="Compact session"
             >
               Compact

@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * The contract these three share, and the reason they exist as primitives:
  *
  *  - **Rows are separated by a hairline and space, never by a border box.**
- *    Each row draws its own `border-b border-hairline` and the LAST row in a
+ *    Rows no longer draw a hairline each; they separate by rhythm. The LAST row in a
  *    group drops it, so a list needs no wrapper chrome at all. A bordered or
  *    rounded list row is a bug (§1.2).
  *  - **44px minimum touch target** (`min-h-11`) on every row, tappable or
@@ -109,6 +109,7 @@ export interface ListRowProps {
   /** Show the affordance chevron. Defaults to true for tappable rows. */
   chevron?: boolean;
   /** Drop the bottom hairline (e.g. the row is last and the group has none). */
+  /** Accepted for compatibility. Rows no longer draw a rule at all. */
   noRule?: boolean;
   disabled?: boolean;
   className?: string;
@@ -128,7 +129,6 @@ export function ListRow({
   voice,
   live,
   chevron,
-  noRule,
   disabled,
   className,
   children,
@@ -190,7 +190,13 @@ export function ListRow({
     <div
       className={cn(
         "min-w-0 max-w-full",
-        !noRule && "border-b border-hairline last:border-b-0",
+        /* No rule under each row. A hairline between every setting turns a
+           short list into a ledger and competes with the section breaks that
+           actually mean something — the boss: "that only makes sense between
+           larger sections not each fucking row". Rows separate by rhythm; a
+           SECTION separates with a rule or a band. `noRule` stays accepted so
+           no consumer breaks, and is now the default behaviour. */
+        // (rule intentionally absent)
         className,
       )}
     >
@@ -236,7 +242,8 @@ export function GroupLabel({
         <span className="truncate font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
           {label}
         </span>
-        {count !== undefined ? (
+        {/* Zero is the empty state's job, not a badge's. See board.tsx. */}
+        {count !== undefined && count !== 0 ? (
           <span className="shrink-0 font-mono text-[11px] tabular-nums text-quiet">{count}</span>
         ) : null}
       </span>
@@ -280,6 +287,7 @@ export interface WorkRowProps {
   onClick?: () => void;
   href?: string;
   trailing?: React.ReactNode;
+  /** Accepted for compatibility. Rows no longer draw a rule at all. */
   noRule?: boolean;
   className?: string;
 }
@@ -333,7 +341,6 @@ export function WorkRow({
   onClick,
   href,
   trailing,
-  noRule,
   className,
 }: WorkRowProps) {
   const tappable = Boolean(onClick || href);
@@ -435,7 +442,13 @@ export function WorkRow({
     <div
       className={cn(
         "min-w-0 max-w-full",
-        !noRule && "border-b border-hairline last:border-b-0",
+        /* No rule under each row. A hairline between every setting turns a
+           short list into a ledger and competes with the section breaks that
+           actually mean something — the boss: "that only makes sense between
+           larger sections not each fucking row". Rows separate by rhythm; a
+           SECTION separates with a rule or a band. `noRule` stays accepted so
+           no consumer breaks, and is now the default behaviour. */
+        // (rule intentionally absent)
         className,
       )}
     >

@@ -182,8 +182,8 @@ func (t *executeTool) Execute(ctx context.Context, in map[string]any) (string, e
 			// Deliberately NOT an error: a non-nil error sets
 			// toolErredThisTurn, which arms self-heal to retry, and retrying a
 			// purchase is the one thing that must never happen.
-			return fmt.Sprintf("That purchase (%s) was already started, so I did not run it again. Its state is %q. "+
-				"Use purchase_status to see how it ended.", id, o.Status), nil
+			return fmt.Sprintf("That purchase (%s) was already started, so I did not run it again: it is %s. "+
+				"Use purchase_status to see how it ended.", id, InEnglish(o.Status)), nil
 		}
 		return "", err
 	}
@@ -255,7 +255,7 @@ func (t *statusTool) Execute(ctx context.Context, in map[string]any) (string, er
 		return "", err
 	}
 	b := &strings.Builder{}
-	fmt.Fprintf(b, "%s\nState: %s\n", describe(o), o.Status)
+	fmt.Fprintf(b, "%s\nWhere it stands: %s\n", describe(o), InEnglish(o.Status))
 	if id, ok := o.Confirmation["order_id"].(string); ok && id != "" {
 		fmt.Fprintf(b, "Order number: %s\n", id)
 	}

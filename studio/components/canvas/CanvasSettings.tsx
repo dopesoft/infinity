@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, FolderOpen, LayoutPanelLeft, MonitorPlay, Save, Zap } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Check, Save } from "lucide-react";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { SettingRow } from "@/components/ui/setting-row";
+import { Switch } from "@/components/ui/switch";
 
 /**
  * CanvasSettings - workspace root, preview URL override, auto-open toggle.
@@ -24,7 +25,7 @@ export function CanvasSettings() {
   const [root, setRoot] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [autoOpen, setAutoOpen] = useState(false);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -38,7 +39,7 @@ export function CanvasSettings() {
     try {
       if (value) window.localStorage.setItem(key, value);
       else window.localStorage.removeItem(key);
-      setSavedAt(new Date().toLocaleTimeString());
+      setSavedKey(key);
     } catch {
       /* ignore */
     }
@@ -49,123 +50,79 @@ export function CanvasSettings() {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(AUTO_OPEN_KEY, next ? "1" : "0");
-      setSavedAt(new Date().toLocaleTimeString());
+      setSavedKey(AUTO_OPEN_KEY);
     } catch {
       /* ignore */
     }
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <LayoutPanelLeft className="size-4 text-muted-foreground" aria-hidden />
-            <CardTitle>Canvas</CardTitle>
-          </div>
-          {savedAt && (
-            <span className="flex items-center gap-1 text-[10px] text-success">
-              <Check className="size-3" /> saved {savedAt}
-            </span>
-          )}
+    // Every row is a SettingRow and every toggle is the Switch primitive, the
+    // same as every other Settings section. This was the last one still using
+    // a private `Field` with its own icons and a hand-rolled switch, which is
+    // why Workbench looked unlike its neighbours.
+    <SettingsPanel>
+      <SettingRow
+        label="Workspace root"
+        description="The folder on your Mac he works in. He cannot read or write outside it."
+        htmlFor="canvas-root"
+      >
+        <div className="flex min-w-0 gap-2">
+          <Input
+            id="canvas-root"
+            value={root}
+            onChange={(e) => setRoot(e.target.value)}
+            placeholder="/Users/you/Dev/infinity"
+            inputMode="text"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="font-mono text-sm"
+          />
+          <SaveButton onClick={() => persist(ROOT_KEY, root.trim())} saved={savedKey === ROOT_KEY} />
         </div>
-        <CardDescription>
-          The IDE-style surface where you watch the agent code: file tree, git, live preview, Monaco editor tabs.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        <Field
-          icon={<FolderOpen className="size-4 text-muted-foreground" />}
-          label="Workspace root"
-          hint="Absolute path on your Mac. Canvas restricts every read and write to this directory."
-        >
-          <div className="flex gap-2">
-            <Input
-              value={root}
-              onChange={(e) => setRoot(e.target.value)}
-              placeholder="/Users/you/Dev/infinity"
-              inputMode="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              className="font-mono text-sm"
-            />
-            <Button size="sm" onClick={() => persist(ROOT_KEY, root.trim())} className="gap-1">
-              <Save className="size-3.5" /> Save
-            </Button>
-          </div>
-        </Field>
+      </SettingRow>
 
-        <Field
-          icon={<MonitorPlay className="size-4 text-muted-foreground" />}
-          label="Preview URL"
-          hint="HTTP(S) URL of your dev server. Lovable-style iframe lives here. Leave blank to use the NEXT_PUBLIC_PREVIEW_URL env."
-        >
-          <div className="flex gap-2">
-            <Input
-              value={previewUrl}
-              onChange={(e) => setPreviewUrl(e.target.value)}
-              placeholder="https://preview.dopesoft.io"
-              inputMode="url"
-              type="url"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              className="font-mono text-sm"
-            />
-            <Button size="sm" onClick={() => persist(PREVIEW_KEY, previewUrl.trim())} className="gap-1">
-              <Save className="size-3.5" /> Save
-            </Button>
-          </div>
-        </Field>
+      <SettingRow
+        label="Preview address"
+        description="Where your app is running, so you can watch it while he works. Leave blank to use the default."
+        htmlFor="canvas-preview"
+      >
+        <div className="flex min-w-0 gap-2">
+          <Input
+            id="canvas-preview"
+            value={previewUrl}
+            onChange={(e) => setPreviewUrl(e.target.value)}
+            placeholder="https://preview.dopesoft.io"
+            inputMode="url"
+            type="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="font-mono text-sm"
+          />
+          <SaveButton
+            onClick={() => persist(PREVIEW_KEY, previewUrl.trim())}
+            saved={savedKey === PREVIEW_KEY}
+          />
+        </div>
+      </SettingRow>
 
-        <Field
-          icon={<Zap className="size-4 text-muted-foreground" />}
-          label="Auto-open Canvas"
-          hint="When the agent invokes its first edit/write tool in Live, jump to Canvas automatically instead of showing a banner."
-        >
-          <button
-            type="button"
-            role="switch"
-            aria-checked={autoOpen}
-            onClick={() => persistAutoOpen(!autoOpen)}
-            className={cn(
-              "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors",
-              autoOpen ? "border-foreground bg-foreground" : "border-border bg-muted",
-            )}
-          >
-            <span
-              className={cn(
-                "inline-block size-5 rounded-full bg-background shadow transition-transform",
-                autoOpen ? "translate-x-6" : "translate-x-1",
-              )}
-            />
-          </button>
-        </Field>
-      </CardContent>
-    </Card>
+      <SettingRow
+        label="Open the workbench on its own"
+        description="Jump straight there the moment he starts editing, instead of showing a banner."
+        control={<Switch checked={autoOpen} onCheckedChange={persistAutoOpen} aria-label="Open the workbench on its own" />}
+      />
+    </SettingsPanel>
   );
 }
 
-function Field({
-  icon,
-  label,
-  hint,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+/** Save plus the confirmation it produces, in one place so the two cannot drift. */
+function SaveButton({ onClick, saved }: { onClick: () => void; saved: boolean }) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2">
-        {icon}
-        <label className="text-sm font-medium">{label}</label>
-      </div>
-      {hint && <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>}
-      <div className="pt-1">{children}</div>
-    </div>
+    <Button size="sm" onClick={onClick} className="shrink-0 gap-1">
+      {saved ? <Check className="size-3.5" aria-hidden /> : <Save className="size-3.5" aria-hidden />}
+      {saved ? "Saved" : "Save"}
+    </Button>
   );
 }

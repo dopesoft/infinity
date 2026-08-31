@@ -61,52 +61,84 @@ const COLUMN_LAYOUTS: Record<number, string> = {
   6: "grid w-full grid-cols-6 sm:inline-flex sm:w-auto",
 };
 
-// Horizontal-scroll mode for mobile: rendered as a row of airy chips (same
-// visual as the /settings mobile SectionPill rail) instead of a packed
-// muted strip. Each trigger is shrink-0 so labels + count badges never
-// get crushed; snap-proximity helps the swipe land cleanly. On sm+ we
-// drop overflow handling and let it sit inline.
-//
-// Chip styling is applied via `[&>button]:` descendant utilities so the
-// underlying shadcn TabsTrigger doesn't need to know about it — every
-// existing scrollable consumer inherits the airy look automatically.
-// Selectors win over TabsTrigger's own `rounded-md` / `data-[state]:bg`
-// classes via higher specificity (descendant selector vs single class).
-const SCROLLABLE_LAYOUT = [
-  // Row container - drop the default muted background / padding so chips
-  // float on the page background like /settings does on mobile.
-  "no-scrollbar flex w-full max-w-full justify-start gap-1.5 overflow-x-auto scroll-touch snap-x snap-proximity bg-transparent p-0",
+/**
+ * TWO LEVELS OF TAB, AND THEY MUST NOT LOOK ALIKE.
+ *
+ * A page can carry a main section switcher AND a sub-switcher inside the
+ * section it lands on. Rendering both as the same chip rail put two identical
+ * strips on top of each other on mobile, with nothing saying which one was
+ * above the other in the hierarchy.
+ *
+ *   level="primary" (default)  shadcn's segmented control: one muted rounded
+ *                              container, the active tab a raised pill inside
+ *                              it. Scrolls sideways on mobile rather than
+ *                              wrapping, so the row never becomes two rows.
+ *   level="sub"                Material underline: no container at all, the
+ *                              active tab is a word with a line under it,
+ *                              sitting on a hairline that runs the row. Reads
+ *                              as clearly subordinate at a glance.
+ *
+ * Use "sub" for ANY tab strip that sits inside a screen that already has a
+ * tab strip above it. If there is only one level on the page, it is primary.
+ *
+ * Both are `[&>button]:` descendant utilities so the underlying shadcn
+ * TabsTrigger stays ignorant of them, and both win over TabsTrigger's own
+ * single-class rules on specificity.
+ */
+export const TAB_LAYOUT_PRIMARY = [
+  // The shadcn container, made scrollable instead of wrapping on mobile.
+  //
+  // DARK MODE, and why it needs its own line. The theme is TRUE black:
+  // --background is 0% and --muted is 5%, so shadcn's default of a muted strip
+  // with a --background active pill inverts in the dark — the active tab comes
+  // out DARKER than the strip it sits in, and the strip itself is 5% on 0%,
+  // near enough invisible. So dark gets a border to define the strip, and the
+  // active tab lifts to --accent (9.6%) instead of dropping to black.
+  "mb-6 h-9 no-scrollbar flex w-full max-w-full snap-x snap-proximity justify-start gap-1 overflow-x-auto rounded-lg border border-border bg-muted p-1 scroll-touch",
+  "sm:inline-flex sm:w-auto sm:max-w-none sm:overflow-visible",
+  // Each trigger sits flat inside the container until it is the active one.
+  "[&>button]:h-7 [&>button]:shrink-0 [&>button]:snap-start [&>button]:gap-1.5 [&>button]:rounded-md [&>button]:border [&>button]:border-transparent [&>button]:bg-transparent [&>button]:px-3 [&>button]:text-muted-foreground [&>button]:shadow-none",
+  "[&>button[data-state=active]]:bg-background [&>button[data-state=active]]:text-foreground [&>button[data-state=active]]:shadow-sm",
+  "[&>button[aria-selected=true]]:bg-background [&>button[aria-selected=true]]:text-foreground [&>button[aria-selected=true]]:shadow-sm",
+  "dark:[&>button[data-state=active]]:border-border dark:[&>button[data-state=active]]:bg-accent dark:[&>button[data-state=active]]:shadow-none",
+  "dark:[&>button[aria-selected=true]]:border-border dark:[&>button[aria-selected=true]]:bg-accent dark:[&>button[aria-selected=true]]:shadow-none",
+].join(" ");
+
+export const TAB_LAYOUT_SUB = [
+  // No container and no rule across the row: the only line is under the tab
+  // you are on. A full-width border made this read as a container, which is
+  // the primary level's job, not this one's.
+  "mb-6 h-auto no-scrollbar flex w-full max-w-full snap-x snap-proximity justify-start gap-5 overflow-x-auto rounded-none border-0 bg-transparent p-0 scroll-touch",
   "sm:w-auto sm:max-w-none sm:overflow-visible",
-  // Chip shape + tap target on every trigger.
-  "[&>button]:shrink-0 [&>button]:snap-start [&>button]:h-9 [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:border [&>button]:px-3.5",
-  // Inactive chip: bordered muted pill that hugs the text.
-  "[&>button]:border-border [&>button]:bg-muted [&>button]:text-muted-foreground [&>button]:shadow-none",
-  // Active chip: inverted (foreground fill + background text), matches
-  // the settings SectionPill active state exactly.
-  "[&>button[data-state=active]]:border-foreground [&>button[data-state=active]]:bg-foreground [&>button[data-state=active]]:text-background [&>button[data-state=active]]:shadow-none",
+  // Sentence case at a readable size, so the register differs from the
+  // primary row's mono caps as well as the shape.
+  "[&>button]:h-9 [&>button]:shrink-0 [&>button]:snap-start [&>button]:gap-1.5 [&>button]:rounded-none [&>button]:border-0 [&>button]:border-b-2 [&>button]:border-transparent [&>button]:bg-transparent [&>button]:px-0.5 [&>button]:pb-2 [&>button]:font-sans [&>button]:text-[13px] [&>button]:font-medium [&>button]:normal-case [&>button]:tracking-normal [&>button]:text-muted-foreground [&>button]:shadow-none",
+  "[&>button[data-state=active]]:border-foreground [&>button[data-state=active]]:bg-transparent [&>button[data-state=active]]:text-foreground [&>button[data-state=active]]:shadow-none",
+  "[&>button[aria-selected=true]]:border-foreground [&>button[aria-selected=true]]:bg-transparent [&>button[aria-selected=true]]:text-foreground [&>button[aria-selected=true]]:shadow-none",
 ].join(" ");
 
 export const PageTabsList = React.forwardRef<
   React.ElementRef<typeof TabsList>,
   React.ComponentPropsWithoutRef<typeof TabsList> & {
     columns?: number;
+    /** Retained for every existing caller; primary is scrollable by design. */
     scrollable?: boolean;
+    /** "sub" for a strip that sits inside a screen that already has one. */
+    level?: "primary" | "sub";
   }
->(({ className, columns, scrollable, children, ...props }, ref) => {
-  // Precedence: `scrollable` wins over `columns`. If neither is set we default
-  // to inline-flex everywhere (caller can still pass classes via className).
-  // `columns` is only safe for 2–3 short text-only labels - anything with a
-  // count badge or 4+ tabs squishes on mobile (375px / 6 ≈ 62px per cell).
+>(({ className, columns, scrollable, level = "primary", children, ...props }, ref) => {
+  // Level decides the look. `columns` is a niche fallback for short text-only
+  // labels that must fill the row, and it only applies to a primary strip.
   let layout: string;
-  if (scrollable) {
-    layout = SCROLLABLE_LAYOUT;
-  } else if (columns) {
-    layout = COLUMN_LAYOUTS[columns] ?? "inline-flex";
+  if (level === "sub") {
+    layout = TAB_LAYOUT_SUB;
+  } else if (columns && !scrollable) {
+    layout = cn("mb-6 h-9", COLUMN_LAYOUTS[columns] ?? "inline-flex");
   } else {
-    layout = "inline-flex";
+    layout = TAB_LAYOUT_PRIMARY;
   }
   return (
-    <TabsList ref={ref} className={cn("h-9", layout, className)} {...props}>
+    <TabsList ref={ref} className={cn(layout, className)} {...props}>
       {children}
     </TabsList>
   );
@@ -193,7 +225,8 @@ export function PageSectionHeader({
       <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </span>
-      {typeof count === "number" ? (
+      {/* Zero is the empty state's job, not a badge's. See board.tsx. */}
+      {typeof count === "number" && count !== 0 ? (
         <Badge
           variant="secondary"
           className="h-5 min-w-[1.25rem] justify-center px-1.5 font-mono text-[10px]"

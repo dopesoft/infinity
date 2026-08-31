@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Zap } from "lucide-react";
 import { previewCron, upsertCron, upsertSentinel, type SentinelDTO } from "@/lib/api";
-import { CRON_KIND_META, casualTime, localTzAbbrev } from "./cronMeta";
+import { CRON_KIND_META, WATCH_TYPE_META, casualTime, localTzAbbrev } from "./cronMeta";
 
 /**
  * The two "make a new automation" forms, extracted from the /cron page so
@@ -63,10 +63,10 @@ function CronCreateCard({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="space-y-2 rounded-xl border bg-card p-3">
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <Input placeholder="name (kebab-case)" value={name} onChange={(e) => setName(e.target.value)} />
-        <Input placeholder="schedule (cron)" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
+        <Input placeholder="A short name" value={name} onChange={(e) => setName(e.target.value)} />
+        <Input placeholder="e.g. 0 9 * * 1-5" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
         <Input
-          placeholder="natural language label (optional)"
+          placeholder="Say it in plain words (optional)"
           value={scheduleNatural}
           onChange={(e) => setScheduleNatural(e.target.value)}
           className="sm:col-span-2"
@@ -146,8 +146,8 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
     try {
       cfg = config.trim() ? JSON.parse(config) : {};
       chain = actions.trim() ? JSON.parse(actions) : [];
-    } catch (e) {
-      setError(`JSON parse: ${String(e)}`);
+    } catch {
+      setError("That is not valid JSON, so I did not save it.");
       return;
     }
     setSaving(true);
@@ -161,36 +161,39 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
     });
     setSaving(false);
     if (r) onCreated();
-    else setError("save failed");
+    else setError("That did not save.");
   }
 
   return (
     <div className="space-y-2 rounded-xl border bg-card p-3">
       <p className="text-[11px] text-muted-foreground">
     Tip: you can skip this form, ask Jarvis “ping me when …” in chat and he&apos;ll set it up.
-        This manual form is for wiring the watch config + action chain by hand.
+        Use this if you would rather set it up yourself.
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <Input placeholder="name (kebab-case)" value={name} onChange={(e) => setName(e.target.value)} />
+        <Input placeholder="A short name" value={name} onChange={(e) => setName(e.target.value)} />
         <select
           value={watchType}
           onChange={(e) => setWatchType(e.target.value as SentinelDTO["watch_type"])}
           className="rounded-md border bg-background px-2 py-1 text-sm"
         >
-          <option value="webhook">webhook</option>
-          <option value="file_change">file_change</option>
-          <option value="memory_event">memory_event</option>
-          <option value="external_api_poll">external_api_poll</option>
-          <option value="threshold">threshold</option>
+          {/* The readable names already exist in cronMeta's WATCH_TYPE_META
+              and this form was printing the raw values beside them. One
+              source, so a new watch type shows up here named. */}
+          {(Object.keys(WATCH_TYPE_META) as (keyof typeof WATCH_TYPE_META)[]).map((t) => (
+            <option key={t} value={t}>
+              {WATCH_TYPE_META[t].label}
+            </option>
+          ))}
         </select>
         <Input
-          placeholder="cooldown seconds"
+          placeholder="Wait this long between fires (seconds)"
           type="number"
           value={cooldown}
           onChange={(e) => setCooldown(parseInt(e.target.value, 10) || 0)}
         />
         <textarea
-          placeholder='watch config (JSON)'
+          placeholder='What to watch for (JSON)'
           value={config}
           onChange={(e) => setConfig(e.target.value)}
           rows={3}
@@ -198,7 +201,7 @@ function SentinelCreateCard({ onCreated }: { onCreated: () => void }) {
           spellCheck={false}
         />
         <textarea
-          placeholder='action chain (JSON array of {kind, args})'
+          placeholder='What to do when it fires (JSON)'
           value={actions}
           onChange={(e) => setActions(e.target.value)}
           rows={3}

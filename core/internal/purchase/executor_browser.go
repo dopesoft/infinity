@@ -63,7 +63,7 @@ func (e *BrowserExecutor) Execute(ctx context.Context, o *Obligation, card vault
 		return out, errors.New("the browser session this purchase was agreed in is gone, so I stopped rather than start a new one on a page you have not seen")
 	}
 	if o.Status != StatusClaimed {
-		return out, fmt.Errorf("purchase: refusing to pay an obligation in state %q", o.Status)
+		return out, fmt.Errorf("I will not pay this one: it is %s", InEnglish(o.Status))
 	}
 
 	// RE-CHECK #2, against the live page, after the claim and before anything

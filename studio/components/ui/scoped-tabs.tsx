@@ -3,6 +3,7 @@
 import * as React from "react";
 import { SearchInput } from "@/components/ui/search-input";
 import { elsewhere, scopePlaceholder, type TabCounts } from "@/lib/search/scope";
+import { TAB_LAYOUT_PRIMARY } from "@/components/ui/page-tabs";
 import { cn } from "@/lib/utils";
 
 /**
@@ -88,11 +89,12 @@ export function ScopedTabs({
   return (
     <div className={cn("flex min-w-0 flex-col gap-3", className)}>
       {/* 1 — tabs. Different kinds. */}
-      <div
-        role="tablist"
-        aria-label="Kind"
-        className="-mx-4 flex min-w-0 gap-1.5 overflow-x-auto scroll-touch no-scrollbar border-b border-border px-4 pb-2 sm:mx-0 sm:px-0"
-      >
+      {/* The house tab look, not a third one. TAB_LAYOUT_PRIMARY styles its
+          children through `[&>button]:` selectors and matches aria-selected as
+          well as Radix's data-state, so this hand-rolled tablist (it has to be
+          hand-rolled: the search field below is scoped to it) renders
+          identically to every PageTabsList in the app. */}
+      <div role="tablist" aria-label="Kind" className={cn("-mx-4 px-4 sm:mx-0 sm:px-0", TAB_LAYOUT_PRIMARY)}>
         {tabs.map((tab) => {
           const on = tab.id === active?.id;
           // While searching, the tab shows how many matches IT holds, not how
@@ -104,20 +106,14 @@ export function ScopedTabs({
               role="tab"
               aria-selected={on}
               onClick={() => onTabChange(tab.id)}
-              className={cn(
-                "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[12px] transition-colors",
-                on
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-              )}
+              // Shape and active state come from the container's layout, so
+              // this carries only what is specific to a scoped tab.
+              className="inline-flex items-center whitespace-nowrap text-[12px] transition-colors hover:text-foreground"
             >
               <span>{tab.label}</span>
               {n !== undefined ? (
                 <span
-                  className={cn(
-                    "font-mono text-[10px] tabular-nums",
-                    on ? "text-background/65" : "text-quiet",
-                  )}
+                  className={cn("font-mono text-[10px] tabular-nums", on ? "text-foreground/60" : "text-quiet")}
                 >
                   {n.toLocaleString()}
                 </span>

@@ -73,7 +73,7 @@ export function IntentStream() {
   const gaugeStyle = gauge ? GAUGE_STYLES[gauge.tier] ?? GAUGE_STYLES.standard : null;
 
   return (
-    <SidePanelCard label="Intent stream">
+    <SidePanelCard label="What he read into it">
       {gauge && gaugeStyle ? (
         <div className="mb-2 flex items-center gap-2 border-b border-border/60 pb-2">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -95,7 +95,7 @@ export function IntentStream() {
       {items === null ? (
         <p className="text-xs text-muted-foreground">Loading…</p>
       ) : items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No turns classified yet.</p>
+        <p className="text-xs text-muted-foreground">Nothing to read yet.</p>
       ) : (
         <ul className="divide-y divide-border/60">
           {items.slice(0, 5).map((r) => {

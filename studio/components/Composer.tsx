@@ -130,7 +130,7 @@ export function Composer({
           onClick={() => persistCodeMode(!codeMode)}
           aria-label={codeMode ? "Disable code mode" : "Enable code mode"}
           aria-pressed={codeMode}
-          title="Code mode disables iOS autocorrect, autocapitalize and spellcheck"
+          title="Turns off autocorrect so code stays exactly as you typed it"
           className="h-11 w-11 shrink-0"
         >
           <Code2 className="size-5" />

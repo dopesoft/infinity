@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Info, Brain, Activity } from "lucide-react";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { Chip, ChipTrigger } from "@/components/ui/chip";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import { LeftPanels, RightPanels } from "@/components/LiveSidePanels";
 import type { ChatMessage } from "@/hooks/useChat";
 
@@ -58,22 +59,16 @@ export function InfoModal({
         bodyClassName="px-0 sm:px-0 pb-4"
       >
         <Tabs defaultValue="brain" className="flex flex-col">
-          <TabsList className="grid h-9 w-full grid-cols-2 bg-transparent p-0 px-4">
-            <TabsTrigger
-              value="brain"
-              className="data-[state=active]:bg-accent data-[state=active]:shadow-sm gap-1.5 text-xs"
-            >
+          <PageTabsList columns={2} className="mx-4 w-auto">
+            <PageTabsTrigger value="brain">
               <Brain className="size-3.5" />
               Brain
-            </TabsTrigger>
-            <TabsTrigger
-              value="activity"
-              className="data-[state=active]:bg-accent data-[state=active]:shadow-sm gap-1.5 text-xs"
-            >
+            </PageTabsTrigger>
+            <PageTabsTrigger value="activity">
               <Activity className="size-3.5" />
               Activity
-            </TabsTrigger>
-          </TabsList>
+            </PageTabsTrigger>
+          </PageTabsList>
           <TabsContent value="brain" className="mt-0 min-w-0 px-3 pt-2 sm:px-4">
             <LeftPanels messages={messages} usedTokens={usedTokens} />
           </TabsContent>

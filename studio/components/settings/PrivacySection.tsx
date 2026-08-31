@@ -5,8 +5,7 @@ import { Loader2, Lock, Plus, Shield, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Section } from "@/components/dashboard/Section";
-import { GroupLabel, ListRow } from "@/components/ui/list-row";
+import { ListRow } from "@/components/ui/list-row";
 import { SettingRow } from "@/components/ui/setting-row";
 import { useRealtime } from "@/lib/realtime/provider";
 import { deleteWard, fetchWards, putWard, type WardDTO } from "@/lib/api";
@@ -66,15 +65,11 @@ export function PrivacySection() {
   }
 
   return (
-    <Section title="Off limits" badge={loaded ? wards.length : undefined} noPad>
-      <p className="pb-1 pt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-        Files Jarvis is not allowed to open on his own. Match a whole name (.env) or a
-        family of them with a star (*.key), and choose whether he is refused outright or
-        has to come and ask you.
-      </p>
+    // No Section heading: the tab that got him here already says "Off limits".
+    <div className="min-w-0">
       <SettingRow
         label="Add a file he can't open"
-        description="Type the file's name, or a pattern like *.key to cover all of them."
+        description="A whole name like .env, or a star to cover a family of them like *.key."
       >
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
           <div className="min-w-0 flex-1">
@@ -105,16 +100,14 @@ export function PrivacySection() {
         </div>
       </SettingRow>
 
-      <GroupLabel label="Files he can't open" count={loaded ? wards.length : undefined} />
+      {/* No group label: the add-row above and the list below are the only two
+          things here, and naming the list repeats the row that fills it. The
+          empty case is the add-row itself. */}
       {!loaded ? (
         <p className="flex items-center gap-2 py-2 text-[13.5px] text-quiet">
           <Loader2 className="size-4 animate-spin" /> Loading…
         </p>
-      ) : wards.length === 0 ? (
-        <p className="py-2 text-[13.5px] text-quiet">
-          Nothing is off limits yet. Anything you add here stays shut until you say otherwise.
-        </p>
-      ) : (
+      ) : wards.length === 0 ? null : (
         wards.map((w) => (
           <ListRow
             key={w.id ?? w.glob}
@@ -127,11 +120,10 @@ export function PrivacySection() {
               )
             }
             title={<span className="font-mono text-[12.5px]">{w.glob}</span>}
-            meta={
-              w.level === "private"
-                ? `He can never open this${w.note ? ` · ${w.note}` : ""}`
-                : `He has to ask you first${w.note ? ` · ${w.note}` : ""}`
-            }
+            // The lock/shield icon and the row tone already carry which of
+            // the two this is, so the meta line says only what is left: the
+            // note, when there is one.
+            meta={w.note || undefined}
             chevron={false}
             trailing={
               <Button
@@ -148,6 +140,6 @@ export function PrivacySection() {
           />
         ))
       )}
-    </Section>
+    </div>
   );
 }

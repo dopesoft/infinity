@@ -60,6 +60,43 @@ const (
 	StatusExpired     = "expired"
 )
 
+// InEnglish turns a status into the sentence the boss actually reads.
+//
+// The raw values above are storage. They are `pending_approval` and
+// `awaiting_3ds` because a CHECK constraint and a state machine need stable
+// tokens, and NONE of them should ever reach a screen or a chat message — see
+// "Plain English in the UI" in CLAUDE.md. This is the one place that
+// translation lives, so a new status is a line here and every surface picks it
+// up rather than three of them rendering the token.
+func InEnglish(status string) string {
+	switch status {
+	case StatusDraft:
+		return "being put together"
+	case StatusPending:
+		return "waiting for you to approve it"
+	case StatusApproved:
+		return "approved, about to be paid"
+	case StatusClaimed:
+		return "being paid right now"
+	case StatusSubmitted:
+		return "paid, waiting on the shop to confirm"
+	case StatusAwaiting3DS:
+		return "your bank wants to check it is you"
+	case StatusConfirmed:
+		return "done, with an order number"
+	case StatusUncertain:
+		return "sent, but I could not confirm it, and I have not tried again"
+	case StatusFailed:
+		return "it did not go through"
+	case StatusCancelled:
+		return "cancelled"
+	case StatusExpired:
+		return "it sat too long and expired"
+	default:
+		return status
+	}
+}
+
 // allowed is the state machine, written out rather than inferred, because the
 // transitions that are ABSENT are the safety property. Nothing returns to
 // approved, and nothing leaves submitted except a resolution.

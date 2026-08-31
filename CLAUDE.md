@@ -194,6 +194,72 @@ Non-negotiable rules:
 - **When debugging `relation does not exist` (SQLSTATE 42P01) errors, FIRST run the migrator.** Don't write fix code, don't propose schema changes, don't speculate — run `infinity migrate` and check the output. The fix is usually that someone forgot to apply.
 - **If asked "are migrations applied?" the only acceptable answer is the output of `infinity migrate` run just now.** Anything else is a guess and guessing on this question has already caused production data loss equivalents (silent feature breakage for weeks). If you cannot run the migrator in the current session, say so explicitly — do not assert.
 
+### Every repeated shape is a PRIMITIVE — when building AND when enhancing
+
+**The boss's law: "why aren't the headers fucking standardized and made primitives?"** Settings had ten sections and five different header treatments: some drew a big title, some drew none, one wrapped itself in a `<Card>` nobody else used. Nothing was broken in any single file. The bug was that ten components each owned the same decision, so on mobile the header moved, appeared and vanished as you swiped between sections.
+
+**A decision that appears on more than one screen belongs to a primitive, not to the screens.** If two consumers can disagree, they eventually will, and the drift is invisible in review because each file looks fine on its own. The reference fix is [`SettingsPanel`](studio/components/settings/SettingsPanel.tsx): every Settings section renders inside it, so the header shape, the sub-tab position and the spacing are decided once. Sections supply a count and an action; they no longer decide whether a header exists.
+
+**An OPTIONAL slot is not a primitive — it is the same inconsistency with a nicer address.** This rule was learned twice on the same screen. First each Settings section drew its own header, giving five treatments across ten sections. The fix was a `SettingsPanel`... which took `title`, `meta` and `action`, all optional. Same complaint, new coat: some panels had a sentence above the sub-tabs and some had nothing, because an optional slot still leaves each consumer deciding. The boss, twice: *"I want uniformity and consistency."*
+
+So the props ARE the structure. `SettingsPanel` takes sub-tabs and content, and nothing else, and the compiler now rejects the alternative. When you find yourself adding an optional prop so one consumer can put something extra at the top, ask where that thing actually belongs: a count belongs on the thing it counts (a tab badge, the group label above the list), an explanation belongs on the control it explains, an action belongs beside what it acts on. If every consumer would use the slot, it is not optional and should be required; if only some would, it does not belong in the primitive at all.
+
+**A header never repeats the name of the tab that opened it.** "It's fucking clear what tab you're in." The panel titled *Dashboard* was the section the rail calls *Home layout* — the same thing under two names, which is how a repeated heading also silently drifts. The name comes from ONE table (`SECTIONS`) and the panel restates nothing. A heading further down that names a *group* is fine; a heading at the top that names the *section* is not.
+
+**This applies to ENHANCING, not just to building.** The moment you touch a file that hand-rolls a shape a primitive already owns, route it through the primitive in that same edit. Do not add "one more" consumer to a pattern you can see repeated, and do not leave the old one behind because your change was small. "I'll refactor later" is how the fifth header treatment got written.
+
+**The order of preference, always:**
+
+1. **A primitive fits** → use it as-is.
+2. **A primitive almost fits** → extend it (a prop, a variant, a slot) and migrate every existing consumer in the SAME PR, so everyone gets the fix. A `level="sub"` on the tab primitive is right; a second tab component is not.
+3. **Genuinely new shape** → build the primitive first, in `components/ui/` or `components/<domain>/`, and route every consumer through it from day one.
+
+**Spacing belongs to the primitive too, and to ONE of them.** The gap under a tab strip lives on the strip (`PageTabsList` carries `mb-6`), not on the page that renders it and not on the panel below it. When three layers each contributed some, the distance from tabs to content was different on every screen and "add a bit more padding" meant editing three files and still missing one. Same for row rhythm: a `SettingRow` owns its own vertical padding, and consumers do not add `pt-3` around it.
+
+**Rules separate SECTIONS, never rows.** A hairline under every setting turns a short list into a ledger and drowns out the section breaks that carry real meaning. Rows separate by rhythm. `SettingRow` and `ListRow` draw no rule at all; a `Section` separates with its title rule or a `tone="band"` ground.
+
+**Controls sit in the same place on every row.** A toggle goes in `SettingRow`'s `control` slot, to the right of the label, never under the field as `children`. One screen putting its switch somewhere else is exactly what the boss notices, and "consistent" means the eye lands in the same spot on every row of every section.
+
+**Theme belongs to the primitive too.** A consumer must never patch a primitive's dark-mode problem locally. Our theme is true black (`--background` 0%, `--muted` 5%), which inverts shadcn's default of a muted strip with a `--background` active pill: the active tab came out darker than the strip it sat in and the strip all but vanished. The fix went into the tab primitive, so every tab strip in the app got it at once.
+
+**The test before you write any UI:** *have I seen this shape before in this codebase?* If yes, and it is not already a primitive, making it one IS the task — not a follow-up.
+
+### Two levels of tab, and they must not look alike
+
+**The boss's law: "why on mobile aren't u making sub tabs different than the main tabs... that's so weird looking".** A page with a main section switcher AND a switcher inside the section it lands on rendered both as the same chip rail, so mobile showed two identical strips stacked with nothing saying which outranked which.
+
+There are exactly **two** tab looks in this product, and both live in [`ui/page-tabs.tsx`](studio/components/ui/page-tabs.tsx):
+
+| Level | Look | Use for |
+|---|---|---|
+| `level="primary"` (default) | shadcn's segmented control: one muted rounded container, the active tab a raised pill inside it. Scrolls sideways on mobile rather than wrapping. | The page's own section switcher. The only strip on the screen. |
+| `level="sub"` | Material underline: no container, the active tab is a word with a line under it, on a hairline running the row. Sentence case at 13px, against primary's mono caps. | ANY strip that sits inside a screen that already has one above it. |
+
+**The test:** is there already a tab strip above this one on this screen? Then it is `sub`. If it is the only one, it is `primary`. Nesting a third level means the page needs splitting, not a third look.
+
+**Every tab strip in the app routes through `PageTabsList` / `PageTabsTrigger`.** Not raw `<TabsList>`, not a hand-rolled row of buttons, not a bespoke pill group. The layouts are exported as `TAB_LAYOUT_PRIMARY` / `TAB_LAYOUT_SUB` and style their children through `[&>button]:` selectors matching BOTH Radix's `data-state=active` and `aria-selected=true`, so a component that must own its own state (`ScopedTabs`, whose search field is scoped to the strip) still gets the identical look by applying the layout to its container. There is no reason left to hand-roll one.
+
+`columns={2|3}` remains a niche fallback for short text-only labels that must fill the row, and it only applies to a primary strip.
+
+**Never add a scrolling tab strip to the header.** That rule is unchanged: when navigation outgrows a phone, grow the drawer.
+
+### A control that cannot do anything is NOT SHOWN
+
+**The boss's law: "why a fucking greyed out save button with nothing to even save vs only showing it when we're trying to actually save something?"** A disabled control is a promise the screen is not keeping. It sits in the spot a real action belongs, gives no clue what would enable it, and after the second time he taps it the page reads as broken.
+
+**The default is to render nothing.** A Save button appears when there is an unsaved change and disappears when there is not. A Retry appears when something failed. A Remove appears on a row that exists. Nothing reserves space for a state it is not in.
+
+**`disabled` is allowed in exactly two cases:**
+
+1. **The action is one tap away and the blocker is visible on the same screen.** A Save inside an open form the boss is typing into may sit disabled until the required field has content, because the empty field explaining it is right there. The moment the enabling control is off-screen, in another tab, or a fact he cannot see, hide the button instead.
+2. **The action is running.** A button showing a spinner mid-request must stay put and stay disabled, or the layout jumps and he taps twice. Per the server-tracked-progress rule this state comes from `mem_runs`, not local `useState`.
+
+**Never disable to communicate.** If he cannot do a thing, the reason is a sentence where the thing would be, not a dead button he has to guess at. "Add a card first" beats a greyed-out Pay.
+
+**The same rule for containers.** Do not render a section heading, an empty group, a filter row or a toolbar for content that is not there. The reference failure: Settings → Vault → Personal info could not reach the server, and rendered a warning, a second warning contradicting the first, four empty field groups, a "Paying by phone" heading and a dead Save. One sentence was the whole correct output.
+
+**And when a fetch fails, say THAT, once, and render nothing else.** An empty shell after a failed load is the silent-green failure of the UI layer: it looks like "you have nothing" when it means "I could not look". Same law as the self-healing rules above, applied to a screen.
+
 ### Say it ONCE — no restating, no explaining yourself twice
 
 **The boss's law: "you explain yourself a million times... you explain yourself more than once ALL the time."** A screen states each fact exactly one time, in the one place it belongs. Repetition is not reassurance; it is noise that buries the thing he actually came for, and it makes a short panel scroll.
