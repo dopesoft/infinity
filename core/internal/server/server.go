@@ -480,6 +480,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/meta", s.handleMeta)
 	mux.HandleFunc("/api/wallet/cards", s.handleWalletCards)
 	mux.HandleFunc("/api/wallet/cards/revoke", s.handleWalletRevoke)
+	mux.HandleFunc("/api/wallet/details", s.handleVaultDetails)
 	mux.HandleFunc("/api/auth/openai/start", s.handleOpenAIOAuthStart)
 	mux.HandleFunc("/api/auth/openai/exchange", s.handleOpenAIOAuthExchange)
 	mux.HandleFunc("/api/auth/openai/status", s.handleOpenAIOAuthStatus)

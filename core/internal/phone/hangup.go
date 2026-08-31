@@ -82,8 +82,8 @@ func hangupAllowed(lastHumanText, lastAgentText string, lastHumanAt, now time.Ti
 // FUNCTION CALL, across the shapes the API uses (response.output_item.*,
 // response.done, conversation.item.created).
 type realtimeEvent struct {
-	Type string       `json:"type"`
-	Item functionItem `json:"item"`
+	Type     string       `json:"type"`
+	Item     functionItem `json:"item"`
 	Response struct {
 		Output []functionItem `json:"output"`
 	} `json:"response"`

@@ -26,7 +26,15 @@ func Register(r *tools.Registry, store *Store, cards vault.CardVault, reg *brows
 		return
 	}
 	r.Register(&proposeTool{store: store, reg: reg, cards: cards})
-	r.Register(&executeTool{store: store, cards: cards, exec: NewBrowserExecutor(reg)})
+	// The details store needs the concrete vault (it shares the encryption
+	// key). A CardVault that is not one — a PCI vendor later — simply means
+	// the checkout fills the card and leaves the address fields alone, rather
+	// than failing to register the tool.
+	var details *vault.Details
+	if st, ok := cards.(*vault.Store); ok {
+		details = vault.NewDetails(st)
+	}
+	r.Register(&executeTool{store: store, cards: cards, exec: NewBrowserExecutor(reg, details)})
 	r.Register(&statusTool{store: store})
 	if cards != nil {
 		r.Register(&cardListTool{cards: cards})

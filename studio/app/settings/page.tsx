@@ -38,8 +38,7 @@ import {
 } from "@/components/ui/resizable";
 import { CanvasSettings } from "@/components/canvas/CanvasSettings";
 import { CompassSection } from "@/components/settings/CompassSection";
-import { PrivacySection, PhoneVaultCard } from "@/components/settings/PrivacySection";
-import { WalletCard } from "@/components/settings/WalletCard";
+import { VaultSection } from "@/components/settings/VaultSection";
 import { ConnectorsSection } from "@/components/settings/ConnectorsSection";
 import { DashboardSettings } from "@/components/settings/DashboardSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
@@ -113,7 +112,7 @@ const SECTIONS: SectionMeta[] = [
   { id: "general", label: "Brain", description: "Which model answers, and what it falls back to", icon: Sliders },
   { id: "chat", label: "Chat", description: "How he behaves in a conversation, and what he may spend", icon: MessageSquare },
   { id: "trust", label: "Approvals", description: "What he is asking to do, and what you have already allowed", icon: ShieldCheck },
-  { id: "privacy", label: "Privacy", description: "Paths he must never read freely", icon: Shield },
+  { id: "privacy", label: "Vault", description: "Your cards, your personal details, and the files he must never open", icon: Shield },
   { id: "mcp", label: "Accounts", description: "Gmail, Slack, GitHub and the rest, and what he may do with each", icon: Plug },
   { id: "tools", label: "Abilities", description: "Everything he can do, and what each one touches", icon: Wrench },
   { id: "canvas", label: "Workbench", description: "Where he works, what the preview points at", icon: LayoutPanelLeft },
@@ -277,13 +276,10 @@ function SectionContent({
       // renders the same editor rather than a blank pane.
       return <CompassSection />;
     case "privacy":
-      return (
-        <>
-          <WalletCard />
-          <PrivacySection />
-          <PhoneVaultCard />
-        </>
-      );
+      // Three tabs (Cards, Personal info, Off limits) rather than the three
+      // stacked blocks this used to be. The id stays "privacy" so existing
+      // /settings?section=privacy links still land here.
+      return <VaultSection />;
     case "trust":
       return <TrustSection />;
     case "dashboard":

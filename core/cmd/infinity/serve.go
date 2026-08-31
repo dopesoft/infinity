@@ -48,9 +48,9 @@ import (
 	"github.com/dopesoft/infinity/core/internal/plan"
 	"github.com/dopesoft/infinity/core/internal/plasticity"
 	"github.com/dopesoft/infinity/core/internal/proactive"
-	"github.com/dopesoft/infinity/core/internal/purchase"
 	"github.com/dopesoft/infinity/core/internal/projects"
 	"github.com/dopesoft/infinity/core/internal/proposals"
+	"github.com/dopesoft/infinity/core/internal/purchase"
 	"github.com/dopesoft/infinity/core/internal/push"
 	"github.com/dopesoft/infinity/core/internal/reauth"
 	"github.com/dopesoft/infinity/core/internal/runs"
@@ -63,8 +63,8 @@ import (
 	"github.com/dopesoft/infinity/core/internal/soul"
 	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/dopesoft/infinity/core/internal/tools"
-	"github.com/dopesoft/infinity/core/internal/vault"
 	"github.com/dopesoft/infinity/core/internal/triage"
+	"github.com/dopesoft/infinity/core/internal/vault"
 	"github.com/dopesoft/infinity/core/internal/voice"
 	"github.com/dopesoft/infinity/core/internal/voyager"
 	"github.com/dopesoft/infinity/core/internal/watch"
@@ -723,6 +723,19 @@ func serveCmd() *cobra.Command {
 							} else if n > 0 {
 								fmt.Printf("  vault: sealed %d plaintext secret(s) that were readable over /api/meta\n", n)
 							}
+							// Split the old single identity blob into per-detail
+							// rows so each one gets its own release switch. Never
+							// overwrites a detail already there, so a boss who has
+							// edited a field since is not reverted by a boot.
+							details := vault.NewDetails(cardVault)
+							dCtx, dCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							moved, dErr := details.MigrateLegacyDetails(dCtx, secretStore)
+							dCancel()
+							if dErr != nil {
+								log.Printf("vault: could not split the stored identity into individual details: %v", dErr)
+							} else if moved > 0 {
+								fmt.Printf("  vault: carried %d personal detail(s) across, each with its own release switch\n", moved)
+							}
 							phoneSecrets = secretStore
 						} else {
 							// Say this plainly at boot. A vault that is not
@@ -947,7 +960,7 @@ func serveCmd() *cobra.Command {
 				// works on gpt-5.4 / ChatGPT Plan, Anthropic, anything - the set
 				// model names the session. (Before this it was Anthropic-only
 				// and went silent the moment the boss switched to gpt-5.4.)
-				sessionNamer = sessions.NewNamer(pool, provider, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
+				sessionNamer = sessions.NewNamer(pool, provider)
 				// The turn-end attempt is the fast path, not the guarantee: it
 				// misses whenever the session row hasn't committed yet (a
 				// scheduled run has exactly one turn, so "retry next turn"
@@ -1342,24 +1355,29 @@ func serveCmd() *cobra.Command {
 						// rather than pinning it to whatever was wired at
 						// boot.
 						//
-						// Order, per the boss on 2026-08-30: his ChatGPT
-						// SUBSCRIPTION first, because a 7-word title on a
-						// plan he already pays for is free, then his Settings
-						// brain, then anything else healthy. He chose this
-						// knowing naming had just died on that plan - the
-						// order was never the problem.
+						// Order, per the boss: his ChatGPT SUBSCRIPTION
+						// first, because a seven-word title on a plan he
+						// already pays for is free - and his Settings brain
+						// ONLY when that plan is down or does not work.
 						//
-						// This is also the fix for naming going dark that
-						// day. It was pinned to the ChatGPT plan, the plan
-						// ran out, and two sessions burned their entire
-						// attempt budget against the quota error before
-						// anyone noticed. FirstHealthy skips a provider whose
-						// plan is currently spent, so a title now moves to
-						// the next brain instead of failing.
+						// The order was never the problem. The missing half
+						// was "or doesn't work". This used to hand back ONE
+						// provider, chosen up front by health, and health only
+						// knew about a spent plan. So when his account began
+						// refusing the model outright - a 400, not a quota
+						// error - naming kept being handed the same brain that
+						// could not do it, and every session for two days
+						// burned its whole attempt budget against it (45 named
+						// out of 625; nothing at all after 08-29 04:39).
+						//
+						// It returns the ORDERED LIST now and the namer walks
+						// it, moving on whenever a brain refuses. You cannot
+						// know a brain does not work without asking it, so the
+						// fallback has to live at the point of asking.
 						if llmRegistry != nil {
 							reg := llmRegistry
 							getProvider := modelSettings.GetProvider
-							sessionNamer.SetProviderFn(func() llm.Provider {
+							sessionNamer.SetProvidersFn(func() []llm.Provider {
 								const plan = "openai_oauth"
 								prefer := []string{plan}
 								seen := map[string]bool{plan: true}
@@ -1373,8 +1391,7 @@ func serveCmd() *cobra.Command {
 										prefer, seen[id] = append(prefer, id), true
 									}
 								}
-								p, _ := reg.FirstHealthy(prefer...)
-								return p
+								return reg.HealthyInOrder(prefer...)
 							})
 						}
 					}

@@ -2792,3 +2792,77 @@ export async function revokeWalletCard(id: string): Promise<boolean> {
     return false;
   }
 }
+
+// ── vault: personal details ───────────────────────────────────────────────
+//
+// The whole catalog, every time: what is saved, what its value is when it is
+// safe to show, and whether Jarvis may hand it over. A sealed detail never
+// carries a value, only `saved`, because opening one to fill a form field
+// would put it back in a browser.
+
+export type VaultDetail = {
+  key: string;
+  label: string;
+  group: "about" | "shipping" | "billing" | "verify";
+  placeholder?: string;
+  sealed: boolean;
+  saved: boolean;
+  releasable: boolean;
+  /** false means it may never be handed over and no switch is shown. */
+  can_toggle: boolean;
+  value?: string;
+};
+
+export type VaultDetailsResponse = {
+  details: VaultDetail[];
+  billing_same_as_shipping: boolean;
+  /** false when INFINITY_VAULT_KEY is missing: the sealed fields cannot be
+   *  written and the screen has to say so rather than fail quietly. */
+  sealed_available: boolean;
+  card_count: number;
+  error?: string;
+};
+
+const EMPTY_DETAILS: VaultDetailsResponse = {
+  details: [],
+  billing_same_as_shipping: false,
+  sealed_available: false,
+  card_count: 0,
+};
+
+export async function fetchVaultDetails(): Promise<VaultDetailsResponse> {
+  try {
+    const res = await authedFetch("/api/wallet/details");
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { ...EMPTY_DETAILS, error: body?.error };
+    return {
+      details: body?.details ?? [],
+      billing_same_as_shipping: Boolean(body?.billing_same_as_shipping),
+      sealed_available: Boolean(body?.sealed_available),
+      card_count: body?.card_count ?? 0,
+    };
+  } catch {
+    return { ...EMPTY_DETAILS, error: "Could not reach the vault." };
+  }
+}
+
+/** Send only what changed. An unmentioned detail is left alone; an empty
+ *  string clears it. That is why saving one box cannot wipe the others. */
+export async function saveVaultDetails(input: {
+  values?: Record<string, string>;
+  release?: Record<string, boolean>;
+  billing_same_as_shipping?: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await authedFetch("/api/wallet/details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (res.ok) return { ok: true };
+    const body = await res.json().catch(() => ({}));
+    return { ok: false, error: body?.error };
+  } catch {
+    return { ok: false, error: "Could not reach the vault." };
+  }
+}

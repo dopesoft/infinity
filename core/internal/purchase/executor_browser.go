@@ -29,10 +29,14 @@ import (
 //     take a complete card with it.
 type BrowserExecutor struct {
 	reg *browser.Registry
+	// details is the boss's own record: name, email, address. Nil-safe, so a
+	// deployment without it fills the card and leaves the rest of the form to
+	// whatever the merchant already knows.
+	details *vault.Details
 }
 
-func NewBrowserExecutor(reg *browser.Registry) *BrowserExecutor {
-	return &BrowserExecutor{reg: reg}
+func NewBrowserExecutor(reg *browser.Registry, details *vault.Details) *BrowserExecutor {
+	return &BrowserExecutor{reg: reg, details: details}
 }
 
 func (e *BrowserExecutor) Name() string { return "browser" }
@@ -168,24 +172,48 @@ func (e *BrowserExecutor) fill(ctx context.Context, o *Obligation, fields []brow
 		kind  string
 		value string
 	}
-	// Security code LAST, always.
-	steps := []step{
-		{"cc-number", card.PAN},
-		{"cc-exp", expiry(card)},
-		{"cc-name", card.Name},
-		{"cc-csc", card.CVC},
+	// His own details first, since a checkout normally asks who you are and
+	// where it is going before it asks how you are paying. Only details he has
+	// marked releasable come back from Release, and a withheld one is never
+	// loaded rather than filtered later, so there is nothing here to leak.
+	var steps []step
+	if e.details != nil {
+		release, err := e.details.Release(ctx)
+		if err != nil {
+			return fmt.Errorf("I could not read your details to fill this checkout: %w", err)
+		}
+		for _, spec := range vault.Catalog {
+			if len(spec.Autofill) == 0 {
+				continue
+			}
+			if v := release[spec.Key]; strings.TrimSpace(v) != "" {
+				steps = append(steps, step{spec.Key, v})
+			}
+		}
 	}
+	// Security code LAST, always.
+	steps = append(steps,
+		step{"cc-number", card.PAN},
+		step{"cc-exp", expiry(card)},
+		step{"cc-name", card.Name},
+		step{"cc-csc", card.CVC},
+	)
+	used := map[int]bool{}
 	for _, s := range steps {
 		if strings.TrimSpace(s.value) == "" {
 			continue
 		}
-		idx, ok := findField(fields, s.kind)
+		idx, ok := findField(fields, s.kind, used)
 		if !ok {
 			if s.kind == "cc-number" || s.kind == "cc-csc" {
 				return fmt.Errorf("I could not find the %s box on this checkout, so I stopped without entering anything", human(s.kind))
 			}
-			continue // name and expiry are sometimes prefilled or absent
+			// Everything else is skipped rather than fatal: a checkout that
+			// already knows his address, or never asks for a phone number, is
+			// normal and not a failure.
+			continue
 		}
+		used[idx] = true
 		if _, err := e.reg.ActDirect(ctx, o.BrowserSession, browser.ActRequest{
 			Index: idx, Action: "type", Value: s.value,
 		}); err != nil {
@@ -221,31 +249,84 @@ var fieldHints = map[string][]string{
 	"cc-name":   {"cc-name", "ccname", "cardholder", "name-on-card", "nameoncard"},
 }
 
+// The rest of a checkout — name, email, phone, shipping and billing address —
+// is filled from the boss's own details, and the markers come from the SAME
+// catalog the settings screen renders (vault.Catalog). One list, so a field he
+// can type is a field a checkout can fill, and adding "company name" later
+// updates both at once rather than one and then a bug report.
+func init() {
+	for _, spec := range vault.Catalog {
+		if len(spec.Autofill) > 0 {
+			fieldHints[spec.Key] = spec.Autofill
+		}
+	}
+}
+
 // findField picks the input for a card field by its own attributes.
 //
 // Matching on autocomplete/name/id/placeholder rather than position is what
 // keeps this stable across redesigns, and matching a KIND rather than a
 // merchant is what keeps it generic.
-func findField(fields []browser.Element, kind string) (int, bool) {
+// disqualifiers stop a loose hint from claiming the wrong box.
+//
+// This is not hypothetical. "number" is one of the markers for a card number,
+// and an input named `phoneNumber` contains it. Before the boss's phone number
+// and address were on the same form that collision was rare; now these fields
+// sit on the same checkout it would be routine, and the failure it produces is
+// the worst kind — a card number typed into a box that is not a card box, on a
+// page that then submits.
+//
+// So a candidate is rejected outright when its markers say it is something
+// else, whatever the hint matched.
+var disqualifiers = map[string][]string{
+	"cc-number": {"phone", "tel", "account", "order", "tracking", "zip", "postal", "house", "street", "apt", "suite"},
+	"cc-csc":    {"zip", "postal", "phone", "tel"},
+	"cc-exp":    {"phone", "tel"},
+	"cc-name":   {"user", "login", "company", "street", "city"},
+	"phone":     {"card", "cc-", "account"},
+	"email":     {"confirm"},
+}
+
+func disqualified(kind, hay string) bool {
+	for _, bad := range disqualifiers[kind] {
+		if strings.Contains(hay, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// findField picks the input for a field by its own attributes.
+//
+// `used` carries the indexes already filled this pass, so one input can never
+// receive two different values. Without it a loose match could put the card
+// number into a box that already holds the phone number, and the second write
+// silently wins.
+func findField(fields []browser.Element, kind string, used map[int]bool) (int, bool) {
 	hints := fieldHints[kind]
 	best, found := 0, false
 	for _, el := range fields {
+		if used[el.Idx] {
+			continue
+		}
 		hay := strings.ToLower(strings.Join([]string{
 			el.Autocomplete, el.Name, el.Placeholder, el.Text,
 		}, " "))
 		if strings.TrimSpace(hay) == "" {
 			continue
 		}
+		// An exact autocomplete match is the merchant telling us outright, and
+		// it beats everything including a disqualifier, because at that point
+		// the field has named itself.
+		if strings.EqualFold(strings.TrimSpace(el.Autocomplete), kind) {
+			return el.Idx, true
+		}
+		if disqualified(kind, hay) {
+			continue
+		}
 		for _, h := range hints {
-			if strings.Contains(hay, h) {
-				// An exact autocomplete match is authoritative; anything else
-				// is a best guess that a later exact match can beat.
-				if strings.EqualFold(strings.TrimSpace(el.Autocomplete), kind) {
-					return el.Idx, true
-				}
-				if !found {
-					best, found = el.Idx, true
-				}
+			if strings.Contains(hay, h) && !found {
+				best, found = el.Idx, true
 			}
 		}
 	}

@@ -69,6 +69,15 @@ func (n *Namer) SweepUnnamed(ctx context.Context, limit int) (SweepResult, error
 		limit = DefaultSweepBatch
 	}
 
+	// Give back the budget that a broken brain took. Sessions condemned by a
+	// model refusal BEFORE that stopped counting (see the branch below) still
+	// carry a spent budget and would stay "New Conversation" forever, even
+	// though the reason is long fixed. This drains that backlog once and then
+	// finds nothing, because such failures no longer increment.
+	if freed := n.reclaimModelRefusals(ctx); freed > 0 {
+		infoLog.Printf("sessions.sweep: freed %d session(s) condemned by a model refusal; they are titlable again", freed)
+	}
+
 	rows, err := n.pool.Query(ctx, `
 		SELECT s.id::text,
 		       COALESCE((SELECT o.raw_text FROM mem_observations o
@@ -140,6 +149,23 @@ func (n *Namer) SweepUnnamed(ctx context.Context, limit int) (SweepResult, error
 				res.Failed++
 				continue
 			}
+			// A brain refusing the MODEL says nothing about this session
+			// either, and for the same reason it must not spend the budget:
+			// on 2026-08-29 titling was pointed at a model the boss's ChatGPT
+			// account rejects outright ("codex-mini-latest is not supported
+			// when using Codex with a ChatGPT account"), which is a 400 and
+			// not a quota error - so every session opened over the next two
+			// days burned all three attempts against a configuration mistake
+			// and was condemned to read "New Conversation" permanently. A
+			// misconfiguration must never be able to mark a nameable
+			// conversation unnameable.
+			if llm.IsUnsupportedModel(reason) {
+				n.noteNameError(ctx, t.id, reason)
+				log.Printf("sessions.sweep: session=%s deferred, the brain refused the model: %s",
+					t.id, truncate(reason, 200))
+				res.Failed++
+				continue
+			}
 			// A failure to name is a real failure of our own code path, not
 			// noise: record it on the row and say so on stderr, so a namer
 			// that has quietly stopped working is visible instead of just
@@ -172,6 +198,59 @@ func (n *Namer) SweepUnnamed(ctx context.Context, limit int) (SweepResult, error
 			res.Named, res.Scanned, res.Failed, res.Remaining)
 	}
 	return res, nil
+}
+
+// reclaimModelRefusals zeroes the attempt budget on sessions whose only
+// recorded failure was a brain refusing the model.
+//
+// The candidates are read and then filtered in GO, through the same
+// llm.IsUnsupportedModel the failure path uses, rather than re-expressing that
+// predicate as a pile of SQL ILIKEs. One definition, so the thing that spends
+// the budget and the thing that refunds it can never disagree about what a
+// model refusal is.
+//
+// name_error is deliberately left in place: the row keeps saying what went
+// wrong, it just stops being punished for it.
+func (n *Namer) reclaimModelRefusals(ctx context.Context) int {
+	rows, err := n.pool.Query(ctx, `
+		SELECT id::text, COALESCE(metadata->>'name_error', '')
+		  FROM mem_sessions
+		 WHERE deleted_at IS NULL
+		   AND name IS NULL
+		   AND COALESCE((metadata->>'name_attempts')::int, 0) > 0
+		   AND COALESCE(metadata->>'name_error', '') <> ''
+		 LIMIT 500
+	`)
+	if err != nil {
+		log.Printf("sessions.sweep: reclaim scan: %v", err)
+		return 0
+	}
+	var ids []string
+	for rows.Next() {
+		var id, reason string
+		if err := rows.Scan(&id, &reason); err != nil {
+			continue
+		}
+		if llm.IsUnsupportedModel(reason) {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("sessions.sweep: reclaim scan: %v", err)
+	}
+	if len(ids) == 0 {
+		return 0
+	}
+	if _, err := n.pool.Exec(ctx, `
+		UPDATE mem_sessions
+		   SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('name_attempts', 0)
+		 WHERE id = ANY($1::uuid[])
+	`, ids); err != nil {
+		log.Printf("sessions.sweep: reclaim update: %v", err)
+		return 0
+	}
+	return len(ids)
 }
 
 // countNameAttempt records a failed titling attempt on the session so the sweep

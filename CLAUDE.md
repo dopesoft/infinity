@@ -194,6 +194,57 @@ Non-negotiable rules:
 - **When debugging `relation does not exist` (SQLSTATE 42P01) errors, FIRST run the migrator.** Don't write fix code, don't propose schema changes, don't speculate — run `infinity migrate` and check the output. The fix is usually that someone forgot to apply.
 - **If asked "are migrations applied?" the only acceptable answer is the output of `infinity migrate` run just now.** Anything else is a guess and guessing on this question has already caused production data loss equivalents (silent feature breakage for weeks). If you cannot run the migrator in the current session, say so explicitly — do not assert.
 
+### Say it ONCE — no restating, no explaining yourself twice
+
+**The boss's law: "you explain yourself a million times... you explain yourself more than once ALL the time."** A screen states each fact exactly one time, in the one place it belongs. Repetition is not reassurance; it is noise that buries the thing he actually came for, and it makes a short panel scroll.
+
+The reference failure, Settings → Vault → Cards. Six elements, two facts:
+
+```
+CARDS                                                    ← tab
+Cards                                                    ← heading, same word
+The cards Jarvis can pay with… never the number.         ← what they are
+Every purchase stops and asks you first…                 ← fine, new fact
+SAVED CARDS  0                                           ← the count
+No cards yet. Add one and Jarvis can buy things          ← the count AGAIN,
+  and settle bills by phone.                               then the description AGAIN
+[+ Add a card]                                           ← the action, a third time
+```
+
+**The checks, applied to every screen before it ships:**
+
+1. **A section heading never repeats the active tab, the page title, or the nav label that got you here.** If the tab says Cards, the panel does not say Cards. Drop the heading, not the tab.
+2. **A count appears once.** A badge, a group label, or a sentence — pick one. `SAVED CARDS 0` and "No cards yet" are the same fact twice.
+3. **An empty state states the absence and stops.** "No cards yet." It does NOT re-explain what the feature is (the description did that) and does NOT describe an action a visible button already offers. The `[+ Add a card]` button IS the instruction. Only when there is no button and no obvious next step may an empty state carry one short clause saying how to get the first one.
+4. **A description says what is NOT already obvious from the labels around it.** If every word of it can be inferred from the heading, the field names and the button, delete it. Keep the part that carries a real constraint or consequence ("he never sees the number", "every purchase stops for your approval") and cut the part that narrates.
+5. **A per-row helper sentence repeated down a list is a column header, not a row.** Sixteen fields each captioned "He can give this out when a shop or a company asks" is the same sentence sixteen times. Say it once above the group and let the rows carry bare controls.
+6. **Never caption a control with its own name.** A switch labelled "Enable" inside a row labelled "Notifications" adds nothing.
+
+**The test:** read the panel top to bottom and mark every fact. If any fact is marked twice, delete the weaker instance. When in doubt about which to cut, keep the one closest to where he acts and cut the prose.
+
+**This trades against clarity exactly once:** a genuine warning before a destructive or irreversible action may restate the consequence next to the button even if it appears above. Nothing else earns a second telling.
+
+### Plain English in the UI — never developer language on a screen
+
+**The boss's law, and he has had to say it twice: "I fucking hate dev language in a UI."** Studio is an interface for a person, not a database browser. Every word rendered to a screen is copy, and copy gets written the way he would say it out loud. The reference failure: Settings → Vault listed his secrets as `secret:vault.phone_passphrase`, `secret:vault.identity`, `secret:vault.payment_card`. Those are storage keys. Two of them were not even cards, and they were printed in a list captioned "cards Jarvis can pay with".
+
+**Banned on any surface the boss reads** — labels, headings, buttons, empty states, placeholders, toasts, errors, tooltips, card titles, list rows, chart axes, notification text:
+
+- `snake_case`, `camelCase`, `kebab-case`, `SCREAMING_CASE`, dotted keys (`vault.payment_card`), prefixed ids (`secret:`, `br_`, `mem_`)
+- table, column, env-var, package or type names (`mem_followups`, `INFINITY_VAULT_KEY`, `WorkItem`, `ClaudeCodeGate`)
+- our internal jargon where a plain word exists: **ward** → *file he can't open*, **obligation** → *purchase*, **surface item** → *what he brought you*, **contract** → *approval*, **provider** → *brain* or the vendor's actual name, **frontier / candidate** → *version he's trying*
+- raw enum values (`needs_you`, `awaiting_3ds`, `pending_approval`) rendered as-is. Map them to a sentence: *waiting on you*, *your bank wants to check it's you*.
+- restating the mechanism when the outcome is the point. "Blocked outright" is a state name; "He can never open this" is what happened.
+
+**The one exception, and its shape.** A genuinely technical identifier may be *shown* when the boss needs the literal string to act on it: a tool name, a file path, a glob, a git SHA, a model id, an env var he has to set. Even then:
+
+- the **listed name is the readable one**; the identifier goes in the **detail view, a secondary meta line, or on tap** — never as the row's title. A run card says "Checked your inbox", and `inbox-triage` lives inside it. See [[feedback_readable_names_engine_on_click]].
+- a file path, glob or SHA renders in `font-mono` so it reads as a literal, and is never bent into prose.
+
+**Naming in code is unaffected.** `ward`, `obligation`, `mem_surface_items` are good names for a Go type, a column and a prop, and renaming them buys nothing. This rule is about the *string that reaches a screen*. The two live in the same file constantly, and that is fine: `w.level === "private" ? "He can never open this" : ...`.
+
+**The test before you ship a screen:** read every visible string aloud as if to him. If a word only makes sense because you have read the source, it is the wrong word. And if you are about to render a value straight out of the database because it "looks close enough", it isn't; map it.
+
 ### Reuse-first componentization — extend the primitive, don't re-roll it
 
 **This is the same idea as Rule #1 applied to UI.** Studio is a single product, not a pile of one-off React files. Every modal, drawer, card, list row, form, button cluster, etc. must be a **named, reused primitive** with its own discipline baked in — not hand-rolled in each consumer. The recurring failure is the opposite: a new screen reaches for raw `<Dialog>` / `<Drawer>` / `<pre>` / `<a href>` / bare grid, copies whatever the last screen did, and silently drops a constraint (`min-w-0`, `break-all`, `pb-safe`, `dvh`, `truncate` chain). The boss then catches the same bug three times in a row in different components. This rule exists to make that physically harder.

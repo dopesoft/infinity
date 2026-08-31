@@ -200,11 +200,13 @@ func (m *Manager) emitLive(ev LiveEvent) {
 }
 
 // ── vault ────────────────────────────────────────────────────────────────
-// Sensitive call material lives in infinity_meta (set once via Studio
-// Settings → Privacy), NEVER in agent-readable state or the memory graph:
-//   vault.payment_card     - card details the phone tool attaches to a brief
-//                            server-side when include_payment=true; the main
-//                            agent's context never contains the number.
+// Sensitive call material lives sealed in the vault (set once via Studio
+// Settings → Vault), NEVER in agent-readable state or the memory graph:
+//   vault.payment_card     - LEGACY. Cards now live in the sealed wallet and
+//                            the phone reads the same list, so there is one
+//                            place to manage a card rather than two. This key
+//                            is the fallback for a boss who has not added a
+//                            wallet card yet.
 //   vault.phone_passphrase - the spoken phrase that verifies the boss on
 //                            INBOUND calls; checked in Go (monitor), never
 //                            given to the call agent, scrubbed from stored
@@ -221,6 +223,17 @@ const (
 // serve.go so this package keeps no build-time dependency on the vault.
 type SecretReader interface {
 	Secret(ctx context.Context, key string) (string, error)
+	// Releasable returns the boss's personal details that he has marked as
+	// things Jarvis may hand over. Anything switched off is never loaded, so
+	// the call brief cannot contain it to begin with.
+	Releasable(ctx context.Context) (map[string]string, error)
+	// Detail reads one detail regardless of its switch, for the spoken
+	// password: a phrase Jarvis compares against a caller, never one he says.
+	Detail(ctx context.Context, key string) (string, error)
+	// PhoneCard resolves the card a call brief should read out. It prefers
+	// the boss's wallet, so there is ONE list of cards rather than one for
+	// buying and a separate one for calling.
+	PhoneCard(ctx context.Context) (string, error)
 }
 
 // SetSecretReader points the vault lookups at the encrypted store.
@@ -260,9 +273,23 @@ func (m *Manager) metaValue(ctx context.Context, key string) (string, error) {
 }
 
 func (m *Manager) vaultPaymentCard(ctx context.Context) (string, error) {
-	card, err := m.metaValue(ctx, vaultCardKey)
-	if err != nil || card == "" {
-		return "", fmt.Errorf("no payment card is stored - the boss adds one in Settings → Privacy → Phone vault. Place the call without payment (arrange pay-on-arrival) or tell him it's missing")
+	// The wallet first, then the legacy sealed blob, then plaintext meta for
+	// a deployment with no vault key. Same card either way from his side.
+	var card string
+	if m.secrets != nil {
+		if v, err := m.secrets.PhoneCard(ctx); err == nil {
+			card = strings.TrimSpace(v)
+		}
+	}
+	if card == "" {
+		v, err := m.metaValue(ctx, vaultCardKey)
+		if err != nil {
+			return "", fmt.Errorf("no card is saved - the boss adds one in Settings, Vault, Cards. Place the call without payment (arrange pay-on-arrival) or tell him it's missing")
+		}
+		card = v
+	}
+	if card == "" {
+		return "", fmt.Errorf("no card is saved - the boss adds one in Settings, Vault, Cards. Place the call without payment (arrange pay-on-arrival) or tell him it's missing")
 	}
 	// Structured form (Settings stores JSON fields); legacy free-text
 	// values pass through untouched.
@@ -296,9 +323,47 @@ func (m *Manager) vaultPaymentCard(ctx context.Context) (string, error) {
 // needs them (verifying with a bank/utility). Never in the agent's context,
 // only released server-side into the brief, same guarantee as the card.
 func (m *Manager) vaultIdentity(ctx context.Context) (string, error) {
+	// The per-detail switches in Settings, Vault, Personal info decide what
+	// goes into a brief. This is the enforcement point, and it is a filter on
+	// what gets LOADED rather than an instruction to the call agent, so a
+	// withheld detail is not something it can be talked into saying.
+	if m.secrets != nil {
+		if rel, err := m.secrets.Releasable(ctx); err == nil {
+			var parts []string
+			if v := rel["dob"]; v != "" {
+				parts = append(parts, "date of birth "+v)
+			}
+			if v := rel["account_number"]; v != "" {
+				parts = append(parts, "account number "+v)
+			}
+			if v := rel["ssn_last4"]; v != "" {
+				parts = append(parts, "last four "+v)
+			}
+			name := strings.TrimSpace(rel["given_name"] + " " + rel["family_name"])
+			if name != "" {
+				parts = append(parts, "full name "+name)
+			}
+			if v := rel["email"]; v != "" {
+				parts = append(parts, "email "+v)
+			}
+			addr := joinAddress(rel, "ship_")
+			if addr == "" {
+				addr = joinAddress(rel, "bill_")
+			}
+			if addr != "" {
+				parts = append(parts, "address "+addr)
+			}
+			if v := rel["bill_postal"]; v != "" && addr == "" {
+				parts = append(parts, "billing zip "+v)
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, ", "), nil
+			}
+		}
+	}
 	raw, err := m.metaValue(ctx, vaultIdentityKey)
 	if err != nil || raw == "" {
-		return "", fmt.Errorf("no identity details are stored - the boss adds them in Settings, Privacy, Phone vault. Proceed without them or tell him they're missing")
+		return "", fmt.Errorf("no personal details are saved - the boss adds them in Settings, Vault, Personal info. Proceed without them or tell him they're missing")
 	}
 	var id struct {
 		DOB     string `json:"dob"`
@@ -326,7 +391,28 @@ func (m *Manager) vaultIdentity(ctx context.Context) (string, error) {
 }
 
 // vaultBossCell returns the boss's cell (E.164) for patch-in / callback, or "".
+// joinAddress renders one address from the detail map, or "" when he has not
+// given one or has switched it off.
+func joinAddress(rel map[string]string, prefix string) string {
+	var parts []string
+	for _, f := range []string{"line1", "line2", "city", "state", "postal", "country"} {
+		if v := strings.TrimSpace(rel[prefix+f]); v != "" {
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (m *Manager) vaultBossCell(ctx context.Context) string {
+	// His phone number is a detail he maintains in one place now. The old meta
+	// key stays as the fallback so patch-in never stops working mid-migration.
+	if m.secrets != nil {
+		if rel, err := m.secrets.Releasable(ctx); err == nil {
+			if v := strings.TrimSpace(rel["phone"]); v != "" {
+				return v
+			}
+		}
+	}
 	v, err := m.metaValue(ctx, vaultBossCellKey)
 	if err != nil {
 		return ""
@@ -340,14 +426,22 @@ func (m *Manager) vaultBossCell(ctx context.Context) string {
 func (m *Manager) referToBoss(ctx context.Context, callID string) error {
 	cell := m.vaultBossCell(ctx)
 	if cell == "" {
-		return fmt.Errorf("no boss cell stored (Settings, Privacy, Phone vault)")
+		return fmt.Errorf("no cell number is saved for him (Settings, Vault, Personal info)")
 	}
 	body, _ := json.Marshal(map[string]any{"target_uri": "tel:" + cell})
 	return m.callControl(ctx, callID, "refer", body)
 }
 
 // phonePassphrase returns the boss-verification phrase, or "" when unset.
+// phonePassphrase reads the phrase that verifies the BOSS. It deliberately
+// does NOT go through Releasable: this phrase is an input Jarvis checks, never
+// an output he offers, and the catalog marks it unreleasable for that reason.
 func (m *Manager) phonePassphrase(ctx context.Context) string {
+	if m.secrets != nil {
+		if v, err := m.secrets.Detail(ctx, "passphrase"); err == nil && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
 	v, err := m.metaValue(ctx, vaultPassphraseKey)
 	if err != nil {
 		return ""

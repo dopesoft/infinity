@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,7 @@ import (
 // readable over GET /api/meta by anything holding a session. This is the one
 // shot that moves them somewhere they belong.
 //
-// WHAT THIS DESTROYS, DELIBERATELY
+// # WHAT THIS DESTROYS, DELIBERATELY
 //
 // The plaintext copy. After the move the meta row holds the sentinel below and
 // the real value exists only sealed under INFINITY_VAULT_KEY. That is the
@@ -86,9 +87,26 @@ func MigrateFromMeta(ctx context.Context, pool *pgxpool.Pool, s *Store) (int, er
 	return moved, nil
 }
 
-// secretRow is how a non-card secret is stored: same table, same key, marked
-// by its label so it never collides with a real card.
-const secretLabelPrefix = "secret:"
+// A non-card secret is stored in the same table under the same key, marked
+// TWO ways: a label prefix so it is legible in the database, and a brand the
+// card queries filter on (see notASecret in vault.go).
+//
+// The brand is the load-bearing one. The label prefix alone was what the
+// wallet was relying on, and it relied on it by never checking — so the boss's
+// spoken passphrase turned up in a list of cards he could pay with.
+const (
+	secretLabelPrefix = "secret:"
+	secretBrand       = "secret"
+)
+
+// Keys for the details the phone releases server-side. Named here so the HTTP
+// layer and the phone both spell them the same way.
+const (
+	KeyPassphrase = "vault.phone_passphrase"
+	KeyIdentity   = "vault.identity"
+	KeyCard       = "vault.payment_card"
+	KeyBossCell   = "vault.boss_cell"
+)
 
 func (s *Store) putSecret(ctx context.Context, key, value string) error {
 	sealed, nonce, err := s.seal(Secrets{PAN: "", CVC: "", Name: value})
@@ -97,9 +115,88 @@ func (s *Store) putSecret(ctx context.Context, key, value string) error {
 	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO mem_vault_cards (label, brand, last4, sealed, nonce, key_version)
-		VALUES ($1, 'secret', '', $2, $3, $4)
-	`, secretLabelPrefix+key, sealed, nonce, keyVersion)
+		VALUES ($1, $5, '', $2, $3, $4)
+	`, secretLabelPrefix+key, sealed, nonce, keyVersion, secretBrand)
 	return err
+}
+
+// Has reports whether a secret is stored, WITHOUT opening it. This is what the
+// settings screen asks: it can tell the boss a thing is saved without the
+// value ever leaving the database, which is the whole reason it was sealed.
+func (s *SecretStore) Has(ctx context.Context, key string) (bool, error) {
+	if s == nil || s.s == nil || s.s.pool == nil {
+		return false, nil
+	}
+	var n int
+	err := s.s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM mem_vault_cards
+		 WHERE label = $1 AND revoked_at IS NULL
+	`, secretLabelPrefix+key).Scan(&n)
+	return n > 0, err
+}
+
+// Clear retires a secret. Used when the boss empties a field.
+func (s *SecretStore) Clear(ctx context.Context, key string) error {
+	if s == nil || s.s == nil || s.s.pool == nil {
+		return nil
+	}
+	_, err := s.s.pool.Exec(ctx,
+		`UPDATE mem_vault_cards SET revoked_at = NOW() WHERE label = $1 AND revoked_at IS NULL`,
+		secretLabelPrefix+key)
+	return err
+}
+
+// Releasable is the phone's view of the boss's details: only the ones he has
+// switched on. It is a thin pass-through to Details.Release so there is exactly
+// one place the switch is enforced.
+func (s *SecretStore) Releasable(ctx context.Context) (map[string]string, error) {
+	if s == nil || s.s == nil {
+		return map[string]string{}, nil
+	}
+	return NewDetails(s.s).Release(ctx)
+}
+
+// Detail reads one detail regardless of its release switch. Used for the
+// spoken password, which Jarvis checks and never says.
+func (s *SecretStore) Detail(ctx context.Context, key string) (string, error) {
+	if s == nil || s.s == nil {
+		return "", ErrNoKey
+	}
+	return NewDetails(s.s).Get(ctx, key)
+}
+
+// PhoneCard renders the card a spoken call brief should read out, in the shape
+// the phone has always parsed.
+//
+// It prefers a WALLET card, and that is the point: before this there were two
+// separate places to type a card number, one for buying and one for calling,
+// and neither knew about the other. One list of cards now serves both. The
+// legacy sealed blob is still the fallback, so a boss who has not added a
+// wallet card yet keeps exactly the phone behaviour he has today.
+func (s *SecretStore) PhoneCard(ctx context.Context) (string, error) {
+	if s == nil || s.s == nil {
+		return "", ErrNoKey
+	}
+	if cards, err := s.s.List(ctx); err == nil && len(cards) > 0 {
+		// Newest first, per List's ordering.
+		if sec, err := s.s.Open(ctx, cards[0].ID); err == nil && sec.PAN != "" {
+			out := map[string]string{
+				"number": sec.PAN,
+				"cvc":    sec.CVC,
+				"name":   sec.Name,
+				"zip":    sec.Billing["zip"],
+				"exp":    sec.Billing["exp"],
+			}
+			if out["exp"] == "" && cards[0].ExpMonth > 0 && cards[0].ExpYear > 0 {
+				out["exp"] = fmt.Sprintf("%02d/%02d", cards[0].ExpMonth, cards[0].ExpYear%100)
+			}
+			b, err := json.Marshal(out)
+			if err == nil {
+				return string(b), nil
+			}
+		}
+	}
+	return s.Secret(ctx, KeyCard)
 }
 
 // Secret reads back one migrated secret. Used by the phone brief splice, which
@@ -138,34 +235,4 @@ func (s *SecretStore) PutSecret(ctx context.Context, key, value string) error {
 		return err
 	}
 	return s.s.putSecret(ctx, key, value)
-}
-
-// PhoneCardText renders a stored card for a spoken call brief, the same shape
-// the phone tool has always produced. It lives here so the formatting sits
-// next to the decryption and neither ever crosses into the agent's context.
-func (s *SecretStore) PhoneCardText(ctx context.Context, raw string) string {
-	var c struct {
-		Name   string `json:"name"`
-		Number string `json:"number"`
-		Exp    string `json:"exp"`
-		CVC    string `json:"cvc"`
-		Zip    string `json:"zip"`
-	}
-	if json.Unmarshal([]byte(raw), &c) != nil || c.Number == "" {
-		return raw // legacy free-text values pass through untouched
-	}
-	out := "Card number " + c.Number
-	if c.Exp != "" {
-		out += ", expiry " + c.Exp
-	}
-	if c.CVC != "" {
-		out += ", security code " + c.CVC
-	}
-	if c.Name != "" {
-		out += ", name on card " + c.Name
-	}
-	if c.Zip != "" {
-		out += ", billing zip " + c.Zip
-	}
-	return out
 }

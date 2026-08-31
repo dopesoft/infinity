@@ -241,6 +241,56 @@ func (r *Registry) FirstHealthy(prefer ...string) (Provider, bool) {
 	return nil, false
 }
 
+// HealthyInOrder is FirstHealthy's plural sibling: every healthy provider, in
+// preference order, so a caller can WALK them instead of committing to one up
+// front.
+//
+// That distinction is the whole point. FirstHealthy decides on health alone,
+// and health here means "the plan is not spent" - which cannot see a brain
+// that is up, has usage left, and still refuses the work (a model its account
+// will not serve, a dead credential). Session titling learned this the hard
+// way: it asked for one provider, got a brain that 400'd on every call, and
+// had no way to reach the next one. Some kinds of "does not work" are only
+// discoverable by asking, so the caller needs the whole list.
+//
+// Returns RAW providers (no failover wrapper) for the same reason FirstHealthy
+// does: the caller is doing the choosing.
+func (r *Registry) HealthyInOrder(prefer ...string) []Provider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Provider, 0, len(r.providers))
+	seen := make(map[string]bool, len(r.providers))
+	add := func(name string) {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" || seen[name] {
+			return
+		}
+		p, ok := r.providers[name]
+		if !ok || p == nil {
+			return
+		}
+		if _, _, spent := Exhausted(name); spent {
+			return
+		}
+		seen[name] = true
+		out = append(out, p)
+	}
+	for _, name := range prefer {
+		add(name)
+	}
+	// Deterministic tail, same rule as FirstHealthy: two calls a second apart
+	// must not order the remaining brains differently.
+	names := make([]string, 0, len(r.providers))
+	for k := range r.providers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		add(name)
+	}
+	return out
+}
+
 // Available returns the sorted list of provider ids the registry knows
 // about. Studio uses this to gray out vendor options whose credentials
 // aren't wired (e.g. ANTHROPIC_API_KEY missing → anthropic absent).

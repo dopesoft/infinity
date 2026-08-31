@@ -254,6 +254,19 @@ const cardCols = `id::text, label, brand, last4,
        COALESCE(exp_month, 0), COALESCE(exp_year, 0), billing_complete,
        created_at, last_used_at`
 
+// notASecret excludes the non-card secrets that share this table (the spoken
+// passphrase, the identity details) from everything that treats a row as a
+// card.
+//
+// They live here because they want the same key and the same ciphertext
+// column, but they are NOT cards, and a table that holds both will hand a
+// passphrase to anything asking for a card unless every card query says so.
+// It did exactly that once: the boss opened his wallet and found
+// "secret:vault.phone_passphrase" sitting in a list captioned "cards Jarvis
+// can pay with". Filtering at the three card reads is what makes that
+// impossible rather than merely unlikely.
+const notASecret = ` AND brand <> '` + secretBrand + `'`
+
 func (s *Store) List(ctx context.Context) ([]Card, error) {
 	if s == nil || s.pool == nil {
 		return nil, nil
@@ -261,7 +274,7 @@ func (s *Store) List(ctx context.Context) ([]Card, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+cardCols+`
 		  FROM mem_vault_cards
-		 WHERE revoked_at IS NULL
+		 WHERE revoked_at IS NULL`+notASecret+`
 		 ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -287,7 +300,7 @@ func (s *Store) Get(ctx context.Context, id string) (Card, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT `+cardCols+`
 		  FROM mem_vault_cards
-		 WHERE id = $1::uuid AND revoked_at IS NULL
+		 WHERE id = $1::uuid AND revoked_at IS NULL`+notASecret+`
 	`, id)
 	c, err := scanCard(row)
 	if err != nil {
@@ -312,7 +325,7 @@ func (s *Store) Open(ctx context.Context, id string) (Secrets, error) {
 	err := s.pool.QueryRow(ctx, `
 		SELECT sealed, nonce, key_version
 		  FROM mem_vault_cards
-		 WHERE id = $1::uuid AND revoked_at IS NULL
+		 WHERE id = $1::uuid AND revoked_at IS NULL`+notASecret+`
 	`, id).Scan(&sealed, &nonce, &ver)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -336,7 +349,7 @@ func (s *Store) Revoke(ctx context.Context, id string) error {
 		return nil
 	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE mem_vault_cards SET revoked_at = NOW() WHERE id = $1::uuid AND revoked_at IS NULL`, id)
+		`UPDATE mem_vault_cards SET revoked_at = NOW() WHERE id = $1::uuid AND revoked_at IS NULL`+notASecret, id)
 	return err
 }
 

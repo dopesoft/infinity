@@ -239,7 +239,7 @@ func (m *Manager) callBackWithResult(transcript, report string, runErr error) {
 	if cell == "" {
 		// Loud: he asked to be called back and he will not be. Better a red line
 		// in the log and a card he can see than a promise silently broken.
-		log.Printf("phone: the boss asked to be called back but no cell is stored (Settings, Privacy, Phone vault); the report is on his dashboard only")
+		log.Printf("phone: the boss asked to be called back but no cell is stored (Settings, Vault, Personal info); the report is on his dashboard only")
 		return
 	}
 

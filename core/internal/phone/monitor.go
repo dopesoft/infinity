@@ -217,7 +217,7 @@ func (m *Manager) monitorOnce(ctx context.Context, callID, direction string, bri
 		// Loud, because the failure is invisible otherwise: with no phrase
 		// stored NOBODY can verify, so every instruction the boss gives by
 		// voice is discarded and the call still looks like it went fine.
-		log.Printf("phone: call %s: no passphrase stored (infinity_meta vault.phone_passphrase); the boss CANNOT be verified on this call", callID)
+		log.Printf("phone: call %s: no passphrase stored (vault: phone passphrase); the boss CANNOT be verified on this call", callID)
 	}
 	bossVerified := false
 	verifyAttempted := false // someone reached for the phrase and missed
@@ -673,7 +673,7 @@ func (m *Manager) alertUnverifiedCommand(callID, number string, noPassphrase boo
 
 	var body string
 	if noPassphrase {
-		body = "Someone rang your line and gave me instructions as though they were you. There is no passphrase stored at all, so I cannot verify anyone by voice, and nothing asked of me on the phone will be carried out until one is set (Settings, Privacy, Phone vault). If that was you, that is why nothing happened."
+		body = "Someone rang your line and gave me instructions as though they were you. There is no passphrase stored at all, so I cannot verify anyone by voice, and nothing asked of me on the phone will be carried out until one is set (Settings, Vault, Personal info). If that was you, that is why nothing happened."
 	} else {
 		body = "Someone rang your line, spoke as though they were you, and gave me instructions. The phrase they gave did not match the one in your vault, so I did not act on any of it. If that was you, say the phrase again and I will carry out what you ask the moment we hang up."
 	}

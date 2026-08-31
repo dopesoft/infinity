@@ -35,7 +35,6 @@ var infoLog = log.New(os.Stdout, "", log.LstdFlags)
 type Namer struct {
 	pool     *pgxpool.Pool
 	provider llm.Provider
-	model    string // optional INFINITY_SESSION_NAME_MODEL override; "" = active/default
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -47,37 +46,48 @@ type Namer struct {
 	modelMu sync.RWMutex
 	modelFn func(ctx context.Context) string
 
-	// providerFn resolves the brain to draft titles on, per call. Set at
-	// boot to "the cheapest healthy provider", so a title never fails
-	// because one plan is spent - which is exactly how naming died on
-	// 2026-08-30, with two sessions burning all three attempts against an
-	// exhausted ChatGPT plan. nil falls back to the fixed provider.
-	provMu     sync.RWMutex
-	providerFn func() llm.Provider
+	// providersFn resolves the brains to try, IN ORDER, for one title. A LIST
+	// and not a single provider, because "use the plan unless it is down or
+	// does not work" cannot be expressed by picking one brain up front: you
+	// only learn a brain does not work by asking it. Set at boot; nil falls
+	// back to the fixed provider.
+	provMu      sync.RWMutex
+	providersFn func() []llm.Provider
 }
 
-// SetProviderFn wires the namer to a live brain resolver. Wired once at boot.
-func (n *Namer) SetProviderFn(fn func() llm.Provider) {
+// SetProvidersFn wires the namer to a live, ORDERED brain resolver. Wired once
+// at boot. Earlier entries are preferred; draftName walks the list and moves on
+// whenever a brain refuses the work.
+func (n *Namer) SetProvidersFn(fn func() []llm.Provider) {
 	if n == nil {
 		return
 	}
 	n.provMu.Lock()
-	n.providerFn = fn
+	n.providersFn = fn
 	n.provMu.Unlock()
 }
 
 // brain resolves the provider for one drafting call, preferring the live
 // resolver and falling back to the one handed in at construction.
-func (n *Namer) brain() llm.Provider {
+func (n *Namer) brains() []llm.Provider {
 	n.provMu.RLock()
-	fn := n.providerFn
+	fn := n.providersFn
 	n.provMu.RUnlock()
 	if fn != nil {
-		if p := fn(); p != nil {
-			return p
+		out := make([]llm.Provider, 0, 4)
+		for _, p := range fn() {
+			if p != nil {
+				out = append(out, p)
+			}
+		}
+		if len(out) > 0 {
+			return out
 		}
 	}
-	return n.provider
+	if n.provider != nil {
+		return []llm.Provider{n.provider}
+	}
+	return nil
 }
 
 // SetActiveModelFn wires the namer to the boss's live model selection so
@@ -94,9 +104,13 @@ func (n *Namer) SetActiveModelFn(fn func(ctx context.Context) string) {
 }
 
 // activeModel returns the model to title with: the boss's live Studio
-// selection (the same model chat uses) when wired, else an optional
-// INFINITY_SESSION_NAME_MODEL override, else "" so the active provider picks
-// its own default. No vendor coupling - whatever the boss set names the session.
+// selection, else "" so whichever brain is being asked picks its own default.
+//
+// There is deliberately NO env-var override any more. INFINITY_SESSION_NAME_MODEL
+// used to sit in this fallback, which meant the answer to "what names my
+// sessions" lived in a Railway variable invisible from the code, could name a
+// model the chosen brain does not serve, and silently outranked the setting the
+// boss actually looks at. The code and his Settings decide.
 func (n *Namer) activeModel(ctx context.Context) string {
 	n.modelMu.RLock()
 	fn := n.modelFn
@@ -106,14 +120,13 @@ func (n *Namer) activeModel(ctx context.Context) string {
 			return m
 		}
 	}
-	return n.model
+	return ""
 }
 
-func NewNamer(pool *pgxpool.Pool, provider llm.Provider, model string) *Namer {
+func NewNamer(pool *pgxpool.Pool, provider llm.Provider) *Namer {
 	return &Namer{
 		pool:     pool,
 		provider: provider,
-		model:    model,
 		inflight: map[string]struct{}{},
 	}
 }
@@ -252,43 +265,86 @@ func (n *Namer) draftName(ctx context.Context, userMsg, assistantMsg string) (st
 	// llm.Provider). We don't want the token stream - just the final text - so
 	// we drain the event channel and read Response.Text. The caller owns the
 	// channel and closes it after Stream returns (same convention as the loop).
-	brain := n.brain()
-	if brain == nil {
+	// Try the brains in order and move on the moment one REFUSES the work.
+	//
+	// The boss's rule: the ChatGPT subscription first, because a seven-word
+	// title on a plan he already pays for is free - and his Settings model
+	// only when that plan is down or does not work. "Does not work" is the
+	// half that was missing. Falling through was wired for a spent plan and
+	// nothing else, so when his account started refusing the model outright
+	// (a 400, not a quota error) naming did not move to the next brain: it
+	// just failed, every time, for two days.
+	//
+	// A refusal is any of: out of usage, the model rejected, or the
+	// credential dead. None of those say anything about this session, and all
+	// of them are answered the same way - ask the next brain.
+	brains := n.brains()
+	if len(brains) == 0 {
 		return "", errors.New("no brain available to draft a session title")
 	}
-	// The Settings model id belongs to the Settings VENDOR. Naming may be
-	// running on a different one (the cheapest healthy brain), and handing
-	// "deepseek-v4-pro" to OpenAI is a guaranteed 400. Pass the id only when
-	// it belongs to this provider's family; otherwise let the provider use
-	// its own default.
-	model := n.activeModel(ctx)
-	if model != "" && !llm.ModelFamilyMatches(brain.Name(), model) {
-		model = ""
-	}
-	out := make(chan llm.StreamEvent, 64)
-	var resp llm.Response
-	var serr error
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		resp, serr = brain.Stream(
-			ctx,
-			model,
-			namingSystem,
-			[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
-			nil,
-			out,
-		)
-		close(out)
-	}()
-	for range out {
-		// drain - we only need the final aggregated text
-	}
-	<-done
-	if serr != nil {
+	var lastErr error
+	for _, brain := range brains {
+		// The Settings model id belongs to the Settings VENDOR. Naming may be
+		// running on a different one, and handing "deepseek-v4-pro" to OpenAI
+		// is a guaranteed 400. Pass the id only when it belongs to this
+		// provider's family; otherwise let the provider use its own default.
+		model := n.activeModel(ctx)
+		if model != "" && !llm.ModelFamilyMatches(brain.Name(), model) {
+			model = ""
+		}
+		out := make(chan llm.StreamEvent, 64)
+		var resp llm.Response
+		var serr error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			resp, serr = brain.Stream(
+				ctx,
+				model,
+				namingSystem,
+				[]llm.Message{{Role: llm.RoleUser, Content: prompt}},
+				nil,
+				out,
+			)
+			close(out)
+		}()
+		for range out {
+			// drain - we only need the final aggregated text
+		}
+		<-done
+		if serr == nil {
+			if title := cleanTitle(resp.Text); title != "" {
+				return title, nil
+			}
+			lastErr = fmt.Errorf("%s returned an empty title", brain.Name())
+			continue
+		}
+		lastErr = serr
+		if refusedTitling(serr) {
+			log.Printf("sessions: %s will not title this (%s); trying the next brain",
+				brain.Name(), truncate(serr.Error(), 160))
+			continue
+		}
+		// Anything else is a genuine failure of the call rather than the brain
+		// declining it. Stop: retrying the same request on another vendor
+		// would just spend a second plan on the same problem.
 		return "", serr
 	}
-	return cleanTitle(resp.Text), nil
+	return "", lastErr
+}
+
+// refusedTitling reports whether a brain declined the work for a reason that
+// has nothing to do with this session - so the right answer is the next brain,
+// not a failed title. Kept as one predicate so every caller agrees on what
+// "this brain will not do it" means.
+func refusedTitling(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, isQuota := llm.AsQuota(err); isQuota {
+		return true
+	}
+	return llm.IsUnsupportedModel(err.Error()) || llm.IsAuthFailure(err.Error())
 }
 
 func truncate(s string, n int) string {

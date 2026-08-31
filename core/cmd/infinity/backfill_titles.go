@@ -66,7 +66,7 @@ cannot be titled stops consuming calls instead of being retried forever.`,
 				}
 			}
 
-			namer := sessions.NewNamer(pool, provider, os.Getenv("INFINITY_SESSION_NAME_MODEL"))
+			namer := sessions.NewNamer(pool, provider)
 			total, failed := 0, 0
 			for i := 1; i <= rounds; i++ {
 				res, err := namer.SweepUnnamed(ctx, batch)
