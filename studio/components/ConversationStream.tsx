@@ -180,6 +180,8 @@ export function ConversationStream({
   const [showJump, setShowJump] = useState(false);
   const stickToBottomRef = useRef(true);
   const work = workingState(messages, working);
+  // Which branch renders. Load-bearing for the observer effect below.
+  const hasMessages = messages.length > 0;
 
   // WHY A ResizeObserver AND NOT JUST AN EFFECT ON `messages`.
   //
@@ -195,6 +197,23 @@ export function ConversationStream({
   // Observing the CONTENT (it got taller) and the CONTAINER (it got shorter)
   // covers every one of those causes at once, including ones added later,
   // which an ever-growing dependency array never would.
+  // ...and why this effect depends on `hasMessages`. It used to be `[]`, and
+  // that quietly disabled the entire mechanism above.
+  //
+  // A session starts with no messages, so the FIRST render returns the
+  // empty-state branch: there is no scroller and no content node yet, so this
+  // effect observed a placeholder div and `contentRef.current` was still null.
+  // The moment the first message arrived the component swapped to the real
+  // scroller - new DOM nodes, new refs - but with `[]` the effect never re-ran,
+  // so the observer spent the whole session watching a detached element that
+  // could never resize. Nothing was left to re-pin except the message-keyed
+  // effect below, which does not fire when a tool call streams its output into
+  // a row that already exists or when a ledger row expands. Hence: new rows
+  // scrolled, tool calls did not, and "Jump to latest" sat there through the
+  // whole turn.
+  //
+  // `hasMessages` is the only condition that swaps the branch, so re-running on
+  // it re-binds the observer to the nodes that actually exist.
   useEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
@@ -213,7 +232,7 @@ export function ConversationStream({
     if (content) ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [hasMessages]);
 
   // Message-driven re-pin as well: a brand-new row must land pinned even in
   // the frame before the observer fires.
@@ -245,15 +264,17 @@ export function ConversationStream({
     setShowJump(false);
   }
 
-  if (messages.length === 0) {
+  if (!hasMessages) {
     return (
       // The stream area excludes the composer, while Files / Preview
       // do not have a bottom composer taking space. Nudge the desktop
       // empty state down so the placeholders line up across columns.
-      <div
-        ref={scrollRef}
-        className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center lg:translate-y-[6.5rem]"
-      >
+      //
+      // Deliberately NOT carrying `scrollRef`: this element does not scroll
+      // and has no content to pin. It used to, which made the two branches
+      // read as interchangeable and hid the fact that the observer above was
+      // binding to this placeholder instead of the real scroller.
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center lg:translate-y-[6.5rem]">
         <span className="inline-flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
           <Sparkles className="size-5" aria-hidden />
         </span>

@@ -129,7 +129,7 @@ type InputEvent struct {
 type Frame struct {
 	Seq       int    `json:"seq"`
 	Frame     string `json:"frame"`         // data:image/jpeg;base64,...
-	URL       string `json:"url,omitempty"` // filled by the registry, not the wire
+	URL       string `json:"url,omitempty"` // the page's own url, from the engine; registry fills it in only as a fallback
 	BrowserID string `json:"-"`             // filled by the registry; the live session id
 }
 

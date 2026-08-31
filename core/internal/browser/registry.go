@@ -300,9 +300,19 @@ func (r *Registry) relay(ctx context.Context, e *entry) {
 			return
 		}
 		for f := range stream.Frames {
-			r.mu.Lock()
-			f.URL = e.url
-			r.mu.Unlock()
+			// The engine's own url wins. Core's tracked url only moves when a
+			// tool result comes back, so stamping it here made the address bar
+			// lag the picture it sits above, and diverge outright once more
+			// than one session was in play. A frame that carries its url is
+			// the truth about what is on screen at that instant; e.url is the
+			// fallback for engines that send none (Camoufox).
+			if f.URL != "" {
+				r.UpdateURL(e.browserID, f.URL)
+			} else {
+				r.mu.Lock()
+				f.URL = e.url
+				r.mu.Unlock()
+			}
 			f.BrowserID = e.browserID
 			r.emit(e.chatID, f)
 		}

@@ -958,7 +958,14 @@ func handleScreencast(w http.ResponseWriter, r *http.Request, s *Session) {
 				return
 			}
 			seq++
-			payload, _ := json.Marshal(map[string]any{"seq": seq, "frame": frame})
+			// The frame carries its OWN url. Core used to stamp its
+			// separately-tracked url onto every frame instead, and that value
+			// only moved when a tool result came back, so the address bar
+			// could disagree with the picture directly beside it (2026-08-31:
+			// the bar read target.com while the screencast showed
+			// bot.sannysoft.com). Picture and address now come from the same
+			// place at the same instant, so they cannot drift apart.
+			payload, _ := json.Marshal(map[string]any{"seq": seq, "frame": frame, "url": s.url()})
 			fmt.Fprintf(w, "event: frame\ndata: %s\n\n", payload)
 			flusher.Flush()
 		}
