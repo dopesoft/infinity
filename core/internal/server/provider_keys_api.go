@@ -52,6 +52,12 @@ type providerKeyRow struct {
 	// can explain that keys are read-only on this deployment instead of
 	// offering a save button that cannot work.
 	Editable bool `json:"editable"`
+	// Implemented is false when Core carries no working client for this
+	// vendor (a stub provider). The vendor still appears - hiding it would
+	// just move the surprise - but the UI shows why it cannot be chosen
+	// instead of offering a paste box that leads to a brain which fails
+	// every turn.
+	Implemented bool `json:"implemented"`
 }
 
 type providerKeysResponse struct {
@@ -115,11 +121,16 @@ func (s *Server) buildProviderKeysResponse(ctx context.Context) (providerKeysRes
 		AvailableProviders: available,
 	}
 	for _, v := range llm.KeyableVendors {
+		// Constructing with an empty key is free and side-effect free: the
+		// constructors only build a struct. It is the provider itself that
+		// knows whether it is a stub, so nothing here needs a vendor list.
+		implemented := llm.Implemented(v.New("", ""))
 		row := providerKeyRow{
-			Provider:   v.ID,
-			EnvVar:     v.Env,
-			Registered: registered[v.ID],
-			Editable:   s.llmKeys != nil,
+			Provider:    v.ID,
+			EnvVar:      v.Env,
+			Registered:  registered[v.ID],
+			Editable:    s.llmKeys != nil && implemented,
+			Implemented: implemented,
 		}
 		if k, ok := stored[v.ID]; ok {
 			row.Configured = true
@@ -160,6 +171,15 @@ func (s *Server) saveProviderKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "I don't know a vendor called " + body.Provider + ".",
+		})
+		return
+	}
+	// Refuse a credential for a brain that cannot answer. Taking the key,
+	// storing it and showing the vendor as configured would be a lie that
+	// only surfaces when a turn dies.
+	if !llm.Implemented(vendor.New("", "")) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "I have no working client for " + vendor.ID + " yet, so a key would not get you a brain. Storing one would only look like it did.",
 		})
 		return
 	}

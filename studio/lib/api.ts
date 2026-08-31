@@ -2650,6 +2650,9 @@ export type ProviderKeyRow = {
   registered: boolean;
   /** False when Core has no key store (no DB pool): env vars only. */
   editable: boolean;
+  /** False when Core carries no working client for this vendor, so a key
+   *  would not buy a brain. The vendor still lists, with the reason shown. */
+  implemented: boolean;
 };
 
 export type ProviderKeysResponse = {

@@ -302,3 +302,26 @@ func EffortFromContext(ctx context.Context) Effort {
 }
 
 var ErrNotImplemented = errors.New("provider not implemented")
+
+// implementedReporter is satisfied by a provider that knows it is a stub.
+// Absence means implemented - only a stub has to say so.
+type implementedReporter interface{ Implemented() bool }
+
+// Implemented reports whether a provider can actually answer a turn. Used at
+// the two places where a stub would otherwise masquerade as a working brain:
+// registry construction (do not offer it) and the provider-keys API (do not
+// take a credential for it). Unwraps through the sanitizer/failover wrappers
+// so a decorated stub is still recognised.
+func Implemented(p Provider) bool {
+	for p != nil {
+		if r, ok := p.(implementedReporter); ok {
+			return r.Implemented()
+		}
+		u, ok := p.(interface{ Unwrap() Provider })
+		if !ok {
+			return true
+		}
+		p = u.Unwrap()
+	}
+	return true
+}

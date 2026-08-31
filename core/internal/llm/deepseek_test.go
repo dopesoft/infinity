@@ -142,3 +142,31 @@ func TestCompatCachedPromptTokensIgnoresOpenAIShape(t *testing.T) {
 		t.Errorf("compat path fired on an OpenAI payload: %d", got)
 	}
 }
+
+// A stub provider must never enter the registry. Everything downstream reads
+// registry membership as "this brain can answer": the vendor picker enables
+// the row, Settings allows the swap, failover may route a spent plan to it.
+// Google is a stub whose every Stream call returns ErrNotImplemented, so
+// registering it would make all three of those statements false at once.
+func TestRegistryRefusesStubProvider(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(NewGoogle("key", ""))
+	if _, ok := reg.Get("google"); ok {
+		t.Error("a stub provider was registered and is now selectable")
+	}
+	reg.Register(NewDeepSeek("key", ""))
+	if _, ok := reg.Get("deepseek"); !ok {
+		t.Error("a working provider was refused")
+	}
+}
+
+// Implemented must see through the wrappers every registered provider wears,
+// or the sanitizer alone would hide a stub from the guard.
+func TestImplementedUnwrapsDecorators(t *testing.T) {
+	if Implemented(WrapNoDashes(NewGoogle("key", ""))) {
+		t.Error("a wrapped stub reported itself as implemented")
+	}
+	if !Implemented(WrapNoDashes(NewDeepSeek("key", ""))) {
+		t.Error("a wrapped working provider reported itself as a stub")
+	}
+}

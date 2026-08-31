@@ -136,6 +136,19 @@ func (r *Registry) Register(p Provider) {
 	if p == nil {
 		return
 	}
+	// A stub provider never enters the registry. Everything downstream reads
+	// registry membership as "this brain can answer": Settings enables the
+	// vendor row, the picker lets it be selected, failover may route a spent
+	// plan to it. Registering something whose every Stream call returns
+	// ErrNotImplemented would make all three of those statements false at
+	// once. This is the single chokepoint every path registers through
+	// (BuildRegistry, the provider-keys save, boot), so gating here covers
+	// them all by construction.
+	if !Implemented(p) {
+		fmt.Fprintf(os.Stderr,
+			"llm: refusing to register %q - the provider is a stub and cannot answer a turn\n", p.Name())
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// Universal em/en-dash sanitizer. Every provider gets wrapped so

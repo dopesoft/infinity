@@ -869,6 +869,10 @@ function ApiKeyBlock({
     }
   }
 
+  // A vendor Core has no client for still lists (hiding it would only move
+  // the surprise to the moment a turn dies), but it gets an explanation
+  // instead of a paste box.
+  const unavailable = row?.implemented === false;
   const stored = row?.source === "ui";
   const fromEnv = row?.source === "env";
   const description = stored
@@ -876,6 +880,16 @@ function ApiKeyBlock({
     : fromEnv
       ? `Coming from ${envVar} on the server. Pasting one here takes precedence.`
       : `Paste your ${vendor.label.replace(" (API Key)", "")} key. It saves to Core and never comes back out of the browser.`;
+
+  if (unavailable) {
+    return (
+      <p className="min-w-0 rounded-[8px] bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
+        I have no working client for {vendor.label.replace(" (API Key)", "")} yet, so a
+        key here would not get you a brain. The models and prices are listed for
+        reference; pick another vendor to actually run on.
+      </p>
+    );
+  }
 
   return (
     <div className="min-w-0 space-y-2">
