@@ -333,6 +333,10 @@ type Loop struct {
 	planMu      sync.RWMutex
 	planChecker PlanContinuationChecker
 	planSettler PlanSettler
+	// planStarter marks the session's current plan step in flight just before a
+	// consequential tool runs, so the board can never show "nothing started"
+	// while real work is happening (see plan_start.go). Shares planMu.
+	planStarter PlanStepStarter
 	// proposalFiler records source changes the self-heal guard refused to
 	// make live (see selfheal.go); shares planMu.
 	proposalFiler CodeProposalFiler
@@ -1845,10 +1849,22 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// around — the agent must never treat the boss's "no" as a
 				// failure to be worked around.
 				bossDenied bool
+				// planStartFailed: every gate allowed the call, but the plan
+				// step could not be marked in flight, so the call was NOT run.
+				// Executing anyway would put real work ahead of the board.
+				planStartFailed bool
 			)
 
 			switch {
 			case decision.Allow:
+				// Every gate has allowed this call, and it hasn't run yet: the
+				// one moment where the plan can be brought level with the work
+				// (plan_start.go). A failure here stops the call outright.
+				if startErr := l.startPlanStepForTool(ctx, s.ID, tc.Name); startErr != nil {
+					output, planStartFailed = planStartRefusal(tc.Name, startErr), true
+					endedAt = time.Now().UTC()
+					break
+				}
 				// Inject the session's ActiveSet so session-aware tools
 				// (load_tools / unload_tools / compact_context) can
 				// mutate the right session's loaded list.
@@ -1875,9 +1891,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				})
 				approved, reason := l.gate.WaitForDecision(ctx, decision.ContractID, timeout)
 				if approved {
-					toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
-					output, execErr, interruptSteers = l.executeInterruptible(toolCtx, tc, steerCh)
-					l.recordToolCost(tc.Name, time.Since(startedAt), execErr)
+					// Same boundary as the allow path: the boss has just said go,
+					// so the step goes in flight before the work does.
+					if startErr := l.startPlanStepForTool(ctx, s.ID, tc.Name); startErr != nil {
+						output, planStartFailed = planStartRefusal(tc.Name, startErr), true
+					} else {
+						toolCtx := tools.WithSessionID(tools.WithActiveSet(ctx, s.Active), s.ID)
+						output, execErr, interruptSteers = l.executeInterruptible(toolCtx, tc, steerCh)
+						l.recordToolCost(tc.Name, time.Since(startedAt), execErr)
+					}
 				} else {
 					if reason == "" {
 						reason = "denied or expired"
@@ -1922,6 +1944,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			case isErr:
 				output = fmt.Sprintf("ERROR: %v", execErr)
 				toolErredThisTurn = true // feeds the reactive self-heal check
+			case planStartFailed:
+				// Nothing ran, and the reason is our own plan store failing —
+				// exactly the kind of failure that must read as one rather than
+				// pass for a quiet no-op. output already carries the refusal.
+				isErr = true
+				toolErredThisTurn = true
 			case gateRefused:
 				// A refused call NEVER RAN. Counting it as forward progress was
 				// how a turn could end on "the bridge rejected it" while the

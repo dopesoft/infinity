@@ -1283,6 +1283,18 @@ func serveCmd() *cobra.Command {
 					// turn ends so an in_progress step is 'skipped'/'done', never
 					// left to be false-failed by the plan-step reaper.
 					loop.SetPlanSettler(plan.NewStore(pool))
+					// Auto-start: marks the step in flight just before a consequential
+					// tool runs, so the board can never read "nothing started" while
+					// real work is happening. Adapted rather than passed directly so
+					// the agent package stays free of the plan/pgx types.
+					planStarter := plan.NewStore(pool)
+					loop.SetPlanStepStarter(agent.PlanStepStarterFunc(func(ctx context.Context, sessionID string) (*agent.PlanStepStart, error) {
+						res, err := planStarter.EnsureStepStarted(ctx, sessionID)
+						if err != nil || res == nil || res.Step == nil {
+							return nil, err
+						}
+						return &agent.PlanStepStart{StepID: res.Step.ID, Title: res.Step.Title, Started: res.Started}, nil
+					}))
 					// Self-heal source guard: a live-conversation heal may not rewrite
 					// Infinity's own code; the intended change is filed here instead so the
 					// nightly self-improve loop + the Code proposals tab still get it.
