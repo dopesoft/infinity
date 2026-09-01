@@ -356,3 +356,76 @@ func (r *recordingHooks) assistantText() []string {
 	}
 	return out
 }
+
+// healPassProvider answers properly, then (once the loop injects the self-heal
+// directive) comes back having done nothing, exactly as Jarvis did on
+// 2026-09-01: "Nothing broke, boss. Waiting on your call."
+type healPassProvider struct {
+	calls int
+	// realAnswer trips the failure detector the way his real reply did, and a
+	// tool error makes the detector fire on it regardless of length.
+	realAnswer string
+}
+
+func (h *healPassProvider) Name() string  { return "heal-pass" }
+func (h *healPassProvider) Model() string { return "heal-pass-1" }
+func (h *healPassProvider) Stream(_ context.Context, _, _ string, _ []llm.Message, _ []llm.ToolDef, out chan<- llm.StreamEvent) (llm.Response, error) {
+	h.calls++
+	if h.calls == 1 {
+		out <- llm.StreamEvent{Kind: llm.StreamText, TextDelta: h.realAnswer}
+		return llm.Response{Text: h.realAnswer}, nil
+	}
+	note := "Nothing broke, boss. Waiting on your call."
+	out <- llm.StreamEvent{Kind: llm.StreamText, TextDelta: note}
+	return llm.Response{Text: note}, nil
+}
+
+// Why: the self-heal directive is written by US, not by him, so the reply to it
+// is addressed to us. When the pass looks and finds nothing wrong, its report
+// is a conversation between the machine and itself - and it was arriving in his
+// chat as the turn's last word, on top of and then instead of the answer he had
+// just read. His words: "why do I want the message about the machine? the
+// message before it was the real message I needed."
+func TestAnEmptyHealPassNeverSpeaks(t *testing.T) {
+	answer := "Here is the plan. I couldn't reach one board, everything else is ready."
+	prov := &healPassProvider{realAnswer: answer}
+	rec := &recordingHooks{}
+	l := New(Config{LLM: prov, Tools: tools.NewRegistry(), Hooks: rec})
+
+	out := make(chan RunEvent, 256)
+	var shown strings.Builder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range out {
+			if ev.Kind == EventDelta {
+				shown.WriteString(ev.TextDelta)
+			}
+		}
+	}()
+	if err := l.Run(context.Background(), "heal-session", "what about built-in?", "", nil, out); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	close(out)
+	<-done
+
+	if strings.Contains(shown.String(), "Nothing broke") {
+		t.Errorf("he was shown the machine's note: %q", shown.String())
+	}
+	if !strings.Contains(shown.String(), answer) {
+		t.Errorf("the real answer never reached him: %q", shown.String())
+	}
+	// The pass really did run - otherwise this test proves nothing.
+	if prov.calls != 2 {
+		t.Fatalf("the heal pass never fired, so nothing was under test (%d calls)", prov.calls)
+	}
+	// And the turn is written down as the answer, not the note, so a reload
+	// gives him the same thing his screen did.
+	kept := strings.Join(rec.assistantText(), " | ")
+	if strings.Contains(kept, "Nothing broke") {
+		t.Errorf("the machine's note was written into his transcript: %q", kept)
+	}
+	if !strings.Contains(kept, answer) {
+		t.Errorf("the answer was not written down, so a reload loses it: %q", kept)
+	}
+}

@@ -99,8 +99,66 @@ func shouldSelfHeal(replyText string, toolErred bool) bool {
 	if resolvedSignal.MatchString(t) && !toolErred {
 		return false // already says it fixed/verified it
 	}
-	return failureSignal.MatchString(t)
+	return reportsFailure(t, toolErred)
 }
+
+// substantialReply is the length above which a reply is a piece of work rather
+// than a shrug. A genuine punt is short by nature ("I can't do that.", "that
+// didn't work"); an answer of several paragraphs is an answer, and a failure
+// word somewhere inside it is almost always part of what it is SAYING.
+const substantialReply = 600
+
+// reportsFailure decides whether a reply is handing back an unresolved problem,
+// as opposed to merely containing English that resembles one.
+//
+// The words alone were the whole test, and on 2026-09-01 that cost the boss two
+// real answers in one conversation. He asked about job boards and got a good
+// 1,200-character reply containing "Google shut down their public jobs API back
+// in 2024, so I can't pull it cleanly" - a true fact about a vendor. He asked
+// about proof artifacts and got a 3,200-character plan ending "If Wed doesn't
+// work, pick another slot" - a courtesy about his calendar. Both tripped the
+// detector, both triggered a heal pass, and each pass's "Nothing broke, boss"
+// note became the turn's final message and replaced the answer he had read.
+//
+// Neither turn ran a single tool. Nothing failed. So the rule now asks for
+// something beyond vocabulary:
+//
+//   - a phrase inside a CONDITIONAL is not a report ("if Wed doesn't work" is
+//     about his diary, not about this turn), and
+//   - with nothing having actually errored, a substantial answer is an answer.
+//     A thin reply still heals on words alone, because a thin reply that says
+//     "can't" IS the shrug this reflex exists to catch.
+func reportsFailure(t string, toolErred bool) bool {
+	loc := failureSignal.FindStringIndex(t)
+	for loc != nil && conditionalClause(t[:loc[0]]) {
+		next := failureSignal.FindStringIndex(t[loc[1]:])
+		if next == nil {
+			return false
+		}
+		loc = []int{loc[1] + next[0], loc[1] + next[1]}
+	}
+	if loc == nil {
+		return false
+	}
+	if toolErred {
+		return true // something really did fail; the words corroborate it
+	}
+	return len([]rune(t)) < substantialReply
+}
+
+// conditionalClause reports whether the text immediately before a failure
+// phrase opens a condition, which makes the phrase hypothetical: "if that
+// doesn't work", "unless it fails", "in case the sign-in can't reach it".
+// Looks back one clause only, so a conditional early in a paragraph cannot
+// excuse a real failure reported later in it.
+func conditionalClause(before string) bool {
+	if i := strings.LastIndexAny(before, ".!?;\n"); i >= 0 {
+		before = before[i+1:]
+	}
+	return conditionalOpener.MatchString(before)
+}
+
+var conditionalOpener = regexp.MustCompile(`(?i)\b(if|unless|in case|whenever|should it|should that)\b[^,]*$`)
 
 // selfHealDirective is injected as a user-role message so the model treats it
 // as a fresh, top-of-mind instruction for this turn.

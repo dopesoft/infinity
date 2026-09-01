@@ -1318,6 +1318,26 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// on for the rest of the turn: in an interactive session the loop then
 	// refuses source-mutating tool calls (selfheal.go guard).
 	inSelfHealPass := false
+	// A HEAL PASS IS INTERNAL. The directive that starts it is written by us,
+	// not by him, so the reply to it is addressed to us. When the pass then
+	// discovers there was nothing to fix, its report ("Nothing broke, boss…")
+	// is a conversation between the machine and itself, and it was landing in
+	// his chat as the turn's last word - on top of, and then instead of, the
+	// real answer he had just read. His words: "why do I want the message
+	// about the machine?"
+	//
+	// So the pass's prose is held back until it has earned a place. If it runs
+	// tools, it is doing real work and gets to speak. If it comes back having
+	// done nothing, it is dropped and the turn ends on the answer he actually
+	// wanted, which is the one that was already on his screen.
+	healPending := false
+	// healSettled: a pass has already looked and found nothing to fix. The
+	// answer it hands back is the one that tripped the detector in the first
+	// place, so without this the same words would trigger the same pass again,
+	// and he would wait through it twice for a note he is never shown.
+	healSettled := false
+	preHealText := ""
+	var healBuffer strings.Builder
 
 	// An empty userMsg is the "resume" path: run one turn against the
 	// already-hydrated session history (e.g. a Discuss-with-Jarvis seeded
@@ -1541,6 +1561,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			switch ev.Kind {
 			case llm.StreamText:
 				partialText.WriteString(ev.TextDelta)
+				if healPending {
+					// Held until the pass shows whether it is doing anything.
+					// Flushed the moment it calls a tool; dropped if it comes
+					// back empty-handed. See healPending's declaration.
+					healBuffer.WriteString(ev.TextDelta)
+					continue
+				}
 				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
 			case llm.StreamThinking:
 				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: ev.ThinkingDelta})
@@ -1618,6 +1645,32 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}
 
 		<-streamDone
+
+		// DID THE HEAL PASS DO ANYTHING?
+		//
+		// Tool calls mean it is working: the prose it wrote is a preamble to
+		// real work, so it is released and the answer that preceded the pass
+		// becomes a message in its own right. No tool calls mean it looked and
+		// found nothing to fix, so its report is for us, not for him: it is
+		// dropped, and the turn ends on the answer he already had.
+		if healPending && len(resp.ToolCalls) > 0 {
+			healPending = false
+			l.keepAssistantSegment(turnID, s, preHealText, nil)
+			if held := healBuffer.String(); strings.TrimSpace(held) != "" {
+				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: held})
+			}
+			healBuffer.Reset()
+			preHealText = ""
+		} else if healPending && streamErr == nil {
+			healPending = false
+			healSettled = true
+			healBuffer.Reset()
+			if strings.TrimSpace(preHealText) != "" {
+				// The turn ends on what he was actually waiting for.
+				resp.Text = preHealText
+			}
+			preHealText = ""
+		}
 
 		// A call with no result by the end of the stream never came back: the
 		// turn was cut off, or the line carrying its result was too big to
@@ -1787,11 +1840,18 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// through, none of the finishing reflexes (self-heal, plan-continue,
 			// verify) run. See consent.go turnIsDiscuss.
 			discussing := turnIsDiscuss(ctx)
-			if !discussing && selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
+			if !discussing && !healSettled && selfHealCount < maxSelfHealPerTurn && shouldSelfHeal(resp.Text, toolErredThisTurn) {
 				selfHealCount++
 				healedThisTurn = true
 				inSelfHealPass = true
-				l.keepAssistantSegment(turnID, s, resp.Text, nil)
+				// Held, not written down: whether this counts as a message of
+				// its own depends on what the pass does next. If the pass does
+				// nothing, THIS is the turn's final answer, not a segment
+				// before one.
+				healPending = true
+				preHealText = resp.Text
+				healBuffer.Reset()
+				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 				s.Append(llm.Message{Role: llm.RoleUser, Content: selfHealDirective})
 				toolErredThisTurn = false // fresh slate for the heal pass
 				continue
