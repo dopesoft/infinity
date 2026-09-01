@@ -19,6 +19,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/gauge"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/mcpauth"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/proactive"
 	"github.com/dopesoft/infinity/core/internal/push"
@@ -106,6 +107,15 @@ type Config struct {
 	// a restart. Nil-safe - when absent, /api/settings/provider returns
 	// 503 and the loop sticks with its boot provider.
 	LLMRegistry *llm.Registry
+	// MCPTokens is the shared mint/check store for the bearer tokens that let
+	// a headless brain session reach Infinity's tool registry over MCP. The
+	// Claude Max provider mints; this server checks. Nil is safe - a private
+	// store is created, which just means nothing can mint.
+	MCPTokens *mcpauth.Tokens
+	// ClaudeBrain answers "is the Claude Max Plan brain connected?" for the
+	// Settings card. An interface rather than the concrete runner so the
+	// server keeps no opinion about how that brain is launched.
+	ClaudeBrain ClaudeBrainStatusProbe
 
 	// LLMKeyStore holds vendor API keys pasted into Studio Settings
 	// (mem_provider_keys). Nil-safe: without it the provider-keys API
@@ -219,6 +229,10 @@ type Server struct {
 	auth        *auth.Verifier
 	settings    *settings.Store
 	llmReg      *llm.Registry
+	// mcpTokens mints/checks the bearer tokens that let a headless brain
+	// session reach Infinity's own tool registry over /api/mcp/server.
+	mcpTokens   *mcpauth.Tokens
+	claudeBrain ClaudeBrainStatusProbe
 	llmKeys     *llm.KeyStore
 	connectors  *connectors.Cache
 	voice       *voice.Minter
@@ -277,6 +291,10 @@ func New(cfg Config) *Server {
 		auth:           cfg.Auth,
 		settings:       settings.New(cfg.Pool),
 		llmReg:         cfg.LLMRegistry,
+		// Nil-safe below: a private store means the endpoint still authenticates,
+		// it just never accepts a token because nothing can mint one.
+		mcpTokens:      cfg.MCPTokens,
+		claudeBrain:    cfg.ClaudeBrain,
 		llmKeys:        cfg.LLMKeyStore,
 		connectors:     cfg.Connectors,
 		voice:          cfg.Voice,
@@ -295,6 +313,9 @@ func New(cfg Config) *Server {
 		bridgeRouter:   cfg.BridgeRouter,
 		bridgePrefs:    cfg.BridgePrefs,
 		turnStore:      cfg.Turns,
+	}
+	if s.mcpTokens == nil {
+		s.mcpTokens = mcpauth.New()
 	}
 	if s.heartbeat != nil {
 		s.heartbeat.SetOnFinding(s.onHeartbeatFinding)
@@ -365,7 +386,7 @@ func New(cfg Config) *Server {
 	// upgrade response, which middleware-401s break).
 	var handler http.Handler = mux
 	if cfg.Auth != nil {
-		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/readyz", "/auth/", "/webhooks/", "/ws", "/api/canvas/preview/"})(handler)
+		handler = cfg.Auth.HTTPMiddleware([]string{"/health", "/readyz", "/auth/", "/webhooks/", "/ws", "/api/canvas/preview/", "/api/mcp/server"})(handler)
 	}
 
 	s.http = &http.Server{
@@ -390,6 +411,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/nav/counts", s.handleNavCounts)
 	mux.HandleFunc("/api/work/cancel", s.handleWorkCancel)
 	mux.HandleFunc("/api/tools", s.handleTools)
+	// Infinity's own registry, published as an MCP server for headless
+	// harnesses (the Claude Max brain). Bearer-token authed in the handler,
+	// so it is JWT-exempt in the middleware list above.
+	mux.HandleFunc("/api/mcp/server", s.handleMCPServer)
+	mux.HandleFunc("/api/brain/claude-max", s.handleClaudeBrainStatus)
+	mux.HandleFunc("/api/brain/claude-max/token", s.handleClaudeMaxToken)
 	mux.HandleFunc("/api/mcp", s.handleMCP)
 	// Global search — one generic contract behind ⌘K and every scoped page
 	// search. See search_api.go for why this is not the RRF endpoint below.

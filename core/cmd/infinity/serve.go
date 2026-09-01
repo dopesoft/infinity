@@ -41,6 +41,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/mcpauth"
 	"github.com/dopesoft/infinity/core/internal/maintenance"
 	"github.com/dopesoft/infinity/core/internal/mandate"
 	"github.com/dopesoft/infinity/core/internal/memory"
@@ -115,6 +116,7 @@ func serveCmd() *cobra.Command {
 				embedder           embed.Embedder
 				llmRegistry        *llm.Registry
 				llmKeyStore        *llm.KeyStore
+				mcpTokens          *mcpauth.Tokens
 				activeModel        *activeModelProvider
 				activeBridgeRouter *bridge.Router
 				// claudeRunner is the ONE Claude Code launcher (code_agent + background_build on the Mac).
@@ -360,6 +362,12 @@ func serveCmd() *cobra.Command {
 					// brain on the very next turn - no redeploy.
 					llmKeyStore = llm.NewKeyStore(p)
 					llmRegistry = llm.BuildRegistry(oauthStoreShared, llmKeyStore)
+					// One store, two halves: the Claude Max brain MINTS a
+					// bearer per turn, the HTTP server CHECKS it on
+					// /api/mcp/server. Created here so both get the same
+					// instance - two stores would mean every tool call the
+					// brain makes comes back unauthorized.
+					mcpTokens = mcpauth.New()
 					fmt.Printf("  llm: registered %v\n", llmRegistry.Available())
 					// Route the boot provider through the registry's failover
 					// wrapper too, so the agent loop (until Settings swaps it),
@@ -541,6 +549,37 @@ func serveCmd() *cobra.Command {
 					claudeRunner.AttachLiveRunLookup(func(ctx context.Context, sessionID string) (string, string, bool) {
 						return runs.LiveCodingRun(ctx, codePool, sessionID)
 					})
+					// The SAME Claude Code on the SAME Max subscription, driven as a
+					// conversational brain rather than a coding job: "Claude Max Plan"
+					// in Settings. It runs with Claude Code's own tools AND Infinity's
+					// registry over MCP (mcpTokens mints the bearer; the endpoint is
+					// server/mcp_server.go), so the boss's best model reaches memory,
+					// surface and connectors instead of being a brilliant amnesiac.
+					//
+					// Registered here rather than in BuildRegistry because it needs the
+					// runner, which needs the bridge router. Registry.Register is
+					// already runtime-safe (Settings registers vendors mid-turn).
+					claudeRunner.AttachBrain(tools.BrainWiring{
+						CoreURL:   strings.TrimSpace(os.Getenv("INFINITY_PUBLIC_URL")),
+						MintToken: mcpTokens.Mint,
+						// The cloud box has no browser and no Claude sign-in of
+						// its own, so its half of the subscription is a token the
+						// boss minted with `claude setup-token`. Read per turn
+						// rather than cached at boot: pasting it in Settings has
+						// to work without a redeploy, same as every other
+						// credential in this product.
+						SubscriptionToken: func(ctx context.Context) string {
+							if llmKeyStore == nil {
+								return ""
+							}
+							tok, _, err := llmKeyStore.Get(ctx, "claude_max")
+							if err != nil {
+								return ""
+							}
+							return tok
+						},
+					})
+					llmRegistry.Register(llm.NewClaudeCode(claudeRunner, settings.New(p), llm.ModelForVendor("claude_max")))
 					// Generic artifact CRUD + high-level project_create.
 					// project_create is the boss-asked-for end-to-end
 					// app-bootstrap tool; it routes through the bridge
@@ -1483,6 +1522,32 @@ func serveCmd() *cobra.Command {
 						// own goals that are blocked, due soon, or stalled -
 						// so a goal it set and forgot gets revisited.
 						proactive.AgentGoalChecklist(pool),
+						// Claude subscription auth: warn a month BEFORE the
+						// cloud box's setup-token hits its one-year expiry,
+						// and say so plainly if neither machine can sign in.
+						// A token that dies unannounced kills the overnight
+						// builds first, when he is asleep and cannot fix it.
+						proactive.ClaudeAuthChecklist(func(ctx context.Context) (proactive.ClaudeAuthState, error) {
+							if claudeRunner == nil {
+								return proactive.ClaudeAuthState{}, nil
+							}
+							st := claudeRunner.BrainStatus(ctx)
+							out := proactive.ClaudeAuthState{
+								Configured: true,
+								MacReady:   st.MacReady,
+								CloudReady: st.CloudReady,
+							}
+							// Age is only knowable for a token saved since
+							// Infinity started recording the date. An older
+							// one reports zero, which suppresses the age
+							// warnings rather than inventing an expiry.
+							if raw, ok, err := settings.New(pool).Get(ctx, "claude_max.token_saved_at"); err == nil && ok {
+								if at, perr := time.Parse(time.RFC3339, strings.TrimSpace(raw)); perr == nil {
+									out.TokenAge = time.Since(at)
+								}
+							}
+							return out, nil
+						}),
 						// Goal × entity urgency: when an active goal references
 						// a world-model entity and that entity shows up in a
 						// recent observation, the agent learns about it. This
@@ -2348,6 +2413,8 @@ func serveCmd() *cobra.Command {
 				WorkingBuffer:      workingBuf,
 				Heartbeat:          heartbeat,
 				LLMRegistry:        llmRegistry,
+				MCPTokens:          mcpTokens,
+				ClaudeBrain:        claudeRunner,
 				LLMKeyStore:        llmKeyStore,
 				Connectors:         connectorsCache,
 				Voice:              voiceMinter,

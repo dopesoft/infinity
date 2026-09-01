@@ -16,7 +16,7 @@
  * figure is never an understatement, with the discount noted per row.
  */
 
-export type VendorId = "anthropic" | "openai" | "openai_oauth" | "google" | "deepseek";
+export type VendorId = "anthropic" | "claude_max" | "openai" | "openai_oauth" | "google" | "deepseek";
 
 export type ModelEntry = {
   /** Stable id used by Core's settings store + provider Stream() override. */
@@ -41,7 +41,12 @@ export type VendorEntry = {
   /** Env var the provider reads for credentials (informational). */
   keyEnv?: string;
   /** Auth flow shape - drives Settings UI. */
-  auth: "api_key" | "oauth";
+  /**
+   * "subscription" is the Mac's own Claude sign-in: nothing to paste and no
+   * flow to run, so Settings shows a live connection state instead of a
+   * credential field.
+   */
+  auth: "api_key" | "oauth" | "subscription";
   models: ModelEntry[];
 };
 
@@ -136,6 +141,32 @@ export const VENDORS: VendorEntry[] = [
         tagline: "legacy · cheap",
         input_per_mtok: 0.8,
         output_per_mtok: 4,
+      },
+    ],
+  },
+  {
+    id: "claude_max",
+    label: "Claude Max Plan",
+    auth: "subscription",
+    models: [
+      {
+        id: "opus",
+        label: "Opus",
+        tagline: "best for research and hard problems",
+        recommended: true,
+        note: "Included in Max",
+      },
+      {
+        id: "sonnet",
+        label: "Sonnet",
+        tagline: "faster, lighter on your weekly limit",
+        note: "Included in Max",
+      },
+      {
+        id: "haiku",
+        label: "Haiku",
+        tagline: "quickest, for simple turns",
+        note: "Included in Max",
       },
     ],
   },

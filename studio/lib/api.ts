@@ -2005,6 +2005,61 @@ export async function exchangeOpenAIOAuth(input: {
   }
 }
 
+/**
+ * Whether the Claude Max Plan brain can answer.
+ *
+ * There is no connect flow to run here: the credential is the Mac's own
+ * Claude sign-in, so this is a live readout rather than a form. Core probes
+ * the same sign-in the launcher checks before every run, which is what keeps
+ * the card from going green over a brain that would then refuse.
+ */
+export type ClaudeMaxStatus = {
+  connected: boolean;
+  account?: string;
+  plan?: string;
+  /** "Mac" or "cloud" - which machine is carrying the sign-in. */
+  where?: string;
+  detail: string;
+  /** Signed in on the Mac. Only true while the laptop is awake. */
+  mac_ready: boolean;
+  /** A subscription token is saved, so the cloud box can think on its own. */
+  cloud_ready: boolean;
+};
+
+export async function fetchClaudeMaxStatus(
+  signal?: AbortSignal,
+): Promise<ClaudeMaxStatus | null> {
+  return getJSON<ClaudeMaxStatus>(`/api/brain/claude-max`, signal);
+}
+
+/**
+ * Save the token `claude setup-token` prints, so the cloud box can sign in as
+ * the boss and keep working when the Mac is shut. Returns an error sentence
+ * fit to show him, or null on success.
+ */
+export async function saveClaudeMaxToken(token: string): Promise<string | null> {
+  try {
+    const res = await authedFetch(`/api/brain/claude-max/token`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    if (!res.ok) return (await res.text()).trim() || `Couldn't save that (HTTP ${res.status}).`;
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
+export async function removeClaudeMaxToken(): Promise<boolean> {
+  try {
+    const res = await authedFetch(`/api/brain/claude-max/token`, { method: "DELETE" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchOpenAIOAuthStatus(
   signal?: AbortSignal,
 ): Promise<OpenAIOAuthStatusResponse | null> {

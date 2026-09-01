@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTabParam } from "@/lib/useTabParam";
+import { openAuthWindow } from "@/lib/auth-window";
 import {
   Check,
   ExternalLink,
@@ -52,6 +53,9 @@ import {
   fetchCoreStatus,
   fetchChatSettings,
   fetchMCP,
+  fetchClaudeMaxStatus,
+  removeClaudeMaxToken,
+  saveClaudeMaxToken,
   fetchOpenAIOAuthStatus,
   fetchProviderKeys,
   fetchTools,
@@ -62,6 +66,7 @@ import {
   type CoreStatus,
   type MCPStatus,
   type OpenAIOAuthStartResponse,
+  type ClaudeMaxStatus,
   type OpenAIOAuthStatusResponse,
   type ProviderKeyRow,
   type ToolDescriptor,
@@ -779,7 +784,9 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
           </p>
         )}
 
-        {selectedVendor.auth === "oauth" ? (
+        {selectedVendor.auth === "subscription" ? (
+          <SubscriptionConnectBlock />
+        ) : selectedVendor.auth === "oauth" ? (
           <OAuthConnectBlock />
         ) : (
           <ApiKeyBlock
@@ -1013,6 +1020,13 @@ function PricingTable({ vendor }: { vendor: VendorEntry }) {
     return arr;
   }, [vendor.models, sortKey, sortDir]);
 
+  // A subscription vendor has no per-token price, and a table of dashes is
+  // worse than no table: it implies a cost that does not exist. The models'
+  // own "Included in Max" note already says how it is paid for.
+  if (!vendor.models.some((m) => m.input_per_mtok != null || m.output_per_mtok != null)) {
+    return null;
+  }
+
   return (
     <Section title={`${vendor.label} pricing`} badge="per 1M tokens" tone="band" noPad>
       <div className="min-w-0 overflow-x-auto pt-1 scroll-touch">
@@ -1083,6 +1097,166 @@ function SortHeader({
   );
 }
 
+// ── Subscription block (claude_max) ────────────────────────────────────────
+// The third credential shape, and the only one with nothing to fill in.
+//
+// Claude Max runs through Claude Code's own sign-in on the Mac, so there is no
+// key to paste and no flow to click through: the honest UI is a live readout
+// of whether that sign-in is there. Core probes the SAME thing the launcher
+// checks before it starts a run, so this can never show connected over a brain
+// that would then refuse.
+//
+// One control, and it always does something: Check again. There is no Connect
+// button, because there is nothing here for it to do.
+function SubscriptionConnectBlock() {
+  const [status, setStatus] = useState<ClaudeMaxStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [token, setToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      setStatus(await fetchClaudeMaxStatus());
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const err = await saveClaudeMaxToken(token.trim());
+      if (err) {
+        setError(err);
+        return;
+      }
+      setToken("");
+      setAdding(false);
+      await refresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    setSaving(true);
+    try {
+      await removeClaudeMaxToken();
+      await refresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Nothing renders until Core answers. An empty shell that fills in a second
+  // later reads as "you have nothing" when it means "I haven't looked".
+  if (status === null) {
+    return (
+      <p className="text-[13px] text-muted-foreground">
+        {busy ? "Checking…" : "I couldn't reach Core to check this."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <span
+          aria-hidden
+          className={cn(
+            "mt-[6px] size-2 shrink-0 rounded-full",
+            status.connected ? "bg-success" : "bg-warning",
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          {status.connected && status.account ? (
+            <p className="min-w-0 break-words text-[14px] font-medium text-foreground">
+              {status.account}
+              {status.plan ? (
+                <span className="text-muted-foreground"> · {status.plan} plan</span>
+              ) : null}
+            </p>
+          ) : null}
+          <p className="mt-0.5 min-w-0 break-words text-[13px] leading-relaxed text-muted-foreground">
+            {status.detail}
+          </p>
+        </div>
+      </div>
+
+      {/* The cloud half. It only earns space when there is something to do or
+          something to undo, so a fully set-up boss sees neither a form nor a
+          dead button. */}
+      {status.cloud_ready ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="text-[13px] text-muted-foreground">
+            Token saved, so this keeps working with your laptop shut.
+          </span>
+          <Button variant="ghost" size="sm" onClick={remove} disabled={saving}>
+            Remove
+          </Button>
+        </div>
+      ) : adding ? (
+        <div className="flex min-w-0 flex-col gap-2">
+          <Input
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Paste the token here"
+            inputMode="text"
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={save} disabled={saving || token.trim() === ""}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setAdding(false);
+                setToken("");
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex min-w-0 flex-col gap-2">
+          <p className="text-[13px] leading-relaxed text-muted-foreground">
+            Run <code className="font-mono text-[12.5px]">claude setup-token</code> on your Mac and
+            paste what it prints. That lets the cloud machine sign in as you, so this brain still
+            answers when the Mac is asleep.
+          </p>
+          <div>
+            <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+              Add token
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {error && <ErrorNote>{error}</ErrorNote>}
+
+      <div>
+        <Button variant="ghost" size="sm" onClick={refresh} disabled={busy}>
+          {busy ? "Checking…" : "Check again"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── OAuth Connect block (openai_oauth only) ────────────────────────────────
 // Three states:
 //   • disconnected - "Connect ChatGPT" button kicks off /api/auth/openai/start,
@@ -1116,20 +1290,21 @@ function OAuthConnectBlock() {
   }, []);
 
   async function connect() {
+    // Claim the sign-in window synchronously in the tap - opening it after
+    // the await is silently blocked on iOS Safari / the installed PWA.
+    // A new tab (not this one) so Studio stays open for the paste-back.
+    const authWindow = openAuthWindow();
     setBusy("start");
     setError(null);
     try {
       const next = await startOpenAIOAuth();
       if (!next) {
+        authWindow.close();
         setError("Could not start the connect flow - check Core logs.");
         return;
       }
       setPending(next);
-      // Open in a new tab so the user can leave Studio open and paste
-      // back without losing the dialog state.
-      if (typeof window !== "undefined") {
-        window.open(next.authorize_url, "_blank", "noopener,noreferrer");
-      }
+      authWindow.navigate(next.authorize_url);
     } finally {
       setBusy(null);
     }

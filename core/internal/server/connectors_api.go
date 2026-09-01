@@ -197,9 +197,13 @@ func (s *Server) handleComposioConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Background cache refresh so the pending account shows up in the
 	// activated list (status=INITIATED until the boss finishes OAuth).
+	// Detached from r.Context(): the request context is cancelled the
+	// moment this handler returns, which killed the refresh mid-flight.
 	if s.connectors != nil {
 		go func() {
-			_ = s.connectors.Refresh(r.Context())
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = s.connectors.Refresh(ctx)
 		}()
 	}
 

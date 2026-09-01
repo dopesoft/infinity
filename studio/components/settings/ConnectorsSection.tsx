@@ -21,6 +21,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CustomExtensions } from "@/components/settings/CustomExtensions";
 import { useTabParam } from "@/lib/useTabParam";
+import { openAuthWindow } from "@/lib/auth-window";
 import { cn } from "@/lib/utils";
 import {
   disconnectComposioAccount,
@@ -79,8 +80,10 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
     existingAliases: string[];
   } | null>(null);
 
-  const loadConnected = useCallback(async () => {
-    setConnectedLoading(true);
+  // background=true refreshes without flipping the loading flag, so the
+  // list doesn't flicker when we re-check status after an OAuth round-trip.
+  const loadConnected = useCallback(async (background = false) => {
+    if (!background) setConnectedLoading(true);
     const [accountsRes, aliasMap] = await Promise.all([
       fetchComposioConnected(),
       fetchComposioAliases(),
@@ -93,7 +96,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
       setConnectedError(null);
     }
     setAliases(aliasMap);
-    setConnectedLoading(false);
+    if (!background) setConnectedLoading(false);
   }, []);
 
   const loadCatalog = useCallback(
@@ -121,6 +124,45 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   useEffect(() => {
     loadConnected();
   }, [loadConnected]);
+
+  // The OAuth round-trip happens in another tab (or, on the iPhone PWA, an
+  // in-app browser sheet), and iOS freezes this page's timers the moment it
+  // goes to the background - so a "reload in 3s" never fires there. The
+  // status refresh has to key off COMING BACK: refetch whenever the app
+  // regains visibility/focus, same listeners the ws provider uses.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") loadConnected(true);
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("pageshow", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("pageshow", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [loadConnected]);
+
+  // While any account is mid-handshake (INITIATED and friends), poll until
+  // Composio flips it to ACTIVE - the flip happens on their side after the
+  // provider redirects, so nothing pushes it to us.
+  const hasPendingAccount = useMemo(
+    () =>
+      connected.some((a) => {
+        const s = (a.status ?? "").toUpperCase();
+        return s === "INITIATED" || s === "INITIALIZING" || s === "PENDING";
+      }),
+    [connected],
+  );
+
+  useEffect(() => {
+    if (!hasPendingAccount) return;
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") loadConnected(true);
+    }, 5000);
+    return () => clearInterval(t);
+  }, [hasPendingAccount, loadConnected]);
 
   useEffect(() => {
     if (tab === "browse" && catalog.length === 0 && !catalogError) {
@@ -236,32 +278,41 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   }
 
   async function handleConnect(slug: string, opts: { userId: string; alias: string }) {
+    // Claim the OAuth window BEFORE the await - iOS Safari (and the
+    // installed PWA) only allows window.open inside the synchronous tap
+    // gesture; opened after the API round-trip it is silently blocked.
+    const authWindow = openAuthWindow();
     setConnecting(connectKey(slug));
     const r = await initiateComposioConnect(slug, opts);
     setConnecting(null);
-    if (r.error) {
+    if (r.error || !r.redirect_url) {
+      authWindow.close();
       // eslint-disable-next-line no-alert
-      alert(`Couldn't start ${slug} connection: ${r.error}`);
+      alert(`Couldn't start ${slug} connection: ${r.error ?? "no sign-in link came back"}`);
       return;
     }
-    if (r.redirect_url) window.open(r.redirect_url, "_blank", "noopener,noreferrer");
-    setTimeout(() => loadConnected(), 3000);
+    authWindow.navigate(r.redirect_url);
+    setTimeout(() => loadConnected(true), 3000);
   }
 
   async function handleReconnect(
     account: ActiveAccount,
   ) {
     if (!account.accountId) return;
+    // Same gesture rule as handleConnect: claim the window before the await
+    // or iOS never opens it.
+    const authWindow = openAuthWindow();
     setConnecting(reconnectKey(account.accountId));
     const r = await refreshComposioAccount(account.accountId);
     setConnecting(null);
-    if (r.error) {
+    if (r.error || !r.redirect_url) {
+      authWindow.close();
       // eslint-disable-next-line no-alert
-      alert(`Couldn't start reconnect: ${r.error}`);
+      alert(`Couldn't start reconnect: ${r.error ?? "no sign-in link came back"}`);
       return;
     }
-    if (r.redirect_url) window.open(r.redirect_url, "_blank", "noopener,noreferrer");
-    setTimeout(() => loadConnected(), 3000);
+    authWindow.navigate(r.redirect_url);
+    setTimeout(() => loadConnected(true), 3000);
   }
 
   async function handleDisconnect(id: string, label: string) {

@@ -1,0 +1,705 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/dopesoft/infinity/core/internal/bridge"
+	"github.com/dopesoft/infinity/core/internal/llm"
+)
+
+// Converse: Claude Code driven as a CONVERSATIONAL brain rather than a coding
+// job.
+//
+// The coding path (code_agent.go) is job-shaped: it takes a task and a git
+// repo, books a run row, forwards steps, and can detach and be followed in the
+// background. A chat turn is none of those things - it is one prompt, watched
+// to completion, streamed into the reply - so this is a sibling loop over the
+// same primitives (the job files, the detached launch, the stream-json poll)
+// rather than a sixth set of options bolted onto Run. Both still go through
+// the SAME subscription proof, because that rule has no exceptions.
+//
+// What makes it a real brain rather than a sandboxed one is the --mcp-config
+// written below: it points the session at Core's own MCP endpoint, so Claude
+// Code can call Infinity's whole tool registry - memory, surface, connectors -
+// through the same gates and hooks a chat turn uses.
+
+var brainInfoLog = log.New(os.Stdout, "", log.LstdFlags)
+
+const (
+	// brainTmpDir is where a conversation turn's stream, status and config
+	// files live on the Mac. Separate from the coding path's tmp dir so a
+	// chat turn and a build can never collide on a file name.
+	brainTmpDir = "/tmp/inf-brain"
+
+	// brainWorkspaceMac is the working directory a conversation runs in ON THE
+	// MAC. Claude Code always has a cwd; a chat turn has no repo, so it gets a
+	// stable scratch directory of its own rather than being turned loose in
+	// whatever the boss last built. Created and git-initialised on first use,
+	// because several of Claude Code's affordances assume a repository.
+	brainWorkspaceMac = "$HOME/.infinity/brain"
+
+	// brainWorkspaceCloud is the cloud box's own persistent disk. Here the
+	// opposite is right: /workspace IS Jarvis's computer, and a brain that
+	// cannot see the files it has been building all week is the amnesia this
+	// whole path exists to avoid.
+	brainWorkspaceCloud = "/workspace"
+
+	// brainPollEach is the cadence of the stream read. Faster than the coding
+	// path's: a chat turn is watched by someone waiting for a reply, and the
+	// poll is what makes the activity ledger move.
+	brainPollEach = 900 * time.Millisecond
+
+	// brainMaxWait bounds one turn. Generous because the whole point of this
+	// brain is long research and multi-step work, but finite so a wedged
+	// session cannot hold a chat open forever.
+	brainMaxWait = 20 * time.Minute
+)
+
+// brainWorkspace resolves the working directory for the bridge in play.
+func brainWorkspace(b bridge.Bridge) string {
+	if b != nil && b.Name() == bridge.KindCloud {
+		return brainWorkspaceCloud
+	}
+	return brainWorkspaceMac
+}
+
+// BrainWiring is what Converse needs beyond the bridge: where Core is
+// reachable from the Mac, and how to mint a token for it.
+type BrainWiring struct {
+	// CoreURL is Core's PUBLIC origin (INFINITY_PUBLIC_URL). The Mac reaches
+	// Core over the internet, not the Railway private network, so an internal
+	// hostname here would leave the brain with no tools at all.
+	CoreURL string
+	// MintToken issues a bearer for one session's MCP access.
+	MintToken func() string
+	// SubscriptionToken returns the stored CLAUDE_CODE_OAUTH_TOKEN, or "" if
+	// none is saved. This is what lets the CLOUD box answer: it has no Claude
+	// sign-in of its own, so the subscription travels as a token minted by
+	// `claude setup-token` and pasted into Settings. Empty on the Mac path,
+	// which uses the Mac's own sign-in instead and must never see a token
+	// (one would outrank the sign-in and change which credential pays).
+	SubscriptionToken func(ctx context.Context) string
+}
+
+// AttachBrain wires the conversational path. Called once from serve.go. Until
+// it is called, Converse refuses rather than running a brain with no tools.
+func (r *ClaudeCodeRunner) AttachBrain(w BrainWiring) {
+	r.brain = w
+}
+
+// brainReady reports whether the MCP half is wired.
+func (r *ClaudeCodeRunner) brainReady() bool {
+	return r != nil && strings.TrimSpace(r.brain.CoreURL) != "" && r.brain.MintToken != nil
+}
+
+// Converse runs one chat turn on the Mac's Claude Code and streams it back.
+// It implements llm.BrainRunner.
+func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out chan<- llm.StreamEvent) (llm.Response, error) {
+	b, _, err := r.ActiveBridge(ctx)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	if b == nil {
+		return llm.Response{}, errors.New("Neither your Mac nor the cloud box is reachable right now, so there's nowhere for Claude to run.")
+	}
+	if !r.brainReady() {
+		return llm.Response{}, errors.New("Claude Max isn't wired to Infinity's tools yet (INFINITY_PUBLIC_URL is unset), so it would answer with no memory. Set it and restart Core.")
+	}
+
+	jobID := fmt.Sprintf("brain-%d", time.Now().UnixNano())
+	files := newBrainFiles(jobID)
+	workspace := brainWorkspace(b)
+
+	// Prove the subscription BEFORE launching. The proof differs by bridge but
+	// the RULE does not: this brain spends the Max plan or it does not run.
+	token, err := r.brainSubscription(ctx, b, workspace)
+	if err != nil {
+		return llm.Response{}, err
+	}
+
+	mcpToken := r.brain.MintToken()
+	if mcpToken == "" {
+		return llm.Response{}, errors.New("couldn't mint a tool token for this turn, so I'd be answering with no memory. Nothing was sent.")
+	}
+
+	script := brainLaunchScript(files, turn, brainLaunch{
+		workspace: workspace,
+		coreURL:   r.brain.CoreURL,
+		mcpToken:  mcpToken,
+		subToken:  token,
+		cloud:     b.Name() == bridge.KindCloud,
+	})
+	body, code, ok := b.Post(ctx, "/bash", map[string]any{
+		"cmd": script, "cwd": "$HOME", "timeout_sec": 30,
+	})
+	if !ok || code >= 300 {
+		msg, _ := bridgeBashOutput(body)
+		return llm.Response{}, fmt.Errorf("couldn't start Claude on the Mac (bridge said %d): %s", code, strings.TrimSpace(msg))
+	}
+	brainInfoLog.Printf("claude_max: launched turn %s (resume=%q model=%q)", jobID, turn.Resume, turn.Model)
+
+	p := &brainPoll{
+		b:         b,
+		workspace: workspace,
+		files:     files,
+		turn:    turn,
+		out:     out,
+		line:    1,
+		started: time.Now(),
+	}
+	defer p.cleanup()
+	return p.wait(ctx)
+}
+
+// --- files -------------------------------------------------------------------
+
+type brainFiles struct {
+	out      string
+	err      string
+	status   string
+	settings string
+	mcp      string
+}
+
+func newBrainFiles(jobID string) brainFiles {
+	return brainFiles{
+		out:      fmt.Sprintf("%s/%s.out", brainTmpDir, jobID),
+		err:      fmt.Sprintf("%s/%s.err", brainTmpDir, jobID),
+		status:   fmt.Sprintf("%s/%s.status", brainTmpDir, jobID),
+		settings: fmt.Sprintf("%s/%s.settings.json", brainTmpDir, jobID),
+		mcp:      fmt.Sprintf("%s/%s.mcp.json", brainTmpDir, jobID),
+	}
+}
+
+// brainMCPConfig is the --mcp-config Claude Code reads: one HTTP MCP server,
+// Infinity itself, carrying a bearer minted for this turn.
+func brainMCPConfig(coreURL, token string) string {
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"infinity": map[string]any{
+				"type":    "http",
+				"url":     strings.TrimRight(coreURL, "/") + "/api/mcp/server",
+				"headers": map[string]string{"Authorization": "Bearer " + token},
+			},
+		},
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+// brainLaunch is everything the launch script needs that is not the turn.
+type brainLaunch struct {
+	workspace string
+	coreURL   string
+	// mcpToken authorises the session against Infinity's tool registry.
+	mcpToken string
+	// subToken is the CLAUDE_CODE_OAUTH_TOKEN. Set on the CLOUD box, which
+	// has no Claude sign-in of its own. Empty on the Mac, where exporting one
+	// would OUTRANK the sign-in and change which credential pays.
+	subToken string
+	cloud    bool
+}
+
+// brainLaunchScript starts the detached turn.
+//
+// It mirrors claudeLaunchScript's hard-won shape - clear the API key so only
+// the subscription can answer, export the prompt through the environment so
+// no quoting can break on it, `set -m` so the whole tree stays reapable - and
+// adds the two things a conversation needs: a workspace that exists, and the
+// MCP config that gives the brain Infinity's tools.
+//
+// --strict-mcp-config is deliberate: the session gets Infinity's registry and
+// nothing else. Without it Claude Code would also load whatever project and
+// user scoped servers happen to sit on the box, which is both a surprise and
+// a prompt-cache invalidator every time that set changes.
+func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
+	inner := fmt.Sprintf(
+		`claude -p "$INF_PROMPT" ${INF_RESUME:+--resume "$INF_RESUME"} ${INF_MODEL:+--model "$INF_MODEL"} `+
+			`${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose `+
+			`--permission-mode bypassPermissions --mcp-config %s --strict-mcp-config --settings %s `+
+			`> %s 2> %s; echo $? > %s`,
+		f.mcp, f.settings, f.out, f.err, f.status,
+	)
+	steps := []string{
+		"mkdir -p " + brainTmpDir,
+		"mkdir -p " + l.workspace,
+		// git init is idempotent and makes the directory behave like the
+		// repository several of Claude Code's affordances assume.
+		"cd " + l.workspace + " && [ -d .git ] || git init -q " + l.workspace,
+		"cat > " + f.settings + " <<'INFEOF'\n" + codeAgentSettingsJSON() + "\nINFEOF",
+		"cat > " + f.mcp + " <<'INFEOF'\n" + brainMCPConfig(l.coreURL, l.mcpToken) + "\nINFEOF",
+		// Both files carry a live credential. Nobody else on the box needs
+		// to read either one.
+		"chmod 600 " + f.mcp,
+		// An API key in the shell would pre-empt the subscription and bill
+		// per token. True on both bridges.
+		"unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN",
+	}
+	if l.cloud && l.subToken != "" {
+		// The cloud box has no browser and no sign-in of its own, so the
+		// subscription travels as a token. Exported for this command only -
+		// it is never written to the image, a dotfile, or the shell profile.
+		steps = append(steps, "export CLAUDE_CODE_OAUTH_TOKEN="+shellQuote(l.subToken))
+	} else {
+		// On the Mac the sign-in is the credential, and a stray token in the
+		// environment would silently outrank it.
+		steps = append(steps, "unset CLAUDE_CODE_OAUTH_TOKEN")
+	}
+	steps = append(steps,
+		"export INF_PROMPT="+shellQuote(turn.Prompt),
+		"export INF_MODEL="+shellQuote(turn.Model),
+		"export INF_EFFORT="+shellQuote(turn.Effort),
+		"export INF_RESUME="+shellQuote(turn.Resume),
+		"cd "+l.workspace,
+		"set -m",
+		"nohup bash -c "+shellQuote(inner)+" >/dev/null 2>&1 &",
+		"echo LAUNCHED",
+	)
+	return strings.Join(steps, "\n")
+}
+
+// brainSubscription proves the Max plan is what will pay, and returns the
+// token to export when the bridge needs one.
+//
+// The two bridges hold the credential differently and that is the ONLY
+// difference. The Mac has a real Claude sign-in, so it is read back and
+// checked. The cloud box has no browser, so the subscription arrives as a
+// CLAUDE_CODE_OAUTH_TOKEN the boss minted with `claude setup-token` - which
+// Anthropic issues only against a Pro/Max/Team/Enterprise plan, so its mere
+// presence IS the proof. Neither path can fall back to an API key.
+func (r *ClaudeCodeRunner) brainSubscription(ctx context.Context, b bridge.Bridge, workspace string) (string, error) {
+	if b.Name() == bridge.KindCloud {
+		if r.brain.SubscriptionToken == nil {
+			return "", errors.New("The cloud box has no Claude sign-in saved, so it can't run this brain. Add your Claude token in Settings, or wake the Mac.")
+		}
+		token := strings.TrimSpace(r.brain.SubscriptionToken(ctx))
+		if token == "" {
+			return "", errors.New("The cloud box needs your Claude token before it can think on your Max plan. Run `claude setup-token` on your Mac and paste the result into Settings.")
+		}
+		return token, nil
+	}
+	auth, err := r.probeAuth(ctx, b, workspace)
+	if err != nil {
+		return "", err
+	}
+	if !auth.Subscription() {
+		return "", &notSubscriptionError{auth: auth}
+	}
+	return "", nil
+}
+
+// --- poll --------------------------------------------------------------------
+
+// brainPoll watches one conversation turn and turns its stream into events.
+type brainPoll struct {
+	b bridge.Bridge
+	// workspace is the cwd every poll and cleanup round trip runs in. Held
+	// per-poll because it differs by bridge and a turn never changes bridge
+	// mid-flight.
+	workspace string
+	files     brainFiles
+	turn    llm.BrainTurn
+	out     chan<- llm.StreamEvent
+	line    int
+	started time.Time
+
+	sessionSeen bool
+}
+
+// wait polls to completion, emitting events as the stream produces them.
+func (p *brainPoll) wait(ctx context.Context) (llm.Response, error) {
+	deadline := time.Now().Add(brainMaxWait)
+	ticker := time.NewTicker(brainPollEach)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// The boss stopped the turn (or it timed out). Leave the Claude
+			// session resumable rather than tearing it down: his next message
+			// picks the thread back up.
+			return llm.Response{}, ctx.Err()
+		case <-ticker.C:
+		}
+
+		read, ok := p.pollOnce(ctx)
+		if !ok {
+			// One missed poll is not a verdict about the turn - the bridge
+			// blinked. Try again.
+			if time.Now().After(deadline) {
+				return llm.Response{}, errors.New("lost contact with the Mac while Claude was working; the turn may still be running")
+			}
+			continue
+		}
+		p.noteSession(read.fresh)
+		p.emit(read.fresh)
+
+		if res, done := claudeTerminalResult(read.last); done {
+			return p.finish(res)
+		}
+		if strings.Contains(read.head, "DONE:") {
+			// The process exited without a terminal result: a crash, a killed
+			// session, or an auth failure. Read what it managed to write and
+			// report it as the failure it is rather than an empty success.
+			return llm.Response{}, p.failure(ctx)
+		}
+		if time.Now().After(deadline) {
+			return llm.Response{}, fmt.Errorf("Claude has been working on this for %s and hasn't finished. It's still going on the Mac; ask me again and I'll pick up the same thread.", time.Since(p.started).Round(time.Second))
+		}
+	}
+}
+
+type brainRead struct {
+	head  string
+	last  string
+	fresh string
+}
+
+// pollOnce reads the completion signals and the slice of stream that is new.
+// Same three-part shape as the coding path's poll, and for the same reason:
+// the bridge truncates a long reply from the tail, so the signals go first.
+func (p *brainPoll) pollOnce(ctx context.Context) (brainRead, bool) {
+	script := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi
+echo "===LAST==="
+tail -n 1 %s 2>/dev/null | head -c %d
+echo ""
+echo "===NEW==="
+tail -n +%d %s 2>/dev/null | head -n 200 | head -c 48000`,
+		p.files.status, p.files.status,
+		p.files.out, claudeLastLineBytes,
+		p.line, p.files.out)
+
+	body, code, ok := p.b.Post(ctx, "/bash", map[string]any{
+		"cmd": script, "cwd": p.workspace, "timeout_sec": 15,
+	})
+	if !ok || code >= 300 {
+		return brainRead{}, false
+	}
+	raw, _ := bridgeBashOutput(body)
+	head, rest := splitMarker(raw, "", "===LAST===")
+	last, region := splitMarker(rest, "", "===NEW===")
+	region = strings.TrimPrefix(region, "\n")
+
+	// Advance only past COMPLETE lines. A half-written line read now would be
+	// re-read next poll and emitted twice.
+	lines := strings.Split(region, "\n")
+	if len(lines) > 0 && !strings.HasSuffix(region, "\n") {
+		lines = lines[:len(lines)-1]
+	}
+	p.line += len(lines)
+	return brainRead{head: head, last: last, fresh: strings.Join(lines, "\n")}, true
+}
+
+// noteSession reports Claude Code's own session id the first time it appears,
+// so the next turn in this conversation resumes it.
+func (p *brainPoll) noteSession(stream string) {
+	if p.sessionSeen || stream == "" {
+		return
+	}
+	id := parseClaudeSessionID(stream)
+	if id == "" {
+		return
+	}
+	p.sessionSeen = true
+	if p.turn.OnSession != nil {
+		p.turn.OnSession(id)
+	}
+}
+
+// brainEvent is the slice of stream-json this path reads.
+type brainEvent struct {
+	Type    string `json:"type"`
+	Message struct {
+		Content []struct {
+			Type     string          `json:"type"`
+			Text     string          `json:"text"`
+			Thinking string          `json:"thinking"`
+			ID       string          `json:"id"`
+			Name     string          `json:"name"`
+			Input    json.RawMessage `json:"input"`
+		} `json:"content"`
+	} `json:"message"`
+}
+
+// emit turns new stream lines into stream events.
+//
+// Assistant TEXT mid-run is narration ("let me check the logs"), not the
+// answer, so it goes out as thinking: it keeps the boss watching real work
+// without the reply appearing to be written twice. The answer itself is the
+// terminal result, emitted once in finish().
+func (p *brainPoll) emit(fresh string) {
+	if fresh == "" || p.out == nil {
+		return
+	}
+	for _, line := range strings.Split(fresh, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var ev brainEvent
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "assistant" {
+			continue
+		}
+		for _, block := range ev.Message.Content {
+			switch block.Type {
+			case "text":
+				if t := strings.TrimSpace(block.Text); t != "" {
+					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: t + "\n"})
+				}
+			case "thinking":
+				if t := strings.TrimSpace(block.Thinking); t != "" {
+					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: t})
+				}
+			case "tool_use":
+				// Visibility only. Claude Code already ran this itself; the
+				// event is what puts the step in the boss's activity ledger.
+				call := &llm.ToolCall{ID: block.ID, Name: block.Name}
+				if len(block.Input) > 0 {
+					var in map[string]any
+					if json.Unmarshal(block.Input, &in) == nil {
+						call.Input = in
+					}
+				}
+				p.send(llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: call})
+			}
+		}
+	}
+}
+
+func (p *brainPoll) send(ev llm.StreamEvent) {
+	if p.out == nil {
+		return
+	}
+	select {
+	case p.out <- ev:
+	default:
+		// A consumer that has stopped reading must never wedge the poll loop.
+	}
+}
+
+// finish renders the terminal result into a Response.
+func (p *brainPoll) finish(res claudeResult) (llm.Response, error) {
+	if res.IsError {
+		detail := strings.TrimSpace(res.Result)
+		if detail == "" {
+			detail = res.Subtype
+		}
+		return llm.Response{}, fmt.Errorf("Claude stopped without finishing: %s", detail)
+	}
+	text := strings.TrimSpace(res.Result)
+	if text != "" {
+		p.send(llm.StreamEvent{Kind: llm.StreamText, TextDelta: text})
+	}
+	usage := brainUsage(res)
+	p.send(llm.StreamEvent{Kind: llm.StreamComplete, StopReason: "end_turn", Usage: &usage})
+	brainInfoLog.Printf("claude_max: turn finished in %s (cache_read=%d input=%d output=%d)",
+		time.Since(p.started).Round(time.Second), usage.CacheRead, usage.Input, usage.Output)
+	return llm.Response{Text: text, Usage: usage, StopReason: "end_turn"}, nil
+}
+
+// failure reads whatever the run left behind when it exited without a result.
+func (p *brainPoll) failure(ctx context.Context) error {
+	body, _, ok := p.b.Post(ctx, "/bash", map[string]any{
+		"cmd": "tail -c 2000 " + p.files.err, "cwd": p.workspace, "timeout_sec": 10,
+	})
+	detail := ""
+	if ok {
+		detail, _ = bridgeBashOutput(body)
+	}
+	detail = strings.TrimSpace(detail)
+	if human, isAuth := claudeAuthFailure(detail, p.b.Name() == bridge.KindCloud); isAuth {
+		return errors.New(human)
+	}
+	if detail == "" {
+		detail = "it exited without saying why"
+	}
+	return fmt.Errorf("Claude stopped before answering: %s", detail)
+}
+
+// cleanup removes the turn's files, the MCP config with its live token first.
+func (p *brainPoll) cleanup() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	p.b.Post(ctx, "/bash", map[string]any{
+		"cmd": fmt.Sprintf("rm -f %s %s %s %s %s", p.files.mcp, p.files.settings, p.files.out, p.files.err, p.files.status),
+		"cwd": p.workspace, "timeout_sec": 10,
+	})
+}
+
+// brainUsage pulls the turn's token counts off the terminal result.
+//
+// This is where the subscription's prompt cache becomes visible: a resumed
+// session reports most of its prompt under cache_read, which is the whole
+// reason one Claude session is pinned per conversation.
+func brainUsage(res claudeResult) llm.TokenUsage {
+	var u llm.TokenUsage
+	if len(res.RawUsage) == 0 {
+		return u
+	}
+	var raw struct {
+		Input      int `json:"input_tokens"`
+		Output     int `json:"output_tokens"`
+		CacheRead  int `json:"cache_read_input_tokens"`
+		CacheWrite int `json:"cache_creation_input_tokens"`
+	}
+	if json.Unmarshal(res.RawUsage, &raw) != nil {
+		return u
+	}
+	return llm.TokenUsage{
+		Input:      raw.Input,
+		Output:     raw.Output,
+		CacheRead:  raw.CacheRead,
+		CacheWrite: raw.CacheWrite,
+	}
+}
+
+// --- connection status -------------------------------------------------------
+
+// BrainStatus is what the Settings card renders. Every field is written to be
+// read by the boss, not by a developer: no enum names, no shell, no paths.
+type BrainStatus struct {
+	// Connected is the only thing the card branches on.
+	Connected bool `json:"connected"`
+	// Account is the signed-in email, shown so he can see WHICH Claude
+	// account is about to be spent.
+	Account string `json:"account,omitempty"`
+	// Plan reads "Max", "Pro", and so on.
+	Plan string `json:"plan,omitempty"`
+	// Where is "Mac" or "cloud": which machine is carrying the sign-in. The
+	// boss needs it because one of those answers depends on his laptop being
+	// awake and the other does not.
+	Where string `json:"where,omitempty"`
+	// Detail is one plain sentence: what is true, or what to do about it.
+	Detail string `json:"detail"`
+	// MacReady / CloudReady say which machines can carry a turn. The card
+	// needs both separately: "working" and "working with the laptop shut"
+	// are different promises, and only the second one survives him closing
+	// the lid.
+	MacReady   bool `json:"mac_ready"`
+	CloudReady bool `json:"cloud_ready"`
+}
+
+// BrainStatus reports whether the Claude Max Plan brain can answer, and from
+// where.
+//
+// It runs the SAME proof the launcher runs, so the card cannot go green over
+// a brain that would then refuse - the false-green this codebase keeps having
+// to fix. Two places can hold the credential, and the card says which one is
+// carrying it, because "it works" and "it works only while your laptop is
+// awake" are different facts.
+func (r *ClaudeCodeRunner) BrainStatus(ctx context.Context) BrainStatus {
+	if !r.brainReady() {
+		return BrainStatus{
+			Detail: "Claude can sign in, but Infinity can't hand it my tools yet. I need my own public address set before this brain is worth using.",
+		}
+	}
+	mac := r.macBrainStatus(ctx)
+	cloud := r.cloudBrainStatus(ctx)
+
+	mac.MacReady, cloud.MacReady = mac.Connected, mac.Connected
+	mac.CloudReady, cloud.CloudReady = cloud.Connected, cloud.Connected
+
+	switch {
+	case mac.Connected && cloud.Connected:
+		mac.Detail = "Ready on your Mac and on the cloud box, so this keeps working when your laptop is shut."
+		return mac
+	case mac.Connected:
+		mac.Detail = "Ready, running on your Mac. Add your Claude token below and it keeps working when the Mac is asleep."
+		return mac
+	case cloud.Connected:
+		return cloud
+	default:
+		// Neither. Lead with whichever failure the boss can actually act on.
+		if strings.TrimSpace(cloud.Detail) != "" {
+			return cloud
+		}
+		return mac
+	}
+}
+
+// macBrainStatus reads the Mac's own Claude sign-in.
+func (r *ClaudeCodeRunner) macBrainStatus(ctx context.Context) BrainStatus {
+	b := r.bridgeNamed(ctx, bridge.KindMac)
+	if b == nil {
+		return BrainStatus{Detail: "Your Mac isn't reachable right now."}
+	}
+	auth, err := r.probeAuth(ctx, b, brainWorkspaceMac)
+	if err != nil {
+		return BrainStatus{Detail: "I couldn't read the Claude sign-in on your Mac just now. " + errDetail(err)}
+	}
+	if !auth.Subscription() {
+		return BrainStatus{
+			Detail: "Claude Code on your Mac isn't signed in to your subscription (I found: " + auth.Label() + "). Run `claude` on the Mac once and sign in with the account your Max plan is on.",
+		}
+	}
+	return BrainStatus{Connected: true, Where: "Mac", Account: auth.Email, Plan: auth.planName()}
+}
+
+// cloudBrainStatus reports whether the cloud box has a subscription token.
+func (r *ClaudeCodeRunner) cloudBrainStatus(ctx context.Context) BrainStatus {
+	if r.brain.SubscriptionToken == nil || strings.TrimSpace(r.brain.SubscriptionToken(ctx)) == "" {
+		return BrainStatus{
+			Detail: "The cloud box can't think on your plan yet. Run `claude setup-token` on your Mac and paste the token below, then this works with the laptop shut.",
+		}
+	}
+	return BrainStatus{
+		Connected: true,
+		Where:     "cloud",
+		Detail:    "Ready on the cloud box, so this works whether or not your Mac is awake.",
+	}
+}
+
+// bridgeNamed returns the named bridge when it is actually reachable.
+func (r *ClaudeCodeRunner) bridgeNamed(ctx context.Context, kind bridge.Kind) bridge.Bridge {
+	b, _, err := r.ActiveBridge(ctx)
+	if err != nil || b == nil || b.Name() != kind {
+		return nil
+	}
+	return b
+}
+
+func errDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimSpace(err.Error())
+}
+
+// claudeAuthFailure recognises a sign-in failure and says what it means.
+//
+// The raw text here is Claude Code's own ("Invalid API key · Please run
+// /login", "OAuth token has expired"), which tells the boss nothing he can
+// act on and reads like a bug in Infinity rather than a credential that ran
+// out. An expired token is the single most likely way this brain ever stops
+// working, and it will land a year from now when nobody remembers setting it
+// up, so it gets a sentence that names the fix.
+func claudeAuthFailure(text string, cloud bool) (string, bool) {
+	low := strings.ToLower(text)
+	authish := strings.Contains(low, "please run /login") ||
+		strings.Contains(low, "invalid api key") ||
+		strings.Contains(low, "authentication_error") ||
+		strings.Contains(low, "oauth token has expired") ||
+		strings.Contains(low, "token has expired") ||
+		strings.Contains(low, "login expired") ||
+		strings.Contains(low, "unauthorized")
+	if !authish {
+		return "", false
+	}
+	if cloud {
+		return "The Claude token the cloud machine signs in with is no longer being accepted, most likely expired: " +
+			"they last a year. Run `claude setup-token` on your Mac and paste the new one into Settings. " +
+			"Until then this only works while the Mac is awake.", true
+	}
+	return "Claude Code on your Mac is signed out, so it can't run on your subscription. " +
+		"Open a terminal there and run `claude`, then sign in with the account your Max plan is on.", true
+}

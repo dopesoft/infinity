@@ -46,6 +46,13 @@ func ModelFamilyMatches(vendor, model string) bool {
 	switch strings.ToLower(strings.TrimSpace(vendor)) {
 	case "anthropic":
 		return strings.HasPrefix(lower, "claude-")
+	case ProviderClaudeMax:
+		// Claude Code takes the family aliases as well as full ids, and the
+		// aliases are what the Settings picker offers, so both count as this
+		// vendor's family. Without this a generic LLM_MODEL of "opus" would
+		// be discarded and every turn would silently run the harness default.
+		return strings.HasPrefix(lower, "claude-") ||
+			lower == "opus" || lower == "sonnet" || lower == "haiku"
 	case "openai", "openai_oauth":
 		// OpenAI ships gpt-* and o*-series (o1, o3, o4-mini, etc).
 		return strings.HasPrefix(lower, "gpt-") ||

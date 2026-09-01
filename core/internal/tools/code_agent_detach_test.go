@@ -358,7 +358,7 @@ func TestClaudeLaunchScript_PutsTheJobInItsOwnProcessGroup(t *testing.T) {
 	installFakeClaude(t, mac, slowFakeClaude)
 	files := newClaudeJobFiles("job-pgid")
 	_, code, ok := mac.Post(context.Background(), "/bash", map[string]any{
-		"cmd": claudeLaunchScript(files, "task", "claude-opus-5[1m]", "", ""),
+		"cmd": claudeLaunchScript(files, "task", "claude-opus-5[1m]", "", "", ""),
 		"cwd": repo, "timeout_sec": 20,
 	})
 	if !ok || code >= 300 {

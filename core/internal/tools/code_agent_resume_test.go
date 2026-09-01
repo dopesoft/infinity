@@ -22,7 +22,7 @@ import (
 func TestClaudeLaunchScript_ResumesTheSessionWithoutLosingAnyGuarantee(t *testing.T) {
 	f := newClaudeJobFiles("job-resume")
 	const sess = "f4fcf5d1-dffc-407e-bf64-9330f8b4b329"
-	script := claudeLaunchScript(f, "finish the last two files", "claude-opus-5[1m]", "high", sess)
+	script := claudeLaunchScript(f, "finish the last two files", "claude-opus-5[1m]", "high", sess, "")
 
 	if !strings.Contains(script, "export INF_RESUME='"+sess+"'") {
 		t.Fatalf("the session id must reach the launch as an env var:\n%s", script)
@@ -55,7 +55,7 @@ func TestClaudeLaunchScript_ResumesTheSessionWithoutLosingAnyGuarantee(t *testin
 // A cold start must stay cold: an empty resume id leaves the flag out of the
 // command entirely rather than passing `--resume ""`, which claude rejects.
 func TestClaudeLaunchScript_OmitsResumeWhenThereIsNone(t *testing.T) {
-	script := claudeLaunchScript(newClaudeJobFiles("job-cold"), "build it", "", "", "")
+	script := claudeLaunchScript(newClaudeJobFiles("job-cold"), "build it", "", "", "", "")
 	if !strings.Contains(script, "export INF_RESUME=''") {
 		t.Fatalf("INF_RESUME must be exported empty, so the ${:+} expansion drops the flag:\n%s", script)
 	}

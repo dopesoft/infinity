@@ -2,8 +2,10 @@
 #
 # Speaks the same five-primitive protocol as the Mac bridge (fs/save,
 # fs/edit, bash, git/*, health). Lives on Railway's private network.
-# No LLM inside — Jarvis's cognition stays in Core (ChatGPT subscription
-# via openai_oauth). This image is pure substrate.
+# Substrate plus one brain: Claude Code is installed so the cloud box can
+# think for itself (the "Claude Max Plan" vendor) when the Mac is asleep or
+# absent. It carries no credential — the subscription token is injected per
+# run by Core.
 #
 # Stage 1 builds a static Go binary. Stage 2 is the runtime, kept lean
 # but with git/curl/build-essential available because `bash` needs them
@@ -80,6 +82,16 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g pnpm \
     && rm -rf /var/lib/apt/lists/*
+
+# Claude Code, so the cloud box is a full coding and research brain on its own
+# and not just a filesystem the Mac drives.
+#
+# Auth is NOT baked in. The CLI signs in with a CLAUDE_CODE_OAUTH_TOKEN minted
+# by `claude setup-token` on a machine with a browser, stored in Infinity and
+# exported per run. Nothing subscription-bound lives in the image, so this
+# layer is safe to rebuild and share.
+RUN npm install -g @anthropic-ai/claude-code \
+    && claude --version
 
 # Extra font aliases (Calibri Light / Helvetica Neue / Aptos → Carlito) so the
 # inline LibreOffice PDF preview of generated docs always renders a clean sans,

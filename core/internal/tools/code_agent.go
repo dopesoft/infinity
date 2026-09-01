@@ -349,6 +349,13 @@ type claudeAuth struct {
 	found         bool
 	defaultModel  string
 	defaultEffort string
+	// cloudToken is the CLAUDE_CODE_OAUTH_TOKEN the cloud box signs in with.
+	// The cloud has no ~/.claude.json to read back, so the proof is different
+	// in KIND: Anthropic issues this token only against a Pro/Max/Team/
+	// Enterprise plan, so holding one IS holding a subscription. Set only on
+	// the cloud bridge, and never exported on the Mac, where it would
+	// outrank the real sign-in.
+	cloudToken string
 }
 
 // parseClaudeAuth decodes the probe output (see claudeAuthProbeCmd).
@@ -398,6 +405,9 @@ func (a claudeAuth) Subscription() bool {
 	if a.apiKeyHelper {
 		return false
 	}
+	if a.cloudToken != "" {
+		return true
+	}
 	return a.BillingType == "stripe_subscription" || strings.HasPrefix(a.OrganizationType, "claude_")
 }
 
@@ -424,6 +434,8 @@ func (a claudeAuth) Label() string {
 	switch {
 	case a.apiKeyHelper:
 		return "API key helper (not your subscription)"
+	case a.cloudToken != "":
+		return "your Claude subscription · cloud"
 	case !a.found:
 		return "not signed in"
 	case a.Subscription():
@@ -553,6 +565,9 @@ type LiveRunLookup func(ctx context.Context, sessionID string) (runID, label str
 // the boss's Claude subscription. It is the single launcher behind
 // code_agent and background_build-on-Mac.
 type ClaudeCodeRunner struct {
+	// brain is the conversational wiring (Core's public URL + the MCP token
+	// minter). Zero until AttachBrain is called; see claude_brain.go.
+	brain  BrainWiring
 	router *bridge.Router
 	prefs  PreferenceFetcher
 	// liveRuns is the one-job-per-conversation guard. Optional; without it
@@ -689,8 +704,8 @@ type ClaudeCodeJob struct {
 // is spent), *stillRunningError (wait window closed, job left running).
 func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, error) {
 	b := job.Bridge
-	if b == nil || b.Name() != bridge.KindMac {
-		return "", errors.New("code_agent: Claude Code runs on the Mac bridge only")
+	if b == nil {
+		return "", errors.New("code_agent: no bridge is reachable, so there is nowhere to run")
 	}
 	heartbeat := job.Heartbeat
 	if heartbeat == nil {
@@ -788,7 +803,7 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 		setMeta("resumed_from", resume)
 	}
 	files := newClaudeJobFiles(job.JobID)
-	launch := claudeLaunchScript(files, job.Task, job.Model, job.Effort, resume)
+	launch := claudeLaunchScript(files, job.Task, job.Model, job.Effort, resume, auth.cloudToken)
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{
 		"cmd":         launch,
 		"cwd":         repo,
@@ -1495,6 +1510,22 @@ var (
 
 // probeAuth runs the sign-in probe on the Mac and decodes it.
 func (r *ClaudeCodeRunner) probeAuth(ctx context.Context, b bridge.Bridge, repo string) (claudeAuth, error) {
+	// The cloud box has no browser, so it never has a ~/.claude.json sign-in
+	// to read back. Its credential is the subscription token the boss minted
+	// with `claude setup-token`, stored in Infinity and exported for the one
+	// command. Absence is a hard stop, not a fallback: without it there is no
+	// way to run on the plan, and running on anything else is the swap this
+	// gate exists to prevent.
+	if b != nil && b.Name() == bridge.KindCloud {
+		if r.brain.SubscriptionToken == nil {
+			return claudeAuth{}, errors.New("code_agent: the cloud box has no Claude sign-in saved. Add your token in Settings, or wake the Mac.")
+		}
+		token := strings.TrimSpace(r.brain.SubscriptionToken(ctx))
+		if token == "" {
+			return claudeAuth{}, errors.New("code_agent: the cloud box needs your Claude token first. Run `claude setup-token` on your Mac and paste it into Settings.")
+		}
+		return claudeAuth{found: true, cloudToken: token}, nil
+	}
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{"cmd": claudeAuthProbeCmd, "cwd": repo, "timeout_sec": 15})
 	if ok && code >= 400 && code < 500 {
 		return claudeAuth{}, &launchRejectedError{bridge: string(b.Name()), status: code, detail: bridgeErrorDetail(body)}
@@ -1504,6 +1535,14 @@ func (r *ClaudeCodeRunner) probeAuth(ctx context.Context, b bridge.Bridge, repo 
 	}
 	out, _ := bridgeBashOutput(body)
 	return parseClaudeAuth(out), nil
+}
+
+// claudeTokenExport renders the one line that decides which credential pays.
+func claudeTokenExport(cloudToken string) string {
+	if strings.TrimSpace(cloudToken) == "" {
+		return "unset CLAUDE_CODE_OAUTH_TOKEN"
+	}
+	return "export CLAUDE_CODE_OAUTH_TOKEN=" + shellQuote(cloudToken)
 }
 
 // claudeJobFiles are the per-job files under codeAgentTmpDir.
@@ -1535,7 +1574,7 @@ func newClaudeJobFiles(jobID string) claudeJobFiles {
 // context instead of starting cold. Deliberately WITHOUT --fork-session: the
 // resumed run keeps the original session id, so meta.claude_session_id stays
 // the one handle to the whole chain however many passes it takes.
-func claudeLaunchScript(f claudeJobFiles, task, model, effort, resume string) string {
+func claudeLaunchScript(f claudeJobFiles, task, model, effort, resume, cloudToken string) string {
 	inner := fmt.Sprintf(
 		`claude -p "$INF_TASK" ${INF_RESUME:+--resume "$INF_RESUME"} ${INF_MODEL:+--model "$INF_MODEL"} ${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose `+
 			`--permission-mode bypassPermissions --settings %s > %s 2> %s; echo $? > %s`,
@@ -1547,6 +1586,10 @@ func claudeLaunchScript(f claudeJobFiles, task, model, effort, resume string) st
 		// An API key in the bridge's shell would pre-empt the sign-in inside
 		// Claude Code and bill the API instead of the subscription.
 		"unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN",
+		// On the cloud box the subscription IS this token; on the Mac the
+		// sign-in is, and a stray token would silently outrank it. One line
+		// covers both because claudeTokenExport returns the unset on the Mac.
+		claudeTokenExport(cloudToken),
 		"export INF_TASK=" + shellQuote(task),
 		"export INF_MODEL=" + shellQuote(model),
 		"export INF_EFFORT=" + shellQuote(effort),
@@ -1804,6 +1847,10 @@ type claudeResult struct {
 	// which is what makes them usable as proof that a line IS that object.
 	DurationMS int `json:"duration_ms"`
 	NumTurns   int `json:"num_turns"`
+	// RawUsage is the turn's token counts, decoded lazily by whoever needs
+	// them (brainUsage). Raw rather than typed so a new field Anthropic adds
+	// to the usage object never breaks the decode of the result itself.
+	RawUsage json.RawMessage `json:"usage"`
 	parsed     bool
 }
 
@@ -1999,16 +2046,18 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 	model := strDefault(in, "model", t.runner.DefaultModel())
 	effort := strDefault(in, "effort", t.runner.DefaultEffort())
 
-	// Only meaningful on the Mac bridge - that's where the Max-billed
-	// Claude Code CLI lives. On Cloud, the chat model codes directly.
+	// Runs on EITHER bridge now: Claude Code is installed on the cloud box
+	// too, so the boss's subscription writes the code whether or not his
+	// laptop is awake. The credential differs by bridge (the Mac's sign-in,
+	// the cloud's stored token) and probeAuth resolves that; what does NOT
+	// differ is the rule that this path spends the plan or refuses.
+	//
+	// This replaces the old "on Cloud, write the code yourself" fallback,
+	// which quietly downgraded every night the Mac slept: the chat brain
+	// (DeepSeek) authored code that the Max plan was supposed to.
 	b, why, err := t.runner.ActiveBridge(ctx)
 	if err != nil {
 		return "", fmt.Errorf("code_agent: %s", why)
-	}
-	if b.Name() != bridge.KindMac {
-		return fmt.Sprintf("code_agent only runs on the Mac bridge (it delegates to the boss's Claude Code "+
-			"Max subscription). The active bridge is %q. On the Cloud bridge, write the code yourself with "+
-			"fs_save/fs_edit in /workspace.", b.Name()), nil
 	}
 
 	// Stop retrying something dead: while the boss's Claude plan is known
