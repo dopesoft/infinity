@@ -30,6 +30,22 @@ type Message struct {
 	Meta        map[string]any `json:"-"`
 }
 
+// SelfExecutingProvider is a brain that runs its OWN tools and hands back a
+// finished turn, rather than returning tool calls for our loop to execute.
+// Claude Code is one: it has its own agent loop, its own tools, its own
+// session. Response.ToolCalls comes back empty from these, so the loop knows
+// that anything they streamed already happened and belongs in his ledger and
+// in memory as it arrives, in the order it arrives.
+//
+// Declared as a capability rather than sniffed from the provider's name, and
+// answered at stream time rather than inferred afterwards: doing it after the
+// stream closed put the tool rows AFTER the reply, and Studio, seeing a tool
+// row last, told him no reply had come when the answer was sitting right
+// above it.
+type SelfExecutingProvider interface {
+	RunsOwnTools() bool
+}
+
 const ResponseItemMetaKey = "openai_response_item"
 
 func WithRawResponseItem(m Message, raw json.RawMessage) Message {
@@ -146,6 +162,10 @@ type StreamEvent struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	ToolName   string      `json:"tool_name,omitempty"`
 	InputDelta string      `json:"input_delta,omitempty"`
+	// ToolOutput / ToolError carry a StreamToolResult: what the tool returned
+	// and whether it failed. ToolCallID says which call it answers.
+	ToolOutput string      `json:"tool_output,omitempty"`
+	ToolError  bool        `json:"tool_error,omitempty"`
 	StopReason string      `json:"stop_reason,omitempty"`
 	Usage      *TokenUsage `json:"usage,omitempty"`
 	Err        string      `json:"err,omitempty"`
@@ -157,6 +177,12 @@ const (
 	StreamText           StreamEventKind = "text"
 	StreamThinking       StreamEventKind = "thinking"
 	StreamToolCall       StreamEventKind = "tool_call"
+	// StreamToolResult is what a tool a SELF-EXECUTING brain ran came back
+	// with. Every other provider hands us the call and our loop produces the
+	// result itself; a harness runs both halves inside its own session, so
+	// without this the boss sees what it decided to do and never what
+	// happened, and memory records the same half-story.
+	StreamToolResult StreamEventKind = "tool_result"
 	StreamToolInputDelta StreamEventKind = "tool_input_delta"
 	StreamComplete       StreamEventKind = "complete"
 	StreamError          StreamEventKind = "error"

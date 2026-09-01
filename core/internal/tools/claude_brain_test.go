@@ -167,7 +167,12 @@ func TestBrainStreamsRealTokenDeltas(t *testing.T) {
 		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weighing it up"}}}`,
 		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello "}}}`,
 		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"there friend"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tu_1","name":"Bash"}}}`,
+		// The assembled message lines are where a tool call and its RESULT
+		// both live. The partial stream carries the call alone, which is how
+		// this path used to show what the brain decided to do and never what
+		// came back.
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"resume.pdf","is_error":false}]}}`,
 		// The assembled message repeats everything above. Consuming it too
 		// would print the whole reply a second time.
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"hello there friend"}]}}`,
@@ -176,6 +181,7 @@ func TestBrainStreamsRealTokenDeltas(t *testing.T) {
 
 	var text, thinking strings.Builder
 	tools := 0
+	results := 0
 	for ev := range events {
 		switch ev.Kind {
 		case llm.StreamText:
@@ -184,8 +190,16 @@ func TestBrainStreamsRealTokenDeltas(t *testing.T) {
 			thinking.WriteString(ev.ThinkingDelta)
 		case llm.StreamToolCall:
 			tools++
-			if ev.ToolCall.Name != "Bash" {
+			if ev.ToolCall.Name != "claude_code__bash" {
 				t.Errorf("tool call lost its name: %+v", ev.ToolCall)
+			}
+		case llm.StreamToolResult:
+			results++
+			if ev.ToolOutput != "resume.pdf" {
+				t.Errorf("the result never reached the boss or memory: %+v", ev)
+			}
+			if ev.ToolCallID != "tu_1" {
+				t.Errorf("the result was not paired with its call: %+v", ev)
 			}
 		}
 	}
@@ -197,6 +211,11 @@ func TestBrainStreamsRealTokenDeltas(t *testing.T) {
 	}
 	if tools != 1 {
 		t.Errorf("want 1 tool call surfaced, got %d", tools)
+	}
+	// Both halves, or the boss watches it decide and never learns what
+	// happened - the difference between this brain and every other one.
+	if results != 1 {
+		t.Errorf("want 1 tool result surfaced, got %d", results)
 	}
 	if p.streamed != "hello there friend" {
 		t.Errorf("streamed text not tracked, so finish() would print the reply twice: %q", p.streamed)

@@ -215,37 +215,51 @@ func TestCompactionPointFollowsTheBrain(t *testing.T) {
 // Claude Code is one; the shape, not the vendor, is what matters here.
 type harnessProvider struct{ did []string }
 
-func (h *harnessProvider) Name() string  { return "harness" }
-func (h *harnessProvider) Model() string { return "harness-1" }
+func (h *harnessProvider) Name() string       { return "harness" }
+func (h *harnessProvider) Model() string      { return "harness-1" }
+func (h *harnessProvider) RunsOwnTools() bool { return true }
 func (h *harnessProvider) Stream(_ context.Context, _, _ string, _ []llm.Message, _ []llm.ToolDef, out chan<- llm.StreamEvent) (llm.Response, error) {
 	for _, name := range h.did {
 		out <- llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: &llm.ToolCall{
 			ID: "brain-" + name, Name: name,
 		}}
 	}
+	// The reply comes after the work, which is the order it happens in.
+	out <- llm.StreamEvent{Kind: llm.StreamText, TextDelta: "read your resume and drafted the letter"}
 	return llm.Response{Text: "read your resume and drafted the letter"}, nil
 }
 
 // Why: when the brain is a harness, everything Jarvis actually DID happened
-// inside the vendor's session. The events were already being streamed "for the
-// boss's activity ledger" and nothing consumed them, so reading his resume,
-// running a command and writing a file reached neither his screen nor
-// Infinity's memory: the model held the work and we held a transcript of words
-// about it. Losing that session lost the work with it.
-func TestWorkTheBrainDidItselfIsSurfacedAndCaptured(t *testing.T) {
+// inside the vendor's session. The events were already streamed "for the boss's
+// activity ledger" and nothing consumed them, so reading his resume, running a
+// command and writing a file reached neither his screen nor Infinity's memory.
+//
+// And they have to land IN ORDER. Recording them after the stream closed put
+// the tool rows after the reply, and Studio, seeing a tool row last, told him
+// "Tools ran above but Jarvis didn't follow up with a reply" while the answer
+// sat right above it. A real turn on 2026-09-01 05:23 that took 90 seconds and
+// produced 3,848 tokens of answer read as dead.
+func TestWorkTheBrainDidItselfIsSurfacedInOrder(t *testing.T) {
 	l := New(Config{
 		LLM:   &harnessProvider{did: []string{"Read", "Bash", "Write"}},
 		Tools: tools.NewRegistry(),
 	})
 
 	out := make(chan RunEvent, 256)
+	var kinds []string
 	var seen []string
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for ev := range out {
-			if ev.Kind == EventToolCall && ev.ToolCall != nil {
-				seen = append(seen, ev.ToolCall.Name)
+			switch ev.Kind {
+			case EventToolCall:
+				if ev.ToolCall != nil {
+					seen = append(seen, ev.ToolCall.Name)
+					kinds = append(kinds, "tool")
+				}
+			case EventDelta:
+				kinds = append(kinds, "text")
 			}
 		}
 	}()
@@ -257,5 +271,8 @@ func TestWorkTheBrainDidItselfIsSurfacedAndCaptured(t *testing.T) {
 
 	if strings.Join(seen, ",") != "Read,Bash,Write" {
 		t.Fatalf("the brain's own work never reached the ledger: %v", seen)
+	}
+	if got := strings.Join(kinds, ","); got != "tool,tool,tool,text" {
+		t.Fatalf("the work must land where it happened, before the reply, got %q", got)
 	}
 }

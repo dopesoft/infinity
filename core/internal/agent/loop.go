@@ -1504,9 +1504,16 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}()
 
 		var partialText strings.Builder
-		// Tool calls the BRAIN made inside its own loop. See the block after
-		// the stream closes.
-		var streamedCalls []llm.ToolCall
+		// Does this brain run its own tools? Asked once per iteration because
+		// the provider can be hot-swapped mid-conversation.
+		brainRunsOwnTools := false
+		if se, ok := provider.(llm.SelfExecutingProvider); ok {
+			brainRunsOwnTools = se.RunsOwnTools()
+		}
+		// Calls the brain made that have not reported back yet, so the result
+		// can be paired with the name and input the boss already saw. Anything
+		// still in here when the stream ends never returned.
+		brainCalls := map[string]llm.ToolCall{}
 		for ev := range llmEvents {
 			switch ev.Kind {
 			case llm.StreamText:
@@ -1528,8 +1535,54 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					InputDelta: ev.InputDelta,
 				})
 			case llm.StreamToolCall:
-				if ev.ToolCall != nil {
-					streamedCalls = append(streamedCalls, *ev.ToolCall)
+				// A brain that runs its OWN tools (Claude Code) executed this
+				// inside its harness: it is not coming back as a tool call for
+				// the executor below, so this event IS the record of it. Emit
+				// and capture IN ORDER, as it streams, so the step lands in
+				// his ledger where it happened - between the words either side
+				// of it, never after the reply.
+				//
+				// Other providers stream the same event and their calls DO
+				// come back to be executed, so theirs are handled there and
+				// ignored here.
+				if ev.ToolCall != nil && brainRunsOwnTools {
+					brainCalls[ev.ToolCall.ID] = *ev.ToolCall
+					emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
+						ID: ev.ToolCall.ID, Name: ev.ToolCall.Name, Input: ev.ToolCall.Input,
+						StartedAt: time.Now().UTC(),
+					}})
+				}
+			case llm.StreamToolResult:
+				// The other half. Every other brain hands our loop the call
+				// and the loop produces the result, so both halves are ours by
+				// construction; a harness runs both inside its own session.
+				// Recording the result here is what makes a turn on this brain
+				// read - and remember - like a turn on any other: the row
+				// completes, and memory holds what came back rather than only
+				// what was attempted.
+				if brainRunsOwnTools && ev.ToolCallID != "" {
+					call := brainCalls[ev.ToolCallID]
+					name := strings.TrimSpace(ev.ToolName)
+					if name == "" {
+						name = call.Name
+					}
+					delete(brainCalls, ev.ToolCallID)
+					emit(out, RunEvent{Kind: EventToolResult, SessionID: s.ID, ToolResult: &ToolEvent{
+						ID: ev.ToolCallID, Name: name, Input: call.Input,
+						Output: ev.ToolOutput, IsError: ev.ToolError,
+						StartedAt: time.Now().UTC(), EndedAt: time.Now().UTC(),
+					}})
+					hook := "PostToolUse"
+					if ev.ToolError {
+						hook = "PostToolUseFailure"
+					}
+					l.fireHookT(turnID, hook, s.ID, s.Project, name+": "+ev.ToolOutput, map[string]any{
+						"name":         name,
+						"input":        call.Input,
+						"output":       ev.ToolOutput,
+						"tool_call_id": ev.ToolCallID,
+						"executed_by":  provider.Name(),
+					})
 				}
 			case llm.StreamNotice:
 				// Provider-layer heads-up for the boss (brain failover on a
@@ -1543,39 +1596,19 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 		<-streamDone
 
-		// WORK THE BRAIN DID ITSELF.
-		//
-		// Some brains are harnesses, not endpoints: Claude Code runs its own
-		// tools inside its own session and hands back a finished turn, so
-		// resp.ToolCalls comes back EMPTY and the executor below never sees
-		// any of it. It still happened - reading his resume, running a
-		// command, editing a file IS the work he asked for - and until now it
-		// existed only inside the vendor's session. Not on his screen, not in
-		// Infinity's memory, gone the moment that session went away.
-		//
-		// So every streamed call this loop will NOT execute is surfaced and
-		// captured here. The test is structural, not per-vendor: if the loop
-		// is not going to run it, whoever streamed it already did.
-		if len(streamedCalls) > 0 {
-			executing := make(map[string]bool, len(resp.ToolCalls))
-			for _, tc := range resp.ToolCalls {
-				executing[tc.ID] = true
-			}
-			for _, tc := range streamedCalls {
-				if tc.Name == "" || executing[tc.ID] {
-					continue
-				}
-				now := time.Now().UTC()
-				emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
-					ID: tc.ID, Name: tc.Name, Input: tc.Input, StartedAt: now, EndedAt: now,
-				}})
-				l.fireHookT(turnID, "PostToolUse", s.ID, s.Project, tc.Name+" (run by the brain in its own session)", map[string]any{
-					"name":         tc.Name,
-					"input":        tc.Input,
-					"tool_call_id": tc.ID,
+		// A call with no result by the end of the stream never came back: the
+		// turn was cut off, or the line carrying its result was too big to
+		// read. Record it as attempted rather than dropping it, so memory
+		// never quietly loses a step that happened.
+		for id, call := range brainCalls {
+			l.fireHookT(turnID, "PostToolUse", s.ID, s.Project,
+				call.Name+" (run by the brain; no result came back)", map[string]any{
+					"name":         call.Name,
+					"input":        call.Input,
+					"tool_call_id": id,
 					"executed_by":  provider.Name(),
+					"no_result":    true,
 				})
-			}
 		}
 
 		// Record real API-reported usage on every successful stream. The

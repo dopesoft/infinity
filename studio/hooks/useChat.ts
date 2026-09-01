@@ -1126,12 +1126,26 @@ export function useChat() {
             //  - otherwise → generic, with the usage numbers so the
             //    pattern is debuggable if it recurs.
             if (!interrupted) {
+              // Did he get a reply THIS TURN? Walk back to the user message
+              // that started it and look for any assistant message carrying
+              // text, rather than only checking the very last row.
+              //
+              // Checking only the last row meant a single tool row arriving
+              // after the answer turned a finished turn into "Jarvis didn't
+              // follow up with a reply", with the reply sitting directly
+              // above it. Whether a step is recorded after the words is a
+              // detail of how a brain streams; whether he was answered is
+              // not, so it is not decided by ordering.
               const last = next[next.length - 1];
-              const visibleText =
-                last && last.role === "assistant"
-                  ? last.text.trim()
-                  : "";
-              const hasAssistantText = !!visibleText;
+              let hasAssistantText = false;
+              for (let i = next.length - 1; i >= 0; i--) {
+                const m = next[i];
+                if (m.role === "user") break;
+                if (m.role === "assistant" && m.text.trim()) {
+                  hasAssistantText = true;
+                  break;
+                }
+              }
               if (!hasAssistantText) {
                 // Did this turn produce any tool activity? Walk back
                 // from the end until we hit the user message that

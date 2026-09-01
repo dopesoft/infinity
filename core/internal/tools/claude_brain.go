@@ -338,6 +338,9 @@ type brainPoll struct {
 	started   time.Time
 
 	sessionSeen bool
+	// toolNames maps a call id to its tool, so the result half of the pair
+	// can be reported under the name the boss saw on the call.
+	toolNames map[string]string
 	// streamed accumulates every text delta already sent. finish() checks it
 	// so the answer is never printed twice, and so a turn that streamed
 	// nothing still produces a reply.
@@ -506,9 +509,15 @@ type brainEvent struct {
 // everything the deltas already carried, so consuming it too would print the
 // whole reply a second time.
 //
-// Tool calls come off content_block_start rather than the finished message,
-// for the same reason and with the same benefit: the boss sees "it's about to
-// run this" at the moment it decides, not after the fact.
+// Tool calls and their RESULTS come off the assembled message lines, through
+// parseNestedEvents - the SAME parser the coding path has used since the
+// "TOTALLY NOT TRANSPARENT" build, rather than a second half-version here.
+// This path originally read only content_block_start, which carries the call
+// and never the result, so a conversation on this brain showed what it decided
+// to do and never what came back, and memory recorded the same half-story.
+// That is the whole of "why doesn”'t it work like my other models": on every
+// other brain our own loop runs the tool, so the result is ours by
+// construction.
 func (p *brainPoll) emit(fresh string) {
 	if fresh == "" || p.out == nil {
 		return
@@ -535,17 +544,44 @@ func (p *brainPoll) emit(fresh string) {
 					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: ev.Event.Delta.Thinking})
 				}
 			}
-		case "content_block_start":
-			// Visibility only: Claude Code runs the tool itself. The event is
-			// what puts the step in the boss's activity ledger.
-			if ev.Event.ContentBlock.Type == "tool_use" {
-				p.send(llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: &llm.ToolCall{
-					ID:   ev.Event.ContentBlock.ID,
-					Name: ev.Event.ContentBlock.Name,
-				}})
-			}
 		}
 	}
+
+	// Both halves of every tool the brain ran itself, in order.
+	for _, n := range parseNestedEvents(fresh) {
+		if n.result {
+			p.send(llm.StreamEvent{
+				Kind:       llm.StreamToolResult,
+				ToolCallID: n.callID,
+				ToolName:   p.toolFor(n.callID),
+				ToolOutput: n.output,
+				ToolError:  n.isError,
+			})
+			continue
+		}
+		p.noteTool(n.callID, n.tool)
+		p.send(llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: &llm.ToolCall{
+			ID:    n.callID,
+			Name:  n.tool,
+			Input: n.input,
+		}})
+	}
+}
+
+// noteTool / toolFor remember which tool a call id belongs to, because the
+// result half of the pair carries only the id. Bounded by the turn.
+func (p *brainPoll) noteTool(callID, tool string) {
+	if callID == "" || tool == "" {
+		return
+	}
+	if p.toolNames == nil {
+		p.toolNames = map[string]string{}
+	}
+	p.toolNames[callID] = tool
+}
+
+func (p *brainPoll) toolFor(callID string) string {
+	return p.toolNames[callID]
 }
 
 func (p *brainPoll) send(ev llm.StreamEvent) {

@@ -140,6 +140,10 @@ func NewClaudeCode(runner BrainRunner, sessions BrainSessionStore, model string)
 	}
 }
 
+// RunsOwnTools: Claude Code executes inside its own harness. See
+// SelfExecutingProvider.
+func (c *ClaudeCode) RunsOwnTools() bool { return true }
+
 func (c *ClaudeCode) Name() string  { return ProviderClaudeMax }
 func (c *ClaudeCode) Model() string { return c.model }
 
