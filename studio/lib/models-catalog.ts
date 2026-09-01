@@ -164,53 +164,41 @@ export const VENDORS: VendorEntry[] = [
     auth: "subscription",
     // What Claude Code actually serves on a subscription, which is NOT the
     // same list as the API-key vendor above. The 4.x line (Opus 4.6/4.7/4.8)
-    // is API-only; through Claude Code a plan gets the 5-series, Fable, and
-    // Haiku 4.5. Aliases are included where they buy something a bare model
-    // id cannot: a bigger context window, a plan/build split, or "whatever is
-    // best today" without having to come back and re-pick.
+    // is API-only; through Claude Code a plan gets the 5-series and Haiku 4.5.
+    //
+    // Ordered best to worst, and that is the whole ordering rule.
+    //
+    // Two entries are deliberately gone. "Best available" resolved to whatever
+    // was newest, which means the model could change under him without him
+    // touching anything - a picker should say what he will get. And "Opus 5 ·
+    // 1M" was a distinction without a difference: the Claude 5 family ships a
+    // million-token window as standard, so plain Opus 5 IS the 1M one.
+    //
+    // No aliases at all: four models, named, in order. Anything that resolves
+    // to "whatever is newest" or splits a turn across two models is a thing he
+    // has to reason about before he can pick, and he asked for a list he can
+    // read top to bottom.
     models: [
+      {
+        id: "claude-fable-5",
+        label: "Fable 5",
+        tagline: "the hardest and longest-running work",
+      },
       {
         id: "claude-opus-5",
         label: "Opus 5",
         tagline: "best all-round, and what Max runs by default",
         recommended: true,
-        note: "Included in Max",
-      },
-      {
-        id: "opus[1m]",
-        label: "Opus 5 \u00b7 1M context",
-        tagline: "same model, million-token memory for long jobs",
-        note: "Included in Max",
-      },
-      {
-        id: "claude-fable-5",
-        label: "Fable 5",
-        tagline: "the hardest and longest-running work",
-        note: "Included in Max",
-      },
-      {
-        id: "best",
-        label: "Best available",
-        tagline: "picks Fable when it can, otherwise the newest Opus",
-        note: "Included in Max",
-      },
-      {
-        id: "opusplan",
-        label: "Opus to plan, Sonnet to build",
-        tagline: "thinks with Opus, then executes cheaper",
-        note: "Included in Max",
       },
       {
         id: "claude-sonnet-5",
         label: "Sonnet 5",
-        tagline: "faster, and lighter on your weekly limit",
-        note: "Included in Max",
+        tagline: "fast, and strong enough for most of it",
       },
       {
         id: "claude-haiku-4-5",
         label: "Haiku 4.5",
-        tagline: "quickest, for simple turns",
-        note: "Included in Max",
+        tagline: "cheapest and quickest",
       },
     ],
   },
