@@ -16,6 +16,13 @@ import { cn } from "@/lib/utils";
  * button and inside the rail's mark. Override with `className="size-3.5"`
  * for a dense row; do NOT reach past this for another spinning glyph.
  *
+ * NEVER put an enter animation (`animate-in`, `fade-in`, `zoom-in`) on this
+ * element or pass one through `className`. `animate-in` sets
+ * `animation-name: enter` and lands LATER in the stylesheet than the rotation,
+ * so the glyph appears, fades, and never turns — which is exactly the "it
+ * just flashes, it doesn't even spin" bug. One CSS animation per element:
+ * fade the WRAPPER, spin the glyph.
+ *
  * `aria-hidden` by default: a spinner is decoration, and the sentence that
  * says what is happening belongs next to it (or in the `aria-live` region
  * its owner renders). Pass `aria-hidden={false}` with a label only when the
@@ -28,7 +35,7 @@ export function Spinner({
   return (
     <LoaderPinwheel
       aria-hidden
-      className={cn("size-4 shrink-0 animate-spin", className)}
+      className={cn("size-4 shrink-0 animate-pinwheel", className)}
       {...props}
     />
   );

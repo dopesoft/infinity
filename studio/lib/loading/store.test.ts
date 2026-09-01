@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MIN_VISIBLE_MS,
   beginLoading,
   endLoading,
   loadingSnapshot,
@@ -22,7 +23,7 @@ describe("app loading store", () => {
     vi.useRealTimers();
   });
 
-  it("shows immediately and holds for the minimum even on an instant load", () => {
+  it("shows immediately and holds a full rotation even on an instant load", () => {
     vi.useFakeTimers();
     beginLoading("a");
     expect(loadingSnapshot()).toBe(true);
@@ -31,7 +32,7 @@ describe("app loading store", () => {
     // Still up: the load finished before he could see it register.
     expect(loadingSnapshot()).toBe(true);
 
-    vi.advanceTimersByTime(349);
+    vi.advanceTimersByTime(MIN_VISIBLE_MS - 1);
     expect(loadingSnapshot()).toBe(true);
     vi.advanceTimersByTime(1);
     expect(loadingSnapshot()).toBe(false);
@@ -41,14 +42,14 @@ describe("app loading store", () => {
     vi.useFakeTimers();
     beginLoading("a");
     beginLoading("b");
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(MIN_VISIBLE_MS + 50);
 
     endLoading("a");
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(MIN_VISIBLE_MS + 50);
     expect(loadingSnapshot()).toBe(true);
 
     endLoading("b");
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(MIN_VISIBLE_MS + 50);
     expect(loadingSnapshot()).toBe(false);
   });
 
@@ -59,7 +60,7 @@ describe("app loading store", () => {
     expect(loadingSnapshot()).toBe(true);
 
     vi.advanceTimersByTime(1);
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(MIN_VISIBLE_MS + 50);
     expect(loadingSnapshot()).toBe(false);
   });
 
@@ -70,7 +71,7 @@ describe("app loading store", () => {
 
     beginLoading("a");
     endLoading("a");
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(MIN_VISIBLE_MS + 50);
     stop();
 
     expect(seen).toEqual([true, false]);

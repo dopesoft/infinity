@@ -3,6 +3,8 @@
 import { Suspense } from "react";
 import { Search } from "lucide-react";
 import { AppMark } from "@/components/nav/AppMark";
+import { PRESS_ICON } from "@/components/ui/press";
+import { cn } from "@/lib/utils";
 import { NavRail } from "@/components/nav/NavRail";
 import { NavDrawer } from "@/components/nav/NavDrawer";
 import { RailStatus } from "@/components/nav/RailStatus";
@@ -66,7 +68,10 @@ export function AppShell({
             type="button"
             onClick={() => palette.setOpen(true)}
             aria-label="Search"
-            className="grid size-11 shrink-0 place-items-center rounded-lg text-quiet transition-colors active:bg-accent/60"
+            className={cn(
+              "grid size-11 shrink-0 place-items-center rounded-lg text-quiet",
+              PRESS_ICON,
+            )}
           >
             <Search className="size-[18px]" aria-hidden />
           </button>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Infinity as InfinityIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
+import { PRESS_ICON } from "@/components/ui/press";
 import { useAppLoading } from "@/lib/loading";
 import { cn } from "@/lib/utils";
 
@@ -41,20 +42,33 @@ export function AppMark({ variant }: { variant: "rail" | "bar" }) {
         href="/"
         aria-label="Infinity home"
         className={cn(
-          "grid shrink-0 place-items-center rounded-lg transition-opacity",
-          rail
-            ? "mb-2.5 size-7 bg-foreground text-background hover:opacity-80"
-            : "size-9 text-foreground",
+          "grid shrink-0 place-items-center rounded-lg",
+          PRESS_ICON,
+          rail ? "mb-2.5 size-7" : "size-9",
+          // The rail's mark is an inverted chip; the SPINNER is not. A black
+          // tile with a small light glyph turning inside it reads as a solid
+          // block that flickers, and it is the loudest shape on a screen made
+          // of hairlines. While it turns, the chip comes off and the pinwheel
+          // is just ink, so the movement is the whole of what you see.
+          loading
+            ? "text-foreground"
+            : rail
+              ? "bg-foreground text-background hover:opacity-80"
+              : "text-foreground",
         )}
       >
-        {loading ? (
-          <Spinner className={cn("animate-in fade-in duration-200", rail ? "size-4":"size-5")} />
-        ) : (
-          <InfinityIcon
-            aria-hidden
-            className={cn("animate-in fade-in duration-200", rail ? "size-4" : "size-5")}
-          />
-        )}
+        {/* The fade lives on this wrapper, NEVER on the glyph inside it.
+            `animate-in` and the rotation both set `animation`, and the enter
+            animation wins the cascade, so a spinner wearing both fades in and
+            then sits perfectly still. That was the "it just flashes, it
+            doesn't even spin" bug. */}
+        <span className="grid animate-in fade-in duration-200 place-items-center">
+          {loading ? (
+            <Spinner className={rail ? "size-5" : "size-[22px]"} />
+          ) : (
+            <InfinityIcon aria-hidden className={rail ? "size-4" : "size-5"} />
+          )}
+        </span>
       </Link>
 
       {/* Says out loud what the glyph says visually, once, for a screen

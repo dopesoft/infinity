@@ -18,10 +18,10 @@
  * TWO TIMERS, BOTH LOAD-BEARING:
  *
  *  - MIN_VISIBLE_MS. The mark appears the instant a key is taken and stays
- *    for at least this long even if the load finishes in 12ms. The whole
- *    point is the boss knowing his tap registered — a spinner that
- *    technically appeared for one frame tells him nothing, and a strobing
- *    logo on a fast page is worse than none.
+ *    for at least one full rotation even if the load finishes in 12ms. The
+ *    whole point is the boss knowing his tap registered, and a glyph that
+ *    appears and vanishes before it can turn reads as a flicker rather than
+ *    as something working.
  *
  *  - The per-key TTL. Any hold auto-releases, so a caller that begins and
  *    never ends (a click on a link something else cancelled, a fetch that
@@ -29,7 +29,13 @@
  *    of a false green: it says "still working" when nothing is.
  */
 
-const MIN_VISIBLE_MS = 350;
+/**
+ * How long the mark stays up once it is up. Sized to ONE FULL TURN of the
+ * pinwheel (750ms, see tailwind.config) plus a little. A shorter hold is what
+ * produced "why does it just flash, it doesn't even spin" — a third of a
+ * rotation is a flicker, not movement, and movement is the entire signal.
+ */
+export const MIN_VISIBLE_MS = 800;
 
 type Listener = () => void;
 
@@ -85,6 +91,33 @@ export function endLoading(key: string): void {
   if (timer) clearTimeout(timer);
   held.delete(key);
   settle();
+}
+
+/**
+ * Where the app is GOING, while it is going there — the path of the
+ * navigation currently in flight, or null when nothing is.
+ *
+ * It shares this module's listener set rather than owning a second one,
+ * because it changes on exactly the same two edges the hold does, and two
+ * stores would mean two re-renders for one event.
+ *
+ * The nav uses it to move its own marker the instant you press, instead of
+ * waiting for the new screen to arrive to tell you which one you picked.
+ */
+let navTarget: string | null = null;
+
+export function setNavTarget(path: string | null): void {
+  if (navTarget === path) return;
+  navTarget = path;
+  emit();
+}
+
+export function navTargetSnapshot(): string | null {
+  return navTarget;
+}
+
+export function navTargetServerSnapshot(): null {
+  return null;
 }
 
 export function subscribeLoading(listener: Listener): () => void {

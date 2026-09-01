@@ -15,6 +15,8 @@ import { SignOutButton } from "@/components/SignOutButton";
 import { NAV, isNavActive } from "@/lib/nav-tabs";
 import { useNavBadge } from "@/lib/nav-badges";
 import { cn } from "@/lib/utils";
+import { PRESS_ICON, PRESS_ROW } from "@/components/ui/press";
+import { useNavTarget } from "@/lib/loading";
 
 /**
  * NavDrawer - the phone navigation. A hamburger and a bottom sheet.
@@ -40,13 +42,18 @@ export function NavDrawer() {
     setOpen(false);
   }, [pathname]);
 
+  const navTarget = useNavTarget();
+
   return (
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
         <button
           type="button"
           aria-label="Open navigation"
-          className="grid size-11 shrink-0 place-items-center rounded-lg text-foreground transition-transform active:scale-95"
+          className={cn(
+            "grid size-11 shrink-0 place-items-center rounded-lg text-foreground",
+            PRESS_ICON,
+          )}
         >
           <Menu className="size-5" aria-hidden />
         </button>
@@ -55,7 +62,20 @@ export function NavDrawer() {
         <DrawerTitle className="sr-only">Navigation</DrawerTitle>
         <nav className="flex flex-col px-2 pb-3 pt-1">
           {NAV.map((entry) => (
-            <DrawerRow key={entry.href} href={entry.href} label={entry.label} Icon={entry.Icon} active={isNavActive(pathname, entry.href)} />
+            <DrawerRow
+              key={entry.href}
+              href={entry.href}
+              label={entry.label}
+              Icon={entry.Icon}
+              here={isNavActive(pathname, entry.href)}
+              lit={isNavActive(navTarget ?? pathname, entry.href)}
+              // Dismiss on the PRESS, not when the new screen arrives. The
+              // sheet used to sit there for the whole navigation, so the one
+              // thing covering the screen was also the one thing giving no
+              // sign it had heard you. The pathname effect above stays as the
+              // backstop for a nav that starts anywhere else.
+              onNavigate={() => setOpen(false)}
+            />
           ))}
           <div className="mt-2 flex items-stretch gap-1.5 border-t border-hairline px-1 pt-3">
             <ThemeToggle variant="cycle-row" className="flex-1" />
@@ -75,29 +95,37 @@ function DrawerRow({
   href,
   label,
   Icon,
-  active,
+  here,
+  lit,
+  onNavigate,
 }: {
   href: string;
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
-  active: boolean;
+  /** Where you are. Drives `aria-current` only. */
+  here: boolean;
+  /** Where the app is pointing — the destination while a nav is in flight. */
+  lit: boolean;
+  onNavigate: () => void;
 }) {
   const count = useNavBadge(href);
   return (
     <Link
       href={href}
-      aria-current={active ? "page" : undefined}
+      onClick={onNavigate}
+      aria-current={here ? "page" : undefined}
       className={cn(
-        "relative flex min-h-12 items-center gap-3 rounded-lg px-3 transition-colors",
+        "relative flex min-h-12 items-center gap-3 rounded-lg px-3",
+        PRESS_ROW,
         // Same law as the rail: ink and a marker, not a filled block.
-        active ? "text-foreground" : "text-muted-foreground active:bg-accent/60",
+        lit ? "text-foreground" : "text-muted-foreground",
       )}
     >
       <Icon
-        className={cn("size-[18px] shrink-0", active ? "text-foreground" : "text-quiet")}
+        className={cn("size-[18px] shrink-0", lit ? "text-foreground" : "text-quiet")}
       />
-      <span className={cn("flex-1 text-[15px]", active && "font-medium")}>{label}</span>
-      {active ? (
+      <span className={cn("flex-1 text-[15px]", lit && "font-medium")}>{label}</span>
+      {lit ? (
         <span aria-hidden className="absolute inset-y-2 left-0 w-[2px] rounded-full bg-foreground" />
       ) : null}
       {count > 0 && (

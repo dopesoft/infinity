@@ -148,10 +148,18 @@ const config: Config = {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.55" },
         },
+        // The app's one spinner. Faster than Tailwind's `animate-spin`
+        // (1s/turn) because at 16-20px a slow rotation reads as a static
+        // glyph that flickered, not as movement.
+        pinwheel: {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
       },
       animation: {
         "highlight-flash": "highlight-flash 300ms ease-out",
         "pulse-soft": "pulse-soft 1.8s ease-in-out infinite",
+        pinwheel: "pinwheel 750ms linear infinite",
       },
     },
   },

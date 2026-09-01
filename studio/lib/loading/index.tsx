@@ -14,6 +14,9 @@ import {
   endLoading,
   loadingServerSnapshot,
   loadingSnapshot,
+  navTargetServerSnapshot,
+  navTargetSnapshot,
+  setNavTarget,
   subscribeLoading,
 } from "./store";
 
@@ -38,6 +41,20 @@ const PAGE_TTL_MS = 20_000;
  */
 export function useAppLoading(): boolean {
   return useSyncExternalStore(subscribeLoading, loadingSnapshot, loadingServerSnapshot);
+}
+
+/**
+ * The path the app is navigating TO right now, or null when it is sitting
+ * still. The rail and the drawer read it so the marker moves to the item you
+ * pressed immediately, rather than a beat later when the screen lands — which
+ * is the difference between a nav that answers you and one you press twice.
+ */
+export function useNavTarget(): string | null {
+  return useSyncExternalStore(
+    subscribeLoading,
+    navTargetSnapshot,
+    navTargetServerSnapshot,
+  );
 }
 
 /**
@@ -91,6 +108,7 @@ export function useAppRouter() {
     try {
       const url = new URL(href, window.location.href);
       if (url.pathname === window.location.pathname) return;
+      setNavTarget(url.pathname);
     } catch {
       return;
     }
@@ -144,6 +162,7 @@ export function RouteLoadingWatcher() {
   // The new screen is on the page: the hold is done. Also runs on first
   // mount, which is the reload case (nothing held, so it is a no-op).
   useEffect(() => {
+    setNavTarget(null);
     endLoading(ROUTE_KEY);
   }, [pathname]);
 
@@ -169,6 +188,7 @@ export function RouteLoadingWatcher() {
       if (url.origin !== window.location.origin) return;
       if (url.pathname === window.location.pathname) return;
 
+      setNavTarget(url.pathname);
       beginLoading(ROUTE_KEY, ROUTE_TTL_MS);
     }
 

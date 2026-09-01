@@ -11,17 +11,23 @@ import { cn } from "@/lib/utils";
  * Remind me trio in the reference shots. Brand variant exists for
  * emerald accents (skill install, success-state CTAs). */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] [&_svg]:size-4 [&_svg]:shrink-0",
+    // PRESS: `transition-colors` used to be on this line, which meant the
+  // `active:` squeeze was the only thing that moved on a press — and at
+  // 0.98 nobody could see it. A press has to be FULLY arrived at inside the
+  // length of a tap, so the transition is short and it covers transform as
+  // well as colour. This is the reason every button in Studio answers a
+  // finger; do not put it back to `transition-colors`.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-[color,background-color,border-color,transform] duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.96] [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        brand: "bg-brand text-brand-foreground hover:bg-brand/90",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        default: "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/80",
+        brand: "bg-brand text-brand-foreground hover:bg-brand/90 active:bg-brand/80",
+        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80",
         outline:
-          "border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
+          "border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent",
+        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:bg-secondary/70",
+        ghost: "hover:bg-accent hover:text-accent-foreground active:bg-accent",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

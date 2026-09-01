@@ -10,6 +10,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { AppMark } from "@/components/nav/AppMark";
+import { PRESS_ICON } from "@/components/ui/press";
+import { useNavTarget } from "@/lib/loading";
 import { RailStatus } from "@/components/nav/RailStatus";
 import { WakeNavButton } from "@/components/WakeNavButton";
 import { NAV, isNavActive, type NavEntry } from "@/lib/nav-tabs";
@@ -74,7 +76,15 @@ function RailLink({
   entry: NavEntry;
   pathname: string | null;
 }) {
-  const active = isNavActive(pathname, entry.href);
+  // `here` is where you ARE; `lit` is where the rail is POINTING. They differ
+  // for the length of a navigation, and that gap is the point: the marker
+  // moves to the icon you pressed on the press, not a beat later when the
+  // screen lands. A rail that only answers on arrival is a rail you press
+  // twice. `aria-current` stays on `here`, because announcing a page you have
+  // not reached yet would be a lie.
+  const target = useNavTarget();
+  const here = isNavActive(pathname, entry.href);
+  const lit = isNavActive(target ?? pathname, entry.href);
   const count = useNavBadge(entry.href);
   const Icon = entry.Icon;
 
@@ -84,7 +94,7 @@ function RailLink({
         <Link
           href={entry.href}
           aria-label={entry.label}
-          aria-current={active ? "page" : undefined}
+          aria-current={here ? "page" : undefined}
           /* Active is INK AND A MARKER, never a filled rectangle. At 36px a
              `bg-accent` block is a solid grey tile sitting in an otherwise
              hairline-and-tone interface — the loudest shape on the screen,
@@ -93,15 +103,16 @@ function RailLink({
              2px rule on the rail's edge says it again for a glance. Hover
              still washes, because a wash that comes and goes is feedback. */
           className={cn(
-            "relative grid size-9 shrink-0 place-items-center rounded-lg transition-colors",
-            active ? "text-foreground" : "text-quiet hover:bg-accent/60 hover:text-foreground",
+            "relative grid size-9 shrink-0 place-items-center rounded-lg",
+            PRESS_ICON,
+            lit ? "text-foreground" : "text-quiet hover:bg-accent/60 hover:text-foreground",
           )}
         >
           <span
             aria-hidden
             className={cn(
-              "absolute inset-y-1.5 -left-[9px] w-[2px] rounded-full transition-colors",
-              active ? "bg-foreground" : "bg-transparent",
+              "absolute inset-y-1.5 -left-[9px] w-[2px] rounded-full transition-colors duration-100",
+              lit ? "bg-foreground" : "bg-transparent",
             )}
           />
           <Icon className="size-4" aria-hidden />
@@ -139,7 +150,10 @@ function RailButton({
           type="button"
           onClick={onClick}
           aria-label={label}
-          className="grid size-9 shrink-0 place-items-center rounded-lg text-quiet transition-colors hover:bg-accent/60 hover:text-foreground"
+          className={cn(
+            "grid size-9 shrink-0 place-items-center rounded-lg text-quiet hover:bg-accent/60 hover:text-foreground",
+            PRESS_ICON,
+          )}
         >
           {children}
         </button>
