@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { LogOut } from "lucide-react";
 import { useAuth } from "@/lib/auth/session";
 import { Chip } from "@/components/ui/chip";
@@ -22,7 +22,7 @@ export function SignOutButton({
   className?: string;
 }) {
   const { signOut, user } = useAuth();
-  const router = useRouter();
+  const router = useAppRouter();
   const [busy, setBusy] = useState(false);
 
   async function handle() {

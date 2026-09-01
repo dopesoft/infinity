@@ -23,6 +23,7 @@ import {
   type SentinelDTO,
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { usePageLoading } from "@/lib/loading";
 import { useTabParam } from "@/lib/useTabParam";
 import { CronCreateCard, SentinelCreateCard } from "@/components/cron/CreateForms";
 import { RunIndicator } from "@/lib/runs";
@@ -77,6 +78,7 @@ export default function CronPage() {
 function CronSection() {
   const [items, setItems] = useState<CronJobDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   const [showCreate, setShowCreate] = useState(false);
   // Tapping a row opens the full cron (Dialog on desktop, Drawer on mobile).
   const [selected, setSelected] = useState<CronJobDTO | null>(null);
@@ -244,6 +246,7 @@ function CronSection() {
 function SentinelSection() {
   const [items, setItems] = useState<SentinelDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState<SentinelDTO | null>(null);
 

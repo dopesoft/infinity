@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
@@ -81,7 +82,7 @@ export function CompassSection() {
     <SettingsPanel>
       {!loaded ? (
         <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" /> Loading…
+          <Spinner className="size-4" /> Loading…
         </div>
       ) : (
         <div className="min-w-0">
@@ -102,7 +103,7 @@ export function CompassSection() {
                     disabled={!dirty[s.section] || saving === s.section}
                     onClick={() => save(s.section, s.position)}
                   >
-                    {saving === s.section ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
+                    {saving === s.section ? <Spinner className="size-3.5" /> : "Save"}
                   </Button>
                 </>
               }

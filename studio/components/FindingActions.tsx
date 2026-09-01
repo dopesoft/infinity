@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, Wrench, X } from "lucide-react";
+import { Check, Wrench, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { decideCuriosityQuestion } from "@/lib/api";
 
@@ -141,7 +142,7 @@ export function FindingActions({
         className="gap-1.5"
       >
         {state === "working" ? (
-          <Loader2 className="size-4 animate-spin" />
+          <Spinner className="size-4" />
         ) : (
           <Wrench className="size-4" />
         )}

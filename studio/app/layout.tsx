@@ -12,6 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { PWARegister } from "@/components/PWARegister";
 import { PullToRefresh } from "@/components/PullToRefresh";
+import { RouteLoadingWatcher } from "@/lib/loading";
 import "./globals.css";
 
 // Bust edge HTML cache on every request. Without this, Railway/Next caches the
@@ -106,6 +107,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <WebSocketProvider>
                 <TooltipProvider delayDuration={250}>
                   <PWARegister />
+                  {/* Watches every internal link click so the app mark can
+                      say "your tap registered" from the one fixed point on
+                      the screen. Renders nothing; see lib/loading. */}
+                  <RouteLoadingWatcher />
                   <TrustToast />
                   <PullToRefresh>
                     <OnboardingGate>{children}</OnboardingGate>

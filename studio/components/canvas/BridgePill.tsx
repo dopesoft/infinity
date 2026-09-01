@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, RefreshCw, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
 import { Chip, ChipGroup, ChipTrigger, chipDotClass, chipTextClass, type ChipTone } from "@/components/ui/chip";
@@ -510,7 +511,7 @@ function PreferenceRow({
         aria-hidden
       >
         {active ? <Check className="size-3" /> : null}
-        {isSaving && <Loader2 className="size-3 animate-spin" />}
+        {isSaving && <Spinner className="size-3" />}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold text-foreground">{title}</span>

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Bot, CheckCircle2, ChevronDown, ChevronRight, Loader2, Users } from "lucide-react";
+import { Bot, CheckCircle2, ChevronDown, ChevronRight, Users } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import type { ChatMessage } from "@/hooks/useChat";
 import { fetchChatSettings, type ChatSettings } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -112,7 +113,7 @@ export function AgentTeamCard({ message }: { message: ChatMessage }) {
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
           <span>{members.length} agents</span>
-          {pending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+          {pending ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}
           {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
         </div>
       </button>

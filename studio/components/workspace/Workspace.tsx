@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { WorkspaceChatColumn } from "@/components/workspace/WorkspaceChatColumn";
 import { WorkbenchPane } from "@/components/canvas/WorkbenchPane";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
@@ -436,7 +436,7 @@ export function Workspace({
   if (!mounted) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center" suppressHydrationWarning>
-        <Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden />
+        <Spinner className="size-5 text-muted-foreground" aria-hidden />
       </div>
     );
   }

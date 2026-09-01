@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ShieldAlert, ChevronDown, ChevronUp, Check, X, Loader2 } from "lucide-react";
+import { ShieldAlert, ChevronDown, ChevronUp, Check, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { fetchTrustContracts, decideTrust, type TrustContractDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 import { cn } from "@/lib/utils";
@@ -108,7 +109,7 @@ export function PendingApprovalsDock() {
                   className="inline-flex h-8 items-center gap-1.5 rounded-md bg-success px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
                 >
                   {deciding[c.id] === "approved" ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                    <Spinner className="size-3.5" aria-hidden />
                   ) : (
                     <Check className="size-3.5" aria-hidden />
                   )}
@@ -121,7 +122,7 @@ export function PendingApprovalsDock() {
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
                 >
                   {deciding[c.id] === "denied" ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                    <Spinner className="size-3.5" aria-hidden />
                   ) : (
                     <X className="size-3.5" aria-hidden />
                   )}

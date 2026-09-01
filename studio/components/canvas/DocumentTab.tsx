@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import {
-  Download, FileSpreadsheet, FileText, Presentation, FileType2, Loader2,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Presentation,
+  FileType2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/chat/Markdown";
 import { fetchWorkspaceBlob, downloadWorkspaceFile, fetchDocPages } from "@/lib/api";
@@ -134,7 +139,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
             disabled={downloading}
             title={`Download ${pdfDownloadName}`}
           >
-            {downloading ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+            {downloading ? <Spinner className="size-3.5" /> : <Download className="size-3.5" />}
             PDF
           </Button>
         ) : null}
@@ -146,7 +151,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
           disabled={downloading}
           title={`Download ${doc.filename}`}
         >
-          {downloading ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+          {downloading ? <Spinner className="size-3.5" /> : <Download className="size-3.5" />}
           {pdfDownloadPath ? doc.format.toUpperCase() : "Download"}
         </Button>
       </div>
@@ -159,14 +164,14 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
           </div>
         ) : isPdfPreview && pages === null ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
-            <Loader2 className="size-5 animate-spin" />
+            <Spinner className="size-5" />
           </div>
         ) : isPdfPreview && pages && pages.length > 0 ? (
           <PdfDeckViewer pages={pages} filename={doc.filename} />
         ) : previewPath ? (
           pdfLoading ? (
             <div className="flex h-full items-center justify-center text-muted-foreground">
-              <Loader2 className="size-5 animate-spin" />
+              <Spinner className="size-5" />
             </div>
           ) : pdfUrl ? (
             <iframe src={pdfUrl} title={doc.filename} className="block size-full border-0 bg-white" />
@@ -199,7 +204,7 @@ function DownloadCard({
         </p>
       </div>
       <Button size="sm" className="gap-1.5" onClick={() => void onDownload()} disabled={downloading}>
-        {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+        {downloading ? <Spinner className="size-4" /> : <Download className="size-4" />}
         Download
       </Button>
     </div>

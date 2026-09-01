@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, BellOff, CheckCircle2, Loader2, Send, Smartphone, Sparkles, Trash2 } from "lucide-react";
+import { AlertCircle, BellOff, CheckCircle2, Send, Smartphone, Sparkles, Trash2 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
@@ -164,7 +165,7 @@ export function NotificationsSection() {
           description="Fires one push to every registered device so you can confirm delivery."
           control={
             <Button variant="ghost" onClick={onTest} disabled={busy !== null} className="gap-1.5">
-              {busy === "test" ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              {busy === "test" ? <Spinner className="size-3.5" /> : <Send className="size-3.5" />}
               Send test
             </Button>
           }
@@ -432,7 +433,7 @@ function ActionBlock({
           className="gap-1.5"
         >
           {busy === "unsubscribe" ? (
-            <Loader2 className="size-3.5 animate-spin" />
+            <Spinner className="size-3.5" />
           ) : (
             <BellOff className="size-3.5" />
           )}
@@ -447,7 +448,7 @@ function ActionBlock({
       control={
         <Button onClick={onSubscribe} disabled={busy !== null} className="gap-1.5">
           {busy === "subscribe" ? (
-            <Loader2 className="size-3.5 animate-spin" />
+            <Spinner className="size-3.5" />
           ) : (
             <Sparkles className="size-3.5" />
           )}

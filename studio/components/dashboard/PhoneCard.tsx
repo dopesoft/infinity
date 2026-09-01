@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, BookUser, Building2, Grip, Loader2, Pencil, Phone, PhoneIncoming, PhoneOutgoing, Plus, Trash2, User } from "lucide-react";
+import { ArrowUp, BookUser, Building2, Grip, Pencil, Phone, PhoneIncoming, PhoneOutgoing, Plus, Trash2, User } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { BoardCard } from "@/components/ui/board";
 import { SurfaceRow } from "./SurfaceCard";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
@@ -226,7 +227,7 @@ export function PhoneCard({
           </div>
         ) : askRun?.status === "running" && !callRunning ? (
           <div className="mb-3 flex min-w-0 items-center gap-2 rounded-[10px] bg-muted px-3 py-2.5 text-[12px] text-muted-foreground">
-            <Loader2 className="size-3.5 shrink-0 animate-spin text-brand" aria-hidden />
+            <Spinner className="size-3.5 shrink-0 text-brand" aria-hidden />
       Working your call errand, finding the number and briefing the call…
           </div>
         ) : null}
@@ -281,7 +282,7 @@ export function PhoneCard({
                       "disabled:cursor-not-allowed disabled:opacity-60",
                     )}
                   >
-                    {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                    {busy ? <Spinner className="size-4" /> : <ArrowUp className="size-4" />}
                   </button>
                   {state === "error" ? (
                     <p className="mt-1.5 text-xs text-danger">
@@ -487,7 +488,7 @@ function ContactBookModal({
           <div className="max-h-[45dvh] space-y-0.5 overflow-y-auto scroll-touch">
             {contacts === null ? (
               <div className="flex items-center justify-center p-4">
-                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                <Spinner className="size-4 text-muted-foreground" />
               </div>
             ) : filtered.length === 0 ? (
               <p className="p-3 text-center text-xs text-muted-foreground">
@@ -791,7 +792,7 @@ function ContactForm({
         onClick={save}
         className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-brand text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
       >
-        {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+        {saving ? <Spinner className="size-4" /> : null}
         {contact ? "Save changes" : "Add to phone book"}
       </button>
     </div>

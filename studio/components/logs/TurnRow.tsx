@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -79,7 +79,7 @@ function OriginBadge({ kind, label }: { kind?: string; label?: string }) {
 }
 
 export function TurnRow({ turn }: { turn: TurnRowDTO }) {
-  const router = useRouter();
+  const router = useAppRouter();
   const hasTokens = !!(turn.input_tokens || turn.output_tokens);
   const isChat = !turn.session_kind || turn.session_kind.toLowerCase() === "chat";
   return (

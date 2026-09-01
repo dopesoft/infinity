@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { ArrowUp, Loader2, MessageSquare, RotateCcw } from "lucide-react";
+import { useAppRouter } from "@/lib/loading";
+import { ArrowUp, MessageSquare, RotateCcw } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Inset } from "@/components/ui/inset";
 import { Textarea } from "@/components/ui/textarea";
@@ -66,7 +67,7 @@ export function CoachConversation({
    *  mid-navigation and leave the page with a locked scroll. */
   onLeave: () => void;
 }) {
-  const router = useRouter();
+  const router = useAppRouter();
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const live = useCoachSession(cockpit.pursuit.id);
   const [handingOff, setHandingOff] = useState(false);
@@ -386,7 +387,7 @@ export function CoachConversation({
               aria-label={answering ? "Send answer" : "Ask Jarvis"}
             >
               {live.busy ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden />
+                <Spinner className="size-4" aria-hidden />
               ) : (
                 <ArrowUp className="size-4" aria-hidden />
               )}
@@ -422,7 +423,7 @@ export function CoachConversation({
             ) : null}
             <QuietAction onClick={() => void continueInWorkspace()}>
               {handingOff ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                <Spinner className="size-3.5" aria-hidden />
               ) : null}
               Continue in the workspace
             </QuietAction>

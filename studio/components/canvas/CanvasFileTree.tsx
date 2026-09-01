@@ -8,11 +8,11 @@ import {
   File as FileIcon,
   Folder,
   FolderOpen,
-  Loader2,
   RefreshCw,
   Sparkles,
   X,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCanvasStore } from "@/lib/canvas/store";
@@ -247,7 +247,7 @@ export function CanvasFileTree({
         {!store.root && <EmptyRoot />}
         {store.root && !filtered && (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
+            <Spinner className="size-4" />
           </div>
         )}
         {filtered && (
@@ -324,7 +324,7 @@ function NodeRow({
             aria-label="modified this session"
           />
         )}
-        {node.loading && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
+        {node.loading && <Spinner className="size-3 shrink-0 text-muted-foreground" />}
         {node.error && (
           <span title={node.error}>
             <AlertCircle className="size-3 shrink-0 text-danger" />

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Workflow as WorkflowIcon, Play, ArrowRight, Loader2 } from "lucide-react";
+import { Workflow as WorkflowIcon, Play, ArrowRight } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -220,7 +221,7 @@ function RunWorkflowModal({
             {result?.ok ? "Close" : "Cancel"}
           </Button>
           <Button onClick={submit} disabled={running || missing || result?.ok}>
-            {running ? <Loader2 className="mr-1 size-4 animate-spin" /> : <Play className="mr-1 size-4" />}
+            {running ? <Spinner className="mr-1 size-4" /> : <Play className="mr-1 size-4" />}
             {running ? "Starting…" : "Run"}
           </Button>
         </div>

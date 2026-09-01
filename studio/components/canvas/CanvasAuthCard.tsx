@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KeyRound, ExternalLink, RefreshCcw, CheckCircle2, Loader2, X } from "lucide-react";
+import { KeyRound, ExternalLink, RefreshCcw, CheckCircle2, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { ModalUrl } from "@/components/ui/modal-content";
 import { useRealtime } from "@/lib/realtime/provider";
@@ -188,7 +189,7 @@ export function CanvasAuthCard({
 
         {!ready && !ext.auth_url && preparing && !prepTimedOut ? (
           <p className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            <Spinner className="size-3.5" aria-hidden />
             Preparing your sign-in link…
           </p>
         ) : null}
@@ -229,14 +230,14 @@ export function CanvasAuthCard({
               className="gap-1.5"
             >
               {checking ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                <Spinner className="size-3.5" aria-hidden />
               ) : (
                 <RefreshCcw className="size-3.5" aria-hidden />
               )}
               {checking ? "Checking…" : "I've signed in"}
             </Button>
             <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" aria-hidden />
+              <Spinner className="size-3" aria-hidden />
               Watching for you to finish…
             </p>
             {note ? <p className="text-[11px] text-warning">{note}</p> : null}

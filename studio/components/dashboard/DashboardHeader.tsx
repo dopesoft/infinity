@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
 import { DailyQuote } from "@/components/dashboard/DailyQuote";
@@ -50,7 +49,6 @@ export function DashboardHeader({
   quote,
   search,
   onSearchChange,
-  loading = false,
 }: {
   /** From the boss profile via /api/dashboard. Empty until he has told us. */
   bossName?: string;
@@ -58,10 +56,6 @@ export function DashboardHeader({
   quote?: DailyQuoteData | null;
   search: string;
   onSearchChange: (v: string) => void;
-  // True while the dashboard is fetching/refetching. Surfaces a small spinner
-  // in the header so the boss can tell the page is in flight instead of
-  // staring at empty sections wondering.
-  loading?: boolean;
 }) {
   // todayHeader still supplies the day for screen readers and for the
   // greeting's boundary; it is no longer printed as a middot-joined line.
@@ -107,18 +101,6 @@ export function DashboardHeader({
         // through `meta`: meta renders inside a <p>, and a <figure> inside a
         // <p> is invalid, so the parser closes the <p> early and the server
         // and client disagree about the DOM.
-        actions={
-          loading ? (
-            <span
-              className="inline-flex items-center text-quiet"
-              aria-live="polite"
-              aria-label="Loading dashboard"
-              title="Loading dashboard"
-            >
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            </span>
-          ) : null
-        }
         className="pb-0"
       />
 

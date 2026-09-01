@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { fetchWorkspaceBlob } from "@/lib/api";
 
@@ -91,7 +92,7 @@ export function PdfDeckViewer({ pages, filename }: { pages: string[]; filename: 
               className="max-h-full max-w-full rounded-sm object-contain shadow-lg ring-1 ring-black/10"
             />
           ) : (
-            <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            <Spinner className="size-6 text-muted-foreground" />
           )}
         </div>
 

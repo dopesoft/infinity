@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Infinity as InfinityIcon, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { AppMark } from "@/components/nav/AppMark";
 import { RailStatus } from "@/components/nav/RailStatus";
 import { WakeNavButton } from "@/components/WakeNavButton";
 import { NAV, isNavActive, type NavEntry } from "@/lib/nav-tabs";
@@ -45,13 +46,7 @@ export function NavRail({ onOpenSearch }: { onOpenSearch: () => void }) {
         aria-label="Primary"
         className="hidden w-rail shrink-0 flex-col items-center gap-0.5 border-r border-hairline bg-background pb-safe pt-3 lg:flex"
       >
-        <Link
-          href="/"
-          aria-label="Infinity home"
-          className="mb-2.5 grid size-7 shrink-0 place-items-center rounded-lg bg-foreground text-background transition-opacity hover:opacity-80"
-        >
-          <InfinityIcon className="size-4" aria-hidden />
-        </Link>
+        <AppMark variant="rail" />
 
         {main.map((entry) => (
           <RailLink key={entry.href} entry={entry} pathname={pathname} />

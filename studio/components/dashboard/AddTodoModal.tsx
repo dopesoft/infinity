@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, ListTodo, Loader2 } from "lucide-react";
+import { CalendarDays, ListTodo } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { ResponsiveModal, ResponsiveModalHeader } from "@/components/ui/responsive-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -127,7 +128,7 @@ export function AddTodoModal({
             Cancel
           </Button>
           <Button onClick={submit} disabled={!canSubmit}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+            {saving ? <Spinner className="size-4" /> : null}
             {saving ? "Adding…" : "Add todo"}
           </Button>
         </>

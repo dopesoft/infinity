@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { StatusDot } from "@/components/ui/list-row";
@@ -101,7 +102,7 @@ export function PCCockpit({
         </div>
       ) : loading && !cockpit ? (
         <div className="mx-auto flex w-full max-w-[38rem] items-center gap-2 px-4 py-10 text-[13.5px] text-quiet sm:px-6">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
+          <Spinner className="size-4" aria-hidden />
           Opening your programme
         </div>
       ) : !cockpit ? null : (

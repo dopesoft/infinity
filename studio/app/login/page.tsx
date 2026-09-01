@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Infinity as InfinityIcon, Loader2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
+import { Infinity as InfinityIcon } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +25,7 @@ function coreBaseURL(): string {
 }
 
 export default function LoginPage() {
-  const router = useRouter();
+  const router = useAppRouter();
   const search = useSearchParams();
   const from = search.get("from") || "/";
 
@@ -132,7 +134,7 @@ export default function LoginPage() {
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 {info && <p className="text-sm text-muted-foreground">{info}</p>}
                 <Button type="submit" className="w-full" disabled={busy}>
-                  {busy && <Loader2 className="size-4 animate-spin" />}
+                  {busy && <Spinner className="size-4" />}
                   {tab === "signin" ? "Sign in" : "Create account"}
                 </Button>
               </form>

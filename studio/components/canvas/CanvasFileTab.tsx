@@ -8,10 +8,10 @@ import {
   Check,
   Files,
   GitCompare,
-  Loader2,
   Pencil,
   Save,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { useCanvasStore } from "@/lib/canvas/store";
 import { fetchCanvasFSReadResult, fetchCanvasGitShow, saveCanvasFile } from "@/lib/canvas/api";
@@ -375,7 +375,7 @@ export function CanvasFileTab({
         )}
         {!hasLive && loading && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            <Spinner className="size-5 text-muted-foreground" />
           </div>
         )}
         {!hasLive && loadError && !loading && (
@@ -445,7 +445,7 @@ export function CanvasFileTab({
           <span className="flex items-center gap-1 text-info">
             {isStreaming ? (
               <>
-                <Loader2 className="size-3 animate-spin" /> Jarvis is writing…
+                <Spinner className="size-3" /> Jarvis is writing…
               </>
             ) : (
               <>
@@ -480,7 +480,7 @@ export function CanvasFileTab({
             {saveState.status === "idle" && !isModified && !(isDirty && diffSource === "head") && <span>Clean</span>}
             {saveState.status === "saving" && (
               <span className="flex items-center gap-1">
-                <Loader2 className="size-3 animate-spin" /> Saving…
+                <Spinner className="size-3" /> Saving…
               </span>
             )}
             {saveState.status === "pending" && (
@@ -648,7 +648,7 @@ function languageFromPath(path: string): string {
 function MonacoSkeleton() {
   return (
     <div className="flex h-full items-center justify-center">
-      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      <Spinner className="size-5 text-muted-foreground" />
     </div>
   );
 }

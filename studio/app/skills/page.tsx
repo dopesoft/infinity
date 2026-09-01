@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { RefreshCw, Wand2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
 import { Inset } from "@/components/ui/inset";
 import { authedFetch, fetchSkills, type SkillSummaryDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { usePageLoading } from "@/lib/loading";
 
 /**
  * Skills — pick on the left, read on the right.
@@ -69,10 +70,11 @@ type Entry =
   | { id: string; label: string; group: "inuse"; skill: SkillSummaryDTO };
 
 export default function SkillsPage() {
-  const router = useRouter();
+  const router = useAppRouter();
   const [skills, setSkills] = useState<SkillSummaryDTO[]>([]);
   const [proposals, setProposals] = useState<LabProposal[]>([]);
   const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   const [query, setQuery] = useState("");
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -216,7 +218,7 @@ export default function SkillsPage() {
 }
 
 function Detail({ entry, loading }: { entry: Entry | null; loading: boolean }) {
-  const router = useRouter();
+  const router = useAppRouter();
   if (!entry) {
     return (
       <div className="p-6">

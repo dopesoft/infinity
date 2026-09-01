@@ -1,6 +1,7 @@
 "use client";
 
-import { FileText, Loader2, Paperclip, TriangleAlert } from "lucide-react";
+import { FileText, Paperclip, TriangleAlert } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment } from "@/hooks/useChat";
 import { openAttachment, useAttachmentObjectUrl } from "@/lib/attachments";
@@ -58,11 +59,11 @@ function ImageTile({ att }: { att: ChatAttachment }) {
           // eslint-disable-next-line @next/next/no-img-element
           <img src={src} alt={att.name} className="h-24 w-24 object-cover" />
         ) : (
-          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          <Spinner className="size-4 text-muted-foreground" />
         )}
         {att.uploading && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/60">
-            <Loader2 className="size-4 animate-spin" />
+            <Spinner className="size-4" />
           </div>
         )}
       </div>
@@ -102,7 +103,7 @@ function FileChip({ att }: { att: ChatAttachment }) {
       )}
     >
       {att.uploading ? (
-        <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+        <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
       ) : status?.tone === "warn" ? (
         <TriangleAlert className="size-3.5 shrink-0 text-warning" />
       ) : (

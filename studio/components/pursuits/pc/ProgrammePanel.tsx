@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, Pencil, Plus, Sparkles, X } from "lucide-react";
+import { Check, Pencil, Plus, Sparkles, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Inset } from "@/components/ui/inset";
@@ -183,7 +184,7 @@ function IdentityGroup({
           ) : null}
 
           <Button onClick={() => void save()} disabled={saving} className="w-full sm:w-auto">
-            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {saving ? <Spinner className="size-4" aria-hidden /> : null}
             {saving ? "Saving" : "Save identity"}
           </Button>
         </div>
@@ -370,7 +371,7 @@ function ProofRow({
           )}
         >
           {busy ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            <Spinner className="size-3.5" aria-hidden />
           ) : proof.taken ? (
             <Check className="size-3.5" aria-hidden />
           ) : null}
@@ -624,7 +625,7 @@ function MemoriesGroup({
           className="w-full sm:w-auto"
         >
           {saving ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden />
+            <Spinner className="size-4" aria-hidden />
           ) : (
             <Plus className="size-4" aria-hidden />
           )}
@@ -798,7 +799,7 @@ function InlineForm({
         className="min-w-0 flex-1"
       />
       <Button type="submit" variant="secondary" disabled={!value.trim() || busy}>
-        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : icon}
+        {busy ? <Spinner className="size-4" aria-hidden /> : icon}
         {submitLabel}
       </Button>
     </form>

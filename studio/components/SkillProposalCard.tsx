@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Sparkles, ExternalLink, Check, X, Pencil, Loader2 } from "lucide-react";
+import { Sparkles, ExternalLink, Check, X, Pencil } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import type { ChatMessage } from "@/hooks/useChat";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -138,7 +139,7 @@ export function SkillProposalCard({ message }: { message: ChatMessage }) {
         <div className="flex items-start gap-2 px-3 py-2.5">
           <div className={`mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full ${iconClass}`}>
             {phase === "loading" ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              <Spinner className="size-3.5" aria-hidden />
             ) : (
               <Sparkles className="size-3.5" aria-hidden />
             )}
@@ -164,7 +165,7 @@ export function SkillProposalCard({ message }: { message: ChatMessage }) {
                   disabled={inflight !== null}
                 >
                   {inflight === "approve" ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                    <Spinner className="size-3.5" aria-hidden />
                   ) : (
                     <Check className="size-3.5" aria-hidden />
                   )}
@@ -190,7 +191,7 @@ export function SkillProposalCard({ message }: { message: ChatMessage }) {
                   disabled={inflight !== null}
                 >
                   {inflight === "dismiss" ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                    <Spinner className="size-3.5" aria-hidden />
                   ) : (
                     <X className="size-3.5" aria-hidden />
                   )}

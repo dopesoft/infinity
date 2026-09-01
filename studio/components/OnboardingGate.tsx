@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { useAuth } from "@/lib/auth/session";
 import { fetchProfile, getMeta } from "@/lib/api";
 
@@ -18,7 +19,7 @@ const LOCAL_FLAG = "boss_onboarded";
  * itself isn't trapped in a redirect loop. */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  const router = useRouter();
+  const router = useAppRouter();
   const pathname = usePathname();
 
   // The onboarding check is a REDIRECT-ONLY concern - a brand-new boss with no

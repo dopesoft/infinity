@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTabParam } from "@/lib/useTabParam";
+import { usePageLoading } from "@/lib/loading";
 import { openAuthWindow } from "@/lib/auth-window";
 import {
   Check,
@@ -10,7 +11,6 @@ import {
   LayoutDashboard,
   Shield,
   LayoutPanelLeft,
-  Loader2,
   MessageSquare,
   Plug,
   Server,
@@ -19,6 +19,7 @@ import {
   Unplug,
   Wrench,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,10 +154,11 @@ function SettingsScreen() {
   const [status, setStatus] = useState<CoreStatus | null>(null);
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [mcp, setMCP] = useState<MCPStatus[]>([]);
-  // setLoading is retained so refresh() can still toggle it for any
-  // sub-section that may want it later; the value itself isn't read at
-  // this level now that the header refresh button is gone.
-  const [, setLoading] = useState(true);
+  // Settings is the slowest screen to arrive: three fetches before the
+  // first section can render anything. The flag lights the app mark until
+  // they land, so a tap on the rail is answered immediately.
+  const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   // Active section lives in ?section=<id> so a refresh, back/forward, and
   // deep-links (the TrustToast's router.push("/settings?section=trust"),
   // dashboard, notifications) all land on the right section instead of
@@ -1393,7 +1395,7 @@ function OAuthConnectBlock() {
         label="ChatGPT plan"
         trailing={
           loading ? (
-            <Loader2 className="size-3.5 animate-spin text-quiet" aria-hidden />
+            <Spinner className="size-3.5 text-quiet" aria-hidden />
           ) : (
             <span
               className={cn(
@@ -1486,7 +1488,7 @@ function OAuthConnectBlock() {
               disabled={!paste.trim() || busy === "exchange"}
             >
               {busy === "exchange" ? (
-                <Loader2 className="animate-spin" />
+                <Spinner />
               ) : (
                 <Check />
               )}
@@ -1511,7 +1513,7 @@ function OAuthConnectBlock() {
             onClick={disconnect}
             disabled={busy === "disconnect"}
           >
-            {busy === "disconnect" ? <Loader2 className="animate-spin" /> : <Unplug />}
+            {busy === "disconnect" ? <Spinner /> : <Unplug />}
             disconnect
           </Button>
         )}
@@ -1522,7 +1524,7 @@ function OAuthConnectBlock() {
             onClick={connect}
             disabled={busy === "start"}
           >
-            {busy === "start" ? <Loader2 className="animate-spin" /> : <Plug />}
+            {busy === "start" ? <Spinner /> : <Plug />}
             {connected ? "reconnect" : "open ChatGPT login"}
           </Button>
         )}

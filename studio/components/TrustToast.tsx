@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { ShieldCheck, X } from "lucide-react";
 import { fetchTrustContracts, type TrustContractDTO } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
@@ -55,7 +56,7 @@ export function TrustToast() {
   const [pending, setPending] = useState<TrustContractDTO[]>([]);
   const [dismissedUntil, setDismissedUntil] = useState<number>(0);
   const [now, setNow] = useState<number>(0);
-  const router = useRouter();
+  const router = useAppRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const inFlightRef = useRef(false);

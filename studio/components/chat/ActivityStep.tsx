@@ -39,7 +39,6 @@ import {
   Layers,
   Link as LinkIcon,
   ListChecks,
-  Loader2,
   Lock,
   Mail,
   MessageSquare,
@@ -76,6 +75,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 
 import { Button } from "@/components/ui/button";
 import { CodeChangeView } from "@/components/chat/CodeChange";
@@ -276,7 +276,7 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
       >
         <span className="flex size-[18px] shrink-0 items-center justify-center">
           {showSpinner ? (
-            <Loader2 className="size-[18px] animate-spin text-brand" aria-hidden />
+            <Spinner className="size-[18px] text-brand" aria-hidden />
           ) : item.status === "running" ? (
             <StatusDot tone="brand" pulse />
           ) : (
@@ -643,7 +643,7 @@ function ApprovalDetail({ item }: { item: ActivityItem }) {
               disabled={sending}
               onClick={() => void decide("approved")}
             >
-              {sending ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+              {sending ? <Spinner aria-hidden /> : <Check aria-hidden />}
               Approve
             </Button>
             <Button

@@ -1,6 +1,7 @@
 "use client";
 
-import { Hash, Loader2 } from "lucide-react";
+import { Hash } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Composer } from "@/components/Composer";
 import { ConversationStream } from "@/components/ConversationStream";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,7 @@ export function CanvasComposer({ chat }: { chat: ChatHook }) {
           {store.dirtyPaths.size} change{store.dirtyPaths.size === 1 ? "" : "s"}
         </span>
         <span className="ml-auto flex items-center gap-1">
-          {chat.isStreaming && <Loader2 className="size-3 animate-spin" />}
+          {chat.isStreaming && <Spinner className="size-3" />}
           <Button
             type="button"
             size="sm"

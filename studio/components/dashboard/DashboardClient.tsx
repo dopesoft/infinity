@@ -22,6 +22,7 @@ import { PCCockpit } from "@/components/pursuits/pc/PCCockpit";
 import { updateTodo } from "@/lib/api";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
 import { fetchDashboard, readDashboardCache } from "@/lib/dashboard/fetcher";
+import { usePageLoading } from "@/lib/loading";
 import type { DashboardResponse } from "@/lib/dashboard/fetcher";
 import { useRealtime } from "@/lib/realtime/provider";
 import type {
@@ -141,6 +142,8 @@ export function DashboardClient() {
   // is true so the spinner shows immediately while the first fetch
   // hasn't resolved yet.
   const [loading, setLoading] = useState(true);
+  // Lights the app mark until the first payload lands. See lib/loading.
+  usePageLoading(loading);
   // Header context: who he is and today's line. Both ride the dashboard
   // payload, so they are on screen from the localStorage cache before the
   // network answers rather than popping in a beat later.
@@ -474,7 +477,6 @@ export function DashboardClient() {
           quote={quote}
           search={search}
           onSearchChange={setSearch}
-          loading={loading}
         />
 
         {/* max-w-board, the token — not max-w-6xl. The width law lives in

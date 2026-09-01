@@ -5,10 +5,10 @@ import {
   AlertTriangle,
   Check,
   Circle,
-  Loader2,
   Minus,
   X,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { RunIndicator } from "@/lib/runs/RunIndicator";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/dashboard/format";
@@ -156,7 +156,7 @@ function StepGlyph({ status }: { status: PlanStepStatus }) {
       return <Check className={cn(base, "text-quiet")} strokeWidth={2.5} aria-label="done" />;
     case "in_progress":
       return (
-        <Loader2 className={cn(base, "animate-spin text-brand")} aria-label="running" />
+        <Spinner className={cn(base, "text-brand")} aria-hidden={false} aria-label="running" />
       );
     case "blocked":
       return <AlertTriangle className={cn(base, "text-warning")} aria-label="blocked" />;

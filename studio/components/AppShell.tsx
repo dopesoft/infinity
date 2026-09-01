@@ -1,8 +1,8 @@
 "use client";
 
 import { Suspense } from "react";
-import Link from "next/link";
-import { Infinity as InfinityIcon, Search } from "lucide-react";
+import { Search } from "lucide-react";
+import { AppMark } from "@/components/nav/AppMark";
 import { NavRail } from "@/components/nav/NavRail";
 import { NavDrawer } from "@/components/nav/NavDrawer";
 import { RailStatus } from "@/components/nav/RailStatus";
@@ -60,13 +60,7 @@ export function AppShell({
             own bar is the top of the page, which is what gives the chat page
             back the 112px it used to spend on two stacked headers. */}
         <header className="flex h-14 shrink-0 items-center gap-1 border-b border-hairline bg-background px-2 pt-safe lg:hidden">
-          <Link
-            href="/"
-            aria-label="Infinity home"
-            className="grid size-9 shrink-0 place-items-center rounded-lg text-foreground"
-          >
-            <InfinityIcon className="size-5" aria-hidden />
-          </Link>
+          <AppMark variant="bar" />
           <span className="flex-1" />
           <button
             type="button"

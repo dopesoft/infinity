@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import {
   AlertTriangle,
   ArrowDownToLine,
@@ -35,7 +35,7 @@ import { useRealtime } from "@/lib/realtime/provider";
  */
 export default function LogDetailPage({ params }: { params: { turnId: string } }) {
   const { turnId } = params;
-  const router = useRouter();
+  const router = useAppRouter();
   const [detail, setDetail] = useState<TraceDetailDTO | null>(null);
   const [selected, setSelected] = useState<TraceEventDTO | null>(null);
   const [loading, setLoading] = useState(true);

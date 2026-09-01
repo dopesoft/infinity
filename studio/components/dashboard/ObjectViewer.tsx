@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertTriangle,
@@ -10,7 +10,6 @@ import {
   Circle,
   ExternalLink,
   AlignLeft,
-  Loader2,
   MapPin,
   Paperclip,
   Pencil,
@@ -22,6 +21,7 @@ import {
   X,
   MessagesSquare,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { authedFetch, triggerCron, cancelWork, postSurfaceAction, canvasProjectActivate } from "@/lib/api";
 import { stashPendingDoc } from "@/lib/canvas/store";
 import { RunIndicator, useRuns } from "@/lib/runs";
@@ -451,7 +451,7 @@ function ViewerActions({
   // can drop a row without opening a chat for it — and dismissals are
   // durable (status='dismissed' is preserved by the connector poller's
   // ON CONFLICT DO NOTHING, so re-polled threads don't resurface).
-  const router = useRouter();
+  const router = useAppRouter();
   const [seeding, setSeeding] = React.useState(false);
   const [dismissing, setDismissing] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(false);
@@ -903,7 +903,7 @@ function FollowupFooterActions({ followup }: { followup: FollowUp }) {
               }
             }}
           >
-            {pending ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+            {pending ? <Spinner className="size-3.5" aria-hidden /> : null}
             {pending && action.id === "draft_reply" ? "Drafting..." : action.label}
           </Button>
         );
@@ -923,7 +923,7 @@ function isURL(s: string): boolean {
 
 async function openArtifact(
   a: Artifact,
-  router: ReturnType<typeof useRouter>,
+  router: ReturnType<typeof useAppRouter>,
   onClose?: () => void,
 ) {
   // A canvas project is the high-value case — reopen it running, not a snapshot.
@@ -978,7 +978,7 @@ async function openArtifact(
 // (app / doc / dashboard Jarvis built). Launches the live artifact; sits
 // alongside the universal "Discuss with Jarvis" trailing button.
 function ArtifactOpenButton({ artifact, onClose }: { artifact: Artifact; onClose?: () => void }) {
-  const router = useRouter();
+  const router = useAppRouter();
   const [opening, setOpening] = React.useState(false);
   return (
     <button
@@ -1008,7 +1008,7 @@ function ArtifactOpenButton({ artifact, onClose }: { artifact: Artifact; onClose
 // onOpenChange isn't called explicitly because navigating away from
 // the dashboard URL closes it naturally.
 function OpenInButton({ href, label }: { href: string; label: string }) {
-  const router = useRouter();
+  const router = useAppRouter();
   return (
     <button
       type="button"
@@ -1889,7 +1889,7 @@ function FollowUpBody({ f }: { f: FollowUp }) {
             in flight, hint at the upgrade without blocking the read. */}
         {!richHtml && plain && loading ? (
           <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" aria-hidden /> loading full message…
+            <Spinner className="size-3" aria-hidden /> loading full message…
           </p>
         ) : null}
       </ModalSection>
@@ -2073,7 +2073,7 @@ function DraftReplyPanel({
       meta={
         running ? (
           <span className="inline-flex items-center gap-1.5 text-brand">
-            <Loader2 className="size-3 animate-spin" aria-hidden />
+            <Spinner className="size-3" aria-hidden />
             Jarvis is writing
           </span>
         ) : draft ? (
@@ -2101,7 +2101,7 @@ function DraftReplyPanel({
         />
         {running ? (
           <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" aria-hidden />
+            <Spinner className="size-3" aria-hidden />
             Keep this open to watch the draft stream in. The run is also tracked durably if you navigate away.
           </p>
         ) : null}
@@ -2124,7 +2124,7 @@ function DraftReplyPanel({
             }}
           >
             {sending ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              <Spinner className="size-3.5" aria-hidden />
             ) : (
               <Send className="size-3.5" aria-hidden />
             )}

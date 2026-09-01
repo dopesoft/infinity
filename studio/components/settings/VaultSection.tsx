@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CreditCard, Loader2, Plus, Trash2 } from "lucide-react";
+import { CreditCard, Plus, Trash2 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section } from "@/components/dashboard/Section";
@@ -303,7 +304,7 @@ function AddCardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =>
           Cancel
         </Button>
         <Button onClick={() => void submit()} disabled={saving || !number.trim()} className="sm:order-2">
-          {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+          {saving ? <Spinner className="size-3.5" aria-hidden /> : null}
           Save card
         </Button>
       </div>
@@ -540,7 +541,7 @@ function PersonalInfoTab() {
       {dirty.length || saving ? (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
           <Button onClick={() => void save()} disabled={saving}>
-            {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+            {saving ? <Spinner className="size-3.5" aria-hidden /> : null}
             Save {dirty.length} change{dirty.length === 1 ? "" : "s"}
           </Button>
         </div>
@@ -556,7 +557,7 @@ function PersonalInfoTab() {
 function Loading() {
   return (
     <p className="flex items-center gap-2 py-3 text-[13.5px] text-quiet">
-      <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
+      <Spinner className="size-4" aria-hidden /> Loading…
     </p>
   );
 }

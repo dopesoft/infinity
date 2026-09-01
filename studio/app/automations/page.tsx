@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { Plus } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
   type SentinelDTO,
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
+import { usePageLoading } from "@/lib/loading";
 
 /**
  * Automations — the next twenty four hours, drawn once, then one list.
@@ -44,10 +45,11 @@ import { useRealtime } from "@/lib/realtime/provider";
  * useState initializer, so the server and the first client paint agree.
  */
 export default function AutomationsPage() {
-  const router = useRouter();
+  const router = useAppRouter();
   const [crons, setCrons] = useState<CronJobDTO[]>([]);
   const [sentinels, setSentinels] = useState<SentinelDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   const [now, setNow] = useState<number | null>(null);
   // Making a new automation is a sheet over this page, not a trip to another
   // route. Two kinds, because a schedule and a watcher genuinely take

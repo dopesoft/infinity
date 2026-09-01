@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { fetchDeployStatus, type DeployStatus } from "@/lib/canvas/api";
 import { cn } from "@/lib/utils";
 
@@ -57,7 +58,7 @@ export function DeployStatusRow() {
 
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning">
-      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+      <Spinner className="size-3.5" aria-hidden />
       <span className="min-w-0 flex-1 truncate">
         Jarvis&rsquo;s deployed code is behind main by{" "}
         <span className="font-semibold">

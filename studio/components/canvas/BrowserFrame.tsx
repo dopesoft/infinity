@@ -6,13 +6,13 @@ import {
   ArrowRight,
   ExternalLink,
   Hand,
-  Loader2,
   Monitor,
   RotateCw,
   Smartphone,
   Square,
   X,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { closeBrowserSession, navigateBrowserSession, setBrowserControl } from "@/lib/api";
 import { useCanvasStore, type DevicePreset } from "@/lib/canvas/store";
 import { useNow } from "@/lib/useNow";
@@ -219,7 +219,7 @@ export function BrowserFrame({
             )}
           >
             {stopping ? (
-              <Loader2 className="size-3 animate-spin" aria-hidden />
+              <Spinner className="size-3" aria-hidden />
             ) : live && !driving ? (
               <Square className="size-3" aria-hidden />
             ) : (

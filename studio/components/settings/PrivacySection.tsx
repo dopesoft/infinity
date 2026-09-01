@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Lock, Plus, Shield, Trash2 } from "lucide-react";
+import { Lock, Plus, Shield, Trash2 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -94,7 +95,7 @@ export function PrivacySection() {
             <option value="sensitive">Ask me first</option>
           </NativeSelect>
           <Button size="sm" onClick={add} disabled={busy || !glob.trim()} className="shrink-0">
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+            {busy ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
             Add
           </Button>
         </div>
@@ -105,7 +106,7 @@ export function PrivacySection() {
           empty case is the add-row itself. */}
       {!loaded ? (
         <p className="flex items-center gap-2 py-2 text-[13.5px] text-quiet">
-          <Loader2 className="size-4 animate-spin" /> Loading…
+          <Spinner className="size-4" /> Loading…
         </p>
       ) : wards.length === 0 ? null : (
         wards.map((w) => (

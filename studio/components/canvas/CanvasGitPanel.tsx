@@ -6,9 +6,9 @@ import {
   ArrowUpFromLine,
   GitBranch,
   GitCommit,
-  Loader2,
   RefreshCw,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
@@ -258,7 +258,7 @@ export function CanvasGitPanel({
           title="Stage, commit, and push everything to GitHub"
         >
           {busy === "push" || busy === "commit" ? (
-            <Loader2 className="size-4 animate-spin" />
+            <Spinner className="size-4" />
           ) : (
             <ArrowUpFromLine className="size-4" />
           )}
@@ -293,7 +293,7 @@ export function CanvasGitPanel({
             title="Pull latest from GitHub"
           >
             {busy === "pull" ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <Spinner className="size-3.5" />
             ) : (
               <ArrowDownToLine className="size-3.5" />
             )}
@@ -326,7 +326,7 @@ export function CanvasGitPanel({
         )}
         {store.root && status === null && sessionWrites.length === 0 && (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
+            <Spinner className="size-4" />
           </div>
         )}
         {/* What Jarvis touched this session — independent of git, with a count
@@ -390,7 +390,7 @@ export function CanvasGitPanel({
                 disabled={!commitMessage.trim() || busy === "commit" || busy === "push"}
               >
                 {busy === "commit" || busy === "push" ? (
-                  <Loader2 className="size-4 animate-spin" />
+                  <Spinner className="size-4" />
                 ) : pushAfterCommit ? (
                   <ArrowUpFromLine className="size-4" />
                 ) : (
@@ -432,7 +432,7 @@ export function CanvasGitPanel({
                 disabled={!commitMessage.trim() || busy === "commit" || busy === "push"}
               >
                 {busy === "commit" || busy === "push" ? (
-                  <Loader2 className="size-4 animate-spin" />
+                  <Spinner className="size-4" />
                 ) : pushAfterCommit ? (
                   <ArrowUpFromLine className="size-4" />
                 ) : (

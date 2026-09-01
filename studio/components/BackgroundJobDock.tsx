@@ -8,10 +8,10 @@ import {
   ChevronUp,
   Circle,
   FileText,
-  Loader2,
   Minus,
   X,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Progress } from "@/components/ui/progress";
 import { StatusDot } from "@/components/ui/list-row";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
@@ -112,7 +112,7 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
           // boss's words. This strip is the persistent "work is happening"
           // surface, so it gets the moving affordance, sized and centred to
           // match the icons in the other two states.
-          <Loader2 className="size-4 shrink-0 animate-spin text-brand" aria-hidden />
+          <Spinner className="size-4 shrink-0 text-brand" aria-hidden />
         ) : plan?.status === "paused" ? (
           <AlertTriangle className="size-4 shrink-0 text-warning" />
         ) : (
@@ -221,7 +221,7 @@ function StepIcon({ status }: { status: PlanStep["status"] }) {
     case "in_progress":
       // The step actually being worked gets the moving affordance, aligned to
       // the first line of its label like every other status glyph here.
-      return <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-brand" aria-hidden />;
+      return <Spinner className="mt-0.5 size-3.5 shrink-0 text-brand" aria-hidden />;
     case "blocked":
       return <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />;
     case "failed":

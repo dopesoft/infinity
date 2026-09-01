@@ -243,6 +243,17 @@ There are exactly **two** tab looks in this product, and both live in [`ui/page-
 
 **Never add a scrolling tab strip to the header.** That rule is unchanged: when navigation outgrows a phone, grow the drawer.
 
+### One spinner, and the app mark is where "the app is loading" is said
+
+**The boss's law: "what I want is a consistent spinner when things are loading."** Studio had one loading indicator, on the dashboard beside the greeting, and roughly thirty hand-rolled `Loader2 animate-spin` glyphs at four sizes everywhere else. So a tap on the rail was answered by nothing at all, and he tapped again.
+
+- **`<Spinner>` ([`ui/spinner.tsx`](studio/components/ui/spinner.tsx)) is the only spinning glyph in the product.** Kibo's pinwheel (`LoaderPinwheel`). It owns the animation, so a consumer never writes `animate-spin` and never picks a different icon. No `Loader2`, no rotating `RefreshCw`, no bare `animate-spin` on a `<svg>`.
+- **"A screen is loading" is said by the app mark, once, in the one place that is on every screen.** [`AppMark`](studio/components/nav/AppMark.tsx) is the Infinity logo, and it becomes the pinwheel while a screen is on its way in - top of the rail on desktop, top-left of the bar on mobile, both through the same component. Never add a second global loading surface (a top progress bar, a page overlay), and never draw the logo yourself.
+- **The signal is [`lib/loading`](studio/lib/loading/index.tsx), and it has exactly two entry points.** `RouteLoadingWatcher` (mounted once in the root layout) sees EVERY internal anchor click through one capture-phase document listener and releases on the `usePathname()` change, so a new `<Link>` anywhere is covered by construction. `useAppRouter()` replaces `useRouter()` at every cross-page `push`/`replace`; a plain `useRouter()` is still right for a same-page query update (`useTabParam`, `<FocusSheet>`) - that is not a screen load.
+- **A page declares its own first fetch with `usePageLoading(loading)`.** The hold releases the first time that flag goes false and is never taken again: a realtime push, a debounced search or a poll happens with the page already on screen and MUST NOT move the mark. A logo that spins whenever a row changes upstream is noise, and he stops reading it.
+- **It never spins for the agent.** Jarvis thinking, a tool running, a reply streaming: the activity ledger, `<RunIndicator>` and the bridge pill own those. The mark answers one question, "did my tap do anything?"
+- **Every hold ends.** The store holds for a 350ms minimum (so an instant load still registers as feedback rather than a strobe) and auto-releases on a TTL (so a hold nobody closed cannot spin forever). A stuck spinner is the UI version of a false green - see the self-healing rules above. Both are pinned by tests in [`lib/loading/store.test.ts`](studio/lib/loading/store.test.ts).
+
 ### A control that cannot do anything is NOT SHOWN
 
 **The boss's law: "why a fucking greyed out save button with nothing to even save vs only showing it when we're trying to actually save something?"** A disabled control is a promise the screen is not keeping. It sits in the spot a real action belongs, gives no clue what would enable it, and after the second time he taps it the page reads as broken.

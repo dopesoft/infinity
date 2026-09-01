@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { Ear } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWakeWord } from "@/lib/voice/use-wake-word";
@@ -21,7 +22,7 @@ import { cn } from "@/lib/utils";
  * place without a navigation. */
 
 export function WakeNavButton() {
-  const router = useRouter();
+  const router = useAppRouter();
   const pathname = usePathname();
   // Suspend while the composer's realtime session holds the mic.
   const [voiceActive, setVoiceActive] = useState(false);

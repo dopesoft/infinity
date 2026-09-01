@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,7 +23,7 @@ export function WorkingIndicator({ label }: { label: string }) {
   return (
     <div className="flex justify-start" data-working-indicator>
       <div className="flex min-h-11 min-w-0 max-w-full items-center gap-2.5">
-        <Loader2 className="size-[18px] shrink-0 animate-spin text-brand" aria-hidden />
+        <Spinner className="size-[18px] shrink-0 text-brand" aria-hidden />
         <span
           className={cn("min-w-0 truncate font-voice text-[15.5px] leading-[1.55]", "thinking-shimmer")}
           aria-live="polite"

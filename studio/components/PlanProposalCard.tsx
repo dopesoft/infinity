@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, ClipboardList, Loader2, ShieldCheck, Flag, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ClipboardList, ShieldCheck, Flag, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import type { ChatMessage } from "@/hooks/useChat";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -213,11 +214,11 @@ export function PlanProposalCard({
               disabled={inflight !== null}
               onClick={() => void discard()}
             >
-              {inflight === "discard" ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+              {inflight === "discard" ? <Spinner className="size-4" /> : <X className="size-4" />}
               Not yet
             </Button>
             <Button size="sm" className="flex-1 sm:flex-none" disabled={inflight !== null} onClick={() => void approve()}>
-              {inflight === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+              {inflight === "approve" ? <Spinner className="size-4" /> : <Check className="size-4" />}
               Go ahead
             </Button>
           </div>

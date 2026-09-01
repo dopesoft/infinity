@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { Loader2, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { ptyStart, ptyInput, ptyResize, ptyClose, ptyStreamResponse } from "@/lib/canvas/api";
 import { Button } from "@/components/ui/button";
 
@@ -184,7 +185,7 @@ export function CanvasTerminal({ sessionId }: { sessionId: string }) {
         <span className="inline-flex items-center gap-1.5">
           {status === "connecting" ? (
             <>
-              <Loader2 className="size-3 animate-spin" /> starting shell…
+              <Spinner className="size-3" /> starting shell…
             </>
           ) : status === "error" ? (
             <span className="text-danger">workspace unreachable</span>

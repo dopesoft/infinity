@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MonitorPlay, MonitorX, Sparkles, Loader2, AlertTriangle } from "lucide-react";
+import { MonitorPlay, MonitorX, Sparkles, AlertTriangle } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { CanvasBrowserView } from "@/components/canvas/CanvasBrowser";
 import { CanvasAuthCard, usePendingAuthExtension } from "@/components/canvas/CanvasAuthCard";
 import { useCanvasStore, devicePresetDimensions } from "@/lib/canvas/store";
@@ -413,7 +414,7 @@ function ProjectStatusBanner({ status, error }: { status: string; error?: string
         : "bg-muted text-muted-foreground border";
   const icon =
     status === "booting" ? (
-      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+      <Spinner className="size-3.5" aria-hidden />
     ) : status === "crashed" ? (
       <AlertTriangle className="size-3.5" aria-hidden />
     ) : null;

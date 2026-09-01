@@ -2,9 +2,23 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ChevronLeft, ChevronRight, Download, FileSpreadsheet, FileText, FileType2,
-  Film, ImageIcon, Loader2, MessageSquare, MoreVertical, Play, Presentation, Sparkles, Trash2,
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  FileType2,
+  Film,
+  ImageIcon,
+  MessageSquare,
+  MoreVertical,
+  Play,
+  Presentation,
+  Sparkles,
+  Trash2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { useCanvasStore, docMetaFromArtifact } from "@/lib/canvas/store";
 import {
   fetchWorkspaceBlob, downloadWorkspaceFile, deleteArtifact,
@@ -202,7 +216,7 @@ export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh, o
             {/* In-flight media jobs — the navigation-proof spinner. */}
             {pending.map((r) => (
               <div key={r.id} className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
-                <Loader2 className="size-4 shrink-0 animate-spin text-info" aria-hidden />
+                <Spinner className="size-4 shrink-0 text-info" aria-hidden />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground/90">{r.label}</p>
                   <p className="truncate text-[11px] text-muted-foreground">{r.progress_label || "generating…"}</p>
@@ -359,7 +373,7 @@ export function CanvasMediaGallery({ documents, mediaRuns, loading, onRefresh, o
               Cancel
             </Button>
             <Button variant="destructive" onClick={() => void confirmDelete()} disabled={deleting}>
-              {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              {deleting ? <Spinner className="size-4" /> : <Trash2 className="size-4" />}
               Delete
             </Button>
           </div>

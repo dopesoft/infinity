@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { Activity as ActivityIcon } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Timeline, TimelineDay, TimelineRow } from "@/components/ui/timeline";
 import { EmptyState } from "@/components/EmptyState";
 import { useRuns } from "@/lib/runs/useRuns";
 import { useRealtime } from "@/lib/realtime/provider";
+import { usePageLoading } from "@/lib/loading";
 import { useTabParam } from "@/lib/useTabParam";
 import {
   fetchHeartbeatFindings,
@@ -58,17 +59,23 @@ type Event = {
 };
 
 export default function ActivityPage() {
-  const router = useRouter();
+  const router = useAppRouter();
   const [lens, setLens] = useTabParam<Lens>("lens", "all", LENSES);
   const [turns, setTurns] = useState<TurnRowDTO[]>([]);
   const [findings, setFindings] = useState<HeartbeatFindingDTO[]>([]);
   const [checking, setChecking] = useState(false);
+  // Lights the app mark until the first river of events is on screen.
+  // Everything after that arrives over realtime with the page already up,
+  // so it must not move the mark. See lib/loading.
+  const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   const { runs } = useRuns({ limit: 200 });
 
   const load = useCallback(async () => {
     const [t, f] = await Promise.all([fetchTraces({ limit: 200 }), fetchHeartbeatFindings(100)]);
     setTurns(t ?? []);
     setFindings(f ?? []);
+    setLoading(false);
   }, []);
 
   useEffect(() => {

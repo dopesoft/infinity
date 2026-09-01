@@ -17,6 +17,7 @@ import { CompassSection } from "@/components/settings/CompassSection";
 import { KnowledgeGraphPanel } from "@/components/KnowledgeGraphPanel";
 import { useRealtime } from "@/lib/realtime/provider";
 import { useTabParam } from "@/lib/useTabParam";
+import { usePageLoading } from "@/lib/loading";
 import {
   fetchMemories,
   fetchMemoryCounts,
@@ -83,6 +84,7 @@ export default function MemoryPage() {
   const [selected, setSelected] = useState<ListItem | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  usePageLoading(loading);
   const [view, setView] = useTabParam<View>("view", "about", VIEWS);
   const [reflections, setReflections] = useState<ReflectionDTO[]>([]);
   const [reflectionChains, setReflectionChains] = useState<ReflectionChainDTO[]>([]);

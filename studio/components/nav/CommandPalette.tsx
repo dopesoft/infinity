@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useAppRouter } from "@/lib/loading";
 import { CornerDownLeft, Plus, Search } from "lucide-react";
 import {
   Command,
@@ -50,7 +50,7 @@ export function CommandPalette({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const router = useRouter();
+  const router = useAppRouter();
   const [query, setQuery] = useState("");
   // Same hook the dashboard search uses. The debounce, the abort and the
   // stale-response guard used to live here in full; two copies of that is how

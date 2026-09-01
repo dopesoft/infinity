@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { SidePanelCard } from "@/components/SidePanelCard";
 import { ListRow } from "@/components/ui/list-row";
 import type { ChatMessage } from "@/hooks/useChat";
@@ -57,7 +57,7 @@ export function ActiveSkillsPanel({ messages }: { messages: ChatMessage[] }) {
                 live={running}
                 leading={
                   running ? (
-                    <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+                    <Spinner className="size-3.5 text-brand" aria-hidden />
                   ) : undefined
                 }
                 title={

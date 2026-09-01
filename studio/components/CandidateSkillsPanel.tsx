@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Loader2, Sparkles, X } from "lucide-react";
+import { Check, Sparkles, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { GroupLabel, ListRow } from "@/components/ui/list-row";
 import {
@@ -216,7 +217,7 @@ function CandidateRow({
             className="inline-flex items-center gap-1.5 text-[12px] font-medium text-quiet"
             aria-live="polite"
           >
-            <Loader2 className="size-4 animate-spin" aria-hidden />
+            <Spinner className="size-4" aria-hidden />
             {run?.progress_label || "Verifying…"}
           </span>
         ) : (
@@ -320,7 +321,7 @@ function ProposalModal({
       footer={
         verifying ? (
           <span className="inline-flex items-center gap-2 px-1 text-sm font-medium text-muted-foreground" aria-live="polite">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
+            <Spinner className="size-4" aria-hidden />
             {run?.progress_label || "Verifying — running the skill to confirm it works…"}
           </span>
         ) : (
