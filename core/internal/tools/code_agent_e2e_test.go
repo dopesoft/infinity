@@ -27,6 +27,7 @@ type localMacBridge struct {
 	extra []string
 	mu    sync.Mutex
 	cmds  []string
+	cwds  []string
 }
 
 func (b *localMacBridge) Name() bridge.Kind           { return bridge.KindMac }
@@ -35,6 +36,19 @@ func (b *localMacBridge) Health(context.Context) bool { return true }
 func (b *localMacBridge) Get(context.Context, string) ([]byte, int, bool) {
 	return nil, 404, true
 }
+
+// expandHome is exec.go's expandHome, against the fake home.
+func (b *localMacBridge) expandHome(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "~" {
+		return b.home
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(b.home, p[2:])
+	}
+	return p
+}
+
 func (b *localMacBridge) Post(ctx context.Context, path string, body any) ([]byte, int, bool) {
 	if path != "/bash" {
 		return []byte(`{"error":"unexpected path"}`), 404, true
@@ -44,8 +58,14 @@ func (b *localMacBridge) Post(ctx context.Context, path string, body any) ([]byt
 	cwd, _ := req["cwd"].(string)
 	b.mu.Lock()
 	b.cmds = append(b.cmds, cmd)
+	b.cwds = append(b.cwds, cwd)
 	b.mu.Unlock()
 	if cwd != "" {
+		// Mirrors tools/mcp-bridge/exec.go: the bridge resolves "~" and "~/x"
+		// against the real home and stats EVERYTHING ELSE literally. Shell
+		// syntax ("$HOME/...") is not expanded anywhere on the way, which is
+		// the 400 that took the Mac chat brain down on 2026-08-31.
+		cwd = b.expandHome(cwd)
 		if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
 			return []byte(`{"error":"cwd not a directory: ` + cwd + `"}`), 400, true
 		}
@@ -80,7 +100,7 @@ case "$*" in *"--output-format stream-json"*"--verbose"*) ;; *) echo '{"type":"r
 echo '{"type":"system","subtype":"init","model":"claude-opus-5"}'
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"core/x.go","old_string":"a","new_string":"b"}}]}}'
 sleep 0.4
-echo '{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"result":"Done: edited core/x.go","modelUsage":{"claude-opus-5":{"inputTokens":1}}}'
+echo '{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"duration_ms":2844,"num_turns":2,"result":"Done: edited core/x.go","modelUsage":{"claude-opus-5":{"inputTokens":1}}}'
 `
 
 // gitInit makes dir a real git worktree - the preflight refuses to launch

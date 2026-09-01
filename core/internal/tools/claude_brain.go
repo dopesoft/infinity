@@ -43,7 +43,18 @@ const (
 	// stable scratch directory of its own rather than being turned loose in
 	// whatever the boss last built. Created and git-initialised on first use,
 	// because several of Claude Code's affordances assume a repository.
-	brainWorkspaceMac = "$HOME/.infinity/brain"
+	//
+	// Spelled with "~", never "$HOME": this string is both pasted into a shell
+	// script AND sent as a bridge cwd, and the bridge stats the cwd literally.
+	// A "$HOME/..." here made every Mac chat turn come back as 400 "cwd not a
+	// directory: $HOME/.infinity/brain" (2026-08-31).
+	brainWorkspaceMac = "~/.infinity/brain"
+
+	// bridgeHome is home on either box, in the one spelling the bridge
+	// resolves. It is the cwd for the two calls that must NOT assume the
+	// workspace exists yet: the sign-in probe (it reads ~/.claude.json and
+	// does not care where it runs) and the launch, which is what creates it.
+	bridgeHome = "~"
 
 	// brainWorkspaceCloud is the cloud box's own persistent disk. Here the
 	// opposite is right: /workspace IS Jarvis's computer, and a brain that
@@ -124,7 +135,7 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 
 	// Prove the subscription BEFORE launching. The proof differs by bridge but
 	// the RULE does not: this brain spends the Max plan or it does not run.
-	token, err := r.brainSubscription(ctx, b, workspace)
+	token, err := r.brainSubscription(ctx, b)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -144,7 +155,7 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 		cloud:     b.Name() == bridge.KindCloud,
 	})
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{
-		"cmd": script, "cwd": "$HOME", "timeout_sec": 30,
+		"cmd": script, "cwd": bridgeHome, "timeout_sec": 30,
 	})
 	if !ok || code >= 300 {
 		msg, _ := bridgeBashOutput(body)
@@ -284,7 +295,7 @@ func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
 // CLAUDE_CODE_OAUTH_TOKEN the boss minted with `claude setup-token` - which
 // Anthropic issues only against a Pro/Max/Team/Enterprise plan, so its mere
 // presence IS the proof. Neither path can fall back to an API key.
-func (r *ClaudeCodeRunner) brainSubscription(ctx context.Context, b bridge.Bridge, workspace string) (string, error) {
+func (r *ClaudeCodeRunner) brainSubscription(ctx context.Context, b bridge.Bridge) (string, error) {
 	if b.Name() == bridge.KindCloud {
 		if r.brain.SubscriptionToken == nil {
 			return "", errors.New("The cloud box has no Claude sign-in saved, so it can't run this brain. Add your Claude token in Settings, or wake the Mac.")
@@ -295,9 +306,15 @@ func (r *ClaudeCodeRunner) brainSubscription(ctx context.Context, b bridge.Bridg
 		}
 		return token, nil
 	}
-	auth, err := r.probeAuth(ctx, b, workspace)
+	// Probed from home, not the workspace: the workspace does not exist until
+	// the launch script makes it, and a probe that cwd's into a directory it
+	// is about to create fails every FIRST turn on a fresh Mac.
+	auth, err := r.probeAuth(ctx, b, bridgeHome)
 	if err != nil {
-		return "", err
+		// probeAuth speaks for the coding tool. A chat turn is not a build,
+		// and "code_agent: ..." arriving mid-conversation reads as a bug in
+		// something the boss never asked for.
+		return "", fmt.Errorf("I couldn't read the Claude sign-in on your Mac, so I didn't start the turn. %s", brainProbeDetail(err))
 	}
 	if !auth.Subscription() {
 		return "", &notSubscriptionError{auth: auth}
@@ -663,9 +680,9 @@ func (r *ClaudeCodeRunner) macBrainStatus(ctx context.Context) BrainStatus {
 	if b == nil {
 		return BrainStatus{Detail: "Your Mac isn't reachable right now."}
 	}
-	auth, err := r.probeAuth(ctx, b, brainWorkspaceMac)
+	auth, err := r.probeAuth(ctx, b, bridgeHome)
 	if err != nil {
-		return BrainStatus{Detail: "I couldn't read the Claude sign-in on your Mac just now. " + errDetail(err)}
+		return BrainStatus{Detail: "I couldn't read the Claude sign-in on your Mac just now. " + brainProbeDetail(err)}
 	}
 	if !auth.Subscription() {
 		return BrainStatus{
@@ -696,6 +713,11 @@ func (r *ClaudeCodeRunner) bridgeNamed(ctx context.Context, kind bridge.Kind) br
 		return nil
 	}
 	return b
+}
+
+// brainProbeDetail restates a coding-path error in the voice of a chat turn.
+func brainProbeDetail(err error) string {
+	return strings.TrimPrefix(errDetail(err), "code_agent: ")
 }
 
 func errDetail(err error) string {

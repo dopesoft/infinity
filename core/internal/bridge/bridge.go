@@ -380,7 +380,7 @@ func (r *Router) Invalidate() {
 // Unknown shapes (relative paths, already-native paths) pass through
 // unchanged. Deterministic; "" stays "".
 func NormalizePath(b Bridge, path string) string {
-	p := strings.TrimSpace(path)
+	p := expandHomeVar(strings.TrimSpace(path))
 	if b == nil || p == "" {
 		return path
 	}
@@ -391,6 +391,26 @@ func NormalizePath(b Bridge, path string) string {
 		return macPath(p)
 	}
 	return path
+}
+
+// expandHomeVar rewrites a shell $HOME / ${HOME} prefix to "~".
+//
+// A path crosses the bridge as a JSON field, not as a shell word, so nothing
+// on the far side expands a variable: the Mac bridge stats the literal string
+// and answers 400 "cwd not a directory: $HOME/...". That reads as the Mac
+// having REJECTED the request, which is how a chat turn on Claude Max came
+// back as a code_agent launch failure (2026-08-31). "~" is the one spelling of
+// home both bridges resolve, so it is the only one allowed to leave here.
+func expandHomeVar(p string) string {
+	for _, prefix := range []string{"${HOME}", "$HOME"} {
+		if p == prefix {
+			return "~"
+		}
+		if strings.HasPrefix(p, prefix+"/") {
+			return "~/" + strings.TrimPrefix(p, prefix+"/")
+		}
+	}
+	return p
 }
 
 func cloudPath(p string) string {

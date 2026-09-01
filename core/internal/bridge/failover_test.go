@@ -166,6 +166,17 @@ func TestNormalizePath(t *testing.T) {
 		{mac, "/Users/kai/Dev/infinity", "~/Dev/infinity"},
 		{mac, "/Users/n0m4d/Dev/infinity/core", "~/Dev/infinity/core"},
 		{mac, "/Users/kai", "~"},
+		// Shell syntax is not expanded anywhere downstream: the bridge stats
+		// the cwd literally and answers 400 "cwd not a directory: $HOME/...".
+		// That 400 reads as the Mac having rejected the request, which is how
+		// a Claude Max chat turn died as a code_agent error (2026-08-31).
+		{mac, "$HOME/.infinity/brain", "~/.infinity/brain"},
+		{mac, "${HOME}/.infinity/brain", "~/.infinity/brain"},
+		{mac, "$HOME", "~"},
+		{cloud, "$HOME/notes.md", "/workspace/notes.md"},
+		{cloud, "$HOME/Dev/infinity", "/workspace/infinity"},
+		// Not a home prefix, so it stays exactly as written.
+		{mac, "$HOMEBREW/bin", "$HOMEBREW/bin"},
 	}
 	for _, c := range cases {
 		if got := NormalizePath(c.b, c.in); got != c.want {
