@@ -285,16 +285,27 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 		return
 	}
 
+	// The MOST RECENT 50, then put back in order.
+	//
+	// This took the OLDEST 50 and called it the conversation, so a long thread
+	// picked back up after a Core restart came back as its opening and none of
+	// its recent state - the boss saying "pick up where we left off" and being
+	// answered out of the beginning of the thread. Where he left off is the
+	// END of it.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hook_name, COALESCE(raw_text, ''), COALESCE(payload::text, ''), created_at
-		FROM mem_observations
-		WHERE session_id = $1
-		  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
-		  AND EXISTS (
-		    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
-		  )
+		SELECT hook_name, raw_text, payload, created_at FROM (
+			SELECT hook_name, COALESCE(raw_text, '') AS raw_text,
+			       COALESCE(payload::text, '') AS payload, created_at
+			FROM mem_observations
+			WHERE session_id = $1
+			  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+			  AND EXISTS (
+			    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
+			  )
+			ORDER BY created_at DESC
+			LIMIT 50
+		) recent
 		ORDER BY created_at ASC
-		LIMIT 50
 	`, sessionID)
 	if err != nil {
 		return

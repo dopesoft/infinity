@@ -51,8 +51,11 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
     };
   }, [sessionId, watchModel, watchProvider]);
 
+  // An unmeasured fill is not a zero fill. Both draw an empty ring, but the
+  // dialog says which one it is rather than implying the window is empty.
+  const measured = data ? data.measured !== false : false;
   const pct =
-    data && data.context_window > 0
+    data && measured && data.context_window > 0
       ? Math.min(1, data.used_tokens / data.context_window)
       : 0;
 
@@ -63,9 +66,11 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
         icon={<Ring pct={pct} />}
         onClick={() => setOpen(true)}
         title={
-          data
-            ? `${formatTokens(data.used_tokens)} / ${formatTokens(data.context_window)} (${Math.round(pct * 100)}%)`
-            : "Context usage"
+          !data
+            ? "Context usage"
+            : measured
+              ? `${formatTokens(data.used_tokens)} / ${formatTokens(data.context_window)} (${Math.round(pct * 100)}%)`
+              : `${formatTokens(data.context_window)} window, measured after your next message`
         }
         aria-label="Context usage"
         /* The ring is data, not a glyph: keep it at its drawn 18px rather
@@ -128,9 +133,31 @@ function UsageBody({ data }: { data: ContextUsageDTO | null }) {
       </div>
     );
   }
-  const pct = data.context_window > 0 ? data.used_tokens / data.context_window : 0;
+  const measured = data.measured !== false;
+  const pct =
+    measured && data.context_window > 0 ? data.used_tokens / data.context_window : 0;
   const entry = resolveModelEntry(data.model);
   const friendly = entry?.model.label ?? data.model;
+
+  // Nothing has been measured on this brain in this thread yet, so there is
+  // no fill to draw. Say what the window is and stop: a bar here would be
+  // either a lie (the last brain's number) or a claim of emptiness we cannot
+  // make.
+  if (!measured) {
+    return (
+      <div className="space-y-1.5">
+        <div className="flex items-baseline gap-1.5">
+          <h3 className="text-sm font-semibold tracking-tight">{friendly}</h3>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            [{formatTokens(data.context_window)}]
+          </span>
+        </div>
+        <p className="text-[13px] text-muted-foreground">
+          Measured after your next message.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">

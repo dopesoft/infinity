@@ -33,6 +33,14 @@ type contextUsageResp struct {
 	// models/turns with no cache hit.
 	CacheReadTokens  int `json:"cache_read_tokens"`
 	CacheWriteTokens int `json:"cache_write_tokens"`
+	// Measured says the fill is a real reading taken on the brain that is
+	// answering now. False means nobody has measured THIS brain on THIS
+	// thread yet: a fresh conversation, a thread just compacted, or the boss
+	// switching models mid-conversation. The fill is then unknown, and the
+	// dial says so instead of rendering the last brain's number against this
+	// brain's window (which is how it sat full-red on a window he had barely
+	// touched).
+	Measured bool `json:"measured"`
 }
 
 // estimateTokens uses the chars-divided-by-4 heuristic - accurate enough for
@@ -41,94 +49,6 @@ type contextUsageResp struct {
 // good enough for the UI.
 func estimateTokens(s string) int {
 	return (len(s) + 3) / 4
-}
-
-// contextWindowFor returns the model's EFFECTIVE input context window in
-// tokens - the size our client actually gets, which is what the meter must
-// divide by. Numbers verified against vendor model cards (last checked
-// 2026-06-19); update in lock step with studio/lib/models-catalog.ts when a
-// card changes. Order matters: most specific patterns first.
-func contextWindowFor(model string) int {
-	m := strings.ToLower(strings.TrimSpace(model))
-	// Some paths carry a "vendor:model" form (e.g. "openai_oauth:gpt-5.4");
-	// match on the bare model id so a prefix can't silently drop the lookup
-	// to the default window.
-	if i := strings.LastIndex(m, ":"); i >= 0 {
-		m = m[i+1:]
-	}
-
-	// Anthropic - effective 200K. Opus 4.6+/Sonnet 4.6 advertise a 1M window
-	// but it requires the context-1m beta header, which anthropic.go does NOT
-	// send, so >200K input is rejected -> effective 200K. The boss opts into
-	// 1M by picking a model id carrying the "1m" marker (then we'd add the
-	// header). Showing 1M here while the client caps at 200K would UNDER-report
-	// fill (dangerous), so 200K is the honest default.
-	if strings.HasPrefix(m, "claude-") {
-		if strings.Contains(m, "1m") {
-			return 1_000_000
-		}
-		// Claude 5 family (Opus 5, Sonnet 5, Fable 5) ships a 1M window as
-		// standard, no beta header (model pages, checked 2026-08-26). Matched
-		// on the family boundary so "claude-sonnet-4-5-…" stays 200K.
-		if isClaude5Family(m) {
-			return 1_000_000
-		}
-		return 200_000
-	}
-
-	// OpenAI gpt-5.x - window differs by MINOR version AND tier. Verified vs
-	// OpenAI cards (all 128K max output):
-	//   gpt-5.4, gpt-5.4-pro, gpt-5.5, gpt-5.5-pro, gpt-5.6(+sol/terra/luna): 1,050,000
-	//   gpt-5.4-mini/-nano, gpt-5.2, gpt-5.1, gpt-5(+pro/mini/nano): 400,000
-	if strings.HasPrefix(m, "gpt-5") {
-		// mini / nano stay at 400K on every minor version (gpt-5.4-mini is
-		// 400K even though gpt-5.4 is 1.05M) - exclude them first.
-		if strings.Contains(m, "-mini") || strings.Contains(m, "-nano") {
-			return 400_000
-		}
-		if strings.HasPrefix(m, "gpt-5.4") || strings.HasPrefix(m, "gpt-5.5") || strings.HasPrefix(m, "gpt-5.6") {
-			return 1_050_000
-		}
-		return 400_000
-	}
-	// o-series reasoning: o1/o3/o4 are 200K; o1-mini is the 128K exception.
-	if strings.HasPrefix(m, "o1-mini") {
-		return 128_000
-	}
-	if strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") {
-		return 200_000
-	}
-	// gpt-4.1 is the long-context one at ~1M (1,047,576); gpt-4o / gpt-4 at 128K.
-	if strings.HasPrefix(m, "gpt-4.1") {
-		return 1_000_000
-	}
-	if strings.HasPrefix(m, "gpt-4") {
-		return 128_000
-	}
-
-	// DeepSeek - V4 flash/pro/flash-vision all ship a 1M window (vendor
-	// pricing page, checked 2026-08-30). Wired: the vendor is in the Studio
-	// catalog and the provider registry.
-	if strings.HasPrefix(m, "deepseek") {
-		return 1_000_000
-	}
-
-	// Google Gemini (verified vs Google's cards):
-	//   Gemini 3 Flash: 200K (the small one) - check before the 3-family default
-	//   Gemini 3 Pro / Deep Think: 1M
-	//   Gemini 2.5 Pro / 2.5 Flash / 2.5 Flash-Lite / 2.0 Flash: 1M
-	// (2.5 Pro is 1M, NOT 2M - that was the old Gemini 1.5 Pro.)
-	if strings.HasPrefix(m, "gemini-3-flash") {
-		return 200_000
-	}
-	if strings.HasPrefix(m, "gemini-3") {
-		return 1_000_000
-	}
-	if strings.HasPrefix(m, "gemini-2.5") || strings.HasPrefix(m, "gemini-2.0") {
-		return 1_000_000
-	}
-
-	return 200_000
 }
 
 // handleContextUsage serves GET /api/context/usage?session_id=…
@@ -168,7 +88,7 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 	if st := llm.EffectiveBrain(provider, override); st.OnStandby && st.Model != "" {
 		modelID = st.Model
 	}
-	window := contextWindowFor(modelID)
+	window := llm.ContextWindow(modelID)
 
 	// Pull the real API-reported usage for this session. If no session id
 	// was supplied or the session has never sent a turn, snapshot.LastInputTokens
@@ -179,7 +99,14 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 		snapshot = s.loop.GetOrCreateSession(sid).UsageSnapshot()
 	}
 
+	// A fill is a measurement of one prompt sent to one model. It only
+	// describes the brain that took it.
+	measured := snapshot.LastInputTokens > 0 &&
+		(snapshot.LastMeasuredModel == "" || sameBrain(snapshot.LastMeasuredModel, modelID))
 	used := snapshot.LastInputTokens
+	if !measured {
+		used = 0
+	}
 	free := window - used
 	if free < 0 {
 		free = 0
@@ -221,23 +148,36 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 			{ID: "messages", Label: "Messages", Tokens: messageTokens},
 			{ID: "free", Label: "Free space", Tokens: free},
 		},
-		CacheReadTokens:  snapshot.LastCacheReadTokens,
-		CacheWriteTokens: snapshot.LastCacheWriteTokens,
+		CacheReadTokens:  cacheIf(measured, snapshot.LastCacheReadTokens),
+		CacheWriteTokens: cacheIf(measured, snapshot.LastCacheWriteTokens),
+		Measured:         measured,
 	})
 }
 
-// isClaude5Family reports a Claude 5 model id: "claude-<family>-5" followed
-// by the end of the id, a date/variant suffix ("-…") or the 1M marker ("[…").
-func isClaude5Family(m string) bool {
-	for _, fam := range []string{"opus", "sonnet", "haiku", "fable"} {
-		p := "claude-" + fam + "-5"
-		if !strings.HasPrefix(m, p) {
-			continue
-		}
-		rest := m[len(p):]
-		if rest == "" || rest[0] == '-' || rest[0] == '[' || rest[0] == '.' {
-			return true
-		}
+// sameBrain reports whether two model ids name the same brain. Compared
+// loosely on purpose: the id that answers can carry a date suffix or a window
+// marker ("claude-opus-5" vs "opus[1m]") without being a different brain, and
+// the cost of a false difference is one unmeasured poll, while the cost of a
+// false match is showing him another model's fill as his own.
+func sameBrain(a, b string) bool {
+	na, nb := brainKey(a), brainKey(b)
+	if na == "" || nb == "" {
+		return false
 	}
-	return strings.Contains(m, "mythos")
+	return na == nb || strings.HasPrefix(na, nb) || strings.HasPrefix(nb, na)
+}
+
+func brainKey(m string) string {
+	m = strings.ToLower(strings.TrimSpace(m))
+	if i := strings.LastIndex(m, ":"); i >= 0 {
+		m = m[i+1:]
+	}
+	return strings.SplitN(m, "[", 2)[0]
+}
+
+func cacheIf(measured bool, n int) int {
+	if !measured {
+		return 0
+	}
+	return n
 }

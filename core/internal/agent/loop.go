@@ -102,6 +102,8 @@ type Session struct {
 	// the next turn, same as the rest of the live usage.
 	lastCacheReadTokens  int
 	lastCacheWriteTokens int
+	// lastMeasuredModel is the model that produced lastInputTokens.
+	lastMeasuredModel string
 
 	// Active is the per-session whitelist of tools whose full schemas are
 	// shipped to the LLM each turn. Everything else lives in the dormant
@@ -151,7 +153,7 @@ func (s *Session) ReplaceMessages(next []llm.Message) {
 // turn completes. Called by the loop with whatever the provider returned in
 // Response.Usage. Safe to call with zero values - turns that erred before
 // the LLM responded simply don't move the counters.
-func (s *Session) RecordUsage(u llm.TokenUsage) {
+func (s *Session) RecordUsage(u llm.TokenUsage, model string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// The context meter must reflect the FULL prompt size (uncached input plus
@@ -168,6 +170,13 @@ func (s *Session) RecordUsage(u llm.TokenUsage) {
 		// zero out the last good reading).
 		s.lastCacheReadTokens = u.CacheRead
 		s.lastCacheWriteTokens = u.CacheWrite
+		// WHICH BRAIN this measurement came from. A fill is a measurement of
+		// one prompt sent to one model, and the boss switches models inside a
+		// live conversation: a 900K reading taken on one brain says nothing
+		// about how full the next brain's window is, and rendering it against
+		// that brain's number is how the meter showed him a full red bar on a
+		// window he had barely touched.
+		s.lastMeasuredModel = strings.TrimSpace(model)
 	}
 	if u.Output > 0 {
 		s.lastOutputTokens = u.Output
@@ -186,6 +195,10 @@ type UsageSnapshot struct {
 	// model/turn didn't cache, so the modal reads accurately on every model.
 	LastCacheReadTokens  int
 	LastCacheWriteTokens int
+	// LastMeasuredModel is the model that produced LastInputTokens. Empty
+	// when unknown. A reading taken on a different brain than the one now
+	// answering is not this brain's fill and must not be shown as it.
+	LastMeasuredModel string
 }
 
 func (s *Session) UsageSnapshot() UsageSnapshot {
@@ -198,7 +211,24 @@ func (s *Session) UsageSnapshot() UsageSnapshot {
 		TotalOutputTokens:    s.totalOutputTokens,
 		LastCacheReadTokens:  s.lastCacheReadTokens,
 		LastCacheWriteTokens: s.lastCacheWriteTokens,
+		LastMeasuredModel:    s.lastMeasuredModel,
 	}
+}
+
+// InvalidateUsage voids the last fill measurement.
+//
+// Called when the thing that was measured stops existing: the thread has just
+// been compacted, so the number describing how full the window was is about a
+// conversation that is no longer there. Leaving it up is what made the meter
+// sit red straight after a compaction that had just freed most of the window.
+// The next turn measures the real thing.
+func (s *Session) InvalidateUsage() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastInputTokens = 0
+	s.lastCacheReadTokens = 0
+	s.lastCacheWriteTokens = 0
+	s.lastMeasuredModel = ""
 }
 
 // SeedUsage installs counters from persistent storage when a session is
@@ -214,6 +244,7 @@ func (s *Session) SeedUsage(snap UsageSnapshot) {
 	s.totalInputTokens = snap.TotalInputTokens
 	s.totalOutputTokens = snap.TotalOutputTokens
 	s.lastCacheReadTokens = snap.LastCacheReadTokens
+	s.lastMeasuredModel = snap.LastMeasuredModel
 	s.lastCacheWriteTokens = snap.LastCacheWriteTokens
 }
 
@@ -390,11 +421,14 @@ type Loop struct {
 	compactorMu sync.RWMutex
 	compactor   *memory.ConversationCompactor
 
-	// autoCompactThreshold is the input-token count above which a turn's
-	// successful completion fires a background compaction pass. Default
-	// 120_000 (roughly 60% of a 200K window) so we compact before the
-	// next turn starts to bloat further. Tune via INFINITY_AUTO_COMPACT_AT.
-	autoCompactThreshold int
+	// autoCompactThreshold is the fallback input-token count above which a
+	// turn's successful completion fires a background compaction pass. The
+	// live number comes from compactAt(), which sizes it against the ACTIVE
+	// brain's window; this is what it falls back to when there is no brain to
+	// ask. Pinned means the boss set INFINITY_AUTO_COMPACT_AT himself, and
+	// then his number is the one that is used.
+	autoCompactThreshold       int
+	autoCompactThresholdPinned bool
 
 	// toolVisibility is the per-turn hook that decides which tool names
 	// to hide from the model for a given session. Guarded by providerMu
@@ -567,6 +601,32 @@ func (l *Loop) resolveActiveModel(ctx context.Context) string {
 
 // maybeAutoCompact fires a background compaction pass when the most
 // recent turn's input-token count crossed the configured threshold AND
+// compactAt is the input-token count above which the thread starts getting
+// summarised away.
+//
+// It follows the brain that is ANSWERING, because the boss switches brains
+// mid-conversation and the fixed number did not move with him: 120K is a
+// sensible 60% of a 200K window and an absurd 12% of the 1M one his plan
+// actually runs, so a switch to the big brain meant his thread was being
+// compacted away with 88% of the room still free. The other direction is
+// worse - a switch DOWN to a small window with a large thread has to compact
+// sooner, not at the same place. INFINITY_AUTO_COMPACT_AT still wins when he
+// has set it, because a number he chose outranks one we derived.
+func (l *Loop) compactAt() int {
+	if l.autoCompactThresholdPinned {
+		return l.autoCompactThreshold
+	}
+	p := l.Provider()
+	if p == nil {
+		return l.autoCompactThreshold
+	}
+	window := llm.ContextWindow(p.Model())
+	if window <= 0 {
+		return l.autoCompactThreshold
+	}
+	return window * 60 / 100
+}
+
 // a compactor is wired AND the session has enough history to bother. Runs
 // async (detached context) so the user-visible response isn't delayed.
 //
@@ -574,7 +634,7 @@ func (l *Loop) resolveActiveModel(ctx context.Context) string {
 // starts before the goroutine finishes will see either the pre- or
 // post-compaction message list - never a torn intermediate state.
 func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
-	if l.autoCompactThreshold <= 0 || lastInputTokens < l.autoCompactThreshold {
+	if threshold := l.compactAt(); threshold <= 0 || lastInputTokens < threshold {
 		return
 	}
 	l.compactorMu.RLock()
@@ -598,6 +658,11 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 			return
 		}
 		s.ReplaceMessages(newMsgs)
+		// The fill reading described the thread that was just summarised
+		// away, so it is no longer about anything. Void it: the meter reads
+		// "measured after your next message" instead of sitting red on a
+		// window that was just emptied.
+		s.InvalidateUsage()
 		infoLog.Printf("auto-compact: session=%s compacted %d turns, kept %d, %d observations promoted",
 			s.ID, res.CompactedTurns, res.KeptTurns, len(res.ObservationIDs))
 	}()
@@ -628,6 +693,7 @@ func (l *Loop) compactTurnNow(s *Session) bool {
 		return false
 	}
 	s.ReplaceMessages(newMsgs)
+	s.InvalidateUsage()
 	infoLog.Printf("turn-continuation compact: session=%s compacted %d turns, kept %d, %d observations promoted",
 		s.ID, res.CompactedTurns, res.KeptTurns, len(res.ObservationIDs))
 	return true
@@ -755,29 +821,32 @@ func New(cfg Config) *Loop {
 		cfg.Gate = AllowAll{}
 	}
 	threshold := 120_000
+	pinned := false
 	if v := strings.TrimSpace(os.Getenv("INFINITY_AUTO_COMPACT_AT")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			threshold = n
+			pinned = true
 		}
 	}
 	return &Loop{
-		llmProvider:          cfg.LLM,
-		tools:                cfg.Tools,
-		memory:               cfg.Memory,
-		hooks:                cfg.Hooks,
-		skills:               cfg.Skills,
-		gate:                 cfg.Gate,
-		namer:                cfg.Namer,
-		accounts:             cfg.Accounts,
-		systemPrompt:         cfg.SystemPrompt,
-		maxToolIterations:    cfg.MaxToolIterations,
-		maxTurnSegments:      maxSegments,
-		sessions:             make(map[string]*Session),
-		autoCompactThreshold: threshold,
-		usageStore:           cfg.UsageStore,
-		turns:                cfg.Turns,
-		costs:                cfg.Costs,
-		toolVisibility:       cfg.ToolVisibility,
+		llmProvider:                cfg.LLM,
+		tools:                      cfg.Tools,
+		memory:                     cfg.Memory,
+		hooks:                      cfg.Hooks,
+		skills:                     cfg.Skills,
+		gate:                       cfg.Gate,
+		namer:                      cfg.Namer,
+		accounts:                   cfg.Accounts,
+		systemPrompt:               cfg.SystemPrompt,
+		maxToolIterations:          cfg.MaxToolIterations,
+		maxTurnSegments:            maxSegments,
+		sessions:                   make(map[string]*Session),
+		autoCompactThreshold:       threshold,
+		autoCompactThresholdPinned: pinned,
+		usageStore:                 cfg.UsageStore,
+		turns:                      cfg.Turns,
+		costs:                      cfg.Costs,
+		toolVisibility:             cfg.ToolVisibility,
 	}
 }
 
@@ -1199,6 +1268,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// self-heal passes have we already injected. See selfheal.go.
 	toolErredThisTurn := false
 	selfHealCount := 0
+	// One clean retry per turn. See the recovery block in the stream-error
+	// path below: a request a brain refuses is rebuilt into the form every
+	// brain accepts and sent again, ONCE, before he is ever shown a failure.
+	cleanRetryUsed := false
 	healedThisTurn := false // a self-heal pass ran this turn; drives the resolved/exhausted hook
 	verifyCount := 0        // steal C Lever 3: bounded adversarial-verify passes this turn
 	// Plan-continuation backstop trackers: did this turn touch the durable plan
@@ -1431,6 +1504,9 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}()
 
 		var partialText strings.Builder
+		// Tool calls the BRAIN made inside its own loop. See the block after
+		// the stream closes.
+		var streamedCalls []llm.ToolCall
 		for ev := range llmEvents {
 			switch ev.Kind {
 			case llm.StreamText:
@@ -1451,6 +1527,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					ToolName:   ev.ToolName,
 					InputDelta: ev.InputDelta,
 				})
+			case llm.StreamToolCall:
+				if ev.ToolCall != nil {
+					streamedCalls = append(streamedCalls, *ev.ToolCall)
+				}
 			case llm.StreamNotice:
 				// Provider-layer heads-up for the boss (brain failover on a
 				// spent plan, back on the primary). Same shape as the bridge
@@ -1463,10 +1543,45 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 
 		<-streamDone
 
+		// WORK THE BRAIN DID ITSELF.
+		//
+		// Some brains are harnesses, not endpoints: Claude Code runs its own
+		// tools inside its own session and hands back a finished turn, so
+		// resp.ToolCalls comes back EMPTY and the executor below never sees
+		// any of it. It still happened - reading his resume, running a
+		// command, editing a file IS the work he asked for - and until now it
+		// existed only inside the vendor's session. Not on his screen, not in
+		// Infinity's memory, gone the moment that session went away.
+		//
+		// So every streamed call this loop will NOT execute is surfaced and
+		// captured here. The test is structural, not per-vendor: if the loop
+		// is not going to run it, whoever streamed it already did.
+		if len(streamedCalls) > 0 {
+			executing := make(map[string]bool, len(resp.ToolCalls))
+			for _, tc := range resp.ToolCalls {
+				executing[tc.ID] = true
+			}
+			for _, tc := range streamedCalls {
+				if tc.Name == "" || executing[tc.ID] {
+					continue
+				}
+				now := time.Now().UTC()
+				emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
+					ID: tc.ID, Name: tc.Name, Input: tc.Input, StartedAt: now, EndedAt: now,
+				}})
+				l.fireHookT(turnID, "PostToolUse", s.ID, s.Project, tc.Name+" (run by the brain in its own session)", map[string]any{
+					"name":         tc.Name,
+					"input":        tc.Input,
+					"tool_call_id": tc.ID,
+					"executed_by":  provider.Name(),
+				})
+			}
+		}
+
 		// Record real API-reported usage on every successful stream. The
 		// context meter reads s.lastInputTokens to show current window
 		// fill - 0 on empty sessions, accurate after each turn.
-		s.RecordUsage(resp.Usage)
+		s.RecordUsage(resp.Usage, provider.Model())
 		// Persist counters so a process restart doesn't reset the meter
 		// to 0% on a session with real history. Best-effort + detached
 		// context so the user-visible turn isn't gated on the DB write.
@@ -1563,6 +1678,31 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					return nil
 				}
 				// Park failed → fall through to the normal error path below.
+			}
+			// LAST CHANCE BEFORE HE SEES A FAILURE.
+			//
+			// Almost every way a turn has died in practice was the brain
+			// refusing the SHAPE of what we sent, never the question: a PDF
+			// block one vendor takes and the next rejects, a tool call left
+			// unanswered by an earlier crash that poisons every turn after
+			// it, a handle to a session that no longer exists. Those are our
+			// problem, and he should never be the one to notice them.
+			//
+			// So the rule is not a list of vendor sentences to recognise.
+			// It is: strip the request back to what every brain accepts and
+			// ask the same question again, once. If that also fails, the
+			// failure is real and he gets told plainly.
+			//
+			// Gated on nothing having streamed yet: once he is reading an
+			// answer, restarting it would rewind the reply under him.
+			if !cleanRetryUsed && partialText.Len() == 0 && !llm.IsUnrecoverable(streamErr) &&
+				!llm.IsAuthFailure(streamErr.Error()) {
+				if safe, changed := llm.MakeSafe(s.Snapshot()); changed {
+					cleanRetryUsed = true
+					s.ReplaceMessages(safe)
+					infoLog.Printf("recovery: %v — retrying the same turn with a request every brain accepts", streamErr)
+					continue
+				}
 			}
 			emitHumanError(out, s.ID, streamErr.Error())
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{

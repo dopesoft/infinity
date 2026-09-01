@@ -46,10 +46,11 @@ func (u *UsagePersistence) Hydrate(ctx context.Context, sessionID string) (agent
 		SELECT s.last_input_tokens, s.last_output_tokens,
 		       s.total_input_tokens, s.total_output_tokens,
 		       COALESCE(t.cache_read_tokens, 0),
-		       COALESCE(t.cache_write_tokens, 0)
+		       COALESCE(t.cache_write_tokens, 0),
+		       COALESCE(t.model, '')
 		FROM mem_sessions s
 		LEFT JOIN LATERAL (
-			SELECT cache_read_tokens, cache_write_tokens
+			SELECT cache_read_tokens, cache_write_tokens, model
 			  FROM mem_turns
 			 WHERE session_id = s.id
 			   AND ended_at IS NOT NULL
@@ -64,6 +65,9 @@ func (u *UsagePersistence) Hydrate(ctx context.Context, sessionID string) (agent
 		&snap.TotalOutputTokens,
 		&snap.LastCacheReadTokens,
 		&snap.LastCacheWriteTokens,
+		// Which brain took the reading. Carried so a restart doesn't turn a
+		// measurement from one model into a claim about another.
+		&snap.LastMeasuredModel,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

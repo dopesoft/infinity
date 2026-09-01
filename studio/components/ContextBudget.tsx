@@ -2,27 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { fetchCoreStatus } from "@/lib/api";
+import { fetchContextUsage } from "@/lib/api";
 import { SidePanelCard } from "@/components/SidePanelCard";
 
-const MODEL_LIMITS: Record<string, number> = {
-  "claude-sonnet-4-5": 200_000,
-  "claude-opus-4-5": 200_000,
-  "claude-haiku-4-5": 200_000,
-  "claude-3-5-sonnet": 200_000,
-  "gpt-4o": 128_000,
-  "gpt-4-turbo": 128_000,
-  "gemini-1.5-pro": 1_000_000,
-  "gemini-2.0-flash": 1_000_000,
-};
-
-function limitFor(model: string | undefined): number {
-  if (!model) return 200_000;
-  for (const k of Object.keys(MODEL_LIMITS)) {
-    if (model.toLowerCase().startsWith(k)) return MODEL_LIMITS[k];
-  }
-  return 200_000;
-}
+// The window a model actually has is decided in ONE place, Core's
+// /api/context/usage, which knows the vendor, the tier aliases the plan brain
+// runs under and whether a standby is answering. A second table here drifted
+// from it and told the boss his 1M window was 200K, so this reads the same
+// number the composer's meter reads.
 
 function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`;
@@ -30,15 +17,18 @@ function formatTokens(n: number): string {
 }
 
 export function ContextBudget({ usedTokens }: { usedTokens: number }) {
-  const [model, setModel] = useState<string | undefined>(undefined);
+  const [max, setMax] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     const ctl = new AbortController();
-    fetchCoreStatus(ctl.signal).then((s) => setModel(s?.model));
+    fetchContextUsage(undefined, ctl.signal).then((u) => {
+      if (u && u.context_window > 0) setMax(u.context_window);
+    });
     return () => ctl.abort();
   }, []);
 
-  const max = limitFor(model);
+  // Until Core answers, show the fill without inventing a denominator.
+  if (!max) return null;
   const pct = Math.min(100, Math.round((usedTokens / max) * 100));
   const danger = pct >= 60;
   const critical = pct >= 80;

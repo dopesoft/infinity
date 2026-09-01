@@ -1945,6 +1945,11 @@ export type ContextUsageDTO = {
   // much of the window was served from cache. 0 on models/turns with no cache.
   cache_read_tokens?: number;
   cache_write_tokens?: number;
+  // False when nobody has measured THIS brain on THIS thread yet: a new
+  // conversation, a thread just compacted, or the model switched mid-chat.
+  // The fill is unknown then, and saying so beats showing the last brain's
+  // number against this brain's window.
+  measured?: boolean;
 };
 
 export const fetchContextUsage = (sessionId?: string, signal?: AbortSignal) => {

@@ -167,10 +167,10 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 		b:         b,
 		workspace: workspace,
 		files:     files,
-		turn:    turn,
-		out:     out,
-		line:    1,
-		started: time.Now(),
+		turn:      turn,
+		out:       out,
+		line:      1,
+		started:   time.Now(),
 	}
 	defer p.cleanup()
 	return p.wait(ctx)
@@ -332,10 +332,10 @@ type brainPoll struct {
 	// mid-flight.
 	workspace string
 	files     brainFiles
-	turn    llm.BrainTurn
-	out     chan<- llm.StreamEvent
-	line    int
-	started time.Time
+	turn      llm.BrainTurn
+	out       chan<- llm.StreamEvent
+	line      int
+	started   time.Time
 
 	sessionSeen bool
 	// streamed accumulates every text delta already sent. finish() checks it
@@ -418,14 +418,20 @@ tail -n +%d %s 2>/dev/null | head -n 400 | head -c 48000`,
 	last, region := splitMarker(rest, "", "===NEW===")
 	region = strings.TrimPrefix(region, "\n")
 
-	// Advance only past COMPLETE lines. A half-written line read now would be
-	// re-read next poll and emitted twice.
-	lines := strings.Split(region, "\n")
-	if len(lines) > 0 && !strings.HasSuffix(region, "\n") {
-		lines = lines[:len(lines)-1]
+	// Advance only past COMPLETE lines, and count NEWLINES rather than the
+	// pieces a split produces: a slice ending in "\n" splits into one more
+	// piece than it has lines, so counting pieces walked the read position
+	// one line too far on every poll and a stream event was dropped each
+	// time. The coding path learned this already (claudePoll.consume); this
+	// is the same accounting, and it is why it is written the same way.
+	cut := strings.LastIndexByte(region, '\n')
+	if cut < 0 {
+		// Nothing complete yet. The half-line is re-read whole next poll.
+		return brainRead{head: head, last: last}, true
 	}
-	p.line += len(lines)
-	return brainRead{head: head, last: last, fresh: strings.Join(lines, "\n")}, true
+	whole := region[:cut+1]
+	p.line += strings.Count(whole, "\n")
+	return brainRead{head: head, last: last, fresh: strings.TrimSuffix(whole, "\n")}, true
 }
 
 // noteSession reports Claude Code's own session id the first time it appears,
@@ -434,7 +440,12 @@ func (p *brainPoll) noteSession(stream string) {
 	if p.sessionSeen || stream == "" {
 		return
 	}
-	id := parseClaudeSessionID(stream)
+	// ONLY the init line. Every event in the stream carries a session_id, and
+	// a sub-agent's events carry ITS session - an id that is not resumable
+	// and, once stored, breaks the boss's next message with "No conversation
+	// found". The conversation's own id is the one Claude Code announces when
+	// the session opens.
+	id := parseClaudeInitSessionID(stream)
 	if id == "" {
 		return
 	}
@@ -442,6 +453,29 @@ func (p *brainPoll) noteSession(stream string) {
 	if p.turn.OnSession != nil {
 		p.turn.OnSession(id)
 	}
+}
+
+// parseClaudeInitSessionID returns the session id off the
+// `{"type":"system","subtype":"init","session_id":…}` line and nothing else.
+func parseClaudeInitSessionID(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var ev struct {
+			Type      string `json:"type"`
+			Subtype   string `json:"subtype"`
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		if ev.Type == "system" && ev.Subtype == "init" && isClaudeSessionID(ev.SessionID) {
+			return ev.SessionID
+		}
+	}
+	return ""
 }
 
 // brainEvent is the slice of stream-json this path reads. The shapes are

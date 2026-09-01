@@ -1,8 +1,12 @@
 package server
 
-import "testing"
+import (
+	"testing"
 
-// contextWindowFor backs the chat context meter's denominator. A wrong value
+	"github.com/dopesoft/infinity/core/internal/llm"
+)
+
+// llm.ContextWindow backs the chat context meter's denominator. A wrong value
 // makes the meter read the wrong % on the boss's actual model - this caught a
 // real bug where every gpt-5.x returned 400K when gpt-5.4 ships 1.05M. The
 // numbers below are OpenAI/Anthropic/DeepSeek model-card values; update this
@@ -59,9 +63,56 @@ func TestContextWindowFor(t *testing.T) {
 		// Unknown - conservative default.
 		{"some-unknown-model", 200_000},
 	}
+	// Claude Code tier aliases: what Settings stores when the plan brain is
+	// picked, and what the running turns log (model="opus[1m]"). These fell
+	// through to the 200K default and under-reported his window by 5x.
+	cases = append(cases,
+		struct {
+			model string
+			want  int
+		}{"opus[1m]", 1_000_000},
+		struct {
+			model string
+			want  int
+		}{"opus", 1_000_000},
+		struct {
+			model string
+			want  int
+		}{"sonnet", 1_000_000},
+		struct {
+			model string
+			want  int
+		}{"haiku", 200_000},
+	)
 	for _, c := range cases {
-		if got := contextWindowFor(c.model); got != c.want {
-			t.Errorf("contextWindowFor(%q) = %d, want %d", c.model, got, c.want)
+		if got := llm.ContextWindow(c.model); got != c.want {
+			t.Errorf("llm.ContextWindow(%q) = %d, want %d", c.model, got, c.want)
+		}
+	}
+}
+
+// Why: a fill is a measurement of one prompt sent to one model, and the boss
+// switches models inside a live conversation. A 900K reading taken on the
+// previous brain, divided by the new brain's window, is what showed him a
+// full red dial on a 1M window he had barely touched.
+func TestFillOnlyCountsWhenThisBrainMeasuredIt(t *testing.T) {
+	cases := []struct {
+		name     string
+		measured string
+		active   string
+		want     bool
+	}{
+		{"same brain, same id", "claude-opus-5", "claude-opus-5", true},
+		{"same brain, alias vs full id", "opus[1m]", "opus", true},
+		{"same brain, dated suffix", "claude-opus-5", "claude-opus-5-20260101", true},
+		{"different brain", "gpt-5.6-sol", "opus[1m]", false},
+		{"different brain, both claude-ish", "claude-haiku-4-5", "claude-opus-5", false},
+		{"unknown measurer is trusted", "", "opus[1m]", false},
+	}
+	for _, c := range cases {
+		got := c.measured != "" && sameBrain(c.measured, c.active)
+		if got != c.want {
+			t.Errorf("%s: sameBrain(%q, %q) = %v, want %v", c.name, c.measured, c.active, got, c.want)
 		}
 	}
 }

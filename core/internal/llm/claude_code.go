@@ -2,10 +2,17 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 )
+
+// Successes go to stdout; stderr is reserved for real failures (Railway tags
+// severity by stream).
+var brainInfo = log.New(os.Stdout, "", log.LstdFlags)
 
 // The Claude Max Plan brain.
 //
@@ -114,7 +121,7 @@ type ClaudeCode struct {
 	// mu guards warm, the in-process mirror of the session mapping. The store
 	// is authoritative; this only saves a database round trip per turn.
 	mu   sync.Mutex
-	warm map[string]string
+	warm map[string]brainHandle
 }
 
 // NewClaudeCode builds the provider. A nil runner yields a STUB: it registers
@@ -129,7 +136,7 @@ func NewClaudeCode(runner BrainRunner, sessions BrainSessionStore, model string)
 		runner:   runner,
 		sessions: sessions,
 		model:    model,
-		warm:     map[string]string{},
+		warm:     map[string]brainHandle{},
 	}
 }
 
@@ -167,13 +174,17 @@ func (c *ClaudeCode) StreamCached(ctx context.Context, model string, sys SystemP
 		return Response{}, err
 	}
 
+	// What this turn will have covered once it answers: the transcript it was
+	// given, plus the reply it is about to add.
+	covered := countConversation(messages) + 1
+
 	turn := BrainTurn{
 		SessionID: sessionID,
-		Resume:    c.resume(ctx, sessionID),
+		Resume:    c.resume(ctx, sessionID, messages),
 		Prompt:    prompt,
 		Model:     firstNonEmpty(model, c.model),
 		Effort:    string(EffortFromContext(ctx)),
-		OnSession: func(id string) { c.RememberSession(ctx, sessionID, id) },
+		OnSession: func(id string) { c.RememberSession(ctx, sessionID, id, covered) },
 	}
 	// A cold start has to carry the system prompt; a resumed session already
 	// holds it and re-sending would both waste tokens and break the cached
@@ -183,52 +194,194 @@ func (c *ClaudeCode) StreamCached(ctx context.Context, model string, sys SystemP
 	}
 
 	resp, err := c.runner.Converse(ctx, turn, out)
-	if err != nil {
+	if err == nil || turn.Resume == "" {
 		return resp, err
 	}
-	return resp, nil
+
+	// A RESUMED turn failed, and the one thing that turn depended on which a
+	// fresh one does not is the handle to an existing Claude session. So the
+	// rule is not "recognise this error": it is that continuing something is
+	// only ever an optimisation, and when it does not work we do the thing
+	// that never needed it - start over, with the whole conversation rendered
+	// in, and answer him.
+	//
+	// No error text is matched, deliberately. Matching a vendor's wording
+	// means every new way for a session to go bad is a new dead end for him
+	// until somebody adds a case for it. The only failures excluded are the
+	// ones where a second attempt provably cannot help: he stopped the turn,
+	// there is no box to run on, the plan is not signed in, or the plan is
+	// spent. Those are answered the same way twice, so trying twice would
+	// only make him wait longer to read the same sentence.
+	if !worthRetryingFresh(ctx, err) {
+		return resp, err
+	}
+	brainInfo.Printf("claude_max: resuming %s failed (%v); starting fresh with the full transcript", turn.Resume, err)
+	c.ForgetSession(ctx, sessionID)
+	fresh := turn
+	fresh.Resume = ""
+	fresh.Prompt = coldStartPrompt(sys, renderTranscript(messages))
+	return c.runner.Converse(ctx, fresh, out)
+}
+
+// worthRetryingFresh reports whether a failed turn deserves a second attempt
+// from scratch. It asks about the SITUATION, never about the error's wording.
+func worthRetryingFresh(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false // he stopped it, or the turn ran out of time
+	}
+	// Marked by the runner as a verdict about the plan or the box rather than
+	// about this turn: no bridge, not signed in, not on the subscription, out
+	// of usage. See Unrecoverable.
+	return !IsUnrecoverable(err)
 }
 
 // RememberSession records the Claude Code session id for an Infinity session.
 // Called by the runner the moment the id appears in the stream (its first
 // line), so even a turn that is interrupted mid-flight leaves a resumable
 // handle behind rather than forcing the next message to start cold.
-func (c *ClaudeCode) RememberSession(ctx context.Context, sessionID, claudeSessionID string) {
+//
+// covered is how much of the conversation that Claude session will have seen
+// once this turn lands. See brainHandle: it is what lets the next turn tell a
+// session that holds the whole thread from one that was overtaken while a
+// different brain was answering.
+func (c *ClaudeCode) RememberSession(ctx context.Context, sessionID, claudeSessionID string, covered int) {
 	if sessionID == "" || claudeSessionID == "" {
 		return
 	}
+	c.store(ctx, sessionID, brainHandle{ID: claudeSessionID, Covered: covered})
+}
+
+// ForgetSession drops the resume handle so the next turn starts cold, with
+// the whole transcript rendered into it.
+//
+// Called when Claude Code says the session is gone ("No conversation found
+// with session ID: …"), which happens for reasons that are none of the boss's
+// business: the box the session lived on was replaced, the cloud container
+// restarted, the CLI moved the handle. A conversation must never dead-end on
+// that - it re-reads its history and carries on.
+func (c *ClaudeCode) ForgetSession(ctx context.Context, sessionID string) {
+	if sessionID == "" {
+		return
+	}
 	c.mu.Lock()
-	c.warm[sessionID] = claudeSessionID
+	delete(c.warm, sessionID)
+	c.mu.Unlock()
+	if c.sessions != nil {
+		_ = c.sessions.Set(ctx, brainSessionKey(sessionID), "")
+	}
+}
+
+func (c *ClaudeCode) store(ctx context.Context, sessionID string, h brainHandle) {
+	c.mu.Lock()
+	c.warm[sessionID] = h
 	c.mu.Unlock()
 	if c.sessions != nil {
 		// Best effort: a failed write costs one cold start next turn, which
 		// is not worth failing the boss's answer over.
-		_ = c.sessions.Set(ctx, brainSessionKey(sessionID), claudeSessionID)
+		_ = c.sessions.Set(ctx, brainSessionKey(sessionID), h.encode())
 	}
 }
 
-// resume resolves the Claude Code session to continue, warm map first.
-func (c *ClaudeCode) resume(ctx context.Context, sessionID string) string {
+// brainHandle is what one conversation remembers about its Claude Code
+// session: which session to resume, and how much of the transcript that
+// session has actually seen.
+//
+// Covered exists because the boss switches brains mid-thread. Claude Code
+// holds the conversation ITSELF, so a session started before he moved to
+// another vendor and back has no idea what was said in between: resuming it
+// would answer confidently out of a stale half of his thread. Comparing what
+// it covered against the transcript catches that, and the turn starts cold
+// with the whole conversation rendered into it instead.
+type brainHandle struct {
+	ID string `json:"id"`
+	// Covered counts the user+assistant messages this Claude session will
+	// have seen, including the reply it is about to give. Zero means unknown
+	// (a handle written before this was recorded), which is trusted rather
+	// than thrown away.
+	Covered int `json:"covered"`
+}
+
+func (h brainHandle) encode() string {
+	raw, err := json.Marshal(h)
+	if err != nil {
+		return h.ID
+	}
+	return string(raw)
+}
+
+// decodeBrainHandle reads either shape: the JSON written today, or the bare
+// session id written before Covered existed.
+func decodeBrainHandle(stored string) brainHandle {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return brainHandle{}
+	}
+	if stored[0] != '{' {
+		return brainHandle{ID: stored}
+	}
+	var h brainHandle
+	if json.Unmarshal([]byte(stored), &h) != nil {
+		return brainHandle{}
+	}
+	return h
+}
+
+// handle resolves the conversation's stored session, warm map first.
+func (c *ClaudeCode) handle(ctx context.Context, sessionID string) brainHandle {
 	if sessionID == "" {
-		return ""
+		return brainHandle{}
 	}
 	c.mu.Lock()
-	id, ok := c.warm[sessionID]
+	h, ok := c.warm[sessionID]
 	c.mu.Unlock()
-	if ok && id != "" {
-		return id
+	if ok && h.ID != "" {
+		return h
 	}
 	if c.sessions == nil {
-		return ""
+		return brainHandle{}
 	}
 	stored, found, err := c.sessions.Get(ctx, brainSessionKey(sessionID))
-	if err != nil || !found || strings.TrimSpace(stored) == "" {
-		return ""
+	if err != nil || !found {
+		return brainHandle{}
+	}
+	h = decodeBrainHandle(stored)
+	if h.ID == "" {
+		return brainHandle{}
 	}
 	c.mu.Lock()
-	c.warm[sessionID] = stored
+	c.warm[sessionID] = h
 	c.mu.Unlock()
-	return stored
+	return h
+}
+
+// resume resolves the Claude Code session to continue, or "" to start cold.
+//
+// It refuses a handle the conversation has outgrown. A Claude session that
+// covered the thread up to message N can be resumed for message N+1 (and for
+// a second message the boss sent before it answered), but a transcript that
+// has grown further means somebody else answered in between - the brain was
+// switched - and that session cannot see those turns.
+func (c *ClaudeCode) resume(ctx context.Context, sessionID string, messages []Message) string {
+	h := c.handle(ctx, sessionID)
+	if h.ID == "" {
+		return ""
+	}
+	if h.Covered > 0 && countConversation(messages) > h.Covered+2 {
+		return ""
+	}
+	return h.ID
+}
+
+// countConversation counts the messages a Claude session would have seen:
+// the same user/assistant lines renderTranscript writes, and nothing else.
+func countConversation(messages []Message) int {
+	n := 0
+	for _, m := range messages {
+		if (m.Role == RoleUser || m.Role == RoleAssistant) && strings.TrimSpace(m.Content) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func brainSessionKey(sessionID string) string {
@@ -246,7 +399,7 @@ func (c *ClaudeCode) buildPrompt(ctx context.Context, sessionID string, sys Syst
 	if len(messages) == 0 {
 		return "", fmt.Errorf("claude_max: nothing to say (no messages)")
 	}
-	if c.resume(ctx, sessionID) != "" {
+	if c.resume(ctx, sessionID, messages) != "" {
 		if last, ok := lastUserMessage(messages); ok {
 			// The new message, with THIS turn's volatile context in front of
 			// it: what RRF just retrieved, the current time, the account
