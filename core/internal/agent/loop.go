@@ -1040,6 +1040,29 @@ func (l *Loop) projectFor(ctx context.Context, sessionID string) string {
 	return fn(ctx, sessionID)
 }
 
+// keepAssistantSegment commits one assistant message the boss saw.
+//
+// A turn is not one message. It can answer, run a tool and speak again; a
+// self-heal, plan-continuation or verify pass takes another swing after the
+// first. Only the turn's FINAL text was ever written down (TaskCompleted), so
+// every earlier segment lived in his browser and nowhere else: he read a full
+// answer, went to Settings to connect LinkedIn, came back, and the answer was
+// gone, replaced by whatever the last pass happened to say. The transcript he
+// got on reload was never the conversation he had.
+//
+// So it goes through here: appended to the conversation AND written down, in
+// one call, at every site that commits one. A site that forgets to use it is
+// the bug coming back, which is why there is nothing else to call.
+func (l *Loop) keepAssistantSegment(turnID string, s *Session, text string, calls []llm.ToolCall) {
+	s.Append(llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: calls})
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	l.fireHookT(turnID, "AssistantMessage", s.ID, s.Project, text, map[string]any{
+		"interim": true,
+	})
+}
+
 func (l *Loop) GetOrCreateSession(id string) *Session {
 	l.mu.Lock()
 	if id == "" {
@@ -1768,7 +1791,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				selfHealCount++
 				healedThisTurn = true
 				inSelfHealPass = true
-				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+				l.keepAssistantSegment(turnID, s, resp.Text, nil)
 				s.Append(llm.Message{Role: llm.RoleUser, Content: selfHealDirective})
 				toolErredThisTurn = false // fresh slate for the heal pass
 				continue
@@ -1787,7 +1810,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				!shouldSelfHeal(resp.Text, toolErredThisTurn) &&
 				l.hasUnfinishedPlan(ctx, s.ID) {
 				planContinueCount++
-				s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+				l.keepAssistantSegment(turnID, s, resp.Text, nil)
 				s.Append(llm.Message{Role: llm.RoleUser, Content: planContinueDirective})
 				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: "Plan still has open steps — continuing instead of stopping.\n"})
 				continue
@@ -1812,6 +1835,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					// erase it (issue: the boss got "the weak spot is the citation
 					// layer…" INSTEAD of his report summary).
 					preVerifyText = resp.Text
+					// NOT keepAssistantSegment: the verify pass carries this text
+					// forward itself. mergeVerifyText appends the caveat to THIS
+					// answer and persists the pair as the turn's final text, so
+					// writing it down here too would show him the answer twice.
 					s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
 					s.Append(llm.Message{Role: llm.RoleUser, Content: directive})
 					emit(out, RunEvent{Kind: EventEffort, SessionID: s.ID, EffortLevel: string(perTurnEffort), EffortSource: "verify_pass"})
@@ -1893,7 +1920,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			return nil
 		}
 
-		s.Append(llm.Message{Role: llm.RoleAssistant, Content: resp.Text, ToolCalls: resp.ToolCalls})
+		l.keepAssistantSegment(turnID, s, resp.Text, resp.ToolCalls)
 
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()

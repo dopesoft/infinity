@@ -16,6 +16,14 @@ const (
 	SubagentStop       EventName = "SubagentStop"
 	Notification       EventName = "Notification"
 	TaskCompleted      EventName = "TaskCompleted"
+	// AssistantMessage is one assistant message the boss SAW, mid-turn.
+	//
+	// A turn can produce several: text before a tool runs, text before a
+	// self-heal or plan-continuation pass takes another swing. Only the
+	// turn's FINAL text used to be persisted (TaskCompleted), so everything
+	// before it lived in the browser and nowhere else - he read a full answer,
+	// navigated away, came back, and it was gone.
+	AssistantMessage EventName = "AssistantMessage"
 	Stop               EventName = "Stop"
 	SessionEnd         EventName = "SessionEnd"
 	// SelfHealResolved fires when a reactive self-heal pass converted an
@@ -32,7 +40,8 @@ const (
 // AllEvents is the canonical list, useful for default hook registration.
 var AllEvents = []EventName{
 	SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure,
-	PreCompact, SubagentStart, SubagentStop, Notification, TaskCompleted, Stop, SessionEnd,
+	PreCompact, SubagentStart, SubagentStop, Notification, TaskCompleted, AssistantMessage,
+	Stop, SessionEnd,
 }
 
 // Event is the payload that fires through the pipeline.

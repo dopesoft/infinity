@@ -46,7 +46,7 @@ func obsKind(hookName string) string {
 	switch hookName {
 	case "UserPromptSubmit":
 		return "user"
-	case "TaskCompleted":
+	case "TaskCompleted", "AssistantMessage":
 		return "assistant"
 	case "PreToolUse":
 		return "tool_call"

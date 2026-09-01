@@ -13,7 +13,7 @@ package sessions
 // RenderableHooksSQL is the hook whitelist the transcript query reads. An
 // observation under any other hook_name is invisible in the UI no matter what
 // it contains. Add a hook here and every consumer agrees at once.
-const RenderableHooksSQL = `'UserPromptSubmit', 'TaskCompleted', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure'`
+const RenderableHooksSQL = `'UserPromptSubmit', 'TaskCompleted', 'AssistantMessage', 'DashboardSeed', 'PostToolUse', 'PostToolUseFailure'`
 
 // HasRenderableSQL is a parameterless boolean SQL fragment expecting a
 // mem_sessions row aliased `s` in scope. True when the transcript query would

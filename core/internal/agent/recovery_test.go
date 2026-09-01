@@ -276,3 +276,83 @@ func TestWorkTheBrainDidItselfIsSurfacedInOrder(t *testing.T) {
 		t.Fatalf("the work must land where it happened, before the reply, got %q", got)
 	}
 }
+
+// twoSegmentProvider answers, then (because the loop asks it to keep going)
+// answers again with something much shorter. That is what a self-heal or
+// plan-continuation pass looks like from the transcript's point of view.
+type twoSegmentProvider struct {
+	calls  int
+	toolID string
+}
+
+func (p *twoSegmentProvider) Name() string  { return "two-segment" }
+func (p *twoSegmentProvider) Model() string { return "two-segment-1" }
+func (p *twoSegmentProvider) Stream(_ context.Context, _, _ string, _ []llm.Message, _ []llm.ToolDef, out chan<- llm.StreamEvent) (llm.Response, error) {
+	p.calls++
+	if p.calls == 1 {
+		// A real answer, delivered alongside a tool call so the loop keeps
+		// going rather than ending the turn here.
+		return llm.Response{
+			Text:      "the long strategy answer he actually read",
+			ToolCalls: []llm.ToolCall{{ID: p.toolID, Name: "noop", Input: map[string]any{}}},
+		}, nil
+	}
+	return llm.Response{Text: "Nothing broke, boss. Waiting on your call."}, nil
+}
+
+// Why: he read a full answer, went to Settings to connect LinkedIn, came back,
+// and it had been replaced by a one-liner about waiting on his decision. The
+// transcript is rebuilt from what was written down, and only the turn's FINAL
+// text was ever written down, so every earlier message he had actually been
+// shown existed in his browser and nowhere else. 2026-09-01, and reported once
+// before on 2026-08-26.
+func TestEveryAssistantMessageHeSawIsWrittenDown(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&countingTool{})
+	rec := &recordingHooks{}
+	l := New(Config{LLM: &twoSegmentProvider{toolID: "c1"}, Tools: reg, Hooks: rec})
+
+	out := make(chan RunEvent, 256)
+	var wg sync.WaitGroup
+	var lastErr string
+	wg.Add(1)
+	go drain(out, &wg, &lastErr)
+	if err := l.Run(context.Background(), "two-segment-session", "what about built-in?", "", nil, out); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	close(out)
+	wg.Wait()
+
+	joined := strings.Join(rec.assistantText(), " | ")
+	if !strings.Contains(joined, "the long strategy answer he actually read") {
+		t.Fatalf("the answer he read was never written down, so a reload loses it: %q", joined)
+	}
+	if !strings.Contains(joined, "Nothing broke, boss") {
+		t.Fatalf("the final message was lost: %q", joined)
+	}
+}
+
+// recordingHooks captures what the loop wrote down, which is exactly what a
+// reload rebuilds the conversation from.
+type recordingHooks struct {
+	mu   sync.Mutex
+	rows []struct{ name, text string }
+}
+
+func (r *recordingHooks) Emit(name, _, _, text string, _ map[string]any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rows = append(r.rows, struct{ name, text string }{name, text})
+}
+
+func (r *recordingHooks) assistantText() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, row := range r.rows {
+		if row.name == "AssistantMessage" || row.name == "TaskCompleted" {
+			out = append(out, row.text)
+		}
+	}
+	return out
+}
