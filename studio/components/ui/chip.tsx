@@ -299,6 +299,12 @@ export const Chip = React.forwardRef<HTMLButtonElement, ChipProps>(
     const classes = cn(
       "relative inline-flex shrink-0 items-center whitespace-nowrap rounded-md font-medium leading-none",
       "transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+      // The ring is drawn OUTSIDE the chip's box, and chips sit a hairline
+      // apart in a group, so the chip after this one painted over the ring's
+      // right edge and the outline looked sliced off. Only the last chip in a
+      // group escaped it. Lift the chip above its neighbours while it is
+      // focused or its menu is open, which is the only time the ring exists.
+      "focus-visible:z-10 data-[state=open]:z-10",
       chipSize[s],
       iconOnly && iconOnlySize[s],
       // Below sm the label is gone, so the chip takes the icon-only geometry

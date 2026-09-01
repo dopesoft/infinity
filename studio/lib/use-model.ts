@@ -206,6 +206,7 @@ export function useGlobalModel() {
 export function standbyLabel(standby: StandbyBrain | null | undefined): string | null {
   if (!standby) return null;
   const vendor = findVendor(standby.provider);
+  if (!vendor) return standby.model || standby.provider || null;
   const model = vendor.models.find((m) => m.id === standby.model);
   return `${vendor.label} · ${model?.label ?? (standby.model || vendor.label)}`;
 }
@@ -225,6 +226,6 @@ export function effectiveModelLabel(setting: ModelSetting | null | undefined): s
   const provider = setting.standby?.provider ?? setting.provider;
   const modelId = setting.standby?.model || setting.model || setting.defaultModel;
   const vendor = findVendor(provider);
-  const model = vendor.models.find((m) => m.id === modelId);
+  const model = vendor?.models.find((m) => m.id === modelId);
   return model?.label ?? (modelId || null);
 }

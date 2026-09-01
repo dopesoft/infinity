@@ -87,7 +87,7 @@ export function RailStatus({ compact = false }: { compact?: boolean }) {
   const vendorLabel =
     vendor?.label ??
     fallback?.vendor.label ??
-    (liveProvider ? findVendor(liveProvider).label : null) ??
+    (liveProvider ? (findVendor(liveProvider)?.label ?? null) : null) ??
     "-";
   const modelLabel = modelFromVendor?.label ?? fallback?.model.label ?? liveModel ?? "-";
   const standby = standbyLabel(setting?.standby);

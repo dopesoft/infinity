@@ -676,8 +676,13 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
     return () => ac.abort();
   }, []);
 
-  const selectedVendor = findVendor(focusVendor);
+  // This page is where he is deliberately choosing, so the panel he is editing
+  // always renders something. What is ANSWERING may genuinely be unknown, and
+  // that stays nullable on purpose: an unknown live vendor must not silently
+  // borrow another vendor's model list. See findVendor.
+  const selectedVendor = findVendor(focusVendor) ?? findVendor(liveProvider) ?? VENDORS[0];
   const liveVendor = findVendor(liveProvider);
+  const liveVendorLabel = liveVendor?.label ?? "your brain";
   const keyRow = keyRows?.find((r) => r.provider === focusVendor) ?? null;
 
   function stateOf(id: string): {
@@ -732,7 +737,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
     await refresh();
     if (!activate || focusVendor === liveProvider) return "";
     if (!available.includes(focusVendor)) {
-      return `Saved, but ${selectedVendor.label} is not answering yet, so I have left you on ${liveVendor.label}.`;
+      return `Saved, but ${selectedVendor.label} is not answering yet, so I have left you on ${liveVendorLabel}.`;
     }
     const res = await setProvider(focusVendor);
     if (!res.ok) return `Saved, but the switch failed: ${res.error ?? "unknown error"}`;
@@ -742,11 +747,14 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
   // Models belong to the LIVE vendor: this row sets what is answering, so
   // showing another vendor's catalog here would be an invitation to pick
   // something that cannot run.
-  const modelOptions = liveVendor.models.some((m) => m.id === effectiveModel)
-    ? liveVendor.models
+  // An unknown live vendor offers NO list: the only safe option is what is
+  // already running.
+  const liveModels = liveVendor?.models ?? [];
+  const modelOptions = liveModels.some((m) => m.id === effectiveModel)
+    ? liveModels
     : effectiveModel
-      ? [{ id: effectiveModel, label: `${effectiveModel} (custom)` }, ...liveVendor.models]
-      : liveVendor.models;
+      ? [{ id: effectiveModel, label: `${effectiveModel} (custom)` }, ...liveModels]
+      : liveModels;
 
   return (
     <div className="min-w-0 space-y-1">
@@ -783,7 +791,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
         <SettingRow
           label="Model"
-          description={`Which ${liveVendor.label.replace(" (API Key)", "").replace(" (Plan)", "")} model answers.`}
+          description={`Which ${liveVendorLabel.replace(" (API Key)", "").replace(" (Plan)", "")} model answers.`}
           control={
             setting?.source === "user" && defaultModel && effectiveModel !== defaultModel ? (
               <Button variant="ghost" onClick={() => pickModel("")}>
@@ -807,7 +815,7 @@ function GeneralSection({ status }: { status: CoreStatus | null }) {
 
         {setting?.standby && (
           <p className="min-w-0 rounded-[8px] bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-foreground/90">
-            {liveVendor.label} is out of usage
+            {liveVendorLabel} is out of usage
             {standbyResetClock(setting.standby) ? (
               <>
                 {" "}until{" "}

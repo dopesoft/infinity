@@ -12,9 +12,6 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -166,55 +163,93 @@ const EFFORT_LABELS: Record<string, string> = {
   high: "High",
   xhigh: "X-High",
 };
-const EFFORT_DESCRIPTIONS: Record<string, string> = {
-  auto: "Jarvis sizes each turn",
-  none: "Fastest — no extra thinking",
-  low: "A little reasoning",
-  medium: "Balanced reasoning",
-  high: "Deep reasoning",
-  xhigh: "Maximum reasoning",
-};
 
-// effortDisplay is the short label on the chip. A pinned level shows verbatim;
-// on Auto it shows the level Jarvis actually chose for the in-flight turn (from
-// the EventEffort frame), falling back to "Auto" before the first turn resolves.
-function effortDisplay(effort?: string, applied?: string): string {
+// effortDisplay is the short label on the chip: HIS setting, verbatim.
+//
+// It used to show the level the router had picked for the in-flight turn
+// whenever the pin was Auto, so the control read "Low" when he had chosen
+// "Auto" and looked stuck on a level he never set. A switcher shows the switch
+// position; what one turn resolved to is not a setting.
+function effortDisplay(effort?: string): string {
   const pin = (effort || "auto").toLowerCase();
-  if (pin !== "auto") return EFFORT_LABELS[pin] ?? pin;
-  if (applied) return EFFORT_LABELS[applied.toLowerCase()] ?? applied;
-  return "Auto";
+  return EFFORT_LABELS[pin] ?? "Auto";
+}
+
+
+// The thinking-level switcher.
+//
+// It lived as a nested submenu inside the model dropdown, which is two taps
+// deep and reads as part of choosing a model rather than as its own setting.
+// It is a switch he flips as often as he changes model, so it sits beside the
+// model as its own control: one tap, the levels, nothing else.
+function EffortChip({
+  effort,
+  appliedEffort,
+  onEffortChange,
+}: {
+  effort?: string;
+  appliedEffort?: string;
+  onEffortChange: (level: string) => void;
+}) {
+  const pin = (effort || "auto").toLowerCase();
+  // On Auto he still deserves to know what it actually picked - but on hover,
+  // not stamped over the switch position.
+  const applied = appliedEffort ? EFFORT_LABELS[appliedEffort.toLowerCase()] ?? appliedEffort : "";
+  const title =
+    pin === "auto" && applied
+      ? `How hard to think about this · this turn: ${applied}`
+      : "How hard to think about this";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Chip raised chevron title={title}>
+          {effortDisplay(effort)}
+        </Chip>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuRadioGroup value={pin} onValueChange={onEffortChange}>
+          {EFFORT_LEVELS.map((lvl) => (
+            <DropdownMenuRadioItem key={lvl} value={lvl}>
+              {EFFORT_LABELS[lvl]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function ModelChip({
   modelId,
   vendorId,
   onSelect,
-  effort,
-  appliedEffort,
-  onEffortChange,
   standbyLabel,
 }: {
   modelId: string;
   vendorId?: string;
   onSelect: (nextModelId: string) => void;
-  effort?: string;
-  appliedEffort?: string;
-  onEffortChange?: (level: string) => void;
   standbyLabel?: string | null;
 }) {
   // The active vendor wins over whatever vendor the model id happens to
   // belong to in the global catalog. Otherwise a stale model override
   // from a previous provider (e.g. "claude-haiku-…" carried over after
   // switching to openai_oauth) would display under the wrong vendor.
+  // NO GUESSING. With no vendor from Settings and a model id that matches
+  // nothing, this offered the first vendor in the catalog - the Anthropic
+  // API-KEY one, whose list carries Opus 4.8 and the rest of the 4.x line: a
+  // model his plan cannot serve, on a credential he has forbidden. A picker
+  // that can hand him that is a landmine. Unknown vendor now means no list.
   const vendor = vendorId
     ? findVendor(vendorId)
-    : (resolveModelEntry(modelId)?.vendor ?? findVendor(null));
+    : (resolveModelEntry(modelId)?.vendor ?? null);
   const current =
-    vendor.models.find((m) => m.id === modelId) ??
-    vendor.models.find((m) => m.id === defaultModelFor(vendor)) ??
-    vendor.models[0];
-  const pin = (effort || "auto").toLowerCase();
-  const showEffort = Boolean(onEffortChange);
+    vendor?.models.find((m) => m.id === modelId) ??
+    vendor?.models.find((m) => m.id === defaultModelFor(vendor)) ??
+    vendor?.models[0] ??
+    // Mid-reconnect the setting has not arrived yet. Name the action rather
+    // than announcing a fault: "No model set" reads like something broke, and
+    // nothing has.
+    { id: modelId, label: modelId || "Choose a model" };
   // While the chosen brain's plan is spent, the chip shows what is ACTUALLY
   // answering (amber dot + "standby"); the menu still edits the boss's choice.
   const onStandby = Boolean(standbyLabel);
@@ -231,61 +266,29 @@ function ModelChip({
           title={
             onStandby
               ? `${current.label} is out of usage; answering on ${standbyLabel} for now`
-              : `${vendor.label} · model & effort`
+              : (vendor?.label ?? "Choose a brain in Settings")
           }
         >
           <span className="inline-flex items-center gap-1.5">
             <span>{onStandby ? standbyLabel : current.label}</span>
             {onStandby ? <span className="text-muted-foreground">standby</span> : null}
-            {showEffort ? (
-              <span className="text-muted-foreground">{effortDisplay(effort, appliedEffort)}</span>
-            ) : null}
           </span>
         </Chip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        {vendor.models.map((m) => (
+        {/* Names only. A list of models he already knows does not need a
+            sentence under each one; the descriptions belong in Settings,
+            where he goes to choose one he has not used before. */}
+        {(vendor?.models ?? []).map((m) => (
           <DropdownMenuItem
             key={m.id}
             onSelect={() => onSelect(m.id)}
-            className="flex-col items-start gap-0.5 py-2"
+            className="flex items-center justify-between gap-2"
           >
-            <span className="flex w-full items-center justify-between gap-2">
-              <span className="font-medium">{m.label}</span>
-              {m.id === current.id ? <Check className="size-4 shrink-0 text-info" /> : null}
-            </span>
-            {m.tagline ? (
-              <span className="text-xs text-muted-foreground">{m.tagline}</span>
-            ) : null}
+            <span>{m.label}</span>
+            {m.id === current.id ? <Check className="size-4 shrink-0 text-info" /> : null}
           </DropdownMenuItem>
         ))}
-        {showEffort ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <span>Effort</span>
-                <span className="ml-auto text-muted-foreground">
-                  {effortDisplay(effort, appliedEffort)}
-                </span>
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-56">
-                <DropdownMenuRadioGroup value={pin} onValueChange={(v) => onEffortChange?.(v)}>
-                  {EFFORT_LEVELS.map((lvl) => (
-                    <DropdownMenuRadioItem
-                      key={lvl}
-                      value={lvl}
-                      className="flex-col items-start gap-0.5 py-2 pl-7"
-                    >
-                      <span className="font-medium">{EFFORT_LABELS[lvl]}</span>
-                      <span className="text-xs text-muted-foreground">{EFFORT_DESCRIPTIONS[lvl]}</span>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          </>
-        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={() => {
@@ -492,9 +495,12 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
       writeStoredDraft(internalValue);
     }, [internalValue, isControlled]);
 
-    const [internalModelId, setInternalModelId] = React.useState<string>(
-      () => defaultModelFor(findVendor(vendorId ?? null)),
-    );
+    // With no vendor from Settings there is no default to invent: an empty id
+    // shows "No model set" rather than quietly seeding an API-key model.
+    const [internalModelId, setInternalModelId] = React.useState<string>(() => {
+      const v = findVendor(vendorId ?? null);
+      return v ? defaultModelFor(v) : "";
+    });
     const modelId = controlledModelId ?? internalModelId;
     const cycleModel = (nextId: string) => {
       if (onModelChange) onModelChange(nextId);
@@ -877,11 +883,15 @@ export const PromptInputBox = React.forwardRef<HTMLDivElement, PromptInputBoxPro
                       modelId={modelId}
                       vendorId={vendorId}
                       onSelect={cycleModel}
-                      effort={effort}
-                      appliedEffort={appliedEffort}
-                      onEffortChange={onEffortChange}
                       standbyLabel={standbyLabel}
                     />
+                    {onEffortChange ? (
+                      <EffortChip
+                        effort={effort}
+                        appliedEffort={appliedEffort}
+                        onEffortChange={onEffortChange}
+                      />
+                    ) : null}
                     <ContextMeter sessionId={sessionId} />
                     {!minimal && (
                     <Tooltip>

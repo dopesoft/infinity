@@ -712,8 +712,20 @@ export const VENDORS: VendorEntry[] = [
   },
 ];
 
-export function findVendor(id: string | undefined | null): VendorEntry {
-  return VENDORS.find((v) => v.id === id) ?? VENDORS[0];
+/**
+ * Look up a vendor. Returns null when the id is empty or unknown - it does NOT
+ * fall back to a default.
+ *
+ * It used to return VENDORS[0], which is the Anthropic API-KEY vendor. So any
+ * caller with no provider set silently rendered that vendor's model list:
+ * Opus 4.8 and the rest of the 4.x line, none of which the Max plan serves,
+ * all of which would bill an API key the boss has forbidden outright. A
+ * picker that can offer a model he must never run is a landmine, and it was
+ * armed by a `?? VENDORS[0]` written for convenience. Every caller now decides
+ * what "I do not know the vendor" means for itself, out loud.
+ */
+export function findVendor(id: string | undefined | null): VendorEntry | null {
+  return VENDORS.find((v) => v.id === id) ?? null;
 }
 
 /**
