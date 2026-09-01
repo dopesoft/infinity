@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
+	"github.com/dopesoft/infinity/core/internal/untrusted"
 )
 
 // CompactionResult reports what happened in a compact pass so callers
@@ -307,7 +308,11 @@ func renderTranscript(messages []llm.Message) string {
 			b.WriteString("  result(")
 			b.WriteString(m.ToolName)
 			b.WriteString("): ")
-			b.WriteString(truncate(strings.TrimSpace(m.Content), 600))
+			// Drop the untrusted-content boundary before truncating. This is a
+			// summary for our own compactor, and the banner is ~230 characters
+			// of boilerplate that would otherwise crowd the actual result out
+			// of a 600-character budget on every fetched item.
+			b.WriteString(truncate(untrusted.StripWrapper(strings.TrimSpace(m.Content)), 600))
 			b.WriteString("\n")
 		}
 	}

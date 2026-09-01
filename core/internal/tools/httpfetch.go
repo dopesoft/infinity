@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/httpx"
 )
 
 type HTTPFetch struct {
@@ -19,10 +19,16 @@ type HTTPFetch struct {
 func NewHTTPFetchFromEnv() (*HTTPFetch, error) {
 	// No domain allowlist: this is a single-user personal agent and "the internet"
 	// is a first-class building block (see Rule #1). The only network restriction is
-	// the SSRF guard below (localhost / private ranges / cloud metadata), which is a
+	// the SSRF boundary (localhost / private ranges / cloud metadata), which is a
 	// security boundary, not an allowlist.
+	//
+	// The boundary is the GUARDED CLIENT, not the pre-check below. This client
+	// refuses a destination after the name resolves and before the socket opens,
+	// once per redirect hop — closing the two holes the old string check could
+	// not: a 302 into the metadata endpoint, and a hostname that resolves into a
+	// private range.
 	return &HTTPFetch{
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: httpx.GuardedClient("http_fetch", 30*time.Second),
 	}, nil
 }
 
@@ -46,12 +52,10 @@ func (h *HTTPFetch) Execute(ctx context.Context, input map[string]any) (string, 
 	if rawURL == "" {
 		return "", errors.New("url is required")
 	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid url: %w", err)
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if err := validateHTTPFetchTarget(parsed, host); err != nil {
+	// Fail fast with a sentence the model can act on. The guarded client is the
+	// boundary that cannot be fooled; this is here so an obviously-internal URL
+	// comes back explained rather than as a connection error.
+	if err := httpx.CheckTarget(rawURL); err != nil {
 		return "", err
 	}
 
@@ -83,48 +87,10 @@ func (h *HTTPFetch) Execute(ctx context.Context, input map[string]any) (string, 
 	return fmt.Sprintf("HTTP %d %s\n\n%s", resp.StatusCode, resp.Status, string(data)), nil
 }
 
-// validateHTTPFetchTarget enforces the SSRF boundary only: a real http(s) scheme
-// and a host that isn't localhost, a private/link-local range, or a cloud-metadata
-// endpoint. There is deliberately no domain allowlist.
-func validateHTTPFetchTarget(parsed *url.URL, host string) error {
-	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("unsupported scheme %q", parsed.Scheme)
-	}
-	if host == "" {
-		return errors.New("url host is required")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isBlockedIP(ip) {
-			return fmt.Errorf("host %q blocked by network policy", host)
-		}
-	} else {
-		if isBlockedHostname(host) {
-			return fmt.Errorf("host %q blocked by network policy", host)
-		}
-	}
-	return nil
-}
-
-func isBlockedHostname(host string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	if h == "localhost" || h == "metadata.google.internal" || h == "169.254.169.254" || h == "0.0.0.0" {
-		return true
-	}
-	if strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".localhost") {
-		return true
-	}
-	return false
-}
-
-func isBlockedIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	if v4 := ip.To4(); v4 != nil {
-		if v4[0] == 169 && v4[1] == 254 {
-			return true
-		}
-	}
-	return false
-}
+// The SSRF policy that used to live here (validateHTTPFetchTarget,
+// isBlockedHostname, isBlockedIP) MOVED to httpx.CheckTarget and the guarded
+// dialer behind httpx.GuardedClient. It was unexported and package-local, which
+// is precisely why the agentic browser, the extension HTTP tools and the
+// sentinel poller shipped with no guard at all — they could not reach it. The
+// shared version covers everything these did, plus IPv4-mapped and NAT64
+// spellings, carrier-grade NAT, trailing-dot hostnames, and every redirect hop.

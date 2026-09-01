@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/untrusted"
 )
 
 // body_capture.go — the durable-message-body MECHANIC.
@@ -113,10 +115,43 @@ func (s *Store) captureBody(ctx context.Context, it *Item) {
 		s.stampCaptureFailure(it, "upstream returned an empty body")
 		return
 	}
+	// Strip the characters that would show the boss one message and hand the
+	// model another (invisible tag-block text, bidi reordering, zero-width
+	// runs). Done HERE, at the one chokepoint every producer passes through,
+	// for the same reason the capture itself was moved here: a recipe cannot be
+	// relied on to remember a mechanic. Both copies are cleaned, so the message
+	// pane he reads and the text the model reads are the same message.
+	html, htmlFindings := untrusted.Normalize(html)
+	text, textFindings := untrusted.Normalize(text)
+
 	it.CachedHTML = html
 	it.CachedText = text
 	applyBodyDerived(it, text, html)
 	clearCaptureFailure(it)
+	stampHiddenContent(it, htmlFindings, textFindings)
+}
+
+// stampHiddenContent records, on the row, that this message tried to hide
+// something — so the card can say so in one line and the boss learns somebody
+// tried rather than learning nothing. It never blocks and never deletes: a
+// false positive must not eat real mail, and he may well want to read the
+// message that attempted it.
+func stampHiddenContent(it *Item, findings ...untrusted.Findings) {
+	var worst untrusted.Findings
+	for _, f := range findings {
+		worst.HiddenChars += f.HiddenChars
+		worst.Directives = append(worst.Directives, f.Directives...)
+		worst.ForgedBoundary = worst.ForgedBoundary || f.ForgedBoundary
+	}
+	if !worst.Suspicious() {
+		return
+	}
+	if it.Metadata == nil {
+		it.Metadata = map[string]any{}
+	}
+	it.Metadata["hidden_content_notice"] = worst.Notice()
+	infoLog.Printf("surface: message hid content: id=%s source=%s hidden_chars=%d directives=%d",
+		it.ExternalID, it.Source, worst.HiddenChars, len(worst.Directives))
 }
 
 // hasStoredBody reports whether this row already holds a captured message.

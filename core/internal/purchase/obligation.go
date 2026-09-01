@@ -31,10 +31,12 @@ package purchase
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -170,6 +172,26 @@ type Obligation struct {
 
 // Total renders the amount the way a human reads it, which is what goes on the
 // approval card. Two carts from one merchant otherwise look identical.
+// CartSummary renders the cart as the boss would read it back: what, how many.
+// Used on the receipt he sees, so it says items rather than line items.
+func (o *Obligation) CartSummary() string {
+	if o == nil || len(o.Cart) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(o.Cart))
+	for _, li := range o.Cart {
+		t := strings.TrimSpace(li.Title)
+		if t == "" {
+			continue
+		}
+		if li.Quantity > 1 {
+			t = fmt.Sprintf("%s × %d", t, li.Quantity)
+		}
+		parts = append(parts, t)
+	}
+	return strings.Join(parts, "\n")
+}
+
 func (o *Obligation) Total() string {
 	return fmt.Sprintf("%s %.2f", strings.ToUpper(o.Currency), float64(o.TotalCents)/100)
 }
@@ -378,10 +400,54 @@ func (s *Store) Resume3DS(ctx context.Context, id string) error {
 
 // Confirm records a VERIFIED purchase. Callers must have an order id: success
 // is defined as having a receipt, not as having seen a page that looked right.
-func (s *Store) Confirm(ctx context.Context, id string, receipt map[string]any) error {
+func (s *Store) Confirm(ctx context.Context, id string, receipt map[string]any, shot []byte) error {
 	b, _ := json.Marshal(orEmpty(receipt))
-	return s.setStatus(ctx, id, StatusSubmitted, StatusConfirmed,
-		`, confirmed_at = NOW(), confirmation = $4::jsonb`, b)
+	if err := s.setStatus(ctx, id, StatusSubmitted, StatusConfirmed,
+		`, confirmed_at = NOW(), confirmation = $4::jsonb`, b); err != nil {
+		return err
+	}
+	// The image is written SECOND and its failure is not the purchase's
+	// failure. The charge has already happened; losing the picture is a
+	// missing receipt, not a missing order, and turning it into an error here
+	// would flip a confirmed purchase into a failed one.
+	if len(shot) > 0 {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE mem_purchase_obligations SET confirmation_shot = $2 WHERE id = $1::uuid`,
+			id, shot); err != nil {
+			log.Printf("purchase: kept the order but could not store the confirmation picture for %s: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// ConfirmationShot returns the stored picture of the confirmation page, or nil
+// when there is none. Selected only here, never by the list or status reads.
+func (s *Store) ConfirmationShot(ctx context.Context, id string) ([]byte, error) {
+	var shot []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT confirmation_shot FROM mem_purchase_obligations WHERE id = $1::uuid`, id).Scan(&shot)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return shot, nil
+}
+
+// decodeDataURL turns the browser's "data:image/png;base64,..." into bytes.
+// A shape we do not recognise returns nil rather than garbage: a receipt with
+// no picture is fine, a receipt with a corrupt one is not.
+func decodeDataURL(s string) []byte {
+	i := strings.Index(s, ",")
+	if i < 0 || !strings.HasPrefix(s, "data:") {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(s[i+1:])
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 // MarkUncertain is the honest outcome when we cannot prove what happened. It

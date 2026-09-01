@@ -51,10 +51,15 @@ const (
 	// whole path exists to avoid.
 	brainWorkspaceCloud = "/workspace"
 
-	// brainPollEach is the cadence of the stream read. Faster than the coding
-	// path's: a chat turn is watched by someone waiting for a reply, and the
-	// poll is what makes the activity ledger move.
-	brainPollEach = 900 * time.Millisecond
+	// brainPollEach is the cadence of the stream read, and it is what the
+	// boss experiences as typing speed.
+	//
+	// The bridge is request/response, so text can only arrive as fast as we
+	// ask for it. Claude Code emits real token deltas (--include-partial-
+	// messages), so at this cadence they land in roughly third-of-a-second
+	// batches: visibly streaming, at three round trips a second, which the
+	// bridge carries comfortably.
+	brainPollEach = 300 * time.Millisecond
 
 	// brainMaxWait bounds one turn. Generous because the whole point of this
 	// brain is long research and multi-step work, but finite so a wedged
@@ -78,7 +83,7 @@ type BrainWiring struct {
 	// hostname here would leave the brain with no tools at all.
 	CoreURL string
 	// MintToken issues a bearer for one session's MCP access.
-	MintToken func() string
+	MintToken func(sessionID string) string
 	// SubscriptionToken returns the stored CLAUDE_CODE_OAUTH_TOKEN, or "" if
 	// none is saved. This is what lets the CLOUD box answer: it has no Claude
 	// sign-in of its own, so the subscription travels as a token minted by
@@ -124,7 +129,9 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 		return llm.Response{}, err
 	}
 
-	mcpToken := r.brain.MintToken()
+	// Minted against THIS conversation, so every tool the brain calls back
+	// through MCP is attributed to it.
+	mcpToken := r.brain.MintToken(turn.SessionID)
 	if mcpToken == "" {
 		return llm.Response{}, errors.New("couldn't mint a tool token for this turn, so I'd be answering with no memory. Nothing was sent.")
 	}
@@ -225,7 +232,7 @@ type brainLaunch struct {
 func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
 	inner := fmt.Sprintf(
 		`claude -p "$INF_PROMPT" ${INF_RESUME:+--resume "$INF_RESUME"} ${INF_MODEL:+--model "$INF_MODEL"} `+
-			`${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose `+
+			`${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose --include-partial-messages `+
 			`--permission-mode bypassPermissions --mcp-config %s --strict-mcp-config --settings %s `+
 			`> %s 2> %s; echo $? > %s`,
 		f.mcp, f.settings, f.out, f.err, f.status,
@@ -314,6 +321,10 @@ type brainPoll struct {
 	started time.Time
 
 	sessionSeen bool
+	// streamed accumulates every text delta already sent. finish() checks it
+	// so the answer is never printed twice, and so a turn that streamed
+	// nothing still produces a reply.
+	streamed string
 }
 
 // wait polls to completion, emitting events as the stream produces them.
@@ -374,7 +385,7 @@ echo "===LAST==="
 tail -n 1 %s 2>/dev/null | head -c %d
 echo ""
 echo "===NEW==="
-tail -n +%d %s 2>/dev/null | head -n 200 | head -c 48000`,
+tail -n +%d %s 2>/dev/null | head -n 400 | head -c 48000`,
 		p.files.status, p.files.status,
 		p.files.out, claudeLastLineBytes,
 		p.line, p.files.out)
@@ -416,27 +427,37 @@ func (p *brainPoll) noteSession(stream string) {
 	}
 }
 
-// brainEvent is the slice of stream-json this path reads.
+// brainEvent is the slice of stream-json this path reads. The shapes are
+// taken from a real run, not guessed: `stream_event` carries the raw
+// Anthropic deltas (this is what --include-partial-messages turns on) and
+// `assistant` carries the assembled message afterwards.
 type brainEvent struct {
-	Type    string `json:"type"`
-	Message struct {
-		Content []struct {
-			Type     string          `json:"type"`
-			Text     string          `json:"text"`
-			Thinking string          `json:"thinking"`
-			ID       string          `json:"id"`
-			Name     string          `json:"name"`
-			Input    json.RawMessage `json:"input"`
-		} `json:"content"`
-	} `json:"message"`
+	Type  string `json:"type"`
+	Event struct {
+		Type  string `json:"type"`
+		Delta struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
+		} `json:"delta"`
+		ContentBlock struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content_block"`
+	} `json:"event"`
 }
 
 // emit turns new stream lines into stream events.
 //
-// Assistant TEXT mid-run is narration ("let me check the logs"), not the
-// answer, so it goes out as thinking: it keeps the boss watching real work
-// without the reply appearing to be written twice. The answer itself is the
-// terminal result, emitted once in finish().
+// It reads the DELTAS, not the assembled messages, which is what makes this
+// brain type like every other one. The assembled `assistant` event repeats
+// everything the deltas already carried, so consuming it too would print the
+// whole reply a second time.
+//
+// Tool calls come off content_block_start rather than the finished message,
+// for the same reason and with the same benefit: the boss sees "it's about to
+// run this" at the moment it decides, not after the fact.
 func (p *brainPoll) emit(fresh string) {
 	if fresh == "" || p.out == nil {
 		return
@@ -447,30 +468,30 @@ func (p *brainPoll) emit(fresh string) {
 			continue
 		}
 		var ev brainEvent
-		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "assistant" {
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "stream_event" {
 			continue
 		}
-		for _, block := range ev.Message.Content {
-			switch block.Type {
-			case "text":
-				if t := strings.TrimSpace(block.Text); t != "" {
-					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: t + "\n"})
+		switch ev.Event.Type {
+		case "content_block_delta":
+			switch ev.Event.Delta.Type {
+			case "text_delta":
+				if ev.Event.Delta.Text != "" {
+					p.streamed += ev.Event.Delta.Text
+					p.send(llm.StreamEvent{Kind: llm.StreamText, TextDelta: ev.Event.Delta.Text})
 				}
-			case "thinking":
-				if t := strings.TrimSpace(block.Thinking); t != "" {
-					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: t})
+			case "thinking_delta":
+				if ev.Event.Delta.Thinking != "" {
+					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: ev.Event.Delta.Thinking})
 				}
-			case "tool_use":
-				// Visibility only. Claude Code already ran this itself; the
-				// event is what puts the step in the boss's activity ledger.
-				call := &llm.ToolCall{ID: block.ID, Name: block.Name}
-				if len(block.Input) > 0 {
-					var in map[string]any
-					if json.Unmarshal(block.Input, &in) == nil {
-						call.Input = in
-					}
-				}
-				p.send(llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: call})
+			}
+		case "content_block_start":
+			// Visibility only: Claude Code runs the tool itself. The event is
+			// what puts the step in the boss's activity ledger.
+			if ev.Event.ContentBlock.Type == "tool_use" {
+				p.send(llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: &llm.ToolCall{
+					ID:   ev.Event.ContentBlock.ID,
+					Name: ev.Event.ContentBlock.Name,
+				}})
 			}
 		}
 	}
@@ -497,13 +518,22 @@ func (p *brainPoll) finish(res claudeResult) (llm.Response, error) {
 		return llm.Response{}, fmt.Errorf("Claude stopped without finishing: %s", detail)
 	}
 	text := strings.TrimSpace(res.Result)
-	if text != "" {
+	// The deltas already printed the answer. Only fall back to sending the
+	// terminal result when nothing streamed at all - an older Claude Code
+	// that ignores --include-partial-messages, or a turn whose output was
+	// swallowed. Better a late reply than a blank one.
+	if text != "" && strings.TrimSpace(p.streamed) == "" {
 		p.send(llm.StreamEvent{Kind: llm.StreamText, TextDelta: text})
 	}
 	usage := brainUsage(res)
 	p.send(llm.StreamEvent{Kind: llm.StreamComplete, StopReason: "end_turn", Usage: &usage})
+	// Guard the zero start time so the log never prints a 292-year duration.
+	took := time.Duration(0)
+	if !p.started.IsZero() {
+		took = time.Since(p.started).Round(time.Second)
+	}
 	brainInfoLog.Printf("claude_max: turn finished in %s (cache_read=%d input=%d output=%d)",
-		time.Since(p.started).Round(time.Second), usage.CacheRead, usage.Input, usage.Output)
+		took, usage.CacheRead, usage.Input, usage.Output)
 	return llm.Response{Text: text, Usage: usage, StopReason: "end_turn"}, nil
 }
 

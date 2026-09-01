@@ -41,9 +41,9 @@ import (
 	"github.com/dopesoft/infinity/core/internal/initiative"
 	"github.com/dopesoft/infinity/core/internal/intent"
 	"github.com/dopesoft/infinity/core/internal/llm"
-	"github.com/dopesoft/infinity/core/internal/mcpauth"
 	"github.com/dopesoft/infinity/core/internal/maintenance"
 	"github.com/dopesoft/infinity/core/internal/mandate"
+	"github.com/dopesoft/infinity/core/internal/mcpauth"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/phone"
 	"github.com/dopesoft/infinity/core/internal/plan"
@@ -745,7 +745,8 @@ func serveCmd() *cobra.Command {
 							}
 						}(purchaseStore)
 						purchase.Register(registry, purchaseStore, cardVault, browserReg,
-							strings.TrimSpace(os.Getenv("INFINITY_PUBLIC_URL")))
+							strings.TrimSpace(os.Getenv("INFINITY_PUBLIC_URL")),
+							surface.NewStore(p, slog.Default()))
 						if cardVault.Healthy() {
 							fmt.Printf("  purchases: on (card vault sealed with INFINITY_VAULT_KEY)\n")
 							// Move the phone vault's plaintext card / identity /

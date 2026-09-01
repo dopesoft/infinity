@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/httpx"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -283,6 +284,13 @@ func (m *Manager) checkExternalPoll(ctx context.Context, s Sentinel, st runtimeS
 	if method == "" {
 		method = http.MethodGet
 	}
+	// A sentinel's URL comes from the watch the agent registered, so it is a
+	// model-chosen destination on a repeating timer — the one shape where an
+	// unguarded fetch would quietly poll an internal endpoint forever. It ran
+	// on the bare default client until now.
+	if err := httpx.CheckTarget(cfg.URL); err != nil {
+		return st, nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, cfg.URL, bytes.NewBufferString(cfg.Body))
 	if err != nil {
 		return st, nil, err
@@ -290,7 +298,7 @@ func (m *Manager) checkExternalPoll(ctx context.Context, s Sentinel, st runtimeS
 	for k, v := range cfg.Headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpx.GuardedClient("sentinel_poll", 30*time.Second).Do(req)
 	if err != nil {
 		return st, nil, err
 	}

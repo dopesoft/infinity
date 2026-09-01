@@ -17,6 +17,7 @@ import {
 } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime/provider";
 import { useTabParam } from "@/lib/useTabParam";
+import { CountBadge } from "@/components/ui/count-badge";
 
 const RISK_DOT: Record<TrustContractDTO["risk_level"], string> = {
   low: "bg-success",
@@ -246,28 +247,14 @@ function TabBar({
       <PageTabsList level="sub">
         <PageTabsTrigger value="pending">
           <span>Pending</span>
-          {pendingCount > 0 ? <CountBadge active={tab === "pending"} count={pendingCount} /> : null}
+          <CountBadge active={tab === "pending"} count={pendingCount} noun="waiting" />
         </PageTabsTrigger>
         <PageTabsTrigger value="decided">
           <span>Decided</span>
-          {decidedCount > 0 ? <CountBadge active={tab === "decided"} count={decidedCount} /> : null}
+          <CountBadge active={tab === "decided"} count={decidedCount} noun="decided" />
         </PageTabsTrigger>
       </PageTabsList>
     </PageTabs>
-  );
-}
-
-function CountBadge({ active, count }: { active: boolean; count: number }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-        active ? "bg-background text-foreground" : "bg-muted-foreground/15 text-muted-foreground",
-      )}
-      aria-label={`${count} ${count === 1 ? "item" : "items"}`}
-    >
-      {count}
-    </span>
   );
 }
 

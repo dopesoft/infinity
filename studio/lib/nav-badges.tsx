@@ -48,6 +48,9 @@ const COUNT_TABLES = [
 
 export type NavBadges = Record<string, number>;
 
+/** Map key for "approvals waiting on the boss". Not a route. */
+const TRUST_PENDING = "trust:pending";
+
 const BadgeContext = createContext<NavBadges>({});
 
 export function NavBadgesProvider({ children }: { children: ReactNode }) {
@@ -85,6 +88,11 @@ export function NavBadgesProvider({ children }: { children: ReactNode }) {
         "/automations": 0,
         "/activity": heartbeat + logs,
         "/settings": counts.chat,
+        // Not a route: the Settings section rail needs the same number for
+        // its Approvals row, and reading it here rather than re-querying is
+        // what keeps the tab badge and the row from disagreeing. Named so a
+        // later change to the "/settings" cell can't silently redefine it.
+        [TRUST_PENDING]: counts.chat,
       };
       setBadges((prev) => {
         const sameKeys = Object.keys(next).length === Object.keys(prev).length;
@@ -122,6 +130,14 @@ export function NavBadgesProvider({ children }: { children: ReactNode }) {
 export function useNavBadge(href: string): number {
   const badges = useContext(BadgeContext);
   return badges[href] ?? 0;
+}
+
+/**
+ * How many approvals are waiting on the boss. Same source as the Settings
+ * tab badge, so the two can never show different numbers.
+ */
+export function useTrustPendingBadge(): number {
+  return useNavBadge(TRUST_PENDING);
 }
 
 /**

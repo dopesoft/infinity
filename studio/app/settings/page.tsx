@@ -72,6 +72,16 @@ import {
   type ToolDescriptor,
 } from "@/lib/api";
 import { standbyLabel, standbyResetClock, useGlobalModel } from "@/lib/use-model";
+import { CountBadge } from "@/components/ui/count-badge";
+import { useTrustPendingBadge } from "@/lib/nav-badges";
+import {
+  ConnectorAccountsProvider,
+  useConnectorAccounts,
+} from "@/lib/connectors/provider";
+import {
+  buildActiveConnectorGroups,
+  countActiveConnectorAccounts,
+} from "@/lib/connectors/active";
 import {
   VENDORS,
   findVendor,
@@ -129,6 +139,17 @@ const SECTIONS: SectionMeta[] = [
 const SECTION_IDS = SECTIONS.map((s) => s.id) as SectionId[];
 
 export default function SettingsPage() {
+  // The connector provider wraps the WHOLE page, not just the Accounts
+  // section: the rail has to be able to count accounts on a screen the boss
+  // has not opened yet. See lib/connectors/provider.tsx.
+  return (
+    <ConnectorAccountsProvider>
+      <SettingsScreen />
+    </ConnectorAccountsProvider>
+  );
+}
+
+function SettingsScreen() {
   const [status, setStatus] = useState<CoreStatus | null>(null);
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [mcp, setMCP] = useState<MCPStatus[]>([]);
@@ -160,19 +181,41 @@ export default function SettingsPage() {
     refresh();
   }, []);
 
+  // A rail number has to be the number of things the section actually
+  // shows, or it is worse than no number. Accounts was counting `mcp.length`
+  // - the MCP processes that answered /api/mcp - while the screen itself
+  // lists those servers PLUS every connected mailbox and workspace, so it
+  // read 2 against a list of nine rows. It now counts the same groups the
+  // Accounts screen renders, built by the one shared function.
+  //
+  // Sections with nothing countable (Brain, Chat, Vault, Workbench, Alerts,
+  // Home layout) deliberately carry no number: those are settings you set,
+  // not lists that grow.
+  const { accounts, aliases, error: accountsError } = useConnectorAccounts();
+  const trustPending = useTrustPendingBadge();
+
+  const accountCount = useMemo(() => {
+    // An unreachable connector backend is not "zero accounts". Show no
+    // number rather than a confident 0 the screen will contradict.
+    if (accountsError) return undefined;
+    return countActiveConnectorAccounts(
+      buildActiveConnectorGroups(mcp, accounts, aliases),
+    );
+  }, [mcp, accounts, aliases, accountsError]);
+
   const counts = useMemo<Partial<Record<SectionId, number>>>(
-    () => ({ tools: tools.length, mcp: mcp.length }),
-    [tools.length, mcp.length],
+    () => ({ tools: tools.length, mcp: accountCount, trust: trustPending }),
+    [tools.length, accountCount, trustPending],
   );
 
   // The one meta line under the title: counts, never a description (§1.5).
   const meta = useMemo(() => {
     const bits: string[] = [];
     if (tools.length) bits.push(`${tools.length} tools`);
-    if (mcp.length) bits.push(`${mcp.length} connectors`);
+    if (accountCount) bits.push(`${accountCount} accounts`);
     if (status?.version) bits.push(`core ${status.version}`);
     return bits.join(" · ");
-  }, [tools.length, mcp.length, status?.version]);
+  }, [tools.length, accountCount, status?.version]);
 
   return (
     <AppShell>
@@ -190,18 +233,7 @@ export default function SettingsPage() {
                 {SECTIONS.map((s) => (
                   <PageTabsTrigger key={s.id} value={s.id} className="gap-1.5">
                     <span>{s.label}</span>
-                    {typeof counts[s.id] === "number" && counts[s.id] ? (
-                      <span
-                        className={cn(
-                          "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                          active === s.id
-                            ? "bg-background/20 text-background"
-                            : "bg-muted-foreground/15 text-muted-foreground",
-                        )}
-                      >
-                        {counts[s.id]}
-                      </span>
-                    ) : null}
+                    <CountBadge count={counts[s.id] ?? 0} active={active === s.id} />
                   </PageTabsTrigger>
                 ))}
               </PageTabsList>

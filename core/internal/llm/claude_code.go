@@ -46,9 +46,11 @@ const (
 	ProviderClaudeMax = "claude_max"
 
 	// defaultClaudeMaxModel is what a turn runs on when Settings names
-	// nothing. Opus because the whole reason the boss wanted this brain was
-	// to get his best model onto research and agent workflows.
-	defaultClaudeMaxModel = "opus"
+	// nothing. The full id rather than the "opus" alias so the model does not
+	// change under him the day Anthropic repoints the alias: Opus 5 is what
+	// Max runs by default, and that is what this should mean a year from now
+	// too.
+	defaultClaudeMaxModel = "claude-opus-5"
 )
 
 // BrainTurn is one conversational turn handed to the harness.
@@ -246,7 +248,17 @@ func (c *ClaudeCode) buildPrompt(ctx context.Context, sessionID string, sys Syst
 	}
 	if c.resume(ctx, sessionID) != "" {
 		if last, ok := lastUserMessage(messages); ok {
-			return last, nil
+			// The new message, with THIS turn's volatile context in front of
+			// it: what RRF just retrieved, the current time, the account
+			// overlay. Claude Code is holding the conversation and the soul,
+			// but it cannot hold context that did not exist when the session
+			// started, and a brain that stops seeing freshly recalled memory
+			// after turn one is the amnesia this whole path exists to avoid.
+			//
+			// This costs nothing in cache terms and is exactly what every
+			// other provider does: the cached prefix is what came before,
+			// and new content appended after it never invalidates that.
+			return withVolatile(sys, last), nil
 		}
 		// No trailing user message means the loop is continuing after a tool
 		// result, which cannot happen on this provider (Claude Code runs its
@@ -254,6 +266,15 @@ func (c *ClaudeCode) buildPrompt(ctx context.Context, sessionID string, sys Syst
 		// empty prompt.
 	}
 	return renderTranscript(messages), nil
+}
+
+// withVolatile puts this turn's changing context in front of the message.
+func withVolatile(sys SystemPrompt, message string) string {
+	vol := strings.TrimSpace(sys.Volatile)
+	if vol == "" {
+		return message
+	}
+	return vol + "\n\n---\n\n" + message
 }
 
 // coldStartPrompt puts the system prompt in front of the first turn. Claude

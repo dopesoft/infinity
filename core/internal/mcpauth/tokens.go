@@ -25,13 +25,25 @@ const TokenTTL = 24 * time.Hour
 // credential out of the database.
 type Tokens struct {
 	mu     sync.Mutex
-	issued map[string]time.Time
+	issued map[string]lease
 }
 
-func New() *Tokens { return &Tokens{issued: map[string]time.Time{}} }
+// lease is one minted token: when it dies, and WHOSE conversation it belongs
+// to. The session id is the load-bearing half. A tool called back through MCP
+// runs with whatever context the HTTP request carries, and without the
+// session stamped onto it every memory write, surface item and plan that tool
+// produces lands unattributed - the orphaned-plan failure, reproduced through
+// a new door. Binding the session to the token is what keeps a tool call made
+// by the Claude brain indistinguishable, downstream, from one made in chat.
+type lease struct {
+	expires time.Time
+	session string
+}
 
-// Mint returns a fresh bearer token for one brain session.
-func (m *Tokens) Mint() string {
+func New() *Tokens { return &Tokens{issued: map[string]lease{}} }
+
+// Mint returns a fresh bearer token bound to one conversation.
+func (m *Tokens) Mint(sessionID string) string {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		// crypto/rand failing is not survivable for a credential - refuse
@@ -42,26 +54,28 @@ func (m *Tokens) Mint() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sweepLocked()
-	m.issued[tok] = time.Now().Add(TokenTTL)
+	m.issued[tok] = lease{expires: time.Now().Add(TokenTTL), session: sessionID}
 	return tok
 }
 
-// Valid reports whether tok was minted here and has not expired.
-func (m *Tokens) Valid(tok string) bool {
+// Session returns the conversation a token was minted for, and whether the
+// token is still good. The caller stamps that id onto the request context so
+// everything the tool writes is attributed to the right conversation.
+func (m *Tokens) Session(tok string) (string, bool) {
 	if tok == "" {
-		return false
+		return "", false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	exp, ok := m.issued[tok]
+	l, ok := m.issued[tok]
 	if !ok {
-		return false
+		return "", false
 	}
-	if time.Now().After(exp) {
+	if time.Now().After(l.expires) {
 		delete(m.issued, tok)
-		return false
+		return "", false
 	}
-	return true
+	return l.session, true
 }
 
 // Revoke drops a token the moment its session ends.
@@ -76,8 +90,8 @@ func (m *Tokens) Revoke(tok string) {
 
 func (m *Tokens) sweepLocked() {
 	now := time.Now()
-	for tok, exp := range m.issued {
-		if now.After(exp) {
+	for tok, l := range m.issued {
+		if now.After(l.expires) {
 			delete(m.issued, tok)
 		}
 	}

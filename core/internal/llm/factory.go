@@ -47,12 +47,22 @@ func ModelFamilyMatches(vendor, model string) bool {
 	case "anthropic":
 		return strings.HasPrefix(lower, "claude-")
 	case ProviderClaudeMax:
-		// Claude Code takes the family aliases as well as full ids, and the
-		// aliases are what the Settings picker offers, so both count as this
-		// vendor's family. Without this a generic LLM_MODEL of "opus" would
-		// be discarded and every turn would silently run the harness default.
-		return strings.HasPrefix(lower, "claude-") ||
-			lower == "opus" || lower == "sonnet" || lower == "haiku"
+		// Claude Code accepts a full model id OR one of its aliases, and the
+		// aliases earn their place in the picker: opus[1m] is the same model
+		// with a million-token window, opusplan plans with Opus then builds
+		// with Sonnet, best tracks whatever is strongest today. All of them
+		// have to count as this vendor's family, or the id gets discarded on
+		// the way through and the turn silently runs the harness default -
+		// the boss picks a model and gets a different one, with nothing said.
+		if strings.HasPrefix(lower, "claude-") {
+			return true
+		}
+		switch lower {
+		case "opus", "sonnet", "haiku", "fable", "best", "default", "opusplan",
+			"opus[1m]", "sonnet[1m]":
+			return true
+		}
+		return false
 	case "openai", "openai_oauth":
 		// OpenAI ships gpt-* and o*-series (o1, o3, o4-mini, etc).
 		return strings.HasPrefix(lower, "gpt-") ||

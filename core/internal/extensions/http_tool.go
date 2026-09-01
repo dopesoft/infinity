@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/httpx"
 )
 
 // HTTPTool is a generic native tool built from an HTTPToolConfig - the
@@ -48,7 +50,12 @@ func NewHTTPTool(toolName, description string, cfg HTTPToolConfig) (*HTTPTool, e
 		toolName:    toolName,
 		description: description,
 		cfg:         cfg,
-		client:      &http.Client{Timeout: 30 * time.Second},
+		// Guarded: both halves of this URL are model-chosen — the template came
+		// from a registration the agent authored, and the {{param}} values come
+		// from the call itself. It had no network boundary at all before,
+		// because the only SSRF policy in the tree was unexported inside
+		// package tools and unreachable from here.
+		client: httpx.GuardedClient(toolName, 30*time.Second),
 	}, nil
 }
 
@@ -90,7 +97,14 @@ func (t *HTTPTool) Execute(ctx context.Context, in map[string]any) (string, erro
 	if t.cfg.BodyTemplate != "" {
 		body = bytes.NewBufferString(subst(t.cfg.BodyTemplate))
 	}
-	req, err := http.NewRequestWithContext(ctx, t.cfg.Method, subst(t.cfg.URL), body)
+	// Check AFTER substitution: a template like https://host/{{path}} is only
+	// as safe as the value the model just put in it, and a template of {{url}}
+	// is entirely the model's choice.
+	target := subst(t.cfg.URL)
+	if err := httpx.CheckTarget(target); err != nil {
+		return "", fmt.Errorf("%s: %w", t.toolName, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, t.cfg.Method, target, body)
 	if err != nil {
 		return "", fmt.Errorf("%s: build request: %w", t.toolName, err)
 	}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/dopesoft/infinity/core/internal/browser"
+	"github.com/dopesoft/infinity/core/internal/surface"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/dopesoft/infinity/core/internal/vault"
 )
@@ -21,7 +23,7 @@ import (
 // done with call briefs.
 
 // Register wires the purchase and wallet tools.
-func Register(r *tools.Registry, store *Store, cards vault.CardVault, reg *browser.Registry, publicURL string) {
+func Register(r *tools.Registry, store *Store, cards vault.CardVault, reg *browser.Registry, publicURL string, surfacer Surfacer) {
 	if r == nil || store == nil {
 		return
 	}
@@ -34,12 +36,12 @@ func Register(r *tools.Registry, store *Store, cards vault.CardVault, reg *brows
 	if st, ok := cards.(*vault.Store); ok {
 		details = vault.NewDetails(st)
 	}
-	r.Register(&executeTool{store: store, cards: cards, exec: NewBrowserExecutor(reg, details)})
+	r.Register(&executeTool{store: store, cards: cards, exec: NewBrowserExecutor(reg, details), surface: surfacer})
 	r.Register(&statusTool{store: store})
 	if cards != nil {
 		r.Register(&cardListTool{cards: cards})
 		if vs, ok := cards.(*vault.Store); ok {
-			r.Register(&enrollTool{vault: vs, publicURL: publicURL})
+			r.Register(&enrollTool{vault: vs, publicURL: publicURL, surface: surfacer})
 		}
 	}
 }
@@ -137,9 +139,53 @@ func (t *proposeTool) Execute(ctx context.Context, in map[string]any) (string, e
 // ── purchase_execute ──────────────────────────────────────────────────────
 
 type executeTool struct {
-	store *Store
-	cards vault.CardVault
-	exec  Executor
+	store   *Store
+	cards   vault.CardVault
+	exec    Executor
+	surface Surfacer
+}
+
+// Surfacer is the generic contract every producer writes to (mem_surface_items).
+// A purchase is not special enough to earn its own card: it is a thing Jarvis
+// did that the boss should be able to find, which is exactly what this is for.
+type Surfacer interface {
+	Upsert(ctx context.Context, it *surface.Item) (string, error)
+}
+
+// surfaceReceipt files the receipt where he looks for what happened. Best
+// effort on purpose: the money has already moved, so a surfacing failure is
+// logged and never turned into a failed purchase.
+func (t *executeTool) surfaceReceipt(ctx context.Context, o *Obligation, r Receipt) {
+	if t.surface == nil {
+		return
+	}
+	title := fmt.Sprintf("Bought %s from %s", o.Total(), hostLabel(o))
+	sub := "Order " + r.OrderID
+	if r.OrderID == "" {
+		sub = "No order number came back"
+	}
+	if _, err := t.surface.Upsert(ctx, &surface.Item{
+		// Not "system": that folds into Activity instead of the inbox he
+		// actually reads (see the surface-routing note in CLAUDE.md).
+		Surface:    "runs",
+		Kind:       "purchase",
+		Source:     "purchase",
+		ExternalID: o.ID,
+		Title:      title,
+		Subtitle:   sub,
+		Body:       o.CartSummary(),
+		URL:        r.URL,
+		Metadata: map[string]any{
+			"merchant":      o.MerchantName,
+			"merchant_host": o.MerchantHost,
+			"total_cents":   r.TotalCents,
+			"currency":      r.Currency,
+			"order_id":      r.OrderID,
+			"has_receipt":   r.Screenshot != "",
+		},
+	}); err != nil {
+		log.Printf("purchase: the order went through but I could not file the receipt: %v", err)
+	}
 }
 
 func (t *executeTool) Name() string { return "purchase_execute" }
@@ -225,9 +271,15 @@ func (t *executeTool) Execute(ctx context.Context, in map[string]any) (string, e
 	if err := t.store.Confirm(ctx, id, map[string]any{
 		"order_id": receipt.OrderID, "url": receipt.URL,
 		"total_cents": receipt.TotalCents, "currency": receipt.Currency,
-	}); err != nil {
+	}, decodeDataURL(receipt.Screenshot)); err != nil {
 		return "", err
 	}
+
+	// Put the receipt somewhere he can find it later. Telling him in chat is
+	// fine in the moment and useless in a week, and a purchase that leaves no
+	// trace outside a transcript is a purchase he has to take my word for.
+	t.surfaceReceipt(ctx, claimed, receipt)
+
 	return fmt.Sprintf("Done. %s at %s, order number %s.",
 		claimed.Total(), hostLabel(claimed), receipt.OrderID), nil
 }
@@ -299,6 +351,7 @@ func (t *cardListTool) Execute(ctx context.Context, _ map[string]any) (string, e
 type enrollTool struct {
 	vault     *vault.Store
 	publicURL string
+	surface   Surfacer
 }
 
 func (t *enrollTool) Name() string { return "vault_enroll_link" }
@@ -319,8 +372,36 @@ func (t *enrollTool) Execute(ctx context.Context, _ map[string]any) (string, err
 	if base == "" {
 		base = "https://infinity.dopesoft.io"
 	}
-	return fmt.Sprintf("Here is a private link to add a card. It works once and expires at %s:\n%s/wallet/add?t=%s",
-		expires.Format("15:04"), base, token), nil
+	link := fmt.Sprintf("%s/wallet/add?t=%s", base, token)
+
+	// THE LINK DOES NOT GO BACK TO THE MODEL.
+	//
+	// This tool used to return the URL, token and all, as its result — which
+	// put a live single-use card-entry link into the transcript, the memory
+	// graph and whatever the embedder saw. The whole premise of the vault is
+	// that a card never travels through chat, and this was the one thread
+	// that did. So the link goes to the boss on his own surface and the model
+	// gets told only that it was sent.
+	if t.surface == nil {
+		return "", errors.New("I cannot hand you a card link right now: there is nowhere private to send it, and I will not put one in this conversation")
+	}
+	if _, err := t.surface.Upsert(ctx, &surface.Item{
+		Surface:    "runs",
+		Kind:       "card_link",
+		Source:     "vault",
+		ExternalID: "card-link",
+		Title:      "Add a card",
+		Subtitle:   "Works once, expires at " + expires.Format("15:04"),
+		URL:        link,
+		ExpiresAt:  &expires,
+		// A rolling item: one card-link row, refreshed. Reopen so a dismissed
+		// older link does not swallow the new one.
+		Reopen: true,
+	}); err != nil {
+		return "", fmt.Errorf("I made a card link but could not get it to you privately, so I have not put it here: %w", err)
+	}
+	return fmt.Sprintf("Sent you a private link to add a card. It is on your dashboard, works once, and expires at %s. I have not put it in this conversation on purpose.",
+		expires.Format("15:04")), nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

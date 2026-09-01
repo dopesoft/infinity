@@ -25,17 +25,23 @@ import { openAuthWindow } from "@/lib/auth-window";
 import { cn } from "@/lib/utils";
 import {
   disconnectComposioAccount,
-  fetchComposioAliases,
-  fetchComposioConnected,
   fetchComposioToolkits,
   initiateComposioConnect,
   refreshComposioAccount,
   setComposioAlias,
-  type ComposioAliasMap,
-  type ComposioConnectedAccount,
   type ComposioToolkit,
   type MCPStatus,
 } from "@/lib/api";
+import { CountBadge } from "@/components/ui/count-badge";
+import { useConnectorAccounts } from "@/lib/connectors/provider";
+import {
+  buildActiveConnectorGroups,
+  countActiveConnectorAccounts,
+  filterActiveConnectorGroups,
+  isReconnectableAccount,
+  type ActiveAccount,
+  type ActiveGroup,
+} from "@/lib/connectors/active";
 
 // ConnectorsSection is the single surface for managing every MCP/integration
 // the agent can call. Three sub-tabs:
@@ -56,10 +62,17 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   // so a refresh on /settings?section=mcp keeps active/browse/custom.
   const [tab, setTab] = useTabParam<Tab>("connectors", "active", ["active", "browse", "custom"]);
 
-  const [connected, setConnected] = useState<ComposioConnectedAccount[]>([]);
-  const [connectedError, setConnectedError] = useState<string | null>(null);
-  const [connectedLoading, setConnectedLoading] = useState(true);
-  const [aliases, setAliases] = useState<ComposioAliasMap>({});
+  // Connected accounts + aliases come from the shared provider, not a local
+  // fetch: the Settings rail needs the same array to count and this screen
+  // is not always mounted. See lib/connectors/provider.tsx.
+  const {
+    accounts: connected,
+    aliases,
+    error: connectedError,
+    loading: connectedLoading,
+    reload: loadConnected,
+    setAliasLocal,
+  } = useConnectorAccounts();
 
   const [catalog, setCatalog] = useState<ComposioToolkit[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -79,25 +92,6 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
     logo?: string;
     existingAliases: string[];
   } | null>(null);
-
-  // background=true refreshes without flipping the loading flag, so the
-  // list doesn't flicker when we re-check status after an OAuth round-trip.
-  const loadConnected = useCallback(async (background = false) => {
-    if (!background) setConnectedLoading(true);
-    const [accountsRes, aliasMap] = await Promise.all([
-      fetchComposioConnected(),
-      fetchComposioAliases(),
-    ]);
-    if ("error" in accountsRes) {
-      setConnected([]);
-      setConnectedError(accountsRes.error);
-    } else {
-      setConnected(accountsRes.items ?? []);
-      setConnectedError(null);
-    }
-    setAliases(aliasMap);
-    if (!background) setConnectedLoading(false);
-  }, []);
 
   const loadCatalog = useCallback(
     async (reset = true) => {
@@ -122,49 +116,6 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   );
 
   useEffect(() => {
-    loadConnected();
-  }, [loadConnected]);
-
-  // The OAuth round-trip happens in another tab (or, on the iPhone PWA, an
-  // in-app browser sheet), and iOS freezes this page's timers the moment it
-  // goes to the background - so a "reload in 3s" never fires there. The
-  // status refresh has to key off COMING BACK: refetch whenever the app
-  // regains visibility/focus, same listeners the ws provider uses.
-  useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState === "visible") loadConnected(true);
-    };
-    window.addEventListener("focus", refresh);
-    window.addEventListener("pageshow", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener("pageshow", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, [loadConnected]);
-
-  // While any account is mid-handshake (INITIATED and friends), poll until
-  // Composio flips it to ACTIVE - the flip happens on their side after the
-  // provider redirects, so nothing pushes it to us.
-  const hasPendingAccount = useMemo(
-    () =>
-      connected.some((a) => {
-        const s = (a.status ?? "").toUpperCase();
-        return s === "INITIATED" || s === "INITIALIZING" || s === "PENDING";
-      }),
-    [connected],
-  );
-
-  useEffect(() => {
-    if (!hasPendingAccount) return;
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") loadConnected(true);
-    }, 5000);
-    return () => clearInterval(t);
-  }, [hasPendingAccount, loadConnected]);
-
-  useEffect(() => {
     if (tab === "browse" && catalog.length === 0 && !catalogError) {
       loadCatalog(true);
     }
@@ -187,82 +138,22 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
     return s;
   }, [connected]);
 
-  // Grouped activated view. Composio toolkits collapse into one row per slug
-  // with each connected_account as a sub-row. Native MCP servers from
-  // mcp.yaml render as single-account groups. The composio parent MCP
-  // entry is hidden when at least one toolkit account is connected - its
-  // "connection status" is implicit in the children.
-  const activeGroups = useMemo<ActiveGroup[]>(() => {
-    const groups: ActiveGroup[] = [];
-    const hasComposio = connected.length > 0;
+  // Grouping is a pure function in lib/connectors/active.ts so the Settings
+  // rail counts exactly what this list renders. Search filters the RENDERED
+  // groups only - a count that shrinks while you type is not a count.
+  const allActiveGroups = useMemo<ActiveGroup[]>(
+    () => buildActiveConnectorGroups(servers, connected, aliases),
+    [servers, connected, aliases],
+  );
 
-    for (const s of servers) {
-      if (hasComposio && s.name === "composio") continue;
-      groups.push({
-        kind: "native",
-        key: `mcp:${s.name}`,
-        slug: s.name,
-        name: s.name,
-        source: nativeSourceLabel(s.name),
-        accounts: [
-          {
-            id: s.name,
-            ok: s.connected,
-            error: s.error,
-            tools: s.tools ?? [],
-            statusText: s.connected ? "ACTIVE" : s.error ? "ERROR" : "PENDING",
-          },
-        ],
-      });
-    }
-
-    // Composio: group by toolkit slug.
-    const byToolkit = new Map<string, ComposioConnectedAccount[]>();
-    for (const acc of connected) {
-      const slug = (acc.toolkit?.slug ?? "unknown").toLowerCase();
-      const arr = byToolkit.get(slug) ?? [];
-      arr.push(acc);
-      byToolkit.set(slug, arr);
-    }
-    for (const [slug, accs] of byToolkit.entries()) {
-      const first = accs[0];
-      groups.push({
-        kind: "composio",
-        key: `composio:${slug}`,
-        slug,
-        name: first.toolkit?.name ?? slug,
-        source: "via Composio",
-        logo: first.toolkit?.logo,
-        accounts: visibleConnectorAccounts(accs, aliases).map((a) => ({
-          id: a.id,
-          accountId: a.id,
-          ok: ((a.status ?? "").toUpperCase() || "ACTIVE") === "ACTIVE",
-          statusText: (a.status ?? "ACTIVE").toUpperCase(),
-          alias: aliases[a.id] ?? "",
-          identityHint: extractIdentityHint(a),
-          userId: a.user_id,
-          createdAt: a.created_at,
-          tools: [],
-        })),
-      });
-    }
-
-    const q = activeQuery.trim().toLowerCase();
-    if (!q) return groups;
-    return groups.filter((g) => {
-      if (g.name.toLowerCase().includes(q) || g.slug.toLowerCase().includes(q)) return true;
-      for (const a of g.accounts) {
-        if (a.alias?.toLowerCase().includes(q)) return true;
-        if (a.identityHint?.toLowerCase().includes(q)) return true;
-        if (a.tools?.some((t) => t.toLowerCase().includes(q))) return true;
-      }
-      return false;
-    });
-  }, [servers, connected, aliases, activeQuery]);
+  const activeGroups = useMemo(
+    () => filterActiveConnectorGroups(allActiveGroups, activeQuery),
+    [allActiveGroups, activeQuery],
+  );
 
   const totalActiveCount = useMemo(
-    () => activeGroups.reduce((sum, g) => sum + g.accounts.length, 0),
-    [activeGroups],
+    () => countActiveConnectorAccounts(allActiveGroups),
+    [allActiveGroups],
   );
 
   // requestConnect opens the alias dialog. Actual OAuth doesn't fire until
@@ -328,7 +219,7 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
   }
 
   async function handleAliasSave(accountId: string, alias: string) {
-    setAliases((prev) => ({ ...prev, [accountId]: alias }));
+    setAliasLocal(accountId, alias);
     const ok = await setComposioAlias(accountId, alias);
     if (!ok) {
       // eslint-disable-next-line no-alert
@@ -344,19 +235,11 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
           <PageTabsList level="sub">
             <PageTabsTrigger value="active" className="gap-1.5">
               <span>Active</span>
-              {totalActiveCount ? (
-                <span
-                  className={cn(
-                    "inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none",
-                    tab === "active"
-                      ? "bg-background text-foreground"
-                      : "bg-muted-foreground/15 text-muted-foreground",
-                  )}
-                  aria-label={`${totalActiveCount} active`}
-                >
-                  {totalActiveCount}
-                </span>
-              ) : null}
+              <CountBadge
+                count={totalActiveCount}
+                active={tab === "active"}
+                noun={totalActiveCount === 1 ? "account" : "accounts"}
+              />
             </PageTabsTrigger>
             <PageTabsTrigger value="browse">Browse</PageTabsTrigger>
             <PageTabsTrigger value="custom">Custom</PageTabsTrigger>
@@ -412,29 +295,6 @@ export function ConnectorsSection({ servers }: { servers: MCPStatus[] }) {
     </SettingsPanel>
   );
 }
-
-type ActiveAccount = {
-  id: string;
-  accountId?: string; // composio-only
-  ok: boolean;
-  error?: string;
-  statusText: string;
-  alias?: string;
-  identityHint?: string;
-  userId?: string;
-  createdAt?: string;
-  tools: string[];
-};
-
-type ActiveGroup = {
-  kind: "native" | "composio";
-  key: string;
-  slug: string;
-  name: string;
-  source: string;
-  logo?: string;
-  accounts: ActiveAccount[];
-};
 
 function ActiveList({
   groups,
@@ -759,63 +619,6 @@ function AccountSubRow({
   );
 }
 
-function isReconnectableAccount(account: ActiveAccount) {
-  if (account.ok) return false;
-  return isBadConnectorStatus(account.statusText.toUpperCase());
-}
-
-function visibleConnectorAccounts(
-  accounts: ComposioConnectedAccount[],
-  aliases: ComposioAliasMap,
-) {
-  const byIdentity = new Map<string, ComposioConnectedAccount>();
-  for (const account of accounts) {
-    const key = connectorIdentityKey(account, aliases);
-    const existing = byIdentity.get(key);
-    if (!existing || connectorAccountDisplayRank(account) > connectorAccountDisplayRank(existing)) {
-      byIdentity.set(key, account);
-    }
-  }
-  return Array.from(byIdentity.values()).sort((a, b) => {
-    const rank = connectorAccountDisplayRank(b) - connectorAccountDisplayRank(a);
-    if (rank !== 0) return rank;
-    return Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? "");
-  });
-}
-
-function connectorIdentityKey(account: ComposioConnectedAccount, aliases: ComposioAliasMap) {
-  const slug = (account.toolkit?.slug ?? "unknown").toLowerCase();
-  const identity = (aliases[account.id] || extractIdentityHint(account) || account.user_id || "")
-    .trim()
-    .toLowerCase();
-  return identity ? `${slug}:${identity}` : `${slug}:${account.id}`;
-}
-
-function connectorAccountDisplayRank(account: ComposioConnectedAccount) {
-  const status = (account.status ?? "ACTIVE").toUpperCase();
-  const statusRank =
-    status === "ACTIVE" ? 500 :
-      status === "INITIATED" || status === "INITIALIZING" || status === "PENDING" ? 400 :
-        isBadConnectorStatus(status) ? 100 :
-          300;
-  const created = Date.parse(account.created_at ?? "");
-  return statusRank + (Number.isFinite(created) ? created / 1_000_000_000_000_000 : 0);
-}
-
-function isBadConnectorStatus(status: string) {
-  return (
-    status === "REVOKED" ||
-    status === "EXPIRED" ||
-    status === "INACTIVE" ||
-    status === "DISABLED" ||
-    status === "ERROR" ||
-    status.includes("FAILED") ||
-    status.includes("UNAUTHORIZED") ||
-    status.includes("EXPIRED") ||
-    status.includes("REVOKED")
-  );
-}
-
 function connectKey(slug: string) {
   return `connect:${slug}`;
 }
@@ -979,46 +782,6 @@ function ComposioErrorBanner({ message, hint }: { message: string; hint?: string
       </div>
     </div>
   );
-}
-
-// extractIdentityHint pulls a recognisable label from Composio's per-
-// account meta/data blobs. The exact field name varies per toolkit
-// (email for Gmail, login for GitHub, team_name for Slack) so we walk
-// a list of common identity keys. Best-effort - returns "" when the
-// upstream response doesn't surface anything usable.
-function extractIdentityHint(acc: ComposioConnectedAccount): string {
-  const candidates = ["email", "username", "user_email", "login", "display_name", "name", "team_name", "workspace_name"];
-  const pools: Array<Record<string, unknown> | undefined> = [acc.meta, acc.data];
-  for (const pool of pools) {
-    if (!pool) continue;
-    for (const key of candidates) {
-      const v = pool[key];
-      if (typeof v === "string" && v.trim() !== "") return v.trim();
-    }
-    for (const nestedKey of ["user", "profile", "account", "authed_user"]) {
-      const nested = pool[nestedKey];
-      if (nested && typeof nested === "object") {
-        for (const key of candidates) {
-          const v = (nested as Record<string, unknown>)[key];
-          if (typeof v === "string" && v.trim() !== "") return v.trim();
-        }
-      }
-    }
-  }
-  return "";
-}
-
-function nativeSourceLabel(name: string): string {
-  switch (name) {
-    case "claude_code":
-      return "Mac bridge";
-    case "github":
-      return "Direct API";
-    case "composio":
-      return "Gateway";
-    default:
-      return "Direct MCP";
-  }
 }
 
 // NameAccountPrompt is the mandatory pre-connect gate. The OAuth flow does

@@ -82,10 +82,21 @@ func (s *Server) handleMCPServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this MCP server answers on POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.mcpTokens == nil || !s.mcpTokens.Valid(bearerToken(r)) {
+	if s.mcpTokens == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	sessionID, ok := s.mcpTokens.Session(bearerToken(r))
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// Stamp the conversation onto the request before anything executes. Tools
+	// read it (plans, surface items, media jobs, crosscheck all call
+	// SessionIDFromContext), so without this every tool the Claude brain calls
+	// would write itself into the void - present in the database, attached to
+	// no conversation, invisible where the boss would look for it.
+	r = r.WithContext(tools.WithSessionID(r.Context(), sessionID))
 	var req jsonRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusOK, rpcErr(nil, -32700, "parse error: "+err.Error()))

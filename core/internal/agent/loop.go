@@ -1992,13 +1992,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				"tool_call_id": tc.ID,
 			})
 
-			// Trim ONLY the transcript copy: the full output already went to
-			// the UI (EventToolResult) and to memory (PostToolUse hook) above.
-			// This keeps a fat result from being re-read in full on every
-			// subsequent LLM call this turn.
+			// Trim and mark ONLY the transcript copy: the full output already
+			// went to the UI (EventToolResult) and to memory (PostToolUse hook)
+			// above. Trimming keeps a fat result from being re-read in full on
+			// every subsequent LLM call this turn; wrapping marks results that
+			// are a third party's words so they can never read as the boss's.
+			// Order is load bearing — see wrapUntrusted.
 			s.Append(llm.Message{
 				Role:       llm.RoleTool,
-				Content:    trimToolResult(tc.Name, output),
+				Content:    wrapUntrusted(tc.Name, trimToolResult(tc.Name, output)),
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
 			})

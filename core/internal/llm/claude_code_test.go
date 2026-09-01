@@ -86,8 +86,13 @@ func TestClaudeCodeResumesOneSessionPerConversation(t *testing.T) {
 	if strings.Contains(second.Prompt, "first question") {
 		t.Error("a resumed turn replayed history Claude Code already holds")
 	}
-	if strings.TrimSpace(second.Prompt) != "second question" {
-		t.Errorf("resumed turn should send only the new message, got %q", second.Prompt)
+	if !strings.Contains(second.Prompt, "second question") {
+		t.Errorf("resumed turn dropped the boss's message: %q", second.Prompt)
+	}
+	// This turn's volatile context HAS to travel, or the brain stops seeing
+	// anything memory retrieved after the conversation started.
+	if !strings.Contains(second.Prompt, "<current_time>") {
+		t.Error("resumed turn dropped the per-turn context (retrieval, clock), so freshly recalled memory never reaches it")
 	}
 }
 

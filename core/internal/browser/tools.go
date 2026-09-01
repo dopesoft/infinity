@@ -119,7 +119,11 @@ func (t *OpenTool) Schema() map[string]any {
 func (t *OpenTool) Execute(ctx context.Context, input map[string]any) (string, error) {
 	chatID := tools.SessionIDFromContext(ctx)
 	url, _ := input["url"].(string)
-	info, err := t.Reg.Open(ctx, chatID, strings.TrimSpace(url))
+	url, err := guardAgentURL(url)
+	if err != nil {
+		return "", err
+	}
+	info, err := t.Reg.Open(ctx, chatID, url)
 	if err != nil {
 		return "", err
 	}
@@ -164,6 +168,10 @@ func (t *NavigateTool) Execute(ctx context.Context, input map[string]any) (strin
 	url, _ := input["url"].(string)
 	if strings.TrimSpace(url) == "" {
 		return "", errors.New("url is required")
+	}
+	url, err := guardAgentURL(url)
+	if err != nil {
+		return "", err
 	}
 	chatID := tools.SessionIDFromContext(ctx)
 	explicit, _ := input["session_id"].(string)

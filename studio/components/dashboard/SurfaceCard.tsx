@@ -55,6 +55,15 @@ export function SurfaceRow({
       ? item.metadata.from
       : "";
 
+  // Somebody tried to hide instructions in this message. Stamped on the row at
+  // capture time, in his English, already stripped from what Jarvis reads. It
+  // gets its own colour rather than joining the meta line because he should
+  // learn that someone tried, not scan for it among the timestamps.
+  const hiddenNotice =
+    typeof item.metadata?.hidden_content_notice === "string"
+      ? item.metadata.hidden_content_notice.trim()
+      : "";
+
   const actions = item.actions ?? [];
   const meta = [from, why, relTime(item.updatedAt ?? item.createdAt)]
     .filter(Boolean)
@@ -64,7 +73,14 @@ export function SurfaceRow({
     <ListRow
       tone={tone}
       title={item.title}
-      meta={<span suppressHydrationWarning>{meta}</span>}
+      meta={
+        <span suppressHydrationWarning>
+          {meta}
+          {hiddenNotice ? (
+            <span className="block text-warning">{hiddenNotice}</span>
+          ) : null}
+        </span>
+      }
       onClick={onClick}
     >
       {actions.length > 0 ? (

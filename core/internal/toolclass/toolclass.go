@@ -101,8 +101,49 @@ func isDataFetch(n string) bool {
 	if n == "read_email" {
 		return true
 	}
+	// The agentic browser and extension-registered HTTP tools are the same
+	// thing as an API read: whatever comes back is a third party's content, not
+	// a status the agent can tune with a better prompt. They were missing here,
+	// which meant a surprising web page counted as a curriculum signal.
+	if strings.HasPrefix(n, "browser_") || strings.HasPrefix(n, "ext_") {
+		return true
+	}
+	// Any remaining MCP tool (<server>__<tool>) is a third party's server
+	// answering. Safe as a catch-all because Classify tests isShellFileOp
+	// first, so the Mac coding bridge (claude_code__*) never reaches here — it
+	// reads the boss's own machine and is a different kind of output entirely.
+	if strings.Contains(n, "__") {
+		return true
+	}
 	return strings.Contains(n, "fetch") || strings.Contains(n, "httpfetch") ||
 		strings.Contains(n, "websearch") || strings.Contains(n, "web_search")
+}
+
+// statusOnly are the tools that classify as DataFetch by family but hand back a
+// one-line status rather than any third-party content. They are named here so
+// ReturnsExternalContent doesn't dress "browser closed" up as quoted material.
+var statusOnly = map[string]bool{
+	"browser_close":            true,
+	"browser_request_takeover": true,
+}
+
+// ReturnsExternalContent reports whether this tool's output is text written by
+// somebody other than the boss — an email body, a web page, a Slack message, an
+// API payload.
+//
+// It is the trigger for the untrusted-content boundary in the agent loop, and
+// it is a predicate here rather than a second classifier elsewhere because the
+// question it asks ("whose words are these?") is the same question Classify
+// already answers; a parallel copy would drift the first time a tool family is
+// added. Deliberately excludes claude_code__* and the native filesystem twins:
+// those read the boss's OWN machine and his own source, and wrapping his code
+// as somebody else's speech would be both wrong and noisy.
+func ReturnsExternalContent(tool string) bool {
+	n := strings.ToLower(strings.TrimSpace(tool))
+	if statusOnly[n] {
+		return false
+	}
+	return Classify(n) == ClassDataFetch
 }
 
 // EligibleForHighSurprise reports whether a surprising outcome for this tool is

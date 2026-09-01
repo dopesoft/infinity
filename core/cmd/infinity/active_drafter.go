@@ -44,6 +44,49 @@ func (d *activeModelProvider) resolve(ctx context.Context) (llm.Provider, string
 			}
 		}
 	}
+	return d.avoidHarnessBrain(p, model)
+}
+
+// avoidHarnessBrain keeps background cognition OFF the Claude Max brain.
+//
+// Everything that runs through here is bookkeeping: naming a session,
+// compressing observations into memories, scoring a prediction, classifying
+// an intent. Each is a short call that happens constantly and that the boss
+// never watches.
+//
+// Claude Max is the wrong shape for all of it. It is not a model endpoint, it
+// is Claude Code: every call launches a CLI process on a bridge and takes
+// seconds, and every call spends the WEEKLY LIMIT on his subscription. Naming
+// a chat would cost the same allowance as an hour of real work, and the
+// memory pipeline would fall minutes behind the conversation it is supposed
+// to be capturing.
+//
+// So when he picks Claude Max for CHAT, the machinery underneath quietly runs
+// on a metered brain instead. The substitution only happens when there IS an
+// alternative: with Claude Max as the only registered brain, bookkeeping runs
+// slowly rather than not at all, because memories that never form are worse
+// than memories that form late.
+//
+// The model id is dropped along with the vendor. Forcing "claude-opus-5" onto
+// DeepSeek would fail every one of these calls.
+func (d *activeModelProvider) avoidHarnessBrain(p llm.Provider, model string) (llm.Provider, string) {
+	if p == nil || p.Name() != llm.ProviderClaudeMax {
+		return p, model
+	}
+	if d.fallback != nil && d.fallback.Name() != llm.ProviderClaudeMax {
+		return d.fallback, ""
+	}
+	if d.registry != nil {
+		for _, name := range d.registry.Available() {
+			if name == llm.ProviderClaudeMax {
+				continue
+			}
+			if got, ok := d.registry.Get(name); ok {
+				return got, ""
+			}
+		}
+	}
+	// Nothing else is registered. Slow bookkeeping beats none.
 	return p, model
 }
 

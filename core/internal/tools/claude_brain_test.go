@@ -155,3 +155,74 @@ func TestClaudeAuthFailureNamesTheFix(t *testing.T) {
 		t.Error("an unrelated crash was misclassified as an auth failure")
 	}
 }
+
+// Token-level streaming is the whole reason --include-partial-messages is on.
+// These lines are copied from a real `claude -p` run, so if Claude Code
+// changes shape this test fails instead of the chat quietly going silent.
+func TestBrainStreamsRealTokenDeltas(t *testing.T) {
+	events := make(chan llm.StreamEvent, 32)
+	p := &brainPoll{out: events}
+	p.emit(strings.Join([]string{
+		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weighing it up"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello "}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"there friend"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tu_1","name":"Bash"}}}`,
+		// The assembled message repeats everything above. Consuming it too
+		// would print the whole reply a second time.
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hello there friend"}]}}`,
+	}, "\n"))
+	close(events)
+
+	var text, thinking strings.Builder
+	tools := 0
+	for ev := range events {
+		switch ev.Kind {
+		case llm.StreamText:
+			text.WriteString(ev.TextDelta)
+		case llm.StreamThinking:
+			thinking.WriteString(ev.ThinkingDelta)
+		case llm.StreamToolCall:
+			tools++
+			if ev.ToolCall.Name != "Bash" {
+				t.Errorf("tool call lost its name: %+v", ev.ToolCall)
+			}
+		}
+	}
+	if got := text.String(); got != "hello there friend" {
+		t.Errorf("text did not stream as deltas, got %q", got)
+	}
+	if thinking.String() != "weighing it up" {
+		t.Errorf("reasoning did not stream, got %q", thinking.String())
+	}
+	if tools != 1 {
+		t.Errorf("want 1 tool call surfaced, got %d", tools)
+	}
+	if p.streamed != "hello there friend" {
+		t.Errorf("streamed text not tracked, so finish() would print the reply twice: %q", p.streamed)
+	}
+}
+
+// A run that streamed nothing must still produce a reply. Better a late
+// answer than a blank turn.
+func TestBrainFallsBackWhenNothingStreamed(t *testing.T) {
+	events := make(chan llm.StreamEvent, 8)
+	p := &brainPoll{out: events, b: nil}
+	resp, err := p.finish(claudeResult{Result: "the answer", parsed: true})
+	close(events)
+	if err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if resp.Text != "the answer" {
+		t.Errorf("the reply was lost: %q", resp.Text)
+	}
+	var sawText bool
+	for ev := range events {
+		if ev.Kind == llm.StreamText && strings.Contains(ev.TextDelta, "the answer") {
+			sawText = true
+		}
+	}
+	if !sawText {
+		t.Error("nothing streamed and nothing was sent, so the boss would see a blank turn")
+	}
+}
