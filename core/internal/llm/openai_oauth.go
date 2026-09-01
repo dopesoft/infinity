@@ -1051,7 +1051,35 @@ func modelSupportsReasoning(model string) bool {
 // ModelSupportsReasoning is the exported capability check used by the steal-C
 // effort router (in serve.go) to clamp: a non-reasoning model gets no effort
 // hint, and is NEVER swapped for a reasoning-capable one to satisfy a level.
-func ModelSupportsReasoning(model string) bool { return modelSupportsReasoning(model) }
+//
+// It answers for EVERY brain, not just OpenAI's - which is the difference
+// between the router doing its job and not existing. The plan brain reports
+// itself as "opus[1m]", nothing here recognised it, so the router decided
+// Claude does not reason, sent no effort level, and left it deliberating at
+// whatever the box defaults to. On 2026-09-01 that meant a conversational
+// question about job-hunting criteria cost 9,200 tokens of thinking before a
+// 1,200-token answer, and the boss watched a spinner for 2m23s. Claude Code
+// takes --effort (low|medium|high|xhigh|max) and the launch script already
+// forwards it; it just was never given one.
+func ModelSupportsReasoning(model string) bool {
+	return modelSupportsReasoning(model) || IsClaudeModel(model)
+}
+
+// IsClaudeModel covers the ids the plan brain actually runs under: full ids
+// ("claude-opus-5"), the tier aliases Claude Code accepts ("opus", "sonnet"),
+// and either carrying a window marker ("opus[1m]").
+func IsClaudeModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, ":"); i >= 0 {
+		m = m[i+1:]
+	}
+	m = strings.SplitN(m, "[", 2)[0]
+	switch m {
+	case "opus", "sonnet", "haiku", "fable":
+		return true
+	}
+	return strings.HasPrefix(m, "claude-")
+}
 
 // looksLikeEffortRejection reports whether a 400 body specifically implicates
 // the reasoning.effort parameter, so steal C can retry once with effort omitted

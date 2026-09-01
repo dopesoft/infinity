@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -126,5 +127,48 @@ func TestClaudeCodeWithoutHarnessIsNotOffered(t *testing.T) {
 	}
 	if _, err := p.StreamCached(context.Background(), "", SystemPrompt{}, []Message{{Role: RoleUser, Content: "hi"}}, nil, nil); err == nil {
 		t.Fatal("want an error when there is no harness, got a silent success")
+	}
+}
+
+// rejectingStore is settings.Store's contract: it refuses any key that does
+// not start with "setting.". This is not a hypothetical - it is the real
+// store this provider is wired to in serve.go.
+type rejectingStore struct{ mem map[string]string }
+
+func (r rejectingStore) Get(_ context.Context, key string) (string, bool, error) {
+	v, ok := r.mem[key]
+	return v, ok, nil
+}
+func (r rejectingStore) Set(_ context.Context, key, value string) error {
+	if !strings.HasPrefix(key, "setting.") {
+		return fmt.Errorf("settings.Set: key %q must use \"setting.\" prefix", key)
+	}
+	r.mem[key] = value
+	return nil
+}
+
+// Why: the handle was written under a key the store rejects, and the error was
+// swallowed as best-effort. So it was never persisted, and every conversation
+// started COLD after a restart: the whole transcript re-read, the subscription's
+// prompt cache thrown away, the boss watching a spinner. A resumed turn finished
+// in 33s where a cold one took 1m36s and up. Nothing failed loudly enough for
+// anyone to notice for as long as this path has existed.
+func TestTheSessionHandleIsActuallyPersisted(t *testing.T) {
+	store := rejectingStore{mem: map[string]string{}}
+	brain := &fakeBrain{reply: "done", session: "claude-abc"}
+	p := NewClaudeCode(brain, store, "opus")
+
+	ctx := WithCacheKey(context.Background(), "session-persist")
+	if _, err := p.StreamCached(ctx, "", SystemPrompt{}, []Message{{Role: RoleUser, Content: "hi"}}, nil, nil); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	if len(store.mem) == 0 {
+		t.Fatal("the handle was never stored, so every turn after a restart starts cold")
+	}
+
+	// A fresh provider, as after a redeploy: only the store remains.
+	restarted := NewClaudeCode(&fakeBrain{}, store, "opus")
+	if got := restarted.resume(ctx, "session-persist", nil); got != "claude-abc" {
+		t.Fatalf("a restart lost the conversation's Claude session: got %q", got)
 	}
 }

@@ -280,9 +280,13 @@ func (c *ClaudeCode) store(ctx context.Context, sessionID string, h brainHandle)
 	c.warm[sessionID] = h
 	c.mu.Unlock()
 	if c.sessions != nil {
-		// Best effort: a failed write costs one cold start next turn, which
-		// is not worth failing the boss's answer over.
-		_ = c.sessions.Set(ctx, brainSessionKey(sessionID), h.encode())
+		// A failed write is not worth failing his answer over, but it is not
+		// nothing either: it costs a cold start, every turn, forever, and it
+		// is invisible unless something says so. Silence here hid a rejected
+		// key for as long as this path has existed.
+		if err := c.sessions.Set(ctx, brainSessionKey(sessionID), h.encode()); err != nil {
+			log.Printf("claude_max: could not remember the session handle (every turn will start cold): %v", err)
+		}
 	}
 }
 
@@ -388,8 +392,17 @@ func countConversation(messages []Message) int {
 	return n
 }
 
+// brainSessionKey names the conversation's stored Claude session.
+//
+// The "setting." prefix is REQUIRED: the store this writes through
+// (settings.Store, over infinity_meta) refuses any key without it. Without the
+// prefix every write was rejected, RememberSession swallowed the error as
+// best-effort, and the handle was never persisted at all - so every
+// conversation started COLD after a restart, re-reading the entire transcript
+// instead of resuming a warm session. The boss saw it as "why is he so slow":
+// a resumed turn finished in 33s where a cold one took 1m36s and up.
 func brainSessionKey(sessionID string) string {
-	return "claude_brain.session." + sessionID
+	return "setting.claude_brain.session." + sessionID
 }
 
 // buildPrompt renders what to actually say this turn.

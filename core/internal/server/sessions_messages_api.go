@@ -16,7 +16,10 @@ import (
 // renderer here, the sessions LIST in api.go, and the auto-namer's sweep all
 // read the SAME predicate. Aliased here to keep the query text below readable.
 const (
-	renderableHooksSQL      = sessions.RenderableHooksSQL
+	renderableHooksSQL = sessions.RenderableHooksSQL
+	// What the MODEL is replayed when a session is faulted back in. Same
+	// messages the transcript shows, minus the tool cards.
+	conversationHooksSQL    = sessions.ConversationHooksSQL
 	sessionHasRenderableSQL = sessions.HasRenderableSQL
 )
 
@@ -298,7 +301,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 			       COALESCE(payload::text, '') AS payload, created_at
 			FROM mem_observations
 			WHERE session_id = $1
-			  AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+			  AND hook_name IN (`+conversationHooksSQL+`)
 			  AND EXISTS (
 			    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
 			  )

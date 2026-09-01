@@ -1697,6 +1697,22 @@ func serveCmd() *cobra.Command {
 								in.CallRate, in.Ceiling = st.CallsInWindow, st.Ceiling
 							}
 							d := effortRouter.Resolve(ctx, in)
+							// "No level" is not a floor on the plan brain.
+							//
+							// For an API model, omitting the effort hint means
+							// the vendor's default, which is cheap. Claude Code
+							// has no such default: with no --effort it thinks as
+							// hard as the box is configured to, and on
+							// 2026-09-01 that meant a conversational question
+							// about job criteria cost 9,200 tokens of reasoning
+							// before a 1,200-token answer while the boss watched
+							// a spinner for 2m23s. So when the router declines to
+							// choose on an ordinary conversational turn, say low
+							// out loud. A hard question still escalates through
+							// the gauge, and a coding turn is untouched.
+							if d.Level == "" && !in.Coding && llm.IsClaudeModel(req.Model) {
+								return llm.EffortLow, "conversational"
+							}
 							return d.Level, d.Source
 						})
 						fmt.Printf("  effort: per-turn reasoning router wired (gauge+callrate+coding+pin)\n")
