@@ -9,6 +9,7 @@ import { fetchSessionMessages } from "@/lib/api";
 import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
+import { settleNestedOnly } from "@/lib/chat/settle";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
@@ -624,12 +625,20 @@ export function useChat() {
   // When the last coding job stops, close whatever it left forwarded but
   // unfinished. Server-side the job closes its own steps; this is the net for
   // when there is no server left to do it.
+  //
+  // IT TOUCHES NOTHING ELSE, and that is not a detail. The first version
+  // reused settleInFlight, which also clears `pending` on the assistant
+  // bubble — correct at the END of a turn, catastrophic in the MIDDLE of one.
+  // This fires whenever a coding run stops, which routinely happens with the
+  // turn still going: the bubble the deltas were streaming into stopped being
+  // pending, the reply that arrived after it had nowhere to land, and the boss
+  // watched a turn whose answer was already written in the database. "NOTHING
+  // IN MY STREAM SAYS ANY OF THAT." A mid-turn effect may only ever touch the
+  // rows it is actually about.
   useEffect(() => {
     if (codingLive) return;
-    setMessages((prev) => {
-      if (!prev.some((m) => m.toolCall?.nested && !m.toolResult && !m.interrupted)) return prev;
-      return settleInFlight(prev, Date.now(), false);
-    });
+    const now = Date.now();
+    setMessages((prev) => settleNestedOnly(prev, now));
   }, [codingLive]);
   const [usage, setUsage] = useState<Usage>({ input: 0, output: 0 });
   const [isStreaming, setIsStreaming] = useState(false);
