@@ -19,6 +19,7 @@ import { MemoryFooter } from "./MemoryFooter";
 import { ObjectViewer } from "./ObjectViewer";
 import { AddTodoModal } from "./AddTodoModal";
 import { PCCockpit } from "@/components/pursuits/pc/PCCockpit";
+import { JobHuntCockpit } from "@/components/pursuits/jh/JobHuntCockpit";
 import { updateTodo } from "@/lib/api";
 import { useDashboardPrefs } from "@/lib/dashboard/preferences";
 import { fetchDashboard, readDashboardCache } from "@/lib/dashboard/fetcher";
@@ -236,6 +237,7 @@ export function DashboardClient() {
   // the generic ObjectViewer. Held as {id,title} instead of the whole row so
   // the cockpit always reads its state from the server.
   const [pcPursuit, setPcPursuit] = useState<{ id: string; title: string } | null>(null);
+  const [jhPursuit, setJhPursuit] = useState<{ id: string; title: string } | null>(null);
   const { prefs } = useDashboardPrefs();
   const s = prefs.sections;
 
@@ -246,6 +248,10 @@ export function DashboardClient() {
   const openViewer = useCallback((item: DashboardItem) => {
     if (item.kind === "pursuit" && item.data.experience === "psycho_cybernetics") {
       setPcPursuit({ id: item.data.id, title: item.data.title });
+      return;
+    }
+    if (item.kind === "pursuit" && item.data.experience === "job_hunt") {
+      setJhPursuit({ id: item.data.id, title: item.data.title });
       return;
     }
     setViewing(item);
@@ -579,6 +585,20 @@ export function DashboardClient() {
             if (!next) setPcPursuit(null);
             // Closing the cockpit may have advanced the programme (a logged
             // session, a taken proof), so pull the dashboard back in step.
+            if (!next) void load({ background: true });
+          }}
+        />
+      ) : null}
+
+      {jhPursuit ? (
+        <JobHuntCockpit
+          pursuitId={jhPursuit.id}
+          title={jhPursuit.title}
+          open
+          onOpenChange={(next) => {
+            if (!next) setJhPursuit(null);
+            // Closing the cockpit may have moved a role between stages, so
+            // pull the dashboard back in step.
             if (!next) void load({ background: true });
           }}
         />

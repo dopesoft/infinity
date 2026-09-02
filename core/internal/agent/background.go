@@ -253,8 +253,8 @@ func (b *BackgroundAgent) Execute(ctx context.Context, input map[string]any) (st
 	runID := uuid.NewString()
 	if existing, busy := b.claimSlot(parentSession, runID); busy {
 		out, _ := json.Marshal(map[string]any{
-			"status":  "already_running",
-			"run_id":  existing,
+			"status": "already_running",
+			"run_id": existing,
 			"message": "A background build is already running for this conversation (run " + existing + "). Do NOT start another one: " +
 				"the same job twice just spends the boss's plan twice. Watch that run (watch_until on its run id) or wait for its result.",
 		})
@@ -686,6 +686,10 @@ func (b *BackgroundAgent) runOnClaudeCode(ctx context.Context, parentSession, ru
 		Bridge: mac,
 		JobID:  runID,
 		Task:   full,
+		// The same headline Execute put on the run row, so the plan this
+		// build's checklist mirrors into carries it too and the dock does not
+		// rename itself when the first checklist lands.
+		Label:  "Claude Code: " + backgroundLabel(task, ""),
 		Repo:   repo,
 		Model:  model,
 		Effort: effort,

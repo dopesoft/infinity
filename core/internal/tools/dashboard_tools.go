@@ -209,7 +209,9 @@ type pursuitCreate struct{ pool *pgxpool.Pool }
 func (t *pursuitCreate) Name() string { return "pursuit_create" }
 func (t *pursuitCreate) Description() string {
 	return "Create a Pursuit (habit, weekly cadence, or long-term goal) with a cadence tag. Use cadence='daily'/'weekly' for habits (track via pursuit_checkin) or 'goal'/'quarterly' for objectives with progress targets. " +
-		"Set experience='psycho_cybernetics' to create a coached 21-day identity programme instead of an ordinary pursuit: it opens a cockpit rather than a checkbox, and is read and written with pursuit_pc_state / pursuit_pc_write. Leave experience unset for everything else."
+		"Set experience='psycho_cybernetics' to create a coached 21-day identity programme instead of an ordinary pursuit: it opens a cockpit rather than a checkbox, and is read and written with pursuit_pc_state / pursuit_pc_write. " +
+		"Set experience='job_hunt' to create a search for a remote Head of Product or VP Product role: it opens a kanban pipeline of roles alongside a corpus of banked interview answers, the hiring managers and recruiters being contacted, and the resumes, cover letters and positioning reads generated per role. " +
+		"Leave experience unset for everything else."
 }
 func (t *pursuitCreate) Schema() map[string]any {
 	return map[string]any{
@@ -225,7 +227,7 @@ func (t *pursuitCreate) Schema() map[string]any {
 				"type":        "string",
 				"enum":        pc.ValidExperiences(),
 				"default":     pc.ExperienceOrdinary,
-				"description": "'ordinary' (default) for a normal habit or goal. 'psycho_cybernetics' for the coached 21-day identity programme.",
+				"description": "'ordinary' (default) for a normal habit or goal. 'psycho_cybernetics' for the coached 21-day identity programme. 'job_hunt' for the remote Head/VP Product search: a kanban pipeline of roles plus an interview answer corpus, outreach contacts, and per-role artifacts.",
 			},
 		},
 		"required": []string{"title"},
@@ -616,7 +618,10 @@ func (t *pursuitList) Description() string {
 		"title, cadence, experience, current_value, target_value, unit, " +
 		"streak_days, done_today. A row whose experience is 'psycho_cybernetics' " +
 		"is a coached programme: read and write it with pursuit_pc_state / " +
-		"pursuit_pc_write, never pursuit_checkin."
+		"pursuit_pc_write, never pursuit_checkin. A row whose experience is " +
+		"'job_hunt' is the remote Head/VP Product search, carrying a kanban " +
+		"pipeline of roles plus an interview answer corpus, outreach contacts " +
+		"and per-role artifacts: it is not a habit and has no check-in either."
 }
 func (t *pursuitList) Schema() map[string]any {
 	return map[string]any{

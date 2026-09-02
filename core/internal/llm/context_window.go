@@ -32,7 +32,7 @@ func ContextWindow(model string) int {
 	// 1M window was a fifth of its real size. Haiku is the one alias that
 	// really is 200K.
 	switch strings.SplitN(m, "[", 2)[0] {
-	case "opus", "sonnet":
+	case "opus", "sonnet", "fable":
 		return 1_000_000 // Claude 5 family: 1M as standard
 	case "haiku":
 		return 200_000 // Haiku 4.5

@@ -16,6 +16,8 @@ package pc
 import (
 	"strings"
 	"time"
+
+	"github.com/dopesoft/infinity/core/internal/pursuits/jh"
 )
 
 // ── Experience constants (on mem_pursuits.experience) ─────────────────────
@@ -33,8 +35,13 @@ const (
 
 // ValidExperiences enumerates every accepted mem_pursuits.experience value.
 // Kept here so the API and pursuit_create tool share one source of truth.
+//
+// Every bespoke experience has to appear in this list, whichever package owns
+// it, because pursuit_create validates against it. A value missing here is
+// rejected at creation no matter what the database constraint allows, so the
+// list mirrors the CHECK in 208_jobhunt_experience.sql exactly.
 func ValidExperiences() []string {
-	return []string{ExperienceOrdinary, ExperiencePsychoCybernetics}
+	return []string{ExperienceOrdinary, ExperiencePsychoCybernetics, jh.ExperienceJobHunt}
 }
 
 // IsValidExperience reports whether the supplied string is a known

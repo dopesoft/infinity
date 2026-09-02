@@ -2707,6 +2707,17 @@ func serveCmd() *cobra.Command {
 				fmt.Println("  coding: every step streams into the chat (Mac and cloud)")
 			}
 
+			// A nested Claude Code job's OWN checklist becomes the session's
+			// plan, through the same seam `todo_write` writes: one substrate,
+			// so a coding build draws the identical dock, checklist and count
+			// as every other brain instead of the activity ramp the run row
+			// carries. On the RUNNER, so `code_agent` and `background_build`
+			// on the Mac are both covered by construction (Rule #1c).
+			if claudeRunner != nil && pool != nil {
+				claudeRunner.AttachPlanSink(nestedPlanSink{plans: plan.NewStore(pool)})
+				fmt.Println("  coding: Claude Code's own checklist renders as the session plan")
+			}
+
 			// Late-bind the browser frame sink now that the server (which
 			// owns the per-session WS broadcaster) exists. Frames stream to
 			// the chat session's Studio tab for the whole browser session.

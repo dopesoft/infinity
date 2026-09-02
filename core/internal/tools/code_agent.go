@@ -576,6 +576,10 @@ type ClaudeCodeRunner struct {
 	// steps forwards the nested job's own tool calls into the parent chat.
 	// Optional; without it the job is as opaque as it used to be.
 	steps StepSink
+	// plans mirrors the nested job's own checklist onto the parent chat's
+	// plan, so a Claude Code build draws the same dock as every other brain.
+	// Optional; without it the dock falls back to run telemetry.
+	plans NestedPlanSink
 }
 
 // AttachLiveRunLookup installs the one-coding-job-per-conversation guard.
@@ -625,6 +629,11 @@ type ClaudeCodeJob struct {
 	Bridge bridge.Bridge
 	JobID  string
 	Task   string
+	// Label is the run row's headline ("Claude Code: <task>"). It becomes the
+	// title of the plan this job's checklist mirrors into, so the dock keeps
+	// the headline it was already showing instead of renaming itself the
+	// moment the first checklist lands.
+	Label string
 	// Repo is the working directory (Mac or cloud-flavored path; normalized
 	// here). It must name one real git repository: empty, missing, or the
 	// ~/Dev umbrella is refused before launch, never defaulted.
@@ -846,6 +855,8 @@ func (r *ClaudeCodeRunner) Run(ctx context.Context, job ClaudeCodeJob) (string, 
 		sink:          r.steps,
 		parentSession: parent,
 		sinkStamp:     nestedStepPrefix(job.JobID),
+		plans:         r.plans,
+		label:         strings.TrimSpace(job.Label),
 	}
 	inline := job.Inline
 	if inline == nil {
@@ -928,6 +939,15 @@ type claudePoll struct {
 	// id prefix that keeps two concurrent jobs from colliding on a nested id.
 	parentSession string
 	sinkStamp     string
+	// plans mirrors the nested job's TodoWrite list onto that chat's plan;
+	// label is the headline the mirrored plan carries. planPrint is the last
+	// checklist written, so an unchanged list is not rewritten every poll, and
+	// planDeclined latches once the conversation turns out to own a plan this
+	// job did not author (see syncNestedPlan).
+	plans        NestedPlanSink
+	label        string
+	planPrint    string
+	planDeclined bool
 	// sunk is the set of nested call ids already forwarded (call half and
 	// result half keyed separately), so a line read twice can never produce a
 	// duplicate row. sunkAt / sunkTool carry a call's start time and name
@@ -1094,6 +1114,11 @@ func (p *claudePoll) wait(ctx, inline context.Context, detach <-chan struct{}, k
 			// the result first would show the boss a job that finished having
 			// visibly done nothing at all.
 			p.forwardSteps(ctx, r.fresh)
+			// And the job's own checklist onto the chat's plan, so the dock
+			// above the composer shows real steps and a real denominator
+			// instead of the activity ramp. Same slice, same poll, same
+			// guarantee: neither depends on the model narrating anything.
+			p.syncNestedPlan(ctx, r.fresh)
 			if strings.Contains(r.head, "DONE:") {
 				out, err := p.finish(ctx, exitCodeFromDone(r.head), false)
 				return out, err, waitFinished
@@ -1177,6 +1202,10 @@ func (p *claudePoll) finish(ctx context.Context, exitCode int, reap bool) (strin
 		return "", err
 	}
 	out, ierr := p.interpret(t, exitCode)
+	// The job reached a verdict, so the plan it authored must not stay open.
+	// Deterministic (Rule #1b): it does not depend on Claude's last TodoWrite
+	// having ticked every box, which a job that errors out never does.
+	p.settleNestedPlan(ctx, ierr != nil, out)
 	p.cleanup()
 	return out, ierr
 }
@@ -1202,6 +1231,9 @@ func (p *claudePoll) stopped() string {
 	}
 	fmt.Fprintf(&b, "\n\nAny edits it had already made are uncommitted in %s — check git_status/git_diff before touching that repo. "+
 		"To pick the job back up, call code_agent again with what is left to do.", repoOrRoot(p.repo))
+	// Stopped is a verdict too: the step in flight failed and the plan pauses,
+	// rather than the dock going on showing a checklist nothing is working.
+	p.settleNestedPlan(context.Background(), true, "Stopped before it finished.")
 	p.cleanup()
 	return b.String()
 }
@@ -1851,7 +1883,7 @@ type claudeResult struct {
 	// them (brainUsage). Raw rather than typed so a new field Anthropic adds
 	// to the usage object never breaks the decode of the result itself.
 	RawUsage json.RawMessage `json:"usage"`
-	parsed     bool
+	parsed   bool
 }
 
 // claudeTerminalResult finds Claude's TERMINAL result event in a stream-json
@@ -2144,6 +2176,7 @@ func (t *codeAgent) Execute(ctx context.Context, in map[string]any) (string, err
 		Bridge:          b,
 		JobID:           jobID,
 		Task:            task,
+		Label:           label,
 		Repo:            repo,
 		Model:           model,
 		Effort:          effort,

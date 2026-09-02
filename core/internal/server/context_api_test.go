@@ -83,6 +83,16 @@ func TestContextWindowFor(t *testing.T) {
 			model string
 			want  int
 		}{"haiku", 200_000},
+		// Fable 5.1, shipped 2026-09-01. A new model in the family must not
+		// fall through to the 200K default and under-report his window.
+		struct {
+			model string
+			want  int
+		}{"claude-fable-5-1", 1_000_000},
+		struct {
+			model string
+			want  int
+		}{"fable", 1_000_000},
 	)
 	for _, c := range cases {
 		if got := llm.ContextWindow(c.model); got != c.want {

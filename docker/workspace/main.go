@@ -107,7 +107,8 @@ func main() {
 	mux.HandleFunc("/supervisor/active", auth(handleSupervisorActive))
 	mux.HandleFunc(previewPrefix+"/", auth(handlePreview))
 
-	go ptyJanitor() // reap idle interactive terminals
+	go ptyJanitor()      // reap idle interactive terminals
+	startClaudeUpdater() // keep this box's Claude Code current on its own
 
 	addr := ":" + envDefault("PORT", "8080")
 	infoLog.Printf("workspace bridge: listening on %s (root=%s)", addr, workspaceRoot)
@@ -316,6 +317,11 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 		"service":     "workspace-bridge",
 		"git_sha":     strings.TrimSpace(os.Getenv("RAILWAY_GIT_COMMIT_SHA")),
 		"deployed_at": strings.TrimSpace(os.Getenv("RAILWAY_DEPLOYMENT_CREATED_AT")),
+		// Which Claude Code this box can actually run. It decides which models
+		// work here, and it used to be knowable only by shelling into the
+		// container: the boss had a model his Mac could run and this box could
+		// not, with no way to see the difference. Now it is one GET.
+		"claude_version": claudeVersion(),
 	})
 }
 

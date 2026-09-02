@@ -58,6 +58,11 @@ export const VENDORS: VendorEntry[] = [
     auth: "api_key",
     models: [
       {
+        id: "claude-fable-5-1",
+        label: "Fable 5.1",
+        tagline: "newest, and the hardest work",
+      },
+      {
         id: "claude-fable-5",
         label: "Fable 5",
         tagline: "most capable, longest-horizon",
@@ -179,9 +184,14 @@ export const VENDORS: VendorEntry[] = [
     // has to reason about before he can pick, and he asked for a list he can
     // read top to bottom.
     models: [
+      // Verified against the plan before being listed: `claude -p --model
+      // claude-fable-5-1` answers in 2.6s on the Mac bridge. It needed Claude
+      // Code 2.1.251+, and the bridge was on 2.1.139 with the auto-updater
+      // switched off, so listing it before updating would have 400'd every
+      // turn. A picker entry that cannot run is a landmine; check first.
       {
-        id: "claude-fable-5",
-        label: "Fable 5",
+        id: "claude-fable-5-1",
+        label: "Fable 5.1",
         tagline: "the hardest and longest-running work",
       },
       {

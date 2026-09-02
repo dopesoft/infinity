@@ -19,7 +19,7 @@ export type PursuitCadence =
 /** Which app a pursuit opens into. "ordinary" is the default habit/goal row
  *  rendered by PursuitsCard + ObjectViewer. A non-ordinary value routes the
  *  tap into that experience's own full-screen cockpit. */
-export type PursuitExperience = "ordinary" | "psycho_cybernetics";
+export type PursuitExperience = "ordinary" | "psycho_cybernetics" | "job_hunt";
 
 export type Pursuit = {
   id: string;

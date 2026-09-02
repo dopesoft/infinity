@@ -160,12 +160,51 @@ type ChecklistItem struct {
 	Status string
 }
 
+// ErrPlanNotOwned is returned when a NESTED job tries to write a checklist
+// onto a plan it did not author. The conversation's own plan always wins: a
+// delegated build must never replace the steps the boss is watching.
+var ErrPlanNotOwned = errors.New("this session's active plan belongs to someone else")
+
 // SyncChecklist upserts the session's active plan to match a flat checklist:
 // it keeps the existing active/paused plan (preserving its id so the dashboard
 // card + chat dock don't flicker) and replaces its steps to mirror the list,
 // or creates a new plan when none is active. This is the unification seam -
 // todo_write maps onto it so its checklist and a plan are the same thing.
+//
+// The CONVERSATION owns what it writes here (owner_run_id NULL), and may take
+// a plan over from a nested job: the boss's brain outranks a delegated build.
 func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, items []ChecklistItem) (*Plan, error) {
+	return s.syncChecklist(ctx, sessionID, title, items, "")
+}
+
+// SyncNestedChecklist mirrors a NESTED agent's own checklist onto the session's
+// plan - the TodoWrite list Claude Code keeps inside `claude -p` on the Mac.
+//
+// It is the SAME seam todo_write uses, and that is the whole point: a coding
+// job now draws the identical dock, checklist and count as any other brain,
+// instead of the meaningless activity-ramp percentage the run row carries.
+//
+// runID is the mem_runs row of the coding job, and it is required. A nested
+// job may only replace steps on a plan IT created (owner_run_id = runID); if
+// the session already has a plan somebody else laid out - the boss's own
+// plan_create, or a second concurrent job - this returns ErrPlanNotOwned and
+// changes nothing. Ownership is a MECHANIC (Rule #1b): it is enforced in the
+// same transaction as the write, not asked for in a prompt.
+func (s *Store) SyncNestedChecklist(ctx context.Context, sessionID, runID, title string, items []ChecklistItem) (*Plan, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, errors.New("nested checklist needs the owning run id")
+	}
+	// owner_run_id is a uuid column. A job that could not book a run row falls
+	// back to a synthetic id ("job-<nanos>"), and casting that would be a raw
+	// 22P02 every poll: refuse in words the caller can act on instead.
+	if _, err := uuid.Parse(runID); err != nil {
+		return nil, fmt.Errorf("nested checklist: %q is not a run id", runID)
+	}
+	return s.syncChecklist(ctx, sessionID, title, items, runID)
+}
+
+func (s *Store) syncChecklist(ctx context.Context, sessionID, title string, items []ChecklistItem, ownerRun string) (*Plan, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("plan store not configured")
 	}
@@ -189,16 +228,25 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 	}
 	defer tx.Rollback(ctx)
 
-	var planID string
+	var planID, existingOwner string
 	err = tx.QueryRow(ctx, `
-		SELECT id::text FROM mem_plans
+		SELECT id::text, COALESCE(owner_run_id::text, '') FROM mem_plans
 		 WHERE session_id = $1::uuid AND status IN ('active','paused')
 		 ORDER BY updated_at DESC LIMIT 1
-	`, safeID).Scan(&planID)
+	`, safeID).Scan(&planID, &existingOwner)
 	if errors.Is(err, pgx.ErrNoRows) {
 		planID = ""
 	} else if err != nil {
 		return nil, err
+	}
+
+	// The ownership gate. A nested job writes ONLY the plan it authored; the
+	// alternative is a delegated build silently deleting the checklist the
+	// boss's own brain just laid out, because SyncChecklist replaces the whole
+	// step set. The conversation (ownerRun "") is never blocked - it may adopt
+	// a plan a nested job started, and takes ownership on the way through.
+	if ownerRun != "" && planID != "" && existingOwner != ownerRun {
+		return nil, ErrPlanNotOwned
 	}
 
 	if planID == "" {
@@ -207,14 +255,19 @@ func (s *Store) SyncChecklist(ctx context.Context, sessionID, title string, item
 			t = "Checklist"
 		}
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO mem_plans (session_id, title, goal, status, current_step)
-			VALUES (NULLIF($1,'')::uuid, $2, '', 'active', 0)
+			INSERT INTO mem_plans (session_id, title, goal, status, current_step, owner_run_id)
+			VALUES (NULLIF($1,'')::uuid, $2, '', 'active', 0, NULLIF($3,'')::uuid)
 			RETURNING id::text
-		`, safeID, t).Scan(&planID); err != nil {
+		`, safeID, t, ownerRun).Scan(&planID); err != nil {
 			return nil, fmt.Errorf("create checklist plan: %w", err)
 		}
-	} else if title != "" {
-		if _, err := tx.Exec(ctx, `UPDATE mem_plans SET title = $2 WHERE id = $1::uuid`, planID, title); err != nil {
+	} else if title != "" || existingOwner != ownerRun {
+		if _, err := tx.Exec(ctx, `
+			UPDATE mem_plans
+			   SET title = COALESCE(NULLIF($2,''), title),
+			       owner_run_id = NULLIF($3,'')::uuid
+			 WHERE id = $1::uuid
+		`, planID, title, ownerRun); err != nil {
 			return nil, err
 		}
 	}
@@ -1096,6 +1149,50 @@ func (s *Store) SettlePlanForSession(ctx context.Context, sessionID, status, sum
 	if err != nil || p == nil {
 		return nil, err
 	}
+	return s.settlePlan(ctx, p, status, summary)
+}
+
+// SettleOwnedPlan is the same deterministic settle, scoped to the plan a
+// NESTED run authored (owner_run_id = runID) rather than to a session.
+//
+// It exists because a plan mirrored from Claude Code's own checklist must not
+// be left 'active' with pending steps once the job is over: the dock would go
+// on showing a checklist for work that ended, which is the stale-spinner shape
+// of a false green. Scoped by OWNER, never by session, so a job that declined
+// to mirror (the conversation owns a plan of its own) can never settle the
+// boss's plan on its way out.
+//
+// No-op when this run owns no live plan - a trivial job that never wrote a
+// checklist, or one whose final list already drove the plan to completed.
+func (s *Store) SettleOwnedPlan(ctx context.Context, runID, status, summary string) (*Plan, error) {
+	runID = strings.TrimSpace(runID)
+	if s == nil || s.pool == nil || runID == "" {
+		return nil, nil
+	}
+	if _, err := uuid.Parse(runID); err != nil {
+		return nil, nil // never booked a run row, so it owns no plan
+	}
+	var planID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text FROM mem_plans
+		 WHERE owner_run_id = $1::uuid AND status IN ('active','paused')
+		 ORDER BY updated_at DESC LIMIT 1
+	`, runID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	p, err := s.Get(ctx, planID)
+	if err != nil || p == nil {
+		return nil, err
+	}
+	return s.settlePlan(ctx, p, status, summary)
+}
+
+// settlePlan is the shared body: success drives every non-terminal step to
+// done, failure fails the one in flight and pauses the plan.
+func (s *Store) settlePlan(ctx context.Context, p *Plan, status, summary string) (*Plan, error) {
 	status = NormalizeStepStatus(status)
 
 	if status == StepFailed {
