@@ -669,14 +669,39 @@ func (p *brainPoll) toolFor(callID string) string {
 	return p.toolNames[callID]
 }
 
+// brainSendWait caps how long one event waits on a full channel. The consumer
+// is the agent loop, which drains until the stream closes, so this only ever
+// absorbs a burst - it is not a deadline for the turn.
+const brainSendWait = 5 * time.Second
+
+// send hands one event to the agent loop, waiting for room rather than
+// throwing the event away.
+//
+// The old version dropped on a full buffer, and this brain is the one that
+// fills a buffer. It does not stream at writing pace: it reads the transcript
+// file on a 300 ms poll and emits everything new in one go, so a single poll
+// can push a hundred events at a consumer holding sixty-four slots. Everything
+// past the sixty-fourth vanished - including the StreamComplete that finish()
+// sends, which is the frame that tells the browser the turn is over.
+//
+// That is why the boss had to refresh to see any of it, and why only THIS
+// brain behaved that way. See emit() in internal/agent/loop.go for the same
+// fault one layer down and the same fix.
 func (p *brainPoll) send(ev llm.StreamEvent) {
 	if p.out == nil {
 		return
 	}
 	select {
 	case p.out <- ev:
+		return
 	default:
-		// A consumer that has stopped reading must never wedge the poll loop.
+	}
+	t := time.NewTimer(brainSendWait)
+	defer t.Stop()
+	select {
+	case p.out <- ev:
+	case <-t.C:
+		brainInfoLog.Printf("claude_max: consumer stalled %s, dropped a %s event", brainSendWait, ev.Kind)
 	}
 }
 

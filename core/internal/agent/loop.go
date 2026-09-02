@@ -2448,13 +2448,50 @@ func plural(n int) string {
 	return "s"
 }
 
+// emitWait caps how long a producer waits on a full channel before it gives
+// up on ONE event. Long enough to ride out any real consumer hiccup, short
+// enough that a genuinely dead reader cannot strand a turn forever.
+const emitWait = 5 * time.Second
+
+// emit hands one event to the consumer. It DROPS only as a last resort, and
+// says so out loud when it does.
+//
+// This used to be a bare `select { case ch <- ev: default: }` - throw the
+// event away the instant the buffer was full - and that is the bug behind
+// "why must I always refresh to see what the agent does" (2026-09-01).
+//
+// The reason it only ever bit the Claude Max brain: every other provider
+// streams at the pace the model writes, a few events at a time, so a 128-slot
+// buffer is never close to full. The Claude brain reads its transcript on a
+// 300ms poll and emits a whole batch at once - one real turn of the boss's
+// carried 44 tool-argument deltas, 18 text deltas and 14 block boundaries in
+// single bursts. The buffer filled, the remainder went in the bin, and the
+// EventComplete at the end of the turn went with it. So the answer existed,
+// was written to the database, and the browser sat spinning on a turn that
+// had been over for twenty minutes: it never got told.
+//
+// A dropped delta is a cosmetic loss. A dropped completion is a lie. Neither
+// is worth the microsecond the old version saved, and both consumers on the
+// live path (the loop's stream reader, ws.runTurn) drain until close, so
+// waiting cannot deadlock them.
 func emit(ch chan<- RunEvent, ev RunEvent) {
 	if ch == nil {
 		return
 	}
+	// Fast path: room in the buffer, no timer, no allocation.
 	select {
 	case ch <- ev:
+		return
 	default:
+	}
+	t := time.NewTimer(emitWait)
+	defer t.Stop()
+	select {
+	case ch <- ev:
+	case <-t.C:
+		// Never silent. A consumer this far behind is a real fault, and the
+		// boss is about to see a turn that looks stuck.
+		log.Printf("agent: consumer stalled %s, dropped a %s event for session %s", emitWait, ev.Kind, ev.SessionID)
 	}
 }
 
