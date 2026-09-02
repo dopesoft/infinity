@@ -30,6 +30,10 @@ function statusTone(status: Pursuit["status"]): RowTone {
   return "default";
 }
 
+function isCoached(p: Pursuit): boolean {
+  return !!p.experience && p.experience !== "ordinary";
+}
+
 export function PursuitsCard({
   pursuits,
   onOpen,
@@ -39,8 +43,16 @@ export function PursuitsCard({
   onOpen: (item: DashboardItem) => void;
   onToggleHabit: (id: string) => void;
 }) {
-  const habits = pursuits.filter((p) => p.cadence === "daily" || p.cadence === "weekly");
-  const goals = pursuits.filter((p) => p.cadence === "goal" || p.cadence === "quarterly");
+  // A pursuit with a bespoke experience is neither a habit nor a goal: it is a
+  // workspace you open. It gets the same row treatment as any other coached
+  // pursuit regardless of its cadence, because a progress bar would describe a
+  // thing the cockpit, not this card, is actually tracking.
+  const habits = pursuits.filter(
+    (p) => isCoached(p) || p.cadence === "daily" || p.cadence === "weekly",
+  );
+  const goals = pursuits.filter(
+    (p) => !isCoached(p) && (p.cadence === "goal" || p.cadence === "quarterly"),
+  );
 
   return (
     <BoardCard
@@ -89,7 +101,7 @@ function HabitRow({
   // tick box here. Leaving one would let a tap write done_today behind the
   // programme's back, and the row would then claim a day was complete that
   // the cockpit had never seen.
-  const coached = !!p.experience && p.experience !== "ordinary";
+  const coached = isCoached(p);
   const meta = [
     coached ? "programme" : p.cadence,
     !coached && p.streakDays ? `${p.streakDays}d streak` : "",
