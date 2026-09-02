@@ -347,6 +347,13 @@ type brainPoll struct {
 	// so the answer is never printed twice, and so a turn that streamed
 	// nothing still produces a reply.
 	streamed string
+	// sentCalls are the tool calls already posted from the LIVE path, so the
+	// assembled message that repeats them cannot double-post.
+	sentCalls map[string]bool
+	// openBlock is the tool_use block currently being written, so an
+	// arguments delta knows which call it belongs to (the delta itself
+	// carries no id).
+	openBlock string
 }
 
 // wait polls to completion, emitting events as the stream produces them.
@@ -500,6 +507,9 @@ type brainEvent struct {
 			Type     string `json:"type"`
 			Text     string `json:"text"`
 			Thinking string `json:"thinking"`
+			// PartialJSON is the tool's arguments arriving as the model
+			// writes them, before the call is complete.
+			PartialJSON string `json:"partial_json"`
 		} `json:"delta"`
 		ContentBlock struct {
 			Type string `json:"type"`
@@ -552,6 +562,31 @@ func (p *brainPoll) emit(fresh string) {
 			continue
 		}
 		switch ev.Event.Type {
+		case "content_block_start":
+			// THE TOOL, THE MOMENT IT IS DECIDED. Claude Code announces a
+			// tool_use block with its name before it writes a single argument,
+			// and this path used to ignore that and wait for the ASSEMBLED
+			// message instead - which only lands once the whole block is
+			// finished. So the boss watched a bare "Thinking" for minutes
+			// while Claude was telling us, second by second, that it was
+			// running `git log` and reading his migrations. His words:
+			// "so i just sit there watch it reasoning with no context??
+			// unlike my other models". On every other brain the row appears
+			// as the model writes the call, because our own loop streams it.
+			// Now this one does too.
+			cb := ev.Event.ContentBlock
+			if cb.Type != "tool_use" || cb.ID == "" || cb.Name == "" {
+				continue
+			}
+			name := nestedToolName(cb.Name)
+			p.noteTool(cb.ID, name)
+			p.markSent(cb.ID)
+			p.send(llm.StreamEvent{Kind: llm.StreamToolCall, ToolCall: &llm.ToolCall{
+				ID: cb.ID, Name: name, Input: map[string]any{},
+			}})
+			p.openBlock = cb.ID
+		case "content_block_stop":
+			p.openBlock = ""
 		case "content_block_delta":
 			switch ev.Event.Delta.Type {
 			case "text_delta":
@@ -563,12 +598,30 @@ func (p *brainPoll) emit(fresh string) {
 				if ev.Event.Delta.Thinking != "" {
 					p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingDelta: ev.Event.Delta.Thinking})
 				}
+			case "input_json_delta":
+				// The arguments as they are typed, so the row fills in with
+				// the actual command / file instead of sitting there named but
+				// blank. Same event every other brain already emits.
+				if ev.Event.Delta.PartialJSON != "" && p.openBlock != "" {
+					p.send(llm.StreamEvent{
+						Kind:       llm.StreamToolInputDelta,
+						ToolCallID: p.openBlock,
+						ToolName:   p.toolFor(p.openBlock),
+						InputDelta: ev.Event.Delta.PartialJSON,
+					})
+				}
 			}
 		}
 	}
 
 	// Both halves of every tool the brain ran itself, in order.
 	for _, n := range parseNestedEvents(fresh) {
+		if !n.result && p.alreadySent(n.callID) {
+			// Already on his screen from content_block_start, with its
+			// arguments streamed in. The assembled copy carries the same id,
+			// so re-sending it would be a duplicate row.
+			continue
+		}
 		if n.result {
 			p.send(llm.StreamEvent{
 				Kind:       llm.StreamToolResult,
@@ -587,6 +640,18 @@ func (p *brainPoll) emit(fresh string) {
 		}})
 	}
 }
+
+// markSent / alreadySent remember which calls went out from the LIVE path
+// (content_block_start), so the assembled message that repeats them later
+// cannot post a second row for the same work.
+func (p *brainPoll) markSent(callID string) {
+	if p.sentCalls == nil {
+		p.sentCalls = map[string]bool{}
+	}
+	p.sentCalls[callID] = true
+}
+
+func (p *brainPoll) alreadySent(callID string) bool { return p.sentCalls[callID] }
 
 // noteTool / toolFor remember which tool a call id belongs to, because the
 // result half of the pair carries only the id. Bounded by the turn.
