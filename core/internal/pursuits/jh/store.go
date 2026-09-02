@@ -362,7 +362,7 @@ func (s *Store) UpsertRole(ctx context.Context, pursuitID string, in RoleInput) 
 		        $7, $8, NULLIF($9, ''), $10,
 		        $11, NULLIF($12, ''), $13, $14::jsonb,
 		        $15, NULLIF($16, ''), NULLIF($17, ''))
-		ON CONFLICT (source, external_id) DO UPDATE SET
+		ON CONFLICT (pursuit_id, source, external_id) DO UPDATE SET
 			company       = EXCLUDED.company,
 			role_title    = EXCLUDED.role_title,
 			url           = COALESCE(EXCLUDED.url, mem_jobhunt_roles.url),
