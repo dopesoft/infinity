@@ -242,11 +242,25 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
   const [raw, setRaw] = React.useState(false);
 
   // Follow the self-opening rule until the boss overrides it — then his choice
-  // wins for the rest of the row's life (a settling write must not slam shut
-  // while he is reading the diff).
+  // wins for the rest of the row's life.
+  //
+  // The rule may only ever OPEN a row. It used to run both ways: a write
+  // opened itself while running, and `shouldOpen` went false the instant the
+  // next step landed, so the diff slammed shut the moment it finished - he
+  // never got to read what was written and lived in the Changes tab instead
+  // (2026-09-02). A finished diff is the one thing in a build worth looking
+  // at, so a write that opened itself stays open until he closes it. Errors
+  // and approvals already stay. Only a thinking trace folds itself away once
+  // it settles, as the old ThinkingBlock always did: the ledger's summary
+  // line owns "he thought", and a settled trace is not what he came to read.
   React.useEffect(() => {
-    if (!touched) setOpen(shouldOpen);
-  }, [shouldOpen, touched]);
+    if (touched) return;
+    if (shouldOpen) {
+      setOpen(true);
+      return;
+    }
+    if (item.kind === "thought") setOpen(false);
+  }, [shouldOpen, touched, item.kind]);
 
   const inFlight = item.status === "running" || (item.status === "approval" && item.awaiting);
   const tick = useNow(inFlight);

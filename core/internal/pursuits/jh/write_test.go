@@ -166,3 +166,33 @@ func TestWriteActionsAreConsistent(t *testing.T) {
 		t.Fatalf("WriteActions has %d entries; the API and the tool schema both enumerate them, so a new one needs a route and a description too", len(WriteActions()))
 	}
 }
+
+// Correcting a card is addressed by role_id, and the source that was mandatory
+// when the posting was first filed must not be mandatory again. Demanding it
+// invites the caller to guess one, which would overwrite the true source with a
+// fabrication - the opposite of what a correction is for. Supplying a bad one
+// is still rejected, so the relaxation cannot smuggle in an invalid value.
+func TestValidateRoleSourceOnlyWhenFilingSomethingNew(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     WriteRequest
+		wantErr bool
+	}{
+		{"filing a new role with no source", WriteRequest{Company: "Acme", RoleTitle: "Head of Product"}, true},
+		{"filing a new role with a good source", WriteRequest{Company: "Acme", RoleTitle: "Head of Product", Source: SourceLinkedIn}, false},
+		{"correcting a card without naming a source", WriteRequest{RoleID: "r", URL: "https://example.com/jobs/1"}, false},
+		{"correcting a card and restating a good source", WriteRequest{RoleID: "r", Source: SourceLinkedIn}, false},
+		{"correcting a card with a bogus source", WriteRequest{RoleID: "r", Source: "carrier-pigeon"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.validate(ActionRole)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected the write to be rejected, but it was accepted")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected the write to be accepted, got: %v", err)
+			}
+		})
+	}
+}

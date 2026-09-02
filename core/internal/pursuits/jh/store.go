@@ -390,6 +390,90 @@ func (s *Store) UpsertRole(ctx context.Context, pursuitID string, in RoleInput) 
 	return r, nil
 }
 
+// PatchRole corrects a card already on the board, addressed by its own id
+// rather than by the posting's identity.
+//
+// UpsertRole cannot do this job. It is keyed on the
+// (pursuit_id, source, external_id) constraint, and Postgres does not treat
+// NULLs as equal, so a row filed without an external_id can never be matched by
+// a later write: supplying the real posting id produces a SECOND card rather
+// than correcting the first. That is exactly the state the early sweeps left
+// the board in, and it is also the shape of every hand correction - "this band
+// is wrong", "here is the real link" - where the caller knows which card he
+// means and nothing about how it was originally found.
+//
+// Only the columns actually supplied move. Blank text and nil numbers mean
+// "leave this alone", never "clear it", so a caller fixing one field cannot
+// silently blank the rest of the card.
+//
+// Stage is absent by design, for the same reason UpsertRole refuses it: where a
+// card sits in the pipeline is a decision, and SetRoleStage is the one place it
+// is made. Correcting a salary band must never move a card he has applied to.
+//
+// Scoped to the pursuit as well as the id, so the authorisation performed in
+// Header is the authorisation that applies - an update keyed on the role id
+// alone would let a caller holding one valid job_hunt pursuit edit another
+// board's card.
+func (s *Store) PatchRole(ctx context.Context, pursuitID, roleID string, in RoleInput) (Role, error) {
+	if _, err := s.Header(ctx, pursuitID); err != nil {
+		return Role{}, err
+	}
+	roleID = strings.TrimSpace(roleID)
+	if roleID == "" {
+		return Role{}, errors.New("role_id required")
+	}
+	if source := strings.TrimSpace(in.Source); source != "" && !IsValidRoleSource(source) {
+		return Role{}, fmt.Errorf("unknown role source %q, expected one of: %s",
+			in.Source, strings.Join(RoleSources(), ", "))
+	}
+	if err := checkScore("fit_score", in.FitScore); err != nil {
+		return Role{}, err
+	}
+	if err := checkScore("ghost_score", in.GhostScore); err != nil {
+		return Role{}, err
+	}
+
+	flags, err := json.Marshal(nonNilFlags(in.GhostFlags))
+	if err != nil {
+		return Role{}, fmt.Errorf("encode ghost_flags: %w", err)
+	}
+
+	r, err := scanRole(s.pool.QueryRow(ctx, `
+		UPDATE mem_jobhunt_roles SET
+			company       = COALESCE(NULLIF($3, ''),  company),
+			role_title    = COALESCE(NULLIF($4, ''),  role_title),
+			source        = COALESCE(NULLIF($5, ''),  source),
+			url           = COALESCE(NULLIF($6, ''),  url),
+			location      = COALESCE(NULLIF($7, ''),  location),
+			comp_min      = COALESCE($8,              comp_min),
+			comp_max      = COALESCE($9,              comp_max),
+			comp_text     = COALESCE(NULLIF($10, ''), comp_text),
+			posted_at     = COALESCE($11,             posted_at),
+			fit_score     = COALESCE($12,             fit_score),
+			fit_reasoning = COALESCE(NULLIF($13, ''), fit_reasoning),
+			ghost_score   = COALESCE($14,             ghost_score),
+			ghost_flags   = CASE WHEN $15::jsonb = '[]'::jsonb
+			                     THEN ghost_flags ELSE $15::jsonb END,
+			notes         = COALESCE(NULLIF($16, ''), notes),
+			external_id   = COALESCE(NULLIF($17, ''), external_id),
+			updated_at    = NOW()
+		 WHERE id = $2::uuid AND pursuit_id = $1::uuid
+		RETURNING `+roleColumns+`
+	`, pursuitID, roleID,
+		clampText(in.Company), clampText(in.RoleTitle), strings.TrimSpace(in.Source),
+		clampText(in.URL), clampText(in.Location),
+		in.CompMin, in.CompMax, clampText(in.CompText), in.PostedAt,
+		in.FitScore, clampText(in.FitReasoning), in.GhostScore, flags,
+		clampText(in.Notes), strings.TrimSpace(in.ExternalID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Role{}, errors.New("role not found on this pursuit")
+	}
+	if err != nil {
+		return Role{}, fmt.Errorf("patch role: %w", err)
+	}
+	return r, nil
+}
+
 // SetRoleStage moves a role between kanban columns and stamps when it moved, so
 // the board can show how long a card has been sitting.
 //

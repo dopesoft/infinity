@@ -107,7 +107,7 @@ func (t *pursuitJHWrite) Schema() map[string]any {
 			},
 
 			// role
-			"role_id":    map[string]any{"type": "string", "description": "The role's UUID (from pursuit_jh_state). Required for action='role/stage' and action='artifact'; optional on action='contact' to attach the person to a role."},
+			"role_id":    map[string]any{"type": "string", "description": "The role's UUID (from pursuit_jh_state). Required for action='role/stage' and action='artifact'; optional on action='contact' to attach the person to a role. On action='role' it switches the write from filing a posting to CORRECTING that exact card in place - only the fields you supply move, everything else is left alone, and the stage never changes. Use it whenever you are fixing a card that already exists (a wrong salary band, a missing link, a missing external_id), because filing it again would add a duplicate instead."},
 			"company":    map[string]any{"type": "string", "description": "For action='role' (required) and action='contact': the company."},
 			"role_title": map[string]any{"type": "string", "description": "For action='role': the posting's title, e.g. 'Head of Product'. Required."},
 			"source": map[string]any{

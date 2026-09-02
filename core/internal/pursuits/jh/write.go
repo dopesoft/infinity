@@ -136,7 +136,7 @@ func (s *Store) Apply(ctx context.Context, action, pursuitID string, req WriteRe
 
 	switch action {
 	case ActionRole:
-		_, err := s.UpsertRole(ctx, pursuitID, RoleInput{
+		in := RoleInput{
 			Company:      req.Company,
 			RoleTitle:    req.RoleTitle,
 			Source:       req.Source,
@@ -153,7 +153,17 @@ func (s *Store) Apply(ctx context.Context, action, pursuitID string, req WriteRe
 			Notes:        req.Notes,
 			ExternalID:   req.ExternalID,
 			Stage:        req.Stage,
-		})
+		}
+		// A caller naming a card by id is correcting THAT card, not filing a
+		// posting. The upsert cannot serve him: its conflict target is
+		// (pursuit_id, source, external_id), and a row filed without an
+		// external_id is unmatchable, so the same call would add a duplicate
+		// instead of fixing the row he pointed at.
+		if roleID := strings.TrimSpace(req.RoleID); roleID != "" {
+			_, err := s.PatchRole(ctx, pursuitID, roleID, in)
+			return err
+		}
+		_, err := s.UpsertRole(ctx, pursuitID, in)
 		return err
 
 	case ActionRoleStage:
@@ -225,7 +235,16 @@ func (s *Store) Apply(ctx context.Context, action, pursuitID string, req WriteRe
 func (req WriteRequest) validate(action string) error {
 	switch action {
 	case ActionRole:
-		if !IsValidRoleSource(strings.TrimSpace(req.Source)) {
+		// Required when filing a posting, since the board cannot say where an
+		// unsourced role came from. Optional when correcting a card by id: the
+		// row already carries its source, and demanding it again invites a
+		// caller to guess one and overwrite the truth.
+		patching := strings.TrimSpace(req.RoleID) != ""
+		source := strings.TrimSpace(req.Source)
+		if !patching && !IsValidRoleSource(source) {
+			return unknownValue("role source", req.Source, RoleSources())
+		}
+		if patching && source != "" && !IsValidRoleSource(source) {
 			return unknownValue("role source", req.Source, RoleSources())
 		}
 		if stage := strings.TrimSpace(req.Stage); stage != "" && !IsValidRoleStage(stage) {

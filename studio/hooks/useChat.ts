@@ -154,6 +154,7 @@ type ServerRow = {
   // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
   // survives navigation/reload. tool_output present = completed.
   tool_call_id?: string;
+  interim?: boolean;
   tool_running?: boolean;
   tool_interrupted?: boolean;
   tool_name?: string;
@@ -241,6 +242,10 @@ function rowToMessage(r: ServerRow): ChatMessage {
     attachments: rowAttachmentsToChat(r.attachments),
     createdAt: new Date(r.created_at).getTime() || Date.now(),
     steered: r.steered || undefined,
+    // Narration that streamed before a tool call stays folded into the
+    // ledger on reload, exactly as it was live. Without this the server's
+    // copy arrived as a plain reply and split the ledger around it.
+    interim: r.interim || undefined,
     seeded: r.kind === "dashboard_seed" || undefined,
     seedKind: r.seed_kind || undefined,
     curiosityId: r.curiosity_id || undefined,

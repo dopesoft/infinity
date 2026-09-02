@@ -63,6 +63,15 @@ type sessionMessageDTO struct {
 	// Tool-call reconstruction (role="tool"): rebuilt from the captured
 	// PostToolUse observation so the inline ToolCallCard survives navigation
 	// and reload instead of vanishing. ToolInput is the raw arguments JSON.
+	// Interim marks an assistant message that streamed BEFORE a tool call in
+	// the same turn: narration, not the reply. Studio folds those into the
+	// activity ledger; the final reply is never interim. The loop has always
+	// written the flag into the AssistantMessage payload and the transcript
+	// never read it back, so on every reconcile the server's copy replaced
+	// the browser's and lost the flag, the bubble stopped being foldable, and
+	// the ledger split in two around it. The boss: "why are there 2 levels of
+	// thinking, one above the other" (2026-09-02).
+	Interim     bool            `json:"interim,omitempty"`
 	ToolCallID  string          `json:"tool_call_id,omitempty"`
 	ToolName    string          `json:"tool_name,omitempty"`
 	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
@@ -281,6 +290,13 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			Text:        text,
 			CreatedAt:   createdAt.UTC().Format(time.RFC3339),
 			Attachments: attachmentsFromPayload(payload),
+		}
+		if hook == "AssistantMessage" {
+			var p struct {
+				Interim bool `json:"interim"`
+			}
+			_ = json.Unmarshal([]byte(payload), &p)
+			msg.Interim = p.Interim
 		}
 		switch hook {
 		case "UserPromptSubmit":
