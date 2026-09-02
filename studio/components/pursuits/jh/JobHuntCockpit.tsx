@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, MessageSquare } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -20,6 +20,7 @@ import {
   stageLabel,
 } from "@/lib/pursuits/jh/labels";
 import type { JHCockpit as JHCockpitData, JHRole } from "@/lib/pursuits/jh/types";
+import { JobHuntConversation } from "./JobHuntConversation";
 import { MaterialPanel } from "./MaterialPanel";
 import { RoleDetail } from "./RoleDetail";
 
@@ -50,7 +51,11 @@ import { RoleDetail } from "./RoleDetail";
  *  them takes the whole screen, and on a laptop they share the one side
  *  panel, so two open at once has no meaning. The role is held by ID rather
  *  than by value, so a refreshed board is always what gets rendered. */
-type Panel = { kind: "role"; roleId: string } | { kind: "material" } | null;
+type Panel =
+  | { kind: "role"; roleId: string }
+  | { kind: "material" }
+  | { kind: "chat" }
+  | null;
 
 export function JobHuntCockpit({
   pursuitId,
@@ -68,6 +73,11 @@ export function JobHuntCockpit({
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [stage, setStage] = useState<string | null>(null);
+  /* What he is LOOKING AT, kept apart from which panel happens to be open.
+   * Opening the conversation replaces the role detail in the one panel slot,
+   * but it must not lose the role he was reading: that role is exactly the
+   * context the first thing he types needs to carry. */
+  const [focusedRoleId, setFocusedRoleId] = useState<string | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -92,6 +102,7 @@ export function JobHuntCockpit({
     const ac = new AbortController();
     setPanel(null);
     setStage(null);
+    setFocusedRoleId(null);
     void load(ac.signal);
     return () => ac.abort();
   }, [open, load]);
@@ -102,7 +113,12 @@ export function JobHuntCockpit({
     panel?.kind === "role" && cockpit
       ? (cockpit.roles.find((r) => r.id === panel.roleId) ?? null)
       : null;
-  const panelOpen = panel?.kind === "material" || Boolean(selectedRole);
+  const focusedRole: JHRole | null =
+    focusedRoleId && cockpit
+      ? (cockpit.roles.find((r) => r.id === focusedRoleId) ?? null)
+      : null;
+  const chatOpen = panel?.kind === "chat";
+  const panelOpen = panel?.kind === "material" || chatOpen || Boolean(selectedRole);
 
   // The stage the phone is looking at. Derived rather than stored, so it can
   // never point at a stage the vocabulary stopped carrying, and it opens on
@@ -130,7 +146,11 @@ export function JobHuntCockpit({
           onToggleMaterial={() =>
             setPanel((p) => (p?.kind === "material" ? null : { kind: "material" }))
           }
-          showMaterial={Boolean(cockpit)}
+          chatOpen={chatOpen}
+          onToggleChat={() =>
+            setPanel((p) => (p?.kind === "chat" ? null : { kind: "chat" }))
+          }
+          showActions={Boolean(cockpit)}
         />
       }
     >
@@ -162,18 +182,35 @@ export function JobHuntCockpit({
               cockpit={cockpit}
               activeStage={activeStage}
               onStage={setStage}
-              selectedRoleId={selectedRole?.id ?? null}
-              onOpenRole={(roleId) => setPanel({ kind: "role", roleId })}
+              selectedRoleId={selectedRole?.id ?? (chatOpen ? focusedRoleId : null)}
+              onOpenRole={(roleId) => {
+                setFocusedRoleId(roleId);
+                setPanel({ kind: "role", roleId });
+              }}
             />
           </div>
 
           {panelOpen ? (
             <aside
               id="jh-panel"
-              aria-label={selectedRole ? "Role" : "Material"}
-              className="min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden scroll-touch lg:w-[24rem] lg:shrink-0 lg:border-l lg:border-hairline"
+              aria-label={chatOpen ? "Jarvis" : selectedRole ? "Role" : "Material"}
+              className={cn(
+                "min-h-0 w-full min-w-0 overflow-x-hidden lg:w-[24rem] lg:shrink-0 lg:border-l lg:border-hairline",
+                // The conversation owns its own scroller and pins its composer,
+                // so the panel must not scroll it a second time.
+                chatOpen
+                  ? "flex flex-col overflow-y-hidden"
+                  : "overflow-y-auto scroll-touch",
+              )}
             >
-              {selectedRole ? (
+              {chatOpen ? (
+                <JobHuntConversation
+                  pursuitId={pursuitId}
+                  role={focusedRole}
+                  onClearRole={() => setFocusedRoleId(null)}
+                  onLeave={() => onOpenChange(false)}
+                />
+              ) : selectedRole ? (
                 <RoleDetail
                   cockpit={cockpit}
                   role={selectedRole}
@@ -197,6 +234,14 @@ export function JobHuntCockpit({
 
 /* ── The chrome ────────────────────────────────────────────────────────── */
 
+/* The bar's two affordances are peers and must stay identical: the
+ * conversation is reached exactly the way the material panel is. They keep the
+ * h-9 look the bar was built around, and take the hit area to 44px through the
+ * padding either side rather than by growing the chrome, so a thumb lands on
+ * them on a phone. */
+const BAR_ACTION =
+  "relative shrink-0 text-quiet after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']";
+
 /** The whole of the chrome: a dot, the live state of the board in words, and
  *  the way through to everything the pipeline is built on.
  *
@@ -214,35 +259,53 @@ function BoardBar({
   state,
   materialOpen,
   onToggleMaterial,
-  showMaterial,
+  chatOpen,
+  onToggleChat,
+  showActions,
 }: {
   title: string;
   state?: string;
   materialOpen: boolean;
   onToggleMaterial: () => void;
-  showMaterial: boolean;
+  chatOpen: boolean;
+  onToggleChat: () => void;
+  showActions: boolean;
 }) {
   return (
-    <header className="flex shrink-0 items-center gap-3 border-b border-hairline px-4 py-2.5 pr-12 sm:px-5 sm:pr-14">
+    <header className="flex shrink-0 items-center gap-1 border-b border-hairline px-4 py-2.5 pr-12 sm:px-5 sm:pr-14">
       <StatusDot tone="brand" />
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
+      <span className="ml-2 min-w-0 flex-1 truncate font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
         {state ?? title}
       </span>
-      {showMaterial ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleMaterial}
-          aria-expanded={materialOpen}
-          aria-controls="jh-panel"
-          className="shrink-0 text-quiet"
-        >
-          Material
-          <ChevronRight
-            className={cn("size-4 transition-transform duration-150", materialOpen && "rotate-90")}
-            aria-hidden
-          />
-        </Button>
+      {showActions ? (
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleChat}
+            aria-expanded={chatOpen}
+            aria-controls="jh-panel"
+            className={cn(BAR_ACTION, chatOpen && "text-foreground")}
+          >
+            <MessageSquare className="size-4" aria-hidden />
+            <span className="hidden sm:inline">Ask Jarvis</span>
+            <span className="sr-only sm:hidden">Ask Jarvis</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleMaterial}
+            aria-expanded={materialOpen}
+            aria-controls="jh-panel"
+            className={cn(BAR_ACTION, materialOpen && "text-foreground")}
+          >
+            Material
+            <ChevronRight
+              className={cn("size-4 transition-transform duration-150", materialOpen && "rotate-90")}
+              aria-hidden
+            />
+          </Button>
+        </>
       ) : null}
     </header>
   );
