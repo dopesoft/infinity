@@ -448,6 +448,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// /api/pursuits/pc/state reads it; the POST actions write through it.
 	// Ordinary pursuits are rejected with 409 by every handler here.
 	mux.HandleFunc("/api/pursuits/pc/", s.handlePursuitsPC)
+	// The same shape for the Job Hunt experience: a pursuit whose experience
+	// is 'job_hunt' opens a pipeline cockpit. GET /api/pursuits/jh/state reads
+	// the whole board in one call. Ordinary pursuits are rejected with 409.
+	mux.HandleFunc("/api/pursuits/jh/", s.handlePursuitsJH)
 	// Wards — structural privacy zones enforced by proactive.WardGate. GET
 	// lists; PUT adds; DELETE?id= removes.
 	mux.HandleFunc("/api/wards", s.handleWards)

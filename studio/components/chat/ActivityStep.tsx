@@ -222,12 +222,21 @@ export interface ActivityStepProps {
 
 export function ActivityStep({ item, spinner = true, nested, className }: ActivityStepProps) {
   const write = isWriteItem(item);
+  // A thinking row with no trace behind it. Claude Code redacts its reasoning
+  // (every `thinking_delta` on the wire carries an empty string), so this is
+  // not an edge case for that brain, it is the norm: the row auto-opened onto
+  // a blank panel and read as a hang. A control that cannot show anything is
+  // not shown - no chevron, no body, just the word and the clock.
+  const traceless =
+    item.kind === "thought" &&
+    item.count === 1 &&
+    !(item.messages[0]?.text ?? "").trim();
   // Opens itself when the boss must see something: what broke, what he has to
   // approve, the code being written right now, the live thinking trace.
   const shouldOpen =
     item.status === "error" ||
     item.status === "approval" ||
-    (item.status === "running" && (write || item.kind === "thought"));
+    (item.status === "running" && (write || (item.kind === "thought" && !traceless)));
   const [open, setOpen] = React.useState<boolean>(shouldOpen);
   const [touched, setTouched] = React.useState(false);
   const [raw, setRaw] = React.useState(false);
@@ -252,6 +261,48 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
   const Glyph = item.status === "stopped" ? Ban : glyphFor(item.glyph);
   const showSpinner = spinner && !nested && item.status === "running";
 
+  // The row's own face, so the expandable and the flat form cannot drift: one
+  // definition, two frames.
+  const face = (
+    <>
+      <span className="flex size-[18px] shrink-0 items-center justify-center">
+        {showSpinner ? (
+          <Spinner className="size-[18px] text-brand" aria-hidden />
+        ) : item.status === "running" ? (
+          <StatusDot tone="brand" pulse />
+        ) : (
+          <Glyph className={cn("size-[18px]", GLYPH_TONE[item.status])} aria-hidden />
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span
+          className={cn(
+            "min-w-0 truncate font-sans text-[13.5px] font-medium transition-colors",
+            item.status === "stopped" ? "text-quiet" : "text-foreground",
+            "group-hover:text-foreground",
+          )}
+        >
+          {item.label}
+        </span>
+        {item.meta ? (
+          <span className="min-w-0 truncate font-mono text-[12px] tabular-nums text-quiet">
+            {item.meta}
+          </span>
+        ) : null}
+      </span>
+      {elapsed ? (
+        <span
+          className="shrink-0 font-mono text-[12px] tabular-nums text-quiet"
+          suppressHydrationWarning
+        >
+          {elapsed}
+        </span>
+      ) : null}
+    </>
+  );
+
+  const ROW = "group flex min-h-12 w-full min-w-0 max-w-full items-center gap-3.5 py-2.5 text-left";
+
   return (
     <div
       className={cn(
@@ -260,63 +311,38 @@ export function ActivityStep({ item, spinner = true, nested, className }: Activi
         className,
       )}
     >
-      <button
-        type="button"
-        onClick={() => {
-          setTouched(true);
-          setOpen((v) => !v);
-        }}
-        aria-expanded={open}
-        // No row-wide background on hover or press. A full-bleed grey block
-        // behind a ledger line reads as a chunky list item, which is exactly
-        // the vibe-coded look this replaces - the affordance is the text and
-        // the chevron warming up, nothing moving and nothing filling in.
-        // The focus ring stays: keyboard users need to see where they are.
-        className="group flex min-h-12 w-full min-w-0 max-w-full items-center gap-3.5 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-      >
-        <span className="flex size-[18px] shrink-0 items-center justify-center">
-          {showSpinner ? (
-            <Spinner className="size-[18px] text-brand" aria-hidden />
-          ) : item.status === "running" ? (
-            <StatusDot tone="brand" pulse />
-          ) : (
-            <Glyph className={cn("size-[18px]", GLYPH_TONE[item.status])} aria-hidden />
-          )}
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span
-            className={cn(
-              "min-w-0 truncate font-sans text-[13.5px] font-medium transition-colors",
-              item.status === "stopped" ? "text-quiet" : "text-foreground",
-              "group-hover:text-foreground",
-            )}
-          >
-            {item.label}
-          </span>
-          {item.meta ? (
-            <span className="min-w-0 truncate font-mono text-[12px] tabular-nums text-quiet">
-              {item.meta}
-            </span>
-          ) : null}
-        </span>
-        {elapsed ? (
-          <span
-            className="shrink-0 font-mono text-[12px] tabular-nums text-quiet"
-            suppressHydrationWarning
-          >
-            {elapsed}
-          </span>
-        ) : null}
-        <ChevronRight
+      {traceless ? (
+        <div className={ROW}>{face}</div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setTouched(true);
+            setOpen((v) => !v);
+          }}
+          aria-expanded={open}
+          // No row-wide background on hover or press. A full-bleed grey block
+          // behind a ledger line reads as a chunky list item, which is exactly
+          // the vibe-coded look this replaces - the affordance is the text and
+          // the chevron warming up, nothing moving and nothing filling in.
+          // The focus ring stays: keyboard users need to see where they are.
           className={cn(
-            "size-4 shrink-0 text-quiet transition-all duration-150 group-hover:text-foreground",
-            open && "rotate-90",
+            ROW,
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           )}
-          aria-hidden
-        />
-      </button>
+        >
+          {face}
+          <ChevronRight
+            className={cn(
+              "size-4 shrink-0 text-quiet transition-all duration-150 group-hover:text-foreground",
+              open && "rotate-90",
+            )}
+            aria-hidden
+          />
+        </button>
+      )}
 
-      {open ? (
+      {open && !traceless ? (
         <div className="min-w-0 max-w-full space-y-2.5 pb-4 pl-[32px]">
           {item.count > 1 ? (
             <GroupDetail item={item} />

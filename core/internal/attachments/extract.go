@@ -260,18 +260,32 @@ func pdfExtract(ctx context.Context, b bridge.Bridge, path string, rasterize boo
 	}
 
 	txtName := base + ".txt"
-	o, code, err := runBash(ctx, b, dir, fmt.Sprintf("pdftotext -layout %s %s", shq(base), shq(txtName)))
-	if err != nil {
-		return out, nil, fmt.Errorf("pdftotext: %w", err)
+
+	// MuPDF first. It resolves a subsetted font's glyphs by NAME, so it keeps
+	// the f-ligatures that poppler drops on a PDF with no ToUnicode map - the
+	// difference between "shipping category-defining software" and "shipping
+	// category-de ning software". See pdftext.go for the case that set this
+	// order. Poppler stays the fallback: it is always installed, and it is
+	// still what decides a scan needs rasterizing.
+	if text, pages, err := pdfTextMuPDF(ctx, b, dir, base, txtName); err == nil {
+		out.text = text
+		if pages > 0 {
+			out.pages = pages
+		}
+	} else {
+		o, code, perr := runBash(ctx, b, dir, fmt.Sprintf("pdftotext -layout %s %s", shq(base), shq(txtName)))
+		if perr != nil {
+			return out, nil, fmt.Errorf("pdftotext: %w", perr)
+		}
+		if code != 0 {
+			return out, nil, fmt.Errorf("pdftotext exit %d: %s", code, strings.TrimSpace(o))
+		}
+		raw, status, ok := b.Get(ctx, "/fs/raw?path="+url.QueryEscape(dir+"/"+txtName))
+		if !ok || status >= 300 {
+			return out, nil, fmt.Errorf("read %s: status %d", txtName, status)
+		}
+		out.text = strings.TrimSpace(normalizeLigatures(string(raw)))
 	}
-	if code != 0 {
-		return out, nil, fmt.Errorf("pdftotext exit %d: %s", code, strings.TrimSpace(o))
-	}
-	raw, status, ok := b.Get(ctx, "/fs/raw?path="+url.QueryEscape(dir+"/"+txtName))
-	if !ok || status >= 300 {
-		return out, nil, fmt.Errorf("read %s: status %d", txtName, status)
-	}
-	out.text = strings.TrimSpace(string(raw))
 
 	if !rasterize {
 		return out, nil, nil
@@ -286,7 +300,7 @@ func pdfExtract(ctx context.Context, b bridge.Bridge, path string, rasterize boo
 	pagesDir := base + ".pages"
 	cmd := fmt.Sprintf("mkdir -p %s && pdftoppm -r %d -jpeg -jpegopt quality=72 -f 1 -l %d %s %s/p && ls %s",
 		shq(pagesDir), rasterDPI, rasterPages, shq(base), shq(pagesDir), shq(pagesDir))
-	o, code, err = runBash(ctx, b, dir, cmd)
+	o, code, err := runBash(ctx, b, dir, cmd)
 	if err != nil {
 		return out, nil, fmt.Errorf("pdftoppm: %w", err)
 	}
@@ -437,5 +451,5 @@ func localPDFText(data []byte) (text string, pages int, err error) {
 	if err != nil {
 		return "", pages, err
 	}
-	return strings.TrimSpace(string(raw)), pages, nil
+	return strings.TrimSpace(normalizeLigatures(string(raw))), pages, nil
 }

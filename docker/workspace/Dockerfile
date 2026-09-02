@@ -93,6 +93,19 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN npm install -g @anthropic-ai/claude-code \
     && claude --version
 
+# MuPDF's python binding, the PRIMARY reader for an uploaded PDF's text layer.
+#
+# poppler stays for rasterizing and as the fallback, but it cannot read a PDF
+# whose embedded font subsets carry no ToUnicode map: it emits a space where
+# each f-ligature stood, so the boss's own resume came back saying "sta ng"
+# and "iCIMS O er". MuPDF resolves those glyphs by name and gets them right.
+#
+# Baked rather than left to the extractor's self-install so the FIRST upload
+# after a cold start is already correct instead of paying for a pip download
+# inside a 55 s bash window. See core/internal/attachments/pdftext.go.
+RUN PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir pymupdf \
+    && python3 -c "import pymupdf; print('pymupdf', pymupdf.__doc__)"
+
 # Extra font aliases (Calibri Light / Helvetica Neue / Aptos → Carlito) so the
 # inline LibreOffice PDF preview of generated docs always renders a clean sans,
 # on top of fontconfig's built-in Calibri→Carlito metric alias. fc-cache picks
