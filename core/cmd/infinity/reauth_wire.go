@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/dopesoft/infinity/core/internal/finish"
 	"strings"
 	"time"
 
@@ -117,3 +118,17 @@ var errReParked = errReParkedT("re-parked during replay")
 type errReParkedT string
 
 func (e errReParkedT) Error() string { return string(e) }
+
+// selfPromptReplayer marks every replay it forwards as a turn INFINITY
+// started, so the brief behind it is filed under AgentSelfPrompt and stays out
+// of the boss's transcript.
+//
+// It wraps at the WIRING seam rather than inside the finish poller, so the
+// poller keeps its one narrow dependency (a Replayer) and the reauth path -
+// which replays the boss's OWN parked words, and must stay visible - is
+// untouched by construction.
+type selfPromptReplayer struct{ inner finish.Replayer }
+
+func (r selfPromptReplayer) Replay(ctx context.Context, sessionID, userText, model string) (string, error) {
+	return r.inner.Replay(agent.WithSelfPrompt(ctx), sessionID, userText, model)
+}

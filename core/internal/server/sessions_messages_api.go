@@ -20,6 +20,7 @@ const (
 	// What the MODEL is replayed when a session is faulted back in. Same
 	// messages the transcript shows, minus the tool cards.
 	conversationHooksSQL    = sessions.ConversationHooksSQL
+	hydrationHooksSQL       = sessions.HydrationHooksSQL
 	sessionHasRenderableSQL = sessions.HasRenderableSQL
 )
 
@@ -301,7 +302,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 			       COALESCE(payload::text, '') AS payload, created_at
 			FROM mem_observations
 			WHERE session_id = $1
-			  AND hook_name IN (`+conversationHooksSQL+`)
+			  AND hook_name IN (`+hydrationHooksSQL+`)
 			  AND EXISTS (
 			    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
 			  )
@@ -330,7 +331,7 @@ func (s *Server) hydrateLoopSession(r *http.Request, sessionID string) {
 		// opening user turn - so it hydrates as a user-role message.
 		role := llm.RoleAssistant
 		var atts []llm.Attachment
-		if hook == "UserPromptSubmit" || hook == "DashboardSeed" {
+		if hook == "UserPromptSubmit" || hook == "DashboardSeed" || hook == sessions.AgentSelfPromptHook {
 			role = llm.RoleUser
 			// Files attached to that turn are reloaded from the store so the
 			// brain sees them again after a Core restart, not just the chip.

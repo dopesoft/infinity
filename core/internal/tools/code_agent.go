@@ -1202,6 +1202,9 @@ func (p *claudePoll) finish(ctx context.Context, exitCode int, reap bool) (strin
 		return "", err
 	}
 	out, ierr := p.interpret(t, exitCode)
+	// Every forwarded step that never got its result is closed here too, or it
+	// spins in his chat until the tab is reloaded (closeOpenSteps).
+	p.closeOpenSteps(ctx, "The job ended before this step reported back.")
 	// The job reached a verdict, so the plan it authored must not stay open.
 	// Deterministic (Rule #1b): it does not depend on Claude's last TodoWrite
 	// having ticked every box, which a job that errors out never does.
@@ -1231,6 +1234,7 @@ func (p *claudePoll) stopped() string {
 	}
 	fmt.Fprintf(&b, "\n\nAny edits it had already made are uncommitted in %s — check git_status/git_diff before touching that repo. "+
 		"To pick the job back up, call code_agent again with what is left to do.", repoOrRoot(p.repo))
+	p.closeOpenSteps(context.Background(), "Stopped before this step reported back.")
 	// Stopped is a verdict too: the step in flight failed and the plan pauses,
 	// rather than the dock going on showing a checklist nothing is working.
 	p.settleNestedPlan(context.Background(), true, "Stopped before it finished.")
@@ -1958,10 +1962,38 @@ func parseClaudeResult(s string) claudeResult {
 }
 
 // looksLikeUsageCap recognises Claude Code's plan-cap copy.
+//
+// THE ONE-WORD BUG (2026-09-01). Claude Code's five-hour cap prints
+//
+//	You've hit your session limit · resets 8:20pm (America/Chicago)
+//
+// and this function did not match it. "hit your limit" is not a substring of
+// "hit your session limit", and "usage limit" does not appear at all. So the
+// spent plan fell through to a generic error: the quota ledger was never
+// marked, `code_agent` cheerfully relaunched `claude -p` on a plan that could
+// not run it, and the continuation poller woke Jarvis once a minute about work
+// that could never finish. Eight jobs in one evening, every one dead in about
+// a minute, and the boss was told nothing at all - he watched a spinner and
+// asked why his pursuit was never built.
+//
+// So the matching is on the SHAPE of the copy, not one phrasing of it: the
+// word "limit" alongside anything that means his plan is used up, plus the
+// "out of usage" family. A vendor rewording it again should not silently
+// switch this off - which is exactly what happened - so the production string
+// is pinned verbatim in the test.
 func looksLikeUsageCap(msg string) bool {
 	m := strings.ToLower(msg)
-	return strings.Contains(m, "out of extra usage") || strings.Contains(m, "out of usage") ||
-		strings.Contains(m, "usage limit") || strings.Contains(m, "hit your limit")
+	for _, phrase := range []string{
+		"out of extra usage", "out of usage",
+		"usage limit", "session limit", "rate limit", "message limit",
+		"hit your limit", "hit the limit", "reached your limit",
+		"limit reached", "limit exceeded", "upgrade to continue",
+	} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // macClaudeDefaults reads the "SETTINGS:{...}" line the probe prints (the
@@ -2315,7 +2347,7 @@ func bridgeErrorDetail(body []byte) string {
 
 // claudeCodeQuotaKey is the quota-ledger id for the boss's Claude plan behind
 // `claude -p` (distinct from the "anthropic" API-key provider).
-const claudeCodeQuotaKey = "claude_code"
+const claudeCodeQuotaKey = llm.ClaudeCodeQuotaKey
 
 // claudeCodeHeldGuidance is the tool result while Claude Code is out of
 // usage. It never steers the chat model into writing the code itself: on the

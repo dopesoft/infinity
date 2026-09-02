@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -169,10 +171,11 @@ type nestedEvent struct {
 // parseNestedEvents reads a slice of Claude Code stream-json and returns the
 // tool calls and results in it, oldest first.
 //
-// Lines that do not decode are skipped in silence on purpose: the incremental
-// reader caps line length, so a `Read` that returned a 400KB file arrives
-// truncated and unparseable. Its CALL is a separate, small line and does
-// survive, which is the half that carries the file name worth showing.
+// A line that does not decode is not discarded: the incremental reader caps
+// line length, so any event carrying a file's contents arrives cut, and
+// dropping those was why a long build produced a handful of rows instead of a
+// worklog. salvageTruncatedCall recovers the step's identity from the head of
+// the line, which survives the cut.
 func parseNestedEvents(slice string) []nestedEvent {
 	var out []nestedEvent
 	for _, line := range strings.Split(slice, "\n") {
@@ -195,6 +198,18 @@ func parseNestedEvents(slice string) []nestedEvent {
 			} `json:"message"`
 		}
 		if json.Unmarshal([]byte(line), &ev) != nil {
+			// A line that will not decode is almost always a COMPLETE event
+			// that arrived CUT: the incremental reader caps each line at
+			// claudeLineMaxCols, and a Write carrying file contents or a Read
+			// returning a file goes well past that. Dropping it in silence is
+			// how a forty-minute build showed the boss three rows - "he
+			// obviously did things and ran commands, but it's not fucking
+			// visible". The identity of the step survives the cut even when
+			// its payload does not, because a tool_use block opens with its
+			// id and name, so salvage that and show the row.
+			if ev, ok := salvageTruncatedCall(line); ok {
+				out = append(out, ev)
+			}
 			continue
 		}
 		if ev.Type != "assistant" && ev.Type != "user" {
@@ -318,3 +333,83 @@ func clipRunes(s string, n int) string {
 }
 
 func isUTF8Start(b byte) bool { return b&0xC0 != 0x80 }
+
+// truncatedCallRe finds the head of a tool_use block in a line too long to
+// have survived the reader intact. Anchored on the three fields that always
+// lead one, in the order the API emits them, so it cannot match a tool_use
+// merely QUOTED inside some other event's text (a grep hit over this very
+// file, which is a real thing that happens when Jarvis edits his own source).
+var truncatedCallRe = regexp.MustCompile(`"type":"tool_use","id":"(toolu_[A-Za-z0-9_-]+)","name":"([A-Za-z0-9_]+)"`)
+
+// truncatedDetailRe pulls the one input field worth showing, if the cut left
+// any of it: the file being touched, else the command being run.
+var truncatedDetailRe = regexp.MustCompile(`"(file_path|path|command|pattern|query)":"((?:[^"\\]|\\.){0,200})`)
+
+// salvageTruncatedCall recovers a step from a line the JSON decoder refused.
+//
+// It returns the CALL half only. A truncated tool_RESULT is left alone on
+// purpose: its id sits at the head but its payload is the part that was cut,
+// so a salvaged result would settle the row with contents we do not actually
+// have. An unresolved call is closed honestly when the job ends instead
+// (closeOpenSteps).
+func salvageTruncatedCall(line string) (nestedEvent, bool) {
+	m := truncatedCallRe.FindStringSubmatch(line)
+	if m == nil {
+		return nestedEvent{}, false
+	}
+	name := nestedToolName(m[2])
+	if name == "" {
+		return nestedEvent{}, false
+	}
+	ev := nestedEvent{callID: m[1], tool: name, input: map[string]any{}}
+	if d := truncatedDetailRe.FindStringSubmatch(line); d != nil {
+		if v, err := strconv.Unquote(`"` + d[2] + `"`); err == nil {
+			ev.input[d[1]] = v
+		} else {
+			ev.input[d[1]] = d[2]
+		}
+	}
+	// Marked so the row can say the payload was cut rather than implying we
+	// showed everything. Never hide that a record is partial.
+	ev.input["_truncated"] = true
+	return ev, true
+}
+
+// closeOpenSteps settles every forwarded call that never got its result.
+//
+// WHY IT HAS TO EXIST. A nested row is deliberately exempt from Studio's
+// end-of-turn cleanup (`settleInFlight`), because a coding job outlives its
+// turn by design and stamping its steps "interrupted" would put stopped rows
+// on screen for work that is visibly still editing files. The cost of that
+// exemption is that nothing else ever closes them: when the job dies, its
+// result frames never come, and the row spins for as long as the tab is open.
+// That is the boss's "Running 6 commands · 15m 0s" over commands that took
+// five seconds, and it is also why Stop felt broken - there was nothing left
+// to stop, only a row that would not stop saying so.
+//
+// So the JOB closes its own steps, at the same two places it reaches a verdict.
+// Through the ordinary result frame, so Studio needs no new case and the rows
+// persist exactly like every other step.
+func (p *claudePoll) closeOpenSteps(ctx context.Context, note string) {
+	if p == nil || p.sink == nil || len(p.sunkAt) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	for callID, at := range p.sunkAt {
+		p.sink(ctx, NestedStep{
+			SessionID: p.parentSession,
+			RunID:     p.jobID,
+			CallID:    p.sinkStamp + callID,
+			Tool:      firstNonBlank(p.sunkTool[callID], "claude_code__bash"),
+			Done:      true,
+			// Not an error: the step is not known to have failed, only to have
+			// no recorded outcome. Calling it a failure would be the same lie
+			// in the other direction.
+			Output:    note,
+			StartedAt: at,
+			EndedAt:   now,
+		})
+		delete(p.sunkAt, callID)
+		delete(p.sunkTool, callID)
+	}
+}

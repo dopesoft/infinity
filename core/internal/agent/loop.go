@@ -1355,7 +1355,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		if meta := llm.AttachmentsMeta(atts); len(meta) > 0 {
 			payload = map[string]any{"attachments": meta}
 		}
-		l.fireHookT(turnID, "UserPromptSubmit", s.ID, s.Project, userMsg, payload)
+		// A turn INFINITY started (the finish poller waking Jarvis about a
+		// stalled build) is filed under its own hook, so the boss never reads
+		// a machine brief in his own bubble while the model still has it on
+		// rebuild. See sessions.AgentSelfPromptHook.
+		hook := "UserPromptSubmit"
+		if IsSelfPrompt(ctx) {
+			hook = selfPromptHook
+		}
+		l.fireHookT(turnID, hook, s.ID, s.Project, userMsg, payload)
 	}
 
 	// Prompt caching depends on a byte-identical prefix across a session's

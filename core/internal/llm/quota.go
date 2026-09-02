@@ -188,6 +188,13 @@ func UserLocation() *time.Location {
 	return loc
 }
 
+// ClaudeCodeQuotaKey is the quota-ledger id for the boss's Claude plan behind
+// Claude Code. It lives here rather than in tools because more than one
+// package has to ask "is his plan spent right now?" - the launcher, so it
+// refuses to start a job that cannot run, and the continuation poller, so it
+// does not wake Jarvis once a minute about work nothing can finish.
+const ClaudeCodeQuotaKey = "claude_code"
+
 // FormatLocalClock renders t the way the boss reads times ("10:13pm"), adding
 // the weekday when it is not today.
 func FormatLocalClock(t time.Time) string {

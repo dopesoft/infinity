@@ -2638,7 +2638,7 @@ func serveCmd() *cobra.Command {
 					return activeBridgePrefs(ctx, sessionID)
 				}
 				fin := finish.NewPoller(pool,
-					&reauthReplayer{loop: loop},
+					selfPromptReplayer{inner: &reauthReplayer{loop: loop}},
 					finish.NewBridgeEvidence(activeBridgeRouter, prefFor),
 					// The transcript reader is what lets a job that FINISHED
 					// with nobody watching be recognised as finished instead

@@ -24,8 +24,20 @@ const (
 	// before it lived in the browser and nowhere else - he read a full answer,
 	// navigated away, came back, and it was gone.
 	AssistantMessage EventName = "AssistantMessage"
-	Stop               EventName = "Stop"
-	SessionEnd         EventName = "SessionEnd"
+	// AgentSelfPrompt is the opening message of a turn INFINITY started,
+	// addressed to Jarvis and never typed by the boss - the finish poller
+	// waking him about a coding job that stopped without finishing, and
+	// anything later with the same shape.
+	//
+	// Its own name because it is persisted but NOT part of the conversation.
+	// Filed as UserPromptSubmit (2026-09-01) it put machine briefs in the
+	// boss's own message bubble, in literal asterisks, and buried the chat he
+	// was trying to follow. The model still replays it on a restart so it
+	// knows why it said what it said; he only ever reads Jarvis's answer.
+	// See sessions.HydrationHooksSQL for the read side.
+	AgentSelfPrompt EventName = "AgentSelfPrompt"
+	Stop            EventName = "Stop"
+	SessionEnd      EventName = "SessionEnd"
 	// SelfHealResolved fires when a reactive self-heal pass converted an
 	// unresolved failure into a fixed+verified outcome within the same turn.
 	// SelfHealExhausted fires when the heal passes ran out and the turn still

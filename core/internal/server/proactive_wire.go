@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/dopesoft/infinity/core/internal/sessions"
 	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"strings"
 	"sync"
@@ -752,7 +753,7 @@ func (s *Server) recentTurnsFromStore(ctx context.Context, sessionID string) []l
 		SELECT hook_name, COALESCE(raw_text, '')
 		  FROM mem_observations
 		 WHERE session_id = $1
-		   AND hook_name IN ('UserPromptSubmit', 'TaskCompleted', 'DashboardSeed')
+		   AND hook_name IN (`+sessions.HydrationHooksSQL+`)
 		 ORDER BY created_at DESC
 		 LIMIT $2
 	`, sessionID, recentContextTurns)
@@ -770,7 +771,7 @@ func (s *Server) recentTurnsFromStore(ctx context.Context, sessionID string) []l
 			continue
 		}
 		role := llm.RoleAssistant
-		if hook == "UserPromptSubmit" || hook == "DashboardSeed" {
+		if hook == "UserPromptSubmit" || hook == "DashboardSeed" || hook == sessions.AgentSelfPromptHook {
 			role = llm.RoleUser
 		}
 		// Query is newest-first; prepend so the block reads oldest -> newest.

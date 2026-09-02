@@ -32,6 +32,7 @@ package finish
 import (
 	"context"
 	"fmt"
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"log"
 	"os"
 	"time"
@@ -89,6 +90,10 @@ type Poller struct {
 	// already-finished ones apart first.
 	transcript Transcript
 
+	// held latches the "plan is spent" log so it is said once per hold rather
+	// than every tick. Touched only from the single ticker goroutine.
+	held bool
+
 	interval time.Duration
 	// settleGrace is how long after a run closes we wait before acting, so
 	// the follower, the watch poller and the plan reconciler have all had
@@ -123,11 +128,11 @@ func NewPoller(pool *pgxpool.Pool, replayer Replayer, evidence Evidence, transcr
 		return nil
 	}
 	return &Poller{
-		pool:       pool,
-		replayer:   replayer,
-		evidence:   evidence,
-		transcript: transcript,
-		interval:   60 * time.Second,
+		pool:           pool,
+		replayer:       replayer,
+		evidence:       evidence,
+		transcript:     transcript,
+		interval:       60 * time.Second,
 		settleGrace:    2 * time.Minute,
 		lookback:       6 * time.Hour,
 		stallAfter:     12 * time.Minute,
@@ -176,9 +181,40 @@ func (p *Poller) tick(ctx context.Context) {
 	if settled {
 		return
 	}
+	// STOP RETRYING SOMETHING DEAD. While the boss's Claude plan is spent
+	// there is nothing a continuation can do: every relaunch dies in about a
+	// minute on the same cap, burns one of this run's three passes, and wakes
+	// Jarvis to say so. On 2026-09-01 that ran once a minute all evening while
+	// the boss watched a spinner and asked why his pursuit was never built.
+	//
+	// The hold is not silence. code_agent refuses at the launch gate with the
+	// reset time in words, so a turn the boss actually drives still tells him
+	// his plan is out until 8:20pm - it just is not woken by a machine to
+	// re-learn it every sixty seconds.
+	if until, detail, spent := llm.Exhausted(llm.ClaudeCodeQuotaKey); spent {
+		p.holdOnce(until, detail)
+		return
+	}
+	p.held = false
 	if err := p.ContinueOne(ctx); err != nil {
 		log.Printf("finish: continuation pass: %v", err)
 	}
+}
+
+// holdOnce says the plan is spent ONCE per hold, not once a minute. A poller
+// that logs the same line sixty times an hour is how a real signal gets
+// scrolled past (the same reason successes go to stdout and only failures go
+// to stderr).
+func (p *Poller) holdOnce(until time.Time, detail string) {
+	if p.held {
+		return
+	}
+	p.held = true
+	when := "an unknown time"
+	if !until.IsZero() {
+		when = llm.FormatLocalClock(until)
+	}
+	infoLog.Printf("holding continuations: the Claude plan is spent until %s (%s)", when, detail)
 }
 
 // lastActivitySQL is when the run last did something NEW. progress_label is
