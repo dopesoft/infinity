@@ -11,6 +11,7 @@ import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
 import { settleNestedOnly } from "@/lib/chat/settle";
 import { survivesRefetch } from "@/lib/chat/preserve";
+import { toolRowToMessage } from "@/lib/chat/toolRow";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
@@ -153,6 +154,8 @@ type ServerRow = {
   // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
   // survives navigation/reload. tool_output present = completed.
   tool_call_id?: string;
+  tool_running?: boolean;
+  tool_interrupted?: boolean;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   tool_output?: string;
@@ -213,26 +216,11 @@ function rowToMessage(r: ServerRow): ChatMessage {
   // inline ToolCallCard survives navigation/reload (the history endpoint used
   // to omit tool events, so cards vanished on return).
   if (r.role === "tool" && r.tool_call_id) {
-    const msg: ChatMessage = {
-      id: makeId(),
-      role: "tool",
-      text: "",
-      createdAt: new Date(r.created_at).getTime() || Date.now(),
-      toolCall: {
-        id: r.tool_call_id,
-        name: r.tool_name ?? "",
-        input: r.tool_input,
-      },
-    };
-    if (r.tool_output != null) {
-      msg.toolResult = {
-        id: r.tool_call_id,
-        name: r.tool_name ?? "",
-        output: r.tool_output,
-        is_error: r.tool_is_error || undefined,
-      };
-    }
-    return msg;
+    return toolRowToMessage(
+      { ...r, tool_call_id: r.tool_call_id },
+      makeId(),
+      new Date(r.created_at).getTime() || Date.now(),
+    );
   }
   // Durable turn-level error (provider/API failure) replayed from mem_turns.
   // Rebuilt into the same red error card the live WS path renders, so it

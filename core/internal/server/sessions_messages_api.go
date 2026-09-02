@@ -68,6 +68,14 @@ type sessionMessageDTO struct {
 	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
 	ToolOutput  string          `json:"tool_output,omitempty"`
 	ToolIsError bool            `json:"tool_is_error,omitempty"`
+	// ToolRunning: the call was written down when it STARTED and its turn is
+	// still in flight, so there is honestly no result yet. ToolInterrupted:
+	// the same row, but the turn has since ended without a result ever being
+	// filed, so it must render stopped rather than spinning forever. Without
+	// these two a reload could not tell "still running", "stopped", and "ran
+	// and printed nothing" apart, and rendered all three as running.
+	ToolRunning     bool `json:"tool_running,omitempty"`
+	ToolInterrupted bool `json:"tool_interrupted,omitempty"`
 }
 
 func attachmentsFromPayload(payload string) []sessionAttachmentDTO {
@@ -147,19 +155,24 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	//      Without this the error only lived in transient WS state and
 	//      vanished on refresh, so he couldn't ask Jarvis to fix it later.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hook_name, raw_text, payload, created_at FROM (
-			SELECT hook_name,
-			       COALESCE(raw_text, '')     AS raw_text,
-			       COALESCE(payload::text, '') AS payload,
-			       created_at
-			FROM mem_observations
-			WHERE session_id = $1
-			  AND hook_name IN (`+renderableHooksSQL+`)
+		SELECT hook_name, raw_text, payload, created_at, turn_live FROM (
+			SELECT o.hook_name,
+			       COALESCE(o.raw_text, '')     AS raw_text,
+			       COALESCE(o.payload::text, '') AS payload,
+			       o.created_at,
+			       -- Is the turn that wrote this row still going? Decides
+			       -- whether a result-less tool row is "running" or "stopped".
+			       EXISTS (SELECT 1 FROM mem_turns t
+			                WHERE t.id = o.turn_id AND t.status = 'in_flight') AS turn_live
+			FROM mem_observations o
+			WHERE o.session_id = $1
+			  AND o.hook_name IN (`+renderableHooksSQL+`)
 			UNION ALL
 			SELECT 'TaskErrored'                       AS hook_name,
 			       COALESCE(error, '')                 AS raw_text,
 			       ''                                  AS payload,
-			       COALESCE(ended_at, started_at)      AS created_at
+			       COALESCE(ended_at, started_at)      AS created_at,
+			       false                               AS turn_live
 			FROM mem_turns
 			WHERE session_id = $1::uuid
 			  AND status = 'errored'
@@ -190,7 +203,8 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var hook, text, payload string
 		var createdAt time.Time
-		if err := rows.Scan(&hook, &text, &payload, &createdAt); err != nil {
+		var turnLive bool
+		if err := rows.Scan(&hook, &text, &payload, &createdAt, &turnLive); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -213,6 +227,8 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				// grep that found nothing inside a build is not a failure of
 				// Infinity's, and must not read as one.
 				IsError bool `json:"is_error"`
+				// Running marks the row the loop writes when a call STARTS.
+				Running bool `json:"running"`
 			}
 			_ = json.Unmarshal([]byte(payload), &p)
 			if strings.TrimSpace(p.ToolCallID) == "" {
@@ -227,6 +243,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				ToolOutput:  p.Output,
 				ToolIsError: hook == "PostToolUseFailure" || p.IsError,
 			}
+			dto.ToolRunning, dto.ToolInterrupted = toolRowState(p.Running, turnLive)
 			if at, seen := toolRowAt[p.ToolCallID]; seen {
 				// Keep the ORIGINAL timestamp: the card belongs where the
 				// call was made, between the words either side of it, not
@@ -594,4 +611,18 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// toolRowState decides how a persisted tool row reads on reload.
+//
+// A row filed when the call STARTED carries no result. Whether that means
+// "still going" or "never came back" is not the row's to say - it is the
+// turn's: live, and the card spins; ended, and the card is stopped. A row
+// with a result is neither, even when that result is an empty string, because
+// a command that printed nothing still finished.
+func toolRowState(running, turnLive bool) (isRunning, isInterrupted bool) {
+	if !running {
+		return false, false
+	}
+	return turnLive, !turnLive
 }

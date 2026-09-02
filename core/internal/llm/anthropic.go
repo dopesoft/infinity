@@ -15,6 +15,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/dopesoft/infinity/core/internal/httpx"
+	"log"
+	"time"
 )
 
 type Anthropic struct {
@@ -406,13 +408,31 @@ func quotaFromAnthropicErr(provider string, err error) *QuotaError {
 	return nil
 }
 
+// emitWait caps how long one event waits on a full consumer before it is
+// given up on. The loop drains until close, so this only ever absorbs a
+// burst; it is not a turn deadline.
+const emitWait = 5 * time.Second
+
+// emit hands one event to the consumer, waiting for room rather than
+// discarding it. It was a bare `select { default: }` drop: the same fault
+// fixed the same night in agent.emit and brainPoll.send, and the one place
+// it still lived was the path that delivers a HELD completion after a
+// failover. A dropped completion is a turn that never ends on screen.
 func emit(ch chan<- StreamEvent, ev StreamEvent) {
 	if ch == nil {
 		return
 	}
 	select {
 	case ch <- ev:
+		return
 	default:
+	}
+	t := time.NewTimer(emitWait)
+	defer t.Stop()
+	select {
+	case ch <- ev:
+	case <-t.C:
+		log.Printf("llm: consumer stalled %s, dropped a %s event", emitWait, ev.Kind)
 	}
 }
 
