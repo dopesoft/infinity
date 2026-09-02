@@ -311,8 +311,54 @@ func (p *Poller) ContinueOne(ctx context.Context) error {
 		p.note(ctx, s.runID, "finish_error", err.Error())
 		return fmt.Errorf("replay run %s into session %s: %w", s.runID, s.sessionID, err)
 	}
+
+	// ASKING AGAIN ONLY MAKES SENSE IF ASKING CHANGED SOMETHING.
+	//
+	// A pass that leaves the repo exactly as it found it has answered the
+	// question: there is nothing left to continue. Jarvis says so in his own
+	// words ("not resuming, it is already committed") and that answer used to
+	// cost one pass out of several, so the same job asked him again a minute
+	// later, and again, and the boss read the same paragraph five times.
+	//
+	// The verdict is taken from the REPO, not from his wording: a sentence
+	// this could match is a mechanic living in prose, and the model is free to
+	// phrase it differently tomorrow (CLAUDE.md Rule #1b). Same commit, same
+	// dirty files, nothing moved, so nothing to ask about.
+	if p.evidence != nil && report.Gathered() {
+		if after := p.evidence.Gather(ctx, s.sessionID, s.repo); after.Gathered() && unchanged(report, after) {
+			p.spend(ctx, s.runID)
+			p.note(ctx, s.runID, "finish_outcome", "settled: the pass changed nothing, so there is nothing to continue")
+			infoLog.Printf("settled run %s: the repo is where it was, so it is not stranded", s.runID)
+			return nil
+		}
+	}
 	p.note(ctx, s.runID, "finish_outcome", "continued")
 	return nil
+}
+
+// unchanged reports that a pass moved nothing in the repo.
+func unchanged(before, after Report) bool {
+	if before.Head != after.Head || len(before.Dirty) != len(after.Dirty) {
+		return false
+	}
+	for i := range before.Dirty {
+		if before.Dirty[i] != after.Dirty[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// spend closes a run's continuation budget so it is never raised again.
+func (p *Poller) spend(ctx context.Context, runID string) {
+	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := p.pool.Exec(nctx, `
+		UPDATE mem_runs
+		   SET meta = COALESCE(meta,'{}'::jsonb) || jsonb_build_object('finish_passes', $2::int)
+		 WHERE id = $1::uuid`, runID, p.maxPasses); err != nil {
+		log.Printf("finish: settling run %s: %v", runID, err)
+	}
 }
 
 // claim atomically takes the next stranded run and books its pass in the same
@@ -322,10 +368,14 @@ func (p *Poller) ContinueOne(ctx context.Context) error {
 // Only runs with NO VERDICT are eligible. A run that closed 'error' failed for
 // a reason — a bad repo, no subscription, a spent plan — and relaunching it is
 // exactly the "stop retrying something dead" behaviour the honesty rules ban.
-func (p *Poller) claim(ctx context.Context) (*stranded, error) {
-	row := p.pool.QueryRow(ctx, `
+// claimSQL is the statement claim() runs. Split out so the rules encoded in
+// it can be asserted by a test instead of described in a comment: the
+// "only the newest stranded job" clause is what stands between the boss and
+// thirty messages he never asked for.
+func claimSQL() string {
+	return `
 		UPDATE mem_runs SET meta = COALESCE(meta,'{}'::jsonb) || jsonb_build_object(
-		         'finish_passes',  (`+passesSQL+`) + 1,
+		         'finish_passes',  (` + passesSQL + `) + 1,
 		         'finish_last_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
 		 WHERE id = (
 		   SELECT r.id FROM mem_runs r
@@ -362,6 +412,28 @@ func (p *Poller) claim(ctx context.Context) (*stranded, error) {
 		             WHERE live.kind = ANY($1)
 		               AND live.status = 'running'
 		               AND live.meta->>'session_id' = r.meta->>'session_id')
+		      -- ONLY THE NEWEST STRANDED JOB IN A CHAT IS STILL A QUESTION.
+		      --
+		      -- A long build is a chain of small passes, so one conversation
+		      -- accumulates dozens of them, and every earlier pass is stranded
+		      -- by definition the moment the next one starts. Asking about each
+		      -- in turn is asking about work that has already been superseded.
+		      --
+		      -- The boss walked away for twenty minutes and came back to
+		      -- thirty identical messages (2026-09-02): twenty-four stranded
+		      -- jobs in one chat, one nudge a minute, Jarvis patiently
+		      -- answering "not resuming, it is already committed" to each. The
+		      -- per-run pass budget bounded each job and nothing bounded the
+		      -- QUEUE, so the loop was correct and unbearable at the same time.
+		      --
+		      -- Whatever happened after this run is the real state of the
+		      -- work, so this one has nothing left to say.
+		      AND NOT EXISTS (
+		            SELECT 1 FROM mem_runs newer
+		             WHERE newer.kind = ANY($1)
+		               AND newer.meta->>'session_id' = r.meta->>'session_id'
+		               AND newer.ended_at IS NOT NULL
+		               AND newer.ended_at > r.ended_at)
 		    ORDER BY r.ended_at
 		    LIMIT 1
 		    FOR UPDATE SKIP LOCKED)
@@ -373,10 +445,14 @@ func (p *Poller) claim(ctx context.Context) (*stranded, error) {
 		          COALESCE(meta->>'stopped_reason',''),
 		          COALESCE(result_summary,''),
 		          COALESCE(meta->>'currentFile',''),
-		          (`+passesSQL+`),
+		          (` + passesSQL + `),
 		          started_at,
 		          ended_at
-	`, codingKinds, p.settleGrace.String(), p.lookback.String(), p.maxPasses, p.transcript != nil)
+	`
+}
+
+func (p *Poller) claim(ctx context.Context) (*stranded, error) {
+	row := p.pool.QueryRow(ctx, claimSQL(), codingKinds, p.settleGrace.String(), p.lookback.String(), p.maxPasses, p.transcript != nil)
 
 	var s stranded
 	err := row.Scan(&s.runID, &s.label, &s.sessionID, &s.repo, &s.claudeSes,
