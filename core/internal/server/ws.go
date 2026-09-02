@@ -102,6 +102,11 @@ type wsServerEvent struct {
 	// backed by a mem_curiosity_questions row, so the chat card can offer
 	// an "Approve & fix" action that round-trips to the decide endpoint.
 	CuriosityID string `json:"curiosity_id,omitempty"`
+	// ThinkingTokens rides a type="thinking" frame from a brain that reports
+	// how MUCH it is reasoning rather than what (Claude Code redacts the
+	// text). It is the only live evidence such a turn is alive, so the row
+	// shows it instead of an empty box under a clock.
+	ThinkingTokens int `json:"thinking_tokens,omitempty"`
 	// BrowserFrame is set on type="browser_frame" frames — a live CDP
 	// screencast frame from the cloud browser, routed to the session's
 	// Studio tab so the boss watches Jarvis drive in real time. This rides
@@ -773,7 +778,10 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 	case agent.EventDelta:
 		send(wsServerEvent{Type: "delta", SessionID: sessionID, Text: ev.TextDelta})
 	case agent.EventThinking:
-		send(wsServerEvent{Type: "thinking", SessionID: sessionID, Text: ev.ThinkingDelta})
+		send(wsServerEvent{
+			Type: "thinking", SessionID: sessionID, Text: ev.ThinkingDelta,
+			ThinkingTokens: ev.ThinkingTokens,
+		})
 	case agent.EventToolCall:
 		if ev.ToolCall != nil {
 			// Forward the full ToolEvent including the gate's

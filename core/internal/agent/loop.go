@@ -1127,12 +1127,16 @@ func (l *Loop) Sessions() []*Session {
 
 // RunEvent is what we surface to transports (WebSocket/etc).
 type RunEvent struct {
-	Kind          EventKind  `json:"kind"`
-	SessionID     string     `json:"session_id"`
-	TextDelta     string     `json:"text_delta,omitempty"`
-	ThinkingDelta string     `json:"thinking_delta,omitempty"`
-	ToolCall      *ToolEvent `json:"tool_call,omitempty"`
-	ToolResult    *ToolEvent `json:"tool_result,omitempty"`
+	Kind          EventKind `json:"kind"`
+	SessionID     string    `json:"session_id"`
+	TextDelta     string    `json:"text_delta,omitempty"`
+	ThinkingDelta string    `json:"thinking_delta,omitempty"`
+	// ThinkingTokens: a brain that reports how much it is reasoning instead
+	// of what it is reasoning (Claude Code redacts the text). See
+	// llm.StreamEvent.ThinkingTokens.
+	ThinkingTokens int        `json:"thinking_tokens,omitempty"`
+	ToolCall       *ToolEvent `json:"tool_call,omitempty"`
+	ToolResult     *ToolEvent `json:"tool_result,omitempty"`
 	// Set on EventToolInputDelta: the model writing a tool call's arguments
 	// live, before the call runs. ToolCallID/ToolName identify the call;
 	// InputDelta is the raw partial-JSON chunk. Drives the canvas opening the
@@ -1578,7 +1582,12 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				}
 				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
 			case llm.StreamThinking:
-				emit(out, RunEvent{Kind: EventThinking, SessionID: s.ID, ThinkingDelta: ev.ThinkingDelta})
+				emit(out, RunEvent{
+					Kind:           EventThinking,
+					SessionID:      s.ID,
+					ThinkingDelta:  ev.ThinkingDelta,
+					ThinkingTokens: ev.ThinkingTokens,
+				})
 			case llm.StreamToolInputDelta:
 				// Forward the live tool-argument chunk so the canvas can open
 				// the file and type it in as the model writes it. Best-effort

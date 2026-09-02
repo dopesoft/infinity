@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { clearLiveTool, publishLiveTool } from "@/lib/live-tool";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
-import { fetchSessionMessages } from "@/lib/api";
+import { fetchSessionMessages, fetchTraces, type TurnRowDTO } from "@/lib/api";
 import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
@@ -65,6 +65,10 @@ export type ChatMessage = {
   // user pressed Stop mid-stream. The partial text streamed is preserved;
   // the UI surfaces a "↩ interrupted" hint rather than an error state.
   interrupted?: boolean;
+  // thinkingTokens: how much a brain has reasoned on this turn, when it
+  // reports the AMOUNT instead of the reasoning (Claude Code redacts the
+  // text). Shown on the Thinking row as the one live sign it is working.
+  thinkingTokens?: number;
   // interim=true on an assistant bubble that streamed BEFORE a tool call in
   // the same turn (the "let me check…" narration). Folded into the turn's
   // work block by ConversationStream; the turn's final reply is never interim.
@@ -664,6 +668,61 @@ export function useChat() {
     }
   }, []);
 
+  // RESUMING A TURN THAT IS STILL GOING.
+  //
+  // The server already does the right thing: a turn's frames route through
+  // `sessionSender`, which looks up whichever socket is bound to the session
+  // AT THE MOMENT each frame is emitted. So a reload, a tab switch, iOS
+  // killing the socket, or wandering off to another page and back all keep
+  // receiving the rest of the reply. What was missing was the browser ever
+  // ASKING whether something is in flight: on load `isStreaming` starts false,
+  // so there is no "Thinking", no working indicator and no Stop button, and
+  // the boss is looking at a dead-looking page while his answer is being
+  // written.
+  //
+  // It never showed on the fast brains because their turns are over in
+  // seconds. On Claude Code a turn routinely runs one to three minutes, which
+  // is long enough to navigate away, and he did: "if i go away the stream
+  // needs to continue as if i was still on the page, whether i browse around
+  // infinity or unfocus the app, or anything. it needs to fuckin persist."
+  //
+  // mem_turns is the truth, the same substrate /logs reads, so this survives a
+  // refresh, a second device, and a Core restart (the boot sweep closes any
+  // turn the restart stranded, so an in_flight row is always a live one).
+  const resumeLiveTurn = useCallback(
+    async (id: string, signal?: AbortSignal) => {
+      if (!id) return false;
+      let live: TurnRowDTO | undefined;
+      try {
+        const rows = await fetchTraces({ sessionId: id, status: "in_flight", limit: 1 }, signal);
+        live = rows?.[0];
+      } catch {
+        // A failed probe must never leave the page CLAIMING work is happening.
+        return false;
+      }
+      if (!live) return false;
+      turnStartRef.current = Date.parse(live.started_at) || Date.now();
+      setIsStreaming(true);
+      // A pending thinking row so the ledger says "Thinking" and counts up
+      // from when the turn actually started, not from when he came back.
+      setMessages((prev) => {
+        if (prev.some((m) => m.role === "thinking" && m.pending)) return prev;
+        return [
+          ...prev,
+          {
+            id: makeId(),
+            role: "thinking",
+            text: "",
+            pending: true,
+            createdAt: turnStartRef.current ?? Date.now(),
+          } as ChatMessage,
+        ];
+      });
+      return true;
+    },
+    [],
+  );
+
   const reconcileFromCore = useCallback(
     async (signal?: AbortSignal): Promise<boolean> => {
       if (!sessionId) return false;
@@ -805,6 +864,28 @@ export function useChat() {
     }
   }, [ws.status, kickSeeded]);
 
+  // AND pick the turn back up on every reconnect.
+  //
+  // iOS Safari kills the socket the moment the tab is backgrounded, and
+  // wandering to another page in Studio drops it too. The turn never stopped -
+  // `sessionSender` keeps routing its frames to whatever socket is bound when
+  // each one is emitted - but a client that came back with `isStreaming` false
+  // showed a dead page until the next delta happened to land. On a brain that
+  // thinks for a minute before its first token, that is the whole minute.
+  //
+  // Cheap enough to do on every reconnect: one indexed query for one row, and
+  // it no-ops when nothing is running.
+  const resumeRef = useRef(resumeLiveTurn);
+  useEffect(() => {
+    resumeRef.current = resumeLiveTurn;
+  }, [resumeLiveTurn]);
+  useEffect(() => {
+    if (ws.status !== "connected" || !sessionId || isStreaming) return;
+    const ac = new AbortController();
+    void resumeRef.current(sessionId, ac.signal);
+    return () => ac.abort();
+  }, [ws.status, sessionId, isStreaming]);
+
   // Restore session id from localStorage on mount; mint a fresh one if none.
   // Hydrate from the optimistic local cache *immediately* so a refresh -
   // even one while Core is offline - keeps the visible conversation. Then
@@ -862,8 +943,10 @@ export function useChat() {
         kickSeededRef.current(id);
       }
     });
+    // Messages are on screen; now ask whether a turn is still running.
+    void resumeLiveTurn(id, ac.signal);
     return () => ac.abort();
-  }, [requestedSessionId]);
+  }, [requestedSessionId, resumeLiveTurn]);
 
   // Mirror the visible transcript into localStorage whenever it changes.
   // Pending / thinking messages are filtered out by writeCachedMessages
@@ -998,12 +1081,19 @@ export function useChat() {
             const next = [...prev];
             const last = next[next.length - 1];
             if (last && last.role === "thinking" && last.pending) {
-              next[next.length - 1] = { ...last, text: last.text + ev.text };
+              next[next.length - 1] = {
+                ...last,
+                text: last.text + (ev.text ?? ""),
+                // The count only ever grows within a turn; never let a late
+                // frame walk it backwards.
+                thinkingTokens: Math.max(last.thinkingTokens ?? 0, ev.thinking_tokens ?? 0) || undefined,
+              };
             } else {
               next.push({
                 id: makeId(),
                 role: "thinking",
-                text: ev.text,
+                text: ev.text ?? "",
+                thinkingTokens: ev.thinking_tokens,
                 pending: true,
                 createdAt: Date.now(),
               });
@@ -1519,7 +1609,9 @@ export function useChat() {
         kickSeededRef.current(id);
       }
     });
-  }, [sessionId, clearWatchdog]);
+    // Messages are on screen; now ask whether a turn is still running.
+    void resumeLiveTurn(id, ac.signal);
+  }, [sessionId, clearWatchdog, resumeLiveTurn]);
 
   const clear = useCallback(() => {
     clearWatchdog();

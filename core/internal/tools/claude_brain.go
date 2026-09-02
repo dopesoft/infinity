@@ -488,8 +488,13 @@ func parseClaudeInitSessionID(s string) string {
 // Anthropic deltas (this is what --include-partial-messages turns on) and
 // `assistant` carries the assembled message afterwards.
 type brainEvent struct {
-	Type  string `json:"type"`
-	Event struct {
+	Type string `json:"type"`
+	// Subtype + EstimatedTokens carry `system/thinking_tokens`, which is how
+	// this brain reports reasoning progress now that the reasoning text is
+	// redacted.
+	Subtype         string `json:"subtype"`
+	EstimatedTokens int    `json:"estimated_tokens"`
+	Event           struct {
 		Type  string `json:"type"`
 		Delta struct {
 			Type     string `json:"type"`
@@ -530,7 +535,20 @@ func (p *brainPoll) emit(fresh string) {
 			continue
 		}
 		var ev brainEvent
-		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "stream_event" {
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		// EVIDENCE THAT IT IS ALIVE. Claude Code redacts the reasoning itself
+		// (every thinking_delta arrives with an empty string) and reports
+		// progress as a running token count instead. Without this the boss
+		// watches a row that says "Thinking" over an empty box for two
+		// minutes, which is indistinguishable from a hang - and he read it as
+		// one, repeatedly. The count is real and it moves.
+		if ev.Type == "system" && ev.Subtype == "thinking_tokens" && ev.EstimatedTokens > 0 {
+			p.send(llm.StreamEvent{Kind: llm.StreamThinking, ThinkingTokens: ev.EstimatedTokens})
+			continue
+		}
+		if ev.Type != "stream_event" {
 			continue
 		}
 		switch ev.Event.Type {

@@ -13,7 +13,10 @@
 
 export type WSEvent =
   | { type: "delta"; session_id: string; text: string }
-  | { type: "thinking"; session_id: string; text: string }
+  // thinking_tokens rides this frame from a brain that reports how MUCH it is
+  // reasoning rather than what (Claude Code redacts the text: every delta
+  // arrives empty). It is the only live evidence such a turn is alive.
+  | { type: "thinking"; session_id: string; text: string; thinking_tokens?: number }
   | { type: "tool_call"; session_id: string; tool_call: WSToolEvent }
   // tool_input_delta streams the model writing a tool call's arguments live —
   // e.g. the file content for an edit — BEFORE the tool runs. Studio opens the

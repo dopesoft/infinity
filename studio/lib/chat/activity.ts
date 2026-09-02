@@ -894,7 +894,15 @@ function describeMessage(m: ChatMessage): Described {
     // termination**` with the asterisks in it. Stripped here, on the prose
     // branch only: a tool's meta is a path or a command, where `*` is a glob
     // and must survive untouched.
-    const meta = oneLine(stripMarkdown(m.text ?? ""));
+    // A thinking row whose text is REDACTED (Claude Code sends the block and
+    // empty deltas) has nothing to quote, so the meta carries the one real
+    // fact available: how much it has reasoned so far. Without it the boss
+    // reads "Thinking" over an empty box for two minutes, which looks exactly
+    // like a hang - and he read it as one, more than once.
+    let meta = oneLine(stripMarkdown(m.text ?? ""));
+    if (!meta && m.role === "thinking" && (m.thinkingTokens ?? 0) > 0) {
+      meta = `${formatCount(m.thinkingTokens as number)} tokens of reasoning so far`;
+    }
     return {
       message: m,
       spec,
@@ -1146,4 +1154,13 @@ export function summaryFor(items: ActivityItem[], now?: number): string {
 
   if (ranked.length === 0) return `Worked for ${duration}`;
   return `Worked for ${duration} · ${ranked.join(", ")}`;
+}
+
+/** formatCount renders a running total the way a person reads one: 950, 1.2k. */
+export function formatCount(n: number): string {
+  if (n < 1000) return String(n);
+  // Round on the tenth explicitly. `(1450/1000).toFixed(1)` is "1.4", because
+  // 1.45 is not 1.45 in binary floating point, and a counter that reads low is
+  // a counter he cannot trust.
+  return `${(Math.round(n / 100) / 10).toFixed(1).replace(/\.0$/, "")}k`;
 }

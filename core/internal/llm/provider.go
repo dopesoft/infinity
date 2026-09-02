@@ -150,7 +150,16 @@ type StreamEvent struct {
 	Kind          StreamEventKind `json:"kind"`
 	TextDelta     string          `json:"text_delta,omitempty"`
 	ThinkingDelta string          `json:"thinking_delta,omitempty"`
-	ToolCall      *ToolCall       `json:"tool_call,omitempty"`
+	// ThinkingTokens is a running count of reasoning tokens for THIS turn,
+	// when the brain reports one instead of the reasoning itself.
+	//
+	// Claude Code is that brain: in -p mode it emits the thinking block and
+	// its deltas with the text REDACTED (every thinking_delta arrives empty),
+	// and reports progress as `system/thinking_tokens` counts instead. So the
+	// boss got a row that said "Thinking" and a clock, with nothing under it,
+	// for two minutes. This is the one real signal available, and it moves.
+	ThinkingTokens int       `json:"thinking_tokens,omitempty"`
+	ToolCall       *ToolCall `json:"tool_call,omitempty"`
 	// Tool-input streaming: a StreamToolInputDelta carries the model writing a
 	// tool call's arguments live, BEFORE the tool runs and before the final
 	// StreamToolCall. ToolCallID/ToolName identify which call (set as soon as
@@ -159,9 +168,9 @@ type StreamEvent struct {
 	// ones that can't simply fall back to the complete StreamToolCall, so
 	// consumers treat deltas as a best-effort live preview that the final tool
 	// call reconciles authoritatively.
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	ToolName   string      `json:"tool_name,omitempty"`
-	InputDelta string      `json:"input_delta,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	InputDelta string `json:"input_delta,omitempty"`
 	// ToolOutput / ToolError carry a StreamToolResult: what the tool returned
 	// and whether it failed. ToolCallID says which call it answers.
 	ToolOutput string      `json:"tool_output,omitempty"`
@@ -174,15 +183,15 @@ type StreamEvent struct {
 type StreamEventKind string
 
 const (
-	StreamText           StreamEventKind = "text"
-	StreamThinking       StreamEventKind = "thinking"
-	StreamToolCall       StreamEventKind = "tool_call"
+	StreamText     StreamEventKind = "text"
+	StreamThinking StreamEventKind = "thinking"
+	StreamToolCall StreamEventKind = "tool_call"
 	// StreamToolResult is what a tool a SELF-EXECUTING brain ran came back
 	// with. Every other provider hands us the call and our loop produces the
 	// result itself; a harness runs both halves inside its own session, so
 	// without this the boss sees what it decided to do and never what
 	// happened, and memory records the same half-story.
-	StreamToolResult StreamEventKind = "tool_result"
+	StreamToolResult     StreamEventKind = "tool_result"
 	StreamToolInputDelta StreamEventKind = "tool_input_delta"
 	StreamComplete       StreamEventKind = "complete"
 	StreamError          StreamEventKind = "error"
