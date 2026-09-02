@@ -113,6 +113,30 @@ type TokenUsage struct {
 	// rate limits - only their dollar cost is discounted.
 	CacheRead  int `json:"cache_read_input_tokens,omitempty"`
 	CacheWrite int `json:"cache_creation_input_tokens,omitempty"`
+	// ContextTokens is how full the WINDOW got, when that is a different
+	// number from the prompt tokens billed.
+	//
+	// For every brain that answers in one API call they are the same, and
+	// this stays 0. A brain that runs its own tool loop (Claude Code) answers
+	// one of our turns with MANY calls and reports the SUM: one real turn of
+	// the boss's billed 2,172,488 cache-read tokens across 13 calls, while
+	// the deepest single prompt - the actual window fill - was 172,498. The
+	// meter divided the sum by a 1M window, showed him 217% and sat red for
+	// an hour, and auto-compaction fired on a window that was a fifth full.
+	//
+	// So the two questions are kept apart: PromptTokens answers "what did
+	// this cost", ContextTokens answers "how full is he".
+	ContextTokens int `json:"context_tokens,omitempty"`
+}
+
+// WindowTokens is how much of the context window the last call occupied.
+// Falls back to PromptTokens, which is the same number for every brain that
+// answers in a single call.
+func (u TokenUsage) WindowTokens() int {
+	if u.ContextTokens > 0 {
+		return u.ContextTokens
+	}
+	return u.PromptTokens()
 }
 
 // PromptTokens is the FULL prompt size that occupied the context window and

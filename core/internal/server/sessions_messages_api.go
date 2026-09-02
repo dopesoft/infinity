@@ -178,6 +178,15 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	out := []sessionMessageDTO{}
+	// One card per tool call, at the position the call was made.
+	//
+	// A tool is filed twice now: once when it STARTS, so a long command is
+	// visible to a reload while it runs, and again when it returns. Both rows
+	// carry the same tool_call_id, and the later one carries the output, so
+	// the second overwrites the first IN PLACE - the card fills in rather than
+	// appearing a second time further down the transcript. Without this the
+	// boss gets two rows for one command and the running one never settles.
+	toolRowAt := map[string]int{}
 	for rows.Next() {
 		var hook, text, payload string
 		var createdAt time.Time
@@ -209,7 +218,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(p.ToolCallID) == "" {
 				continue
 			}
-			out = append(out, sessionMessageDTO{
+			dto := sessionMessageDTO{
 				Role:        "tool",
 				CreatedAt:   createdAt.UTC().Format(time.RFC3339),
 				ToolCallID:  p.ToolCallID,
@@ -217,7 +226,17 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				ToolInput:   p.Input,
 				ToolOutput:  p.Output,
 				ToolIsError: hook == "PostToolUseFailure" || p.IsError,
-			})
+			}
+			if at, seen := toolRowAt[p.ToolCallID]; seen {
+				// Keep the ORIGINAL timestamp: the card belongs where the
+				// call was made, between the words either side of it, not
+				// wherever the result happened to land.
+				dto.CreatedAt = out[at].CreatedAt
+				out[at] = dto
+				continue
+			}
+			toolRowAt[p.ToolCallID] = len(out)
+			out = append(out, dto)
 			continue
 		}
 

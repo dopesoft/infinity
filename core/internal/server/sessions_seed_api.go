@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/dashboard"
+	"github.com/dopesoft/infinity/core/internal/pursuits/jh"
 	"github.com/dopesoft/infinity/core/internal/pursuits/pc"
 	"github.com/dopesoft/infinity/core/internal/untrusted"
 	"github.com/google/uuid"
@@ -144,6 +145,24 @@ func (s *Server) handleSessionsSeed(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rawText = pc.FormatChatContext(cockpit)
+	}
+	// Same contract for a Job Hunt pursuit: turn one arrives already knowing
+	// the whole board — every role and the stage it sits in, why it scores the
+	// way it does, which postings look like ghosts, the interview material
+	// banked so far, where each outreach has got to, and what has been written
+	// for which role. Without it, "tailor my resume for this one" would open
+	// with the agent asking which one.
+	if body.Kind == "pursuit_jh" {
+		cockpit, cerr := jh.NewStore(s.pool).Cockpit(r.Context(), body.ID)
+		if cerr != nil {
+			// Fail loud, for the same reason as the coaching cockpit above: a
+			// board we could not read is NOT an empty board, and an agent
+			// seeded with no pipeline would answer as though nothing were
+			// filed.
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("load job hunt cockpit: %v", cerr))
+			return
+		}
+		rawText = jh.FormatChatContext(cockpit)
 	}
 	// For a generated document/artifact, hydrate the actual CONTENT into turn-1
 	// context so "Discuss with Jarvis" lands the boss in a chat that can answer

@@ -10,6 +10,7 @@ import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/a
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
 import { settleNestedOnly } from "@/lib/chat/settle";
+import { survivesRefetch } from "@/lib/chat/preserve";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
@@ -390,9 +391,17 @@ function mergeServerRows(
   // text (TaskCompleted), so a tail-only rule erased that interim text on
   // every reconnect/reconcile — the "it had a whole message, then it
   // disappeared" report (2026-08-26). They sort back into place by time.
-  const pendingTail: ChatMessage[] = local.filter(
-    (m) => (m.pending && m.role !== "tool") || m.role === "thinking",
-  );
+  //
+  // An ERROR card is preserved on the same grounds and for a sharper reason:
+  // it carries no `pending` flag (useChat's "error" frame handler builds it
+  // settled), so it matched neither rule and every refetch deleted it. The
+  // boss saw a failure flash up and remove itself, which is the UI version of
+  // a silent-green failure - worse than never showing it, because now he
+  // cannot tell whether it happened. Some errors never reach the server
+  // transcript at all: the loop can emit one mid-stream and then recover, and
+  // only a turn that CLOSES errored gets a durable row. Local is the only
+  // copy, so local keeps it.
+  const pendingTail: ChatMessage[] = local.filter(survivesRefetch);
   // De-dupe: drop any pending bubble whose text matches OR is a prefix of
   // a same-role server row. The server's finalized turn always wins.
   //
@@ -408,7 +417,14 @@ function mergeServerRows(
     list.push(m.text.trim());
     sameRoleServer.set(m.role, list);
   }
+  // The same fact must not be told twice: once a turn closes errored the
+  // server replays a durable error row, and the local card it duplicates goes.
+  const serverErrors = new Set(
+    fromServer.map((m) => (m.error ?? "").trim()).filter(Boolean),
+  );
   const filteredPending = pendingTail.filter((m) => {
+    const err = (m.error ?? "").trim();
+    if (err) return !serverErrors.has(err);
     const candidates = sameRoleServer.get(m.role);
     if (!candidates) return true;
     const local = m.text.trim();
@@ -932,11 +948,22 @@ export function useChat() {
         const serverUserTexts = new Set(
           fromServer.filter((m) => m.role === "user").map((m) => m.text.trim()),
         );
-        const orphanedSteers = prev.filter(
-          (m) => m.role === "user" && m.steered && !serverUserTexts.has(m.text.trim()),
+        const serverErrors = new Set(
+          fromServer.map((m) => (m.error ?? "").trim()).filter(Boolean),
         );
-        if (orphanedSteers.length === 0) return fromServer;
-        return [...fromServer, ...orphanedSteers].sort((a, b) => a.createdAt - b.createdAt);
+        // Same rule as the reconcile merge (survivesRefetch), so navigating
+        // away and back cannot lose something a reconnect would have kept.
+        // This path used to preserve steered messages ONLY, which is how an
+        // error card and a mid-turn note both vanished on return.
+        const keep = prev.filter((m) => {
+          if (!survivesRefetch(m)) return false;
+          const err = (m.error ?? "").trim();
+          if (err) return !serverErrors.has(err);
+          if (m.role === "user") return !serverUserTexts.has(m.text.trim());
+          return true;
+        });
+        if (keep.length === 0) return fromServer;
+        return [...fromServer, ...keep].sort((a, b) => a.createdAt - b.createdAt);
       });
       // Seeded session: fire the opening agent turn now that history is loaded.
       if (fromServer.length === 1 && fromServer[0].seeded) {

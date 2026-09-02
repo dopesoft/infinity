@@ -2,13 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppRouter } from "@/lib/loading";
-import { ArrowUp, MessageSquare, RotateCcw } from "lucide-react";
+import { MessageSquare, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Inset } from "@/components/ui/inset";
-import { Textarea } from "@/components/ui/textarea";
 import { useMediaQuery } from "@/lib/use-media-query";
-import { cn } from "@/lib/utils";
+import {
+  AgentLine,
+  BossLine,
+  ConversationComposer,
+  ConversationFooter,
+  ConversationScroll,
+  LiveLine,
+  QuietAction,
+  QuietRow,
+  ThinkingLine,
+  type ConversationComposerHandle,
+} from "@/components/pursuits/conversation";
 import { writeCockpit } from "@/lib/pursuits/pc/api";
 import {
   adjustmentLine,
@@ -38,6 +48,12 @@ import type { PCCockpit } from "@/lib/pursuits/pc/types";
  *
  * The transcript is one ordered list of entries so the two interleave the way
  * the conversation actually happened, rather than sitting in separate regions.
+ *
+ * The transcript register, the scroller and the composer row are NOT decided
+ * here: they come from components/pursuits/conversation, shared with the job
+ * hunt cockpit, so the two surfaces cannot drift into two chat treatments.
+ * What stays local is genuinely coaching-specific — the beat choices, the
+ * question label above the composer, and the quoted memory.
  */
 
 type Entry =
@@ -94,8 +110,7 @@ export function CoachConversation({
   const keyRef = useRef(0);
   const startedRef = useRef<Set<string>>(new Set());
   const seenLiveRef = useRef<Set<string>>(new Set());
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputRef = useRef<ConversationComposerHandle | null>(null);
   const answersRef = useRef(answers);
   answersRef.current = answers;
 
@@ -185,24 +200,6 @@ export function CoachConversation({
     ]);
   }, [live.messages]);
 
-  /* Follow the conversation. Jump rather than glide under reduced motion. */
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
-  }, [entries, live.messages, reduceMotion]);
-
-  /* Grow the composer with the answer. The evening question wants a paragraph,
-   * and a 44px box that scrolls internally is where people stop writing. This
-   * is the same sanctioned imperative-height exception the main Composer uses:
-   * it sets a calculated value, it is not a styling concern. */
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [draft]);
-
   const speaking = Boolean(beat) && revealed < (beat?.lines.length ?? 0);
   const saving = commitStatus === "running";
   const failed = commitStatus === "error";
@@ -258,15 +255,6 @@ export function CoachConversation({
     await live.ask(value);
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter sends, Shift+Enter breaks the line: the same contract as the main
-    // composer, so the muscle memory carries over.
-    if (e.key !== "Enter" || e.shiftKey) return;
-    e.preventDefault();
-    if (answering) submitAnswer();
-    else void submitAsk();
-  }
-
   /* Hand off to the full workspace on the SAME session, so the conversation
    * continues rather than restarting. Minting it here when the boss never
    * spoke is the same seed the dashboard's Discuss-with-Jarvis performs. */
@@ -289,172 +277,118 @@ export function CoachConversation({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div
-        ref={scrollerRef}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto scroll-touch [overflow-anchor:none]"
-      >
-        {/* `justify-end` + `min-h-full` keeps the opening line down by the
-            composer rather than stranded at the top of an empty screen, then
-            lets the conversation grow upward the way a chat does. */}
-        <div
-          className="mx-auto flex min-h-full w-full min-w-0 max-w-[38rem] flex-col justify-end gap-5 px-4 py-6 sm:px-6 sm:py-8"
-          aria-live="polite"
-        >
-          {entries.map((entry) => (
-            <TranscriptEntry key={entry.key} entry={entry} live={live.messages} />
-          ))}
+      <ConversationScroll follow={[entries, live.messages]}>
+        {entries.map((entry) => (
+          <TranscriptEntry key={entry.key} entry={entry} live={live.messages} />
+        ))}
 
-          {(speaking || saving || live.busy) && !failed ? (
-            <p className="thinking-shimmer font-voice text-[15.5px] leading-[1.55] text-quiet">
-              {saving ? "Writing that down" : "Jarvis is thinking"}
+        {(speaking || saving || live.busy) && !failed ? (
+          <ThinkingLine label={saving ? "Writing that down" : undefined} />
+        ) : null}
+
+        {failed ? (
+          <div className="min-w-0" role="alert">
+            <p className="font-voice text-[15.5px] leading-[1.6] text-danger">
+              I could not write that down, so nothing has been logged for this step yet.
+              {commitError ? ` ${commitError}` : ""}
             </p>
-          ) : null}
-
-          {failed ? (
-            <div className="min-w-0" role="alert">
-              <p className="font-voice text-[15.5px] leading-[1.6] text-danger">
-                I could not write that down, so nothing has been logged for this step yet.
-                {commitError ? ` ${commitError}` : ""}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3"
-                onClick={() => setAttempt((n) => n + 1)}
-              >
-                <RotateCcw className="size-4" aria-hidden />
-                Try saving again
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="shrink-0 border-t border-hairline bg-background px-4 pt-3 sm:px-6 pb-safe">
-        <div className="mx-auto w-full min-w-0 max-w-[38rem]">
-          {showChoices ? (
-            <div className="flex flex-wrap gap-2 pb-3">
-              {choices.map((choice, i) => (
-                <Button
-                  key={choice.id}
-                  variant={i === 0 ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => pick(choice.id)}
-                >
-                  {choice.label}
-                </Button>
-              ))}
-            </div>
-          ) : null}
-
-          {answering && activeCompose ? (
-            <label htmlFor="pc-coach-input" className="block pb-2">
-              <span className="font-sans text-[13.5px] font-medium text-foreground">
-                {activeCompose.label}
-              </span>
-              {activeCompose.help ? (
-                <span className="mt-0.5 block text-[12.5px] leading-snug text-quiet">
-                  {activeCompose.help}
-                </span>
-              ) : null}
-            </label>
-          ) : null}
-
-          <div className="flex items-end gap-2 pb-3">
-            <Textarea
-              id="pc-coach-input"
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKeyDown}
-              rows={1}
-              inputMode="text"
-              aria-label={
-                answering && activeCompose ? activeCompose.label : "Say something to Jarvis"
-              }
-              placeholder={
-                answering && activeCompose
-                  ? activeCompose.placeholder
-                  : "Say something to Jarvis"
-              }
-              className="min-h-11 min-w-0 flex-1 py-2.5 text-base sm:text-sm"
-            />
             <Button
-              size="icon"
-              className="size-11 shrink-0"
-              disabled={sendDisabled}
-              onClick={() => (answering ? submitAnswer() : void submitAsk())}
-              aria-label={answering ? "Send answer" : "Ask Jarvis"}
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => setAttempt((n) => n + 1)}
             >
-              {live.busy ? (
-                <Spinner className="size-4" aria-hidden />
-              ) : (
-                <ArrowUp className="size-4" aria-hidden />
-              )}
+              <RotateCcw className="size-4" aria-hidden />
+              Try saving again
             </Button>
           </div>
+        ) : null}
+      </ConversationScroll>
 
-          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 pb-3 text-[12.5px] text-quiet">
-            {answering ? (
-              <>
-                {activeCompose?.optional ? (
-                  <QuietAction onClick={submitAnswer}>Skip this</QuietAction>
-                ) : null}
-                <QuietAction
-                  onClick={() => {
-                    setAskMode(true);
-                    setDraft("");
-                    window.setTimeout(() => inputRef.current?.focus(), 0);
-                  }}
-                >
-                  <MessageSquare className="size-3.5" aria-hidden />
-                  Ask something instead
-                </QuietAction>
-              </>
-            ) : askMode && activeCompose ? (
-              <QuietAction
-                onClick={() => {
-                  setAskMode(false);
-                  setDraft(activeCompose.initialValue ?? "");
-                }}
+      <ConversationFooter>
+        {showChoices ? (
+          <div className="flex flex-wrap gap-2 pb-3">
+            {choices.map((choice, i) => (
+              <Button
+                key={choice.id}
+                variant={i === 0 ? "default" : "outline"}
+                size="sm"
+                onClick={() => pick(choice.id)}
               >
-                Back to the question
-              </QuietAction>
-            ) : null}
-            <QuietAction onClick={() => void continueInWorkspace()}>
-              {handingOff ? (
-                <Spinner className="size-3.5" aria-hidden />
-              ) : null}
-              Continue in the workspace
-            </QuietAction>
-            {!live.connected ? (
-              <span className="text-warning">
-                I am not connected, so I cannot answer questions right now. Your programme
-                still saves.
+                {choice.label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+
+        {answering && activeCompose ? (
+          <label htmlFor="pc-coach-input" className="block pb-2">
+            <span className="font-sans text-[13.5px] font-medium text-foreground">
+              {activeCompose.label}
+            </span>
+            {activeCompose.help ? (
+              <span className="mt-0.5 block text-[12.5px] leading-snug text-quiet">
+                {activeCompose.help}
               </span>
             ) : null}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+          </label>
+        ) : null}
 
-function QuietAction({
-  onClick,
-  children,
-}: {
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex min-h-8 items-center gap-1 rounded-sm underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-    >
-      {children}
-    </button>
+        <ConversationComposer
+          id="pc-coach-input"
+          ref={inputRef}
+          value={draft}
+          onChange={setDraft}
+          onSubmit={() => (answering ? submitAnswer() : void submitAsk())}
+          ariaLabel={answering && activeCompose ? activeCompose.label : "Say something to Jarvis"}
+          placeholder={
+            answering && activeCompose ? activeCompose.placeholder : "Say something to Jarvis"
+          }
+          disabled={sendDisabled}
+          busy={live.busy}
+          sendLabel={answering ? "Send answer" : "Ask Jarvis"}
+        />
+
+        <QuietRow>
+          {answering ? (
+            <>
+              {activeCompose?.optional ? (
+                <QuietAction onClick={submitAnswer}>Skip this</QuietAction>
+              ) : null}
+              <QuietAction
+                onClick={() => {
+                  setAskMode(true);
+                  setDraft("");
+                  window.setTimeout(() => inputRef.current?.focus(), 0);
+                }}
+              >
+                <MessageSquare className="size-3.5" aria-hidden />
+                Ask something instead
+              </QuietAction>
+            </>
+          ) : askMode && activeCompose ? (
+            <QuietAction
+              onClick={() => {
+                setAskMode(false);
+                setDraft(activeCompose.initialValue ?? "");
+              }}
+            >
+              Back to the question
+            </QuietAction>
+          ) : null}
+          <QuietAction onClick={() => void continueInWorkspace()}>
+            {handingOff ? <Spinner className="size-3.5" aria-hidden /> : null}
+            Continue in the workspace
+          </QuietAction>
+          {!live.connected ? (
+            <span className="text-warning">
+              I am not connected, so I cannot answer questions right now. Your programme
+              still saves.
+            </span>
+          ) : null}
+        </QuietRow>
+      </ConversationFooter>
+    </div>
   );
 }
 
@@ -470,7 +404,7 @@ function TranscriptEntry({
   if (entry.kind === "coach") {
     return (
       <div className="min-w-0">
-        <CoachLine text={entry.text} />
+        <AgentLine text={entry.text} />
         {entry.quote ? (
           <div className="mt-3 min-w-0">
             <p className="pb-1.5 font-mono text-[11px] uppercase tracking-[0.08em] text-quiet">
@@ -495,40 +429,5 @@ function TranscriptEntry({
 
   const message = live.find((m) => m.id === entry.id);
   if (!message) return null;
-  if (message.role === "boss") return <BossLine text={message.text} />;
-  if (message.error) {
-    return (
-      <p className="min-w-0 font-voice text-[15.5px] leading-[1.6] text-danger" role="alert">
-        {message.error}
-      </p>
-    );
-  }
-  if (!message.text.trim()) return null;
-  return <CoachLine text={message.text} />;
-}
-
-/** Jarvis speaks on the page ground, never in a bubble or a card. */
-function CoachLine({ text }: { text: string }) {
-  return (
-    <p className="min-w-0 whitespace-pre-wrap break-words font-voice text-[15.5px] leading-[1.6] text-foreground">
-      {text}
-    </p>
-  );
-}
-
-/** The boss's own words: chrome register, right-aligned, one level of tone. */
-function BossLine({ text }: { text: string }) {
-  if (!text.trim()) return null;
-  return (
-    <div className="flex min-w-0 justify-end">
-      <p
-        className={cn(
-          "min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-[10px] bg-muted px-3 py-2",
-          "text-right font-sans text-[13.5px] leading-relaxed text-foreground",
-        )}
-      >
-        {text}
-      </p>
-    </div>
-  );
+  return <LiveLine message={message} />;
 }

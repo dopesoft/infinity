@@ -78,6 +78,36 @@ const (
 	// brain is long research and multi-step work, but finite so a wedged
 	// session cannot hold a chat open forever.
 	brainMaxWait = 20 * time.Minute
+
+	// The read window, and the three numbers that keep one huge line from
+	// silencing an entire turn.
+	//
+	// The failure this fixes (2026-09-01): the slice was read as
+	// `tail -n +N | head -n 400 | head -c 48000` with no per-line clamp. When
+	// the FIRST line at the cursor was itself bigger than the byte cap, the
+	// slice came back with no newline in it at all, so nothing was complete,
+	// the read position never advanced, and every poll for the rest of the
+	// turn re-read the same truncated bytes and returned nothing. Claude kept
+	// working; the boss watched "Working..." for ten minutes. A stream that
+	// goes silent must never be indistinguishable from a brain that stopped.
+	//
+	// The coding path has had all three of these from the start and says why
+	// in its own comment (claudeLineMaxCols / claudeChunkBytes /
+	// claudeMaxDrains, code_agent.go). This is the same defence, same names,
+	// because it is the same problem on the same kind of stream.
+	//
+	// brainLineMaxCols clamps EVERY line before the byte cap, so no single
+	// event can fill the window on its own. A clamped line stops being valid
+	// JSON and is skipped, which is the right trade: the one line big enough
+	// to hit this is an assembled message whose live half already streamed.
+	brainLineMaxCols = 8000
+	// brainLinesPerPoll / brainChunkBytes bound one read.
+	brainLinesPerPoll = 400
+	brainChunkBytes   = 48000
+	// brainMaxDrains lets a BURST catch up inside one poll instead of
+	// trickling out over the following seconds. A turn that emits 2,000 events
+	// in a second should not take five seconds to show them.
+	brainMaxDrains = 4
 )
 
 // brainWorkspace resolves the working directory for the bridge in play.
@@ -120,7 +150,20 @@ func (r *ClaudeCodeRunner) brainReady() bool {
 // Converse runs one chat turn on the Mac's Claude Code and streams it back.
 // It implements llm.BrainRunner.
 func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out chan<- llm.StreamEvent) (llm.Response, error) {
+	// Where the wait before the first word actually goes.
+	//
+	// The boss: "as of now I wait 2-3 mins before seeing something." Five
+	// things happen before Claude sees a token - a bridge health probe, a full
+	// bash round trip to prove the subscription, the launch round trip, an MCP
+	// handshake over the public internet (--strict-mcp-config, so the whole
+	// tool registry is enumerated first), and Claude's own cold start. Cutting
+	// the wrong one costs an evening, so each is timed and the numbers go in
+	// one line per turn. Measure, then cut.
+	t0 := time.Now()
+	var tBridge, tAuth, tLaunch time.Duration
+
 	b, _, err := r.ActiveBridge(ctx)
+	tBridge = time.Since(t0)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -137,7 +180,9 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 
 	// Prove the subscription BEFORE launching. The proof differs by bridge but
 	// the RULE does not: this brain spends the Max plan or it does not run.
+	tAuthStart := time.Now()
 	token, err := r.brainSubscription(ctx, b)
+	tAuth = time.Since(tAuthStart)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -156,14 +201,19 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 		subToken:  token,
 		cloud:     b.Name() == bridge.KindCloud,
 	})
+	tLaunchStart := time.Now()
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{
 		"cmd": script, "cwd": bridgeHome, "timeout_sec": 30,
 	})
+	tLaunch = time.Since(tLaunchStart)
 	if !ok || code >= 300 {
 		msg, _ := bridgeBashOutput(body)
 		return llm.Response{}, fmt.Errorf("couldn't start Claude on the Mac (bridge said %d): %s", code, strings.TrimSpace(msg))
 	}
-	brainInfoLog.Printf("claude_max: launched turn %s (resume=%q model=%q)", jobID, turn.Resume, turn.Model)
+	brainInfoLog.Printf("claude_max: launched turn %s in %s (bridge=%s auth=%s launch=%s) resume=%q model=%q",
+		jobID, time.Since(t0).Round(time.Millisecond),
+		tBridge.Round(time.Millisecond), tAuth.Round(time.Millisecond), tLaunch.Round(time.Millisecond),
+		turn.Resume, turn.Model)
 
 	p := &brainPoll{
 		b:         b,
@@ -173,6 +223,7 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 		out:       out,
 		line:      1,
 		started:   time.Now(),
+		setupTook: time.Since(t0),
 	}
 	defer p.cleanup()
 	return p.wait(ctx)
@@ -308,6 +359,12 @@ func (r *ClaudeCodeRunner) brainSubscription(ctx context.Context, b bridge.Bridg
 		}
 		return token, nil
 	}
+	// A proof that is still warm is still true. See ClaudeCodeRunner.authOK:
+	// this probe is a full round trip to the Mac and it was paid before every
+	// message, launched or not.
+	if r.authProven() {
+		return "", nil
+	}
 	// Probed from home, not the workspace: the workspace does not exist until
 	// the launch script makes it, and a probe that cwd's into a directory it
 	// is about to create fails every FIRST turn on a fresh Mac.
@@ -321,7 +378,25 @@ func (r *ClaudeCodeRunner) brainSubscription(ctx context.Context, b bridge.Bridg
 	if !auth.Subscription() {
 		return "", &notSubscriptionError{auth: auth}
 	}
+	r.rememberAuth()
 	return "", nil
+}
+
+// brainAuthTTL is how long a proven Mac subscription is trusted without
+// re-asking. Short enough that signing out is noticed within a message or two,
+// long enough that a back-and-forth conversation pays for the proof once.
+const brainAuthTTL = 90 * time.Second
+
+func (r *ClaudeCodeRunner) authProven() bool {
+	r.authMu.Lock()
+	defer r.authMu.Unlock()
+	return !r.authOK.IsZero() && time.Since(r.authOK) < brainAuthTTL
+}
+
+func (r *ClaudeCodeRunner) rememberAuth() {
+	r.authMu.Lock()
+	r.authOK = time.Now()
+	r.authMu.Unlock()
 }
 
 // --- poll --------------------------------------------------------------------
@@ -338,6 +413,13 @@ type brainPoll struct {
 	out       chan<- llm.StreamEvent
 	line      int
 	started   time.Time
+
+	// setupTook is everything paid before Claude was launched, carried so the
+	// first-token line can report the whole wait in one place.
+	setupTook time.Duration
+	// firstEvent marks the first time this turn produced anything at all, so
+	// "time to first word" is measured rather than guessed.
+	firstEvent time.Time
 
 	sessionSeen bool
 	// toolNames maps a call id to its tool, so the result half of the pair
@@ -362,16 +444,25 @@ func (p *brainPoll) wait(ctx context.Context) (llm.Response, error) {
 	ticker := time.NewTicker(brainPollEach)
 	defer ticker.Stop()
 
+	// Read once before the first tick. The ticker used to fire first, so every
+	// turn began with a third of a second of guaranteed silence for no reason.
+	first := true
 	for {
-		select {
-		case <-ctx.Done():
-			// The boss stopped the turn (or it timed out). Leave the Claude
-			// session resumable rather than tearing it down: his next message
-			// picks the thread back up.
-			return llm.Response{}, ctx.Err()
-		case <-ticker.C:
+		if first {
+			first = false
+			if err := ctx.Err(); err != nil {
+				return llm.Response{}, err
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				// The boss stopped the turn (or it timed out). Leave the
+				// Claude session resumable rather than tearing it down: his
+				// next message picks the thread back up.
+				return llm.Response{}, ctx.Err()
+			case <-ticker.C:
+			}
 		}
-
 		read, ok := p.pollOnce(ctx)
 		if !ok {
 			// One missed poll is not a verdict about the turn - the bridge
@@ -382,15 +473,41 @@ func (p *brainPoll) wait(ctx context.Context) (llm.Response, error) {
 			continue
 		}
 		p.noteSession(read.fresh)
+		if p.firstEvent.IsZero() && strings.TrimSpace(read.fresh) != "" {
+			p.firstEvent = time.Now()
+			// The number the boss actually feels: from him pressing send to
+			// the first thing appearing. Broken out so it is obvious which
+			// half to attack - our setup, or Claude's own cold start.
+			brainInfoLog.Printf("claude_max: first output after %s (setup %s + claude %s)",
+				(p.setupTook + time.Since(p.started)).Round(time.Millisecond),
+				p.setupTook.Round(time.Millisecond),
+				time.Since(p.started).Round(time.Millisecond))
+		}
 		p.emit(read.fresh)
 
 		if res, done := claudeTerminalResult(read.last); done {
 			return p.finish(res)
 		}
 		if strings.Contains(read.head, "DONE:") {
-			// The process exited without a terminal result: a crash, a killed
-			// session, or an auth failure. Read what it managed to write and
-			// report it as the failure it is rather than an empty success.
+			// The process is gone. Before calling that a failure, read the
+			// last line again without the poll's byte cap.
+			//
+			// The routine poll clamps the tail to claudeLastLineBytes so a
+			// long reply cannot dominate a 300 ms read. But the terminal
+			// `result` line carries the whole answer plus its usage blob, and
+			// a reply longer than that cap comes back truncated, fails to
+			// parse as JSON, and reads as "no result" - so a turn that
+			// SUCCEEDED was reported to the boss as "Claude stopped before
+			// answering". Paying for one uncapped read at the very end costs
+			// a single round trip and removes that whole class of false
+			// failure. (Same law as the honesty guards in CLAUDE.md, pointed
+			// the other way: a success must never be reported as a failure
+			// either.)
+			if res, done := p.finalResult(ctx); done {
+				return p.finish(res)
+			}
+			// Genuinely nothing to parse: a crash, a killed session, or an
+			// auth failure. Read what it managed to write and report it.
 			return llm.Response{}, p.failure(ctx)
 		}
 		if time.Now().After(deadline) {
@@ -405,45 +522,95 @@ type brainRead struct {
 	fresh string
 }
 
-// pollOnce reads the completion signals and the slice of stream that is new.
-// Same three-part shape as the coding path's poll, and for the same reason:
-// the bridge truncates a long reply from the tail, so the signals go first.
+// pollOnce reads the completion signals and everything new since the last
+// read, draining up to brainMaxDrains times so a burst lands in one go.
 func (p *brainPoll) pollOnce(ctx context.Context) (brainRead, bool) {
+	var acc brainRead
+	for drain := 0; drain < brainMaxDrains; drain++ {
+		r, full, ok := p.readSlice(ctx)
+		if !ok {
+			if drain == 0 {
+				return brainRead{}, false
+			}
+			break // one blink mid-drain: keep what we already read
+		}
+		acc.head, acc.last = r.head, r.last
+		if r.fresh != "" {
+			if acc.fresh == "" {
+				acc.fresh = r.fresh
+			} else {
+				acc.fresh += "\n" + r.fresh
+			}
+		}
+		if !full {
+			break // the stream is caught up
+		}
+	}
+	return acc, true
+}
+
+// readSlice performs ONE read. full reports that the slice filled its budget,
+// which is what tells consume a trailing half-line can never complete.
+func (p *brainPoll) readSlice(ctx context.Context) (r brainRead, full bool, ok bool) {
+	// Same three-part shape as the coding path's poll, and for the same
+	// reason: the bridge truncates a long reply from the tail, so the signals
+	// go first. `cut -c 1-N` clamps each line BEFORE the byte cap - see
+	// brainLineMaxCols for the turn-long silence its absence caused.
 	script := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi
 echo "===LAST==="
 tail -n 1 %s 2>/dev/null | head -c %d
 echo ""
 echo "===NEW==="
-tail -n +%d %s 2>/dev/null | head -n 400 | head -c 48000`,
+tail -n +%d %s 2>/dev/null | head -n %d | cut -c 1-%d | head -c %d`,
 		p.files.status, p.files.status,
 		p.files.out, claudeLastLineBytes,
-		p.line, p.files.out)
+		p.line, p.files.out, brainLinesPerPoll, brainLineMaxCols, brainChunkBytes)
 
-	body, code, ok := p.b.Post(ctx, "/bash", map[string]any{
+	body, code, okPost := p.b.Post(ctx, "/bash", map[string]any{
 		"cmd": script, "cwd": p.workspace, "timeout_sec": 15,
 	})
-	if !ok || code >= 300 {
-		return brainRead{}, false
+	if !okPost || code >= 300 {
+		return brainRead{}, false, false
 	}
 	raw, _ := bridgeBashOutput(body)
 	head, rest := splitMarker(raw, "", "===LAST===")
 	last, region := splitMarker(rest, "", "===NEW===")
 	region = strings.TrimPrefix(region, "\n")
+	full = len(region) >= brainChunkBytes
+	return brainRead{head: head, last: last, fresh: p.consume(region, full)}, full, true
+}
 
-	// Advance only past COMPLETE lines, and count NEWLINES rather than the
-	// pieces a split produces: a slice ending in "\n" splits into one more
-	// piece than it has lines, so counting pieces walked the read position
-	// one line too far on every poll and a stream event was dropped each
-	// time. The coding path learned this already (claudePoll.consume); this
-	// is the same accounting, and it is why it is written the same way.
-	cut := strings.LastIndexByte(region, '\n')
-	if cut < 0 {
-		// Nothing complete yet. The half-line is re-read whole next poll.
-		return brainRead{head: head, last: last}, true
+// consume advances the read position past the COMPLETE lines in a slice and
+// returns just those lines.
+//
+// Two things leave a trailing half-line, and they need opposite handling.
+// Claude being mid-write when the poll landed: the half completes in a moment,
+// so leave the position alone and re-read it whole. The slice filling its
+// budget: that half can NEVER complete inside the window, so stepping over it
+// is the only way the read ever moves again. Conflating them is what wedged
+// this stream for whole turns at a time.
+//
+// Newlines are counted, not split pieces: a slice ending in "\n" splits into
+// one more piece than it has lines, which walked the position a line too far
+// and dropped an event on every poll. The coding path learned this first
+// (claudePoll.consume); this is the same accounting, written the same way.
+func (p *brainPoll) consume(slice string, full bool) string {
+	if slice == "" {
+		return ""
 	}
-	whole := region[:cut+1]
+	cut := strings.LastIndexByte(slice, '\n')
+	if cut < 0 {
+		if !full {
+			return "" // still being written; re-read it whole next poll
+		}
+		// One line, longer than the whole window. It cannot arrive complete,
+		// so step over it rather than reading it forever.
+		p.line++
+		return ""
+	}
+	whole := slice[:cut+1]
 	p.line += strings.Count(whole, "\n")
-	return brainRead{head: head, last: last, fresh: strings.TrimSuffix(whole, "\n")}, true
+	return strings.TrimSuffix(whole, "\n")
 }
 
 // noteSession reports Claude Code's own session id the first time it appears,
@@ -734,6 +901,20 @@ func (p *brainPoll) finish(res claudeResult) (llm.Response, error) {
 	return llm.Response{Text: text, Usage: usage, StopReason: "end_turn"}, nil
 }
 
+// finalResult re-reads the stream's last line with no byte cap, for the one
+// moment it matters: the process has exited and the routine poll's clamped
+// tail did not parse. Called once per turn, never on the hot path.
+func (p *brainPoll) finalResult(ctx context.Context) (claudeResult, bool) {
+	body, code, ok := p.b.Post(ctx, "/bash", map[string]any{
+		"cmd": "tail -n 1 " + p.files.out + " 2>/dev/null", "cwd": p.workspace, "timeout_sec": 15,
+	})
+	if !ok || code >= 300 {
+		return claudeResult{}, false
+	}
+	out, _ := bridgeBashOutput(body)
+	return claudeTerminalResult(strings.TrimSpace(out))
+}
+
 // failure reads whatever the run left behind when it exited without a result.
 func (p *brainPoll) failure(ctx context.Context) error {
 	body, _, ok := p.b.Post(ctx, "/bash", map[string]any{
@@ -773,21 +954,43 @@ func brainUsage(res claudeResult) llm.TokenUsage {
 	if len(res.RawUsage) == 0 {
 		return u
 	}
-	var raw struct {
+	type iteration struct {
 		Input      int `json:"input_tokens"`
-		Output     int `json:"output_tokens"`
 		CacheRead  int `json:"cache_read_input_tokens"`
 		CacheWrite int `json:"cache_creation_input_tokens"`
+	}
+	var raw struct {
+		Input      int         `json:"input_tokens"`
+		Output     int         `json:"output_tokens"`
+		CacheRead  int         `json:"cache_read_input_tokens"`
+		CacheWrite int         `json:"cache_creation_input_tokens"`
+		Iterations []iteration `json:"iterations"`
 	}
 	if json.Unmarshal(res.RawUsage, &raw) != nil {
 		return u
 	}
-	return llm.TokenUsage{
+	u = llm.TokenUsage{
 		Input:      raw.Input,
 		Output:     raw.Output,
 		CacheRead:  raw.CacheRead,
 		CacheWrite: raw.CacheWrite,
 	}
+	// The top-level counts are the SUM over every API call this turn made, and
+	// this brain makes many: it runs its own tool loop, so one of our turns is
+	// a dozen round trips, each re-reading the cached prefix. Billing wants
+	// that sum. The context meter does not - it wants the DEEPEST single
+	// prompt, which is the widest the window ever got.
+	//
+	// A real turn of the boss's reported 2,172,488 cache-read tokens over 13
+	// calls while the largest single prompt was 172,498. Fed to the meter as
+	// one number it read 217% of a 1M window, went red, and stayed red - and
+	// auto-compaction kept firing on a session a fifth full.
+	for _, it := range raw.Iterations {
+		if n := it.Input + it.CacheRead + it.CacheWrite; n > u.ContextTokens {
+			u.ContextTokens = n
+		}
+	}
+	return u
 }
 
 // --- connection status -------------------------------------------------------

@@ -161,7 +161,10 @@ func (s *Session) RecordUsage(u llm.TokenUsage, model string) {
 	// under CacheRead with a tiny Input - doesn't make the meter read empty on
 	// a session that's actually full. Cached tokens still occupy the window and
 	// still count to rate limits; only their dollar cost is discounted.
-	inputTotal := u.PromptTokens()
+	// WindowTokens, not PromptTokens: for a brain that runs its own tool loop
+	// those differ by an order of magnitude, and this counter is what the
+	// meter and auto-compaction both read. See TokenUsage.ContextTokens.
+	inputTotal := u.WindowTokens()
 	if inputTotal > 0 {
 		s.lastInputTokens = inputTotal
 		s.totalInputTokens += inputTotal
@@ -1559,6 +1562,21 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		}()
 
 		var partialText strings.Builder
+		// A failure the STREAM reported, held rather than shown.
+		//
+		// It used to go straight to his screen the instant it arrived, before
+		// anyone knew how the turn would end - and this loop recovers from
+		// most of them (the clean retry below strips the request back and asks
+		// again). So he watched an error appear and then remove itself on the
+		// next refetch, because a turn that recovers closes `ok` and no
+		// durable error row is ever written. An error he sees must be one that
+		// actually happened.
+		//
+		// Same trade llm/failover.go already makes: hold the error until the
+		// outcome is known, so a failover nobody needed to hear about is
+		// silent. Below, it either becomes the turn's real failure (handled by
+		// the one existing error path) or it is dropped.
+		var streamedErr string
 		// Does this brain run its own tools? Asked once per iteration because
 		// the provider can be hot-swapped mid-conversation.
 		brainRunsOwnTools := false
@@ -1569,6 +1587,39 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// can be paired with the name and input the boss already saw. Anything
 		// still in here when the stream ends never returned.
 		brainCalls := map[string]llm.ToolCall{}
+		// How much of partialText has already been written down as a finished
+		// assistant message. See commitBrainSegment.
+		brainKept := 0
+		// commitBrainSegment writes down what the boss has ALREADY READ, the
+		// moment it stops changing, instead of at the end of the turn.
+		//
+		// A brain that runs its own tools answers one of our turns in several
+		// messages with tool work between them, and only the LAST of those
+		// used to reach the database: keepAssistantSegment's three call sites
+		// are all gated on resp.ToolCalls being non-empty, which never happens
+		// for this kind of brain. So everything before the final message lived
+		// in his browser and nowhere else. He read a full answer, navigated
+		// away, came back, and it was gone - "messages removing from the
+		// stream", 2026-09-01.
+		//
+		// A tool call is the boundary: the model finished saying something and
+		// went to do something. keepAssistantSegment is the only writer, per
+		// its own doc, so this is a new CALL SITE and not a second path.
+		commitBrainSegment := func() {
+			if !brainRunsOwnTools {
+				return
+			}
+			all := partialText.String()
+			if brainKept > len(all) {
+				brainKept = len(all)
+			}
+			seg := all[brainKept:]
+			brainKept = len(all)
+			if strings.TrimSpace(seg) == "" {
+				return
+			}
+			l.keepAssistantSegment(turnID, s, seg, nil)
+		}
 		for ev := range llmEvents {
 			switch ev.Kind {
 			case llm.StreamText:
@@ -1613,11 +1664,31 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// come back to be executed, so theirs are handled there and
 				// ignored here.
 				if ev.ToolCall != nil && brainRunsOwnTools {
+					// Whatever he said before reaching for this tool is
+					// finished. Write it down now, not at the end of the turn.
+					commitBrainSegment()
 					brainCalls[ev.ToolCall.ID] = *ev.ToolCall
 					emit(out, RunEvent{Kind: EventToolCall, SessionID: s.ID, ToolCall: &ToolEvent{
 						ID: ev.ToolCall.ID, Name: ev.ToolCall.Name, Input: ev.ToolCall.Input,
 						StartedAt: time.Now().UTC(),
 					}})
+					// And write down the CALL, not only the result.
+					//
+					// Only results were persisted, so a five-minute command
+					// was invisible to a reload for five minutes: the boss
+					// refreshed mid-turn and got his own message back with
+					// nothing under it, which is indistinguishable from a
+					// brain that never started. The row carries no output yet;
+					// the result below files the same tool_call_id and the
+					// transcript keeps the completed one.
+					l.fireHookT(turnID, "PostToolUse", s.ID, s.Project,
+						ev.ToolCall.Name+" (running)", map[string]any{
+							"name":         ev.ToolCall.Name,
+							"input":        ev.ToolCall.Input,
+							"tool_call_id": ev.ToolCall.ID,
+							"executed_by":  provider.Name(),
+							"running":      true,
+						})
 				}
 			case llm.StreamToolResult:
 				// The other half. Every other brain hands our loop the call
@@ -1657,11 +1728,21 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// failover notice: one italic line in the reply stream.
 				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
 			case llm.StreamError:
-				emitHumanError(out, s.ID, ev.Err)
+				streamedErr = ev.Err
 			}
 		}
 
 		<-streamDone
+
+		// A stream that reported a failure, returned no error of its own, and
+		// produced nothing to show is a failure however the provider filed it.
+		// Promote it so the one error path below owns it - status errored, a
+		// durable row, and a card that is still there when he comes back.
+		// Anything the loop went on to recover from stays silent, which is the
+		// whole point of holding it.
+		if streamErr == nil && streamedErr != "" && strings.TrimSpace(partialText.String()) == "" {
+			streamErr = errors.New(streamedErr)
+		}
 
 		// DID THE HEAL PASS DO ANYTHING?
 		//
@@ -1993,7 +2074,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// threshold, run compaction in the background so the *next*
 			// turn lands on a tighter buffer. We don't block the return
 			// because the user's response has already streamed.
-			l.maybeAutoCompact(s, resp.Usage.PromptTokens())
+			l.maybeAutoCompact(s, resp.Usage.WindowTokens())
 			return nil
 		}
 

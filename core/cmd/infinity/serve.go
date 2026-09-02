@@ -479,6 +479,10 @@ func serveCmd() *cobra.Command {
 					// "Discuss with Jarvis" chat land in the same cockpit state
 					// the boss sees, through the same pc.Store.Apply chokepoint.
 					tools.RegisterPursuitPCTools(registry, p)
+					// The same pair for the Job Hunt experience, through the
+					// same jh.Store.Apply chokepoint: a role moved in a chat
+					// and a role moved on the board are one write path.
+					tools.RegisterPursuitJHTools(registry, p)
 					// todo_write - the background agent's live checklist. Writes
 					// meta.todos onto the current background run's mem_runs row so
 					// the pinned dock renders a Claude-Code-style todo list.

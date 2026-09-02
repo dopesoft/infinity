@@ -580,6 +580,19 @@ type ClaudeCodeRunner struct {
 	// plan, so a Claude Code build draws the same dock as every other brain.
 	// Optional; without it the dock falls back to run telemetry.
 	plans NestedPlanSink
+
+	// authOK caches a PROVEN Mac subscription for brainAuthTTL.
+	//
+	// Proving it costs a full bash round trip to the Mac, and it was paid on
+	// every single chat turn before Claude was even launched - part of the
+	// wait the boss described as "2-3 mins before seeing something". A Max
+	// sign-in does not change between two messages a minute apart, so a short
+	// TTL removes the cost from a conversation without letting a stale answer
+	// outlive a real sign-out. Only SUCCESS is cached: a failure is re-probed
+	// every time, so signing back in takes effect on the next message rather
+	// than whenever a timer says so.
+	authMu sync.Mutex
+	authOK time.Time
 }
 
 // AttachLiveRunLookup installs the one-coding-job-per-conversation guard.

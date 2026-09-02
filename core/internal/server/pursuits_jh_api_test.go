@@ -32,10 +32,9 @@ func TestPursuitsJHRequiresADatabase(t *testing.T) {
 	}
 }
 
-// The cockpit read is a GET. This route is registered as a prefix, so a POST
-// arriving at it must be refused with the allowed verb named, never accepted
-// and interpreted as some other operation. The write endpoints are a separate
-// pass; until they exist, a write verb here has nowhere legitimate to land.
+// The cockpit read is a GET and the writes are POSTs. A write verb arriving at
+// the read path must be refused with the allowed verb named, never coerced into
+// the other operation.
 func TestPursuitsJHRejectsTheWrongMethod(t *testing.T) {
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
@@ -76,19 +75,256 @@ func TestPursuitsJHRequiresAPursuitID(t *testing.T) {
 }
 
 // The route is a prefix, so anything after /api/pursuits/jh/ reaches this
-// handler. Only "state" exists today; a typo or a write path that has not been
-// built yet must 404 rather than fall through to the cockpit read, which would
-// answer a request for something that does not exist with a 200.
+// handler. A suffix that is neither the read nor a known write must 404 rather
+// than fall through to the cockpit read, which would answer a request for
+// something that does not exist with a 200 and a board.
+//
+// Both verbs are checked: the 404 has to come BEFORE the method check, or a
+// typo would read as "wrong verb" and send the caller looking for a request
+// they could rephrase into working.
 func TestPursuitsJHRejectsAnUnknownAction(t *testing.T) {
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/pursuits/jh/stat?pursuit_id=x"},
+		{http.MethodPost, "/api/pursuits/jh/roles"},
+		{http.MethodPost, "/api/pursuits/jh/role/stages"},
+		{http.MethodPost, "/api/pursuits/jh/"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
+			unreachableServer(t).handlePursuitsJH(rr, req)
+
+			if rr.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", rr.Code)
+			}
+			if !strings.Contains(rr.Body.String(), "unknown action") {
+				t.Fatalf("body = %s, want it to name the unknown action", rr.Body.String())
+			}
+		})
+	}
+}
+
+// The HTTP surface routes on the path suffix and the agent tool routes on the
+// action enum, and both hand the result to the same jh.Store.Apply switch. The
+// route is registered as a prefix, so the suffix IS the action: if the two ever
+// disagree, one caller silently 404s while the other works.
+func TestEveryJHWriteActionIsReachableAsAPathSuffix(t *testing.T) {
+	const prefix = "/api/pursuits/jh/"
+	for _, action := range jh.WriteActions() {
+		got := strings.TrimPrefix(prefix+action, prefix)
+		if got != action {
+			t.Fatalf("path %q yields action %q, want %q", prefix+action, got, action)
+		}
+		if !jh.IsWriteAction(got) {
+			t.Fatalf("action %q parsed from a path is not accepted by Apply", got)
+		}
+	}
+	// "state" is the read and must NOT be a write action, or a GET would be
+	// routed into the mutation switch.
+	if jh.IsWriteAction("state") {
+		t.Fatal(`"state" is the read path and must never be a write action`)
+	}
+}
+
+// A write arriving as a GET must be refused. Without this a link, a browser
+// prefetch or a crawler could move a role between stages or mark outreach sent.
+func TestPursuitsJHRejectsAGetOnEveryWritePath(t *testing.T) {
+	for _, action := range jh.WriteActions() {
+		t.Run(action, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/pursuits/jh/"+action, nil)
+			unreachableServer(t).handlePursuitsJH(rr, req)
+
+			if rr.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("GET on a write path = %d, want 405", rr.Code)
+			}
+			if got := rr.Header().Get("Allow"); got != "POST" {
+				t.Fatalf("Allow header = %q, want POST", got)
+			}
+		})
+	}
+}
+
+// pursuit_id scopes every write to one hunt, exactly as it scopes the read. A
+// write without it must be refused before any store call - never defaulted to
+// "the first job_hunt pursuit", which would file another board's roles,
+// contacts and salary bands onto this one.
+func TestEveryJHWriteRequiresAPursuitID(t *testing.T) {
+	for _, action := range jh.WriteActions() {
+		t.Run(action, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/pursuits/jh/"+action,
+				strings.NewReader(`{"company":"Acme","stage":"applied"}`))
+			unreachableServer(t).handlePursuitsJH(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rr.Code)
+			}
+			if !strings.Contains(rr.Body.String(), "pursuit_id required") {
+				t.Fatalf("body = %s, want it to name the missing field", rr.Body.String())
+			}
+		})
+	}
+}
+
+// A write body that is not JSON must be rejected before any store call, so a
+// truncated or malformed request can never be interpreted as a partial write.
+func TestPursuitsJHRejectsMalformedJSON(t *testing.T) {
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/pursuits/jh/stat?pursuit_id=x", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/pursuits/jh/"+jh.ActionRole,
+		strings.NewReader("{not json"))
 	unreachableServer(t).handlePursuitsJH(rr, req)
 
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "unknown action") {
-		t.Fatalf("body = %s, want it to name the unknown action", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), "invalid json") {
+		t.Fatalf("body = %s, want it to name the parse failure", rr.Body.String())
+	}
+}
+
+// A value outside a column's vocabulary must be refused with the accepted
+// values named, and refused BEFORE the database is touched - the pool here
+// points nowhere, so a check that ran after the pursuit lookup would fail on
+// the connection instead of passing.
+//
+// Naming the alternatives is the part that matters. A caller told only that
+// "sourced" is wrong has to go read the schema; one told the five sources that
+// exist fixes it on the spot.
+func TestEveryJHWriteRejectsAnInvalidEnumValue(t *testing.T) {
+	tests := []struct {
+		action  string
+		body    string
+		wantAny []string
+	}{
+		{
+			action:  jh.ActionRole,
+			body:    `{"pursuit_id":"p","company":"Acme","role_title":"Head of Product","source":"carrier_pigeon"}`,
+			wantAny: jh.RoleSources(),
+		},
+		{
+			action:  jh.ActionRole,
+			body:    `{"pursuit_id":"p","company":"Acme","role_title":"Head of Product","source":"linkedin","stage":"ghosted"}`,
+			wantAny: jh.RoleStages(),
+		},
+		{
+			action:  jh.ActionRoleStage,
+			body:    `{"pursuit_id":"p","role_id":"r","stage":"ghosted"}`,
+			wantAny: jh.RoleStages(),
+		},
+		{
+			action:  jh.ActionCorpus,
+			body:    `{"pursuit_id":"p","theme":"reorg","question":"q","answer":"a","source":"telepathy"}`,
+			wantAny: jh.CorpusSources(),
+		},
+		{
+			action:  jh.ActionContact,
+			body:    `{"pursuit_id":"p","name":"Dana Reyes","status":"ignoring_me"}`,
+			wantAny: jh.ContactStatuses(),
+		},
+		{
+			action:  jh.ActionContactStatus,
+			body:    `{"pursuit_id":"p","contact_id":"c","status":"ignoring_me"}`,
+			wantAny: jh.ContactStatuses(),
+		},
+		{
+			action:  jh.ActionArtifact,
+			body:    `{"pursuit_id":"p","role_id":"r","title":"Resume","kind":"haiku"}`,
+			wantAny: jh.ArtifactKinds(),
+		},
+		{
+			action:  jh.ActionArtifact,
+			body:    `{"pursuit_id":"p","role_id":"r","title":"Resume","kind":"resume","status":"posted"}`,
+			wantAny: jh.ArtifactStatuses(),
+		},
+		{
+			action:  jh.ActionArtifactStatus,
+			body:    `{"pursuit_id":"p","artifact_id":"a","status":"posted"}`,
+			wantAny: jh.ArtifactStatuses(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.action+" "+tt.body, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/pursuits/jh/"+tt.action,
+				strings.NewReader(tt.body))
+			unreachableServer(t).handlePursuitsJH(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+			}
+			for _, accepted := range tt.wantAny {
+				if !strings.Contains(rr.Body.String(), accepted) {
+					t.Fatalf("rejection does not name the accepted value %q: %s",
+						accepted, rr.Body.String())
+				}
+			}
+		})
+	}
+}
+
+// An action whose target id is missing must be refused too, and for the same
+// reason: without it the store would have nothing to key the UPDATE on, and a
+// caller that omitted it should learn which id it forgot.
+func TestJHStatusWritesRequireTheirTargetID(t *testing.T) {
+	tests := []struct{ action, body, wantField string }{
+		{jh.ActionRoleStage, `{"pursuit_id":"p","stage":"applied"}`, "role_id required"},
+		{jh.ActionContactStatus, `{"pursuit_id":"p","status":"sent"}`, "contact_id required"},
+		{jh.ActionArtifact, `{"pursuit_id":"p","kind":"resume","title":"Resume"}`, "role_id required"},
+		{jh.ActionArtifactStatus, `{"pursuit_id":"p","status":"approved"}`, "artifact_id required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.action, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/pursuits/jh/"+tt.action,
+				strings.NewReader(tt.body))
+			unreachableServer(t).handlePursuitsJH(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), tt.wantField) {
+				t.Fatalf("body = %s, want it to name %q", rr.Body.String(), tt.wantField)
+			}
+		})
+	}
+}
+
+// The write payload embeds jh.WriteRequest alongside pursuit_id. Embedding only
+// promotes fields if the struct is anonymous, so a refactor to a named field
+// would silently drop every value on the floor: the request would still parse,
+// still return 200, and file a role with no company.
+func TestPursuitsJHWritePayloadPromotesEmbeddedFields(t *testing.T) {
+	var body struct {
+		PursuitID string `json:"pursuit_id"`
+		jh.WriteRequest
+	}
+	raw := `{
+		"pursuit_id": "11111111-1111-1111-1111-111111111111",
+		"company": "Acme",
+		"role_title": "Head of Product",
+		"source": "linkedin",
+		"comp_min": 210000,
+		"ghost_flags": ["reposted three times"],
+		"external_id": "ln-4417"
+	}`
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.PursuitID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("pursuit_id = %q", body.PursuitID)
+	}
+	if body.Company != "Acme" {
+		t.Fatalf("company = %q, want the embedded WriteRequest field to be populated", body.Company)
+	}
+	if body.CompMin == nil || *body.CompMin != 210000 {
+		t.Fatalf("comp_min = %v, want the stated salary band to survive decoding", body.CompMin)
+	}
+	if body.ExternalID != "ln-4417" {
+		t.Fatalf("external_id = %q - without it a re-sweep files a second copy of this role", body.ExternalID)
+	}
+	if len(body.GhostFlags) != 1 {
+		t.Fatalf("ghost_flags = %v", body.GhostFlags)
 	}
 }
 
