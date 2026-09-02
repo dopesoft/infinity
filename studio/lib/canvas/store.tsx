@@ -49,6 +49,33 @@ export type LayoutMode = "chat" | "split" | "build";
 
 export type CanvasTabKind = "preview" | "terminal" | "media" | "file" | "document";
 
+/**
+ * Instrument - WHAT THE WORKBENCH IS SHOWING. One value, owned here.
+ *
+ * It used to be a `useState` inside WorkbenchPane while the store owned
+ * `activeTabId`, so "which document is focused" and "is that document on
+ * screen" were two separate decisions kept in step by hand. Every entry point
+ * that focused a document without also reaching into the pane's private state
+ * - the Made gallery, the Library, the dashboard hand-off - opened a tab
+ * nobody could see. Focusing a tab and revealing it are the same act, so they
+ * happen at one seam: `setActiveTabId`.
+ */
+export type Instrument = "files" | "file" | "browser" | "changes" | "terminal" | "made";
+
+/** The instrument that shows a given tab. The whole point of the type above. */
+function instrumentForTab(id: string): Instrument {
+  switch (id) {
+    case "preview":
+      return "browser";
+    case "terminal":
+      return "terminal";
+    case "media":
+      return "made";
+    default:
+      return "file"; // file:<path> and document ids both live in the file slot
+  }
+}
+
 export type CanvasTab =
   | { kind: "preview"; id: "preview" }
   | { kind: "terminal"; id: "terminal" }
@@ -216,7 +243,12 @@ type CanvasStoreValue = {
   // Tabs
   tabs: CanvasTab[];
   activeTabId: string;
+  /** Focus a tab AND reveal it. The one seam where those two agree. */
   setActiveTabId: (id: string) => void;
+  /** What the workbench is showing right now. */
+  instrument: Instrument;
+  /** Choose an instrument directly - the bar, and the pane's own snaps. */
+  setInstrument: (i: Instrument) => void;
   openFile: (path: string) => void;
   closeFile: (id: string) => void;
   closeOthers: (id: string) => void;
@@ -246,7 +278,11 @@ type CanvasStoreValue = {
 
   // Generated documents (each opens as its own closeable tab).
   documents: DocMeta[];
+  /** Open a document AND put it on screen. The deliberate "show me this one". */
   openDocument: (doc: DocMeta) => void;
+  /** Add a document tab without taking the screen - a document FINISHING is
+   *  news, not an interruption. It lands in Made and waits to be opened. */
+  registerDocument: (doc: DocMeta) => void;
   closeDocument: (id: string) => void;
   // Rehydrate open doc tabs from server state (survives refresh / device).
   restoreDocuments: (docs: DocMeta[], activeId?: string) => void;
@@ -337,6 +373,10 @@ export function CanvasStoreProvider({
   // are high-frequency and we only re-render when extracted path/content change.
   const toolRawRef = useRef<Map<string, { raw: string; path: string | null; name: string }>>(new Map());
   const [rightMode, setRightModeInternal] = useState<"preview" | "file">("preview");
+  // Files, not Browser: you open the workbench to see what is here, and a
+  // preview of a project that may not be serving anything is a blank screen
+  // with a reload button on it.
+  const [instrument, setInstrument] = useState<Instrument>("files");
   const [browserActive, setBrowserActive] = useState(false);
   const [browserSessionId, setBrowserSessionId] = useState("");
   const [browserUrl, setBrowserUrl] = useState("");
@@ -369,6 +409,7 @@ export function CanvasStoreProvider({
       if (targetPath) {
         setActiveTabIdInternal(fileTabId(targetPath));
         setRightModeInternal("file");
+        setInstrument("file"); // come back to what he was reading, not the tree
       } else {
         setActiveTabIdInternal("preview");
         setRightModeInternal("preview");
@@ -469,6 +510,10 @@ export function CanvasStoreProvider({
   const setActiveTabId = useCallback(
     (id: string) => {
       setActiveTabIdInternal(id);
+      // Reveal what you just focused. Every open path in the app funnels
+      // through here, so a document opened from the gallery, the Library or
+      // the dashboard hand-off can no longer land behind whatever is on top.
+      setInstrument(instrumentForTab(id));
       setRightModeInternal(id === "preview" ? "preview" : "file");
       if (typeof window !== "undefined") {
         try {
@@ -485,6 +530,14 @@ export function CanvasStoreProvider({
     setDocuments((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
     setActiveTabId(doc.id);
   }, [setActiveTabId]);
+
+  // registerDocument is openDocument minus the screen. A document FINISHING is
+  // news, not an interruption: it joins the tabs (so the mobile canvas reveal
+  // and the layout auto still fire) and waits in Made, which snaps to itself
+  // as the count rises. Only a deliberate click gets to take the pane.
+  const registerDocument = useCallback((doc: DocMeta) => {
+    setDocuments((prev) => [...prev.filter((d) => d.id !== doc.id), doc]);
+  }, []);
 
   const closeDocument = useCallback((id: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
@@ -535,17 +588,9 @@ export function CanvasStoreProvider({
   const openFile = useCallback(
     (path: string) => {
       setOpenPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
-      setActiveTabIdInternal(fileTabId(path));
-      setRightModeInternal("file");
-      if (typeof window !== "undefined") {
-        try {
-          window.localStorage.setItem(RIGHT_MODE_KEY, "file");
-        } catch {
-          /* ignore */
-        }
-      }
+      setActiveTabId(fileTabId(path));
     },
-    [],
+    [setActiveTabId],
   );
 
   const closeFile = useCallback(
@@ -566,6 +611,8 @@ export function CanvasStoreProvider({
                 : "preview";
           setActiveTabIdInternal(fallback);
           setRightModeInternal(fallback === "preview" ? "preview" : "file");
+          // Nothing left in the file slot means the tree, never a blank layer.
+          setInstrument(fallback === "preview" ? "files" : "file");
         }
         return next;
       });
@@ -579,12 +626,14 @@ export function CanvasStoreProvider({
         setOpenPaths([]);
         setActiveTabIdInternal("preview");
         setRightModeInternal("preview");
+        setInstrument("files");
         return;
       }
       const path = id.slice("file:".length);
       setOpenPaths([path]);
       setActiveTabIdInternal(id);
       setRightModeInternal("file");
+      setInstrument("file");
     },
     [],
   );
@@ -593,6 +642,8 @@ export function CanvasStoreProvider({
     setOpenPaths([]);
     setActiveTabIdInternal("preview");
     setRightModeInternal("preview");
+    // This is the project-switch path: show him what is in the new project.
+    setInstrument("files");
   }, []);
 
   const markDirty = useCallback((path: string) => {
@@ -729,6 +780,8 @@ export function CanvasStoreProvider({
       tabs,
       activeTabId,
       setActiveTabId,
+      instrument,
+      setInstrument,
       openFile,
       closeFile,
       closeOthers,
@@ -745,6 +798,7 @@ export function CanvasStoreProvider({
       setBrowserController,
       documents,
       openDocument,
+      registerDocument,
       closeDocument,
       restoreDocuments,
       dirtyPaths,
@@ -779,6 +833,8 @@ export function CanvasStoreProvider({
       tabs,
       activeTabId,
       setActiveTabId,
+      instrument,
+      setInstrument,
       openFile,
       closeFile,
       closeOthers,
@@ -791,6 +847,7 @@ export function CanvasStoreProvider({
       browserController,
       documents,
       openDocument,
+      registerDocument,
       closeDocument,
       restoreDocuments,
       dirtyPaths,

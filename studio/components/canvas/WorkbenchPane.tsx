@@ -10,7 +10,7 @@ import { ChangesReview } from "@/components/canvas/ChangesReview";
 import { DocumentTab } from "@/components/canvas/DocumentTab";
 import { BrowserFrame } from "@/components/canvas/BrowserFrame";
 import { FileSwitcher } from "@/components/canvas/FileSwitcher";
-import { InstrumentBar, type Instrument } from "@/components/canvas/InstrumentBar";
+import { InstrumentBar } from "@/components/canvas/InstrumentBar";
 import { useCanvasStore } from "@/lib/canvas/store";
 import type { DocArtifact, RunDTO } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -49,11 +49,12 @@ export function WorkbenchPane({
   onClose: () => void;
 }) {
   const store = useCanvasStore();
-  // Files, not Browser. You open the workbench to see what is here; a preview
-  // of a project that may not be serving anything is a blank screen with a
-  // reload button on it. The three snaps below move you off this the moment
-  // there is something better to look at.
-  const [instrument, setInstrument] = React.useState<Instrument>("files");
+  // What is on screen lives in the STORE, beside the tab it is showing. It was
+  // local state here, which is how a document opened from the gallery, the
+  // Library or the dashboard could become the active tab and still be
+  // invisible: the pane had no way to hear about it. The two snaps below are
+  // the pane's own signals, so they still live here.
+  const { instrument, setInstrument } = store;
   const [switcherOpen, setSwitcherOpen] = React.useState(false);
   const [rebuiltAt, setRebuiltAt] = React.useState<number | null>(null);
 
@@ -66,18 +67,11 @@ export function WorkbenchPane({
     // Widening the layout was only half of "watch it redraw itself" — the
     // browser also has to be the thing in front of you.
     setInstrument("browser");
-  }, [store.previewRefreshKey]);
+  }, [store.previewRefreshKey, setInstrument]);
 
   const activeFile = store.tabs.find((t) => t.id === store.activeTabId && t.kind === "file");
   const activeDoc = store.documents.find((d) => d.id === store.activeTabId);
   const fileName = activeFile && activeFile.kind === "file" ? basename(activeFile.path) : activeDoc?.filename;
-
-  // A file opening (he started writing) makes it the thing you are looking at.
-  // Documents are deliberately NOT here: a finished document is something he
-  // MADE, and the media snap below owns that case.
-  React.useEffect(() => {
-    if (activeFile) setInstrument("file");
-  }, [activeFile]);
 
   const mediaCount =
     documents.length +
@@ -99,7 +93,7 @@ export function WorkbenchPane({
     mediaSeenRef.current = mediaCount;
     if (prev === null) return;
     if (mediaCount > prev) setInstrument("made");
-  }, [mediaCount]);
+  }, [mediaCount, setInstrument]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -107,6 +101,7 @@ export function WorkbenchPane({
         active={instrument}
         onSelect={setInstrument}
         fileName={fileName}
+        canSwitch={!!activeFile}
         onOpenSwitcher={() => setSwitcherOpen(true)}
         changes={changeCount}
         madeCount={mediaCount}

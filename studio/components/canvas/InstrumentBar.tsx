@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { Chip, ChipGroup } from "@/components/ui/chip";
+import type { Instrument } from "@/lib/canvas/store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,13 +39,15 @@ import { cn } from "@/lib/utils";
  * shifts down when a tab appears.
  */
 
-export type Instrument = "files" | "file" | "browser" | "changes" | "terminal" | "made";
-
 export function InstrumentBar({
   active,
   onSelect,
-  /** Basename of the open file, when there is one. Opens the switcher. */
+  /** Basename of what is open in the file slot, when there is something. */
   fileName,
+  /** True when that thing is a workspace FILE, so the switcher can reach it.
+   *  A generated document is not in the file index, so a chip naming one must
+   *  never answer a press with a search it cannot satisfy. */
+  canSwitch,
   onOpenSwitcher,
   changes,
   madeCount,
@@ -54,6 +57,7 @@ export function InstrumentBar({
   active: Instrument;
   onSelect: (i: Instrument) => void;
   fileName?: string;
+  canSwitch?: boolean;
   onOpenSwitcher?: () => void;
   changes?: number;
   madeCount?: number;
@@ -70,11 +74,14 @@ export function InstrumentBar({
             role="tab"
             aria-selected={active === "file"}
             raised={active === "file"}
-            chevron
+            chevron={canSwitch}
             icon={<FileText />}
             onClick={() => {
-              onSelect("file");
-              onOpenSwitcher?.();
+              // The first press takes you BACK to what you were reading. The
+              // switcher is the second press, on the chip you are already on,
+              // so returning to a file never arrives under a search overlay.
+              if (active === "file" && canSwitch) onOpenSwitcher?.();
+              else onSelect("file");
             }}
             title={fileName}
             className="max-w-[11rem]"

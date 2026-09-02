@@ -161,17 +161,21 @@ export function Workspace({
         return;
       }
 
-      // A document_create finished: open it as its OWN document tab (with the
+      // A document_create finished: give it its OWN document tab (with the
       // sibling PDF for download) here at the ALWAYS-MOUNTED seam. This used to
       // live only in CanvasRightPane, which is UNMOUNTED on mobile whenever the
       // boss is on the Chat pill — so on the phone the report never popped a tab
       // and its PDF download went missing (he found it only via the Media
-      // count). openDocument dedupes by id, so this + rehydration never double-
-      // add. The mobile auto-reveal below (widened to `document`) then surfaces
-      // the Canvas once per burst, exactly like a code edit does.
+      // count). registerDocument dedupes by id, so this + rehydration never
+      // double-add. The mobile auto-reveal below (widened to `document`) then
+      // surfaces the Canvas once per burst, exactly like a code edit does.
+      //
+      // register, not open: a document finishing is news. It joins the tabs and
+      // Made snaps to itself as the count rises; taking the pane outright would
+      // also race that snap for the same event. A click is what opens it.
       if (ev.type === "document_created") {
         const d = ev.document_created;
-        store.openDocument({
+        store.registerDocument({
           id: d.path,
           filename: d.filename,
           format: d.format,
