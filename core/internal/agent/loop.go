@@ -1579,10 +1579,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		var streamedErr string
 		// Does this brain run its own tools? Asked once per iteration because
 		// the provider can be hot-swapped mid-conversation.
-		brainRunsOwnTools := false
-		if se, ok := provider.(llm.SelfExecutingProvider); ok {
-			brainRunsOwnTools = se.RunsOwnTools()
-		}
+		//
+		// Asked through llm.SelfExecuting, which unwraps the decorators, and
+		// NEVER as a type assertion on `provider`: what the loop is handed is
+		// always a noDashesProvider (factory.go wraps every registration),
+		// and a direct assertion on it was false for every Claude Max turn
+		// the boss ever had. The whole tool-row branch below sat dead behind
+		// it. See the helper's comment for what that cost.
+		brainRunsOwnTools := llm.SelfExecuting(provider)
 		// Calls the brain made that have not reported back yet, so the result
 		// can be paired with the name and input the boss already saw. Anything
 		// still in here when the stream ends never returned.

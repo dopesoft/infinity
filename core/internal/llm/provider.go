@@ -360,6 +360,37 @@ func EffortFromContext(ctx context.Context) Effort {
 	return ""
 }
 
+// SelfExecuting reports whether the brain behind p runs its own tools,
+// unwrapping the sanitizer/failover decorators to ask the real provider.
+//
+// Every registered provider is wrapped (factory.go: WrapNoDashes, and
+// failoverProvider on top of that), and neither wrapper implements
+// SelfExecutingProvider, so a type assertion on what the loop is handed was
+// ALWAYS false. The consequence was total and invisible: for every Claude Max
+// turn the boss ever had, the loop believed the brain did not run tools, the
+// branch that records its tool calls and results never executed, and nothing
+// he did with that brain reached his ledger, his transcript, or memory. He
+// watched it write files to his tree and saw nothing in the chat, and every
+// reload showed him a spinner over an empty turn. Found 2026-09-02 after a
+// night of fixes built inside that dead branch, each verified by a test that
+// used a bare brain and so never met the wrapper.
+//
+// Same unwrap loop as Implemented, for the same reason: a capability must be
+// asked of the brain, never of its coat.
+func SelfExecuting(p Provider) bool {
+	for p != nil {
+		if se, ok := p.(SelfExecutingProvider); ok {
+			return se.RunsOwnTools()
+		}
+		u, ok := p.(interface{ Unwrap() Provider })
+		if !ok {
+			return false
+		}
+		p = u.Unwrap()
+	}
+	return false
+}
+
 var ErrNotImplemented = errors.New("provider not implemented")
 
 // implementedReporter is satisfied by a provider that knows it is a stub.
