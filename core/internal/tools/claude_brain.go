@@ -2,11 +2,13 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -824,4 +826,114 @@ func claudeAuthFailure(text string, cloud bool) (string, bool) {
 	}
 	return "Claude Code on your Mac is signed out, so it can't run on your subscription. " +
 		"Open a terminal there and run `claude`, then sign in with the account your Max plan is on.", true
+}
+
+// ── putting the boss's files where the brain can open them ───────────────
+
+// PlaceFile writes one attachment onto the box this brain is running on and
+// returns the path it landed at. It implements llm.BrainFilePlacer.
+//
+// WHY IT HAS TO EXIST. Every other brain receives an image as a native image
+// block. Claude Code takes a PROMPT and physically cannot, so an image was
+// named to it and never seen - the boss attached a screenshot and got an
+// answer written about a file nobody had opened. What Claude Code CAN do is
+// open a file: its Read tool renders an image exactly as a vision model sees
+// one. So the bytes go to the box, and the prompt says where.
+//
+// Over /bash rather than /fs/save, deliberately: /fs/save takes JSON string
+// content, and a PNG is not valid UTF-8. base64 through the shell is the one
+// shape that carries arbitrary bytes and works UNCHANGED on the Mac and the
+// cloud box, which is the requirement - "every model I use on mac or cloud
+// bridge", not whichever one we wired first. It also needs no new bridge
+// endpoint, so it works against the bridge already installed on his Mac.
+func (r *ClaudeCodeRunner) PlaceFile(ctx context.Context, id, name string, data []byte) (string, error) {
+	if r == nil || len(data) == 0 {
+		return "", errors.New("nothing to place")
+	}
+	if len(data) > maxPlacedFileBytes {
+		return "", fmt.Errorf("the file is %s, over the %s a prompt can carry to your machine",
+			humanBytes(int64(len(data))), humanBytes(maxPlacedFileBytes))
+	}
+	b, _, err := r.ActiveBridge(ctx)
+	if err != nil {
+		return "", err
+	}
+	if b == nil {
+		return "", errors.New("neither your Mac nor the cloud box is reachable")
+	}
+	path := placedFilePath(id, name)
+
+	// Already there from an earlier turn in this conversation? Then the write
+	// is skipped and only the check crosses the wire. A 5MB base64 payload
+	// re-sent on every turn of a long chat is the kind of waste that turns
+	// into a slow chat nobody can explain.
+	script := fmt.Sprintf(
+		"mkdir -p %s"+"\n"+
+			"if [ -s %s ]; then echo PLACED; else printf '%%s' %s | base64 -d > %s && echo PLACED; fi",
+		shellQuote(placedFileDir), shellQuote(path),
+		shellQuote(base64.StdEncoding.EncodeToString(data)), shellQuote(path),
+	)
+	body, code, ok := b.Post(ctx, "/bash", map[string]any{
+		"cmd": script, "cwd": bridgeHome, "timeout_sec": 60,
+	})
+	if !ok || code >= 300 {
+		return "", fmt.Errorf("%s could not take the file (status %d): %s", b.Name(), code, bridgeErrorDetail(body))
+	}
+	if !strings.Contains(string(body), "PLACED") {
+		return "", fmt.Errorf("%s did not confirm the file was written", b.Name())
+	}
+	return path, nil
+}
+
+const (
+	// placedFileDir is where the boss's attachments land on either box. Under
+	// /tmp on purpose: these are conversation inputs, not artifacts, and the
+	// durable copy is already in mem_attachments.
+	placedFileDir = "/tmp/inf-attach"
+	// maxPlacedFileBytes bounds one file. Base64 inflates by 4/3, and the
+	// bridge caps a request body at 32MB, so this leaves real headroom.
+	maxPlacedFileBytes = 20 << 20
+)
+
+// placedFilePath is the stable path one attachment always lands at, so the
+// same file is written once per box and a resumed session's earlier reference
+// still resolves.
+func placedFilePath(id, name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	base = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, base)
+	if base == "" || base == "." || base == ".." {
+		base = "file"
+	}
+	if len(base) > 80 {
+		base = base[len(base)-80:]
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = "att"
+	}
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	return placedFileDir + "/" + id + "-" + base
+}
+
+// humanBytes renders a size the way a person says it.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0fKB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
 }

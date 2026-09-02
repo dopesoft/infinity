@@ -98,6 +98,21 @@ type BrainRunner interface {
 	Converse(ctx context.Context, turn BrainTurn, out chan<- StreamEvent) (Response, error)
 }
 
+// BrainFilePlacer puts one of the boss's attachments on the box the brain is
+// running on, and reports the path it landed at.
+//
+// It exists because Claude Code takes a PROMPT, not typed content blocks. Every
+// other brain receives an image as a native image block; this one physically
+// cannot. What it can do is open a file, and its Read tool renders an image the
+// same way a vision model sees one. So the file goes to the box and the model
+// is told where it is.
+//
+// Optional: a runner that does not implement it still gets text and PDF text,
+// and an image is named honestly as one it could not be shown.
+type BrainFilePlacer interface {
+	PlaceFile(ctx context.Context, id, name string, data []byte) (path string, err error)
+}
+
 // BrainSessionStore is the durable Infinity-session to Claude-session mapping.
 // Deliberately the shape of settings.Store's generic Get/Set over
 // infinity_meta, so serve.go passes that store in with no adapter. In the
@@ -223,7 +238,7 @@ func (c *ClaudeCode) StreamCached(ctx context.Context, model string, sys SystemP
 	c.ForgetSession(ctx, sessionID)
 	fresh := turn
 	fresh.Resume = ""
-	fresh.Prompt = coldStartPrompt(sys, renderTranscript(messages))
+	fresh.Prompt = coldStartPrompt(sys, c.renderTranscript(ctx, messages))
 	return c.runner.Converse(ctx, fresh, out)
 }
 
@@ -417,7 +432,7 @@ func (c *ClaudeCode) buildPrompt(ctx context.Context, sessionID string, sys Syst
 		return "", fmt.Errorf("claude_max: nothing to say (no messages)")
 	}
 	if c.resume(ctx, sessionID, messages) != "" {
-		if last, ok := lastUserMessage(messages); ok {
+		if last, ok := c.lastUserMessage(ctx, messages); ok {
 			// The new message, with THIS turn's volatile context in front of
 			// it: what RRF just retrieved, the current time, the account
 			// overlay. Claude Code is holding the conversation and the soul,
@@ -435,7 +450,7 @@ func (c *ClaudeCode) buildPrompt(ctx context.Context, sessionID string, sys Syst
 		// own tools). Fall through to the full render rather than send an
 		// empty prompt.
 	}
-	return renderTranscript(messages), nil
+	return c.renderTranscript(ctx, messages), nil
 }
 
 // withVolatile puts this turn's changing context in front of the message.
@@ -460,10 +475,10 @@ func coldStartPrompt(sys SystemPrompt, prompt string) string {
 }
 
 // lastUserMessage returns the newest user turn's text.
-func lastUserMessage(messages []Message) (string, bool) {
+func (c *ClaudeCode) lastUserMessage(ctx context.Context, messages []Message) (string, bool) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == RoleUser {
-			text := strings.TrimSpace(messages[i].Content)
+			text := c.userContent(ctx, messages[i])
 			if text == "" {
 				return "", false
 			}
@@ -473,11 +488,110 @@ func lastUserMessage(messages []Message) (string, bool) {
 	return "", false
 }
 
+// userContent renders one of the boss's messages: what he typed, plus whatever
+// he attached to it.
+//
+// THE FILE THAT NEVER ARRIVED (2026-09-01). He attached his resume, the chip
+// rendered on his message, the upload landed, the PDF extracted cleanly to
+// 12,163 characters, and the turn recorded it. Then Jarvis told him "no
+// attachment came through on this message" - and from where he was sitting
+// that was true, because this provider rendered `m.Content` and nothing else.
+// Every other brain reads `m.Attachments`; this one, the one he is actually
+// on, dropped them on the floor. His answer: "file uploads absolutely need to
+// work".
+//
+// Claude Code takes a prompt, not typed content blocks, so the carrier is
+// Attachment.TextBlock - the provider-neutral rendering that exists for
+// exactly this ("documents on brains without native PDF input"). It is not
+// prompt-stuffed METADATA, which is the thing this codebase forbids: it is the
+// file's real extracted text, named, so he can be asked about it and quote it.
+//
+// Used by BOTH render paths (the resumed turn and the full transcript) so a
+// resumed session cannot quietly be the one that loses his files.
+func (c *ClaudeCode) userContent(ctx context.Context, m Message) string {
+	text := strings.TrimSpace(m.Content)
+	if len(m.Attachments) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString(text)
+	for _, a := range m.Attachments {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(c.placed(ctx, a).TextBlock())
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// placed puts the file where the model can open it, and says so.
+//
+// THE HALF THAT WAS MISSING. Rendering the extracted text made PDFs work and
+// left images exactly as broken as before: named, and unseeable. The boss, and
+// he should not have had to say it twice: "i need every fuckin model i use on
+// mac or cloud bridge to take fuckin image or files, ALWAYS".
+//
+// So the bytes go to the box the brain runs on, and Path names them there.
+// TextBlock already prints that path, and the note tells the model to open it,
+// because a path it does not know to read is the same as no path. Its Read
+// tool renders an image, so this is not a description of a picture - it is the
+// picture.
+//
+// Failure is stated, never swallowed: if the file cannot be placed, the note
+// says so and the boss gets told his image did not make it rather than an
+// answer confidently written about something nobody looked at.
+func (c *ClaudeCode) placed(ctx context.Context, a Attachment) Attachment {
+	// Nothing to place: plain text rides in the block as text.
+	if len(a.Data) == 0 {
+		return a
+	}
+	// A document whose text came out clean needs no file: the text IS the
+	// content, and it is already in the block. An image always needs the file,
+	// and so does a PDF whose extraction failed or came back empty.
+	if a.Kind == AttachmentDocument && strings.TrimSpace(a.Text) != "" {
+		return a
+	}
+	placer, ok := c.runner.(BrainFilePlacer)
+	if !ok {
+		if a.Kind == AttachmentImage {
+			a.Note = joinNote(a.Note, "this file could not be put on the machine you are running on, so you cannot open it — tell the boss it did not reach you rather than guessing at what it shows")
+		}
+		return a
+	}
+	path, err := placer.PlaceFile(ctx, a.ID, a.Name, a.Data)
+	if err != nil || strings.TrimSpace(path) == "" {
+		reason := "the machine you are running on could not be reached"
+		if err != nil {
+			reason = err.Error()
+		}
+		a.Note = joinNote(a.Note, "this file did not make it onto your machine ("+reason+"), so you cannot open it — tell the boss it did not reach you rather than guessing at its contents")
+		return a
+	}
+	a.Path = path
+	a.Note = joinNote(a.Note, "this file is on the machine you are running on at "+path+" — open it with your Read tool to see it")
+	return a
+}
+
+// joinNote appends to a note without losing the one already there: an
+// extraction failure the boss needs to hear about must not be overwritten by
+// a delivery note.
+func joinNote(existing, add string) string {
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return add
+	}
+	return existing + "; " + add
+}
+
 // renderTranscript flattens a conversation into one prompt for a cold start.
-func renderTranscript(messages []Message) string {
+func (c *ClaudeCode) renderTranscript(ctx context.Context, messages []Message) string {
 	var b strings.Builder
 	for _, m := range messages {
+		// A user message carries his attachments too; anything else is text.
 		text := strings.TrimSpace(m.Content)
+		if m.Role == RoleUser {
+			text = c.userContent(ctx, m)
+		}
 		if text == "" {
 			continue
 		}

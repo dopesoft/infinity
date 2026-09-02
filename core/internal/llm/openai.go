@@ -386,6 +386,15 @@ func openaiUserParts(m Message) []openai.ChatCompletionContentPartUnionParam {
 func openaiAttachmentText(m Message) string {
 	var b strings.Builder
 	for _, a := range m.Attachments {
+		// An IMAGE on a vendor that takes no image parts is the one case where
+		// this rendering carries no content at all - TextBlock can only say
+		// "[image]". Left there, the model reads a filename and answers as if
+		// it had looked, which is the confident-answer-about-nothing failure
+		// this codebase refuses everywhere else. So it is told plainly, and
+		// told to say so.
+		if a.Kind == AttachmentImage && len(a.Pages) == 0 {
+			a.Note = joinNote(a.Note, "this brain cannot be shown pictures, so you have NOT seen this image — tell the boss that and ask him to switch brains or describe it, never guess at what it shows")
+		}
 		b.WriteString(a.TextBlock())
 		b.WriteString("\n\n")
 	}
