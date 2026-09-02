@@ -9,6 +9,7 @@ import { fetchSessionMessages } from "@/lib/api";
 import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
+import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
@@ -456,15 +457,28 @@ function markTrailingAssistantInterim(messages: ChatMessage[]): ChatMessage[] {
 // after the turn is over is not "running": its timer must stop and it must
 // read as stopped (2026-08-26: code_agent card ticking past 500s after the
 // turn had already finished, "I can't stop it").
-function settleInFlight(messages: ChatMessage[], now: number): ChatMessage[] {
+function settleInFlight(
+  messages: ChatMessage[],
+  now: number,
+  codingLive = true,
+): ChatMessage[] {
   return messages.map((m) => {
     if (m.role === "assistant" && m.pending) return { ...m, pending: false };
     // A NESTED step belongs to a coding job, not to this turn. The job runs on
     // past the turn by design — that is the whole point of a detached build —
-    // so stamping it "interrupted" here would put a stopped row on screen for
-    // work that is still, visibly, editing files. Its own result frame settles
-    // it, whenever that lands.
-    if (m.toolCall?.nested) return m;
+    // so stamping it "interrupted" while the job is still going would put a
+    // stopped row on screen for work that is visibly still editing files.
+    //
+    // But ONLY while it is still going. The exemption used to be
+    // unconditional, and its cost was the boss's exact words: "it looked like
+    // 'run a command' was still spinning and time ticking upwards even tho I
+    // had no stop button". No stop button means the turn is over; nothing
+    // coding means the job is over too; a row still counting up in that state
+    // is the UI claiming work that nobody is doing. The job closes its own
+    // steps server-side now, but that only helps while the core is alive to
+    // send the frames - after a restart there is nobody left to send them, and
+    // this is what makes the row settle anyway.
+    if (m.toolCall?.nested) return codingLive ? m : { ...m, interrupted: true, endedAt: now };
     if (m.role === "tool" && m.toolCall && !m.toolResult && !m.interrupted) {
       return { ...m, interrupted: true, endedAt: now };
     }
@@ -595,6 +609,28 @@ export function useChat() {
   // hydration mismatches from non-deterministic UUID generation.
   const [sessionId, setSessionId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // IS ANYTHING ACTUALLY CODING? Server state, so it survives a reload and a
+  // core restart, which is the whole point: a forwarded step whose job died
+  // has nobody left to close it, and this is what stops the row pretending
+  // otherwise. `loading` counts as live, because the hook starts with an empty
+  // array and treating that as "nothing is coding" would settle the steps of a
+  // build that is running perfectly well.
+  const { runs: liveCodingRuns, loading: codingLoading } = useCodingRuns({ runningOnly: true });
+  const codingLive = codingLoading || liveCodingRuns.length > 0;
+  const codingLiveRef = useRef(true);
+  codingLiveRef.current = codingLive;
+
+  // When the last coding job stops, close whatever it left forwarded but
+  // unfinished. Server-side the job closes its own steps; this is the net for
+  // when there is no server left to do it.
+  useEffect(() => {
+    if (codingLive) return;
+    setMessages((prev) => {
+      if (!prev.some((m) => m.toolCall?.nested && !m.toolResult && !m.interrupted)) return prev;
+      return settleInFlight(prev, Date.now(), false);
+    });
+  }, [codingLive]);
   const [usage, setUsage] = useState<Usage>({ input: 0, output: 0 });
   const [isStreaming, setIsStreaming] = useState(false);
   // steal C: the reasoning-effort level Jarvis chose for the latest turn (from
@@ -1112,7 +1148,8 @@ export function useChat() {
             }
             // Nothing stays "running" once the turn is over: interim assistant
             // bubbles close and result-less tool cards stop ticking.
-            for (let i = 0; i < next.length; i++) next[i] = settleInFlight([next[i]], Date.now())[0];
+            for (let i = 0; i < next.length; i++)
+              next[i] = settleInFlight([next[i]], Date.now(), codingLiveRef.current)[0];
             // Silent-turn rescue: when a turn completes with no
             // visible assistant text, surface a clear marker so the
             // chat never just stops mid-air. Phrase the marker
@@ -1218,7 +1255,7 @@ export function useChat() {
           clearLiveTool();
           clearWatchdog();
           setMessages((prev) => [
-            ...settleInFlight(closePendingThinking(prev), Date.now()),
+            ...settleInFlight(closePendingThinking(prev), Date.now(), codingLiveRef.current),
             {
               id: makeId(),
               role: "assistant",

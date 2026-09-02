@@ -36,6 +36,12 @@ export type UseCodingRunsOpts = {
 export type UseCodingRunsResult = {
   /** Every matching run, newest first. */
   runs: RunDTO[];
+  /**
+   * True until BOTH subscriptions have answered once. A consumer that acts on
+   * "nothing is coding right now" must wait for this, or it acts on the empty
+   * array the hook starts with and concludes a live build is over.
+   */
+  loading: boolean;
   /** The newest one, or null. What a single-status surface renders. */
   latest: RunDTO | null;
   /**
@@ -53,8 +59,9 @@ export function useCodingRuns(opts: UseCodingRunsOpts = {}): UseCodingRunsResult
   // One useRuns per kind: the hook filters server-side on a single kind, and
   // two cheap subscriptions beat fetching every run in the system and
   // filtering in the browser.
-  const { runs: codeRuns } = useRuns({ kind: "code_agent", status, limit, enabled });
-  const { runs: buildRuns } = useRuns({ kind: "background.build", status, limit, enabled });
+  const { runs: codeRuns, loading: codeLoading } = useRuns({ kind: "code_agent", status, limit, enabled });
+  const { runs: buildRuns, loading: buildLoading } = useRuns({ kind: "background.build", status, limit, enabled });
+  const loading = codeLoading || buildLoading;
 
   return useMemo(() => {
     const runs = [...codeRuns, ...buildRuns].sort((a, b) =>
@@ -62,6 +69,6 @@ export function useCodingRuns(opts: UseCodingRunsOpts = {}): UseCodingRunsResult
     );
     const claudeRun =
       codeRuns[0] ?? buildRuns.find((r) => r.meta?.engine === "claude_code") ?? null;
-    return { runs, latest: runs[0] ?? null, claudeRun };
-  }, [codeRuns, buildRuns]);
+    return { runs, latest: runs[0] ?? null, claudeRun, loading };
+  }, [codeRuns, buildRuns, loading]);
 }
