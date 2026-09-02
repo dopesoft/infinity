@@ -154,19 +154,35 @@ func (s *Server) handleSessionArtifacts(w http.ResponseWriter, r *http.Request) 
 			limit = n
 		}
 	}
+	// Two things the raw row cannot answer on its own, both of which decide
+	// whether the viewer can SHOW the document instead of offering a download:
+	//
+	//   path    an uploaded file's storage_path is "attachment:<id>" (bytes in
+	//           Postgres). The workspace MIRROR of that upload is a real path
+	//           the page-rasterizer can render, so prefer it when it exists;
+	//           the download proxy resolves the "attachment:" form either way.
+	//   format  only document_create stamps metadata->>'format'. An upload has
+	//           none, and an empty format used to leave the viewer with no
+	//           preview path at all - the filename extension is the honest
+	//           answer and it is right there in the name.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT id::text, name,
-		       COALESCE(storage_path,'')             AS storage_path,
-		       COALESCE(storage_size,0)              AS storage_size,
-		       COALESCE(metadata->>'format','')      AS format,
-		       COALESCE(metadata->>'pdf_path','')    AS pdf_path,
-		       COALESCE(metadata->>'thumb_path','')  AS thumb_path,
-		       COALESCE(metadata->>'html_path','')   AS html_path,
-		       COALESCE(metadata->>'markdown','')    AS markdown,
-		       created_at
-		  FROM mem_artifacts
-		 WHERE kind='document' AND deleted_at IS NULL AND source_session_id = $1
-		 ORDER BY created_at DESC
+		SELECT a.id::text, a.name,
+		       COALESCE(NULLIF(at.workspace_path,''), a.storage_path, '')  AS storage_path,
+		       COALESCE(a.storage_size,0)                                  AS storage_size,
+		       COALESCE(
+		         NULLIF(a.metadata->>'format',''),
+		         lower(substring(a.name from '\.([A-Za-z0-9]+)$')),
+		         ''
+		       )                                                           AS format,
+		       COALESCE(a.metadata->>'pdf_path','')                        AS pdf_path,
+		       COALESCE(a.metadata->>'thumb_path','')                      AS thumb_path,
+		       COALESCE(a.metadata->>'html_path','')                       AS html_path,
+		       COALESCE(a.metadata->>'markdown','')                        AS markdown,
+		       a.created_at
+		  FROM mem_artifacts a
+		  LEFT JOIN mem_attachments at ON a.storage_path = 'attachment:' || at.id::text
+		 WHERE a.kind='document' AND a.deleted_at IS NULL AND a.source_session_id = $1
+		 ORDER BY a.created_at DESC
 		 LIMIT $2
 	`, sid, limit)
 	if err != nil {
@@ -193,14 +209,29 @@ func (s *Server) handleSessionArtifacts(w http.ResponseWriter, r *http.Request) 
 //
 //	GET /api/workspace/download?path=<cloud workspace path>[&download=1]
 func (s *Server) handleWorkspaceDownload(w http.ResponseWriter, r *http.Request) {
-	base := strings.TrimRight(s.cfg.WorkspaceRawBase, "/")
-	if base == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "workspace not configured"})
-		return
-	}
 	p := strings.TrimSpace(r.URL.Query().Get("path"))
 	if p == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path required"})
+		return
+	}
+	// A file the boss UPLOADED is an artifact like any other (it shows in the
+	// gallery, it opens in the document viewer), but its bytes live in
+	// Postgres under "attachment:<id>", not on the workspace volume. Resolving
+	// that here - at the one seam every document fetch goes through: preview,
+	// thumbnail and download - is what makes an uploaded PDF viewable instead
+	// of a dead download card. Handled before the proxy so it works even when
+	// the workspace mirror is missing or the volume is down.
+	if id, ok := strings.CutPrefix(p, "attachment:"); ok {
+		disp := "inline"
+		if r.URL.Query().Get("download") == "1" {
+			disp = "attachment"
+		}
+		s.serveAttachmentBytes(w, r, id, disp)
+		return
+	}
+	base := strings.TrimRight(s.cfg.WorkspaceRawBase, "/")
+	if base == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "workspace not configured"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)

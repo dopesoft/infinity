@@ -75,24 +75,35 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 	// queries for the agent.
 	const perKindCap = 200
 
+	// storage_path and format are resolved exactly as in handleSessionArtifacts
+	// (see the note there): an uploaded file's bytes live in Postgres under
+	// "attachment:<id>", its workspace MIRROR is what the page-rasterizer can
+	// render, and only document_create ever stamps a format - the filename
+	// extension is the honest answer for everything else. Without both, the
+	// Library opened an uploaded PDF as a dead download card.
 	rows, err := s.pool.Query(r.Context(), `
 		WITH ranked AS (
-			SELECT id::text, kind, name, COALESCE(description, '') AS description,
-			       virtual_path, storage_kind,
-			       COALESCE(storage_path, '') AS storage_path,
-			       COALESCE(storage_mime, '') AS storage_mime,
-			       COALESCE(github_url, '')   AS github_url,
-			       COALESCE(bridge, '')       AS bridge,
-			       COALESCE(metadata->>'format','')     AS format,
-			       COALESCE(metadata->>'pdf_path','')   AS pdf_path,
-			       COALESCE(metadata->>'thumb_path','') AS thumb_path,
-			       COALESCE(metadata->>'html_path','')  AS html_path,
-			       COALESCE(metadata->>'markdown','')   AS markdown,
-			       tags::text  AS tags_json,
-			       created_at,
-			       ROW_NUMBER() OVER (PARTITION BY kind ORDER BY created_at DESC) AS rn
-			  FROM mem_artifacts
-			 WHERE deleted_at IS NULL
+			SELECT a.id::text, a.kind, a.name, COALESCE(a.description, '') AS description,
+			       a.virtual_path, a.storage_kind,
+			       COALESCE(NULLIF(at.workspace_path,''), a.storage_path, '') AS storage_path,
+			       COALESCE(a.storage_mime, '') AS storage_mime,
+			       COALESCE(a.github_url, '')   AS github_url,
+			       COALESCE(a.bridge, '')       AS bridge,
+			       COALESCE(
+			         NULLIF(a.metadata->>'format',''),
+			         lower(substring(a.name from '\.([A-Za-z0-9]+)$')),
+			         ''
+			       )                                       AS format,
+			       COALESCE(a.metadata->>'pdf_path','')     AS pdf_path,
+			       COALESCE(a.metadata->>'thumb_path','')   AS thumb_path,
+			       COALESCE(a.metadata->>'html_path','')    AS html_path,
+			       COALESCE(a.metadata->>'markdown','')     AS markdown,
+			       a.tags::text  AS tags_json,
+			       a.created_at,
+			       ROW_NUMBER() OVER (PARTITION BY a.kind ORDER BY a.created_at DESC) AS rn
+			  FROM mem_artifacts a
+			  LEFT JOIN mem_attachments at ON a.storage_path = 'attachment:' || at.id::text
+			 WHERE a.deleted_at IS NULL
 		)
 		SELECT id, kind, name, description, virtual_path, storage_kind,
 		       storage_path, storage_mime, github_url, bridge,

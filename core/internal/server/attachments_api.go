@@ -188,7 +188,19 @@ func (s *Server) handleAttachmentRaw(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data, att, err := s.attachments.Bytes(r.Context(), parts[0])
+	s.serveAttachmentBytes(w, r, parts[0], "inline")
+}
+
+// serveAttachmentBytes streams one attachment's bytes with its real MIME type.
+// Shared by the raw route and by /api/workspace/download, which resolves an
+// "attachment:<id>" artifact path here rather than proxying it to a workspace
+// volume that has never heard of it.
+func (s *Server) serveAttachmentBytes(w http.ResponseWriter, r *http.Request, id, disposition string) {
+	if s.attachments == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "attachment store not configured"})
+		return
+	}
+	data, att, err := s.attachments.Bytes(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
 		return
@@ -200,7 +212,7 @@ func (s *Server) handleAttachmentRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	w.Header().Set("Content-Disposition", "inline; filename="+strconv.Quote(filepath.Base(att.Name)))
+	w.Header().Set("Content-Disposition", disposition+"; filename="+strconv.Quote(filepath.Base(att.Name)))
 	if r.Method == http.MethodHead {
 		return
 	}

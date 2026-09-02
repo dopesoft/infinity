@@ -97,6 +97,19 @@ export type DocMeta = {
   htmlPath?: string; // side-scrollable HTML preview (spreadsheets)
 };
 
+// extensionOf reads the kind of file out of its name. Only document_create
+// stamps a format on the row; a file the boss UPLOADED carries none, and an
+// empty format is what left the viewer with no preview path at all - it fell
+// through to a download card on a PDF it could perfectly well have shown. The
+// extension is right there in the name, so every mapper below asks for it.
+function extensionOf(name?: string): string {
+  const base = (name ?? "").split(/[\\/]/).pop() ?? "";
+  const i = base.lastIndexOf(".");
+  if (i <= 0 || i === base.length - 1) return "";
+  const ext = base.slice(i + 1).toLowerCase();
+  return /^[a-z0-9]{1,8}$/.test(ext) ? ext : "";
+}
+
 // docMetaFromArtifact maps a server-tracked DocArtifact (mem_artifacts row) to
 // the DocMeta a tab renders. Shared by the right-pane (rehydration) and the
 // gallery (click-to-open) so the mapping lives in exactly one place.
@@ -104,7 +117,7 @@ export function docMetaFromArtifact(a: DocArtifact): DocMeta {
   return {
     id: a.path, // DocMeta.id === path, matching the document_created tab convention
     filename: a.filename,
-    format: a.format,
+    format: a.format || extensionOf(a.filename) || extensionOf(a.path),
     path: a.path,
     bytes: a.bytes,
     markdown: a.markdown,
@@ -129,9 +142,9 @@ export function docMetaFromLibrary(e: {
   return {
     id: path,
     filename: e.name,
-    // Fall back to the filename extension when the row predates the metadata
-    // (older artifacts have no metadata->>'format').
-    format: e.format || path.split(".").pop()?.toLowerCase() || "",
+    // Fall back to the filename extension when the row carries no metadata
+    // (older artifacts, and every uploaded file).
+    format: e.format || extensionOf(e.name) || extensionOf(path),
     path,
     markdown: e.markdown || undefined,
     pdfPath: e.pdf_path || undefined,

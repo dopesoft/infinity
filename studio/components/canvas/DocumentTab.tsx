@@ -7,6 +7,7 @@ import {
   FileText,
   Presentation,
   FileType2,
+  RotateCw,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,12 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
   const isPdfPreview = !!previewPath && previewType === "application/pdf";
 
   const [downloading, setDownloading] = useState(false);
+  // A preview that COULD NOT BE FETCHED is a different answer from a document
+  // that HAS no preview, and both used to render the same download card. That
+  // is the silent-green failure in UI form: it reads as "there is nothing to
+  // show you" when it means "I could not get it".
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // PDF previews render page-by-page (one slide at a time) via the workspace's
   // rasterized page images; pages=null while loading, [] when unavailable (then
@@ -73,14 +80,15 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
     return () => {
       cancelled = true;
     };
-  }, [isPdfPreview, previewPath]);
+    // reloadKey: "Try again" has to re-run the page render too, or it only
+    // retries half the preview.
+  }, [isPdfPreview, previewPath, reloadKey]);
 
   // The blob/iframe path is only needed for HTML previews and as the PDF
   // fallback (when page rasterization isn't available). Don't fetch it while
   // the deck viewer is in play.
   const needIframe = !!previewPath && (previewType === "text/html" || (isPdfPreview && pages?.length === 0));
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
 
   // Load the iframe preview (HTML, or the PDF fallback) as a blob object URL —
   // an iframe can't carry a bearer. Force the content type so it RENDERS.
@@ -88,20 +96,21 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
     if (!needIframe || !previewPath) return;
     let revoked = false;
     let url: string | null = null;
-    setPdfLoading(true);
+    setPreviewFailed(false);
     fetchWorkspaceBlob(previewPath).then((blob) => {
       if (revoked) return;
       if (blob) {
         url = URL.createObjectURL(new Blob([blob], { type: previewType }));
         setPdfUrl(url);
+      } else {
+        setPreviewFailed(true);
       }
-      setPdfLoading(false);
     });
     return () => {
       revoked = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [needIframe, previewPath, previewType]);
+  }, [needIframe, previewPath, previewType, reloadKey]);
 
   async function handleDownload(path: string, filename: string) {
     setDownloading(true);
@@ -169,18 +178,56 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
         ) : isPdfPreview && pages && pages.length > 0 ? (
           <PdfDeckViewer pages={pages} filename={doc.filename} />
         ) : previewPath ? (
-          pdfLoading ? (
+          pdfUrl ? (
+            <iframe src={pdfUrl} title={doc.filename} className="block size-full border-0 bg-white" />
+          ) : previewFailed ? (
+            <PreviewFailedCard
+              doc={doc}
+              onRetry={() => setReloadKey((k) => k + 1)}
+              onDownload={() => void handleDownload(doc.path, doc.filename)}
+              downloading={downloading}
+            />
+          ) : (
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <Spinner className="size-5" />
             </div>
-          ) : pdfUrl ? (
-            <iframe src={pdfUrl} title={doc.filename} className="block size-full border-0 bg-white" />
-          ) : (
-            <DownloadCard doc={doc} Icon={Icon} onDownload={() => void handleDownload(doc.path, doc.filename)} downloading={downloading} />
           )
         ) : (
           <DownloadCard doc={doc} Icon={Icon} onDownload={() => void handleDownload(doc.path, doc.filename)} downloading={downloading} />
         )}
+      </div>
+    </div>
+  );
+}
+
+// PreviewFailedCard - what he sees when the bytes could not be fetched. It says
+// the true thing ("I could not load it"), offers the retry, and still leaves
+// the download within reach. It never pretends the document has no preview.
+function PreviewFailedCard({
+  doc, onRetry, onDownload, downloading,
+}: {
+  doc: DocMeta;
+  onRetry: () => void;
+  onDownload: () => void;
+  downloading: boolean;
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="max-w-sm space-y-1.5">
+        <p className="text-sm font-medium">{doc.filename}</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          I couldn&apos;t load this one to show you.
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={onRetry}>
+          <RotateCw className="size-4" />
+          Try again
+        </Button>
+        <Button size="sm" className="gap-1.5" onClick={() => void onDownload()} disabled={downloading}>
+          {downloading ? <Spinner className="size-4" /> : <Download className="size-4" />}
+          Download
+        </Button>
       </div>
     </div>
   );
