@@ -36,10 +36,21 @@ import { cn } from "@/lib/utils";
 // was invisible in the one place he looks for it, and he was left with a bare
 // spinner for eight minutes. Both coding kinds now feed the dock.
 //
-// Shows whenever there's an active plan for this session OR a coding run is
-// live. ONE progress bar: % from the plan's done/total when there's a plan,
-// otherwise the run's own progress fraction, and only indeterminate (pulsing)
-// when neither has said anything yet.
+// THIS STRIP IS THE PLAN, AND NOTHING ELSE. It renders only when there is a
+// real plan with real steps, whoever authored it: Jarvis laying one out with
+// plan_create / todo_write, or Claude Code's own TodoWrite list mirrored in by
+// the runner. No plan means no strip.
+//
+// It used to appear for ANY live coding run, with no plan behind it, and fill
+// the bar from the run's own fraction. That fraction is not a measurement:
+// ProgressForSteps invents 0.15 + 0.10 per distinct thing the job has done,
+// capped at 0.90. So a build thirty seconds in said "15%" and one that had
+// read four files said "25%", over a line reading "Claude Code · Bash sed -n
+// '1,95p' …". The boss, twice: a plan UI is for when the AI actually made a
+// plan, and "if there's no fucking plan I don't want the plan UI to come up".
+// A coding job with no checklist is still fully visible - every step it takes
+// is a row in the conversation above, and the bridge pill carries that it is
+// working - so nothing is lost by this strip staying away.
 
 export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
   const plan = usePlan(sessionId);
@@ -52,22 +63,17 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
   const worker = build?.meta?.worker?.trim() ?? "";
   const backend = build?.meta?.backend?.trim() ?? "";
 
-  // Nothing to show unless a plan is in flight or a build is running.
-  if (!plan && activeBuilds.length === 0) return null;
-
   const steps = plan?.steps ?? [];
   const done = plan?.doneCount ?? 0;
   const total = plan?.totalCount ?? 0;
-  const hasPlan = total > 0;
-  // The plan's own done/total is the truest measure of "how far in are we",
-  // so it wins. Without a plan, fall back to the run's live fraction - which
-  // the coding tools now actually write (it was hardcoded 0, so this bar
-  // could never move for a code_agent run no matter how long it worked).
-  const runPct =
-    typeof build?.progress === "number" && build.progress > 0
-      ? Math.round(build.progress * 100)
-      : null;
-  const pct = hasPlan ? Math.round((done / total) * 100) : runPct;
+
+  // No plan, no strip. Gated on STEPS rather than on the plan row existing, so
+  // an empty plan can't put an empty checklist on screen either ("an empty
+  // session is of no use to me").
+  if (total === 0) return null;
+
+  // The plan's own done/total is the only number this bar ever draws.
+  const pct = Math.round((done / total) * 100);
 
   // What is happening RIGHT NOW, in preference order. A live coding run
   // outranks a blocked step: a step goes 'blocked' when an earlier run was
@@ -84,9 +90,7 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
 
   const running =
     activeBuilds.length > 0 || steps.some((s) => s.status === "in_progress");
-  const status = hasPlan
-    ? `${done}/${total} · ${current}`
-    : build?.progress_label?.trim() || "working";
+  const status = `${done}/${total} · ${current}`;
   const title = plan?.title?.trim() || build?.label?.trim() || "Background build";
   const workerDetail = [worker, backend].filter(Boolean).join(" · ");
 
@@ -118,12 +122,9 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
         ) : (
           <Circle className="size-4 shrink-0 text-quiet" />
         )}
-        <Progress
-          value={pct ?? 8}
-          className={cn("h-1.5 flex-1 bg-brand/15", pct == null && "animate-pulse")}
-        />
+        <Progress value={pct} className="h-1.5 flex-1 bg-brand/15" />
         <span className="w-9 shrink-0 text-right font-mono text-[12px] tabular-nums text-quiet">
-          {pct != null ? `${pct}%` : ""}
+          {pct}%
         </span>
         {expanded ? (
           <ChevronDown className="size-4 shrink-0 text-quiet" />
@@ -140,11 +141,9 @@ export function BackgroundJobDock({ sessionId }: { sessionId?: string }) {
         <span className="min-w-0 flex-1 truncate font-voice text-[13.5px] leading-[1.45] text-foreground">
           {current || status}
         </span>
-        {hasPlan && (
-          <span className="shrink-0 font-mono text-[11px] tabular-nums text-quiet">
-            {done}/{total}
-          </span>
-        )}
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-quiet">
+          {done}/{total}
+        </span>
         {others.length > 0 && (
           <span className="shrink-0 rounded-full bg-brand/15 px-1.5 font-mono text-[11px] text-brand">
             +{others.length}

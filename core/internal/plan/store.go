@@ -844,6 +844,15 @@ func (s *Store) FinalizeSession(ctx context.Context, sessionID string) (int, err
 	// plan out of the failed→paused→"needs you" lane it doesn't belong in
 	// (recompute only pauses on a real failed/blocked step). A step whose run
 	// ALREADY ended in error is a genuine failure → left for ReconcileStranded.
+	//
+	// EXCEPT a plan owned by a run that is STILL WORKING. A coding job routinely
+	// outlives the turn that started it - that is the whole point of the detach
+	// path - and its plan is mirrored from the job, not driven by the chat
+	// brain. Settling it here would mark a build that is actively editing files
+	// "I stopped here", complete the plan, and drop the checklist off the dock
+	// while the work carried on, which is the exact blindness this mirror was
+	// built to end. The owning run's own verdict settles it instead
+	// (SettleOwnedPlan, from the runner's finish/stop path).
 	rows, err := s.pool.Query(ctx, `
 		SELECT st.id::text, COALESCE(st.run_id::text, '')
 		  FROM mem_plan_steps st
@@ -852,6 +861,9 @@ func (s *Store) FinalizeSession(ctx context.Context, sessionID string) (int, err
 		   AND st.status = 'in_progress'
 		   AND (st.run_id IS NULL OR EXISTS (
 		         SELECT 1 FROM mem_runs r WHERE r.id = st.run_id AND r.status = 'running'))
+		   AND NOT EXISTS (
+		         SELECT 1 FROM mem_runs owner
+		          WHERE owner.id = p.owner_run_id AND owner.status = 'running')
 	`, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("finalize session scan: %w", err)
