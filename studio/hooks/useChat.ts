@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { clearLiveTool, publishLiveTool } from "@/lib/live-tool";
 import type { WSEvent, WSToolEvent } from "@/lib/ws/client";
 import { useWebSocket } from "@/lib/ws/provider";
+import { isRestoredSession, nextSessionHref } from "@/lib/chat/sessionUrl";
 import { fetchSessionMessages, fetchTraces, type TurnRowDTO } from "@/lib/api";
 import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
@@ -261,13 +262,33 @@ function readStoredSessionId(): string {
   }
 }
 
-function writeStoredSessionId(id: string) {
+// rememberSession records WHICH CONVERSATION IS OPEN, in both places that
+// answer that question: localStorage (what a refresh falls back to) and the
+// `?session=` param (what a refresh reads FIRST).
+//
+// They used to be allowed to disagree. A chat opened from the dashboard or a
+// record sheet arrives as /live?session=<id>; switching chats in the drawer or
+// starting a new one moved only React state and localStorage, so that first id
+// stayed in the address bar. Refresh read the URL, won, and dropped him into an
+// older conversation. Every session change in this hook goes through here, so a
+// new writer cannot reintroduce the split.
+function rememberSession(id: string) {
   if (typeof window === "undefined") return;
   try {
     if (id) window.localStorage.setItem(SESSION_KEY, id);
     else window.localStorage.removeItem(SESSION_KEY);
   } catch {
     /* private mode / quota */
+  }
+  // Shallow, and a REPLACE: the back button belongs to the pages he visited,
+  // not to every conversation he opened inside this one.
+  const href = nextSessionHref(window.location.href, id);
+  if (href) {
+    try {
+      window.history.replaceState(window.history.state, "", href);
+    } catch {
+      /* ignore - the localStorage half still holds */
+    }
   }
 }
 
@@ -619,6 +640,16 @@ export function useChat() {
   const ws = useWebSocket();
   const searchParams = useSearchParams();
   const requestedSessionId = searchParams.get("session")?.trim() ?? "";
+  // The conversation this hook has opened, and the one function that changes
+  // it. Its only extra job over rememberSession is recording what is open, so
+  // the mount effect can tell a `?session=` this hook wrote itself from one
+  // that is genuinely asking for a different chat.
+  const openSessionRef = useRef("");
+  const initializedRef = useRef(false);
+  const openConversation = useCallback((id: string) => {
+    openSessionRef.current = id;
+    rememberSession(id);
+  }, []);
   // Empty on first server render; assigned client-side in useEffect to avoid
   // hydration mismatches from non-deterministic UUID generation.
   const [sessionId, setSessionId] = useState<string>("");
@@ -903,21 +934,41 @@ export function useChat() {
   // gap when Core is unreachable. Will be replaced by Supabase Realtime
   // once auth is wired so multiple tabs / devices stay in sync.
   useEffect(() => {
+    // Syncing the address bar (openConversation) changes the param this effect
+    // depends on. Once we are running, a param naming the conversation already
+    // open is one this hook wrote itself, not a request to switch - so return
+    // rather than re-running the whole mount. Never on the first pass, which is
+    // the one that has to honour a deep link.
+    if (
+      initializedRef.current &&
+      requestedSessionId &&
+      requestedSessionId === openSessionRef.current
+    ) {
+      return;
+    }
+    initializedRef.current = true;
     const stored = readStoredSessionId();
     let id = requestedSessionId || stored || newSessionId();
+    // RESTORED means "put me back where I was", as against a deep link asking
+    // for a specific conversation. A refresh is now the former WITH a param in
+    // the URL (the address bar follows the open chat), and it is told apart by
+    // the param agreeing with what was stored. Getting this wrong would have
+    // quietly retired the rotation below - it used to key off "no param at
+    // all", a condition that can no longer happen.
+    const restored = isRestoredSession(requestedSessionId, stored);
     // Stale-session rotation: a restored (never an explicitly requested)
     // session idle past the window is a finished conversation - start fresh
     // so this exchange gets its own chat + title. Synchronous on purpose:
     // it must win the race against the ?voice=1 auto-start, which otherwise
     // pipes a whole voice conversation into the stale session.
-    if (!requestedSessionId && stored) {
+    if (restored && stored) {
       const last = lastActivityFor(stored);
       if (last > 0 && Date.now() - last > STALE_SESSION_MS) {
         id = newSessionId();
       }
     }
     setSessionId(id);
-    writeStoredSessionId(id);
+    openConversation(id);
 
     const cached = readCachedMessages(id);
     if (cached.length > 0) {
@@ -966,7 +1017,7 @@ export function useChat() {
     // Messages are on screen; now ask whether a turn is still running.
     void resumeLiveTurn(id, ac.signal);
     return () => ac.abort();
-  }, [requestedSessionId, resumeLiveTurn]);
+  }, [requestedSessionId, resumeLiveTurn, openConversation]);
 
   // Mirror the visible transcript into localStorage whenever it changes.
   // Pending / thinking messages are filtered out by writeCachedMessages
@@ -1013,12 +1064,12 @@ export function useChat() {
     clearWatchdog();
     const id = newSessionId();
     setSessionId(id);
-    writeStoredSessionId(id);
+    openConversation(id);
     setMessages([]);
     turnStartRef.current = null;
     setIsStreaming(false);
     writeLastActiveAt(Date.now()); // the fresh session is "active now"
-  }, [clearWatchdog]);
+  }, [clearWatchdog, openConversation]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -1595,11 +1646,11 @@ export function useChat() {
     });
     const id = newSessionId();
     setSessionId(id);
-    writeStoredSessionId(id);
+    openConversation(id);
     setMessages([]);
     turnStartRef.current = null;
     setIsStreaming(false);
-  }, [clearWatchdog]);
+  }, [clearWatchdog, openConversation]);
 
   // switchSession loads an existing session in place - same view, different
   // conversation. Used by the Sessions drawer in the Live header. We hydrate
@@ -1609,7 +1660,7 @@ export function useChat() {
     if (!id || id === sessionId) return;
     clearWatchdog();
     setSessionId(id);
-    writeStoredSessionId(id);
+    openConversation(id);
     setIsStreaming(false);
     turnStartRef.current = null;
 
@@ -1631,7 +1682,7 @@ export function useChat() {
     });
     // Messages are on screen; now ask whether a turn is still running.
     void resumeLiveTurn(id, ac.signal);
-  }, [sessionId, clearWatchdog, resumeLiveTurn]);
+  }, [sessionId, clearWatchdog, resumeLiveTurn, openConversation]);
 
   const clear = useCallback(() => {
     clearWatchdog();
