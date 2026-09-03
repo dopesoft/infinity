@@ -21,7 +21,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { useCanvasStore, docMetaFromArtifact } from "@/lib/canvas/store";
 import {
-  fetchWorkspaceBlob, downloadWorkspaceFile, deleteArtifact,
+  fetchWorkspaceBlob, fetchDocPages, downloadWorkspaceFile, deleteArtifact,
   type DocArtifact, type MediaItem, type RunDTO,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -71,26 +71,38 @@ function docIcon(format: string) {
   }
 }
 
-// DocThumb shows the page-1 PNG (fetched as an authed blob, since the bearer
-// can't ride an <img src>), falling back to a format icon while/when absent.
+// DocThumb shows page 1 (fetched as an authed blob, since the bearer can't
+// ride an <img src>), falling back to a format icon while/when absent.
+//
+// document_create stamps a thumbnail on what it generates; a file the boss
+// UPLOADED never has one, which is why a PDF he handed Jarvis sat in the grid
+// as a grey box with the word PDF on it. The page renderer already knows how
+// to make that image and caches it workspace-side, so when there is no
+// thumbnail we ask it for the first page - the same render the viewer opens
+// with, so opening the document afterwards is instant.
 function DocThumb({ doc }: { doc: DocArtifact }) {
   const [url, setUrl] = useState<string | null>(null);
+  const previewSrc = doc.format === "pdf" ? doc.path : doc.pdf_path;
   useEffect(() => {
-    if (!doc.thumb_path) return;
+    if (!doc.thumb_path && !previewSrc) return;
     let revoked = false;
     let made: string | null = null;
-    fetchWorkspaceBlob(doc.thumb_path).then((b) => {
+    void (async () => {
+      let path = doc.thumb_path;
+      if (!path && previewSrc) path = (await fetchDocPages(previewSrc))[0];
+      if (!path || revoked) return;
+      const b = await fetchWorkspaceBlob(path, doc.updated_at);
       if (revoked) return;
       if (b) {
         made = URL.createObjectURL(b);
         setUrl(made);
       }
-    });
+    })();
     return () => {
       revoked = true;
       if (made) URL.revokeObjectURL(made);
     };
-  }, [doc.thumb_path]);
+  }, [doc.thumb_path, previewSrc, doc.updated_at]);
   const Icon = docIcon(doc.format);
   if (url) {
     // eslint-disable-next-line @next/next/no-img-element

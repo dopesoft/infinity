@@ -35,6 +35,10 @@ type libraryEntry struct {
 	Bridge      string    `json:"bridge,omitempty"`
 	Tags        []string  `json:"tags"`
 	CreatedAt   time.Time `json:"created_at"`
+	// UpdatedAt is the artifact's VERSION - see the note on docArtifact. A
+	// document Jarvis redoes keeps its path, and this is what tells a preview
+	// the bytes underneath it moved.
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Document-preview metadata, carried straight off the same mem_artifacts
 	// row /api/canvas/artifacts reads. It's what lets a Library click open a
@@ -100,6 +104,7 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(a.metadata->>'markdown','')     AS markdown,
 			       a.tags::text  AS tags_json,
 			       a.created_at,
+			       COALESCE(a.updated_at, a.created_at) AS updated_at,
 			       ROW_NUMBER() OVER (PARTITION BY a.kind ORDER BY a.created_at DESC) AS rn
 			  FROM mem_artifacts a
 			  LEFT JOIN mem_attachments at ON a.storage_path = 'attachment:' || at.id::text
@@ -108,7 +113,7 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 		SELECT id, kind, name, description, virtual_path, storage_kind,
 		       storage_path, storage_mime, github_url, bridge,
 		       format, pdf_path, thumb_path, html_path, markdown,
-		       tags_json, created_at
+		       tags_json, created_at, updated_at
 		  FROM ranked
 		 WHERE rn <= $1
 		 ORDER BY kind, created_at DESC
@@ -128,7 +133,7 @@ func (s *Server) handleLibraryTree(w http.ResponseWriter, r *http.Request) {
 			&e.VirtualPath, &e.StorageKind,
 			&e.StoragePath, &e.StorageMime, &e.GitHubURL, &e.Bridge,
 			&e.Format, &e.PDFPath, &e.ThumbPath, &e.HTMLPath, &e.Markdown,
-			&tagsJSON, &e.CreatedAt,
+			&tagsJSON, &e.CreatedAt, &e.UpdatedAt,
 		); err != nil {
 			continue
 		}

@@ -347,6 +347,26 @@ export function Workspace({
     if (pending) store.openDocument(pending);
   }, [chat.sessionId, docsForSession, docArtifacts, store]);
 
+  // A document Jarvis REDOES keeps its path, so an already-open tab has no way
+  // to notice its bytes changed: it keeps showing the render it fetched the
+  // first time while the download hands over the new file. mem_artifacts
+  // bumps updated_at on the rewrite and the artifacts snapshot is already live
+  // over realtime, so when a version moves, hand the tab the new row and its
+  // preview re-fetches. registerDocument, not openDocument: refreshing what he
+  // is looking at must never move him to a different tab.
+  useEffect(() => {
+    const sid = chat.sessionId;
+    if (!sid || docsForSession !== sid) return;
+    const store = storeRef.current;
+    const open = new Map(store.documents.map((d) => [d.id, d]));
+    for (const a of docArtifacts) {
+      const cur = open.get(a.path);
+      if (cur && (cur.version ?? "") !== (a.updated_at ?? "")) {
+        store.registerDocument(docMetaFromArtifact(a));
+      }
+    }
+  }, [chat.sessionId, docsForSession, docArtifacts]);
+
   // Persist which tabs are open, AFTER rehydration, so neither the empty
   // initial state nor a mid-switch state clobbers the saved set.
   useEffect(() => {

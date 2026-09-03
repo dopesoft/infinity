@@ -127,6 +127,12 @@ type docArtifact struct {
 	HTMLPath  string    `json:"html_path,omitempty"`
 	Markdown  string    `json:"markdown,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is the document's VERSION. Jarvis redoing a document reuses its
+	// path, so nothing downstream could tell the bytes had changed: an open tab
+	// kept showing the render it fetched once while the download handed over the
+	// new file. The upsert in recordDocumentArtifact bumps this, so it is the
+	// signal every preview keys off.
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // handleSessionArtifacts lists the document artifacts created in a session,
@@ -178,7 +184,8 @@ func (s *Server) handleSessionArtifacts(w http.ResponseWriter, r *http.Request) 
 		       COALESCE(a.metadata->>'thumb_path','')                      AS thumb_path,
 		       COALESCE(a.metadata->>'html_path','')                       AS html_path,
 		       COALESCE(a.metadata->>'markdown','')                        AS markdown,
-		       a.created_at
+		       a.created_at,
+		       COALESCE(a.updated_at, a.created_at)                        AS updated_at
 		  FROM mem_artifacts a
 		  LEFT JOIN mem_attachments at ON a.storage_path = 'attachment:' || at.id::text
 		 WHERE a.kind='document' AND a.deleted_at IS NULL AND a.source_session_id = $1
@@ -193,7 +200,7 @@ func (s *Server) handleSessionArtifacts(w http.ResponseWriter, r *http.Request) 
 	out := []docArtifact{}
 	for rows.Next() {
 		var d docArtifact
-		if err := rows.Scan(&d.ID, &d.Filename, &d.Path, &d.Bytes, &d.Format, &d.PDFPath, &d.ThumbPath, &d.HTMLPath, &d.Markdown, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.Filename, &d.Path, &d.Bytes, &d.Format, &d.PDFPath, &d.ThumbPath, &d.HTMLPath, &d.Markdown, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			continue
 		}
 		out = append(out, d)

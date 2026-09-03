@@ -636,9 +636,13 @@ export async function activateExtension(
 // the cloud-direct proxy (works on any device, independent of the session
 // bridge). Returns a Blob so binaries never round-trip as text. Used for
 // generated-document download + inline PDF preview.
-export async function fetchWorkspaceBlob(path: string): Promise<Blob | null> {
+export async function fetchWorkspaceBlob(path: string, version?: string): Promise<Blob | null> {
   try {
-    const res = await authedFetch(`/api/workspace/download?path=${encodeURIComponent(path)}`);
+    // `v` is never read by the server. It is in the URL so that a REDONE
+    // document, which keeps the same path, is a different URL to the browser
+    // cache - otherwise the old page images are served back forever.
+    const v = version ? `&v=${encodeURIComponent(version)}` : "";
+    const res = await authedFetch(`/api/workspace/download?path=${encodeURIComponent(path)}${v}`);
     if (!res.ok) return null;
     return await res.blob();
   } catch {
@@ -831,6 +835,10 @@ export type DocArtifact = {
   html_path?: string; // side-scrollable HTML preview (spreadsheets)
   markdown?: string; // inline content for md/report docs (so they rehydrate)
   created_at: string;
+  // The document's VERSION. Jarvis redoing a document reuses its path, so
+  // every preview URL and cached render underneath it would otherwise stay on
+  // the old bytes. Everything that fetches a preview keys off this.
+  updated_at?: string;
 };
 
 export async function fetchSessionArtifacts(

@@ -491,6 +491,7 @@ export type LibraryEntry = {
   bridge?: "mac" | "cloud";
   tags: string[];
   created_at: string;
+  updated_at?: string; // the artifact's version - see DocArtifact.updated_at
   // Document-preview metadata (present on kind="document" rows). Same shape as
   // DocArtifact so a Library click can open the real document viewer.
   format?: string;

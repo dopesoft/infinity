@@ -95,6 +95,10 @@ export type DocMeta = {
   markdown?: string;
   pdfPath?: string;
   htmlPath?: string; // side-scrollable HTML preview (spreadsheets)
+  // The document's VERSION (mem_artifacts.updated_at). A document Jarvis redoes
+  // keeps its path, so this is the only thing that tells an already-open tab
+  // its bytes moved. Every preview fetch keys off it.
+  version?: string;
 };
 
 // extensionOf reads the kind of file out of its name. Only document_create
@@ -123,6 +127,7 @@ export function docMetaFromArtifact(a: DocArtifact): DocMeta {
     markdown: a.markdown,
     pdfPath: a.pdf_path,
     htmlPath: a.html_path,
+    version: a.updated_at || a.created_at,
   };
 }
 
@@ -137,6 +142,8 @@ export function docMetaFromLibrary(e: {
   pdf_path?: string;
   html_path?: string;
   markdown?: string;
+  updated_at?: string;
+  created_at?: string;
 }): DocMeta {
   const path = e.storage_path ?? "";
   return {
@@ -149,6 +156,7 @@ export function docMetaFromLibrary(e: {
     markdown: e.markdown || undefined,
     pdfPath: e.pdf_path || undefined,
     htmlPath: e.html_path || undefined,
+    version: e.updated_at || e.created_at || undefined,
   };
 }
 

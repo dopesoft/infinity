@@ -18,7 +18,18 @@ import { fetchWorkspaceBlob } from "@/lib/api";
  * bearer) and cached; thumbnails lazy-load as they scroll into view, and the
  * current page prefetches its neighbours for instant navigation.
  */
-export function PdfDeckViewer({ pages, filename }: { pages: string[]; filename: string }) {
+export function PdfDeckViewer({
+  pages,
+  filename,
+  version,
+}: {
+  pages: string[];
+  filename: string;
+  /** The document's version. A redone document re-renders to the SAME page
+   *  image paths, so without this the blob cache below would keep handing
+   *  back the pages of the old draft. */
+  version?: string;
+}) {
   const [current, setCurrent] = useState(0);
   // path -> object URL. Component-scoped so URLs are revoked on unmount.
   const cache = useRef<Map<string, string>>(new Map());
@@ -32,14 +43,27 @@ export function PdfDeckViewer({ pages, filename }: { pages: string[]; filename: 
     };
   }, []);
 
-  const ensure = useCallback(async (path: string | undefined) => {
-    if (!path || cache.current.has(path)) return;
-    const blob = await fetchWorkspaceBlob(path);
-    if (blob && !cache.current.has(path)) {
-      cache.current.set(path, URL.createObjectURL(blob));
-      force((n) => n + 1);
-    }
-  }, []);
+  // A new version of the same document: drop every rendered page. The paths
+  // did not change, so nothing else here could tell that the pixels did.
+  useEffect(() => {
+    const c = cache.current;
+    if (c.size === 0) return;
+    c.forEach((u) => URL.revokeObjectURL(u));
+    c.clear();
+    force((n) => n + 1);
+  }, [version]);
+
+  const ensure = useCallback(
+    async (path: string | undefined) => {
+      if (!path || cache.current.has(path)) return;
+      const blob = await fetchWorkspaceBlob(path, version);
+      if (blob && !cache.current.has(path)) {
+        cache.current.set(path, URL.createObjectURL(blob));
+        force((n) => n + 1);
+      }
+    },
+    [version],
+  );
 
   const go = useCallback(
     (n: number) => setCurrent(Math.max(0, Math.min(pages.length - 1, n))),

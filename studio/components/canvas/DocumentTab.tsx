@@ -81,8 +81,10 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
       cancelled = true;
     };
     // reloadKey: "Try again" has to re-run the page render too, or it only
-    // retries half the preview.
-  }, [isPdfPreview, previewPath, reloadKey]);
+    // retries half the preview. doc.version: a REDONE document keeps its path,
+    // so without it this effect never fires again and the tab keeps showing
+    // the render it fetched the first time.
+  }, [isPdfPreview, previewPath, reloadKey, doc.version]);
 
   // The blob/iframe path is only needed for HTML previews and as the PDF
   // fallback (when page rasterization isn't available). Don't fetch it while
@@ -97,7 +99,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
     let revoked = false;
     let url: string | null = null;
     setPreviewFailed(false);
-    fetchWorkspaceBlob(previewPath).then((blob) => {
+    fetchWorkspaceBlob(previewPath, doc.version).then((blob) => {
       if (revoked) return;
       if (blob) {
         url = URL.createObjectURL(new Blob([blob], { type: previewType }));
@@ -110,7 +112,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
       revoked = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [needIframe, previewPath, previewType, reloadKey]);
+  }, [needIframe, previewPath, previewType, reloadKey, doc.version]);
 
   async function handleDownload(path: string, filename: string) {
     setDownloading(true);
@@ -176,7 +178,7 @@ export function DocumentTab({ doc }: { doc: DocMeta }) {
             <Spinner className="size-5" />
           </div>
         ) : isPdfPreview && pages && pages.length > 0 ? (
-          <PdfDeckViewer pages={pages} filename={doc.filename} />
+          <PdfDeckViewer pages={pages} filename={doc.filename} version={doc.version} />
         ) : previewPath ? (
           pdfUrl ? (
             <iframe src={pdfUrl} title={doc.filename} className="block size-full border-0 bg-white" />
