@@ -888,8 +888,10 @@ export type SessionMessageDTO = {
   text: string;
   created_at: string;
   // interim marks narration that streamed before a tool call in the same
-  // turn; the final reply is never interim.
+  // turn; the final reply is never interim. interrupted marks a reply the
+  // turn did not get to finish (Stop, budget, provider error).
   interim?: boolean;
+  interrupted?: boolean;
   attachments?: {
     id?: string;
     name?: string;

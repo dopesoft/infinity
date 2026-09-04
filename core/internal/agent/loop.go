@@ -1052,6 +1052,53 @@ func (l *Loop) projectFor(ctx context.Context, sessionID string) string {
 	return fn(ctx, sessionID)
 }
 
+// cutReplyText is what a turn that ends EARLY (Stop, budget, provider error)
+// keeps as its reply. It is not always the streamed text:
+//   - a self-executing brain has already written down everything before
+//     brainKept as its own messages, so only the tail is new;
+//   - while a self-heal pass is pending, the real answer is preHealText and
+//     the pass's buffered preamble is for us, not for him;
+//   - while a verify pass is running, the answer he was waiting for is the
+//     one before it, with the caveat appended, exactly as the clean end does.
+//
+// One function for every early exit, so the Stop path and the error path can
+// never disagree about what he gets to keep.
+func cutReplyText(streamed string, brainRunsOwnTools bool, brainKept int, healPending bool, preHealText, preVerifyText string) string {
+	if healPending {
+		return strings.TrimSpace(preHealText)
+	}
+	all := streamed
+	if brainRunsOwnTools && brainKept > 0 && brainKept < len(all) {
+		all = all[brainKept:]
+	}
+	partial := strings.TrimSpace(all)
+	if strings.TrimSpace(preVerifyText) != "" {
+		return strings.TrimSpace(mergeVerifyText(preVerifyText, partial))
+	}
+	return partial
+}
+
+// persistCutReply writes down the reply of a turn that ended early: appended
+// to the conversation so the next turn sees it, and filed as TaskCompleted
+// {interrupted:true} so the transcript rebuilds it as HIS reply, never as
+// narration. extra carries why (timed_out / stalled / errored). Nothing is
+// written for an empty reply.
+func (l *Loop) persistCutReply(turnID string, s *Session, text string, extra map[string]any) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	s.Append(llm.Message{Role: llm.RoleAssistant, Content: text})
+	payload := map[string]any{
+		"interrupted":   true,
+		"message_index": s.replyIndex,
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, text, payload)
+}
+
 // keepAssistantSegment commits one assistant message the boss saw.
 //
 // A turn is not one message. It can answer, run a tool and speak again; a
@@ -1857,13 +1904,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// is durable; the deployed plan-continuation backstop resumes it when
 			// he says "continue").
 			if ctx.Err() != nil {
-				all := partialText.String()
-				if brainRunsOwnTools && brainKept < len(all) {
-					// Everything before brainKept is already written down as
-					// its own message; writing it again would show it twice.
-					all = all[brainKept:]
-				}
-				partial := strings.TrimSpace(all)
+				partial := cutReplyText(partialText.String(), brainRunsOwnTools, brainKept, healPending, preHealText, preVerifyText)
 				// Which budget ended it, if it was a budget and not the boss.
 				// The server cancels with a cause (server/turn_budget.go); a
 				// plain cancel is the Stop button.
@@ -1882,15 +1923,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: note, MsgIndex: s.replyIndex})
 					partial = strings.TrimSpace(partial + note)
 				}
-				if partial != "" {
-					s.Append(llm.Message{Role: llm.RoleAssistant, Content: partial})
-					l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, partial, map[string]any{
-						"interrupted":   true,
-						"timed_out":     timedOut,
-						"stalled":       stalled,
-						"message_index": s.replyIndex,
-					})
-				}
+				l.persistCutReply(turnID, s, partial, map[string]any{
+					"timed_out": timedOut,
+					"stalled":   stalled,
+				})
 				// The wire says "interrupted" for every cut turn: the browser
 				// marks the bubble and settles; the precise reason is on the
 				// mem_turns row for /logs.
@@ -1971,9 +2007,15 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					continue
 				}
 			}
+			// Whatever he was reading when the provider failed is kept, the
+			// same way a Stop keeps it. It used to be dropped here: the only
+			// persisted assistant rows of an errored turn were the interim
+			// segments, so a reply cut by a usage cap vanished on reload.
+			partial := cutReplyText(partialText.String(), brainRunsOwnTools, brainKept, healPending, preHealText, preVerifyText)
+			l.persistCutReply(turnID, s, partial, map[string]any{"errored": true})
 			emitHumanError(out, s.ID, streamErr.Error())
 			l.closeTurn(context.Background(), turnID, TurnCloseFields{
-				AssistantText:    strings.TrimSpace(partialText.String()),
+				AssistantText:    partial,
 				StopReason:       "error",
 				Status:           "errored",
 				InputTokens:      resp.Usage.PromptTokens(),
@@ -1982,8 +2024,11 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				CacheWriteTokens: resp.Usage.CacheWrite,
 				ToolCallCount:    toolCallCount,
 				Error:            streamErr.Error(),
-				Summary:          summarizeReply("", toolCallCount),
+				Summary:          summarizeReply(partial, toolCallCount),
 			})
+			if partial != "" && l.namer != nil {
+				l.namer.MaybeName(s.ID, turnText, partial)
+			}
 			return streamErr
 		}
 

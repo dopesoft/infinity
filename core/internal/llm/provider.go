@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -275,6 +276,37 @@ func (s SystemPrompt) Render() string {
 	default:
 		return s.Stable + "\n\n" + s.Volatile
 	}
+}
+
+// volatileTailCaption frames the volatile segment when it rides at the TAIL of
+// the message array instead of the system slot. Without it the model can read a
+// trailing block of retrieved memory and tool listings as a fresh instruction
+// and answer THAT instead of the conversation.
+const volatileTailCaption = "Background context assembled for this turn (retrieved memory, available tools, connected accounts, current time). Reference material, not a new request: keep answering whatever the conversation above is asking."
+
+// VolatileTail returns the volatile segment framed for delivery as the LAST
+// item in the message array, or "" when there is nothing volatile to say.
+//
+// This is the OpenAI-family half of the caching contract. Anthropic can mark a
+// breakpoint mid-system, so it keeps volatile in the system slot after the
+// cached stable block (see anthropic.go). OpenAI cannot: per its prompt-caching
+// guide the cacheable prefix is "the model's full rendered context including
+// OpenAI-provided instructions, developer messages, tool definitions, and
+// conversation history", and the `instructions` field "cannot contain explicit
+// breakpoints". So anything volatile placed there sits at byte zero of the
+// prefix and invalidates the system prompt, every tool schema AND the entire
+// history behind it on every single turn. The guide's prescribed order is
+// stable instructions first, dynamic content after, which is what moving the
+// volatile segment to the tail achieves.
+//
+// Placement is a single decision shared by every OpenAI-family provider, so it
+// lives here rather than in each one.
+func (s SystemPrompt) VolatileTail() string {
+	v := strings.TrimSpace(s.Volatile)
+	if v == "" {
+		return ""
+	}
+	return volatileTailCaption + "\n\n" + v
 }
 
 // CachingProvider is the OPTIONAL capability a Provider implements when it can

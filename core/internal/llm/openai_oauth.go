@@ -407,7 +407,12 @@ func (o *OpenAIOAuth) StreamCached(
 	out chan<- StreamEvent,
 ) (Response, error) {
 	var resp Response
-	system := sys.Render()
+	// Stable ONLY in `instructions`. The volatile segment rides at the tail of
+	// the input array instead (see SystemPrompt.VolatileTail) so it can't
+	// invalidate the cached prefix - `instructions` leads the prefix and cannot
+	// carry a breakpoint, so a volatile byte here re-prices the whole prompt.
+	system := strings.TrimSpace(sys.Stable)
+	volatileTail := sys.VolatileTail()
 	cacheKey := CacheKeyFromContext(ctx)
 	// steal C: per-turn reasoning effort. ctx hint wins; else the env fallback.
 	// dropEffort is flipped by the 400 handler below if the backend rejects the
@@ -446,7 +451,12 @@ func (o *OpenAIOAuth) StreamCached(
 	backoff := transientBackoffBase()
 	triedModelFallback := false
 	triedEffortDrop := false
+	triedTailFold := false
 	dropEffort := false
+	// foldTail collapses the volatile tail back into `instructions` (the old
+	// pre-caching shape) if the backend turns out to reject a developer-role
+	// input item. Costs the cache win for that session but never the turn.
+	foldTail := false
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -459,7 +469,12 @@ func (o *OpenAIOAuth) StreamCached(
 		if dropEffort {
 			effortToSend = ""
 		}
-		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, system, cacheKey, effortToSend, messages, tools)
+		sendSystem, sendTail := system, volatileTail
+		if foldTail && sendTail != "" {
+			sendSystem = strings.TrimSpace(sendSystem + "\n\n" + sys.Volatile)
+			sendTail = ""
+		}
+		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, sendSystem, sendTail, cacheKey, effortToSend, messages, tools)
 
 		// Network-level failure (no usable response).
 		if attemptErr != nil {
@@ -508,6 +523,19 @@ func (o *OpenAIOAuth) StreamCached(
 					effortToSend, truncateOAuth(bodyStr, 200))
 				dropEffort = true
 				triedEffortDrop = true
+				continue
+			}
+			// The volatile block rides as a developer-role input item so it
+			// can't invalidate the cached prefix. If this backend rejects that
+			// role or item shape, retry ONCE with the block folded back into
+			// `instructions` - the pre-caching shape, which is known-served.
+			// Gated on a body that implicates the role/item so an unrelated 400
+			// still surfaces as a real error (never-hide).
+			if !triedTailFold && volatileTail != "" && looksLikeDeveloperRoleRejection(bodyStr) {
+				unknownOAIEventLog.Printf("openai_oauth: developer-role tail rejected, folding volatile back into instructions (reason: %s)",
+					truncateOAuth(bodyStr, 200))
+				foldTail = true
+				triedTailFold = true
 				continue
 			}
 			statusErr := fmt.Errorf("openai_oauth: status=400 body=%s", truncateOAuth(bodyStr, 400))
@@ -739,11 +767,11 @@ func isTransientNetErr(err error) bool {
 func (o *OpenAIOAuth) attemptStream(
 	ctx context.Context,
 	tok OAuthToken,
-	model, system, cacheKey, effort string,
+	model, system, volatileTail, cacheKey, effort string,
 	messages []Message,
 	tools []ToolDef,
 ) (*http.Response, error) {
-	body := buildResponsesRequest(model, system, cacheKey, effort, messages, tools)
+	body := buildResponsesRequest(model, system, volatileTail, cacheKey, effort, messages, tools)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -909,16 +937,42 @@ func buildResponsesInput(messages []Message) []any {
 	return input
 }
 
+// appendVolatileTail puts the per-turn volatile block at the END of the input
+// array, which is where the caching contract needs it: everything ahead of it
+// (instructions, tool schemas, the whole conversation) then stays byte-identical
+// turn to turn and reads from cache.
+//
+// Role is `developer`, the Responses API's slot for instructions that outrank
+// the user without being a conversational turn. OpenAI's prompt-caching guide
+// names developer messages as part of the rendered prefix and points at them
+// explicitly: "To mark reusable developer instructions for caching, place them
+// in an `input_text` block inside a developer message." Verified accepted by the
+// ChatGPT-account Codex backend before shipping - that backend is strict enough
+// to 400 on `web_search_preview` and on `store=true`, so role support here was
+// probed live rather than assumed.
+func appendVolatileTail(input []any, volatileTail string) []any {
+	if strings.TrimSpace(volatileTail) == "" {
+		return input
+	}
+	return append(input, map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []map[string]any{
+			{"type": "input_text", "text": volatileTail},
+		},
+	})
+}
+
 // buildResponsesRequest assembles the JSON payload for /responses. Messages
 // are translated into the Responses API's `input` array (one item per turn),
 // except provider-native raw response items returned by /responses/compact are
 // passed through unchanged. Tool calls and tool results round-trip via
 // `function_call` / `function_call_output` items, the same shape the upstream
 // API documents.
-func buildResponsesRequest(model, system, cacheKey, effort string, messages []Message, tools []ToolDef) map[string]any {
+func buildResponsesRequest(model, system, volatileTail, cacheKey, effort string, messages []Message, tools []ToolDef) map[string]any {
 	body := map[string]any{
 		"model":  model,
-		"input":  buildResponsesInput(messages),
+		"input":  appendVolatileTail(buildResponsesInput(messages), volatileTail),
 		"stream": true,
 		"store":  false,
 	}
@@ -1022,6 +1076,27 @@ func buildResponsesRequest(model, system, cacheKey, effort string, messages []Me
 // = "web_search")]). The codex roster (gpt-5*, codex-mini-latest, chatgpt-*
 // aliases) all support built-in web search; older API-only families do not
 // ride the OAuth path so they're excluded.
+// looksLikeDeveloperRoleRejection reports whether a 400 body implicates the
+// developer-role input item we append for the volatile tail, rather than some
+// unrelated payload problem. Kept deliberately narrow: a 400 we don't recognise
+// must still surface as a real error instead of being silently retried into a
+// different shape.
+func looksLikeDeveloperRoleRejection(body string) bool {
+	b := strings.ToLower(body)
+	if !strings.Contains(b, "developer") && !strings.Contains(b, "input_text") && !strings.Contains(b, "role") {
+		return false
+	}
+	switch {
+	case strings.Contains(b, "invalid value") && strings.Contains(b, "role"),
+		strings.Contains(b, "unsupported role"),
+		strings.Contains(b, "invalid role"),
+		strings.Contains(b, "unknown role"),
+		strings.Contains(b, "developer"):
+		return true
+	}
+	return false
+}
+
 func openAIModelSupportsBuiltInWebSearch(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {

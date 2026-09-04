@@ -131,6 +131,8 @@ export function rowToMessage(r: TranscriptRow, makeId: () => string): ChatMessag
     // Narration that streamed before a tool call stays folded into the
     // ledger on reload, exactly as it was live.
     interim: r.interim || undefined,
+    // A reply the turn did not get to finish keeps its hint on reload.
+    interrupted: r.interrupted || undefined,
     seeded: r.kind === "dashboard_seed" || undefined,
     seedKind: r.seed_kind || undefined,
     curiosityId: r.curiosity_id || undefined,
@@ -167,7 +169,11 @@ function reconcileRow(local: ChatMessage, server: ChatMessage): ChatMessage {
     attachments: mergeAttachmentLists(local.attachments, server.attachments),
     pending: false,
     interrupted: local.interrupted || server.interrupted || undefined,
-    interim: server.interim || local.interim || undefined,
+    // The server's word on narration vs reply, EXCEPT for a row this browser
+    // promoted itself (interim === false, set by promoteLastReply when the
+    // turn ended): the server's own promotion can lag a fetch, and re-folding
+    // the reply he is reading for one round trip is the bug coming back.
+    interim: local.interim === false ? undefined : server.interim || undefined,
     steered: server.steered || local.steered || undefined,
     inputTokens: local.inputTokens,
     outputTokens: local.outputTokens,

@@ -188,7 +188,9 @@ func (r *Registry) Definitions() []llm.ToolDef {
 func (r *Registry) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
 	t, ok := r.Get(call.Name)
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", call.Name)
+		// Say where the right name is: tool_search is always loaded, so the
+		// correction is one call away instead of a guess.
+		return "", fmt.Errorf("unknown tool %q. Find the right name with tool_search, then load_tools it", call.Name)
 	}
 	return t.Execute(ctx, call.Input)
 }

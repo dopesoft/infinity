@@ -78,6 +78,11 @@ func validateIdent(name string) error {
 
 // confirmTableExists protects against typo'd table names from the LLM -
 // information_schema is the authoritative existence check.
+//
+// A miss names the tables that DO exist. A bare "does not exist" gave the
+// model nothing to correct with, so it retried the identical call until the
+// loop guard blocked it (2026-09-04: `mem_unused`, four times in a minute).
+// The refusal is the same; what changed is that it now carries the answer.
 func confirmTableExists(ctx context.Context, pool *pgxpool.Pool, name string) error {
 	var n int
 	err := pool.QueryRow(ctx, `
@@ -88,9 +93,123 @@ func confirmTableExists(ctx context.Context, pool *pgxpool.Pool, name string) er
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("table %q does not exist", name)
+		existing, _ := memTables(ctx, pool)
+		return missingTableError(name, existing)
 	}
 	return nil
+}
+
+// memTables lists every mem_* table in the live schema, in name order. Used by
+// system_map for its overview and by confirmTableExists to say what exists.
+func memTables(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	if pool == nil {
+		return nil, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT table_name
+		  FROM information_schema.tables
+		 WHERE table_schema = 'public'
+		   AND table_name LIKE 'mem\_%' ESCAPE '\'
+		 ORDER BY table_name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// tableColumns lists a table's columns in ordinal order. Best-effort callers
+// pass the result straight into an error message.
+func tableColumns(ctx context.Context, pool *pgxpool.Pool, table string) ([]string, error) {
+	if pool == nil {
+		return nil, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT column_name
+		  FROM information_schema.columns
+		 WHERE table_schema='public' AND table_name=$1
+		 ORDER BY ordinal_position
+	`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// The refusals below are what the MODEL reads as the tool result. Each one
+// says what was wrong AND what would be right, so one wrong call corrects
+// itself instead of being repeated verbatim. Pure, so they are tested.
+
+// missingTableError names the table that does not exist and the ones that do.
+func missingTableError(name string, existing []string) error {
+	if len(existing) == 0 {
+		return fmt.Errorf("table %q does not exist. Call system_map to see the tables that do", name)
+	}
+	return fmt.Errorf("table %q does not exist. Tables here: %s. Use one of those, or system_map for what each holds",
+		name, strings.Join(existing, ", "))
+}
+
+// unknownColumnError names the column that is not on the table and the ones that are.
+func unknownColumnError(table, column string, cols []string) error {
+	if len(cols) == 0 {
+		return fmt.Errorf("column %q does not exist on %q. Call mem_list({table:%q}) to see its columns", column, table, table)
+	}
+	return fmt.Errorf("column %q does not exist on %q. Columns there: %s", column, table, strings.Join(cols, ", "))
+}
+
+// emptyIDsError says where row ids come from.
+func emptyIDsError(table string) error {
+	return fmt.Errorf("ids must contain at least one row id, and none was given. Read the rows first with mem_list({table:%q}) and pass their id values", table)
+}
+
+// idsFromInput accepts the ids argument as the schema asks (an array of
+// strings) and as models actually send it: a single id, or several separated
+// by commas or whitespace. A call that did contain an id must never be
+// refused for "no ids", because that refusal is exactly the one a model
+// retries unchanged.
+func idsFromInput(v any) []string {
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	switch raw := v.(type) {
+	case []any:
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				add(s)
+			}
+		}
+	case []string:
+		for _, s := range raw {
+			add(s)
+		}
+	case string:
+		for _, s := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+			add(s)
+		}
+	}
+	return out
 }
 
 // registeredActions returns the action vocabulary already registered for a
@@ -176,8 +295,8 @@ func tableHasColumn(ctx context.Context, pool *pgxpool.Pool, table, column strin
 
 type memList struct{ pool *pgxpool.Pool }
 
-func (t *memList) Name() string        { return "mem_list" }
-func (t *memList) ReadOnly() bool      { return true }
+func (t *memList) Name() string   { return "mem_list" }
+func (t *memList) ReadOnly() bool { return true }
 func (t *memList) Description() string {
 	return "Generic reader for any mem_* table. Returns id + every TEXT/UUID/" +
 		"TIMESTAMP column up to 12 columns. Pass `status` (or `status_eq`) to " +
@@ -330,22 +449,19 @@ func (t *memAct) Execute(ctx context.Context, in map[string]any) (string, error)
 	if err := validateMemTable(table); err != nil {
 		return "", err
 	}
-	if err := confirmTableExists(ctx, t.pool, table); err != nil {
-		return "", err
-	}
+	// Everything that can be judged from the call alone is judged BEFORE the
+	// database is asked anything: a call with no action or no ids is wrong
+	// whatever the table is, and the message says how to fix it.
 	action := strString(in, "action")
 	if action == "" {
-		return "", errors.New("action required")
+		return "", fmt.Errorf("action required: the registered action to apply. Call action_list({table:%q}) to see them", table)
 	}
-	rawIDs, _ := in["ids"].([]any)
-	ids := make([]string, 0, len(rawIDs))
-	for _, v := range rawIDs {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			ids = append(ids, strings.TrimSpace(s))
-		}
-	}
+	ids := idsFromInput(in["ids"])
 	if len(ids) == 0 {
-		return "", errors.New("ids must contain at least one id")
+		return "", emptyIDsError(table)
+	}
+	if err := confirmTableExists(ctx, t.pool, table); err != nil {
+		return "", err
 	}
 
 	// Look up the bounded action schema.
@@ -498,9 +614,6 @@ func (t *actionRegister) Execute(ctx context.Context, in map[string]any) (string
 	if err := validateMemTable(table); err != nil {
 		return "", err
 	}
-	if err := confirmTableExists(ctx, t.pool, table); err != nil {
-		return "", err
-	}
 	action := strString(in, "action")
 	op := strString(in, "op")
 	column := strString(in, "column")
@@ -515,7 +628,11 @@ func (t *actionRegister) Execute(ctx context.Context, in map[string]any) (string
 	if err := validateIdent(column); err != nil {
 		return "", err
 	}
-	// Confirm the column exists on the table - defence against typos.
+	if err := confirmTableExists(ctx, t.pool, table); err != nil {
+		return "", err
+	}
+	// Confirm the column exists on the table - defence against typos. A miss
+	// names the columns that do exist.
 	var n int
 	if err := t.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM information_schema.columns
@@ -524,7 +641,8 @@ func (t *actionRegister) Execute(ctx context.Context, in map[string]any) (string
 		return "", err
 	}
 	if n == 0 {
-		return "", fmt.Errorf("column %q does not exist on %q", column, table)
+		cols, _ := tableColumns(ctx, t.pool, table)
+		return "", unknownColumnError(table, column, cols)
 	}
 	if op == "set_null" {
 		if err := guardSetNull(ctx, t.pool, table, column); err != nil {
@@ -563,8 +681,8 @@ func (t *actionRegister) Execute(ctx context.Context, in map[string]any) (string
 
 type actionList struct{ pool *pgxpool.Pool }
 
-func (t *actionList) Name() string        { return "action_list" }
-func (t *actionList) ReadOnly() bool      { return true }
+func (t *actionList) Name() string   { return "action_list" }
+func (t *actionList) ReadOnly() bool { return true }
 func (t *actionList) Description() string {
 	return "List registered action schemas. Optionally filter by table. Returns " +
 		"every (table, action, op, column, value, source) tuple - the agent's " +

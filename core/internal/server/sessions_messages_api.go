@@ -98,6 +98,9 @@ type sessionMessageDTO struct {
 	// and printed nothing" apart, and rendered all three as running.
 	ToolRunning     bool `json:"tool_running,omitempty"`
 	ToolInterrupted bool `json:"tool_interrupted,omitempty"`
+	// Interrupted marks a reply the turn did not get to finish: Stop, the
+	// budget, or a provider error cut it. Same hint the live path shows.
+	Interrupted bool `json:"interrupted,omitempty"`
 	// ToolAwaitingApproval: the running call is parked on a Trust contract,
 	// so the rebuilt card offers Approve / Deny. ToolContractID is what the
 	// buttons decide on.
@@ -182,7 +185,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	//      Without this the error only lived in transient WS state and
 	//      vanished on refresh, so he couldn't ask Jarvis to fix it later.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT id, turn_id, hook_name, raw_text, payload, created_at, turn_live FROM (
+		SELECT id, turn_id, hook_name, raw_text, payload, created_at, turn_live, turn_has_text, turn_ended_at FROM (
 			SELECT o.id::text                       AS id,
 			       COALESCE(o.turn_id::text, '')    AS turn_id,
 			       o.hook_name,
@@ -191,9 +194,17 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			       o.created_at,
 			       -- Is the turn that wrote this row still going? Decides
 			       -- whether a result-less tool row is "running" or "stopped".
-			       EXISTS (SELECT 1 FROM mem_turns t
-			                WHERE t.id = o.turn_id AND t.status = 'in_flight') AS turn_live
+			       COALESCE(t.status = 'in_flight', false)            AS turn_live,
+			       -- Did the turn close with a reply of its own? The reply's
+			       -- row lands a moment later (the hook is async), so a fetch
+			       -- in that window must not promote the interim before it.
+			       COALESCE(t.assistant_text, '') <> ''               AS turn_has_text,
+			       t.ended_at                                          AS turn_ended_at,
+			       -- Which message of the turn: two async inserts of one turn
+			       -- can land out of order, and this puts them back.
+			       NULLIF(o.payload->>'message_index', '')::int        AS msg_index
 			FROM mem_observations o
+			LEFT JOIN mem_turns t ON t.id = o.turn_id
 			WHERE o.session_id = $1
 			  AND o.hook_name IN (`+renderableHooksSQL+`)
 			UNION ALL
@@ -203,7 +214,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(error, '')                 AS raw_text,
 			       ''                                  AS payload,
 			       COALESCE(ended_at, started_at)      AS created_at,
-			       false                               AS turn_live
+			       false                               AS turn_live,
+			       COALESCE(assistant_text, '') <> ''  AS turn_has_text,
+			       ended_at                            AS turn_ended_at,
+			       NULL::int                           AS msg_index
 			FROM mem_turns
 			WHERE session_id = $1::uuid
 			  AND status = 'errored'
@@ -212,7 +226,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		WHERE EXISTS (
 		    SELECT 1 FROM mem_sessions WHERE id = $1::uuid AND deleted_at IS NULL
 		)
-		ORDER BY created_at ASC
+		ORDER BY created_at ASC, msg_index ASC NULLS FIRST, id ASC
 		LIMIT 500
 	`, id)
 	if err != nil {
@@ -231,13 +245,27 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	// appearing a second time further down the transcript. Without this the
 	// boss gets two rows for one command and the running one never settles.
 	toolRowAt := map[string]int{}
+	// What the promotion pass needs per turn (promoteLastReply): whether the
+	// turn wrote a reply of its own, and its state.
+	finals := map[string]bool{}
+	turns := map[string]turnMeta{}
 	for rows.Next() {
 		var rowID, turnID, hook, text, payload string
 		var createdAt time.Time
-		var turnLive bool
-		if err := rows.Scan(&rowID, &turnID, &hook, &text, &payload, &createdAt, &turnLive); err != nil {
+		var turnLive, turnHasText bool
+		var turnEndedAt *time.Time
+		if err := rows.Scan(&rowID, &turnID, &hook, &text, &payload, &createdAt, &turnLive, &turnHasText, &turnEndedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
+		}
+		if turnID != "" {
+			meta := turns[turnID]
+			meta.live = meta.live || turnLive
+			meta.hasText = meta.hasText || turnHasText
+			if turnEndedAt != nil {
+				meta.endedAt = *turnEndedAt
+			}
+			turns[turnID] = meta
 		}
 
 		// Tool calls: rebuild the inline ToolCallCard from the captured
@@ -311,6 +339,9 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		if text == "" {
 			continue
 		}
+		if hook == "TaskCompleted" && turnID != "" {
+			finals[turnID] = true
+		}
 		// TaskErrored is the durable turn-level error (provider/API failure).
 		// Studio renders it as the red error card via Kind="error".
 		if hook == "TaskErrored" {
@@ -342,10 +373,12 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			// the loop numbered them, and then the browser has only the id.
 			var p struct {
 				Interim      bool `json:"interim"`
+				Interrupted  bool `json:"interrupted"`
 				MessageIndex *int `json:"message_index"`
 			}
 			_ = json.Unmarshal([]byte(payload), &p)
 			msg.Interim = hook == "AssistantMessage" && p.Interim
+			msg.Interrupted = hook == "TaskCompleted" && p.Interrupted
 			msg.MessageIndex = p.MessageIndex
 		}
 		switch hook {
@@ -375,7 +408,95 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, promoteLastReply(out, finals, turns, time.Now()))
+}
+
+// turnMeta is what promoteLastReply knows about a turn: still running, closed
+// with a reply of its own (assistant_text), and when it ended.
+type turnMeta struct {
+	live    bool
+	hasText bool
+	endedAt time.Time
+}
+
+// promoteGrace is how long after a turn ends its own reply row may still be
+// on its way: closeTurn writes assistant_text synchronously, the TaskCompleted
+// hook inserts asynchronously (a goroutine plus an embedding), and a settle
+// fetch routinely lands in between.
+const promoteGrace = 15 * time.Second
+
+// promoteLastReply applies the one rule the fold needs: THE LAST THING JARVIS
+// SAID IN A TURN IS HIS REPLY, never narration.
+//
+// The loop files every assistant message that precedes a tool call as
+// interim, because at that moment it IS narration ("let me look…") and Studio
+// folds interim rows into the activity ledger. But a turn can end without a
+// final reply: a provider error, a usage cap, Stop, the iteration cap. Then
+// the last interim row is the last thing he was told, and folding it hides it
+// behind a one-line "Talked it through" row. 2026-09-04: a 19,000-character
+// research report vanished that way when the ChatGPT plan ran dry four
+// seconds after it was written.
+//
+// So, for every finished turn with no reply of its own: the assistant row with
+// the highest message index is un-folded. A turn whose mem_turns row already
+// carries a reply (assistant_text) but whose TaskCompleted row has not landed
+// yet is left alone for promoteGrace, or the interim would un-fold for one
+// fetch and re-fold on the next. The turn's error card, timestamped by
+// closeTurn and so sorted BEFORE the reply it explains, is moved after it.
+func promoteLastReply(rows []sessionMessageDTO, finals map[string]bool, turns map[string]turnMeta, now time.Time) []sessionMessageDTO {
+	// The promoted row per turn, by position in rows.
+	promoted := map[string]int{}
+	for i, r := range rows {
+		if r.TurnID == "" || r.Role != "assistant" || r.Kind != "" {
+			continue
+		}
+		meta := turns[r.TurnID]
+		if meta.live || finals[r.TurnID] {
+			continue
+		}
+		if meta.hasText && !meta.endedAt.IsZero() && now.Sub(meta.endedAt) < promoteGrace {
+			continue
+		}
+		at, seen := promoted[r.TurnID]
+		if !seen || later(r, rows[at]) {
+			promoted[r.TurnID] = i
+		}
+	}
+	if len(promoted) == 0 {
+		return rows
+	}
+	out := make([]sessionMessageDTO, 0, len(rows))
+	// Error cards that sort before their turn's reply wait until it has been
+	// emitted, then follow it.
+	held := map[string][]sessionMessageDTO{}
+	promotedAt := map[int]string{}
+	for turn, i := range promoted {
+		rows[i].Interim = false
+		promotedAt[i] = turn
+	}
+	for i, r := range rows {
+		if r.Kind == "error" && r.TurnID != "" {
+			if at, ok := promoted[r.TurnID]; ok && at > i {
+				held[r.TurnID] = append(held[r.TurnID], r)
+				continue
+			}
+		}
+		out = append(out, r)
+		if turn, ok := promotedAt[i]; ok {
+			out = append(out, held[turn]...)
+			delete(held, turn)
+		}
+	}
+	return out
+}
+
+// later reports whether a is a later message of its turn than b: by message
+// index when both carry one, else by order in the transcript.
+func later(a, b sessionMessageDTO) bool {
+	if a.MessageIndex != nil && b.MessageIndex != nil {
+		return *a.MessageIndex > *b.MessageIndex
+	}
+	return true
 }
 
 // hydrateLoopSession lazily loads prior user/assistant turns into the

@@ -51,7 +51,7 @@ func TestWithEffortEmptyIsNoOp(t *testing.T) {
 // the OAuth (Codex) path the boss's brain runs on.
 func TestBuildResponsesRequestEffort(t *testing.T) {
 	// reasoning model + level -> reasoning.effort is set.
-	body := buildResponsesRequest("gpt-5-codex", "", "", "high", nil, nil)
+	body := buildResponsesRequest("gpt-5-codex", "", "", "", "high", nil, nil)
 	r, ok := body["reasoning"].(map[string]any)
 	if !ok {
 		t.Fatal("reasoning block missing on a reasoning model")
@@ -60,13 +60,13 @@ func TestBuildResponsesRequestEffort(t *testing.T) {
 		t.Fatalf("effort not applied: got %v", r["effort"])
 	}
 	// reasoning model + "" -> effort OMITTED (model default; never a literal).
-	body = buildResponsesRequest("gpt-5-codex", "", "", "", nil, nil)
+	body = buildResponsesRequest("gpt-5-codex", "", "", "", "", nil, nil)
 	r, _ = body["reasoning"].(map[string]any)
 	if _, has := r["effort"]; has {
 		t.Fatal("effort must be omitted when level is empty (model default)")
 	}
 	// non-reasoning model -> no reasoning block at all, regardless of effort.
-	body = buildResponsesRequest("gpt-4o", "", "", "high", nil, nil)
+	body = buildResponsesRequest("gpt-4o", "", "", "", "high", nil, nil)
 	if _, has := body["reasoning"]; has {
 		t.Fatal("non-reasoning model must never receive reasoning/effort")
 	}

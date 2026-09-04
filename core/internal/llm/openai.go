@@ -138,7 +138,12 @@ func (o *OpenAI) StreamCached(
 	tools []ToolDef,
 	out chan<- StreamEvent,
 ) (Response, error) {
-	system := sys.Render()
+	// Stable ONLY in the leading system message; the volatile segment is
+	// appended at the tail below. Chat Completions caches on the prefix exactly
+	// like the Responses API (DeepSeek's context caching too), so a volatile
+	// byte in the leading system message re-prices the whole conversation.
+	system := strings.TrimSpace(sys.Stable)
+	volatileTail := sys.VolatileTail()
 	effectiveModel := o.model
 	if model != "" {
 		if normalized := o.normalizeModel(model); normalized != "" {
@@ -185,6 +190,13 @@ func (o *OpenAI) StreamCached(
 		case RoleTool:
 			apiMessages = append(apiMessages, openai.ToolMessage(m.Content, m.ToolCallID))
 		}
+	}
+	// Per-turn context rides LAST so everything ahead of it stays cacheable.
+	// System role rather than the newer `developer` role: this path also serves
+	// DeepSeek, whose OpenAI-compatible surface documents system/user/assistant/
+	// tool and not developer. A trailing system message is accepted by both.
+	if volatileTail != "" {
+		apiMessages = append(apiMessages, openai.SystemMessage(volatileTail))
 	}
 
 	apiTools := make([]openai.ChatCompletionToolParam, 0, len(tools))

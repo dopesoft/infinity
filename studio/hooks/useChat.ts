@@ -10,7 +10,7 @@ import { fetchSessionMessages, fetchTraces, type TurnRowDTO } from "@/lib/api";
 import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/attachments";
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
-import { settleNestedOnly } from "@/lib/chat/settle";
+import { promoteLastReply, settleNestedOnly } from "@/lib/chat/settle";
 import { applyDelta, mergeTranscript, rowToMessage } from "@/lib/chat/transcript";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 import {
@@ -338,6 +338,17 @@ function isDuplicateVoiceAssistantText(a: string, b: string): boolean {
   return left === right || left.startsWith(right) || right.startsWith(left);
 }
 
+// lastAssistantTurnId is the turn the newest assistant bubble belongs to, for
+// frames that do not carry one themselves (`complete` does not).
+function lastAssistantTurnId(messages: ChatMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.turnId) return m.turnId;
+    if (m.role === "user" && !m.steered) return undefined;
+  }
+  return undefined;
+}
+
 function findLatestPendingAssistant(messages: ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "assistant" && messages[i].pending) return i;
@@ -602,7 +613,12 @@ export function useChat() {
           }
           break;
         }
-        const settled = settleInFlight(next, now, codingLiveRef.current);
+        // The last thing Jarvis said this turn is his reply, however the
+        // turn ended (lib/chat/settle.ts promoteLastReply).
+        const settled = promoteLastReply(
+          settleInFlight(next, now, codingLiveRef.current),
+          lastAssistantTurnId(next),
+        );
         if (stopReason === "interrupted") {
           for (let i = settled.length - 1; i >= 0; i--) {
             if (settled[i].role === "assistant") {
@@ -1219,7 +1235,9 @@ export function useChat() {
                 }
               }
             }
-            return next;
+            // Whatever he was told last this turn is the reply, never
+            // narration: un-fold it if a tool call had folded it away.
+            return promoteLastReply(next, turnId ?? lastAssistantTurnId(next));
           });
           turnStartRef.current = null;
           setIsStreaming(false);
@@ -1241,16 +1259,25 @@ export function useChat() {
         }
         case "error": {
           clearLiveTool();
-          setMessages((prev) => [
-            ...settleInFlight(closePendingThinking(prev), Date.now(), codingLiveRef.current),
-            {
-              id: makeId(),
-              role: "assistant",
-              text: "",
-              error: ev.message,
-              createdAt: Date.now(),
-            },
-          ]);
+          setMessages((prev) => {
+            // The turn is over. What he was reading when it failed is his
+            // reply (un-folded if a tool call had marked it narration), and
+            // the failure lands under it.
+            const settled = promoteLastReply(
+              settleInFlight(closePendingThinking(prev), Date.now(), codingLiveRef.current),
+              turnId ?? lastAssistantTurnId(prev),
+            );
+            return [
+              ...settled,
+              {
+                id: makeId(),
+                role: "assistant",
+                text: "",
+                error: ev.message,
+                createdAt: Date.now(),
+              },
+            ];
+          });
           turnStartRef.current = null;
           setIsStreaming(false);
           break;

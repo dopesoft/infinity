@@ -152,19 +152,17 @@ func (a *Anthropic) Stream(
 	return a.StreamCached(ctx, model, SystemPrompt{Stable: system}, messages, tools, out)
 }
 
-// StreamCached is the caching-aware path. It places Anthropic cache_control
-// breakpoints exactly the way Claude Code does: one on the stable system
-// block, one on the last tool definition (so tools+system cache together),
-// and a walking breakpoint on the last message so the growing transcript
-// caches incrementally. Up to 4 breakpoints are allowed; we use 3.
-func (a *Anthropic) StreamCached(
+// buildParams assembles the request, including every cache_control breakpoint.
+// Split out of StreamCached so the breakpoint placement - the thing that decides
+// whether a turn is billed at full price or a tenth of it - is directly
+// testable without a live call.
+func (a *Anthropic) buildParams(
 	ctx context.Context,
 	model string,
 	sys SystemPrompt,
 	messages []Message,
 	tools []ToolDef,
-	out chan<- StreamEvent,
-) (Response, error) {
+) anthropic.MessageNewParams {
 	// Per-call model override (studio model chip). Falls back to the
 	// boot-time default when unset. We don't validate the string here -
 	// the Anthropic API surfaces a 404 / invalid-model error if the
@@ -217,6 +215,28 @@ func (a *Anthropic) StreamCached(
 		}
 	}
 
+	// Volatile rides AFTER the walking breakpoint, as a trailing block on the
+	// last user message.
+	//
+	// Anthropic hashes the prefix in the order tools -> system -> messages, so
+	// a volatile block left in the system slot sits AHEAD of every message and
+	// invalidates the walking breakpoint on every turn: the stable system and
+	// tools still read from cache, but the entire transcript is re-written at
+	// full price each time. Putting it here leaves tools + stable system + all
+	// history byte-identical turn to turn, and only the block itself is
+	// uncached.
+	//
+	// Only onto a USER message: appending to an assistant message would read as
+	// words the model itself just said. When the last message is not a user
+	// message the block stays in the system slot below, which is correct if
+	// less efficient.
+	volatileInSystem := strings.TrimSpace(sys.Volatile)
+	if n := len(apiMessages); n > 0 && volatileInSystem != "" && apiMessages[n-1].Role == anthropic.MessageParamRoleUser {
+		apiMessages[n-1].Content = append(apiMessages[n-1].Content,
+			anthropic.NewTextBlock(sys.VolatileTail()))
+		volatileInSystem = ""
+	}
+
 	apiTools := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
 		raw, _ := json.Marshal(t.Schema)
@@ -254,19 +274,19 @@ func (a *Anthropic) StreamCached(
 		MaxTokens: maxTokens,
 		Messages:  apiMessages,
 	}
-	// Stable system block carries the cache breakpoint; the volatile block
-	// (RRF retrieval, current_time, tool catalog, ...) follows AFTER it so it
-	// never invalidates the cached prefix.
+	// Stable system block carries the cache breakpoint. The volatile block has
+	// normally been moved onto the last user message above; it only lands here
+	// when there was no user message to carry it.
 	if sys.Stable != "" {
 		params.System = []anthropic.TextBlockParam{{
 			Text:         sys.Stable,
 			CacheControl: anthropic.NewCacheControlEphemeralParam(),
 		}}
-		if sys.Volatile != "" {
-			params.System = append(params.System, anthropic.TextBlockParam{Text: sys.Volatile})
+		if volatileInSystem != "" {
+			params.System = append(params.System, anthropic.TextBlockParam{Text: volatileInSystem})
 		}
-	} else if sys.Volatile != "" {
-		params.System = []anthropic.TextBlockParam{{Text: sys.Volatile}}
+	} else if volatileInSystem != "" {
+		params.System = []anthropic.TextBlockParam{{Text: volatileInSystem}}
 	}
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
@@ -274,6 +294,23 @@ func (a *Anthropic) StreamCached(
 	if budget > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
+	return params
+}
+
+// StreamCached is the caching-aware path. It places Anthropic cache_control
+// breakpoints exactly the way Claude Code does: one on the stable system
+// block, one on the last tool definition (so tools+system cache together),
+// and a walking breakpoint on the last message so the growing transcript
+// caches incrementally. Up to 4 breakpoints are allowed; we use 3.
+func (a *Anthropic) StreamCached(
+	ctx context.Context,
+	model string,
+	sys SystemPrompt,
+	messages []Message,
+	tools []ToolDef,
+	out chan<- StreamEvent,
+) (Response, error) {
+	params := a.buildParams(ctx, model, sys, messages, tools)
 
 	stream := a.client.Messages.NewStreaming(ctx, params)
 

@@ -273,29 +273,9 @@ func (t *systemMap) loadHints(ctx context.Context) (map[string]loadedHint, error
 }
 
 func (t *systemMap) discoverTables(ctx context.Context) ([]string, error) {
-	if t.pool == nil {
-		return nil, nil
-	}
-	rows, err := t.pool.Query(ctx, `
-		SELECT table_name
-		  FROM information_schema.tables
-		 WHERE table_schema = 'public'
-		   AND table_name LIKE 'mem\_%' ESCAPE '\'
-		 ORDER BY table_name
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	// One query for "which mem_* tables exist", shared with the refusal that
+	// names them (mem_substrate.go confirmTableExists).
+	return memTables(ctx, t.pool)
 }
 
 // loadActions pulls the registered action vocabulary keyed by table.
@@ -327,11 +307,12 @@ func (t *systemMap) loadActions(ctx context.Context) map[string][]string {
 
 // countWith uses an explicit hint when provided, falling back to the
 // heuristic ladder. Symbolic hints are interpreted:
-//   "open" | "pending" | "proposed" | "active"  → WHERE status = <hint>
-//   "enabled"                                    → WHERE enabled = true
-//   "unread"                                     → WHERE read_at IS NULL (or unread=true)
-//   "total"                                      → no filter
-//   anything else                                → treat as status literal
+//
+//	"open" | "pending" | "proposed" | "active"  → WHERE status = <hint>
+//	"enabled"                                    → WHERE enabled = true
+//	"unread"                                     → WHERE read_at IS NULL (or unread=true)
+//	"total"                                      → no filter
+//	anything else                                → treat as status literal
 func (t *systemMap) countWith(ctx context.Context, table, hint string) (int, string) {
 	if t.pool == nil {
 		return 0, "no pool"
