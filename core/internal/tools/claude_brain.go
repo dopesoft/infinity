@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,6 +103,17 @@ const (
 	// JSON and is skipped, which is the right trade: the one line big enough
 	// to hit this is an assembled message whose live half already streamed.
 	brainLineMaxCols = 8000
+	// brainInitHeadBytes is how much of the HEAD of the stream is read, on
+	// every poll until the session id is known, to find the
+	// `system/init` line. That line is NOT small: on the boss's Mac it is
+	// 24,616 chars (470 MCP tools, 101 slash commands, 64 skills, 26 agents
+	// listed by name), so the streaming slice's per-line clamp above cuts it
+	// off, it stops being JSON, and the session id was never seen. Every turn
+	// then started cold - 54 separate Claude sessions for 54 messages, each
+	// re-writing 80-105K tokens of cache (2026-09-04). The init line sits
+	// after the SessionStart hook events (around line 7), so the head has to
+	// cover several of those plus the whole init line.
+	brainInitHeadBytes = 32000
 	// brainLinesPerPoll / brainChunkBytes bound one read.
 	brainLinesPerPoll = 400
 	brainChunkBytes   = 48000
@@ -317,7 +330,7 @@ type brainLaunch struct {
 func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
 	inner := fmt.Sprintf(
 		`claude -p "$INF_PROMPT" ${INF_RESUME:+--resume "$INF_RESUME"} ${INF_MODEL:+--model "$INF_MODEL"} `+
-			`${INF_EFFORT:+--effort "$INF_EFFORT"} --output-format stream-json --verbose --include-partial-messages `+
+			`${INF_EFFORT:+--effort "$INF_EFFORT"} ${INF_MAX_TURNS:+--max-turns "$INF_MAX_TURNS"} --output-format stream-json --verbose --include-partial-messages `+
 			`--permission-mode bypassPermissions --mcp-config %s --strict-mcp-config --settings %s `+
 			`> %s 2> %s; echo $? > %s`,
 		f.mcp, f.settings, f.out, f.err, f.status,
@@ -355,12 +368,24 @@ func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
 		"export INF_MODEL="+shellQuote(turn.Model),
 		"export INF_EFFORT="+shellQuote(turn.Effort),
 		"export INF_RESUME="+shellQuote(turn.Resume),
+		// Empty means no cap: the ${VAR:+...} expansion drops the flag, the
+		// same way an empty resume drops --resume.
+		"export INF_MAX_TURNS="+shellQuote(brainMaxTurns(turn.MaxTurns)),
 		"cd "+l.workspace,
 		"set -m",
 		"nohup bash -c "+shellQuote(inner)+" >/dev/null 2>&1 &",
 		"echo LAUNCHED",
 	)
 	return strings.Join(steps, "\n")
+}
+
+// brainMaxTurns renders the turn cap for the launch environment; zero or
+// less is "no cap" and renders empty so the flag is omitted.
+func brainMaxTurns(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
 }
 
 // brainSubscription proves the Max plan is what will pay, and returns the
@@ -503,6 +528,10 @@ func (p *brainPoll) wait(ctx context.Context) (llm.Response, error) {
 			}
 			continue
 		}
+		// The head carries the whole init line; the streaming slice carries
+		// it clamped. Either is enough for the tolerant parser, and the head
+		// is tried first because it is the one that is guaranteed complete.
+		p.noteSession(read.init)
 		p.noteSession(read.fresh)
 		if p.firstEvent.IsZero() && strings.TrimSpace(read.fresh) != "" {
 			p.firstEvent = time.Now()
@@ -551,6 +580,9 @@ type brainRead struct {
 	head  string
 	last  string
 	fresh string
+	// init is the head of the stream, read only until the session id is
+	// known (see brainInitHeadBytes). Empty once it is.
+	init string
 }
 
 // pollOnce reads the completion signals and everything new since the last
@@ -566,6 +598,9 @@ func (p *brainPoll) pollOnce(ctx context.Context) (brainRead, bool) {
 			break // one blink mid-drain: keep what we already read
 		}
 		acc.head, acc.last = r.head, r.last
+		if acc.init == "" {
+			acc.init = r.init
+		}
 		if r.fresh != "" {
 			if acc.fresh == "" {
 				acc.fresh = r.fresh
@@ -587,13 +622,27 @@ func (p *brainPoll) readSlice(ctx context.Context) (r brainRead, full bool, ok b
 	// reason: the bridge truncates a long reply from the tail, so the signals
 	// go first. `cut -c 1-N` clamps each line BEFORE the byte cap - see
 	// brainLineMaxCols for the turn-long silence its absence caused.
+	//
+	// The HEAD read sits right behind the one-line status, ahead of the
+	// tail and the slice, and only until the session id is known. It is
+	// what finds the `system/init` line whole: the slice below clamps every
+	// line to brainLineMaxCols, and the init line is three times that (see
+	// brainInitHeadBytes). Without it every turn started cold.
+	headRead := ""
+	if !p.sessionSeen {
+		headRead = fmt.Sprintf(`echo "%s"
+head -c %d %s 2>/dev/null
+echo ""
+`, brainHeadMarker, brainInitHeadBytes, p.files.out)
+	}
 	script := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi
-echo "===LAST==="
+%secho "===LAST==="
 tail -n 1 %s 2>/dev/null | head -c %d
 echo ""
 echo "===NEW==="
 tail -n +%d %s 2>/dev/null | head -n %d | cut -c 1-%d | head -c %d`,
 		p.files.status, p.files.status,
+		headRead,
 		p.files.out, claudeLastLineBytes,
 		p.line, p.files.out, brainLinesPerPoll, brainLineMaxCols, brainChunkBytes)
 
@@ -605,10 +654,26 @@ tail -n +%d %s 2>/dev/null | head -n %d | cut -c 1-%d | head -c %d`,
 	}
 	raw, _ := bridgeBashOutput(body)
 	head, rest := splitMarker(raw, "", "===LAST===")
+	// Peel the head read off the status so "DONE:" is only ever matched
+	// against the status line, never against Claude's own output.
+	head, initHead := splitBrainHead(head)
 	last, region := splitMarker(rest, "", "===NEW===")
 	region = strings.TrimPrefix(region, "\n")
 	full = len(region) >= brainChunkBytes
-	return brainRead{head: head, last: last, fresh: p.consume(region, full)}, full, true
+	return brainRead{head: head, last: last, fresh: p.consume(region, full), init: initHead}, full, true
+}
+
+// brainHeadMarker separates the status line from the head read in one poll.
+const brainHeadMarker = "===HEAD==="
+
+// splitBrainHead separates the status line from the head read that follows
+// it. A poll without a head read comes back unchanged.
+func splitBrainHead(s string) (status, initHead string) {
+	i := strings.Index(s, brainHeadMarker)
+	if i < 0 {
+		return s, ""
+	}
+	return s[:i], s[i+len(brainHeadMarker):]
 }
 
 // consume advances the read position past the COMPLETE lines in a slice and
@@ -667,10 +732,26 @@ func (p *brainPoll) noteSession(stream string) {
 
 // parseClaudeInitSessionID returns the session id off the
 // `{"type":"system","subtype":"init","session_id":…}` line and nothing else.
+//
+// It is tolerant of a CUT line on purpose. The init line is tens of
+// thousands of chars (it names every tool, command, skill and agent on the
+// box) and reaches this parser clamped by the poll's per-line cap, or cut
+// mid-byte by the head read. json.Unmarshal refuses both, which is exactly
+// how the id went unseen for 54 turns in a row. So the line is recognised by
+// its `"type":"system"` and `"subtype":"init"` markers and the id is lifted
+// with a regexp - Claude Code writes `session_id` right after `cwd`, well
+// inside the first 200 bytes, so a cut anywhere past that still yields it.
+// Whole JSON is still tried first, because it is the stronger check.
+//
+// Only the init line. Every event carries a session_id, and a sub-agent's
+// events carry ITS id, which is not resumable.
 func parseClaudeInitSessionID(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || line[0] != '{' {
+			continue
+		}
+		if !strings.Contains(line, `"subtype":"init"`) || !strings.Contains(line, `"type":"system"`) {
 			continue
 		}
 		var ev struct {
@@ -678,15 +759,23 @@ func parseClaudeInitSessionID(s string) string {
 			Subtype   string `json:"subtype"`
 			SessionID string `json:"session_id"`
 		}
-		if json.Unmarshal([]byte(line), &ev) != nil {
+		if json.Unmarshal([]byte(line), &ev) == nil {
+			if ev.Type == "system" && ev.Subtype == "init" && isClaudeSessionID(ev.SessionID) {
+				return ev.SessionID
+			}
 			continue
 		}
-		if ev.Type == "system" && ev.Subtype == "init" && isClaudeSessionID(ev.SessionID) {
-			return ev.SessionID
+		if m := claudeInitSessionIDRe.FindStringSubmatch(line); m != nil && isClaudeSessionID(m[1]) {
+			return m[1]
 		}
 	}
 	return ""
 }
+
+// claudeInitSessionIDRe lifts the id off an init line that no longer parses
+// as JSON. The class is the uuid alphabet Claude Code uses; isClaudeSessionID
+// then checks the shape.
+var claudeInitSessionIDRe = regexp.MustCompile(`"session_id":"([0-9a-fA-F-]{36})"`)
 
 // brainEvent is the slice of stream-json this path reads. The shapes are
 // taken from a real run, not guessed: `stream_event` carries the raw
@@ -987,8 +1076,13 @@ func (p *brainPoll) finish(res claudeResult) (llm.Response, error) {
 	if !p.started.IsZero() {
 		took = time.Since(p.started).Round(time.Second)
 	}
-	brainInfoLog.Printf("claude_max: turn finished in %s (cache_read=%d input=%d output=%d)",
-		took, usage.CacheRead, usage.Input, usage.Output)
+	// cold says whether this turn resumed a Claude session or opened a new
+	// one. Every cold turn re-writes the whole prefix (cache_write shows the
+	// bill), so a run of cold=true across one conversation is the signal
+	// that resume capture has broken again - it must be visible, not
+	// inferred from token counts days later.
+	brainInfoLog.Printf("claude_max: turn finished in %s (cold=%t cache_read=%d cache_write=%d input=%d output=%d)",
+		took, p.turn.Resume == "", usage.CacheRead, usage.CacheWrite, usage.Input, usage.Output)
 	return llm.Response{Text: text, Usage: usage, StopReason: "end_turn"}, nil
 }
 

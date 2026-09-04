@@ -2629,11 +2629,12 @@ func serveCmd() *cobra.Command {
 			// it was fixing, and then nothing continued it.
 			//
 			// This poller reads those rows, gathers real git evidence off the
-			// repo, and re-enters the loop in the originating chat so JARVIS
-			// decides what happens next - continue, replan, or say it needs the
-			// boss - with `code_agent`'s new resume_session making continuing
-			// cheap. Reuses the reauth replayer verbatim: there is one
-			// implementation of "wake him up in this session", not two.
+			// repo, and re-enters the loop in a SIDE SESSION opened for that
+			// run (never the boss's live chat - see the finish package doc) so
+			// JARVIS decides what happens next - continue, replan, or say it
+			// needs the boss - with `code_agent`'s new resume_session making
+			// continuing cheap. Reuses the reauth replayer verbatim: there is
+			// one implementation of "wake him up in this session", not two.
 			if pool != nil && loop != nil {
 				prefFor := func(ctx context.Context, sessionID string) bridge.Preference {
 					if activeBridgePrefs == nil {
@@ -2648,7 +2649,13 @@ func serveCmd() *cobra.Command {
 					// with nobody watching be recognised as finished instead
 					// of continued: the 2026-08-29 build that succeeded, wrote
 					// a full report, and was announced as a failure.
-					finish.NewBridgeTranscript(activeBridgeRouter, prefFor))
+					finish.NewBridgeTranscript(activeBridgeRouter, prefFor),
+					// A finished job is a NOTICE, and a notice is a card in
+					// "Surfaced by Jarvis" through the same generic contract
+					// every cron outcome uses - never a model turn. On
+					// 2026-09-02 that notice was replayed into a 900K-token
+					// chat once a minute and took half of a week's Claude plan.
+					surface.NewStore(pool, slog.Default()))
 				if fin != nil {
 					go fin.Start(cmd.Context())
 					fmt.Println("  finish: coding-continuation poller started")

@@ -7,10 +7,12 @@ import { Chip } from "@/components/ui/chip";
 import { useGlobalModel } from "@/lib/use-model";
 import { resolveModelEntry } from "@/lib/models-catalog";
 import {
+  compactSession,
   fetchContextUsage,
   type ContextCategoryDTO,
   type ContextUsageDTO,
 } from "@/lib/api";
+import { RunIndicator } from "@/lib/runs/RunIndicator";
 import { cn } from "@/lib/utils";
 
 /**
@@ -79,7 +81,7 @@ export function ContextMeter({ sessionId }: { sessionId?: string }) {
       />
 
       <ResponsiveModal open={open} onOpenChange={setOpen} size="sm" title="Context usage">
-        <UsageBody data={data} />
+        <UsageBody data={data} sessionId={sessionId} />
       </ResponsiveModal>
     </>
   );
@@ -125,7 +127,12 @@ function Ring({ pct }: { pct: number }) {
 // Shared body for the dialog + drawer. Matches the screenshot's layout:
 // model id + token totals on top, segmented progress bar, then a table
 // of categories with colored dots + token counts + percentages.
-function UsageBody({ data }: { data: ContextUsageDTO | null }) {
+// compactOfferAt is the fill above which the Compact action is offered. Below
+// it there is nothing worth folding, and a control that cannot do anything
+// is not shown.
+const compactOfferAt = 0.25;
+
+function UsageBody({ data, sessionId }: { data: ContextUsageDTO | null; sessionId?: string }) {
   if (!data) {
     return (
       <div className="flex min-h-32 items-center justify-center">
@@ -217,6 +224,25 @@ function UsageBody({ data }: { data: ContextUsageDTO | null }) {
           })}
         </tbody>
       </table>
+
+      {sessionId && pct >= compactOfferAt && (
+        <div className="space-y-1">
+          <RunIndicator
+            kind="session.compact"
+            targetId={sessionId}
+            label="Compact"
+            title="Fold the older part of this conversation into memory so the window frees up"
+            size="default"
+            className="w-full"
+            onRun={async () => {
+              await compactSession(sessionId);
+            }}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Older tool output is cleared first, then the earlier conversation is summarised into memory. Recent messages stay as they are.
+          </p>
+        </div>
+      )}
 
       {!!data.cache_read_tokens && data.cache_read_tokens > 0 && (
         <div className="flex items-center gap-1.5 rounded-md border border-success/30 bg-success/10 px-2 py-1.5 text-[11px] text-success">

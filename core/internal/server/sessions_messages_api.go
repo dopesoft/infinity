@@ -166,6 +166,9 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	case "delete":
 		s.handleSessionDelete(w, r, id)
 		return
+	case "compact":
+		s.handleSessionCompact(w, r, id)
+		return
 	default:
 		http.NotFound(w, r)
 		return

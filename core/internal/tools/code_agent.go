@@ -134,10 +134,14 @@ const (
 	// stream, per the Claude Code docs) without tripping the bridge's output
 	// cap on a long run. claudeInitHeadBytes is the HEAD we read for the
 	// `system/init` line carrying Claude's session id — it is the first line
-	// of the stream, so on a long run it has long since left the tail.
+	// of the stream, so on a long run it has long since left the tail. It is
+	// sized like the brain's (brainInitHeadBytes, claude_brain.go): the init
+	// line runs to 24K+ chars on the boss's Mac and sits behind the
+	// SessionStart hook events, so a 4,000-byte head could only ever find
+	// the id by luck of field order.
 	claudeTailBytes       = 12000
 	claudeResultTailBytes = 30000
-	claudeInitHeadBytes   = 4000
+	claudeInitHeadBytes   = 32000
 	// claudeLastLineBytes bounds the LAST line of the stream, read on every
 	// poll so completion is detected from Claude's own terminal `result`
 	// event. It is read separately from the slice because a long report can be

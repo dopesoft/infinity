@@ -217,6 +217,9 @@ func (o *OpenAI) StreamCached(
 	}
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
+		if NoToolCallsFromContext(ctx) {
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))}
+		}
 	}
 	// Ask for token usage on the stream. Without this OpenAI sends NO usage
 	// object on a streamed response at all, so resp.Usage comes back as
@@ -397,12 +400,26 @@ var _ ssestream.Stream[openai.ChatCompletionChunk] // keep import for clarity
 func (o *OpenAI) userMessage(m Message) openai.ChatCompletionMessageParamUnion {
 	switch {
 	case len(m.Attachments) == 0:
-		return openai.UserMessage(m.Content)
+		return openai.UserMessage(withVolatileText(m.Content, m))
 	case o.nativeAttachments:
 		return openai.UserMessage(openaiUserParts(m))
 	default:
-		return openai.UserMessage(openaiAttachmentText(m))
+		return openai.UserMessage(withVolatileText(openaiAttachmentText(m), m))
 	}
+}
+
+// withVolatileText appends the message's pinned per-turn context (see
+// Message.Volatile) after its text, so it sits at a fixed offset on every
+// call of the turn instead of trailing the whole request.
+func withVolatileText(text string, m Message) string {
+	v := m.VolatileBlock()
+	if v == "" {
+		return text
+	}
+	if strings.TrimSpace(text) == "" {
+		return v
+	}
+	return text + "\n\n" + v
 }
 
 // openaiUserParts renders a user message with attachments as Chat Completions
@@ -431,6 +448,9 @@ func openaiUserParts(m Message) []openai.ChatCompletionContentPartUnionParam {
 	}
 	if strings.TrimSpace(m.Content) != "" || len(parts) == 0 {
 		parts = append(parts, openai.TextContentPart(m.Content))
+	}
+	if v := m.VolatileBlock(); v != "" {
+		parts = append(parts, openai.TextContentPart(v))
 	}
 	return parts
 }

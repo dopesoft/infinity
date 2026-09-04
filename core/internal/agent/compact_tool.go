@@ -22,8 +22,8 @@ import (
 // Tied to a specific Loop because it has to mutate Session.Messages in
 // place. The Loop pointer is set at registration time in serve.go.
 type CompactContext struct {
-	Loop       *Loop
-	Compactor  *memory.ConversationCompactor
+	Loop      *Loop
+	Compactor *memory.ConversationCompactor
 }
 
 func (c *CompactContext) Name() string { return "compact_context" }
@@ -78,7 +78,14 @@ func (c *CompactContext) Execute(ctx context.Context, input map[string]any) (str
 		return `{"error":"could not locate calling session"}`, nil
 	}
 
-	cfg := &memory.CompactionConfig{}
+	// The model asked, so it is worth it: Force skips the turn-count floor
+	// (an in-turn compaction when the history is one long turn). The
+	// summariser rides the session's own cached prefix.
+	cfg := &memory.CompactionConfig{
+		Force:        true,
+		StableSystem: c.Loop.SystemPrompt(),
+		Tools:        c.Loop.Tools().DefinitionsFor(active.Names()),
+	}
 	if v, ok := input["keep_last_turns"].(float64); ok && v > 0 {
 		cfg.KeepLastTurns = int(v)
 	}
@@ -118,4 +125,3 @@ func (c *CompactContext) Execute(ctx context.Context, input map[string]any) (str
 	b, _ := json.Marshal(body)
 	return string(b), nil
 }
-

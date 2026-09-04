@@ -278,9 +278,17 @@ func (a *Anthropic) buildParams(
 	// normally been moved onto the last user message above; it only lands here
 	// when there was no user message to carry it.
 	if sys.Stable != "" {
+		// 1-hour TTL on the stable prefix: a conversation with a gap longer
+		// than the 5-minute default (he steps away, comes back) otherwise
+		// re-writes tools + soul at full price. Writes cost 2x instead of
+		// 1.25x, refreshed free on every hit, so it pays for itself after a
+		// single miss avoided. Anthropic prompt-caching docs, checked
+		// 2026-09-04.
+		stable := anthropic.NewCacheControlEphemeralParam()
+		stable.TTL = anthropic.CacheControlEphemeralTTLTTL1h
 		params.System = []anthropic.TextBlockParam{{
 			Text:         sys.Stable,
-			CacheControl: anthropic.NewCacheControlEphemeralParam(),
+			CacheControl: stable,
 		}}
 		if volatileInSystem != "" {
 			params.System = append(params.System, anthropic.TextBlockParam{Text: volatileInSystem})
@@ -290,6 +298,11 @@ func (a *Anthropic) buildParams(
 	}
 	if len(apiTools) > 0 {
 		params.Tools = apiTools
+		if NoToolCallsFromContext(ctx) {
+			// Same tool array (so the cached prefix still matches), calls
+			// disabled for this one request.
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
+		}
 	}
 	if budget > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
@@ -481,7 +494,13 @@ func emit(ch chan<- StreamEvent, ev StreamEvent) {
 // labelled text rendering so nothing is ever silently dropped.
 func anthropicUserBlocks(m Message) []anthropic.ContentBlockParamUnion {
 	if len(m.Attachments) == 0 {
-		return []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(m.Content)}
+		blocks := []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(m.Content)}
+		// The turn's pinned context rides as the LAST block of the message
+		// that opened the turn (Message.Volatile), so it never moves.
+		if v := m.VolatileBlock(); v != "" {
+			blocks = append(blocks, anthropic.NewTextBlock(v))
+		}
+		return blocks
 	}
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Attachments)*3+1)
 	for _, a := range m.Attachments {
@@ -507,6 +526,9 @@ func anthropicUserBlocks(m Message) []anthropic.ContentBlockParamUnion {
 	}
 	if strings.TrimSpace(m.Content) != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+	}
+	if v := m.VolatileBlock(); v != "" {
+		blocks = append(blocks, anthropic.NewTextBlock(v))
 	}
 	return blocks
 }

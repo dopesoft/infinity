@@ -35,6 +35,24 @@ type CompactionConfig struct {
 	// the provider's default (usually Sonnet); pass a Haiku model id
 	// for the cheap path.
 	Model string
+	// Force compacts even below MinTurnsToCompact: the caller measured the
+	// window (tokens, not turns) and knows it is worth it. When the history
+	// cannot be split by turns (one long tool-heavy turn), Force compacts
+	// INSIDE the last turn: the oldest tool exchanges are summarised and the
+	// newest KeepToolExchanges stay verbatim.
+	Force bool
+	// KeepToolExchanges is how many of the newest assistant+tool exchanges
+	// of the current turn survive an in-turn compaction. Default 3.
+	KeepToolExchanges int
+	// StableSystem and Tools are the conversation's own cached prefix. When
+	// set, the summariser runs against that exact prefix (same system, same
+	// tools, tool calls disabled) plus one instruction, so it READS the warm
+	// cache instead of paying for the whole transcript again. This is how
+	// Claude Code compacts: "the exact same system prompt … and tool
+	// definitions as the parent conversation", with the instruction as a
+	// final user message. Unset = the standalone summariser prompt.
+	StableSystem string
+	Tools        []llm.ToolDef
 }
 
 // ConversationCompactor takes a session's message history and produces a
@@ -90,13 +108,16 @@ func (c *ConversationCompactor) Compact(
 	// turn is the atomic unit so summaries don't strand orphan tool
 	// results without their preceding call.
 	turnBoundaries := turnStartIndices(messages)
-	if len(turnBoundaries) < minTurns {
+	if len(turnBoundaries) < minTurns && !cfg.Force {
 		return messages, CompactionResult{
 			OriginalTurns: len(turnBoundaries),
 			KeptTurns:     len(turnBoundaries),
 		}, nil
 	}
 	if len(turnBoundaries) <= keep {
+		if cfg.Force {
+			return c.compactInTurn(ctx, sessionID, messages, cfg)
+		}
 		return messages, CompactionResult{
 			OriginalTurns: len(turnBoundaries),
 			KeptTurns:     len(turnBoundaries),
@@ -137,41 +158,19 @@ func (c *ConversationCompactor) Compact(
 		}
 	}
 
-	// Build a transcript blob the summariser can chew on.
-	transcript := renderTranscript(older)
-
-	// Run the summariser. We use a fresh dummy channel so the provider's
-	// streaming API is satisfied; we read the final Response.Text
-	// after the channel closes.
-	out := make(chan llm.StreamEvent, 64)
-	go func() {
-		for range out {
-			// drain - we don't care about deltas, just the final Response
-		}
-	}()
-	resp, sumErr := c.provider.Stream(
-		ctx,
-		cfg.Model, // empty = provider default
-		compactionSystemPrompt,
-		[]llm.Message{{Role: llm.RoleUser, Content: "Summarize this conversation segment.\n\n---\n" + transcript}},
-		nil,
-		out,
-	)
-	close(out)
+	summary, sumErr := c.summarize(ctx, cfg, messages, older)
 	if sumErr != nil {
-		return messages, CompactionResult{}, fmt.Errorf("summarize: %w", sumErr)
-	}
-	summary := strings.TrimSpace(resp.Text)
-	if summary == "" {
-		return messages, CompactionResult{}, errors.New("summarizer returned empty body")
+		return messages, CompactionResult{}, sumErr
 	}
 
-	// Build the replacement message list: synthetic system note +
-	// kept tail. The synthetic message is RoleSystem so the model
-	// treats it as instructional context rather than user/assistant
-	// dialogue.
+	// Build the replacement message list: the summary + kept tail. The
+	// summary is a USER message: every provider renders user/assistant/tool
+	// and silently DROPS a RoleSystem message mid-transcript (anthropic.go,
+	// openai.go, openai_oauth.go all switch on the three roles), so the old
+	// RoleSystem note never reached the model at all. Codex and the OpenAI
+	// Agents SDK inject their summaries as user messages for the same reason.
 	synth := llm.Message{
-		Role:    llm.RoleSystem,
+		Role:    llm.RoleUser,
 		Content: buildCompactionNote(summary, compactedTurns, len(obsIDs)),
 	}
 	newMessages = append([]llm.Message{synth}, kept...)
@@ -229,28 +228,154 @@ func (c *ConversationCompactor) persistCompactedObservations(
 	return obsIDs
 }
 
-// compactionSystemPrompt is the summariser prompt. Tuned to preserve the
-// load-bearing details that re-asking would expose: decisions, file
-// paths, identifiers, constraints, user preferences, open follow-ups.
-const compactionSystemPrompt = `You are compressing a slice of a conversation between a user (the "boss") and an AI assistant. The goal is a tight summary that preserves everything the assistant would otherwise re-ask about.
+// compactionInstruction is what the summariser is asked for. The sections
+// are Claude Code's own list of what auto-compact preserves ("your requests
+// and intent, key technical concepts, files examined or modified with
+// important code snippets, errors and how they were fixed, pending tasks,
+// and current work"), plus the OpenAI Agents SDK rules that keep a summary
+// honest: quote error strings exactly, most recent update wins, mark
+// unknowns UNVERIFIED.
+const compactionInstruction = `CONTEXT CHECKPOINT. Write a handoff summary of the conversation so far so that you (or another model) can continue it without re-asking anything. Do not call tools. Do not answer the last message; summarise.
 
-Output format: markdown with these sections, omit any that have no content:
+Markdown, these sections, omit any that are empty:
 
-## Decisions
-- One bullet per decision made (what was chosen and why).
+## Requests and intent
+What the boss asked for, in his words where it matters, and what he ultimately wants.
 
-## Context
-- File paths, project names, repo names, IDs, URLs, env vars, credentials referenced (NOT the credential values themselves - just that they exist).
-- User preferences and constraints expressed (e.g. "prefer Tailwind over inline CSS").
+## Decisions and constraints
+Choices made and why; rules, preferences and limits he stated.
 
-## Open follow-ups
-- Things the assistant said it would do later or check back on.
-- Questions the user asked but the assistant deferred.
+## Files and artifacts
+Paths, repos, ids, URLs, env var NAMES (never secret values); the important snippets verbatim.
 
-## Errors and gotchas
-- Specific error messages or failures encountered, and how (or whether) they were resolved.
+## Errors and fixes
+Exact error strings, what caused them, how (or whether) they were resolved.
 
-Be terse. No prose intro, no "to summarize" lines. Just the sections.`
+## Pending
+What was promised or deferred and is not done.
+
+## Current state
+Where the work stands right now and the very next step.
+
+Rules: be terse; the most recent update wins when facts conflict; quote error text exactly; mark anything you are not sure of UNVERIFIED.`
+
+// compactionSystemPrompt frames the standalone (cold) summariser, used when
+// the caller has no cached prefix to reuse.
+const compactionSystemPrompt = "You are compressing a conversation between a user (the \"boss\") and his AI assistant, Jarvis, into a handoff summary. Preserve everything the assistant would otherwise have to re-ask."
+
+// summarize runs the summariser. With a StableSystem it rides the
+// conversation's own cached prefix (same system, same tools, calls
+// disabled) plus the instruction, so the whole history is read from cache;
+// without one it summarises a rendered transcript of `older` cold.
+func (c *ConversationCompactor) summarize(ctx context.Context, cfg *CompactionConfig, full, older []llm.Message) (string, error) {
+	out := make(chan llm.StreamEvent, 64)
+	go func() {
+		for range out {
+			// drain - only the final Response matters
+		}
+	}()
+	var (
+		resp llm.Response
+		err  error
+	)
+	cp, caching := c.provider.(llm.CachingProvider)
+	if strings.TrimSpace(cfg.StableSystem) != "" && caching {
+		msgs := append(append([]llm.Message{}, full...), llm.Message{Role: llm.RoleUser, Content: compactionInstruction})
+		resp, err = cp.StreamCached(llm.WithNoToolCalls(ctx), cfg.Model, llm.SystemPrompt{Stable: cfg.StableSystem}, msgs, cfg.Tools, out)
+	} else {
+		transcript := renderTranscript(older)
+		resp, err = c.provider.Stream(
+			ctx,
+			cfg.Model, // empty = provider default
+			compactionSystemPrompt,
+			[]llm.Message{{Role: llm.RoleUser, Content: compactionInstruction + "\n\n---\n" + transcript}},
+			nil,
+			out,
+		)
+	}
+	close(out)
+	if err != nil {
+		return "", fmt.Errorf("summarize: %w", err)
+	}
+	summary := strings.TrimSpace(resp.Text)
+	if summary == "" {
+		return "", errors.New("summarizer returned empty body")
+	}
+	return summary, nil
+}
+
+// compactInTurn compacts INSIDE the last turn: everything after the turn's
+// user message except the newest KeepToolExchanges assistant+tool exchanges
+// is summarised, and the summary lands right after the user message as a
+// user-role note. Tool pairs are never split: the cut is always at an
+// assistant message boundary.
+func (c *ConversationCompactor) compactInTurn(ctx context.Context, sessionID string, messages []llm.Message, cfg *CompactionConfig) ([]llm.Message, CompactionResult, error) {
+	keepEx := cfg.KeepToolExchanges
+	if keepEx <= 0 {
+		keepEx = 3
+	}
+	user := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == llm.RoleUser {
+			user = i
+			break
+		}
+	}
+	turns := len(turnStartIndices(messages))
+	nothing := CompactionResult{OriginalTurns: turns, KeptTurns: turns}
+	if user < 0 {
+		return messages, nothing, nil
+	}
+	// Assistant boundaries after the user message, newest last.
+	var bounds []int
+	for i := user + 1; i < len(messages); i++ {
+		if messages[i].Role == llm.RoleAssistant {
+			bounds = append(bounds, i)
+		}
+	}
+	if len(bounds) <= keepEx {
+		return messages, nothing, nil
+	}
+	cut := bounds[len(bounds)-keepEx]
+	older := messages[user+1 : cut]
+	if len(older) == 0 {
+		return messages, nothing, nil
+	}
+	var obsIDs []string
+	if id, err := c.store.InsertObservation(ctx, ObservationInput{
+		SessionID:  sessionID,
+		HookName:   "conversation_compaction",
+		RawText:    renderTranscript(older),
+		Importance: 6,
+		Payload: map[string]any{
+			"source":           "conversation_compaction",
+			"in_turn":          true,
+			"original_session": sessionID,
+		},
+	}); err == nil {
+		obsIDs = append(obsIDs, id)
+	}
+	summary, err := c.summarize(ctx, cfg, messages, older)
+	if err != nil {
+		return messages, CompactionResult{}, err
+	}
+	note := llm.Message{
+		Role:    llm.RoleUser,
+		Content: "[ Earlier tool work in this turn compacted. What it established: ]\n\n" + summary,
+	}
+	out := make([]llm.Message, 0, len(messages)-len(older)+1)
+	out = append(out, messages[:user+1]...)
+	out = append(out, note)
+	out = append(out, messages[cut:]...)
+	return out, CompactionResult{
+		OriginalTurns:   turns,
+		KeptTurns:       turns,
+		CompactedTurns:  1,
+		SummaryChars:    len(summary),
+		ObservationIDs:  obsIDs,
+		SummaryMarkdown: summary,
+	}, nil
+}
 
 // buildCompactionNote wraps the LLM summary in a clear delimiter so the
 // model understands this isn't a normal turn - it's a compressed pointer

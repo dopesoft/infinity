@@ -110,9 +110,10 @@ func DefaultLoadedTools() []string {
 		"claude_code__Write",
 		"claude_code__Edit",
 		"claude_code__Bash",
-		"claude_code__Grep",
-		"claude_code__Glob",
-		"claude_code__LS",
+		// Grep / Glob / LS are no longer tools of the current Claude Code
+		// MCP server (live tools/list on 2026-09-04: Bash, Read, Edit, Write
+		// and 22 others); a name that is not registered is silently skipped
+		// by DefinitionsFor, so listing them only misleads the next reader.
 		// Cloud workspace shell + reader, routed by the session's bridge
 		// preference. Everything that lives on the volume is reachable ONLY
 		// through these: every seeded cli extension (yt-dlp, ffmpeg), the

@@ -452,7 +452,16 @@ func (o *OpenAIOAuth) StreamCached(
 	triedModelFallback := false
 	triedEffortDrop := false
 	triedTailFold := false
+	triedRetentionDrop := false
+	triedReasoningDrop := false
 	dropEffort := false
+	// dropRetention omits prompt_cache_retention after the backend rejected
+	// it (the ChatGPT Codex backend documents nothing about caching, so the
+	// parameter is probed and dropped rather than assumed). dropReasoning
+	// stops replaying encrypted reasoning items after a 400 that implicates
+	// them (a model switch mid-session can make old items unreadable).
+	dropRetention := false
+	dropReasoning := false
 	// foldTail collapses the volatile tail back into `instructions` (the old
 	// pre-caching shape) if the backend turns out to reject a developer-role
 	// input item. Costs the cache win for that session but never the turn.
@@ -474,7 +483,14 @@ func (o *OpenAIOAuth) StreamCached(
 			sendSystem = strings.TrimSpace(sendSystem + "\n\n" + sys.Volatile)
 			sendTail = ""
 		}
-		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, sendSystem, sendTail, cacheKey, effortToSend, messages, tools)
+		opts := responsesOptions{
+			NoToolCalls:     NoToolCallsFromContext(ctx),
+			ReplayReasoning: !dropReasoning,
+		}
+		if !dropRetention {
+			opts.CacheRetention = openAICacheRetention(effectiveModel)
+		}
+		httpResp, attemptErr := o.attemptStream(ctx, tok, effectiveModel, sendSystem, sendTail, cacheKey, effortToSend, messages, tools, opts)
 
 		// Network-level failure (no usable response).
 		if attemptErr != nil {
@@ -512,6 +528,25 @@ func (o *OpenAIOAuth) StreamCached(
 					triedModelFallback = true
 					continue
 				}
+			}
+			// prompt_cache_retention is sent on the models OpenAI documents it
+			// for; the subscription backend is undocumented, so a 400 that
+			// names it means "not here": retry once without and remember.
+			if !triedRetentionDrop && !dropRetention && looksLikeRetentionRejection(bodyStr) {
+				unknownOAIEventLog.Printf("openai_oauth: prompt_cache_retention rejected, retrying without it (reason: %s)",
+					truncateOAuth(bodyStr, 200))
+				dropRetention = true
+				triedRetentionDrop = true
+				continue
+			}
+			// Replayed reasoning items the backend cannot read (model switched
+			// mid-thread, item expired): retry once with them omitted.
+			if !triedReasoningDrop && !dropReasoning && looksLikeReasoningItemRejection(bodyStr) {
+				unknownOAIEventLog.Printf("openai_oauth: replayed reasoning items rejected, retrying without them (reason: %s)",
+					truncateOAuth(bodyStr, 200))
+				dropReasoning = true
+				triedReasoningDrop = true
+				continue
 			}
 			// steal C: the Codex backend rejected the reasoning.effort value (its
 			// accepted enum is model-dependent and not a published contract). Retry
@@ -770,8 +805,9 @@ func (o *OpenAIOAuth) attemptStream(
 	model, system, volatileTail, cacheKey, effort string,
 	messages []Message,
 	tools []ToolDef,
+	opts responsesOptions,
 ) (*http.Response, error) {
-	body := buildResponsesRequest(model, system, volatileTail, cacheKey, effort, messages, tools)
+	body := buildResponsesRequestOpts(model, system, volatileTail, cacheKey, effort, messages, tools, opts)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -891,6 +927,10 @@ func looksLikeModelRejection(body string) bool {
 // Tool calls and tool results round-trip via `function_call` / `function_call
 // _output` items, the same shape the upstream API documents.
 func buildResponsesInput(messages []Message) []any {
+	return buildResponsesInputOpts(messages, true)
+}
+
+func buildResponsesInputOpts(messages []Message, replayReasoning bool) []any {
 	input := make([]any, 0, len(messages))
 	for _, m := range messages {
 		if raw, ok := RawResponseItem(m); ok {
@@ -908,6 +948,16 @@ func buildResponsesInput(messages []Message) []any {
 				"content": responsesUserContent(m),
 			})
 		case RoleAssistant:
+			// The reasoning that led to this segment goes back AHEAD of it,
+			// in the order the model emitted it.
+			if replayReasoning {
+				for _, raw := range reasoningItems(m.Meta) {
+					var item map[string]any
+					if err := json.Unmarshal(raw, &item); err == nil && len(item) > 0 {
+						input = append(input, item)
+					}
+				}
+			}
 			if m.Content != "" {
 				input = append(input, map[string]any{
 					"type": "message",
@@ -970,11 +1020,38 @@ func appendVolatileTail(input []any, volatileTail string) []any {
 // `function_call` / `function_call_output` items, the same shape the upstream
 // API documents.
 func buildResponsesRequest(model, system, volatileTail, cacheKey, effort string, messages []Message, tools []ToolDef) map[string]any {
+	return buildResponsesRequestOpts(model, system, volatileTail, cacheKey, effort, messages, tools, responsesOptions{ReplayReasoning: true})
+}
+
+// responsesOptions are the per-attempt knobs that are not part of the
+// conversation itself.
+type responsesOptions struct {
+	// NoToolCalls keeps the tool array (cached prefix intact) but forbids
+	// calling any of them: tool_choice "none".
+	NoToolCalls bool
+	// CacheRetention is the prompt_cache_retention value to send, "" to omit.
+	CacheRetention string
+	// ReplayReasoning re-sends the encrypted reasoning items the model
+	// produced for earlier assistant segments, ahead of those segments, the
+	// way Codex does on every request (store:false + include
+	// reasoning.encrypted_content). OpenAI's reasoning guide: passing them
+	// back "allows the model to continue its reasoning process to produce
+	// better results in the most token-efficient manner."
+	ReplayReasoning bool
+}
+
+func buildResponsesRequestOpts(model, system, volatileTail, cacheKey, effort string, messages []Message, tools []ToolDef, opts responsesOptions) map[string]any {
 	body := map[string]any{
 		"model":  model,
-		"input":  appendVolatileTail(buildResponsesInput(messages), volatileTail),
+		"input":  appendVolatileTail(buildResponsesInputOpts(messages, opts.ReplayReasoning), volatileTail),
 		"stream": true,
 		"store":  false,
+	}
+	if opts.NoToolCalls {
+		body["tool_choice"] = "none"
+	}
+	if opts.CacheRetention != "" {
+		body["prompt_cache_retention"] = opts.CacheRetention
 	}
 	builtinWebSearch := openAIModelSupportsBuiltInWebSearch(model)
 	if builtinWebSearch {
@@ -1034,6 +1111,11 @@ func buildResponsesRequest(model, system, volatileTail, cacheKey, effort string,
 			reasoning["effort"] = lvl
 		}
 		body["reasoning"] = reasoning
+		// Stateless mode: ask for the encrypted reasoning items so they can
+		// be replayed on the next request (see responsesOptions).
+		if opts.ReplayReasoning {
+			body["include"] = []string{"reasoning.encrypted_content"}
+		}
 	}
 	if len(tools) > 0 {
 		apiTools := make([]map[string]any, 0, len(tools))
@@ -1165,6 +1247,102 @@ func IsClaudeModel(model string) bool {
 // the reasoning.effort parameter, so steal C can retry once with effort omitted
 // WITHOUT masking unrelated 400s (never-hide-errors). It requires the param name
 // (effort/reasoning) AND a rejection verb, so a generic 400 still surfaces.
+// MetaResponsesReasoning is the Response.Meta / Message.Meta key carrying
+// the raw reasoning output items (with encrypted_content) the Responses API
+// returned for one assistant segment.
+const MetaResponsesReasoning = "openai_reasoning_items"
+
+// reasoningItems reads the replayable reasoning items off a message's Meta.
+func reasoningItems(meta map[string]any) []json.RawMessage {
+	if meta == nil {
+		return nil
+	}
+	items, _ := meta[MetaResponsesReasoning].([]json.RawMessage)
+	return items
+}
+
+// reasoningItemRaw returns the item when it is a reasoning item carrying
+// encrypted content, else nil. Summaries alone are not replayable state.
+func reasoningItemRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var item struct {
+		Type             string `json:"type"`
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil || item.Type != "reasoning" || item.EncryptedContent == "" {
+		return nil
+	}
+	cp := make(json.RawMessage, len(raw))
+	copy(cp, raw)
+	return cp
+}
+
+// openAICacheRetention is the prompt_cache_retention to send for a model, or
+// "" to omit it. OpenAI's caching guide (2026-09-04): gpt-5.5 and earlier
+// accept "in_memory" | "24h" (24h keeps a prefix warm ~30 min and up to a
+// day, no write charge); gpt-5.6+ moved to a fixed 30-minute
+// prompt_cache_options.ttl and no longer take the field. A conversation
+// with a 15-minute gap on the in-memory default re-writes the whole prefix.
+// INFINITY_OPENAI_PROMPT_CACHE_RETENTION overrides ("off" disables).
+func openAICacheRetention(model string) string {
+	v := strings.TrimSpace(os.Getenv("INFINITY_OPENAI_PROMPT_CACHE_RETENTION"))
+	if strings.EqualFold(v, "off") {
+		return ""
+	}
+	if !openAIModelAcceptsCacheRetention(model) {
+		return ""
+	}
+	if v == "" {
+		return "24h"
+	}
+	return v
+}
+
+// openAIModelAcceptsCacheRetention: gpt-4.1 and gpt-5 through gpt-5.5 (and
+// their codex/mini/chat variants); anything gpt-5.6+ does not.
+func openAIModelAcceptsCacheRetention(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, ":"); i >= 0 {
+		m = m[i+1:]
+	}
+	if strings.HasPrefix(m, "gpt-4.1") {
+		return true
+	}
+	if !strings.HasPrefix(m, "gpt-5") {
+		return false
+	}
+	rest := strings.TrimPrefix(m, "gpt-5")
+	if rest == "" || rest[0] != '.' {
+		return true // gpt-5, gpt-5-codex, gpt-5-mini
+	}
+	// gpt-5.<minor>...
+	minor := 0
+	for _, c := range rest[1:] {
+		if c < '0' || c > '9' {
+			break
+		}
+		minor = minor*10 + int(c-'0')
+	}
+	return minor <= 5
+}
+
+// looksLikeRetentionRejection: a 400 that names prompt_cache_retention.
+func looksLikeRetentionRejection(body string) bool {
+	return strings.Contains(strings.ToLower(body), "prompt_cache_retention")
+}
+
+// looksLikeReasoningItemRejection: a 400 about a replayed reasoning item
+// (encrypted content the backend cannot use), as opposed to the effort enum.
+func looksLikeReasoningItemRejection(body string) bool {
+	b := strings.ToLower(body)
+	if !strings.Contains(b, "reasoning") {
+		return false
+	}
+	return strings.Contains(b, "encrypted") || strings.Contains(b, "reasoning item") || strings.Contains(b, "rs_")
+}
+
 func looksLikeEffortRejection(body string) bool {
 	b := strings.ToLower(body)
 	if !strings.Contains(b, "effort") && !strings.Contains(b, "reasoning") {
@@ -1258,6 +1436,15 @@ func readResponsesSSE(r io.Reader, out chan<- StreamEvent) (Response, error) {
 				}
 			}
 		case "response.output_item.done":
+			// A reasoning item with encrypted content is kept whole so the
+			// next request can replay it ahead of this segment.
+			if raw := reasoningItemRaw(evt.Item); raw != nil {
+				if resp.Meta == nil {
+					resp.Meta = map[string]any{}
+				}
+				items, _ := resp.Meta[MetaResponsesReasoning].([]json.RawMessage)
+				resp.Meta[MetaResponsesReasoning] = append(items, raw)
+			}
 			// Fallback path: some Responses-API model variants (and partial
 			// streams under load) finalize an output item without first
 			// emitting per-token deltas. The final `output_item.done` event
@@ -1681,6 +1868,11 @@ func responsesUserContent(m Message) []map[string]any {
 	}
 	if strings.TrimSpace(m.Content) != "" || len(content) == 0 {
 		content = append(content, map[string]any{"type": "input_text", "text": m.Content})
+	}
+	// Pinned per-turn context (Message.Volatile) is the last part of the
+	// message that opened the turn, never a trailing item of the request.
+	if v := m.VolatileBlock(); v != "" {
+		content = append(content, map[string]any{"type": "input_text", "text": v})
 	}
 	return content
 }

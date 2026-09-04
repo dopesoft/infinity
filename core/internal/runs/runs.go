@@ -79,6 +79,11 @@ const (
 	// (tools/code_agent.go); the constant exists so the sweeps below and the
 	// cron reconciler name the same kind rather than three loose literals.
 	KindCodeAgent Kind = "code_agent"
+	// KindCompact is a manual context compaction of one conversation
+	// (POST /api/sessions/{id}/compact). Tracked so the context meter's
+	// Compact action survives navigation and refresh like every other
+	// long action.
+	KindCompact Kind = "session.compact"
 )
 
 // Stopped reasons stamped into mem_runs.meta.stopped_reason by

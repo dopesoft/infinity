@@ -49,7 +49,9 @@ func (m *MemoryProvider) BuildSystemPrefix(ctx context.Context, sessionID, query
 	st := m.Router.Snapshot()
 
 	var b strings.Builder
-	b.WriteString("## Bridge\n")
+	// Tagged so the loop can treat it as world state (sent once, then only
+	// when it changes) instead of re-sending it on every call.
+	b.WriteString("<bridge>\n## Bridge\n")
 	b.WriteString(fmt.Sprintf("Status: %s\n", m.Router.Describe(active, pref)))
 
 	switch {
@@ -75,5 +77,6 @@ func (m *MemoryProvider) BuildSystemPrefix(ctx context.Context, sessionID, query
 	} else if pref == PrefAuto && !st.MacHealthy && st.CloudHealthy && active != nil && active.Name() == KindCloud {
 		b.WriteString("Note: the boss's Mac is offline so we fell back to Cloud. If he comes back online, the next turn will auto-route to Mac.\n")
 	}
+	b.WriteString("</bridge>")
 	return b.String(), nil
 }

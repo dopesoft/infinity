@@ -2011,6 +2011,29 @@ export const fetchContextUsage = (sessionId?: string, signal?: AbortSignal) => {
   return getJSON<ContextUsageDTO>(`/api/context/usage${qs}`, signal);
 };
 
+export type CompactSessionResult = {
+  compacted: boolean;
+  compacted_turns: number;
+  kept_turns: number;
+  summary_chars: number;
+  observations: number;
+};
+
+/** Fold the older part of a conversation into memory (the Compact action on
+ *  the context meter). Tracked server-side as a `session.compact` run, so
+ *  the meter reads progress through useRuns rather than local state. */
+export async function compactSession(sessionId: string): Promise<CompactSessionResult | null> {
+  try {
+    const res = await authedFetch(`/api/sessions/${encodeURIComponent(sessionId)}/compact`, {
+      method: "POST",
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CompactSessionResult;
+  } catch {
+    return null;
+  }
+}
+
 // ---- OpenAI OAuth (ChatGPT-subscription provider) --------------------------
 //
 // Paste-based PKCE connect flow. Studio renders a "Connect ChatGPT" button

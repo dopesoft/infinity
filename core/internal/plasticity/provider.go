@@ -20,11 +20,11 @@ import (
 // Retrieval is hybrid (cosine + lexical + recency) and the rendering
 // splits lessons into two buckets so the model treats them differently:
 //
-//   1. AVOID  (label='rejected' / 'corrected'): things that went wrong
-//      before. These get higher weight because negative lessons change
-//      behavior more reliably than positive ones.
-//   2. APPLY  (label='accepted', high score): things that worked. Useful
-//      pattern matches when the agent recognises the situation.
+//  1. AVOID  (label='rejected' / 'corrected'): things that went wrong
+//     before. These get higher weight because negative lessons change
+//     behavior more reliably than positive ones.
+//  2. APPLY  (label='accepted', high score): things that worked. Useful
+//     pattern matches when the agent recognises the situation.
 //
 // Without an embedder, retrieval degrades to the original lexical+score
 // path. Rows without an embedding column populated yet (pre-migration-057)
@@ -43,10 +43,15 @@ func NewProvider(pool *pgxpool.Pool, embedder embed.Embedder) *Provider {
 
 // Tunables. These are the "feels right" values for a single-user agent.
 const (
-	candidateLimit = 80 // pulled from the table before ranking
-	avoidLimit     = 6  // rendered "AVOID" lessons per turn
-	applyLimit     = 6  // rendered "APPLY" lessons per turn
+	candidateLimit = 80   // pulled from the table before ranking
+	avoidLimit     = 6    // rendered "AVOID" lessons per turn
+	applyLimit     = 6    // rendered "APPLY" lessons per turn
 	cosineMin      = 0.45 // cosine sim threshold to count as a vector hit
+	// blockMaxChars caps the whole <gym_reflex> block. Measured at 6.2K chars
+	// on real turns (2026-09-04), re-sent on every LLM call of every turn on
+	// every brain. Lessons are already ranked, so the cap drops the
+	// lowest-ranked ones from each bucket until the block fits.
+	blockMaxChars = 3000
 )
 
 func (p *Provider) BuildSystemPrefix(ctx context.Context, _, query string) (string, error) {
@@ -99,23 +104,43 @@ func (p *Provider) BuildSystemPrefix(ctx context.Context, _, query string) (stri
 		return "", nil
 	}
 
-	var b strings.Builder
-	b.WriteString("<gym_reflex>\n")
-	b.WriteString("Experience-backed lessons mined from your own past sessions. AVOID lessons describe what failed before - skip those moves. APPLY lessons describe what worked - reach for them when the situation matches.\n")
-	if len(avoid) > 0 {
-		b.WriteString("\nAVOID:\n")
-		for i, ex := range avoid {
-			renderLesson(&b, i+1, ex)
+	return renderReflexBlock(avoid, apply, blockMaxChars), nil
+}
+
+// renderReflexBlock renders the two buckets under a character cap. Both
+// buckets are ranked best-first, so when the block is over budget the last
+// lesson of the longer bucket is dropped, repeatedly, until it fits. Pure;
+// tested directly.
+func renderReflexBlock(avoid, apply []promptExample, maxChars int) string {
+	render := func() string {
+		var b strings.Builder
+		b.WriteString("<gym_reflex>\n")
+		b.WriteString("Experience-backed lessons mined from your own past sessions. AVOID lessons describe what failed before - skip those moves. APPLY lessons describe what worked - reach for them when the situation matches.\n")
+		if len(avoid) > 0 {
+			b.WriteString("\nAVOID:\n")
+			for i, ex := range avoid {
+				renderLesson(&b, i+1, ex)
+			}
 		}
-	}
-	if len(apply) > 0 {
-		b.WriteString("\nAPPLY:\n")
-		for i, ex := range apply {
-			renderLesson(&b, i+1, ex)
+		if len(apply) > 0 {
+			b.WriteString("\nAPPLY:\n")
+			for i, ex := range apply {
+				renderLesson(&b, i+1, ex)
+			}
 		}
+		b.WriteString("</gym_reflex>")
+		return b.String()
 	}
-	b.WriteString("</gym_reflex>")
-	return b.String(), nil
+	out := render()
+	for maxChars > 0 && len(out) > maxChars && len(avoid)+len(apply) > 1 {
+		if len(avoid) >= len(apply) {
+			avoid = avoid[:len(avoid)-1]
+		} else {
+			apply = apply[:len(apply)-1]
+		}
+		out = render()
+	}
+	return out
 }
 
 func (p *Provider) fetchCandidates(ctx context.Context, query string) ([]promptExample, error) {

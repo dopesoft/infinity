@@ -187,60 +187,78 @@ func completedFixture() candidate {
 }
 
 // Why: this is the 2026-08-29 failure. A 47-minute build succeeded, wrote a
-// full report, and the boss was told it had FAILED. The brief that wakes Jarvis
-// has to make the correction the first thing he says, hand him the report, and
-// stop him relaunching work that is already on disk.
-func TestBuildCompletedBrief_LeadsWithTheCorrectionAndCarriesTheReport(t *testing.T) {
-	b := buildCompletedBrief(completedFixture(), Verdict{
+// full report, and the boss was told it had FAILED. The card that tells him has
+// to lead with the correction, carry the report, and never read as a job to
+// re-run. And it is a CARD: on 2026-09-02 this notice was a model turn into a
+// 900K-token chat once a minute, and half of a week's Claude plan went on it.
+func TestBuildCompletedNotice_LeadsWithTheCorrectionAndCarriesTheReport(t *testing.T) {
+	title, body := buildCompletedNotice(completedFixture(), Verdict{
 		Found:  true,
 		Done:   true,
 		Report: "Done. Rewrote the coach panel and the four call sites; go build and pnpm test both clean.",
 		Files:  []string{"studio/components/CoachConversation.tsx", "core/internal/coach/panel.go"},
-	})
+	}, "")
 
-	if !strings.Contains(b, "DID finish") {
-		t.Fatalf("the brief must open by saying it finished — he was last told the opposite:\n%s", b)
+	if title != "Build finished: redesign the coach conversation" {
+		t.Fatalf("the title is the plain fact, without the engine prefix the run label carries: %q", title)
 	}
-	if !strings.Contains(b, "Rewrote the coach panel") {
-		t.Fatalf("Claude's own report is the whole point of reading the transcript:\n%s", b)
+	if !strings.Contains(body, "it had not") {
+		t.Fatalf("the notice must open by correcting what he was last told:\n%s", body)
 	}
-	if !strings.Contains(b, "CoachConversation.tsx") {
-		t.Fatalf("the files it touched are the evidence the boss can check:\n%s", b)
+	if !strings.Contains(body, "Rewrote the coach panel") {
+		t.Fatalf("Claude's own report is the whole point of reading the transcript:\n%s", body)
 	}
-	if !strings.Contains(b, "plan_update") {
-		t.Fatalf("a step still sitting blocked for finished work is the visible half of this bug:\n%s", b)
+	if !strings.Contains(body, "CoachConversation.tsx") {
+		t.Fatalf("the files it touched are the evidence the boss can check:\n%s", body)
 	}
-	if !strings.Contains(b, "Do NOT relaunch") {
-		t.Fatalf("relaunching work whose report is already written is the failure made autonomous:\n%s", b)
-	}
-	if strings.Contains(b, "resume_session") {
-		t.Fatalf("nothing here should read as an invitation to continue a finished job:\n%s", b)
+	for _, dev := range []string{"resume_session", "plan_update", "code_agent", "[Automatic check"} {
+		if strings.Contains(body, dev) || strings.Contains(title, dev) {
+			t.Fatalf("this is addressed to the boss, not to the model; %q has no place on his card:\n%s", dev, body)
+		}
 	}
 }
 
 // Why: a run that ran to the end and REPORTED a failure is not a success with
 // an awkward summary. The correction must not launder it.
-func TestBuildCompletedBrief_KeepsAFailureAFailure(t *testing.T) {
-	b := buildCompletedBrief(completedFixture(), Verdict{
+func TestBuildCompletedNotice_KeepsAFailureAFailure(t *testing.T) {
+	title, body := buildCompletedNotice(completedFixture(), Verdict{
 		Found: true, Done: true, IsError: true,
 		Report: "The production build failed: type error in CoachConversation.tsx:212.",
-	})
-	if !strings.Contains(b, "FAILURE") {
-		t.Fatalf("a reported failure must be named as one:\n%s", b)
+	}, "")
+	if !strings.Contains(title, "with errors") {
+		t.Fatalf("a reported failure must be named as one in the title: %q", title)
 	}
-	if !strings.Contains(b, "type error in CoachConversation.tsx:212") {
-		t.Fatalf("its own account of what went wrong is what makes it actionable:\n%s", b)
+	if !strings.Contains(body, "type error in CoachConversation.tsx:212") {
+		t.Fatalf("its own account of what went wrong is what makes it actionable:\n%s", body)
+	}
+	if strings.Contains(body, "it had not") {
+		t.Fatalf("a failure must not carry the 'it did not fail' correction:\n%s", body)
 	}
 }
 
 // Why: "it finished" with no report must never read as "it finished cleanly".
 // An empty report is a reason to go and look, not a reason to reassure him.
-func TestBuildCompletedBrief_RefusesToInventAReport(t *testing.T) {
-	b := buildCompletedBrief(completedFixture(), Verdict{Found: true, Done: true})
-	if !strings.Contains(b, "it wrote none") {
-		t.Fatalf("a missing report must be stated plainly:\n%s", b)
+func TestBuildCompletedNotice_RefusesToInventAReport(t *testing.T) {
+	_, body := buildCompletedNotice(completedFixture(), Verdict{Found: true, Done: true}, "")
+	if !strings.Contains(body, "wrote no closing summary") {
+		t.Fatalf("a missing report must be stated plainly:\n%s", body)
 	}
-	if !strings.Contains(b, "Look at the repo") {
-		t.Fatalf("with no report, the instruction is to go and check:\n%s", b)
+	if !strings.Contains(body, "Check the repo") {
+		t.Fatalf("with no report, the instruction is to go and check:\n%s", body)
+	}
+}
+
+// Why: the plan step that was sitting `blocked` for finished work is the
+// visible half of the 2026-08-29 bug. The card names it only when there is one
+// to name, so a chat with no plan is not sent looking for a step to close.
+func TestBuildCompletedNotice_NamesAWaitingPlanOnlyWhenThereIsOne(t *testing.T) {
+	_, withPlan := buildCompletedNotice(completedFixture(), Verdict{Found: true, Done: true, Report: "Done."},
+		"44444444-4444-4444-8444-444444444444")
+	if !strings.Contains(withPlan, "plan step") {
+		t.Fatalf("a chat with an active plan must be told a step may be waiting:\n%s", withPlan)
+	}
+	_, without := buildCompletedNotice(completedFixture(), Verdict{Found: true, Done: true, Report: "Done."}, "")
+	if strings.Contains(without, "plan step") {
+		t.Fatalf("no plan, no mention of one:\n%s", without)
 	}
 }

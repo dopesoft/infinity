@@ -14,15 +14,25 @@
 //
 // This is the reader. Deterministic Go on a ticker (never LLM cognition):
 // it finds a coding run that ended WITHOUT a verdict, gathers real evidence off
-// the repo, and re-enters the agent loop in the originating chat with that
-// evidence in hand. Jarvis then makes the only call that is genuinely a
-// judgment — continue it, replan it, or say it needs the boss — and he can
-// continue it cheaply because `code_agent` now takes resume_session.
+// the repo, and re-enters the agent loop with that evidence in hand. Jarvis
+// then makes the only call that is genuinely a judgment — continue it, replan
+// it, or say it needs the boss — and he can continue it cheaply because
+// `code_agent` now takes resume_session.
+//
+// WHERE THAT TURN RUNS. In a side session made for the run, never in the
+// boss's chat. On 2026-09-02 the briefs went into the live conversation, whose
+// context was ~900K tokens, once a minute from 05:45 to 06:00: each one a full
+// Opus turn to answer in under 120 tokens. Over a week these machine-started
+// turns were 28% of the Claude plan. Half of them were not even a decision:
+// "the job DID finish and was never reported" is a notice, and a notice is a
+// surface item in the boss's inbox, not a model turn. So: a stranded job is
+// briefed in its own small session (three passes at most, a real gap between
+// them), and a finished job is a card.
 //
 // The split is deliberate and is CLAUDE.md Rule #1b. Mechanics here, in code,
 // where they cannot be forgotten: noticing, gathering the evidence, capping the
-// passes, claiming a pass atomically so a crash can't loop. Judgment there, in
-// the model: what to do about it.
+// passes, claiming a pass atomically so a crash can't loop, keeping the turn
+// out of his chat. Judgment there, in the model: what to do about it.
 //
 // Modelled on reauth.Poller and watch.Poller — same shape, same durability
 // story (state lives on the row, so a restart resumes on the next tick), same
@@ -32,13 +42,15 @@ package finish
 import (
 	"context"
 	"fmt"
-	"github.com/dopesoft/infinity/core/internal/llm"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/runs"
-	"github.com/jackc/pgx/v5"
+	"github.com/dopesoft/infinity/core/internal/surface"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -51,6 +63,14 @@ var infoLog = log.New(os.Stdout, "finish: ", log.LstdFlags)
 // one implementation of "wake Jarvis up in this chat", not two.
 type Replayer interface {
 	Replay(ctx context.Context, sessionID, userText, model string) (string, error)
+}
+
+// Surfacer posts to the boss's inbox ("Surfaced by Jarvis"). Satisfied by
+// *surface.Store as-is: the finished-job notice goes through the same generic
+// contract every cron outcome does, so it lands on the same card with no new
+// widget and no new loader.
+type Surfacer interface {
+	Upsert(ctx context.Context, it *surface.Item) (string, error)
 }
 
 // Report is what the repo actually looks like right now. It is the difference
@@ -81,7 +101,7 @@ type Evidence interface {
 
 // Poller is the deterministic background loop. Nil-safe throughout.
 type Poller struct {
-	pool     *pgxpool.Pool
+	rows     runRows
 	replayer Replayer
 	evidence Evidence
 	// transcript reads a job's OWN files, which is the only way to learn that
@@ -89,6 +109,10 @@ type Poller struct {
 	// the poller still continues stranded work, it just cannot tell the
 	// already-finished ones apart first.
 	transcript Transcript
+	// surfacer delivers the finished-job notice to the boss's inbox. Optional
+	// in type only: without it the notice cannot be delivered, and that is
+	// said on stderr every time rather than dropped.
+	surfacer Surfacer
 
 	// held latches the "plan is spent" log so it is said once per hold rather
 	// than every tick. Touched only from the single ticker goroutine.
@@ -108,10 +132,11 @@ type Poller struct {
 	// duration, and a healthy test run must never be called stalled.
 	stallAfter time.Duration
 	maxPasses  int
-	// settleEach is the minimum gap between two probes of the SAME run, and
-	// maxSettleTries bounds consecutive FAILED probes so a Mac that has gone
-	// to sleep is not woken every minute forever. A probe that succeeds resets
-	// the counter, so a genuinely long job never exhausts its attempts.
+	// settleEach is the minimum gap between two probes of the SAME run, AND
+	// the minimum gap between two briefs of the same run. maxSettleTries
+	// bounds consecutive FAILED probes so a Mac that has gone to sleep is not
+	// woken every minute forever. A probe that succeeds resets the counter,
+	// so a genuinely long job never exhausts its attempts.
 	settleEach     time.Duration
 	maxSettleTries int
 }
@@ -123,15 +148,18 @@ type Poller struct {
 // it went in without a look at the repo. transcript may be nil: stranded work
 // is still continued, but a job that finished unwatched is no longer told
 // apart from one that stopped short, which is the bug SettleOne exists for.
-func NewPoller(pool *pgxpool.Pool, replayer Replayer, evidence Evidence, transcript Transcript) *Poller {
+// surfacer may be nil: a finished job is still corrected on the board, and
+// every one of them is logged on stderr as undelivered.
+func NewPoller(pool *pgxpool.Pool, replayer Replayer, evidence Evidence, transcript Transcript, surfacer Surfacer) *Poller {
 	if pool == nil || replayer == nil {
 		return nil
 	}
 	return &Poller{
-		pool:           pool,
+		rows:           pgRows{pool: pool},
 		replayer:       replayer,
 		evidence:       evidence,
 		transcript:     transcript,
+		surfacer:       surfacer,
 		interval:       60 * time.Second,
 		settleGrace:    2 * time.Minute,
 		lookback:       6 * time.Hour,
@@ -148,8 +176,8 @@ func (p *Poller) Start(ctx context.Context) {
 	if p == nil {
 		return
 	}
-	infoLog.Printf("continuation poller started (every %s, stall after %s, max %d passes)",
-		p.interval, p.stallAfter, p.maxPasses)
+	infoLog.Printf("continuation poller started (every %s, stall after %s, max %d passes, %s between passes)",
+		p.interval, p.stallAfter, p.maxPasses, p.settleEach)
 	t := time.NewTicker(p.interval)
 	defer t.Stop()
 	for {
@@ -248,32 +276,17 @@ var codingKinds = runs.CodingKinds()
 // confident progress bar for something that has not moved in ten minutes.
 // "Still spinning is not a status."
 func (p *Poller) MarkStalled(ctx context.Context) (int, error) {
-	if p == nil || p.pool == nil {
+	if p == nil || p.rows == nil {
 		return 0, nil
 	}
-	tag, err := p.pool.Exec(ctx, `
-		UPDATE mem_runs
-		   SET progress_label = 'Claude Code · no new activity for '
-		         || FLOOR(EXTRACT(EPOCH FROM (NOW() - (`+lastActivitySQL+`)))/60)::int || 'm'
-		         || COALESCE(NULLIF(' · last: ' || (meta->>'currentFile'), ' · last: '), ''),
-		       meta = COALESCE(meta,'{}'::jsonb)
-		              || jsonb_build_object('stalled_since', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
-		 WHERE kind = ANY($1)
-		   AND status = 'running'
-		   AND COALESCE(meta->>'stalled_since','') = ''
-		   AND (`+lastActivitySQL+`) < NOW() - $2::interval
-	`, codingKinds, p.stallAfter.String())
-	if err != nil {
-		return 0, err
-	}
-	return int(tag.RowsAffected()), nil
+	return p.rows.MarkStalled(ctx, p.stallAfter)
 }
 
 // stranded is one coding run that ended without ever reaching a verdict.
 type stranded struct {
 	runID     string
 	label     string
-	sessionID string
+	sessionID string // the boss's chat the job was started from
 	repo      string
 	claudeSes string
 	reason    string
@@ -282,6 +295,12 @@ type stranded struct {
 	pass      int
 	startedAt time.Time
 	endedAt   time.Time
+	// finishSes is the side session this run is continued in, minted on the
+	// first claim and reused by every later pass.
+	finishSes string
+	// planID is the plan the parent chat was driving, so the model can read
+	// or resume it by id from the side session. Empty when there is none.
+	planID string
 }
 
 // ContinueOne claims at most one stranded run and continues it.
@@ -290,26 +309,51 @@ type stranded struct {
 // brain, so this is a drip, never a burst. Nothing to do is the overwhelmingly
 // common case and costs one indexed query.
 func (p *Poller) ContinueOne(ctx context.Context) error {
-	if p == nil || p.pool == nil {
+	if p == nil || p.rows == nil {
 		return nil
 	}
-	s, err := p.claim(ctx)
+	s, err := p.rows.ClaimContinue(ctx, p.claimParams())
 	if err != nil || s == nil {
 		return err
 	}
+	// A synthetic session (a delegate, a background job) has no chat to
+	// trace back to and would be a 22P02 on every mem_* write besides.
+	if !isChatSession(s.sessionID) {
+		return nil
+	}
+	// The claim mints the side session's id in the same statement, so this
+	// only fires for a row the claim could not stamp; the id is then pinned
+	// on the row so the next pass of this run still shares the session.
+	if !isChatSession(s.finishSes) {
+		s.finishSes = uuid.NewString()
+		p.note(ctx, s.runID, "finish_session_id", s.finishSes)
+	}
+	if err := p.rows.EnsureContinuationSession(ctx, s.finishSes, s.sessionID, continuationName(s.label), s.runID); err != nil {
+		// The pass is already spent — deliberately. Retrying a step that just
+		// failed is the "stop retrying something dead" anti-pattern, and a
+		// crash between the claim and here must not be able to loop.
+		p.note(ctx, s.runID, "finish_error", err.Error())
+		return fmt.Errorf("open continuation session %s for run %s: %w", s.finishSes, s.runID, err)
+	}
+	if planID, err := p.rows.ActivePlanID(ctx, s.sessionID); err != nil {
+		// Not fatal: the brief says the plan is unknown instead of naming it,
+		// and the model can still find it from the parent session.
+		log.Printf("finish: reading the active plan for session %s: %v", s.sessionID, err)
+	} else {
+		s.planID = planID
+	}
+
 	report := Report{Repo: s.repo, Err: "no evidence gatherer is wired, so I did not look at the repo"}
 	if p.evidence != nil {
 		report = p.evidence.Gather(ctx, s.sessionID, s.repo)
 	}
 	brief := buildBrief(*s, report, p.maxPasses)
 
-	infoLog.Printf("continuing stranded run %s (pass %d/%d) in session %s", s.runID, s.pass, p.maxPasses, s.sessionID)
-	if _, err := p.replayer.Replay(ctx, s.sessionID, brief, ""); err != nil {
-		// The pass is already spent — deliberately. Retrying a replay that
-		// just failed is the "stop retrying something dead" anti-pattern, and
-		// a crash between the claim and here must not be able to loop.
+	infoLog.Printf("continuing stranded run %s (pass %d/%d) in side session %s (from chat %s)",
+		s.runID, s.pass, p.maxPasses, s.finishSes, s.sessionID)
+	if _, err := p.replayer.Replay(ctx, s.finishSes, brief, ""); err != nil {
 		p.note(ctx, s.runID, "finish_error", err.Error())
-		return fmt.Errorf("replay run %s into session %s: %w", s.runID, s.sessionID, err)
+		return fmt.Errorf("replay run %s into session %s: %w", s.runID, s.finishSes, err)
 	}
 
 	// ASKING AGAIN ONLY MAKES SENSE IF ASKING CHANGED SOMETHING.
@@ -336,6 +380,35 @@ func (p *Poller) ContinueOne(ctx context.Context) error {
 	return nil
 }
 
+func (p *Poller) claimParams() claimParams {
+	return claimParams{
+		settleGrace:    p.settleGrace,
+		lookback:       p.lookback,
+		maxPasses:      p.maxPasses,
+		backoff:        p.settleEach,
+		requireSettled: p.transcript != nil,
+	}
+}
+
+// continuationName is what the side session is called in the boss's list.
+func continuationName(label string) string {
+	return clip("Continuing: "+jobName(label), 80)
+}
+
+// jobName strips the engine prefix a coding run's label carries ("Claude
+// Code: rewrite the coach panel") so a title built on it does not read as
+// "Build finished: Claude Code: rewrite …".
+func jobName(label string) string {
+	label = strings.TrimSpace(label)
+	for _, prefix := range []string{"Claude Code: ", "Claude Code · ", "Claude Code — "} {
+		if strings.HasPrefix(label, prefix) {
+			label = strings.TrimSpace(strings.TrimPrefix(label, prefix))
+			break
+		}
+	}
+	return firstNonEmpty(label, "a coding job")
+}
+
 // unchanged reports that a pass moved nothing in the repo.
 func unchanged(before, after Report) bool {
 	if before.Head != after.Head || len(before.Dirty) != len(after.Dirty) {
@@ -353,122 +426,9 @@ func unchanged(before, after Report) bool {
 func (p *Poller) spend(ctx context.Context, runID string) {
 	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if _, err := p.pool.Exec(nctx, `
-		UPDATE mem_runs
-		   SET meta = COALESCE(meta,'{}'::jsonb) || jsonb_build_object('finish_passes', $2::int)
-		 WHERE id = $1::uuid`, runID, p.maxPasses); err != nil {
+	if err := p.rows.Spend(nctx, runID, p.maxPasses); err != nil {
 		log.Printf("finish: settling run %s: %v", runID, err)
 	}
-}
-
-// claim atomically takes the next stranded run and books its pass in the same
-// statement, so two ticks (or two boxes) can never continue the same job twice
-// and a crash after the claim costs one pass rather than an infinite loop.
-//
-// Only runs with NO VERDICT are eligible. A run that closed 'error' failed for
-// a reason — a bad repo, no subscription, a spent plan — and relaunching it is
-// exactly the "stop retrying something dead" behaviour the honesty rules ban.
-// claimSQL is the statement claim() runs. Split out so the rules encoded in
-// it can be asserted by a test instead of described in a comment: the
-// "only the newest stranded job" clause is what stands between the boss and
-// thirty messages he never asked for.
-func claimSQL() string {
-	return `
-		UPDATE mem_runs SET meta = COALESCE(meta,'{}'::jsonb) || jsonb_build_object(
-		         'finish_passes',  (` + passesSQL + `) + 1,
-		         'finish_last_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
-		 WHERE id = (
-		   SELECT r.id FROM mem_runs r
-		    WHERE r.kind = ANY($1)
-		      AND r.status <> 'running'
-		      AND COALESCE(r.meta->>'stopped_reason','') <> ''
-		      AND r.ended_at IS NOT NULL
-		      AND r.ended_at <  NOW() - $2::interval
-		      AND r.ended_at >  NOW() - $3::interval
-		      AND (CASE WHEN r.meta->>'finish_passes' ~ '^[0-9]+$'
-		                THEN (r.meta->>'finish_passes')::int ELSE 0 END) < $4
-		      AND COALESCE(r.meta->>'session_id','') <> ''
-		      AND COALESCE(r.meta->>'repo','')       <> ''
-		      -- READ IT BEFORE YOU RE-RUN IT. When a transcript reader is
-		      -- wired, a Claude Code run is only continued after SettleOne has
-		      -- actually looked at its own files ($5). Without this gate the
-		      -- two claims pick rows by different orderings, and a job whose
-		      -- report is sitting unread on the Mac gets relaunched — the
-		      -- 2026-08-29 failure, made autonomous.
-		      --
-		      -- A CLOUD build is exempt, because there is nothing to read:
-		      -- Jarvis writes that code himself inside the agent loop, so no
-		      -- transcript exists and SettleOne skips it by design. Without
-		      -- this clause the gate would never open and cloud work would
-		      -- silently stop being continued at all.
-		      AND (NOT $5::bool
-		           OR COALESCE(r.meta->>'engine','') <> 'claude_code'
-		           OR COALESCE(r.meta->>'settle_last_at','') <> '')
-		      -- Never while newer coding work is live in the same chat: that
-		      -- job may BE the continuation, and two drivers on one repo is
-		      -- how the same edit gets made twice.
-		      AND NOT EXISTS (
-		            SELECT 1 FROM mem_runs live
-		             WHERE live.kind = ANY($1)
-		               AND live.status = 'running'
-		               AND live.meta->>'session_id' = r.meta->>'session_id')
-		      -- ONLY THE NEWEST STRANDED JOB IN A CHAT IS STILL A QUESTION.
-		      --
-		      -- A long build is a chain of small passes, so one conversation
-		      -- accumulates dozens of them, and every earlier pass is stranded
-		      -- by definition the moment the next one starts. Asking about each
-		      -- in turn is asking about work that has already been superseded.
-		      --
-		      -- The boss walked away for twenty minutes and came back to
-		      -- thirty identical messages (2026-09-02): twenty-four stranded
-		      -- jobs in one chat, one nudge a minute, Jarvis patiently
-		      -- answering "not resuming, it is already committed" to each. The
-		      -- per-run pass budget bounded each job and nothing bounded the
-		      -- QUEUE, so the loop was correct and unbearable at the same time.
-		      --
-		      -- Whatever happened after this run is the real state of the
-		      -- work, so this one has nothing left to say.
-		      AND NOT EXISTS (
-		            SELECT 1 FROM mem_runs newer
-		             WHERE newer.kind = ANY($1)
-		               AND newer.meta->>'session_id' = r.meta->>'session_id'
-		               AND newer.ended_at IS NOT NULL
-		               AND newer.ended_at > r.ended_at)
-		    ORDER BY r.ended_at
-		    LIMIT 1
-		    FOR UPDATE SKIP LOCKED)
-		RETURNING id::text,
-		          label,
-		          COALESCE(meta->>'session_id',''),
-		          COALESCE(meta->>'repo',''),
-		          COALESCE(meta->>'claude_session_id',''),
-		          COALESCE(meta->>'stopped_reason',''),
-		          COALESCE(result_summary,''),
-		          COALESCE(meta->>'currentFile',''),
-		          (` + passesSQL + `),
-		          started_at,
-		          ended_at
-	`
-}
-
-func (p *Poller) claim(ctx context.Context) (*stranded, error) {
-	row := p.pool.QueryRow(ctx, claimSQL(), codingKinds, p.settleGrace.String(), p.lookback.String(), p.maxPasses, p.transcript != nil)
-
-	var s stranded
-	err := row.Scan(&s.runID, &s.label, &s.sessionID, &s.repo, &s.claudeSes,
-		&s.reason, &s.summary, &s.lastFile, &s.pass, &s.startedAt, &s.endedAt)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	// A synthetic session (a delegate, a background job) has no chat to
-	// deliver into and would be a 22P02 on every mem_* write besides.
-	if !isChatSession(s.sessionID) {
-		return nil, nil
-	}
-	return &s, nil
 }
 
 // note records an outcome on the run row. Best-effort: failing to annotate
@@ -476,10 +436,7 @@ func (p *Poller) claim(ctx context.Context) (*stranded, error) {
 func (p *Poller) note(ctx context.Context, runID, key, value string) {
 	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if _, err := p.pool.Exec(nctx, `
-		UPDATE mem_runs
-		   SET meta = jsonb_set(COALESCE(meta,'{}'::jsonb), ARRAY[$2], to_jsonb($3::text), true)
-		 WHERE id = $1::uuid`, runID, key, value); err != nil {
+	if err := p.rows.Note(nctx, runID, key, value); err != nil {
 		log.Printf("finish: annotating run %s: %v", runID, err)
 	}
 }

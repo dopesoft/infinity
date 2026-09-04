@@ -120,7 +120,19 @@ func (s *Server) handleContextUsage(w http.ResponseWriter, r *http.Request) {
 	if used > 0 {
 		systemTokens = estimateTokens(s.loop.SystemPrompt())
 		if reg := s.loop.Tools(); reg != nil {
-			if defs := reg.Definitions(); len(defs) > 0 {
+			// Size what the loop SENDS: the session's active set, not the
+			// whole registry (444 tools vs ~41). Unknown session: fall back
+			// to the full registry rather than report zero.
+			var defs []llm.ToolDef
+			if sid := strings.TrimSpace(r.URL.Query().Get("session_id")); sid != "" {
+				if names := s.loop.ActiveToolNames(sid); len(names) > 0 {
+					defs = reg.DefinitionsFor(names)
+				}
+			}
+			if len(defs) == 0 {
+				defs = reg.Definitions()
+			}
+			if len(defs) > 0 {
 				if blob, err := json.Marshal(defs); err == nil {
 					toolsTokens = estimateTokens(string(blob))
 				}

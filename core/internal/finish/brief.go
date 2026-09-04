@@ -22,9 +22,17 @@ func buildBrief(s stranded, r Report, maxPasses int) string {
 	var b strings.Builder
 
 	b.WriteString("[Automatic check, no one asked for this] A coding job you started stopped without finishing, and nobody has picked it back up.\n\n")
+	b.WriteString("You are in a side session opened for this one check. The boss is not reading it: anything that needs him " +
+		"goes to him through `surface_item`, in your own words, not as a reply here.\n\n")
 
 	fmt.Fprintf(&b, "**The job:** %s\n", firstNonEmpty(strings.TrimSpace(s.label), "a Claude Code run"))
 	fmt.Fprintf(&b, "**Repo:** %s\n", s.repo)
+	fmt.Fprintf(&b, "**Started from:** conversation `%s`\n", s.sessionID)
+	if s.planID != "" {
+		fmt.Fprintf(&b, "**Its plan:** `%s` — `plan_get` with that `plan_id` reads it, `plan_resume` with it picks the next step back up.\n", s.planID)
+	} else {
+		b.WriteString("**Its plan:** that conversation has no active plan on record, so there is no step to settle.\n")
+	}
 	fmt.Fprintf(&b, "**How it ended:** %s, after %s.\n", reasonLine(s.reason), humanDuration(s.endedAt.Sub(s.startedAt)))
 	if f := strings.TrimSpace(s.lastFile); f != "" {
 		fmt.Fprintf(&b, "**Last thing it touched:** %s\n", f)
@@ -69,43 +77,43 @@ func buildBrief(s stranded, r Report, maxPasses int) string {
 	return b.String()
 }
 
-// buildCompletedBrief wakes Jarvis with a job that ACTUALLY FINISHED and was
-// never reported.
+// buildCompletedNotice is the card for a job that ACTUALLY FINISHED and was
+// never reported: a title and a body in plain English, addressed to the boss.
 //
 // This is the other half of the 2026-08-29 failure. The build succeeded, wrote
-// a full report, and the boss was told it had failed — so the mechanics
-// (noticing, reading the transcript, correcting the run row) have already
-// happened in Go by the time this is written, and what is left is the judgment
-// a model is for: telling him in his own voice, and settling the plan step
-// that is still sitting there `blocked` for work that is done.
-func buildCompletedBrief(c candidate, v Verdict) string {
-	var b strings.Builder
-
-	b.WriteString("[Automatic check, no one asked for this] A coding job you started DID finish, and its result was never reported. ")
-	b.WriteString("I have already corrected the run — this is not something to re-run.\n\n")
-
-	fmt.Fprintf(&b, "**The job:** %s\n", firstNonEmpty(strings.TrimSpace(c.label), "a Claude Code run"))
-	fmt.Fprintf(&b, "**Repo:** %s\n", c.repo)
+// a full report, and the boss was told it had failed. The mechanics (noticing,
+// reading the transcript, correcting the run row) have already happened in Go
+// by the time this is written, and nothing that remains is a decision, so it
+// goes to his inbox as a notice rather than waking a model to say the same
+// thing at the price of a full turn over his chat.
+func buildCompletedNotice(c candidate, v Verdict, planID string) (title, body string) {
+	name := jobName(c.label)
 	if v.IsError {
-		b.WriteString("**How it ended:** it ran to the end and reported a FAILURE. What it says below is its own account of what went wrong.\n")
+		title = "Build finished with errors: " + name
 	} else {
-		fmt.Fprintf(&b, "**How it ended:** successfully, after %s.\n", humanDuration(time.Since(c.startedAt)))
+		title = "Build finished: " + name
 	}
-	if len(v.Files) > 0 {
-		fmt.Fprintf(&b, "**Files it touched:** %s\n", strings.Join(clipList(v.Files, 10), ", "))
+	title = clip(title, 140)
+
+	var b strings.Builder
+	if v.IsError {
+		b.WriteString("This one ran to the end and reported a failure. What follows is its own account of what went wrong.\n\n")
+	} else {
+		fmt.Fprintf(&b, "This one finished after %s. You were last told it had stalled or failed; it had not.\n\n",
+			humanDuration(time.Since(c.startedAt)))
 	}
 	if report := strings.TrimSpace(v.Report); report != "" {
-		fmt.Fprintf(&b, "\n**Its own report:**\n%s\n", clip(report, 4000))
+		fmt.Fprintf(&b, "%s\n", clip(report, 4000))
 	} else {
-		b.WriteString("\n**Its own report:** it wrote none. Look at the repo before you say anything about what landed.\n")
+		b.WriteString("It wrote no closing summary of its own. Check the repo before trusting what landed.\n")
 	}
-
-	b.WriteString("\n**Your call:** tell the boss plainly, in your own words, that this finished and what it did — " +
-		"he was last told it had stalled or failed, so lead with the correction. If a plan step is still sitting `blocked` " +
-		"or `in_progress` for this work, settle it now with `plan_update` (verify first if the step asked for proof). " +
-		"Do NOT relaunch this job, and do NOT start a fresh `code_agent` pass for work the report says is already done.\n")
-
-	return b.String()
+	if len(v.Files) > 0 {
+		fmt.Fprintf(&b, "\nFiles it touched: %s\n", strings.Join(clipList(v.Files, 10), ", "))
+	}
+	if planID != "" {
+		b.WriteString("\nA plan step in that conversation may still be waiting on this. Open the chat and I will close it out.\n")
+	}
+	return title, strings.TrimRight(b.String(), "\n")
 }
 
 // reasonLine turns a stopped_reason into something a person would say.

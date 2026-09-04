@@ -3,10 +3,11 @@ package finish
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/dopesoft/infinity/core/internal/surface"
 )
 
 // Settling a coding job from its OWN transcript, before anything else acts on
@@ -28,8 +29,11 @@ import (
 //
 // The answer to both is one read-only probe of the job's own files, asking
 // three questions: are they there, is the process alive, did Claude write its
-// terminal result. Deterministic Go, no cognition (Rule #1b) — the judgment
-// that follows ("tell him, settle the step") is the model's, as always.
+// terminal result. Deterministic Go, no cognition (Rule #1b). What follows a
+// finish is a NOTICE, not a decision, so it is a card in the boss's inbox and
+// not a model turn: on 2026-09-02 half of the machine-started turns eating
+// his Claude plan were this exact "it DID finish, I have already corrected
+// the run" sentence, replayed into a 900K-token chat once a minute.
 
 // Verdict is what a job's own files say about it. Mirrors
 // tools.ClaudeJobVerdict; declared here so this package keeps its no-bridge,
@@ -76,10 +80,10 @@ const settleTriesSQL = `CASE WHEN meta->>'settle_tries' ~ '^[0-9]+$'
 // One per tick, like ContinueOne: each probe is a bridge round trip, and there
 // is never a hurry — the row has already stopped moving.
 func (p *Poller) SettleOne(ctx context.Context) (bool, error) {
-	if p == nil || p.pool == nil || p.transcript == nil {
+	if p == nil || p.rows == nil || p.transcript == nil {
 		return false, nil
 	}
-	c, err := p.claimSettle(ctx)
+	c, err := p.rows.ClaimSettle(ctx, p.settleParams())
 	if err != nil || c == nil {
 		return false, err
 	}
@@ -110,74 +114,30 @@ func (p *Poller) SettleOne(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// claimSettle takes the next probe-worthy run and books the attempt in the
-// same statement, so two ticks can never probe the same row and a crash
-// between the claim and the probe costs one attempt rather than looping.
-func (p *Poller) claimSettle(ctx context.Context) (*candidate, error) {
-	row := p.pool.QueryRow(ctx, `
-		UPDATE mem_runs SET meta = COALESCE(meta,'{}'::jsonb) || jsonb_build_object(
-		         'settle_tries',   (`+settleTriesSQL+`) + 1,
-		         'settle_last_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
-		 WHERE id = (
-		   SELECT r.id FROM mem_runs r
-		    WHERE r.kind = ANY($1)
-		      -- CLAUDE CODE ONLY. This probe reads a DETACHED job's own files
-		      -- under /tmp/inf-code on the Mac. A cloud build has none — Jarvis
-		      -- writes that code himself inside the agent loop — so probing one
-		      -- would come back "no files, no process" and this would close a
-		      -- perfectly healthy run as dead. Both Mac paths stamp
-		      -- meta.engine; nothing on the cloud does.
-		      AND COALESCE(r.meta->>'engine','') = 'claude_code'
-		      AND COALESCE(r.meta->>'repo','') <> ''
-		      AND r.started_at > NOW() - $2::interval
-		      AND (CASE WHEN r.meta->>'settle_tries' ~ '^[0-9]+$'
-		                THEN (r.meta->>'settle_tries')::int ELSE 0 END) < $3
-		      AND (COALESCE(r.meta->>'settle_last_at','') !~ '^\d{4}-\d{2}-\d{2}T'
-		           OR (r.meta->>'settle_last_at')::timestamptz < NOW() - $4::interval)
-		      AND (
-		            -- Live but quiet: either finished with nobody watching, or
-		            -- the row is describing a process that no longer exists.
-		            (r.status = 'running' AND (`+lastActivitySQL+`) < NOW() - $5::interval)
-		            -- Closed without a verdict: the case that reported a
-		            -- successful 47-minute build as a failure.
-		         OR (r.status <> 'running'
-		             AND COALESCE(r.meta->>'stopped_reason','') <> ''
-		             AND r.ended_at IS NOT NULL
-		             AND r.ended_at < NOW() - $6::interval)
-		          )
-		    ORDER BY r.started_at
-		    LIMIT 1
-		    FOR UPDATE SKIP LOCKED)
-		RETURNING id::text,
-		          label,
-		          COALESCE(meta->>'session_id',''),
-		          COALESCE(meta->>'repo',''),
-		          COALESCE(meta->>'claude_session_id',''),
-		          status,
-		          COALESCE(meta->>'stopped_reason',''),
-		          started_at
-	`, codingKinds, p.lookback.String(), p.maxSettleTries, p.settleEach.String(),
-		p.stallAfter.String(), p.settleGrace.String())
-
-	var c candidate
-	err := row.Scan(&c.runID, &c.label, &c.sessionID, &c.repo, &c.claudeSes,
-		&c.status, &c.reason, &c.startedAt)
-	if err == pgx.ErrNoRows {
-		return nil, nil
+func (p *Poller) settleParams() settleParams {
+	return settleParams{
+		lookback:    p.lookback,
+		maxTries:    p.maxSettleTries,
+		each:        p.settleEach,
+		stallAfter:  p.stallAfter,
+		settleGrace: p.settleGrace,
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
 }
 
 // closeCompleted turns a run that actually finished into one that SAYS it
-// finished, and then wakes Jarvis with the report so the boss hears it in the
-// chat he started it from.
+// finished, and then tells the boss with a card in his inbox.
 //
-// The row is corrected first and the chat second, deliberately: if the replay
+// The row is corrected first and the card second, deliberately: if the card
 // fails, the truth is still on the board rather than depending on a second
-// thing also working.
+// thing also working. Once corrected, the row has no stopped_reason and a
+// terminal status, so neither claim can pick it up again: a finished job is
+// told exactly once.
+//
+// A card and not a model turn, because nothing here is a decision. The job is
+// done, its report is in hand, the run row already says so. What is left is
+// telling him, and a turn spent telling him costs a full pass over his chat's
+// context (28% of a week's Claude plan, 2026-09-02) to produce the same
+// sentence this writes for free.
 func (p *Poller) closeCompleted(ctx context.Context, c candidate, v Verdict) error {
 	status := "ok"
 	if v.IsError {
@@ -187,32 +147,88 @@ func (p *Poller) closeCompleted(ctx context.Context, c candidate, v Verdict) err
 	if summary == "" {
 		summary = "It finished, but it wrote no closing summary. " + filesLine(v.Files)
 	}
-	if _, err := p.pool.Exec(ctx, `
-		UPDATE mem_runs
-		   SET status         = $2,
-		       ended_at       = COALESCE(ended_at, NOW()),
-		       result_summary = $3,
-		       progress       = 1,
-		       progress_label = '',
-		       meta = (COALESCE(meta,'{}'::jsonb) - 'stopped_reason' - 'stalled_since')
-		              || jsonb_build_object(
-		                   'finish_outcome', 'completed',
-		                   'settled_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
-		 WHERE id = $1::uuid`, c.runID, status, clip(summary, 8000)); err != nil {
+	if err := p.rows.CloseCompleted(ctx, c.runID, status, clip(summary, 8000)); err != nil {
 		return fmt.Errorf("close completed run %s: %w", c.runID, err)
 	}
-	infoLog.Printf("run %s actually finished (%s) — corrected the row and reporting it into session %s",
+	infoLog.Printf("run %s actually finished (%s) — corrected the row, telling the boss from chat %s",
 		c.runID, status, c.sessionID)
 
-	if !isChatSession(c.sessionID) || p.replayer == nil {
+	if p.surfacer == nil {
+		// Never silently: the board is right but the boss was not told, and
+		// a finished job he was last told had failed is exactly the thing he
+		// needs to hear.
+		log.Printf("finish: run %s finished but no inbox writer is wired, so the boss was not told (label %q, chat %s)",
+			c.runID, c.label, c.sessionID)
+		p.note(ctx, c.runID, "finish_error", "finished, but no inbox writer was wired to tell the boss")
 		return nil
 	}
-	if _, err := p.replayer.Replay(ctx, c.sessionID, buildCompletedBrief(c, v), ""); err != nil {
-		p.note(ctx, c.runID, "finish_error", err.Error())
-		return fmt.Errorf("report finished run %s into session %s: %w", c.runID, c.sessionID, err)
+
+	planID := ""
+	if id, err := p.rows.ActivePlanID(ctx, c.sessionID); err != nil {
+		log.Printf("finish: reading the active plan for session %s: %v", c.sessionID, err)
+	} else {
+		planID = id
 	}
-	p.note(ctx, c.runID, "finish_outcome", "reported")
+	item := buildCompletedItem(c, v, planID)
+	if _, err := p.surfacer.Upsert(ctx, item); err != nil {
+		p.note(ctx, c.runID, "finish_error", err.Error())
+		return fmt.Errorf("surface finished run %s: %w", c.runID, err)
+	}
+	p.note(ctx, c.runID, "finish_outcome", "surfaced")
 	return nil
+}
+
+// buildCompletedItem is the inbox card for a job that finished unwatched.
+// One card per run (ExternalID keyed on the run id), so a second probe of the
+// same run could only ever refresh it, never stack another.
+func buildCompletedItem(c candidate, v Verdict, planID string) *surface.Item {
+	title, body := buildCompletedNotice(c, v, planID)
+	imp := 30
+	if v.IsError {
+		imp = 70
+	}
+	reason := firstLineOf(strings.TrimSpace(v.Report))
+	if reason == "" {
+		reason = "It finished, but wrote no closing summary."
+	}
+	meta := map[string]any{
+		"run_id":     c.runID,
+		"session_id": c.sessionID,
+		"repo":       c.repo,
+		"status":     "ok",
+	}
+	if v.IsError {
+		meta["status"] = "error"
+	}
+	if c.claudeSes != "" {
+		meta["claude_session_id"] = c.claudeSes
+	}
+	if len(v.Files) > 0 {
+		meta["files"] = v.Files
+	}
+	if planID != "" {
+		meta["plan_id"] = planID
+	}
+	item := &surface.Item{
+		Surface:          "runs",
+		Kind:             "run_outcome",
+		Source:           "coding-job",
+		ExternalID:       "build-finished:" + c.runID,
+		Title:            title,
+		Subtitle:         repoName(c.repo),
+		Body:             body,
+		Importance:       &imp,
+		ImportanceReason: clip(reason, 200),
+		Metadata:         meta,
+		Status:           surface.StatusOpen,
+	}
+	// A clean finish is information, not a chore: it self-clears like a
+	// cron's did-work card. A reported failure stays until he has seen it.
+	if !v.IsError {
+		exp := time.Now().UTC().Add(36 * time.Hour)
+		item.ExpiresAt = &exp
+	}
+	return item
 }
 
 // closeDead closes a `running` row whose job is provably gone: no process, no
@@ -223,18 +239,7 @@ func (p *Poller) closeDead(ctx context.Context, c candidate) error {
 	summary := "I lost track of this one. Its process is gone from the Mac and it left nothing behind, " +
 		"so I have no result for it — it was not stopped and it did not fail. Anything it wrote is still " +
 		"uncommitted in " + firstNonEmpty(c.repo, "that repo") + "."
-	if _, err := p.pool.Exec(ctx, `
-		UPDATE mem_runs
-		   SET status         = 'ok',
-		       ended_at       = COALESCE(ended_at, NOW()),
-		       duration_ms    = COALESCE(duration_ms,
-		           LEAST(2147483647, GREATEST(0, EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000))::int),
-		       progress_label = '',
-		       result_summary = COALESCE(NULLIF(result_summary, ''), $2),
-		       meta = COALESCE(meta,'{}'::jsonb)
-		              || jsonb_build_object('stopped_reason', 'still_working', 'finish_outcome', 'reaped')
-		 WHERE id = $1::uuid
-		   AND status = 'running'`, c.runID, summary); err != nil {
+	if err := p.rows.CloseDead(ctx, c.runID, summary); err != nil {
 		return fmt.Errorf("close dead run %s: %w", c.runID, err)
 	}
 	infoLog.Printf("run %s had no process and no files left — closed it so the work behind it can move", c.runID)
@@ -248,4 +253,22 @@ func filesLine(files []string) string {
 		return "Check git_status in that repo for what it changed."
 	}
 	return "It touched " + strings.Join(clipList(files, 8), ", ") + "."
+}
+
+// repoName is the last path segment of a repo path, which is what the boss
+// calls it ("infinity", not "/Users/kai/Dev/infinity").
+func repoName(repo string) string {
+	repo = strings.TrimRight(strings.TrimSpace(repo), "/")
+	if i := strings.LastIndex(repo, "/"); i >= 0 {
+		return repo[i+1:]
+	}
+	return repo
+}
+
+// firstLineOf is the opening line of a report, for the card's one-line why.
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }

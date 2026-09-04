@@ -128,6 +128,14 @@ type Session struct {
 	// swapped. Used by the delegate tool to apply a persona to a child
 	// session without forking the whole agent loop.
 	SystemPromptOverride string
+
+	// world remembers which world-state sections this session has already
+	// been told, so a turn sends the full block once and diffs after. See
+	// worldstate.go.
+	world worldSnapshot
+	// volatileAt is the index of the message carrying this turn's pinned
+	// context (Message.Volatile), -1 when none. Cleared when the turn ends.
+	volatileAt int
 }
 
 func (s *Session) Append(m llm.Message) {
@@ -655,13 +663,19 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 	if c == nil {
 		return
 	}
+	provider := l.Provider()
+	stable := l.systemPrompt
+	if o := strings.TrimSpace(s.SystemPromptOverride); o != "" {
+		stable = o
+	}
 	go func() {
 		// Detached context with a generous deadline - compaction is
 		// network-bound on the summariser call but should never run
 		// longer than a minute or two.
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		newMsgs, res, err := c.Compact(ctx, s.ID, s.Snapshot(), &memory.CompactionConfig{})
+		cfg := &memory.CompactionConfig{Force: true, StableSystem: stable, Tools: l.tools.DefinitionsFor(s.Active.Names())}
+		newMsgs, res, err := c.Compact(ctx, s.ID, s.Snapshot(), cfg)
 		if err != nil {
 			log.Printf("auto-compact: session=%s err=%v", s.ID, err)
 			return
@@ -670,6 +684,11 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 			return
 		}
 		s.ReplaceMessages(newMsgs)
+		// A brain that holds the conversation itself must drop its session
+		// too, or the next resumed turn continues on the uncompacted one.
+		if llm.ForgetSessionIfSupported(ctx, provider, s.ID) {
+			infoLog.Printf("auto-compact: session=%s brain session dropped; next turn starts from the compacted transcript", s.ID)
+		}
 		// The fill reading described the thread that was just summarised
 		// away, so it is no longer about anything. Void it: the meter reads
 		// "measured after your next message" instead of sitting red on a
@@ -687,16 +706,19 @@ func (l *Loop) maybeAutoCompact(s *Session, lastInputTokens int) {
 // instead of inheriting the bloated history that filled the previous one.
 // Synchronous (unlike maybeAutoCompact) because the next segment must see the
 // compacted buffer, not race it. No-op + false when no compactor is wired.
-func (l *Loop) compactTurnNow(s *Session) bool {
+func (l *Loop) compactTurnNow(parent context.Context, s *Session, provider llm.Provider, stableSystem string, toolDefs []llm.ToolDef) bool {
 	l.compactorMu.RLock()
 	c := l.compactor
 	l.compactorMu.RUnlock()
 	if c == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Detached from the turn's deadline (a compaction that starts near the
+	// end of a long turn must still finish) but carrying its values.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 90*time.Second)
 	defer cancel()
-	newMsgs, res, err := c.Compact(ctx, s.ID, s.Snapshot(), &memory.CompactionConfig{})
+	cfg := &memory.CompactionConfig{Force: true, StableSystem: stableSystem, Tools: toolDefs}
+	newMsgs, res, err := c.Compact(ctx, s.ID, s.Snapshot(), cfg)
 	if err != nil {
 		log.Printf("turn-continuation compact: session=%s err=%v", s.ID, err)
 		return false
@@ -706,6 +728,9 @@ func (l *Loop) compactTurnNow(s *Session) bool {
 	}
 	s.ReplaceMessages(newMsgs)
 	s.InvalidateUsage()
+	if llm.ForgetSessionIfSupported(ctx, provider, s.ID) {
+		infoLog.Printf("compact: session=%s brain session dropped; next turn starts from the compacted transcript", s.ID)
+	}
 	infoLog.Printf("turn-continuation compact: session=%s compacted %d turns, kept %d, %d observations promoted",
 		s.ID, res.CompactedTurns, res.KeptTurns, len(res.ObservationIDs))
 	return true
@@ -1490,10 +1515,16 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	// Cloud-routed sessions so the model can't accidentally edit the
 	// Mac filesystem when working in the Cloud workspace.
 	hidden := l.hiddenForSession(ctx, s.ID)
-	// Prepend the dormant tool catalog so the model knows what exists
-	// even when it doesn't have the schema in hand. Cheap (~30 tokens
-	// per entry) and unlocks the tool_search → load_tools loop.
-	appendVolatile(buildToolCatalogBlock(l.tools, s.Active, hidden))
+	// The dormant tool catalog so the model knows what exists even when
+	// it doesn't have the schema in hand; it unlocks the tool_search →
+	// load_tools loop. Lifted into world state below (sent once, then only
+	// on change). Skipped for a brain that runs its own tools: Claude Code
+	// sees Infinity's registry as mcp__infinity__* through its own deferred
+	// list, and 28K chars of names it cannot call under those names was
+	// the single largest block in every prompt it got.
+	if !llm.SelfExecuting(l.Provider()) {
+		appendVolatile(buildToolCatalogBlock(l.tools, s.Active, hidden))
+	}
 	// Prepend the connected-accounts overlay so the model can route to
 	// the right OAuth account when a tool has multi-account support
 	// (e.g. four Gmail mailboxes). The block lists per-toolkit
@@ -1508,7 +1539,36 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	if VoiceModeFromContext(ctx) {
 		appendVolatile(voiceModeSystemOverlay)
 	}
-	volatileSystem := volatile.String()
+	// World state vs this turn's context (see worldstate.go). The stable
+	// overlays (tool catalog, connected accounts, bridge, CLI tools, compass,
+	// goals) are lifted out and sent ONCE per session as a message that stays
+	// in the history, then only as a diff when they change; Codex does the
+	// same with its environment context. What remains is genuinely per-turn
+	// (retrieval, current time, plan, lessons, reflexes) and is PINNED to the
+	// user message that opened the turn (session_context.go), so it sits at
+	// one byte offset for every call of the turn. The discuss overlay is
+	// pinned with it: it is a register for the turn, not for one call.
+	perTurnContext, worldSections, _ := splitWorldSections(volatile.String())
+	if ws := worldStateMessage(&s.world, worldSections); ws != "" {
+		s.insertWorldState(ws)
+	}
+	if overlay := discussOverlayFor(ctx, true); overlay != "" {
+		perTurnContext = joinBlocks(perTurnContext, overlay)
+	}
+	s.pinVolatile(perTurnContext)
+	defer s.clearVolatile()
+	infoLog.Printf("turn-context: session=%s pinned=%d chars world_sections=%d", s.ID, len(perTurnContext), len(worldSections))
+	// Bytes of files the model has already seen stop riding every call.
+	if n := s.degradeOldAttachments(); n > 0 {
+		infoLog.Printf("turn-context: session=%s degraded %d earlier attachment(s) to text", s.ID, n)
+	}
+	// TTL'd tools age once per TURN. Aging them before every LLM call (as
+	// this used to) changed the tool array mid-turn, which invalidates
+	// tools + system + history on every vendor.
+	s.Active.DecayTTL()
+	// What is left for the per-call system overlay: nothing, unless a
+	// wind-down notice cannot ride the newest tool result.
+	volatileSystem := ""
 
 	// Per-turn continuation state. A turn runs in "segments": each segment is
 	// up to maxToolIterations tool-loop iterations. When a segment exhausts its
@@ -1547,7 +1607,8 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			if segment+1 >= l.maxTurnSegments || segmentSuccesses == 0 {
 				break
 			}
-			compacted := l.compactTurnNow(s)
+			compacted := l.compactTurnNow(ctx, s, l.Provider(), stableSystem,
+				l.tools.DefinitionsFor(filterToolNames(s.Active.Names(), l.hiddenForSession(ctx, s.ID))))
 			segment++
 			segmentSuccesses = 0
 			iter = 0
@@ -1561,10 +1622,6 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				s.ID, segment+1, l.maxTurnSegments, toolCallCount, compacted)
 			// fall through to run the new segment's first iteration
 		}
-		// Age out TTL'd entries before the next LLM call - keeps an
-		// exploratory `load_tools` from squatting once the relevant work
-		// is done.
-		s.Active.DecayTTL()
 		select {
 		case <-ctx.Done():
 			emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
@@ -1613,24 +1670,23 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// applied to this call only, never persisted onto the session. It is
 		// volatile, so it lands AFTER the cached stable prefix.
 		sysVolatile := volatileSystem
-		// Conversation register: while the boss is talking it through, every
-		// iteration's prompt carries the <conversation> overlay (short, plain,
-		// end with a question). Volatile segment, so the cached prefix holds.
-		if overlay := discussOverlayFor(ctx, iter == 0); overlay != "" {
-			sysVolatile += "\n\n" + overlay
+		// Wind-down rides the newest tool result (new content anyway, so the
+		// cached prefix does not move); only when there is none does it fall
+		// back to the per-call system overlay.
+		if iter >= windDownAt && !s.appendWindDown() {
+			sysVolatile = joinBlocks(sysVolatile, turnWindDownBlock)
 		}
-		if iter >= windDownAt {
-			if sysVolatile != "" {
-				sysVolatile = sysVolatile + "\n\n" + turnWindDownBlock
-			} else {
-				sysVolatile = turnWindDownBlock
-			}
-		}
+		// Context economy before the call: clear old tool results, then
+		// compact, both gated on the measured window fill of the previous
+		// call. See context_maint.go.
+		l.maintainContext(ctx, s, provider, model, stableSystem, toolDefs)
 		sys := llm.SystemPrompt{Stable: stableSystem, Volatile: sysVolatile}
 		// Stamp the session id so OpenAI/OAuth forward it as prompt_cache_key,
-		// and the steal-C per-turn effort so each provider sizes reasoning inside
-		// its own gate (WithEffort is a no-op when perTurnEffort is "").
-		streamCtx := llm.WithEffort(llm.WithCacheKey(ctx, s.ID), perTurnEffort)
+		// the steal-C per-turn effort so each provider sizes reasoning inside
+		// its own gate (WithEffort is a no-op when perTurnEffort is ""), and
+		// the segment's tool budget as the cap on a self-executing brain's own
+		// loop (--max-turns).
+		streamCtx := llm.WithMaxTurns(llm.WithEffort(llm.WithCacheKey(ctx, s.ID), perTurnEffort), l.maxToolIterations)
 		go func() {
 			defer close(streamDone)
 			if cp, ok := provider.(llm.CachingProvider); ok {
@@ -1873,6 +1929,13 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		// context meter reads s.lastInputTokens to show current window
 		// fill - 0 on empty sessions, accurate after each turn.
 		s.RecordUsage(resp.Usage, provider.Model())
+		// One line per call so a cache break is visible where it happens
+		// (Claude Code: "alert on cache breaks and treat them as
+		// incidents"). uncached is what was re-written at full price.
+		if u := resp.Usage; u.PromptTokens() > 0 {
+			infoLog.Printf("llm-call: session=%s iter=%d model=%s prompt=%d cached=%d cache_write=%d uncached=%d out=%d tools=%d effort=%s",
+				s.ID, iter, provider.Model(), u.PromptTokens(), u.CacheRead, u.CacheWrite, u.Input, u.Output, len(toolDefs), perTurnEffort)
+		}
 		// Persist counters so a process restart doesn't reset the meter
 		// to 0% on a session with real history. Best-effort + detached
 		// context so the user-visible turn isn't gated on the DB write.

@@ -45,9 +45,16 @@ func (p *MemoryProvider) BuildSystemPrefix(ctx context.Context, sessionID, query
 	if err != nil || strings.TrimSpace(rep) == "" {
 		return "", nil
 	}
+	// Deduped by fact and capped (RepMaxChars): the raw representation
+	// repeated one cron instruction a hundred times with fresh timestamps,
+	// ~2.7K tokens a turn on every brain for one sentence.
+	rep = CompactRepresentation(rep)
+	if rep == "" {
+		return "", nil
+	}
 	var b strings.Builder
 	b.WriteString("About the boss (Honcho dialectic - peer representation):\n")
-	b.WriteString(strings.TrimSpace(rep))
+	b.WriteString(rep)
 	b.WriteString("\n")
 	return b.String(), nil
 }

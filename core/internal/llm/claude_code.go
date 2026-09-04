@@ -77,6 +77,11 @@ type BrainTurn struct {
 	Prompt string
 	Model  string
 	Effort string
+	// MaxTurns caps the harness's own tool loop for this turn (rendered as
+	// --max-turns). 0 = unset. Sized from the agent loop's per-segment tool
+	// budget so a cron sweep cannot run the plan down for an hour on one
+	// prompt.
+	MaxTurns int
 	// OnSession is called the moment Claude Code's own session id appears in
 	// the stream, which is its very first line. It fires BEFORE the turn
 	// finishes on purpose: a turn the boss interrupts, or one that dies with
@@ -203,6 +208,7 @@ func (c *ClaudeCode) StreamCached(ctx context.Context, model string, sys SystemP
 		Prompt:    prompt,
 		Model:     firstNonEmpty(model, c.model),
 		Effort:    string(EffortFromContext(ctx)),
+		MaxTurns:  MaxTurnsFromContext(ctx),
 		OnSession: func(id string) { c.RememberSession(ctx, sessionID, id, covered) },
 	}
 	// A cold start has to carry the system prompt; a resumed session already
@@ -210,9 +216,24 @@ func (c *ClaudeCode) StreamCached(ctx context.Context, model string, sys SystemP
 	// prefix that resuming exists to preserve.
 	if turn.Resume == "" {
 		turn.Prompt = coldStartPrompt(sys, prompt)
+		// A cold start on a conversation with history is the expensive case
+		// this file exists to avoid (the whole transcript re-rendered and
+		// re-written at full price), so it is said out loud every time. For
+		// weeks every turn was cold and nothing noticed: the init line that
+		// carries the session id was being clamped before it was parsed.
+		if prior := countConversation(messages); prior > 1 {
+			brainInfo.Printf("claude_max: COLD start for session %s: %d prior messages rendered into the prompt (no resume handle)", sessionID, prior)
+		}
 	}
 
 	resp, err := c.runner.Converse(ctx, turn, out)
+	if err == nil && turn.Resume != "" {
+		// The resumed session now covers this exchange too. Refreshed here,
+		// not only when the init line is seen: a handle whose `covered`
+		// stops advancing is refused two turns later by resume(), and every
+		// turn after that starts cold.
+		c.RememberSession(ctx, sessionID, turn.Resume, covered)
+	}
 	if err == nil || turn.Resume == "" {
 		return resp, err
 	}
@@ -432,34 +453,43 @@ func (c *ClaudeCode) buildPrompt(ctx context.Context, sessionID string, sys Syst
 		return "", fmt.Errorf("claude_max: nothing to say (no messages)")
 	}
 	if c.resume(ctx, sessionID, messages) != "" {
-		if last, ok := c.lastUserMessage(ctx, messages); ok {
-			// The new message, with THIS turn's volatile context in front of
-			// it: what RRF just retrieved, the current time, the account
-			// overlay. Claude Code is holding the conversation and the soul,
-			// but it cannot hold context that did not exist when the session
-			// started, and a brain that stops seeing freshly recalled memory
-			// after turn one is the amnesia this whole path exists to avoid.
+		if last, ok := c.trailingUserMessages(ctx, messages); ok {
+			// The new message(s): a world-state update when something
+			// changed since the session opened, then the boss's message with
+			// THIS turn's context pinned to it (Message.Volatile: what RRF
+			// just retrieved, the current time, the plan). Claude Code is
+			// holding the conversation and the soul, but it cannot hold
+			// context that did not exist when the session started, and a
+			// brain that stops seeing freshly recalled memory after turn one
+			// is the amnesia this whole path exists to avoid.
 			//
-			// This costs nothing in cache terms and is exactly what every
-			// other provider does: the cached prefix is what came before,
-			// and new content appended after it never invalidates that.
-			return withVolatile(sys, last), nil
+			// The context rides AFTER the message, as it does on every other
+			// brain, and only the per-turn part is sent: the stable overlays
+			// (tool catalog, accounts, bridge) were sent once as world state
+			// and live in the session. The old shape prepended the whole
+			// 64K-char volatile block to every message, and it stayed in
+			// Claude Code's transcript forever: 94% of one real session's
+			// user text was repeated context, which is what drove it to a
+			// 900K-token window.
+			return withPerCallVolatile(sys, last), nil
 		}
 		// No trailing user message means the loop is continuing after a tool
 		// result, which cannot happen on this provider (Claude Code runs its
 		// own tools). Fall through to the full render rather than send an
 		// empty prompt.
 	}
-	return c.renderTranscript(ctx, messages), nil
+	return withPerCallVolatile(sys, c.renderTranscript(ctx, messages)), nil
 }
 
-// withVolatile puts this turn's changing context in front of the message.
-func withVolatile(sys SystemPrompt, message string) string {
+// withPerCallVolatile appends the residual per-call overlay (wind-down,
+// voice) when the loop set one. Usually empty: the turn's context is pinned
+// on the message itself.
+func withPerCallVolatile(sys SystemPrompt, prompt string) string {
 	vol := strings.TrimSpace(sys.Volatile)
 	if vol == "" {
-		return message
+		return prompt
 	}
-	return vol + "\n\n---\n\n" + message
+	return prompt + "\n\n---\n\n" + vol
 }
 
 // coldStartPrompt puts the system prompt in front of the first turn. Claude
@@ -474,18 +504,38 @@ func coldStartPrompt(sys SystemPrompt, prompt string) string {
 	return rendered + "\n\n---\n\n" + prompt
 }
 
-// lastUserMessage returns the newest user turn's text.
+// lastUserMessage is the single-message form of trailingUserMessages, kept
+// for the attachment tests that exercise the resumed-turn render path.
 func (c *ClaudeCode) lastUserMessage(ctx context.Context, messages []Message) (string, bool) {
+	return c.trailingUserMessages(ctx, messages)
+}
+
+// trailingUserMessages returns the text of the user messages that arrived
+// since the brain last spoke: normally one (the boss's message), sometimes
+// two (a world-state update the loop appended ahead of it). They are joined
+// in order so the update is read before the request. false when the newest
+// message is not the boss's, which on this brain cannot happen mid-turn.
+func (c *ClaudeCode) trailingUserMessages(ctx context.Context, messages []Message) (string, bool) {
+	start := -1
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == RoleUser {
-			text := c.userContent(ctx, messages[i])
-			if text == "" {
-				return "", false
-			}
-			return text, true
+		if messages[i].Role != RoleUser {
+			break
+		}
+		start = i
+	}
+	if start < 0 {
+		return "", false
+	}
+	var parts []string
+	for _, m := range messages[start:] {
+		if text := c.userContent(ctx, m); text != "" {
+			parts = append(parts, text)
 		}
 	}
-	return "", false
+	if len(parts) == 0 {
+		return "", false
+	}
+	return strings.Join(parts, "\n\n"), true
 }
 
 // userContent renders one of the boss's messages: what he typed, plus whatever
@@ -510,9 +560,6 @@ func (c *ClaudeCode) lastUserMessage(ctx context.Context, messages []Message) (s
 // resumed session cannot quietly be the one that loses his files.
 func (c *ClaudeCode) userContent(ctx context.Context, m Message) string {
 	text := strings.TrimSpace(m.Content)
-	if len(m.Attachments) == 0 {
-		return text
-	}
 	var b strings.Builder
 	b.WriteString(text)
 	for _, a := range m.Attachments {
@@ -520,6 +567,14 @@ func (c *ClaudeCode) userContent(ctx context.Context, m Message) string {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(c.placed(ctx, a).TextBlock())
+	}
+	// The turn's pinned context trails the message it belongs to, the same
+	// shape every other brain renders (Message.Volatile).
+	if v := m.VolatileBlock(); v != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n---\n\n")
+		}
+		b.WriteString(v)
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -595,10 +650,12 @@ func (c *ClaudeCode) renderTranscript(ctx context.Context, messages []Message) s
 		if text == "" {
 			continue
 		}
-		switch m.Role {
-		case RoleUser:
+		switch {
+		case IsWorldState(m):
+			// Context, not his words: no speaker label.
+		case m.Role == RoleUser:
 			b.WriteString("Boss: ")
-		case RoleAssistant:
+		case m.Role == RoleAssistant:
 			b.WriteString("You: ")
 		default:
 			continue

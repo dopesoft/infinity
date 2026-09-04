@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -243,5 +244,124 @@ func TestBrainFallsBackWhenNothingStreamed(t *testing.T) {
 	}
 	if !sawText {
 		t.Error("nothing streamed and nothing was sent, so the boss would see a blank turn")
+	}
+}
+
+// brainInitLine builds an init line the size of the real one on the boss's
+// Mac: 470 tool names, 101 slash commands, 64 skills and 26 agents, so it
+// lands at roughly 24,600 chars like the real thing. The fields are written
+// in the order Claude Code 2.1.258 writes them (type, subtype, cwd,
+// session_id, tools, ...) - a map marshal would sort them and put the
+// markers the parser keys on behind the tool list, which is not the shape
+// on the wire.
+func brainInitLine(t *testing.T, sessionID string) string {
+	t.Helper()
+	names := func(prefix string, n, width int) string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("%q", fmt.Sprintf("%s%0*d", prefix, width, i))
+		}
+		return "[" + strings.Join(out, ",") + "]"
+	}
+	line := `{"type":"system","subtype":"init","cwd":"/tmp/inf-brain/workspace","session_id":"` + sessionID + `",` +
+		`"tools":` + names("mcp__infinity__tool_name_padding_", 470, 4) + `,` +
+		`"mcp_servers":[{"name":"infinity","status":"connected"}],"model":"claude-opus-5","permissionMode":"bypassPermissions",` +
+		`"slash_commands":` + names("command-name-padding-", 101, 3) + `,` +
+		`"apiKeySource":"none","claude_code_version":"2.1.258","output_style":"default",` +
+		`"agents":` + names("agent-name-padding-", 26, 3) + `,` +
+		`"skills":` + names("skill-name-padding-", 64, 3) + `,` +
+		`"uuid":"0b2c4d6e-8f01-4234-8567-89abcdef0123"}`
+	if !json.Valid([]byte(line)) {
+		t.Fatal("the fixture is not valid JSON")
+	}
+	if len(line) < 24_000 || len(line) > 26_000 {
+		t.Fatalf("the fixture must be the size of the real init line, got %d chars", len(line))
+	}
+	return line
+}
+
+// THE COLD-START BUG (2026-09-04). The init line is 24,616 chars on the Mac,
+// the poll clamps every line to 8,000, so it stopped being JSON, the session
+// id was never seen, and 54 messages opened 54 Claude sessions - each one
+// re-writing the whole prefix into cache. The parser has to find the id on
+// the line whole, on the line cut by the clamp, and on a byte-cut head read
+// sitting behind the SessionStart hook events - and must still refuse a
+// sub-agent's id off a non-init line.
+func TestParseClaudeInitSessionIDSurvivesTheClamp(t *testing.T) {
+	const want = "4fd24f47-0355-42a5-bf7d-765c0ae6cdaa"
+	line := brainInitLine(t, want)
+
+	// (a) whole
+	if got := parseClaudeInitSessionID(line); got != want {
+		t.Fatalf("whole line: got %q", got)
+	}
+	// (b) cut by the poll's per-line clamp
+	clamped := line[:brainLineMaxCols]
+	if json.Valid([]byte(clamped)) {
+		t.Fatal("the fixture must not survive the clamp as JSON, or this test proves nothing")
+	}
+	if got := parseClaudeInitSessionID(clamped); got != want {
+		t.Fatalf("clamped line: got %q", got)
+	}
+	// (c) a head read: hook events first, then the init line, cut at the
+	// head's byte budget mid-way through the following event.
+	var stream strings.Builder
+	for i := 0; i < 6; i++ {
+		fmt.Fprintf(&stream, `{"type":"system","subtype":"hook_started","hook_id":"%d","hook_name":"SessionStart:startup","session_id":"%s","uuid":"h%d"}`+"\n",
+			i, want, i)
+	}
+	stream.WriteString(line + "\n")
+	stream.WriteString(`{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"text","text":"` + strings.Repeat("y", 9000) + `"}]},"session_id":"` + want + `"}` + "\n")
+	head := stream.String()[:brainInitHeadBytes]
+	if got := parseClaudeInitSessionID(head); got != want {
+		t.Fatalf("head read: got %q", got)
+	}
+	// (d) a sub-agent's id on a non-init line is never the answer.
+	sub := `{"type":"assistant","message":{"content":[]},"session_id":"11111111-2222-4333-8444-555555555555","parent_tool_use_id":"toolu_1"}` + "\n" +
+		`{"type":"system","subtype":"hook_started","hook_name":"SubagentStart","session_id":"11111111-2222-4333-8444-555555555555"}`
+	if got := parseClaudeInitSessionID(sub); got != "" {
+		t.Fatalf("a non-init line yielded %q; that id is not resumable and breaks the next message", got)
+	}
+	// And a cut so early that the id itself is incomplete yields nothing,
+	// never a mangled id.
+	midID := strings.Index(line, want) + len(want)/2
+	if got := parseClaudeInitSessionID(line[:midID]); got != "" {
+		t.Fatalf("an incomplete id was accepted: %q", got)
+	}
+}
+
+// The head read is what carries the whole init line, and it is paid for
+// only until the id is known.
+func TestBrainReadSliceHeadIsPeeledOffTheStatus(t *testing.T) {
+	status, head := splitBrainHead("RUNNING\n" + brainHeadMarker + "\n{\"type\":\"system\",\"subtype\":\"init\"}\n")
+	if strings.TrimSpace(status) != "RUNNING" {
+		t.Fatalf("status = %q", status)
+	}
+	if !strings.Contains(head, `"subtype":"init"`) {
+		t.Fatalf("head = %q", head)
+	}
+	if strings.Contains(status, "DONE:") {
+		t.Fatal("the head must never be matched for DONE:")
+	}
+	status, head = splitBrainHead("DONE:0\n")
+	if status != "DONE:0\n" || head != "" {
+		t.Fatalf("a poll without a head read must come back unchanged: %q / %q", status, head)
+	}
+}
+
+// --max-turns rides the same conditional expansion as --resume: absent when
+// the turn sets no cap, present with the number when it does.
+func TestBrainLaunchScriptMaxTurnsIsConditional(t *testing.T) {
+	files := newBrainFiles("brain-test")
+	uncapped := brainLaunchScript(files, llm.BrainTurn{Prompt: "hi"}, brainLaunch{workspace: brainWorkspaceMac, coreURL: "https://c", mcpToken: "t"})
+	if !strings.Contains(uncapped, `export INF_MAX_TURNS=''`) {
+		t.Errorf("an uncapped turn should export an empty max-turns, got:\n%s", uncapped)
+	}
+	if !strings.Contains(uncapped, `${INF_MAX_TURNS:+--max-turns "$INF_MAX_TURNS"}`) {
+		t.Error("the launch does not expand --max-turns conditionally")
+	}
+	capped := brainLaunchScript(files, llm.BrainTurn{Prompt: "hi", MaxTurns: 12}, brainLaunch{workspace: brainWorkspaceMac, coreURL: "https://c", mcpToken: "t"})
+	if !strings.Contains(capped, `export INF_MAX_TURNS='12'`) {
+		t.Errorf("a capped turn lost its cap:\n%s", capped)
 	}
 }

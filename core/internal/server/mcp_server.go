@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dopesoft/infinity/core/internal/agent"
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/tools"
 	"github.com/google/uuid"
@@ -157,11 +158,19 @@ func (s *Server) mcpToolList() []map[string]any {
 			// the brain silently loses every tool.
 			schema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"name":        t.Name(),
 			"description": t.Description(),
 			"inputSchema": schema,
-		})
+		}
+		// Claude Code honours `_meta["anthropic/maxResultSizeChars"]` (see
+		// code.claude.com/docs/en/mcp): it is told up front how big a
+		// result can be, and the call below enforces the same number, so
+		// the two can never disagree.
+		if maxChars := agent.ToolResultMaxChars(); maxChars > 0 {
+			entry["_meta"] = map[string]any{"anthropic/maxResultSizeChars": maxChars}
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -201,8 +210,15 @@ func (s *Server) mcpToolCall(r *http.Request, req jsonRPCRequest) jsonRPCRespons
 			"content": []map[string]any{{"type": "text", "text": err.Error()}},
 		})
 	}
+	// The same trim the agent loop applies to a chat turn's tool results
+	// (agent.trimToolResult). A brain calling through MCP bypasses the loop,
+	// so without this a 200KB build log went into Claude Code's transcript
+	// whole and was re-read by every one of its own calls for the rest of
+	// the turn. The full output still reaches the UI and mem_observations
+	// through the PostToolUse hook that Execute fired; only the copy handed
+	// to the model is cut.
 	return rpcOK(req.ID, map[string]any{
-		"content": []map[string]any{{"type": "text", "text": result}},
+		"content": []map[string]any{{"type": "text", "text": agent.TrimToolResult(params.Name, result)}},
 	})
 }
 

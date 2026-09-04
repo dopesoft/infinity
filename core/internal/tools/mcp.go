@@ -400,7 +400,7 @@ func (m *MCPManager) connectOne(ctx context.Context, s MCPServerConfig, registry
 		// Use a double underscore as the namespace separator and sanitise
 		// each side so MCP servers with hyphenated/dotted names still work.
 		name := sanitiseToolName(s.Name) + "__" + sanitiseToolName(t.Name)
-		desc := t.Description
+		desc := trimToolDescription(t.Description)
 		schema := mapFromAny(t.InputSchema)
 		// Tools dispatch through the manager (by server name) rather than
 		// holding a raw session pointer, so Reconnect can swap sessions

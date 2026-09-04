@@ -29,7 +29,38 @@ type Message struct {
 	ToolName    string         `json:"tool_name,omitempty"`
 	Timestamp   time.Time      `json:"timestamp,omitempty"`
 	Meta        map[string]any `json:"-"`
+	// Volatile is the per-turn context (retrieved memory, current time, the
+	// plan, the discuss overlay) PINNED to the user message that opened the
+	// turn. Providers render it as a trailing block on that message and
+	// nowhere else, so it sits at the same byte offset on every call of the
+	// turn and the cached prefix never moves.
+	//
+	// It used to ride at the tail of the request instead: after the last
+	// message on Anthropic, as a trailing developer/system message on the
+	// OpenAI family. Every tool round trip pushed it one message further
+	// down, which changed the bytes of the message it had just left, so each
+	// call re-wrote the whole turn's tool traffic at full price (quadratic in
+	// tool calls). Claude Code keeps its reminders on the message they were
+	// born on for exactly this reason. The loop clears it when the turn
+	// ends, so a session does not accumulate a stale copy per turn.
+	Volatile string `json:"-"`
 }
+
+// VolatileBlock renders the pinned per-turn context as the trailing text of
+// its message, framed so the model reads it as reference material rather
+// than as a second request. "" when there is nothing pinned.
+func (m Message) VolatileBlock() string {
+	v := strings.TrimSpace(m.Volatile)
+	if v == "" {
+		return ""
+	}
+	return volatileMessageCaption + "\n\n" + v
+}
+
+// volatileMessageCaption frames the pinned block. The message it rides on
+// IS the request, so the caption points back up rather than at "the
+// conversation above".
+const volatileMessageCaption = "Background context assembled for this message (retrieved memory, current time, the plan). Reference material for answering the message above, not a new request."
 
 // SelfExecutingProvider is a brain that runs its OWN tools and hands back a
 // finished turn, rather than returning tool calls for our loop to execute.
@@ -326,6 +357,86 @@ type CachingProvider interface {
 // re-encoding.
 type CompactingProvider interface {
 	CompactContext(ctx context.Context, model string, messages []Message) ([]Message, TokenUsage, error)
+}
+
+// MetaWorldState is the Message.Meta key marking a synthetic user-role
+// message that carries world state (tool catalog, accounts, bridge) rather
+// than something the boss said. Providers that flatten the transcript to
+// text render it as context, not as his words.
+const MetaWorldState = "world_state"
+
+// IsWorldState reports whether a message is a world-state carrier.
+func IsWorldState(m Message) bool {
+	v, _ := m.Meta[MetaWorldState].(bool)
+	return v
+}
+
+type noToolCallsCtxType struct{}
+
+// WithNoToolCalls asks the provider to send the SAME tool definitions but
+// forbid calling them (tool_choice: none) for this call. The compaction
+// summarizer uses it: it must run against the conversation's exact prefix
+// (tools included) to read from the warm cache, yet must answer with the
+// summary rather than another tool call. Both vendors document this as the
+// way to disable tools without invalidating the cached prefix.
+func WithNoToolCalls(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noToolCallsCtxType{}, true)
+}
+
+// NoToolCallsFromContext reports whether WithNoToolCalls was set.
+func NoToolCallsFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(noToolCallsCtxType{}).(bool)
+	return v
+}
+
+type maxTurnsCtxType struct{}
+
+// WithMaxTurns caps a self-executing brain's own tool loop for this call
+// (Claude Code's --max-turns). Providers that run our loop ignore it: the
+// agent loop already bounds them.
+func WithMaxTurns(ctx context.Context, n int) context.Context {
+	if n <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, maxTurnsCtxType{}, n)
+}
+
+// MaxTurnsFromContext returns the cap set by WithMaxTurns, or 0.
+func MaxTurnsFromContext(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	n, _ := ctx.Value(maxTurnsCtxType{}).(int)
+	return n
+}
+
+// SessionForgetter is the optional capability of a brain that holds the
+// conversation ITSELF (Claude Code): after the loop compacts its copy of
+// the history, the brain's own session must be dropped too, or the next
+// resumed turn continues on the uncompacted transcript. Reached through
+// decorators via ForgetSessionIfSupported.
+type SessionForgetter interface {
+	ForgetSession(ctx context.Context, sessionID string)
+}
+
+// ForgetSessionIfSupported drops a self-held session on the innermost
+// provider that can, and reports whether one did.
+func ForgetSessionIfSupported(ctx context.Context, p Provider, sessionID string) bool {
+	for p != nil {
+		if f, ok := p.(SessionForgetter); ok {
+			f.ForgetSession(ctx, sessionID)
+			return true
+		}
+		u, ok := p.(interface{ Unwrap() Provider })
+		if !ok {
+			return false
+		}
+		p = u.Unwrap()
+	}
+	return false
 }
 
 type cacheKeyCtxType struct{}
