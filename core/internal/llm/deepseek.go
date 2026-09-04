@@ -44,12 +44,32 @@ func NewDeepSeek(apiKey, model string) *OpenAI {
 		name:      "deepseek",
 		normalize: normalizeDeepSeekModel,
 		// DeepSeek accepts the standard Chat Completions body. It has no
-		// prompt_cache_key (its caching is automatic and server-side) and
-		// no reasoning.effort field, so those stay off.
+		// prompt_cache_key (its caching is automatic and server-side), so
+		// that stays off.
 		openaiExtras: false,
-		baseURL:      DeepSeekBaseURL,
-		apiKey:       apiKey,
+		// Thinking mode (api-docs.deepseek.com/guides/thinking_mode): the
+		// reasoning streams as delta.reasoning_content, `reasoning_effort`
+		// takes low | high | max, and in a tool-calling round the reasoning
+		// goes back with the assistant message that made the call.
+		effortLevel:     deepSeekEffort,
+		replayReasoning: true,
+		baseURL:         DeepSeekBaseURL,
+		apiKey:          apiKey,
 	}
+}
+
+// deepSeekEffort maps the effort router's five levels onto DeepSeek's three.
+// "" (auto) omits the field so the model's default applies.
+func deepSeekEffort(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "none", "low":
+		return "low"
+	case "medium", "high":
+		return "high"
+	case "xhigh", "max":
+		return "max"
+	}
+	return ""
 }
 
 // normalizeDeepSeekModel passes through anything in the DeepSeek namespace

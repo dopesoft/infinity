@@ -15,7 +15,7 @@ import { useGitPendingCount } from "@/lib/canvas/useGitPending";
 import { fetchSessions } from "@/lib/api";
 import { useChat } from "@/hooks/useChat";
 import { type AgentState } from "@/components/StatusPill";
-import { useRealtime } from "@/lib/realtime/provider";
+import { useRealtimeDebounced } from "@/lib/realtime/provider";
 
 /**
  * /live - the unified workspace.
@@ -87,7 +87,7 @@ function LivePageInner() {
     return () => ac.abort();
   }, [chat.sessionId]);
 
-  useRealtime("mem_sessions", async () => {
+  useRealtimeDebounced("mem_sessions", async () => {
     if (!chat.sessionId) return;
     const rows = await fetchSessions();
     if (!rows) return;

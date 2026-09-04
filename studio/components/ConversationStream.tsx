@@ -12,6 +12,8 @@ import { ActivityStepFor } from "@/components/chat/ActivityStep";
 import { DashboardContextCard } from "@/components/DashboardContextCard";
 import { WorkingIndicator } from "@/components/WorkingIndicator";
 import { describeStep } from "@/lib/chat/activity";
+import { workingLabel, type LivenessState } from "@/lib/chat/liveness";
+import { useNow } from "@/lib/useNow";
 import type { ChatMessage } from "@/hooks/useChat";
 
 const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
@@ -22,10 +24,18 @@ const SKILL_TOOL_NAMES = new Set(["skill_propose", "skill_optimize"]);
 // reasons before the next step). It is suppressed when a live affordance is
 // already on screen: a pending thinking block (owns its own shimmer) or a
 // tool call parked awaiting the boss's approval (the agent is blocked, not
-// working). Otherwise the label reflects the current step.
+// working).
+//
+// What it SAYS comes from the server's own account of the turn when there is
+// one (liveness: the phase, the tool in flight, the turn's real clock, whether
+// we are reconnecting or stopping) - "Thinking · 2m 40s", "Running a command
+// · 12s", "Reconnecting…" - and falls back to the shape of the transcript only
+// against a core that does not report it.
 function workingState(
   messages: ChatMessage[],
   working: boolean,
+  liveness?: LivenessState,
+  now = 0,
 ): { show: boolean; label: string } {
   if (!working) return { show: false, label: "" };
   const last = messages[messages.length - 1];
@@ -35,10 +45,20 @@ function workingState(
     // Rendering this row too would put two "still working" signals, and two
     // spinners, on the same screen.
     if (isFoldable(last)) return { show: false, label: "" };
+    if (last.role === "tool" && last.pending && last.toolCall?.awaiting_approval) {
+      return { show: false, label: "" };
+    }
+  }
+  if (liveness && liveness.inFlight && liveness.phase) {
+    return {
+      show: true,
+      label: workingLabel(liveness, now || Date.now(), (tool) => describeStep({ id: "", name: tool }).verb),
+    };
+  }
+  if (last) {
     if (last.role === "tool" && last.pending) {
       // A decision card mid-flight (a plan being laid out, a team starting).
       // The label comes from the vocabulary, never from the tool id.
-      if (last.toolCall?.awaiting_approval) return { show: false, label: "" };
       return { show: true, label: describeStep(last.toolCall).verb };
     }
     if (last.role === "assistant" && last.pending) {
@@ -170,16 +190,22 @@ export function ConversationStream({
   // working is the turn-in-flight flag (chat.isStreaming). Drives the
   // persistent WorkingIndicator so the boss always has a "still going" cue.
   working = false,
+  // liveness is the server's account of the turn (chat.liveness): what it
+  // is doing and for how long. The working row's words come from here.
+  liveness,
 }: {
   messages: ChatMessage[];
   onQuickReply?: (text: string) => void;
   working?: boolean;
+  liveness?: LivenessState;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [showJump, setShowJump] = useState(false);
   const stickToBottomRef = useRef(true);
-  const work = workingState(messages, working);
+  // The row's clock ticks once a second while a turn is in flight.
+  const now = useNow(working && !!liveness?.inFlight);
+  const work = workingState(messages, working, liveness, now);
   // Which branch renders. Load-bearing for the observer effect below.
   const hasMessages = messages.length > 0;
 

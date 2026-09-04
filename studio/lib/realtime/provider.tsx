@@ -7,6 +7,7 @@ import type {
 } from "@supabase/supabase-js";
 import { useAuth } from "@/lib/auth/session";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { trailingDebounce } from "@/lib/realtime/debounce";
 
 type Event = "INSERT" | "UPDATE" | "DELETE" | "*";
 
@@ -210,4 +211,27 @@ export function useRealtime(
     window.addEventListener("infinity:pull-to-refresh", onPull);
     return () => window.removeEventListener("infinity:pull-to-refresh", onPull);
   }, []);
+}
+
+// useRealtimeDebounced is useRealtime for a table that changes in bursts
+// (mem_sessions moves on every assistant segment): a burst of events becomes
+// ONE call to the handler after `waitMs` of quiet. Same subscription path,
+// same pull-to-refresh (which stays immediate: the boss asked for it).
+export function useRealtimeDebounced(
+  table: string | string[],
+  handler: () => void,
+  waitMs = 500,
+  events: Event[] = ["*"],
+) {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
+  const debouncedRef = useRef<ReturnType<typeof trailingDebounce<[]>> | null>(null);
+  if (!debouncedRef.current) {
+    debouncedRef.current = trailingDebounce(() => handlerRef.current(), waitMs);
+  }
+  useEffect(() => {
+    const d = debouncedRef.current;
+    return () => d?.cancel();
+  }, []);
+  useRealtime(table, () => debouncedRef.current?.(), events);
 }

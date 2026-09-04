@@ -35,7 +35,7 @@ import {
 } from "@/lib/api";
 import { PageTabs, PageTabsList, PageTabsTrigger } from "@/components/ui/page-tabs";
 import { Bot } from "lucide-react";
-import { useRealtime } from "@/lib/realtime/provider";
+import { useRealtimeDebounced } from "@/lib/realtime/provider";
 import { useIsDesktop } from "@/lib/use-media-query";
 
 /**
@@ -220,7 +220,7 @@ export function SessionsDrawer({
     if (open) refresh();
   }, [open]);
 
-  useRealtime("mem_sessions", refresh);
+  useRealtimeDebounced("mem_sessions", refresh);
 
   // Reset transient state when the drawer closes - otherwise reopening
   // could land mid-confirm or with stale selections. Also clean up any

@@ -11,21 +11,55 @@
  * pattern (mobile sleep, NAT timeout, captive proxy) that silently breaks chat.
  */
 
+// Every frame the turn journal records carries these (see core's
+// turn_journal.go): seq is per-session monotonic across turns, turn_id is the
+// server-minted id of the turn, replay marks a frame re-sent in answer to an
+// `attach`. A client uses seq to tell a gap from a duplicate.
+export type WSSeq = { seq?: number; turn_id?: string; replay?: boolean };
+
+export type TurnPhase =
+  | "starting"
+  | "thinking"
+  | "streaming"
+  | "tool"
+  | "awaiting_approval"
+  | "steering"
+  | "stopping";
+
+// WSTurnStatus is the server's own answer to "is anything running here, and
+// what is it doing?". It is the payload of both `turn_status` (the answer to
+// an attach or an interrupt) and `heartbeat` (every few seconds while a turn
+// runs). The client renders it; it never infers any of it.
+export type WSTurnStatus = {
+  turn_id?: string;
+  in_flight: boolean;
+  seq: number;
+  oldest_seq: number;
+  started_at?: string;
+  phase?: string;
+  tool_name?: string;
+  elapsed_ms: number;
+  thinking_tokens?: number;
+  model?: string;
+  replayed: number;
+  stop_reason?: string;
+};
+
 export type WSEvent =
-  | { type: "delta"; session_id: string; text: string }
+  | ({ type: "delta"; session_id: string; text: string } & WSSeq)
   // thinking_tokens rides this frame from a brain that reports how MUCH it is
   // reasoning rather than what (Claude Code redacts the text: every delta
   // arrives empty). It is the only live evidence such a turn is alive.
-  | { type: "thinking"; session_id: string; text: string; thinking_tokens?: number }
-  | { type: "tool_call"; session_id: string; tool_call: WSToolEvent }
+  | ({ type: "thinking"; session_id: string; text: string; thinking_tokens?: number } & WSSeq)
+  | ({ type: "tool_call"; session_id: string; tool_call: WSToolEvent } & WSSeq)
   // tool_input_delta streams the model writing a tool call's arguments live —
   // e.g. the file content for an edit — BEFORE the tool runs. Studio opens the
   // file in the canvas and types it in as deltas arrive. id/name correlate to
   // the eventual tool_call. Model-agnostic: providers that can't stream tool
   // args never send these and the canvas falls back to the full tool_call.
-  | { type: "tool_input_delta"; session_id: string; tool_input_delta: WSToolInputDelta }
-  | { type: "tool_result"; session_id: string; tool_result: WSToolEvent }
-  | {
+  | ({ type: "tool_input_delta"; session_id: string; tool_input_delta: WSToolInputDelta } & WSSeq)
+  | ({ type: "tool_result"; session_id: string; tool_result: WSToolEvent } & WSSeq)
+  | ({
       type: "complete";
       session_id: string;
       usage?: { input?: number; output?: number };
@@ -33,8 +67,14 @@ export type WSEvent =
       // partial assistant text already streamed is preserved; the UI
       // should treat this as a clean turn end (no error state).
       stop_reason?: string;
-    }
-  | { type: "error"; session_id: string; message: string }
+    } & WSSeq)
+  | ({ type: "error"; session_id: string; message: string } & WSSeq)
+  // turn_status answers an `attach` (the client binding itself to a session
+  // and asking what it missed) and an `interrupt` that found nothing to
+  // stop. heartbeat is the same payload every few seconds while a turn runs:
+  // proof of life with the phase and the clock.
+  | ({ type: "turn_status"; session_id: string; turn_status: WSTurnStatus } & WSSeq)
+  | ({ type: "heartbeat"; session_id: string; turn_status: WSTurnStatus } & WSSeq)
   // voice_audio carries one synthesized speech clip (a sentence of Jarvis's
   // spoken reply) for a voice turn. data is base64 audio of mime_type; seq
   // orders clips within the turn. useVoice decodes + plays them; useChat
@@ -46,7 +86,7 @@ export type WSEvent =
   // the input that was injected into a running turn is visible everywhere.
   // The originating tab already rendered it optimistically and ignores
   // the echo via a duplicate-id check.
-  | { type: "steer_received"; session_id: string; text: string }
+  | ({ type: "steer_received"; session_id: string; text: string } & WSSeq)
   // intent carries the per-turn IntentFlow classification. Emitted async
   // after the WS handler kicks off classification - arrives mid-turn or
   // after `complete` depending on Haiku latency. The IntentStream panel
@@ -59,7 +99,7 @@ export type WSEvent =
   // effort is the per-turn reasoning level steal C chose (none|low|medium|high|
   // xhigh). The Composer chip renders it as "Auto · <level>" so the boss sees
   // how hard Jarvis is thinking. Per-turn, not persisted in the transcript.
-  | { type: "effort"; session_id: string; effort: WSEffort }
+  | ({ type: "effort"; session_id: string; effort: WSEffort } & WSSeq)
   // proactive_message is an unprompted assistant turn - broadcast by the
   // heartbeat when a finding crosses the surface threshold (surprise,
   // curiosity, security, or any pre-approved finding). useChat renders

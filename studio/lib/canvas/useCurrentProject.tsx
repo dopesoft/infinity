@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { fetchSessions, canvasProjectActivate, canvasProjectStatus, type SessionDTO, type ProjectDTO } from "@/lib/api";
-import { useRealtime } from "@/lib/realtime/provider";
+import { useRealtimeDebounced } from "@/lib/realtime/provider";
 import { useWebSocket } from "@/lib/ws/provider";
 
 const SESSION_KEY = "infinity:sessionId";
@@ -86,7 +86,7 @@ export function useCurrentProject(): CurrentProject {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  useRealtime("mem_sessions", () => {
+  useRealtimeDebounced("mem_sessions", () => {
     if (sessionId) loadSession(true);
   });
 

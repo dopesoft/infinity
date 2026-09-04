@@ -224,6 +224,10 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 		line:      1,
 		started:   time.Now(),
 		setupTook: time.Since(t0),
+		// The brain's own TodoWrite lands on the conversation's plan, the
+		// same dock a coding job's checklist reaches (syncOwnPlan).
+		plans:         r.plans,
+		parentSession: turn.SessionID,
 	}
 	defer p.cleanup()
 	return p.wait(ctx)
@@ -249,6 +253,19 @@ func newBrainFiles(jobID string) brainFiles {
 	}
 }
 
+// MCPToolTimeoutMillis is the per-tool-call timeout handed to Claude Code, in
+// the milliseconds its MCP settings take: the coding job's full lifetime.
+//
+// Claude Code's timer for an HTTP MCP server is max(60s, the server's
+// "timeout", MCP_TOOL_TIMEOUT). Unset, that is sixty seconds, and a tool call
+// it aborts is a CANCELLED request on Core's side - which code_agent read as
+// the Stop button and killed the job it was running for the brain, at 58-62s,
+// seven times in a row (2026-09-02). Both the per-server key and the env var
+// are set from this one number so the wall is never the first thing hit.
+func MCPToolTimeoutMillis() int64 {
+	return (codeAgentMaxWait + codeAgentJobGrace).Milliseconds()
+}
+
 // brainMCPConfig is the --mcp-config Claude Code reads: one HTTP MCP server,
 // Infinity itself, carrying a bearer minted for this turn.
 func brainMCPConfig(coreURL, token string) string {
@@ -258,6 +275,10 @@ func brainMCPConfig(coreURL, token string) string {
 				"type":    "http",
 				"url":     strings.TrimRight(coreURL, "/") + "/api/mcp/server",
 				"headers": map[string]string{"Authorization": "Bearer " + token},
+				// Per-server tool-call timeout (ms). Without it Claude aborts
+				// every call to Infinity at sixty seconds - see
+				// MCPToolTimeoutMillis.
+				"timeout": MCPToolTimeoutMillis(),
 			},
 		},
 	}
@@ -315,6 +336,9 @@ func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
 		// An API key in the shell would pre-empt the subscription and bill
 		// per token. True on both bridges.
 		"unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN",
+		// The default per-call MCP timeout is a coding job's lifetime, not
+		// sixty seconds. Belt to the mcp-config's braces.
+		fmt.Sprintf("export MCP_TOOL_TIMEOUT=%d", MCPToolTimeoutMillis()),
 	}
 	if l.cloud && l.subToken != "" {
 		// The cloud box has no browser and no sign-in of its own, so the
@@ -422,6 +446,13 @@ type brainPoll struct {
 	firstEvent time.Time
 
 	sessionSeen bool
+	// plans mirrors the brain's own TodoWrite list onto the conversation's
+	// plan; parentSession is that conversation; planPrint is the last list
+	// written so an unchanged one is not rewritten on every poll (see
+	// syncOwnPlan). Nil plans means no dock is wired and the path is inert.
+	plans         NestedPlanSink
+	parentSession string
+	planPrint     string
 	// toolNames maps a call id to its tool, so the result half of the pair
 	// can be reported under the name the boss saw on the call.
 	toolNames map[string]string
@@ -781,6 +812,12 @@ func (p *brainPoll) emit(fresh string) {
 		}
 	}
 
+	// The brain's checklist, onto the dock above the composer. A coding job's
+	// TodoWrite already lands there (syncNestedPlan); the chat brain's did
+	// not, so a conversation that laid out five steps showed the boss
+	// nothing to track them by.
+	p.syncOwnPlan(fresh)
+
 	// Both halves of every tool the brain ran itself, in order.
 	for _, n := range parseNestedEvents(fresh) {
 		if !n.result && p.alreadySent(n.callID) {
@@ -806,6 +843,60 @@ func (p *brainPoll) emit(fresh string) {
 			Input: n.input,
 		}})
 	}
+}
+
+// syncOwnPlan mirrors the newest TodoWrite in this slice of the brain's
+// stream onto the conversation's own plan.
+//
+// The brain IS the conversation, so this goes through the plan the
+// conversation owns (SyncOwn → plan.Store.SyncChecklist, the seam todo_write
+// uses), not the nested variant a coding job uses - a brain turn has no run
+// row to own a plan with. Settlement needs nothing here: the loop settles the
+// conversation's plan on every turn exit, brain or not.
+func (p *brainPoll) syncOwnPlan(slice string) {
+	if p == nil || p.plans == nil || strings.TrimSpace(slice) == "" {
+		return
+	}
+	// A real conversation, or nothing: an ephemeral sub-agent session has no
+	// dock to draw into (same guard as syncNestedPlan).
+	if !isClaudeSessionID(p.parentSession) || isSubAgentSession(p.parentSession) {
+		return
+	}
+	items, ok := newestNestedChecklist(slice)
+	if !ok {
+		return
+	}
+	fp := checklistFingerprint(items)
+	if fp == p.planPrint {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.plans.SyncOwn(ctx, p.parentSession, brainPlanTitle(p.turn.Prompt), items); err != nil {
+		// Never fatal: a reply must not fail because its checklist could not
+		// be mirrored. Logged, because a dock that quietly stopped tracking
+		// is the false-green shape we don't ship.
+		log.Printf("claude_max: mirror the brain's checklist: %v", err)
+		return
+	}
+	p.planPrint = fp
+}
+
+// brainPlanTitle names the mirrored plan after what the boss asked for: the
+// last line of the prompt that reads like his message, clipped.
+func brainPlanTitle(prompt string) string {
+	lines := strings.Split(strings.TrimSpace(prompt), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" || strings.HasPrefix(l, "<") || strings.HasPrefix(l, "#") {
+			continue
+		}
+		if r := []rune(l); len(r) > 60 {
+			return string(r[:60]) + "…"
+		}
+		return l
+	}
+	return "Claude's plan"
 }
 
 // markSent / alreadySent remember which calls went out from the LIVE path

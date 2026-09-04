@@ -349,7 +349,7 @@ function Pipeline({
   }
 
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden scroll-touch">
+    <div className="min-h-0 min-w-0 flex-1 overflow-auto scroll-touch">
       {/* Phone: pick a stage, then read down it. */}
       <div className="min-w-0 px-4 pb-10 pt-4 lg:hidden">
         <NativeSelect
@@ -373,9 +373,12 @@ function Pipeline({
         </div>
       </div>
 
-      {/* Laptop: the columns side by side, in pipeline order. */}
-      <div className="hidden min-w-0 overflow-x-auto px-5 pb-10 pt-3 scroll-touch lg:block">
-        <div className="flex items-start gap-6">
+      {/* Laptop: the columns side by side, in pipeline order. One scroll
+          container for BOTH axes: a nested `overflow-x-auto` here would also
+          become `overflow-y: auto` (CSS forces it) and, with overscroll
+          contained, swallow the trackpad's vertical scroll. */}
+      <div className="hidden min-w-0 px-5 pb-10 pt-3 lg:block">
+        <div className="flex w-max items-start gap-6">
           {stages.map((s) => (
             <section key={s} className="w-[16rem] shrink-0">
               <GroupLabel label={stageLabel(s)} count={counts[s] ?? 0} />

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,7 +58,13 @@ func (s *TurnStore) Open(ctx context.Context, sessionID, userText, model string)
 	`, sessionID); err != nil {
 		return "", err
 	}
-	id := uuid.NewString()
+	// The live-chat path mints the id up front (turnctx.WithTurnID) so the
+	// frames the browser sees and the row the transcript rebuilds from carry
+	// the SAME turn id. Everything else (crons, delegates) leaves it to us.
+	id := turnctx.TurnID(ctx)
+	if id == "" {
+		id = uuid.NewString()
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mem_turns (id, session_id, user_text, model, status)
 		VALUES ($1::uuid, $2::uuid, $3, $4, 'in_flight')

@@ -11,13 +11,17 @@ import (
 	"github.com/dopesoft/infinity/core/internal/tools"
 )
 
+func newRegistryServer() *Server {
+	return &Server{activeSessions: make(map[string]map[string]func(wsServerEvent))}
+}
+
 func TestSessionSenderPublishesToParentSession(t *testing.T) {
-	srv := &Server{activeSessions: make(map[string]func(wsServerEvent))}
+	srv := newRegistryServer()
 	tools.RegisterRunForSession("background:child", "run-1", "chat-parent")
 	defer tools.UnregisterRunForSession("background:child")
 
 	got := make(chan wsServerEvent, 1)
-	srv.registerSession("chat-parent", func(ev wsServerEvent) { got <- ev })
+	srv.registerSession("chat-parent", "c1", func(ev wsServerEvent) { got <- ev })
 
 	srv.sessionSender("background:child")(wsServerEvent{Type: "tool_call", SessionID: "background:child"})
 	select {
@@ -31,9 +35,9 @@ func TestSessionSenderPublishesToParentSession(t *testing.T) {
 }
 
 func TestBroadcastBackgroundDoneTargetsOriginatingSession(t *testing.T) {
-	srv := &Server{activeSessions: make(map[string]func(wsServerEvent))}
+	srv := newRegistryServer()
 	got := make(chan wsServerEvent, 1)
-	srv.registerSession("chat-parent", func(ev wsServerEvent) { got <- ev })
+	srv.registerSession("chat-parent", "c1", func(ev wsServerEvent) { got <- ev })
 
 	srv.BroadcastBackgroundDone("chat-parent", "Fix it", "All good", "")
 	ev := <-got
@@ -44,6 +48,57 @@ func TestBroadcastBackgroundDoneTargetsOriginatingSession(t *testing.T) {
 		t.Fatalf("finding kind = %q", ev.FindingKind)
 	}
 }
+
+// ── one session, many sockets (2026-09-04) ─────────────────────────────────
+//
+// The registry used to hold ONE send per session, last registration wins. Two
+// real costs: opening the same chat on the phone blinded the laptop, and the
+// "same-pointer guard" on unregister compared func values with %p, which is
+// the code pointer and identical for every closure, so a slow-closing old
+// socket evicted the fresh one that had just replaced it. Both pinned here.
+
+func TestSessionSender_FansOutToEveryTab(t *testing.T) {
+	srv := newRegistryServer()
+	laptop := make(chan wsServerEvent, 1)
+	phone := make(chan wsServerEvent, 1)
+	srv.registerSession("chat", "laptop", func(ev wsServerEvent) { laptop <- ev })
+	srv.registerSession("chat", "phone", func(ev wsServerEvent) { phone <- ev })
+
+	srv.sessionSender("chat")(wsServerEvent{Type: "delta", Text: "hi"})
+	for name, ch := range map[string]chan wsServerEvent{"laptop": laptop, "phone": phone} {
+		select {
+		case ev := <-ch:
+			if ev.Text != "hi" {
+				t.Fatalf("%s got %+v", name, ev)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never received the frame: a second tab must not blind the first", name)
+		}
+	}
+}
+
+func TestUnregister_ByConnIDNeverEvictsTheOtherTab(t *testing.T) {
+	srv := newRegistryServer()
+	fresh := make(chan wsServerEvent, 1)
+	srv.registerSession("chat", "old", func(ev wsServerEvent) { t.Fatal("the closed socket must not receive anything") })
+	srv.registerSession("chat", "fresh", func(ev wsServerEvent) { fresh <- ev })
+
+	// The old socket's deferred cleanup runs AFTER the fresh one registered -
+	// the reconnect race. Only its own binding may go.
+	srv.unregisterSession("chat", "old")
+	srv.sessionSender("chat")(wsServerEvent{Type: "complete"})
+	select {
+	case <-fresh:
+	case <-time.After(time.Second):
+		t.Fatal("the fresh socket lost its binding to a stale unregister - the reconnect race is not guarded")
+	}
+	// And the last binding going removes the session entirely.
+	srv.unregisterSession("chat", "fresh")
+	if len(srv.sessionSenders("chat")) != 0 {
+		t.Fatal("an unbound session must have no senders left")
+	}
+}
+
 // ── classifier recent context (2026-08-28) ─────────────────────────────────
 //
 // Both classifiers were called with a hard-coded empty recentContext, while

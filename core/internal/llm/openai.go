@@ -31,9 +31,19 @@ type OpenAI struct {
 	// configured default rather than shipping a foreign id upstream.
 	normalize func(string) string
 	// openaiExtras gates request fields only OpenAI itself accepts
-	// (prompt_cache_key, reasoning.effort). A compatible vendor that has
-	// never seen them gets a clean request instead of an unexplained 400.
+	// (prompt_cache_key). A compatible vendor that has never seen them gets
+	// a clean request instead of an unexplained 400.
 	openaiExtras bool
+	// effortLevel maps the effort router's level (none|low|medium|high|xhigh)
+	// onto what THIS vendor's reasoning_effort accepts, or "" to omit the
+	// field. nil means the vendor has no such field. OpenAI takes the levels
+	// as they are; DeepSeek takes low|high|max.
+	effortLevel func(string) string
+	// replayReasoning: this vendor wants the model's own reasoning text sent
+	// back on assistant messages in a tool-calling round (DeepSeek's
+	// documented contract for thinking mode). Read off Message.Meta, where
+	// the loop keeps what the stream produced.
+	replayReasoning bool
 	// nativeAttachments gates the OpenAI-native image_url / file content
 	// parts. Only OpenAI itself is known to accept them: DeepSeek's Chat
 	// Completions schema wants file_id/file_data directly on the content
@@ -63,9 +73,34 @@ func NewOpenAI(apiKey, model string) *OpenAI {
 		name:              "openai",
 		normalize:         normalizeOpenAIModel,
 		openaiExtras:      true,
+		effortLevel:       func(l string) string { return l },
 		nativeAttachments: true,
 		apiKey:            apiKey,
 	}
+}
+
+// reasoningDelta reads the vendor-extension reasoning text off a streamed
+// chunk. DeepSeek streams its chain of thought as `delta.reasoning_content`
+// (api-docs.deepseek.com, thinking mode); other compatibles use `reasoning`.
+// The SDK has no typed slot for either, so they land in JSON.ExtraFields.
+//
+// This was simply never read (2026-09-04): a DeepSeek turn that reasoned for
+// two and a half minutes produced NO frame for the whole of it, the browser's
+// watchdog declared the agent dead, and the boss was shown an error over a
+// turn that was fine. Now the reasoning streams into the Thinking row the way
+// Anthropic's does.
+func reasoningDelta(d openai.ChatCompletionChunkChoiceDelta) string {
+	for _, key := range []string{"reasoning_content", "reasoning"} {
+		f, ok := d.JSON.ExtraFields[key]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal([]byte(f.Raw()), &s); err == nil && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (o *OpenAI) Name() string  { return o.name }
@@ -139,6 +174,13 @@ func (o *OpenAI) StreamCached(
 					},
 				})
 			}
+			if o.replayReasoning && len(tools) > 0 {
+				// DeepSeek's thinking-mode contract: in a tool-calling round
+				// the reasoning that led to each call goes back with it.
+				if rc, _ := m.Meta[MetaReasoningContent].(string); rc != "" {
+					am.SetExtraFields(map[string]any{"reasoning_content": rc})
+				}
+			}
 			apiMessages = append(apiMessages, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
 		case RoleTool:
 			apiMessages = append(apiMessages, openai.ToolMessage(m.Content, m.ToolCallID))
@@ -188,12 +230,12 @@ func (o *OpenAI) StreamCached(
 	// steal C: per-turn reasoning effort (ctx hint > env fallback > omit). Only
 	// on reasoning-capable models; "" omits the field (model default), so an
 	// un-escalated turn is unchanged.
-	if o.openaiExtras && modelSupportsReasoning(effectiveModel) {
+	if o.effortLevel != nil && modelSupportsReasoning(effectiveModel) {
 		lvl := string(EffortFromContext(ctx))
 		if lvl == "" {
 			lvl = strings.TrimSpace(os.Getenv("INFINITY_OPENAI_REASONING_EFFORT"))
 		}
-		if lvl != "" {
+		if lvl = o.effortLevel(lvl); lvl != "" {
 			params.ReasoningEffort = shared.ReasoningEffort(lvl)
 		}
 	}
@@ -213,11 +255,16 @@ func (o *OpenAI) StreamCached(
 	// can open the file in the canvas and type it in live.
 	type toolDeltaMeta struct{ id, name string }
 	toolDeltas := map[int64]toolDeltaMeta{}
+	var reasoning strings.Builder
 
 	for stream.Next() {
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
 		for _, choice := range chunk.Choices {
+			if r := reasoningDelta(choice.Delta); r != "" {
+				reasoning.WriteString(r)
+				emit(out, StreamEvent{Kind: StreamThinking, ThinkingDelta: r})
+			}
 			if choice.Delta.Content != "" {
 				emit(out, StreamEvent{Kind: StreamText, TextDelta: choice.Delta.Content})
 			}
@@ -273,6 +320,11 @@ func (o *OpenAI) StreamCached(
 		}
 		resp.Usage = TokenUsage{Input: uncached, Output: int(acc.Usage.CompletionTokens), CacheRead: cached}
 		resp.StopReason = string(acc.Choices[0].FinishReason)
+	}
+	if reasoning.Len() > 0 {
+		// Kept on the response so the loop can hand it back on the next
+		// request of a tool-calling round (replayReasoning).
+		resp.Meta = map[string]any{MetaReasoningContent: reasoning.String()}
 	}
 
 	emit(out, StreamEvent{Kind: StreamComplete, StopReason: resp.StopReason, Usage: &resp.Usage})

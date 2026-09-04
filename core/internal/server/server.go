@@ -55,6 +55,9 @@ type turnState struct {
 	// squelch server-side synthesis for the rest of the interrupted reply.
 	// Set once in startTurn before the state is registered; read-only after.
 	speak *speakPump
+	// journal is the session's turn journal for this turn (turn_journal.go),
+	// so an interrupt can mark the phase `stopping` before the loop confirms.
+	journal *turnJournal
 }
 
 type Config struct {
@@ -263,13 +266,33 @@ type Server struct {
 	// that's exactly when we want to push unprompted assistant messages
 	// from the heartbeat. Map value is the send func bound to the WS
 	// writer goroutine; calling it pushes a frame to that browser tab.
-	activeMu       sync.Mutex
-	activeSessions map[string]func(wsServerEvent)
+	activeMu sync.Mutex
+	// activeSessions is sessionID → connID → send. Every socket bound to a
+	// session receives its frames (two tabs, a phone and a laptop), and a
+	// socket is unbound by its own id, never by comparing functions.
+	activeSessions map[string]map[string]func(wsServerEvent)
 	// broadcastConns is every OPEN WS connection, registered on connect and
 	// dropped on close, regardless of whether that tab ever chats. It is what
 	// broadcastAll fans out over: the live call transcript has to reach the
 	// dashboard, which is the one tab that never sends a message.
 	broadcastConns map[string]func(wsServerEvent)
+
+	// journals is the per-session turn journal (turn_journal.go): the
+	// frames of the current turn with their seq, the turn's phase, and the
+	// truth about whether anything is in flight. Read on attach, written by
+	// the turn's sender.
+	journalsMu sync.Mutex
+	journals   map[string]*turnJournal
+
+	// mcpExecs are the tool executions the Claude Code brain is running
+	// through the MCP endpoint, keyed by session so a Stop can cancel them
+	// (mcp_server.go).
+	mcpMu    sync.Mutex
+	mcpExecs map[string]map[string]context.CancelFunc
+
+	// runLoop, when set, replaces loop.Run as the thing a turn drives. Only
+	// tests set it (ws_e2e_test.go); production always runs the agent loop.
+	runLoop func(ctx context.Context, sessionID, content, model string, steer <-chan agent.Steer, events chan<- agent.RunEvent) error
 }
 
 func New(cfg Config) *Server {
@@ -277,20 +300,20 @@ func New(cfg Config) *Server {
 		cfg.Addr = ":8080"
 	}
 	s := &Server{
-		cfg:            cfg,
-		loop:           cfg.Loop,
-		mcp:            cfg.MCP,
-		pool:           cfg.Pool,
-		attachments:    cfg.Attachments,
-		store:          cfg.Store,
-		searcher:       cfg.Searcher,
-		skillsAPI:      cfg.SkillsAPI,
-		trust:          cfg.Trust,
-		vault:          cfg.Vault,
-		namer:          cfg.Namer,
-		auth:           cfg.Auth,
-		settings:       settings.New(cfg.Pool),
-		llmReg:         cfg.LLMRegistry,
+		cfg:         cfg,
+		loop:        cfg.Loop,
+		mcp:         cfg.MCP,
+		pool:        cfg.Pool,
+		attachments: cfg.Attachments,
+		store:       cfg.Store,
+		searcher:    cfg.Searcher,
+		skillsAPI:   cfg.SkillsAPI,
+		trust:       cfg.Trust,
+		vault:       cfg.Vault,
+		namer:       cfg.Namer,
+		auth:        cfg.Auth,
+		settings:    settings.New(cfg.Pool),
+		llmReg:      cfg.LLMRegistry,
 		// Nil-safe below: a private store means the endpoint still authenticates,
 		// it just never accepts a token because nothing can mint one.
 		mcpTokens:      cfg.MCPTokens,
@@ -308,8 +331,10 @@ func New(cfg Config) *Server {
 		wal:            cfg.WAL,
 		buffer:         cfg.WorkingBuffer,
 		heartbeat:      cfg.Heartbeat,
-		activeSessions: make(map[string]func(wsServerEvent)),
+		activeSessions: make(map[string]map[string]func(wsServerEvent)),
 		broadcastConns: make(map[string]func(wsServerEvent)),
+		journals:       make(map[string]*turnJournal),
+		mcpExecs:       make(map[string]map[string]context.CancelFunc),
 		bridgeRouter:   cfg.BridgeRouter,
 		bridgePrefs:    cfg.BridgePrefs,
 		turnStore:      cfg.Turns,

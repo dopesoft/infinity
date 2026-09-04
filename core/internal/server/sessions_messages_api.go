@@ -41,8 +41,21 @@ type sessionAttachmentDTO struct {
 // from mem_observations (the canonical capture log) so a browser refresh
 // never loses what the user can see - even across core restarts.
 type sessionMessageDTO struct {
-	Role        string                 `json:"role"`
-	Text        string                 `json:"text"`
+	// ID is the row's own identity: the mem_observations id, or "err:<turn>"
+	// for a turn-level error. Stable across fetches, so the browser can tell
+	// a row it already has from a new one without comparing text.
+	ID   string `json:"id,omitempty"`
+	Role string `json:"role"`
+	Text string `json:"text"`
+	// TurnID + MessageIndex identify an assistant row the way its live
+	// frames did: the turn it belongs to and which of the turn's messages it
+	// is. A bubble streamed as (turn_id, msg_index) and this row are the same
+	// thing, and the browser merges them by that key.
+	TurnID       string `json:"turn_id,omitempty"`
+	MessageIndex *int   `json:"message_index,omitempty"`
+	// ClientID is the browser's own id for a user message, handed back so the
+	// optimistic bubble is matched by id.
+	ClientID    string                 `json:"client_id,omitempty"`
 	CreatedAt   string                 `json:"created_at"`
 	Attachments []sessionAttachmentDTO `json:"attachments,omitempty"`
 	// Steered marks a user message that was injected mid-turn rather than
@@ -85,6 +98,11 @@ type sessionMessageDTO struct {
 	// and printed nothing" apart, and rendered all three as running.
 	ToolRunning     bool `json:"tool_running,omitempty"`
 	ToolInterrupted bool `json:"tool_interrupted,omitempty"`
+	// ToolAwaitingApproval: the running call is parked on a Trust contract,
+	// so the rebuilt card offers Approve / Deny. ToolContractID is what the
+	// buttons decide on.
+	ToolAwaitingApproval bool   `json:"tool_awaiting_approval,omitempty"`
+	ToolContractID       string `json:"tool_contract_id,omitempty"`
 }
 
 func attachmentsFromPayload(payload string) []sessionAttachmentDTO {
@@ -164,8 +182,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	//      Without this the error only lived in transient WS state and
 	//      vanished on refresh, so he couldn't ask Jarvis to fix it later.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hook_name, raw_text, payload, created_at, turn_live FROM (
-			SELECT o.hook_name,
+		SELECT id, turn_id, hook_name, raw_text, payload, created_at, turn_live FROM (
+			SELECT o.id::text                       AS id,
+			       COALESCE(o.turn_id::text, '')    AS turn_id,
+			       o.hook_name,
 			       COALESCE(o.raw_text, '')     AS raw_text,
 			       COALESCE(o.payload::text, '') AS payload,
 			       o.created_at,
@@ -177,7 +197,9 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			WHERE o.session_id = $1
 			  AND o.hook_name IN (`+renderableHooksSQL+`)
 			UNION ALL
-			SELECT 'TaskErrored'                       AS hook_name,
+			SELECT 'err:' || id::text                  AS id,
+			       id::text                            AS turn_id,
+			       'TaskErrored'                       AS hook_name,
 			       COALESCE(error, '')                 AS raw_text,
 			       ''                                  AS payload,
 			       COALESCE(ended_at, started_at)      AS created_at,
@@ -210,10 +232,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	// boss gets two rows for one command and the running one never settles.
 	toolRowAt := map[string]int{}
 	for rows.Next() {
-		var hook, text, payload string
+		var rowID, turnID, hook, text, payload string
 		var createdAt time.Time
 		var turnLive bool
-		if err := rows.Scan(&hook, &text, &payload, &createdAt, &turnLive); err != nil {
+		if err := rows.Scan(&rowID, &turnID, &hook, &text, &payload, &createdAt, &turnLive); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -238,12 +260,27 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				IsError bool `json:"is_error"`
 				// Running marks the row the loop writes when a call STARTS.
 				Running bool `json:"running"`
+				// AwaitingApproval / ContractID ride the running row when the
+				// gate parked the call, so a reload mid-approval rebuilds the
+				// Approve / Deny card instead of a spinner.
+				AwaitingApproval bool   `json:"awaiting_approval"`
+				ContractID       string `json:"contract_id"`
 			}
 			_ = json.Unmarshal([]byte(payload), &p)
 			if strings.TrimSpace(p.ToolCallID) == "" {
 				continue
 			}
+			if at, seen := toolRowAt[p.ToolCallID]; seen && p.Running {
+				// Hooks fire asynchronously (one goroutine each), so a call's
+				// `running` row can land in the table AFTER its result row. A
+				// late start must never un-finish a card that already has its
+				// result; the first row keeps its slot and the start is noise.
+				_ = at
+				continue
+			}
 			dto := sessionMessageDTO{
+				ID:          rowID,
+				TurnID:      turnID,
 				Role:        "tool",
 				CreatedAt:   createdAt.UTC().Format(time.RFC3339),
 				ToolCallID:  p.ToolCallID,
@@ -253,6 +290,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 				ToolIsError: hook == "PostToolUseFailure" || p.IsError,
 			}
 			dto.ToolRunning, dto.ToolInterrupted = toolRowState(p.Running, turnLive)
+			if dto.ToolRunning && p.AwaitingApproval {
+				dto.ToolAwaitingApproval = true
+				dto.ToolContractID = p.ContractID
+			}
 			if at, seen := toolRowAt[p.ToolCallID]; seen {
 				// Keep the ORIGINAL timestamp: the card belongs where the
 				// call was made, between the words either side of it, not
@@ -274,6 +315,8 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		// Studio renders it as the red error card via Kind="error".
 		if hook == "TaskErrored" {
 			out = append(out, sessionMessageDTO{
+				ID:        rowID,
+				TurnID:    turnID,
 				Role:      "assistant",
 				Kind:      "error",
 				Text:      text,
@@ -286,17 +329,24 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		// distinct "from dashboard" card - so it carries a Kind + the
 		// originating dashboard item kind parsed out of the seed payload.
 		msg := sessionMessageDTO{
+			ID:          rowID,
+			TurnID:      turnID,
 			Role:        "assistant",
 			Text:        text,
 			CreatedAt:   createdAt.UTC().Format(time.RFC3339),
 			Attachments: attachmentsFromPayload(payload),
 		}
-		if hook == "AssistantMessage" {
+		if hook == "AssistantMessage" || hook == "TaskCompleted" {
+			// message_index is which of the turn's messages this is; the live
+			// deltas carried the same number. Absent on rows written before
+			// the loop numbered them, and then the browser has only the id.
 			var p struct {
-				Interim bool `json:"interim"`
+				Interim      bool `json:"interim"`
+				MessageIndex *int `json:"message_index"`
 			}
 			_ = json.Unmarshal([]byte(payload), &p)
-			msg.Interim = p.Interim
+			msg.Interim = hook == "AssistantMessage" && p.Interim
+			msg.MessageIndex = p.MessageIndex
 		}
 		switch hook {
 		case "UserPromptSubmit":
@@ -304,11 +354,14 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 			// Extract the steered flag so Studio can render the "↳ steered"
 			// affordance on reload. The payload is {"steered":true} when the
 			// message arrived via the steer channel; absent for normal turns.
+			// client_id is the browser's own id for the message.
 			var p struct {
-				Steered bool `json:"steered"`
+				Steered  bool   `json:"steered"`
+				ClientID string `json:"client_id"`
 			}
 			_ = json.Unmarshal([]byte(payload), &p)
 			msg.Steered = p.Steered
+			msg.ClientID = p.ClientID
 		case "DashboardSeed":
 			msg.Role = "user"
 			msg.Kind = "dashboard_seed"

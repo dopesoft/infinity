@@ -168,7 +168,16 @@ type Response struct {
 	ToolCalls  []ToolCall `json:"tool_calls"`
 	Usage      TokenUsage `json:"usage"`
 	StopReason string     `json:"stop_reason"`
+	// Meta is provider-private carry for the assistant message the loop
+	// appends from this response (Message.Meta): never persisted, never
+	// rendered. DeepSeek uses it to get its own reasoning back on the next
+	// request of a tool-calling round (MetaReasoningContent).
+	Meta map[string]any `json:"-"`
 }
+
+// MetaReasoningContent is the Message.Meta / Response.Meta key carrying a
+// reasoner's chain of thought for replay to the vendor that wants it back.
+const MetaReasoningContent = "reasoning_content"
 
 type StreamEvent struct {
 	Kind          StreamEventKind `json:"kind"`

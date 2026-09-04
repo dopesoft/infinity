@@ -9,6 +9,7 @@ import (
 
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/google/uuid"
 )
 
 // Core as an MCP SERVER.
@@ -185,7 +186,7 @@ func (s *Server) mcpToolCall(r *http.Request, req jsonRPCRequest) jsonRPCRespons
 	// Execute is the SAME entry point the agent loop uses, so the Trust gate,
 	// the loop gate and every capture hook fire here exactly as they do in
 	// chat. There is deliberately no second execution path.
-	result, err := s.loop.Tools().Execute(r.Context(), llm.ToolCall{
+	result, err := s.executeMCPTool(r.Context(), s.loop.Tools(), llm.ToolCall{
 		Name:  params.Name,
 		Input: params.Arguments,
 	})
@@ -203,6 +204,134 @@ func (s *Server) mcpToolCall(r *http.Request, req jsonRPCRequest) jsonRPCRespons
 	return rpcOK(req.ID, map[string]any{
 		"content": []map[string]any{{"type": "text", "text": result}},
 	})
+}
+
+// mcpToolCeiling is the server-side lifetime of one tool execution started
+// over MCP, and mcpSoftBudget is how long a request is held open before a
+// tool that can outlive its caller is asked to return its interim receipt.
+//
+// THE 60-SECOND KILL (2026-09-01/02). Claude Code's per-request timer for an
+// HTTP MCP server is max(60s, the server's "timeout", MCP_TIMEOUT). Nothing
+// set either, so every tool the Claude Max brain called through here was
+// aborted at sixty seconds. The abort CANCELLED r.Context() - not a deadline,
+// a cancel - and code_agent treats a cancel of its inline window as the Stop
+// button (KillOnCancel), so seven coding jobs in a row were killed at exactly
+// 58-62s, and the continuation poller then woke Jarvis every minute about the
+// jobs the timeout itself had killed.
+//
+// Two things fix it, and both live here. The tool runs on a context that the
+// request cannot cancel (the request going away is a DETACH: keep working,
+// report back through the run row); and the launch script hands Claude Code
+// the same ceiling as its per-server timeout (tools.MCPToolTimeoutMillis), so
+// the request is normally never aborted at all. The soft budget sits just
+// under that ceiling as the last resort before the wall: a detachable tool is
+// told to hand back its "still working" receipt while Claude is still
+// listening.
+var (
+	mcpToolCeiling = tools.CodeAgentMaxWait + tools.CodeAgentJobGrace
+	mcpSoftBudget  = mcpToolCeiling - 10*time.Second
+)
+
+// executeMCPTool runs one tool for the brain with detach-not-kill semantics.
+//
+// Stop still means stop: the execution is registered under its session, and
+// interruptTurn cancels it (cancelMCPExecs) - that is the ONE path that kills
+// a brain-launched coding job, and it is the boss's own hand on the button.
+func (s *Server) executeMCPTool(reqCtx context.Context, reg *tools.Registry, call llm.ToolCall) (string, error) {
+	sessionID := tools.SessionIDFromContext(reqCtx)
+	// Every value on the request context (the session id, the auth
+	// identity) carries across; only its cancellation is dropped.
+	execCtx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), mcpToolCeiling)
+	defer cancel()
+	execCtx, detach := tools.WithDetachSignal(execCtx)
+	execID := s.trackMCPExec(sessionID, cancel)
+	defer s.untrackMCPExec(sessionID, execID)
+
+	type res struct {
+		out string
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		out, err := reg.Execute(execCtx, call)
+		done <- res{out, err}
+	}()
+	soft := time.NewTimer(mcpSoftBudget)
+	defer soft.Stop()
+	for {
+		select {
+		case r := <-done:
+			return r.out, r.err
+		case <-reqCtx.Done():
+			// The caller went away (its timer, its process, its socket). That
+			// is not an order to stop working. A detachable tool returns its
+			// receipt and keeps going; any other tool simply finishes, and
+			// its result is written to a socket nobody reads - harmless.
+			detach()
+			r := <-done
+			return r.out, r.err
+		case <-soft.C:
+			// About to hit the caller's wall. Hand back the interim receipt
+			// now, while there is still someone to read it.
+			if reg.DetachesOnSteer(call.Name) {
+				detach()
+			}
+		}
+	}
+}
+
+// trackMCPExec registers a running MCP execution for its session so a Stop
+// can reach it. Returns the key to untrack with.
+func (s *Server) trackMCPExec(sessionID string, cancel context.CancelFunc) string {
+	if s == nil || sessionID == "" || cancel == nil {
+		return ""
+	}
+	id := uuid.NewString()
+	s.mcpMu.Lock()
+	if s.mcpExecs == nil {
+		s.mcpExecs = make(map[string]map[string]context.CancelFunc)
+	}
+	execs := s.mcpExecs[sessionID]
+	if execs == nil {
+		execs = make(map[string]context.CancelFunc)
+		s.mcpExecs[sessionID] = execs
+	}
+	execs[id] = cancel
+	s.mcpMu.Unlock()
+	return id
+}
+
+func (s *Server) untrackMCPExec(sessionID, id string) {
+	if s == nil || sessionID == "" || id == "" {
+		return
+	}
+	s.mcpMu.Lock()
+	if execs, ok := s.mcpExecs[sessionID]; ok {
+		delete(execs, id)
+		if len(execs) == 0 {
+			delete(s.mcpExecs, sessionID)
+		}
+	}
+	s.mcpMu.Unlock()
+}
+
+// cancelMCPExecs cancels every MCP execution running for a session. Called by
+// interruptTurn: the boss pressed Stop, and stop means stop.
+func (s *Server) cancelMCPExecs(sessionID string) int {
+	if s == nil || sessionID == "" {
+		return 0
+	}
+	s.mcpMu.Lock()
+	execs := s.mcpExecs[sessionID]
+	cancels := make([]context.CancelFunc, 0, len(execs))
+	for _, c := range execs {
+		cancels = append(cancels, c)
+	}
+	s.mcpMu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+	return len(cancels)
 }
 
 // bearerToken pulls the credential off the Authorization header.

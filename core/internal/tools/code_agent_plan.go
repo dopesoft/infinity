@@ -64,6 +64,12 @@ type NestedPlanSink interface {
 	// flight to failed (plan pauses, surfaces under "Awaiting you"); otherwise
 	// every unfinished step is driven done. A no-op when the run owns no plan.
 	Settle(ctx context.Context, runID string, failed bool, summary string) error
+	// SyncOwn mirrors a checklist the CONVERSATION itself laid out - the chat
+	// brain's own TodoWrite - onto that conversation's plan (owner NULL), the
+	// same write todo_write makes. Distinct from Sync because a brain turn has
+	// no run row to own a plan with, and the conversation's plan is settled
+	// by the loop on turn exit rather than by a job's verdict.
+	SyncOwn(ctx context.Context, sessionID, title string, items []plan.ChecklistItem) error
 }
 
 // AttachPlanSink installs the nested-checklist mirror.

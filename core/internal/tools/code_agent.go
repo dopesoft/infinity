@@ -122,6 +122,12 @@ const (
 	// context gets, so the final read of the transcript is never cut off by
 	// the same clock that ended the polling.
 	codeAgentJobGrace = 2 * time.Minute
+	// CodeAgentMaxWait / CodeAgentJobGrace are the same two numbers, exported
+	// for the MCP endpoint: a tool the Claude Code brain starts through it
+	// gets exactly the lifetime a coding job gets, and the brain's own MCP
+	// timeout is set from them so its timer never fires first.
+	CodeAgentMaxWait  = codeAgentMaxWait
+	CodeAgentJobGrace = codeAgentJobGrace
 	// claudeTailBytes is how much of Claude's stream-json we read on each
 	// poll to name its current activity; claudeResultTailBytes is how much we
 	// read at the end to find the final `result` line (the last line of the
@@ -690,9 +696,11 @@ type ClaudeCodeJob struct {
 	// KillOnCancel is set; a deadline detaches. Zero → ctx, the pre-detach
 	// behaviour for callers that have no separate turn.
 	//
-	// This split is the fix for the 2026-08-28 guillotine: INFINITY_TURN_TIMEOUT
-	// (15 min) always fired before this tool's own 20-minute ceiling, so every
-	// long job took the kill branch and the "never killed" path was dead code.
+	// This split is the fix for the 2026-08-28 guillotine: the turn's
+	// wall-clock ceiling (then INFINITY_TURN_TIMEOUT, 15 min) always fired
+	// before this tool's own 20-minute ceiling, so every long job took the
+	// kill branch and the "never killed" path was dead code. The turn budget
+	// is stall-based now (server/turn_budget.go), but the split still holds.
 	Inline context.Context
 	// Detach fires when the loop wants the inline wait to END without killing
 	// anything - the boss said something that is not a stop. Nil for callers
@@ -1639,6 +1647,9 @@ func claudeLaunchScript(f claudeJobFiles, task, model, effort, resume, cloudToke
 		// sign-in is, and a stray token would silently outrank it. One line
 		// covers both because claudeTokenExport returns the unset on the Mac.
 		claudeTokenExport(cloudToken),
+		// Any MCP server this job loads gets a coding job's lifetime per
+		// call, not Claude Code's sixty-second default (MCPToolTimeoutMillis).
+		fmt.Sprintf("export MCP_TOOL_TIMEOUT=%d", MCPToolTimeoutMillis()),
 		"export INF_TASK=" + shellQuote(task),
 		"export INF_MODEL=" + shellQuote(model),
 		"export INF_EFFORT=" + shellQuote(effort),

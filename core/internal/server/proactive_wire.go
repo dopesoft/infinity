@@ -58,70 +58,90 @@ func findingFingerprint(f proactive.Finding) string {
 	return "fp:" + hex.EncodeToString(h[:12])
 }
 
-// registerSession marks a WS connection as active under sessionID and binds
-// it to a send function. The heartbeat broadcaster calls send when a finding
-// crosses the proactive threshold so the browser tab gets an unprompted
-// assistant turn - that's the wire that turns "responds when asked" into
-// "speaks first."
+// registerSession binds one WS connection (by its connID) to a session. Every
+// frame addressed to the session - the turn's stream, the heartbeat pulse,
+// proactive findings - fans out to every connection bound to it.
 //
-// Multiple tabs sharing one sessionID is legal; the last registration wins.
-// In practice studio uses one tab per active session.
-func (s *Server) registerSession(sessionID string, send func(wsServerEvent)) {
-	if s == nil || sessionID == "" || send == nil {
+// Keyed by connID, not by the send function. The old registry held ONE send
+// per session ("last registration wins"), which blinded the first tab the
+// moment a second one opened the same chat, and its unregister guard
+// compared func values with %p - which yields the CODE pointer, identical for
+// every closure - so a slow-closing old socket's deferred unregister evicted
+// the fresh connection that had just replaced it. Both gone by construction.
+func (s *Server) registerSession(sessionID, connID string, send func(wsServerEvent)) {
+	if s == nil || sessionID == "" || connID == "" || send == nil {
 		return
 	}
 	s.activeMu.Lock()
-	s.activeSessions[sessionID] = send
+	if s.activeSessions == nil {
+		s.activeSessions = make(map[string]map[string]func(wsServerEvent))
+	}
+	conns := s.activeSessions[sessionID]
+	if conns == nil {
+		conns = make(map[string]func(wsServerEvent))
+		s.activeSessions[sessionID] = conns
+	}
+	conns[connID] = send
 	s.activeMu.Unlock()
 }
 
-// unregisterSession removes a WS binding. Called when the WS connection
-// closes (browser navigated away, network flap, tab closed). Heartbeat
-// findings emitted after this point have no live target for that session
-// but still land in mem_heartbeat_findings for the next time the boss
-// opens Studio.
-func (s *Server) unregisterSession(sessionID string, send func(wsServerEvent)) {
-	if s == nil || sessionID == "" {
+// unregisterSession drops ONE connection's binding. Other tabs on the same
+// session keep theirs. Heartbeat findings emitted after the last binding
+// goes still land in mem_heartbeat_findings for the next time the boss opens
+// Studio.
+func (s *Server) unregisterSession(sessionID, connID string) {
+	if s == nil || sessionID == "" || connID == "" {
 		return
 	}
 	s.activeMu.Lock()
-	if cur, ok := s.activeSessions[sessionID]; ok {
-		/* Same-pointer guard so a stale unregister can't evict a fresh
-		 * connection that arrived during a reconnect race. */
-		if fmt.Sprintf("%p", cur) == fmt.Sprintf("%p", send) {
+	if conns, ok := s.activeSessions[sessionID]; ok {
+		delete(conns, connID)
+		if len(conns) == 0 {
 			delete(s.activeSessions, sessionID)
 		}
 	}
 	s.activeMu.Unlock()
 }
 
+// sessionSenders snapshots the send functions bound to a session.
+func (s *Server) sessionSenders(sessionID string) []func(wsServerEvent) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	conns := s.activeSessions[sessionID]
+	if len(conns) == 0 {
+		return nil
+	}
+	out := make([]func(wsServerEvent), 0, len(conns))
+	for _, fn := range conns {
+		out = append(out, fn)
+	}
+	return out
+}
+
 // sessionSender returns a send function that, every time it's called, looks
-// up the *current* WS binding for sessionID and dispatches there. If the
-// session has no active WS (browser navigated away, network flap, tab
-// backgrounded on iOS Safari and the socket died), the frame is dropped
-// silently - the turn keeps running, persists its output to mem_turns /
-// mem_messages on completion, and the client's reconnect path
-// (mergeServerRows in useChat.ts) picks the completed turn up.
+// up the sockets CURRENTLY bound to sessionID and fans the frame out to all
+// of them. If none is bound (browser navigated away, network flap, tab
+// backgrounded on iOS Safari and the socket died), the frame goes nowhere -
+// the turn keeps running, its frames stay in the turn journal, and the
+// client's `attach{since_seq}` on reconnect replays what it missed.
 //
-// The key property: the returned closure does NOT capture the send fn
-// from the WS handler. A turn launched from a WS that subsequently dies
-// will route its remaining frames to whichever WS happens to be bound to
-// this session at the moment the frame is emitted - including no WS at
-// all, in which case the frame is dropped without stalling the agent.
+// The key property: the returned closure does NOT capture any socket. A turn
+// launched from a WS that subsequently dies routes its remaining frames to
+// whatever is bound at the moment each frame is emitted.
 func (s *Server) sessionSender(sessionID string) func(wsServerEvent) {
 	return func(ev wsServerEvent) {
 		sessionID = tools.SessionForPublish(sessionID)
 		if s == nil || sessionID == "" {
 			return
 		}
-		s.activeMu.Lock()
-		send := s.activeSessions[sessionID]
-		s.activeMu.Unlock()
-		if send == nil {
+		sends := s.sessionSenders(sessionID)
+		if len(sends) == 0 {
 			return
 		}
 		ev.SessionID = sessionID
-		send(ev)
+		for _, send := range sends {
+			send(ev)
+		}
 	}
 }
 
@@ -154,9 +174,11 @@ func (s *Server) broadcastProactive(ev wsServerEvent) {
 	s.activeMu.Lock()
 	sends := make([]func(wsServerEvent), 0, len(s.activeSessions))
 	sids := make([]string, 0, len(s.activeSessions))
-	for sid, fn := range s.activeSessions {
-		sends = append(sends, fn)
-		sids = append(sids, sid)
+	for sid, conns := range s.activeSessions {
+		for _, fn := range conns {
+			sends = append(sends, fn)
+			sids = append(sids, sid)
+		}
 	}
 	s.activeMu.Unlock()
 	for i, fn := range sends {

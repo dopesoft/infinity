@@ -23,6 +23,7 @@ import (
 	"github.com/dopesoft/infinity/core/internal/llm"
 	"github.com/dopesoft/infinity/core/internal/memory"
 	"github.com/dopesoft/infinity/core/internal/tools"
+	"github.com/dopesoft/infinity/core/internal/turnctx"
 	"github.com/google/uuid"
 )
 
@@ -104,6 +105,14 @@ type Session struct {
 	lastCacheWriteTokens int
 	// lastMeasuredModel is the model that produced lastInputTokens.
 	lastMeasuredModel string
+
+	// replyIndex numbers the assistant messages of the CURRENT turn, from 0.
+	// Every delta carries the index of the message it belongs to and every
+	// persisted assistant row (AssistantMessage, TaskCompleted) carries the
+	// same number, so the browser pairs a live bubble with its row by
+	// (turn_id, message_index) instead of by comparing text. Reset per turn;
+	// only the turn's own goroutine touches it.
+	replyIndex int
 
 	// Active is the per-session whitelist of tools whose full schemas are
 	// shipped to the LLM each turn. Everything else lives in the dormant
@@ -1056,14 +1065,25 @@ func (l *Loop) projectFor(ctx context.Context, sessionID string) string {
 // So it goes through here: appended to the conversation AND written down, in
 // one call, at every site that commits one. A site that forgets to use it is
 // the bug coming back, which is why there is nothing else to call.
-func (l *Loop) keepAssistantSegment(turnID string, s *Session, text string, calls []llm.ToolCall) {
-	s.Append(llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: calls})
+func (l *Loop) keepAssistantSegment(turnID string, s *Session, text string, calls []llm.ToolCall, meta ...map[string]any) {
+	msg := llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: calls}
+	// Provider-private carry (a reasoner's own chain of thought, which some
+	// vendors want back on the next request). Never persisted, never shown.
+	for _, m := range meta {
+		if len(m) > 0 {
+			msg.Meta = m
+		}
+	}
+	s.Append(msg)
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 	l.fireHookT(turnID, "AssistantMessage", s.ID, s.Project, text, map[string]any{
-		"interim": true,
+		"interim":       true,
+		"message_index": s.replyIndex,
 	})
+	// The next thing the model says is a new message.
+	s.replyIndex++
 }
 
 func (l *Loop) GetOrCreateSession(id string) *Session {
@@ -1130,10 +1150,14 @@ func (l *Loop) Sessions() []*Session {
 
 // RunEvent is what we surface to transports (WebSocket/etc).
 type RunEvent struct {
-	Kind          EventKind `json:"kind"`
-	SessionID     string    `json:"session_id"`
-	TextDelta     string    `json:"text_delta,omitempty"`
-	ThinkingDelta string    `json:"thinking_delta,omitempty"`
+	Kind      EventKind `json:"kind"`
+	SessionID string    `json:"session_id"`
+	TextDelta string    `json:"text_delta,omitempty"`
+	// MsgIndex, on EventDelta: which assistant message of the turn this text
+	// belongs to (Session.replyIndex at the time it streamed). The persisted
+	// row for that message carries the same index.
+	MsgIndex      int    `json:"msg_index,omitempty"`
+	ThinkingDelta string `json:"thinking_delta,omitempty"`
 	// ThinkingTokens: a brain that reports how much it is reasoning instead
 	// of what it is reasoning (Claude Code redacts the text). See
 	// llm.StreamEvent.ThinkingTokens.
@@ -1250,6 +1274,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 	defer l.clearRunCancel(sessionID, cancelGen)
 
 	s := l.GetOrCreateSession(sessionID)
+	s.replyIndex = 0
 
 	// A scoped turn (e.g. the locked inbox-triage cron) pre-loads its
 	// allowlisted recipe tools as PERMANENT so skills_invoke + the mail/surface
@@ -1361,6 +1386,14 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 		var payload map[string]any
 		if meta := llm.AttachmentsMeta(atts); len(meta) > 0 {
 			payload = map[string]any{"attachments": meta}
+		}
+		// The browser's own id for this message, so the transcript can hand
+		// it back and the bubble on screen is matched by id, not by text.
+		if cid := turnctx.ClientMessageID(ctx); cid != "" {
+			if payload == nil {
+				payload = map[string]any{}
+			}
+			payload["client_id"] = cid
 		}
 		// A turn INFINITY started (the finish poller waking Jarvis about a
 		// stalled build) is filed under its own hook, so the boss never reads
@@ -1635,7 +1668,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					healBuffer.WriteString(ev.TextDelta)
 					continue
 				}
-				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
+				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta, MsgIndex: s.replyIndex})
 			case llm.StreamThinking:
 				emit(out, RunEvent{
 					Kind:           EventThinking,
@@ -1730,7 +1763,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 				// Provider-layer heads-up for the boss (brain failover on a
 				// spent plan, back on the primary). Same shape as the bridge
 				// failover notice: one italic line in the reply stream.
-				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta})
+				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: ev.TextDelta, MsgIndex: s.replyIndex})
 			case llm.StreamError:
 				streamedErr = ev.Err
 			}
@@ -1759,7 +1792,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			healPending = false
 			l.keepAssistantSegment(turnID, s, preHealText, nil)
 			if held := healBuffer.String(); strings.TrimSpace(held) != "" {
-				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: held})
+				emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: held, MsgIndex: s.replyIndex})
 			}
 			healBuffer.Reset()
 			preHealText = ""
@@ -1824,24 +1857,47 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// is durable; the deployed plan-continuation backstop resumes it when
 			// he says "continue").
 			if ctx.Err() != nil {
-				partial := strings.TrimSpace(partialText.String())
-				timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
-				if timedOut {
-					note := "\n\n_(I hit my time budget for this one turn — but everything I set up, including the plan, is saved. Say 'continue' and I'll pick up where I left off.)_"
-					emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: note})
+				all := partialText.String()
+				if brainRunsOwnTools && brainKept < len(all) {
+					// Everything before brainKept is already written down as
+					// its own message; writing it again would show it twice.
+					all = all[brainKept:]
+				}
+				partial := strings.TrimSpace(all)
+				// Which budget ended it, if it was a budget and not the boss.
+				// The server cancels with a cause (server/turn_budget.go); a
+				// plain cancel is the Stop button.
+				stalled, ceiling := TurnBudgetCause(ctx)
+				timedOut := stalled || ceiling
+				stopReason := "interrupted"
+				switch {
+				case stalled:
+					stopReason = "stalled"
+					note := "\n\n_(The model went quiet on me for too long, so I stopped waiting. Everything I set up, including the plan, is saved. Say 'continue' and I'll pick up where I left off.)_"
+					emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: note, MsgIndex: s.replyIndex})
+					partial = strings.TrimSpace(partial + note)
+				case ceiling:
+					stopReason = "time_budget"
+					note := "\n\n_(I hit my time budget for this one turn. Everything I set up, including the plan, is saved. Say 'continue' and I'll pick up where I left off.)_"
+					emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: note, MsgIndex: s.replyIndex})
 					partial = strings.TrimSpace(partial + note)
 				}
 				if partial != "" {
 					s.Append(llm.Message{Role: llm.RoleAssistant, Content: partial})
 					l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, partial, map[string]any{
-						"interrupted": true,
-						"timed_out":   timedOut,
+						"interrupted":   true,
+						"timed_out":     timedOut,
+						"stalled":       stalled,
+						"message_index": s.replyIndex,
 					})
 				}
+				// The wire says "interrupted" for every cut turn: the browser
+				// marks the bubble and settles; the precise reason is on the
+				// mem_turns row for /logs.
 				emit(out, RunEvent{Kind: EventComplete, SessionID: s.ID, StopReason: "interrupted"})
 				l.closeTurn(context.Background(), turnID, TurnCloseFields{
 					AssistantText:    partial,
-					StopReason:       "interrupted",
+					StopReason:       stopReason,
 					Status:           "interrupted",
 					InputTokens:      resp.Usage.PromptTokens(),
 					OutputTokens:     resp.Usage.Output,
@@ -2039,6 +2095,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			l.fireHookT(turnID, "TaskCompleted", s.ID, s.Project, finalText, map[string]any{
 				"input_tokens":  resp.Usage.PromptTokens(),
 				"output_tokens": resp.Usage.Output,
+				"message_index": s.replyIndex,
 			})
 			// Status reflects what the boss sees: empty reply with no tool
 			// work is a confused decode; empty reply with tool work is a
@@ -2082,7 +2139,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			return nil
 		}
 
-		l.keepAssistantSegment(turnID, s, resp.Text, resp.ToolCalls)
+		l.keepAssistantSegment(turnID, s, resp.Text, resp.ToolCalls, resp.Meta)
 
 		for _, tc := range resp.ToolCalls {
 			startedAt := time.Now().UTC()
@@ -2180,6 +2237,7 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 			// a contract, Studio renders inline Approve/Deny buttons so
 			// the boss can decide right in the chat. Otherwise the card
 			// shows the spinner / "running" state until the result lands.
+			awaiting := !decision.Allow && decision.WaitForApproval && decision.ContractID != ""
 			emit(out, RunEvent{
 				Kind:      EventToolCall,
 				SessionID: s.ID,
@@ -2188,11 +2246,30 @@ func (l *Loop) Run(ctx context.Context, sessionID, userMsg, model string, steerC
 					Name:             tc.Name,
 					Input:            tc.Input,
 					StartedAt:        startedAt,
-					AwaitingApproval: !decision.Allow && decision.WaitForApproval && decision.ContractID != "",
+					AwaitingApproval: awaiting,
 					ContractID:       decision.ContractID,
 					Preview:          decision.Preview,
 				},
 			})
+			// And write down the CALL, not only the result - for EVERY brain.
+			//
+			// The self-executing branch above has filed a `running` row since
+			// the "refreshed mid-turn and got nothing" fix; this path did not,
+			// so on DeepSeek, OpenAI and the API brains a reload during a
+			// five-minute command showed the boss his own message with nothing
+			// under it. Same row shape, same tool_call_id; the result below
+			// overwrites it in place. The gate's verdict rides along so a
+			// reload during a parked approval shows the Approve/Deny card
+			// rather than a spinner.
+			l.fireHookT(turnID, "PostToolUse", s.ID, s.Project,
+				tc.Name+" (running)", map[string]any{
+					"name":              tc.Name,
+					"input":             tc.Input,
+					"tool_call_id":      tc.ID,
+					"running":           true,
+					"awaiting_approval": awaiting,
+					"contract_id":       decision.ContractID,
+				})
 
 			var (
 				output  string
@@ -2605,7 +2682,7 @@ func (l *Loop) maybeBridgeFailover(out chan<- RunEvent, s *Session, toolName str
 	if !cloudHealthy {
 		notice = "\n\n_Mac bridge went offline and the cloud workspace is also unreachable — I can't make code changes until a bridge is back._\n"
 	}
-	emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: notice})
+	emit(out, RunEvent{Kind: EventDelta, SessionID: s.ID, TextDelta: notice, MsgIndex: s.replyIndex})
 	return macBridgeDownFallback(toolName, cloudHealthy), true
 }
 

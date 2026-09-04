@@ -93,7 +93,12 @@ export function WorkspaceChatColumn({
         {/* onQuickReply routes the "Approve & fix" action on heartbeat
             finding cards through chat.send, so the agent acts on the
             finding in this same session. */}
-        <ConversationStream messages={chat.messages} onQuickReply={chat.send} working={chat.isStreaming} />
+        <ConversationStream
+          messages={chat.messages}
+          onQuickReply={chat.send}
+          working={chat.isStreaming}
+          liveness={chat.liveness}
+        />
       </div>
       {/* Pinned plan status — the chat's live window onto the active plan
           (the same one the dashboard Agent Work board shows), plus any

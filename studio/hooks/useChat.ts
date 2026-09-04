@@ -14,6 +14,17 @@ import { settleNestedOnly } from "@/lib/chat/settle";
 import { survivesRefetch } from "@/lib/chat/preserve";
 import { toolRowToMessage } from "@/lib/chat/toolRow";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
+import {
+  initialLiveness,
+  onConnected as livenessOnConnected,
+  onFrame as livenessOnFrame,
+  onSend as livenessOnSend,
+  onSessionSwitch as livenessOnSessionSwitch,
+  onStop as livenessOnStop,
+  onTick as livenessOnTick,
+  type LivenessAction,
+  type LivenessState,
+} from "@/lib/chat/liveness";
 
 export type ChatRole = "user" | "assistant" | "tool" | "thinking";
 
@@ -59,6 +70,11 @@ export type ChatMessage = {
   progressTask?: string;
   // Only set on `thinking` messages once the agent moves on to text/tool/complete.
   endedAt?: number;
+  // turnId is the server-minted id of the turn a live row belongs to. Deltas
+  // land in the pending assistant bubble of THEIR turn, never merely "the
+  // last pending bubble": a nested coding step or a mid-turn settle between
+  // two deltas used to split one reply into two bubbles.
+  turnId?: string;
   // steered=true on a user message means it was typed and sent mid-turn -
   // it routes through the WS `steer` channel and gets drained into the
   // running agent loop on the next iteration boundary. ChatBubble surfaces
@@ -119,9 +135,11 @@ const LAST_ACTIVE_KEY = "infinity:lastActiveAt";
 // ("voice chats don't generate a title"). Memory continuity is unaffected:
 // cross-session recall is the mem_* substrate's job, not the transcript's.
 const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
-// If the agent goes silent for this long after a send, surface a timeout
-// so the UI can never get stuck on "thinking" forever.
-const TURN_WATCHDOG_MS = 90_000;
+// How often the liveness machine (lib/chat/liveness.ts) is ticked while a
+// turn is in flight. It decides about silence; nothing here does.
+const LIVENESS_TICK_MS = 1_000;
+// After Stop, how long to wait for the server's word before asking again.
+const STOP_ACK_MS = 5_000;
 
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -158,6 +176,8 @@ type ServerRow = {
   interim?: boolean;
   tool_running?: boolean;
   tool_interrupted?: boolean;
+  tool_awaiting_approval?: boolean;
+  tool_contract_id?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   tool_output?: string;
@@ -692,7 +712,20 @@ export function useChat() {
   const [appliedEffort, setAppliedEffort] = useState<string>("");
 
   const turnStartRef = useRef<number | null>(null);
-  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // THE LIVENESS MACHINE (lib/chat/liveness.ts). The server says whether a
+  // turn is alive and what it is doing (heartbeat, turn_status, seq on every
+  // frame); this ref folds that in and decides the only three things the
+  // client may do on its own: ask for a replay, rebuild the socket, or
+  // rebuild from the transcript once the server has said the turn is over.
+  // It replaces a 90-second "no frame → the agent went silent" watchdog that
+  // painted an error and closed a healthy socket on a turn that was thinking.
+  const livenessRef = useRef<LivenessState>(initialLiveness());
+  const [liveness, setLivenessState] = useState<LivenessState>(livenessRef.current);
+  const applyLiveness = useCallback((next: LivenessState) => {
+    if (next === livenessRef.current) return;
+    livenessRef.current = next;
+    setLivenessState(next);
+  }, []);
   // Discuss-with-Jarvis opens a session whose only row is a DashboardSeed
   // context block - no agent reply yet. seededKickRef parks such a session
   // id until the socket is connected enough to fire one `resume` turn so
@@ -701,34 +734,39 @@ export function useChat() {
   const seededKickRef = useRef<string>("");
   const kickedSessionsRef = useRef<Set<string>>(new Set());
 
-  const clearWatchdog = useCallback(() => {
-    if (watchdogRef.current) {
-      clearTimeout(watchdogRef.current);
-      watchdogRef.current = null;
-    }
+  // showLiveTurn puts the streaming affordances on screen for a turn the
+  // server says is running: the working row, the Stop button, and a pending
+  // "Thinking" row whose clock counts from when the turn ACTUALLY started,
+  // not from when he came back to the tab.
+  const showLiveTurn = useCallback((startedAt: number) => {
+    turnStartRef.current = startedAt || Date.now();
+    setIsStreaming(true);
+    setMessages((prev) => {
+      const tail = prev[prev.length - 1];
+      // Something of this turn is already live on screen (a streaming
+      // bubble, a running card): nothing to add.
+      if (prev.some((m) => m.pending)) return prev;
+      if (tail && tail.role === "thinking" && tail.pending) return prev;
+      return [
+        ...prev,
+        {
+          id: makeId(),
+          role: "thinking",
+          text: "",
+          pending: true,
+          createdAt: turnStartRef.current ?? Date.now(),
+        } as ChatMessage,
+      ];
+    });
   }, []);
 
-  // RESUMING A TURN THAT IS STILL GOING.
+  // RESUMING A TURN THAT IS STILL GOING, without a server that can be asked.
   //
-  // The server already does the right thing: a turn's frames route through
-  // `sessionSender`, which looks up whichever socket is bound to the session
-  // AT THE MOMENT each frame is emitted. So a reload, a tab switch, iOS
-  // killing the socket, or wandering off to another page and back all keep
-  // receiving the rest of the reply. What was missing was the browser ever
-  // ASKING whether something is in flight: on load `isStreaming` starts false,
-  // so there is no "Thinking", no working indicator and no Stop button, and
-  // the boss is looking at a dead-looking page while his answer is being
-  // written.
-  //
-  // It never showed on the fast brains because their turns are over in
-  // seconds. On Claude Code a turn routinely runs one to three minutes, which
-  // is long enough to navigate away, and he did: "if i go away the stream
-  // needs to continue as if i was still on the page, whether i browse around
-  // infinity or unfocus the app, or anything. it needs to fuckin persist."
-  //
-  // mem_turns is the truth, the same substrate /logs reads, so this survives a
-  // refresh, a second device, and a Core restart (the boot sweep closes any
-  // turn the restart stranded, so an in_flight row is always a live one).
+  // The live path is `attach`: the socket binds to the session and the server
+  // answers with turn_status (and replays what was missed). This is the
+  // fallback for a core that predates attach: it reads mem_turns over HTTP,
+  // the same substrate /logs reads, and puts the affordances up if a turn is
+  // in flight. It arms nothing and decides nothing about silence.
   const resumeLiveTurn = useCallback(
     async (id: string, signal?: AbortSignal) => {
       if (!id) return false;
@@ -741,122 +779,123 @@ export function useChat() {
         return false;
       }
       if (!live) return false;
-      turnStartRef.current = Date.parse(live.started_at) || Date.now();
-      setIsStreaming(true);
-      // A pending thinking row so the ledger says "Thinking" and counts up
-      // from when the turn actually started, not from when he came back.
-      setMessages((prev) => {
-        if (prev.some((m) => m.role === "thinking" && m.pending)) return prev;
-        return [
-          ...prev,
-          {
-            id: makeId(),
-            role: "thinking",
-            text: "",
-            pending: true,
-            createdAt: turnStartRef.current ?? Date.now(),
-          } as ChatMessage,
-        ];
-      });
+      const startedAt = Date.parse(live.started_at) || Date.now();
+      showLiveTurn(startedAt);
+      applyLiveness({ ...livenessRef.current, inFlight: true, startedAt, phase: livenessRef.current.phase ?? "thinking" });
       return true;
     },
-    [],
+    [showLiveTurn, applyLiveness],
   );
 
+  // reconcileFromCore merges the canonical transcript into the local view.
+  // MERGE ONLY: it never decides that a turn is over. That used to be
+  // inferred from "the last row is an assistant row", which is false whenever
+  // the tail is the interim narration Core persists before a tool call, so a
+  // reconcile mid-turn silently killed the streaming UI. The server's
+  // turn_status is the only thing that ends a turn now (settleTurn).
   const reconcileFromCore = useCallback(
     async (signal?: AbortSignal): Promise<boolean> => {
       if (!sessionId) return false;
       const rows = await fetchSessionMessages(sessionId, signal);
       if (!rows || rows.length === 0) return false;
-
-      const serverFinishedTurn = rows[rows.length - 1]?.role === "assistant";
       setMessages((prev) => {
         const next = mergeServerRows(prev, rows);
-        if (rows.length > 0) {
-          const remoteTail = rowToMessage(rows[rows.length - 1]);
-          for (let i = next.length - 1; i >= 0; i--) {
-            const local = next[i];
-            if (local.role !== remoteTail.role) continue;
-            if (local.text !== remoteTail.text) continue;
-            const mergedAttachments = mergeAttachmentLists(local.attachments, remoteTail.attachments);
-            if (mergedAttachments !== local.attachments) {
-              next[i] = { ...local, attachments: mergedAttachments };
-            }
-            break;
+        const remoteTail = rowToMessage(rows[rows.length - 1]);
+        for (let i = next.length - 1; i >= 0; i--) {
+          const local = next[i];
+          if (local.role !== remoteTail.role) continue;
+          if (local.text !== remoteTail.text) continue;
+          const mergedAttachments = mergeAttachmentLists(local.attachments, remoteTail.attachments);
+          if (mergedAttachments !== local.attachments) {
+            next[i] = { ...local, attachments: mergedAttachments };
           }
+          break;
         }
-        if (!serverFinishedTurn) return next;
-        // Server already has a completed assistant turn at the tail.
-        // Drop trailing live-only bubbles whose final frames landed on a
-        // dead/suspended browser connection.
+        return next;
+      });
+      return true;
+    },
+    [sessionId],
+  );
+
+  // settleTurn closes everything a turn left open once the SERVER has said
+  // the turn is over (turn_status in_flight:false after we were streaming,
+  // or a legacy transcript poll). The transcript by then holds the final
+  // reply, so live-only tails are dropped in favour of the persisted rows.
+  const settleTurn = useCallback(
+    async (stopReason?: string) => {
+      try {
+        await reconcileFromCore();
+      } catch {
+        /* Core may be waking; the merge is a nicety, the settle is not. */
+      }
+      const now = Date.now();
+      setMessages((prev) => {
+        const next = closePendingThinking(prev);
         while (next.length > 0) {
           const last = next[next.length - 1];
           if (last.role === "thinking" && last.pending) {
             next.pop();
             continue;
           }
-          if (last.role === "assistant" && last.pending && !last.error) {
+          if (last.role === "assistant" && last.pending && !last.error && !last.text.trim()) {
             next.pop();
             continue;
           }
           break;
         }
-        return next;
+        const settled = settleInFlight(next, now, codingLiveRef.current);
+        if (stopReason === "interrupted") {
+          for (let i = settled.length - 1; i >= 0; i--) {
+            if (settled[i].role === "assistant") {
+              settled[i] = { ...settled[i], interrupted: true };
+              break;
+            }
+          }
+        }
+        return settled;
       });
-
-      if (serverFinishedTurn) {
-        turnStartRef.current = null;
-        setIsStreaming(false);
-        clearWatchdog();
-      }
-      return serverFinishedTurn;
+      clearLiveTool();
+      turnStartRef.current = null;
+      setIsStreaming(false);
     },
-    [sessionId, clearWatchdog],
+    [reconcileFromCore],
   );
 
-  const showWatchdogReconnectError = useCallback(() => {
-    const error = "Agent went silent. Reconnecting and checking for the final reply.";
-    setMessages((prev) => {
-      const next = closePendingThinking(prev);
-      for (let i = next.length - 1; i >= 0; i--) {
-        if (next[i].role === "assistant" && next[i].pending) {
-          next[i] = { ...next[i], pending: false, error };
-          return next;
-        }
+  // dispatchLiveness carries out what the machine decided. Three verbs, no
+  // guessing: attach (ask the server what we missed), reconnect (the socket
+  // is the problem), reconcile (the server said the turn is over).
+  const dispatchLiveness = useCallback(
+    (action: LivenessAction) => {
+      switch (action.kind) {
+        case "attach":
+          if (sessionId) ws.send({ type: "attach", session_id: sessionId, since_seq: action.sinceSeq });
+          break;
+        case "reconnect":
+          ws.reconnect();
+          break;
+        case "reconcile":
+          void settleTurn(action.stopReason);
+          break;
+        default:
+          break;
       }
-      next.push({
-        id: makeId(),
-        role: "assistant",
-        text: "",
-        error,
-        createdAt: Date.now(),
-      });
-      return next;
-    });
-    turnStartRef.current = null;
-    setIsStreaming(false);
-    ws.reconnect();
-  }, [ws]);
+    },
+    [ws, sessionId, settleTurn],
+  );
+  const dispatchRef = useRef(dispatchLiveness);
+  dispatchRef.current = dispatchLiveness;
 
-  const armWatchdog = useCallback(() => {
-    clearWatchdog();
-    watchdogRef.current = setTimeout(() => {
-      watchdogRef.current = null;
-      // Backgrounded PWAs routinely pause timers and WebSockets. Do not
-      // turn that lifecycle state into a visible chat failure; the
-      // foreground handler below will reconnect and pull the durable turn.
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-        return;
-      }
-
-      void reconcileFromCore()
-        .then((serverFinishedTurn) => {
-          if (serverFinishedTurn) return;
-          showWatchdogReconnectError();
-        })
-        .catch(showWatchdogReconnectError);
-    }, TURN_WATCHDOG_MS);
-  }, [clearWatchdog, reconcileFromCore, showWatchdogReconnectError]);
+  // The clock the machine runs on, only while a turn is in flight.
+  useEffect(() => {
+    if (!liveness.inFlight) return;
+    const t = setInterval(() => {
+      const r = livenessOnTick(livenessRef.current, Date.now());
+      applyLiveness(r.state);
+      if (r.action.kind !== "none") dispatchRef.current(r.action);
+    }, LIVENESS_TICK_MS);
+    return () => clearInterval(t);
+  }, [liveness.inFlight, applyLiveness]);
 
   // Fire one `resume` turn for a freshly-seeded session so the agent
   // replies to the dashboard context Discuss-with-Jarvis injected (the
@@ -875,7 +914,7 @@ export function useChat() {
       kickedSessionsRef.current.add(target);
       turnStartRef.current = Date.now();
       setIsStreaming(true);
-      armWatchdog();
+      applyLiveness(livenessOnSend(livenessRef.current, Date.now()));
       // Show the "Jarvis is thinking" indicator while the resume turn
       // spins up - same optimistic affordance a normal send() gives.
       setMessages((prev) =>
@@ -887,7 +926,7 @@ export function useChat() {
             ],
       );
     },
-    [ws, armWatchdog],
+    [ws, applyLiveness],
   );
   // Latest-callback ref so the session-load effect can kick a seeded
   // session without taking kickSeeded as a dependency (which would make
@@ -904,27 +943,34 @@ export function useChat() {
     }
   }, [ws.status, kickSeeded]);
 
-  // AND pick the turn back up on every reconnect.
+  // ATTACH: bind this socket to the conversation and ask what we missed.
   //
-  // iOS Safari kills the socket the moment the tab is backgrounded, and
-  // wandering to another page in Studio drops it too. The turn never stopped -
-  // `sessionSender` keeps routing its frames to whatever socket is bound when
-  // each one is emitted - but a client that came back with `isStreaming` false
-  // showed a dead page until the next delta happened to land. On a brain that
-  // thinks for a minute before its first token, that is the whole minute.
-  //
-  // Cheap enough to do on every reconnect: one indexed query for one row, and
-  // it no-ops when nothing is running.
+  // Sent on every connect (a reload, iOS killing the socket, a network flap,
+  // wandering off to another page and back) and on every session switch,
+  // with the newest seq we have. The server answers with turn_status - its
+  // own word on whether a turn is running, since when, and in what phase -
+  // and replays every journaled frame past that seq. So a socket that arrives
+  // late is caught up instead of left to guess, and a reload mid-turn shows
+  // "Thinking" counting from the turn's real start.
+  const attachRef = useRef<(id: string) => void>(() => {});
+  attachRef.current = (id: string) => {
+    if (!id || ws.status !== "connected") return;
+    const action = livenessOnConnected(livenessRef.current);
+    ws.send({ type: "attach", session_id: id, since_seq: action.kind === "attach" ? action.sinceSeq : 0 });
+  };
+  // Legacy: a core that predates attach answers `unknown type: attach`, and
+  // the machine flips to polling mem_turns over HTTP instead.
   const resumeRef = useRef(resumeLiveTurn);
   useEffect(() => {
     resumeRef.current = resumeLiveTurn;
   }, [resumeLiveTurn]);
   useEffect(() => {
     if (ws.status !== "connected" || !sessionId || isStreaming) return;
+    if (liveness.attachSupported !== false) return;
     const ac = new AbortController();
     void resumeRef.current(sessionId, ac.signal);
     return () => ac.abort();
-  }, [ws.status, sessionId, isStreaming]);
+  }, [ws.status, sessionId, isStreaming, liveness.attachSupported]);
 
   // Restore session id from localStorage on mount; mint a fresh one if none.
   // Hydrate from the optimistic local cache *immediately* so a refresh -
@@ -1014,10 +1060,12 @@ export function useChat() {
         kickSeededRef.current(id);
       }
     });
-    // Messages are on screen; now ask whether a turn is still running.
-    void resumeLiveTurn(id, ac.signal);
+    // Messages are on screen; now bind the socket to this conversation and
+    // ask whether a turn is still running (and what we missed of it).
+    applyLiveness(livenessOnSessionSwitch(livenessRef.current));
+    attachRef.current(id);
     return () => ac.abort();
-  }, [requestedSessionId, resumeLiveTurn, openConversation]);
+  }, [requestedSessionId, openConversation, applyLiveness]);
 
   // Mirror the visible transcript into localStorage whenever it changes.
   // Pending / thinking messages are filtered out by writeCachedMessages
@@ -1028,8 +1076,6 @@ export function useChat() {
     writeCachedMessages(sessionId, messages);
     if (messages.length > 0) writeLastActiveAt(Date.now());
   }, [sessionId, messages]);
-
-  useEffect(() => () => clearWatchdog(), [clearWatchdog]);
 
   useEffect(() => {
     return () => revokeMessageAttachmentUrls(messages);
@@ -1061,7 +1107,7 @@ export function useChat() {
   // (the mount path handles reloads). Unlike newSession it does NOT wipe the
   // previous session's cache - that conversation is finished, not discarded.
   const rotateToFreshSession = useCallback(() => {
-    clearWatchdog();
+    applyLiveness(livenessOnSessionSwitch(livenessRef.current));
     const id = newSessionId();
     setSessionId(id);
     openConversation(id);
@@ -1069,7 +1115,8 @@ export function useChat() {
     turnStartRef.current = null;
     setIsStreaming(false);
     writeLastActiveAt(Date.now()); // the fresh session is "active now"
-  }, [clearWatchdog, openConversation]);
+    attachRef.current(id);
+  }, [applyLiveness, openConversation]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -1091,14 +1138,19 @@ export function useChat() {
         const last = readLastActiveAt();
         if (last > 0 && Date.now() - last > STALE_SESSION_MS) {
           rotateToFreshSession();
-          ws.reconnect();
           return; // nothing to reconcile - the fresh session is empty
         }
       }
-      ws.reconnect();
+      // The socket itself is the WS provider's business: it reconnects a
+      // dead one on this same event, and a live one is left alone (tearing
+      // down a healthy socket here used to drop the rest of the turn). We
+      // just merge what landed while hidden and re-ask the server where the
+      // turn is; the liveness machine rebuilds the socket only if the server
+      // stays silent.
       void reconcileFromCore().catch(() => {
         /* Core may still be waking; WS reconnect will retry independently. */
       });
+      attachRef.current(sessionId);
     };
     document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pageshow", onForeground);
@@ -1113,27 +1165,19 @@ export function useChat() {
   }, [sessionId, ws, reconcileFromCore, requestedSessionId, rotateToFreshSession]);
 
   // WS-reconnect rehydration. iOS Safari (and any flaky network) can kill
-  // the WebSocket mid-turn. The agent finishes the turn and writes to
-  // mem_observations, but the `complete` frame never reaches us - the UI ends
-  // up stuck on "thinking forever" until the user nudges the agent.
-  //
-  // On every connect transition we re-fetch the session's messages from
-  // Core and merge in any assistant turns that landed while we were
-  // disconnected. Streaming-in-progress is left alone - we only patch
-  // when the local state has gaps Core knows about.
+  // the WebSocket mid-turn. The turn keeps running server-side; on every
+  // connect transition we attach (which binds the socket and replays every
+  // frame we missed, completion included) and merge whatever the transcript
+  // has. Nothing here decides the turn is over; the server's turn_status
+  // does, in the frame handler below.
   const lastStatusRef = useRef<typeof ws.status>(ws.status);
   useEffect(() => {
     const prevStatus = lastStatusRef.current;
     lastStatusRef.current = ws.status;
     if (ws.status !== "connected") return;
-    if (prevStatus === "connected") return; // ignore initial mount; covered by the session-load effect
+    if (prevStatus === "connected") return; // initial mount is covered by the session-load effect
     if (!sessionId) return;
-
-    // ALWAYS refetch on reconnect - even mid-stream. Turns now run
-    // server-side independent of the WS lifecycle (see ws.go startTurn),
-    // so a turn the boss kicked off before backgrounding the app on iOS
-    // Safari may have completed while disconnected. The server's
-    // mem_observations row is the source of truth; reconcile against it.
+    attachRef.current(sessionId);
     const ac = new AbortController();
     void reconcileFromCore(ac.signal).catch(() => {
       /* transient fetch failure; socket retry path remains active */
@@ -1145,9 +1189,44 @@ export function useChat() {
     return ws.subscribe((ev: WSEvent) => {
       if ("session_id" in ev && ev.session_id && ev.session_id !== sessionId) return;
 
+      // Every frame goes through the liveness machine first: it resets the
+      // silence clock, spots a seq gap, adopts the server's phase and start
+      // time, and flags a replayed frame the transcript already holds.
+      const lv = livenessOnFrame(livenessRef.current, ev, Date.now());
+      applyLiveness(lv.state);
+      if (lv.action.kind !== "none") dispatchRef.current(lv.action);
+      if (lv.duplicate) return;
+      const turnId = "turn_id" in ev && typeof ev.turn_id === "string" ? ev.turn_id : undefined;
+
       switch (ev.type) {
+        case "turn_status":
+        case "heartbeat": {
+          // The server's own word on the turn. In flight → the streaming
+          // affordances go up (idempotent), counting from its real start.
+          // Not in flight while we were streaming → the machine already
+          // dispatched a reconcile, which settles from the transcript.
+          const st = ev.turn_status;
+          if (st.in_flight) {
+            const startedAt = st.started_at ? Date.parse(st.started_at) : NaN;
+            if (!isStreamingRef.current) {
+              showLiveTurn(Number.isFinite(startedAt) ? startedAt : Date.now());
+            } else if (Number.isFinite(startedAt) && startedAt > 0) {
+              turnStartRef.current = startedAt;
+            }
+            if (typeof st.thinking_tokens === "number" && st.thinking_tokens > 0) {
+              const tokens = st.thinking_tokens;
+              setMessages((prev) => {
+                const i = prev.findIndex((m) => m.role === "thinking" && m.pending);
+                if (i === -1 || (prev[i].thinkingTokens ?? 0) >= tokens) return prev;
+                const next = [...prev];
+                next[i] = { ...next[i], thinkingTokens: tokens };
+                return next;
+              });
+            }
+          }
+          break;
+        }
         case "thinking": {
-          armWatchdog();
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
@@ -1155,6 +1234,7 @@ export function useChat() {
               next[next.length - 1] = {
                 ...last,
                 text: last.text + (ev.text ?? ""),
+                turnId: last.turnId ?? turnId,
                 // The count only ever grows within a turn; never let a late
                 // frame walk it backwards.
                 thinkingTokens: Math.max(last.thinkingTokens ?? 0, ev.thinking_tokens ?? 0) || undefined,
@@ -1166,6 +1246,7 @@ export function useChat() {
                 text: ev.text ?? "",
                 thinkingTokens: ev.thinking_tokens,
                 pending: true,
+                turnId,
                 createdAt: Date.now(),
               });
             }
@@ -1174,20 +1255,37 @@ export function useChat() {
           break;
         }
         case "delta": {
-          armWatchdog();
           setMessages((prev) => {
             const next = closePendingThinking(prev);
-            const last = next[next.length - 1];
-            if (!last || last.role !== "assistant" || !last.pending) {
+            // The bubble this delta belongs to is the pending assistant
+            // bubble of ITS turn, wherever it sits - a nested coding step
+            // or a settled row may have landed after it. Only without a
+            // turn id (an older core) does "the tail" have to do.
+            let at = -1;
+            if (turnId) {
+              for (let i = next.length - 1; i >= 0; i--) {
+                const m = next[i];
+                if (m.role === "assistant" && m.pending && m.turnId === turnId) {
+                  at = i;
+                  break;
+                }
+                if (m.role === "user" && !m.steered) break;
+              }
+            } else {
+              const last = next[next.length - 1];
+              if (last && last.role === "assistant" && last.pending) at = next.length - 1;
+            }
+            if (at === -1) {
               next.push({
                 id: makeId(),
                 role: "assistant",
                 text: ev.text,
                 pending: true,
+                turnId,
                 createdAt: Date.now(),
               });
             } else {
-              next[next.length - 1] = { ...last, text: last.text + ev.text };
+              next[at] = { ...next[at], text: next[at].text + ev.text };
             }
             return next;
           });
@@ -1197,20 +1295,9 @@ export function useChat() {
           // A NESTED step is a coding job reporting from inside its own run —
           // Claude Code on the Mac, or the settings model in the cloud
           // workspace. Those keep arriving for as long as the build lasts,
-          // which is routinely long after the reply landed, so they must NOT
-          // touch this turn's watchdog: a detached build that goes quiet for
-          // two minutes mid-`go test` is not "the agent went silent".
+          // which is routinely long after the reply landed; the liveness
+          // machine already ignores them for this turn's phase.
           const nested = !!ev.tool_call.nested;
-          // When the gate parks a call on a Trust contract, the agent
-          // loop blocks inside WaitForDecision for up to 15 min. The
-          // 90s "agent went silent" watchdog would fire long before
-          // the boss could tap Approve - disarm it here so the card
-          // can sit waiting indefinitely. tool_result re-arms it.
-          if (ev.tool_call.awaiting_approval) {
-            clearWatchdog();
-          } else if (!nested) {
-            armWatchdog();
-          }
           // Tell the status chrome (bridge pill) what is in flight this
           // second, so it can flash the model doing the coding.
           if (ev.tool_call.id && ev.tool_call.name) {
@@ -1239,12 +1326,17 @@ export function useChat() {
               : -1;
             if (existing !== -1) {
               const next = [...prev];
+              const done = !!next[existing].toolResult;
               next[existing] = {
                 ...next[existing],
-                toolCall: ev.tool_call,
+                // A card whose result already landed keeps its call as it
+                // was: a REPLAYED call frame (awaiting_approval and all)
+                // must not reopen a decision the boss already made.
+                toolCall: done ? next[existing].toolCall : ev.tool_call,
+                turnId: next[existing].turnId ?? turnId,
                 // Keep a resolved card resolved if its result already landed
                 // (out-of-order frames); otherwise it's still in flight.
-                pending: !next[existing].toolResult,
+                pending: !done,
               };
               return next;
             }
@@ -1256,6 +1348,7 @@ export function useChat() {
                 text: "",
                 toolCall: ev.tool_call,
                 pending: true,
+                turnId,
                 createdAt: Date.now(),
               },
             ];
@@ -1263,19 +1356,34 @@ export function useChat() {
           break;
         }
         case "tool_result": {
-          if (!ev.tool_result.nested) armWatchdog();
           clearLiveTool(ev.tool_result.id);
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.role === "tool" && m.toolCall?.id === ev.tool_result.id
-                ? { ...m, toolResult: ev.tool_result, pending: false }
-                : m,
-            ),
-          );
+          setMessages((prev) => {
+            const id = ev.tool_result.id;
+            const at = prev.findIndex((m) => m.role === "tool" && m.toolCall?.id === id);
+            if (at !== -1) {
+              const next = [...prev];
+              next[at] = { ...next[at], toolResult: ev.tool_result, pending: false };
+              return next;
+            }
+            // A result whose call frame never reached us (it was shed on a
+            // slow socket, or the replay floor moved past it) still renders
+            // as a finished card rather than vanishing.
+            return [
+              ...closePendingThinking(prev),
+              {
+                id: makeId(),
+                role: "tool",
+                text: "",
+                toolCall: { id, name: ev.tool_result.name, nested: ev.tool_result.nested },
+                toolResult: ev.tool_result,
+                turnId,
+                createdAt: Date.now(),
+              },
+            ];
+          });
           break;
         }
         case "complete": {
-          clearWatchdog();
           clearLiveTool();
           const inputT = ev.usage?.input ?? 0;
           const outputT = ev.usage?.output ?? 0;
@@ -1423,7 +1531,6 @@ export function useChat() {
         }
         case "error": {
           clearLiveTool();
-          clearWatchdog();
           setMessages((prev) => [
             ...settleInFlight(closePendingThinking(prev), Date.now(), codingLiveRef.current),
             {
@@ -1485,7 +1592,8 @@ export function useChat() {
             // is the tool's normal return text, not this event.
             break;
           }
-          clearWatchdog();
+          // An unprompted message says nothing about the turn in flight (if
+          // any); it must never touch the liveness of one.
           setMessages((prev) => [
             ...closePendingThinking(prev),
             {
@@ -1502,9 +1610,11 @@ export function useChat() {
           ]);
           break;
         }
+        default:
+          break;
       }
     });
-  }, [ws, sessionId, armWatchdog, clearWatchdog]);
+  }, [ws, sessionId, applyLiveness, showLiveTurn]);
 
   const send = useCallback(
     async (content: string, files?: File[], opts?: { voice?: boolean; effort?: string }) => {
@@ -1594,7 +1704,7 @@ export function useChat() {
 
       turnStartRef.current = Date.now();
       setIsStreaming(true);
-      armWatchdog();
+      applyLiveness(livenessOnSend(livenessRef.current, Date.now()));
       const ok = ws.send({
         type: "message",
         session_id: sessionId,
@@ -1608,7 +1718,7 @@ export function useChat() {
         ...(opts?.effort && opts.effort !== "auto" ? { effort: opts.effort } : {}),
       });
       if (!ok) {
-        clearWatchdog();
+        applyLiveness(livenessOnSessionSwitch(livenessRef.current));
         setIsStreaming(false);
         setMessages((prev) => [
           ...prev,
@@ -1623,21 +1733,27 @@ export function useChat() {
       }
       return ok;
     },
-    [ws, sessionId, armWatchdog, clearWatchdog],
+    [ws, sessionId, applyLiveness],
   );
 
-  // interrupt cancels the in-flight turn for the current session. The
-  // server cancels the LLM stream context; the agent loop persists
-  // whatever partial assistant text streamed and emits a clean
-  // complete{stop_reason:"interrupted"} that flips isStreaming off and
-  // marks the bubble. Safe to call when nothing is in flight (no-op).
+  // interrupt asks the server to stop the turn. It ALWAYS answers: with
+  // complete{stop_reason:"interrupted"} once the loop unwinds, or with a
+  // turn_status saying nothing was running - so Stop can never be pressed
+  // into silence, whatever the client thought was going on. The label reads
+  // "Stopping…" until that answer lands; if none does within STOP_ACK_MS the
+  // machine re-attaches and takes the server's word from there.
   const interrupt = useCallback(() => {
-    if (!sessionId || !isStreaming) return false;
-    return ws.send({ type: "interrupt", session_id: sessionId });
-  }, [ws, sessionId, isStreaming]);
+    if (!sessionId) return false;
+    applyLiveness(livenessOnStop(livenessRef.current));
+    const ok = ws.send({ type: "interrupt", session_id: sessionId });
+    setTimeout(() => {
+      if (livenessRef.current.stopping) attachRef.current(sessionId);
+    }, STOP_ACK_MS);
+    return ok;
+  }, [ws, sessionId, applyLiveness]);
 
   const newSession = useCallback(() => {
-    clearWatchdog();
+    applyLiveness(livenessOnSessionSwitch(livenessRef.current));
     // Drop the previous session's cache too - `/new` is a deliberate
     // reset, the user doesn't want it lingering in storage.
     setSessionId((prev) => {
@@ -1650,7 +1766,8 @@ export function useChat() {
     setMessages([]);
     turnStartRef.current = null;
     setIsStreaming(false);
-  }, [clearWatchdog, openConversation]);
+    attachRef.current(id);
+  }, [applyLiveness, openConversation]);
 
   // switchSession loads an existing session in place - same view, different
   // conversation. Used by the Sessions drawer in the Live header. We hydrate
@@ -1658,7 +1775,7 @@ export function useChat() {
   // when Core is unreachable.
   const switchSession = useCallback((id: string) => {
     if (!id || id === sessionId) return;
-    clearWatchdog();
+    applyLiveness(livenessOnSessionSwitch(livenessRef.current));
     setSessionId(id);
     openConversation(id);
     setIsStreaming(false);
@@ -1680,16 +1797,17 @@ export function useChat() {
         kickSeededRef.current(id);
       }
     });
-    // Messages are on screen; now ask whether a turn is still running.
-    void resumeLiveTurn(id, ac.signal);
-  }, [sessionId, clearWatchdog, resumeLiveTurn, openConversation]);
+    // Messages are on screen; bind the socket to this conversation and ask
+    // whether a turn is still running (and what we missed of it).
+    attachRef.current(id);
+  }, [sessionId, applyLiveness, openConversation]);
 
   const clear = useCallback(() => {
-    clearWatchdog();
+    applyLiveness(livenessOnSessionSwitch(livenessRef.current));
     ws.send({ type: "clear", session_id: sessionId });
     setMessages([]);
     if (sessionId) writeCachedMessages(sessionId, []);
-  }, [ws, sessionId, clearWatchdog]);
+  }, [ws, sessionId, applyLiveness]);
 
   // ── Voice integration ──────────────────────────────────────────────────
   //
@@ -1798,6 +1916,10 @@ export function useChat() {
       messages,
       usage,
       isStreaming,
+      // liveness is what the working row reads: the server-reported phase,
+      // the tool in flight, the turn's real start, and whether we are
+      // reconnecting or stopping.
+      liveness,
       appliedEffort,
       send,
       interrupt,
@@ -1813,6 +1935,7 @@ export function useChat() {
       messages,
       usage,
       isStreaming,
+      liveness,
       appliedEffort,
       send,
       interrupt,

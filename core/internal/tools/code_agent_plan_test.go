@@ -109,6 +109,10 @@ func (r *recordingSink) Sync(_ context.Context, c NestedChecklist) error {
 	return r.err
 }
 
+func (r *recordingSink) SyncOwn(context.Context, string, string, []plan.ChecklistItem) error {
+	return nil
+}
+
 func (r *recordingSink) Settle(_ context.Context, runID string, failed bool, _ string) error {
 	r.settles = append(r.settles, struct {
 		runID  string

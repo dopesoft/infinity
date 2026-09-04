@@ -4,9 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dopesoft/infinity/core/internal/agent"
@@ -57,11 +55,35 @@ type wsClientMessage struct {
 	// medium|high|xhigh). Stamped onto the turn ctx so the effort router honors
 	// it ahead of any auto signal.
 	Effort string `json:"effort,omitempty"`
+	// SinceSeq rides an `attach` frame: the newest seq this client has seen
+	// for the session, so the journal replays only what it missed. Zero on a
+	// cold open.
+	SinceSeq uint64 `json:"since_seq,omitempty"`
+	// ClientID is the browser's own id for the user message on a `message`
+	// or `steer` frame. It is persisted on the UserPromptSubmit row and
+	// echoed on steer_received, so the bubble already on screen is matched
+	// by id when the transcript comes back, never by comparing text.
+	ClientID string `json:"client_id,omitempty"`
 }
 
 type wsServerEvent struct {
-	Type       string         `json:"type"`
-	SessionID  string         `json:"session_id"`
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	// Seq / TurnID / Replay are the turn journal's stamps (turn_journal.go).
+	// Seq is per-session monotonic across turns; every journaled frame has
+	// one, so a client can tell a gap from a duplicate. Replay marks a frame
+	// re-sent in answer to an attach - never dropped by the socket writer.
+	Seq    uint64 `json:"seq,omitempty"`
+	TurnID string `json:"turn_id,omitempty"`
+	Replay bool   `json:"replay,omitempty"`
+	// MsgIndex, on a delta: which assistant message of the turn the text
+	// belongs to. The persisted row carries the same number, so the browser
+	// pairs the bubble with its row by (turn_id, msg_index).
+	MsgIndex *int `json:"msg_index,omitempty"`
+	// ClientID, on steer_received: the browser's id for the echoed message.
+	ClientID string `json:"client_id,omitempty"`
+	// TurnStatus is the payload of `turn_status` and `heartbeat` frames.
+	TurnStatus *wsTurnStatus  `json:"turn_status,omitempty"`
 	Text       string         `json:"text,omitempty"`
 	Usage      map[string]int `json:"usage,omitempty"`
 	StopReason string         `json:"stop_reason,omitempty"`
@@ -312,7 +334,7 @@ func turnText(content string, atts []llm.Attachment) string {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	if s.loop == nil {
+	if s.loop == nil && s.runLoop == nil {
 		http.Error(w, "agent loop not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -360,48 +382,38 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	writeMu := sync.Mutex{}
-	send := func(ev wsServerEvent) {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := conn.WriteJSON(ev); err != nil {
-			log.Printf("ws write: %v", err)
-		}
-	}
+	// One writer goroutine per socket; producers never block on it and the
+	// protocol ping lives in the same loop (ws_conn.go).
+	c := newWSConn(conn)
+	go c.writeLoop()
+	defer c.close()
+	send := c.send
+	connID := c.id
 
-	pingTicker := time.NewTicker(30 * time.Second)
-	defer pingTicker.Stop()
-	go func() {
-		for range pingTicker.C {
-			writeMu.Lock()
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			_ = conn.WriteMessage(websocket.PingMessage, nil)
-			writeMu.Unlock()
-		}
-	}()
-
-	/* activeSessionID tracks the last session this connection hydrated, so
-	 * we can unregister the right key on disconnect. Most browsers send the
-	 * same sessionID for the lifetime of the tab; tab-swap pairs an unregister
-	 * with a register on the next message. */
+	/* activeSessionID tracks the session this connection is bound to, so we
+	 * can unregister the right key on disconnect. Binding happens on
+	 * `attach` (every open and reconnect, every session switch) and, for
+	 * older clients that never send one, on the first message/steer/resume. */
 	var activeSessionID string
+	bind := func(sessionID string) {
+		if sessionID == "" || sessionID == activeSessionID {
+			return
+		}
+		if activeSessionID != "" {
+			s.unregisterSession(activeSessionID, connID)
+		}
+		activeSessionID = sessionID
+		s.registerSession(sessionID, connID, send)
+	}
 	defer func() {
 		if activeSessionID != "" {
-			s.unregisterSession(activeSessionID, send)
+			s.unregisterSession(activeSessionID, connID)
 		}
 	}()
 
 	/* Broadcast registration, separate from session registration and done the
-	 * moment the socket opens.
-	 *
-	 * registerSession only fires when the boss SENDS a chat message, so a tab
-	 * sitting on the dashboard was in nobody's list and broadcastAll reached an
-	 * empty map. That is why the live call transcript never streamed: the modal
-	 * opened (it reads mem_runs from the DB) and then sat there empty while the
-	 * phone_live events went nowhere. A dashboard is exactly where you watch a
-	 * call from, and it is precisely the tab that never chats. */
-	connID := uuid.NewString()
+	 * moment the socket opens: the live call transcript has to reach the
+	 * dashboard, which is the one tab that never chats. */
 	s.registerBroadcast(connID, send)
 	defer s.unregisterBroadcast(connID)
 
@@ -419,6 +431,24 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case "ping":
 			send(wsServerEvent{Type: "pong", SessionID: msg.SessionID})
 			continue
+		case "attach":
+			// The client binding itself to the chat it is looking at, and
+			// asking what it missed. Answered with the server's own view of
+			// the turn (turn_status) and then every journaled frame past
+			// since_seq, flagged replay. This is what makes a reconnect
+			// mid-turn invisible to the boss: the socket that arrives late
+			// is caught up instead of left to guess.
+			if msg.SessionID == "" {
+				send(wsServerEvent{Type: "error", SessionID: "", Message: "attach requires a session id"})
+				continue
+			}
+			bind(msg.SessionID)
+			st, frames := s.attachSnapshot(msg.SessionID, msg.SinceSeq)
+			send(wsServerEvent{Type: "turn_status", SessionID: msg.SessionID, TurnID: st.TurnID, Seq: st.Seq, TurnStatus: &st})
+			for _, f := range frames {
+				send(f)
+			}
+			continue
 		case "clear":
 			s.loop.ClearSession(msg.SessionID)
 			send(wsServerEvent{Type: "cleared", SessionID: msg.SessionID})
@@ -427,8 +457,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// Cancel any in-flight turn for this session. The turn's
 			// runTurn goroutine will emit `complete{stop_reason:
 			// "interrupted"}` once the LLM stream unwinds, so the
-			// client sees a clean turn end (not an error).
-			s.interruptTurn(msg.SessionID)
+			// client sees a clean turn end (not an error). When nothing is
+			// running the answer is still an answer: a turn_status saying
+			// so, so Stop can never be pressed into silence.
+			if !s.interruptTurn(msg.SessionID) {
+				st := s.turnStatusFor(msg.SessionID)
+				send(wsServerEvent{Type: "turn_status", SessionID: msg.SessionID, TurnID: st.TurnID, Seq: st.Seq, TurnStatus: &st})
+			}
 			continue
 		case "voice_interrupt":
 			// Barge-in: the boss is talking over Jarvis. NOT a turn cancel -
@@ -451,6 +486,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// turn so the client doesn't have to distinguish.
 			steerAtts := s.resolveAttachments(connCtx, msg.Attachments)
 			steerText := turnText(msg.Content, steerAtts)
+			// Bind BEFORE routing. A steer is the first frame a reconnected
+			// client sends when a turn is running, and binding after the
+			// steer was consumed left that socket unbound - the turn streamed
+			// into the void until the boss typed a fresh message.
+			bind(msg.SessionID)
 			// A mid-turn message re-reads the stance too ("ok, go ahead" flips
 			// a discussion into work without a new turn). The re-read can only
 			// ESCALATE: once the turn has run a work tool the holder refuses a
@@ -458,9 +498,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// longer retroactively shuts the consent gate on work he already
 			// approved (turnctx.StanceHolder).
 			if st := s.stanceFor(msg.SessionID); st != nil {
-				s.classifyIntentAsync(connCtx, msg.SessionID, msg.Content, send, st, s.recentContextFn(msg.SessionID))
+				s.classifyIntentAsync(connCtx, msg.SessionID, msg.Content, s.sessionSender(msg.SessionID), st, s.recentContextFn(msg.SessionID))
 			}
-			if s.steerTurn(msg.SessionID, steerText, steerAtts, send) {
+			if s.steerTurn(msg.SessionID, steerText, steerAtts, msg.ClientID) {
 				/* WAL the steer too - corrections often arrive as
 				 * mid-turn nudges and we need them on the durable
 				 * SESSION-STATE log just like a first message. */
@@ -471,36 +511,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if sessionID == "" {
 				sessionID = uuid.NewString()
 			}
-			if sessionID != activeSessionID {
-				if activeSessionID != "" {
-					s.unregisterSession(activeSessionID, send)
-				}
-				activeSessionID = sessionID
-				s.registerSession(sessionID, send)
-			}
+			bind(sessionID)
 			s.appendWAL(connCtx, sessionID, msg.Content)
 			stance := s.stanceFor(sessionID)
 			recent := s.recentContextFn(sessionID)
-			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance, recent)
-			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send, recent)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, s.sessionSender(sessionID), stance, recent)
+			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, s.sessionSender(sessionID), recent)
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, steerText, steerAtts, msg.Voice, msg.Effort, stance, send)
+			s.startTurn(connCtx, userID, sessionID, steerText, steerAtts, msg.Voice, msg.Effort, stance, msg.ClientID)
 			continue
 		case "message":
 			sessionID := msg.SessionID
 			if sessionID == "" {
 				sessionID = uuid.NewString()
 			}
-			/* Register this connection under the session so the heartbeat
-			 * broadcaster can target it on a proactive surface. Safe to
-			 * call repeatedly - the latest send func wins. */
-			if sessionID != activeSessionID {
-				if activeSessionID != "" {
-					s.unregisterSession(activeSessionID, send)
-				}
-				activeSessionID = sessionID
-				s.registerSession(sessionID, send)
-			}
+			/* Bind this connection to the session so the turn's frames and
+			 * the heartbeat broadcaster can reach it. Safe to call repeatedly. */
+			bind(sessionID)
 			/* WAL: extract corrections / preferences / dates / decisions
 			 * from the user message and persist to mem_session_state. Runs
 			 * synchronously - regex over the message string only, no LLM. */
@@ -511,11 +538,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			 * Studio's IntentStream panel updates live. Its stance (discuss /
 			 * work) rides the turn: the loop holds work tools while the boss is
 			 * talking it through. If a turn is already in flight the reading
-			 * updates THAT turn's stance (the message becomes a steer). */
+			 * updates THAT turn's stance (the message becomes a steer). The
+			 * frames go through the session binding, never this socket, so a
+			 * reading that lands after a reconnect reaches the live tab. */
 			stance := s.stanceFor(sessionID)
 			recent := s.recentContextFn(sessionID)
-			s.classifyIntentAsync(connCtx, sessionID, msg.Content, send, stance, recent)
-			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, send, recent)
+			s.classifyIntentAsync(connCtx, sessionID, msg.Content, s.sessionSender(sessionID), stance, recent)
+			s.classifyGaugeAsync(connCtx, sessionID, msg.Content, s.sessionSender(sessionID), recent)
 			// Auto-route to steer when a turn is already running for
 			// this session. This lets the studio compose+send while
 			// streaming without having to switch message types - the
@@ -524,7 +553,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// dropped mid-turn lands in the running turn exactly like text.
 			msgAtts := s.resolveAttachments(connCtx, msg.Attachments)
 			msgText := turnText(msg.Content, msgAtts)
-			if s.steerTurn(sessionID, msgText, msgAtts, send) {
+			if s.steerTurn(sessionID, msgText, msgAtts, msg.ClientID) {
 				continue
 			}
 			// First message for this session since startup (or after
@@ -532,7 +561,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// mem_observations so the model sees the same conversation
 			// the user does.
 			s.hydrateLoopSession(r, sessionID)
-			s.startTurn(connCtx, userID, sessionID, msgText, msgAtts, msg.Voice, msg.Effort, stance, send)
+			s.startTurn(connCtx, userID, sessionID, msgText, msgAtts, msg.Voice, msg.Effort, stance, msg.ClientID)
 		case "resume":
 			// Run one agent turn against a session's existing history
 			// without a fresh user message. Discuss-with-Jarvis uses this:
@@ -545,13 +574,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				send(wsServerEvent{Type: "error", SessionID: "", Message: "resume requires a session id"})
 				continue
 			}
-			if sessionID != activeSessionID {
-				if activeSessionID != "" {
-					s.unregisterSession(activeSessionID, send)
-				}
-				activeSessionID = sessionID
-				s.registerSession(sessionID, send)
-			}
+			bind(sessionID)
 			// A turn already running for this session - nothing to do; the
 			// in-flight turn will produce the reply. Prevents a double-fire
 			// if Studio retries the resume across a reconnect.
@@ -570,7 +593,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				send(wsServerEvent{Type: "error", SessionID: sessionID, Message: "nothing to resume - session has no history"})
 				continue
 			}
-			s.startTurn(connCtx, userID, sessionID, "", nil, false, "", nil, send)
+			s.startTurn(connCtx, userID, sessionID, "", nil, false, "", nil, "")
 		default:
 			send(wsServerEvent{Type: "error", SessionID: msg.SessionID, Message: "unknown type: " + msg.Type})
 		}
@@ -591,37 +614,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // on iOS Safari, navigates away in the browser, or the network flaps,
 // the turn keeps running. Its assistant_text persists to mem_turns and
 // becomes visible on reconnect via useChat's mergeServerRows refetch.
-// The only thing that cancels a turn now is an explicit `interrupt`
-// frame, the per-turn 5-minute timeout, or a new turn for the same
-// session evicting it.
-//
-// interactiveTurnTimeout is the wall-clock ceiling for a single live-chat turn.
-// The old 5-minute cap was too short for legitimate long work: a "scour the web
-// and write me a report" turn does several SERVER-SIDE web searches (~20s each)
-// plus reasoning and easily needs 10+ minutes — it was getting guillotined
-// mid-work with an opaque "context deadline exceeded" (the 2026-07-02 report
-// failures), which then also blocked the session from ever being auto-named
-// (the namer only runs on a turn that completes). The Stop button
-// (interruptTurn) and the LoopGate (50 calls / 5 min) remain the real backstops
-// against a genuinely wedged turn, so a generous ceiling is safe. Override with
-// INFINITY_TURN_TIMEOUT (Go duration, e.g. "20m").
-func interactiveTurnTimeout() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("INFINITY_TURN_TIMEOUT")); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return 15 * time.Minute
-}
+// The only things that cancel a turn now are an explicit `interrupt`
+// frame, the turn budget (turn_budget.go: a stall while the brain should
+// be talking, or the absolute ceiling), or a new turn for the same session
+// evicting it.
 
 // startTurn spawns the agent loop for one turn. The model is resolved
 // server-side from the settings store (set by Studio's chip + Settings
 // page) rather than carried on the WS frame - that way a single source
 // of truth drives both the live chip and the Settings page, and a
 // hostile client can't smuggle an arbitrary model id through the wire.
-func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, atts []llm.Attachment, voiceTurn bool, effortPin string, stance *turnctx.StanceHolder, _ func(wsServerEvent)) {
+func (s *Server) startTurn(_ context.Context, userID, sessionID, content string, atts []llm.Attachment, voiceTurn bool, effortPin string, stance *turnctx.StanceHolder, clientID string) {
 	// Use a fresh background context so the WS dying doesn't cancel this
-	// turn. The interactiveTurnTimeout() below is the only deadline that applies.
+	// turn. The turn budget (guardTurn below) is the only deadline that applies.
 	base := context.Background()
 	// Resolve effective model from the persisted setting; empty string
 	// means the agent loop falls back to the provider's boot default.
@@ -651,16 +656,30 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 		stance.Set(turnctx.StanceUnknown, "resume turn")
 	}
 	ctxWithUser = turnctx.WithStance(ctxWithUser, stance)
-	turnCtx, cancel := context.WithTimeout(ctxWithUser, interactiveTurnTimeout())
+	// ONE turn id. It is minted here, stamped on every frame by the journal,
+	// and handed to the loop on the ctx so the mem_turns row and every
+	// persisted assistant row carry the same id: that is what lets the
+	// browser pair a live bubble with its transcript row by identity.
+	turnID := uuid.NewString()
+	ctxWithUser = turnctx.WithTurnID(ctxWithUser, turnID)
+	// The browser's id for the message that opened the turn, for the same
+	// reason: the user bubble is matched by id, not by text.
+	ctxWithUser = turnctx.WithClientMessageID(ctxWithUser, clientID)
+	// The turn's frames go through the journal FIRST and then to whatever
+	// sockets are bound to the session at that moment (turn_journal.go). The
+	// journal opens BEFORE the goroutine starts so an attach racing the start
+	// already sees in_flight:true, and before the budget guard so the guard
+	// has a clock to read.
+	journal := s.journalFor(sessionID)
+	journal.begin(turnID, model)
+	turnCtx, cancel := guardTurn(ctxWithUser, journal, turnBudgetFromEnv())
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
-	// Route every WS frame through the live session binding rather than
-	// the connection-bound closure the handler captured. See
-	// sessionSender for the no-op-on-disconnect contract.
-	send := s.sessionSender(sessionID)
+	send := s.turnSender(sessionID, journal)
 	state := &turnState{
-		cancel: cancel,
-		steer:  make(chan agent.Steer, 8),
-		stance: stance,
+		cancel:  cancel,
+		steer:   make(chan agent.Steer, 8),
+		stance:  stance,
+		journal: journal,
 		// Voice turns get their speak pump minted here (not inside runTurn)
 		// so it's reachable from the turns registry - that's what lets a
 		// `voice_interrupt` frame squelch synthesis mid-reply. nil for text
@@ -687,20 +706,37 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 			}
 			s.turnsMu.Unlock()
 		}()
-		s.runTurn(turnCtx, sessionID, runContent, model, state.speak, state.steer, send)
+		// The visible pulse: a heartbeat every few seconds for as long as
+		// the turn runs, so a brain thinking for three minutes never looks
+		// dead. Stopped the moment the turn is over, and the journal closes
+		// AFTER the last frame so an attach can never see in_flight:false
+		// with the completion still on its way.
+		stopPulse := make(chan struct{})
+		go s.pulse(sessionID, journal, stopPulse)
+		stopReason := s.runTurn(turnCtx, sessionID, runContent, model, state.speak, state.steer, send)
+		close(stopPulse)
+		journal.end(stopReason)
 		if recovered && s.buffer != nil {
 			_ = s.buffer.Clear(context.Background(), sessionID)
 		}
 	}()
 }
 
-// interruptTurn cancels the in-flight turn for the given session, if any.
+// interruptTurn cancels the in-flight turn for the given session. It reports
+// whether there was one to cancel, so the caller can answer a Stop that had
+// nothing to stop instead of leaving the boss's tap unanswered.
+//
 // We remove the entry from the registry synchronously so a subsequent
-// `message` doesn't race with the goroutine's cleanup and incorrectly
-// route as a steer. The goroutine's deferred cleanup is idempotent.
-func (s *Server) interruptTurn(sessionID string) {
+// `message` doesn't race with the goroutine's cleanup and incorrectly route
+// as a steer. The goroutine's deferred cleanup is idempotent.
+//
+// Stop means stop: any tool the Claude Code brain is running through the MCP
+// endpoint for this session is cancelled too (mcp_server.go). That is the one
+// path that still kills a brain-launched coding job, and it is the boss's
+// own hand on the button.
+func (s *Server) interruptTurn(sessionID string) bool {
 	if sessionID == "" {
-		return
+		return false
 	}
 	s.turnsMu.Lock()
 	state, ok := s.turns[sessionID]
@@ -708,16 +744,41 @@ func (s *Server) interruptTurn(sessionID string) {
 		delete(s.turns, sessionID)
 	}
 	s.turnsMu.Unlock()
-	if state != nil {
-		state.cancel()
+	s.cancelMCPExecs(sessionID)
+	if state == nil {
+		return false
 	}
+	if state.journal != nil {
+		state.journal.stopping()
+	}
+	state.cancel()
+	return true
+}
+
+// attachSnapshot answers an attach: the turn's status plus every journaled
+// frame past sinceSeq. Taken as one snapshot so the count on the status
+// matches the frames that follow it.
+func (s *Server) attachSnapshot(sessionID string, sinceSeq uint64) (wsTurnStatus, []wsServerEvent) {
+	j := s.journalPeek(tools.SessionForPublish(sessionID))
+	if j == nil {
+		return wsTurnStatus{}, nil
+	}
+	frames, truncated := j.since(sinceSeq)
+	st := j.status()
+	st.Replayed = len(frames)
+	if truncated && len(frames) > 0 {
+		// The client's since_seq predates the ring: it can have the tail,
+		// but the head is only in the database. oldest_seq tells it so.
+		st.OldestSeq = frames[0].Seq
+	}
+	return st, frames
 }
 
 // steerTurn routes a user-typed string into a running turn's steer channel.
 // Returns true when the message was consumed by a turn (either queued or
 // dropped with a soft error reported to the client). Returns false when no
 // turn is in flight - the caller should start a fresh turn instead.
-func (s *Server) steerTurn(sessionID, content string, atts []llm.Attachment, send func(wsServerEvent)) bool {
+func (s *Server) steerTurn(sessionID, content string, atts []llm.Attachment, clientID string) bool {
 	if sessionID == "" {
 		return false
 	}
@@ -744,23 +805,35 @@ func (s *Server) steerTurn(sessionID, content string, atts []llm.Attachment, sen
 			if meta := llm.AttachmentsMeta(atts); len(meta) > 0 {
 				payload["attachments"] = meta
 			}
+			if clientID != "" {
+				payload["client_id"] = clientID
+			}
+			// The steer belongs to the running turn: stamp its id so the
+			// transcript row joins the turn like every other row of it.
+			if state.journal != nil {
+				if tid := state.journal.status().TurnID; tid != "" {
+					payload["turn_id"] = tid
+				}
+			}
 			h.Emit("UserPromptSubmit", sessionID, "", content, payload)
 		}
-		// Echo the steered message back so other tabs (and the
-		// originating tab's reconnect path) can render it. The
-		// originating tab already inserted it optimistically.
-		send(wsServerEvent{
+		// Echo the steered message back so every tab on the session (and a
+		// socket that re-attaches later - it is journaled) can render it.
+		// The originating tab already inserted it optimistically and matches
+		// the echo by client_id.
+		s.publish(sessionID, wsServerEvent{
 			Type:      "steer_received",
 			SessionID: sessionID,
 			Text:      content,
 			Steered:   true,
+			ClientID:  clientID,
 		})
 		return true
 	default:
 		// Buffer is sized for human typing cadence; overflow is rare
 		// and recoverable (the user can resend). Surface it cleanly
 		// rather than silently dropping.
-		send(wsServerEvent{
+		s.sessionSender(sessionID)(wsServerEvent{
 			Type:      "error",
 			SessionID: sessionID,
 			Message:   "steer buffer full; please wait a moment and resend",
@@ -776,7 +849,8 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 	sessionID := tools.SessionForPublish(ev.SessionID)
 	switch ev.Kind {
 	case agent.EventDelta:
-		send(wsServerEvent{Type: "delta", SessionID: sessionID, Text: ev.TextDelta})
+		idx := ev.MsgIndex
+		send(wsServerEvent{Type: "delta", SessionID: sessionID, Text: ev.TextDelta, MsgIndex: &idx})
 	case agent.EventThinking:
 		send(wsServerEvent{
 			Type: "thinking", SessionID: sessionID, Text: ev.ThinkingDelta,
@@ -862,18 +936,26 @@ func sendRunEventToWS(send func(wsServerEvent), ev agent.RunEvent) {
 // (startTurn) owns the cancel + steer channel via the turns registry; we
 // receive the steer channel as a receive-only param so the agent loop can
 // drain it between iterations. ctx is already wrapped with the per-turn
-// 5-minute timeout, so we don't re-wrap it here.
-func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, speak *speakPump, steer <-chan agent.Steer, send func(wsServerEvent)) {
+// timeout, so we don't re-wrap it here.
+//
+// It returns how the turn ended, and it guarantees EXACTLY ONE terminal frame
+// per turn: `complete` or `error`. Two exits used to end without either (the
+// iteration cap, and a Loop.Run error after the events had drained), and a
+// turn that never says it is over is a turn the browser cannot settle.
+func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, speak *speakPump, steer <-chan agent.Steer, send func(wsServerEvent)) string {
 	events := make(chan agent.RunEvent, 128)
 	done := make(chan struct{})
+	var runErr error
 
+	run := s.loopRunner()
 	go func() {
 		defer close(done)
-		if err := s.loop.Run(ctx, sessionID, content, model, steer, events); err != nil {
-			send(wsServerEvent{Type: "error", SessionID: sessionID, Message: err.Error()})
-		}
+		runErr = run(ctx, sessionID, content, model, steer, events)
 		close(events)
 	}()
+	journal := s.journalPeek(sessionID)
+	sawTerminal := false
+	stopReason := ""
 
 	// speak is the voice pump minted in startTurn (nil for text turns and
 	// voice turns without a Speaker configured - then this is the exact text
@@ -901,6 +983,20 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 			// barge-in squelch.
 			speak.Unsquelch()
 		}
+		if journal != nil {
+			journal.setPhase(ev)
+		}
+		switch ev.Kind {
+		case agent.EventComplete:
+			sawTerminal = true
+			stopReason = ev.StopReason
+			if stopReason == "" {
+				stopReason = "end_turn"
+			}
+		case agent.EventError:
+			sawTerminal = true
+			stopReason = "error"
+		}
 		sendRunEventToWS(send, ev)
 		if ev.Kind == agent.EventComplete {
 			/* Mirror this exchange into mem_working_buffer iff the
@@ -924,6 +1020,32 @@ func (s *Server) runTurn(ctx context.Context, sessionID, content, model string, 
 	// the last clip ships before the turn ctx is cancelled. No-op for text.
 	speak.finish()
 	<-done
+	if runErr != nil {
+		// A Loop.Run error is terminal in its own right; it lands AFTER the
+		// events it explains, never interleaved with them.
+		if !sawTerminal {
+			send(wsServerEvent{Type: "error", SessionID: sessionID, Message: runErr.Error()})
+		}
+		return "error"
+	}
+	if !sawTerminal {
+		// The loop returned without saying it was done. The browser must
+		// still hear that the turn is over, or it spins on a turn nobody is
+		// running.
+		send(wsServerEvent{Type: "complete", SessionID: sessionID, StopReason: "ended"})
+		return "ended"
+	}
+	return stopReason
+}
+
+// loopRunner is what runTurn drives: the agent loop, or the seam a test
+// installs in its place (server.runLoop) so the whole socket path can be
+// exercised without a brain.
+func (s *Server) loopRunner() func(context.Context, string, string, string, <-chan agent.Steer, chan<- agent.RunEvent) error {
+	if s.runLoop != nil {
+		return s.runLoop
+	}
+	return s.loop.Run
 }
 
 // stanceFor returns the consent holder a message should update: the in-flight

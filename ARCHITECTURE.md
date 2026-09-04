@@ -290,7 +290,7 @@ studio/
 | Path | Method | Handler | Purpose |
 |---|---|---|---|
 | `/health` | GET | server.handleHealth | readiness + uptime |
-| `/ws` | WS | server.handleWebSocket | streaming chat protocol (delta/tool_call/tool_result/complete/error) |
+| `/ws` | WS | server.handleWebSocket | streaming chat protocol. Server→client: `delta/thinking/tool_call/tool_input_delta/tool_result/effort/steer_received/complete/error` (every one stamped `seq` + `turn_id` by the per-session **turn journal**, `turn_journal.go`), `turn_status` (answer to `attach`/`interrupt`: in_flight, phase, started_at, replay floor) and `heartbeat` (same payload every 5s while a turn runs). Client→server: `attach {session_id, since_seq}` on every connect and session switch (binds the socket; the journal replays frames past `since_seq` flagged `replay`), `message`, `steer`, `resume`, `interrupt` (always answered), `ping`, `clear`. One writer goroutine per socket with a kind-based drop policy (`ws_conn.go`); sessions fan out to every bound socket (`proactive_wire.go`). Studio's `lib/chat/liveness.ts` is the only client logic that acts on silence (20s → attach, 45s → reconnect, never an error card). |
 | `/api/attachments/upload` | POST | server.handleAttachmentUpload | chat file uploads (multipart `session_id` + `file`…); bytes → `mem_attachments`, mirrored to `/workspace/uploads/`, text/pages extracted, indexed in `mem_artifacts`; the WS frame then references the returned ids |
 | `/api/attachments/{id}/raw` | GET | server.handleAttachmentRaw | streams an upload's (or rasterized page's) bytes for Studio previews / open |
 | `/api/status` | GET | server.handleStatus | version, provider, model, tools |
@@ -579,7 +579,8 @@ is added as a third ingress alongside SSH + VNC.
 ### Build-to-done — a coding job survives the turn, and gets finished
 
 A long `code_agent` run used to die of its own success: the chat turn timed out
-(`INFINITY_TURN_TIMEOUT`, 15 min) or the boss typed a question, the job was
+(then a flat 15-minute `INFINITY_TURN_TIMEOUT`; the budget is stall-based now,
+see `server/turn_budget.go`) or the boss typed a question, the job was
 killed, its transcript was orphaned in `/tmp/inf-code`, the interruption was
 recorded as a FAILURE, and nothing ever picked the work back up. Plan `2f1508a2`
 is the monument: the plan to fix this was killed by the thing it was fixing.

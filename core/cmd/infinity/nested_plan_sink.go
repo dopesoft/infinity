@@ -21,6 +21,11 @@ func (s nestedPlanSink) Sync(ctx context.Context, c tools.NestedChecklist) error
 	return err
 }
 
+func (s nestedPlanSink) SyncOwn(ctx context.Context, sessionID, title string, items []plan.ChecklistItem) error {
+	_, err := s.plans.SyncChecklist(ctx, sessionID, title, items)
+	return err
+}
+
 func (s nestedPlanSink) Settle(ctx context.Context, runID string, failed bool, summary string) error {
 	status := plan.StepDone
 	if failed {

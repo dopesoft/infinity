@@ -18,6 +18,10 @@ export interface ToolRowFields {
   tool_is_error?: boolean;
   tool_running?: boolean;
   tool_interrupted?: boolean;
+  // The running call is parked on a Trust contract: the rebuilt card offers
+  // Approve / Deny instead of a spinner, on the contract the buttons decide.
+  tool_awaiting_approval?: boolean;
+  tool_contract_id?: string;
 }
 
 /**
@@ -46,6 +50,13 @@ export function toolRowToMessage(r: ToolRowFields, id: string, createdAt: number
   };
   if (r.tool_running) {
     msg.pending = true;
+    if (r.tool_awaiting_approval) {
+      msg.toolCall = {
+        ...msg.toolCall!,
+        awaiting_approval: true,
+        contract_id: r.tool_contract_id || undefined,
+      };
+    }
   } else if (r.tool_interrupted) {
     msg.interrupted = true;
     msg.endedAt = createdAt;

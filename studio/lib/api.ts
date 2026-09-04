@@ -856,8 +856,19 @@ export async function fetchSessionArtifacts(
 export const fetchTools = (signal?: AbortSignal) =>
   getJSON<ToolDescriptor[]>("/api/tools", signal);
 export const fetchMCP = (signal?: AbortSignal) => getJSON<MCPStatus[]>("/api/mcp", signal);
-export const fetchSessions = (signal?: AbortSignal) =>
-  getJSON<SessionDTO[]>("/api/sessions", signal);
+// fetchSessions is single-flight: the header, the drawer and the project hook
+// all ask for the same list on the same realtime tick, and one GET answers
+// all of them. A caller's abort signal is honoured only when it is the sole
+// caller; a shared request outlives any one of its askers.
+let sessionsInflight: Promise<SessionDTO[] | null> | null = null;
+export const fetchSessions = (signal?: AbortSignal): Promise<SessionDTO[] | null> => {
+  if (sessionsInflight) return sessionsInflight;
+  const p = getJSON<SessionDTO[]>("/api/sessions", signal).finally(() => {
+    if (sessionsInflight === p) sessionsInflight = null;
+  });
+  sessionsInflight = p;
+  return p;
+};
 
 // Sessions filtered by who opened them. The drawer keeps one list per tab so
 // neither crowds the other out of the 50-row window.

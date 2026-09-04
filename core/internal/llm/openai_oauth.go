@@ -1045,6 +1045,11 @@ func modelSupportsReasoning(model string) bool {
 	if strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o1") {
 		return true
 	}
+	// DeepSeek's V4 line and the dedicated reasoner run in thinking mode and
+	// take reasoning_effort (low | high | max); the provider maps the level.
+	if strings.HasPrefix(m, "deepseek-v4") || strings.HasPrefix(m, "deepseek-reasoner") {
+		return true
+	}
 	return false
 }
 
