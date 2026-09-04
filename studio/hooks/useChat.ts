@@ -11,8 +11,7 @@ import { attachmentRawPath, uploadAttachments, type UploadResult } from "@/lib/a
 import type { AssistantTranscriptEvent } from "@/lib/voice/client";
 import { reconcileSteerEcho } from "@/lib/chat/steer";
 import { settleNestedOnly } from "@/lib/chat/settle";
-import { survivesRefetch } from "@/lib/chat/preserve";
-import { toolRowToMessage } from "@/lib/chat/toolRow";
+import { applyDelta, mergeTranscript, rowToMessage } from "@/lib/chat/transcript";
 import { useCodingRuns } from "@/lib/runs/useCodingRuns";
 import {
   initialLiveness,
@@ -75,6 +74,14 @@ export type ChatMessage = {
   // last pending bubble": a nested coding step or a mid-turn settle between
   // two deltas used to split one reply into two bubbles.
   turnId?: string;
+  // msgIndex is which assistant message of its turn this bubble is; the
+  // persisted row carries the same number. clientId is the id this browser
+  // minted for a message it sent; serverId is the transcript row's own id.
+  // Together they are how a row is matched to its server copy BY IDENTITY
+  // (lib/chat/transcript.ts) instead of by comparing text.
+  msgIndex?: number;
+  clientId?: string;
+  serverId?: string;
   // steered=true on a user message means it was typed and sent mid-turn -
   // it routes through the WS `steer` channel and gets drained into the
   // running agent loop on the next iteration boundary. ChatBubble surfaces
@@ -148,129 +155,6 @@ function makeId() {
 function newSessionId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
   return `sess_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-// A server transcript row as returned by GET /api/sessions/{id}/messages.
-type ServerRow = {
-  role: ChatRole;
-  text: string;
-  created_at: string;
-  steered?: boolean;
-  kind?: string;
-  seed_kind?: string;
-  curiosity_id?: string;
-  attachments?: {
-    id?: string;
-    name?: string;
-    mime_type?: string;
-    size_bytes?: number;
-    text?: string;
-    preview_url?: string;
-    storage_path?: string;
-    extract_status?: string;
-    page_count?: number;
-  }[];
-  // Tool-call reconstruction (role="tool"): rebuilt into a ToolCallCard so it
-  // survives navigation/reload. tool_output present = completed.
-  tool_call_id?: string;
-  interim?: boolean;
-  tool_running?: boolean;
-  tool_interrupted?: boolean;
-  tool_awaiting_approval?: boolean;
-  tool_contract_id?: string;
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  tool_output?: string;
-  tool_is_error?: boolean;
-};
-
-function rowAttachmentsToChat(atts?: ServerRow["attachments"]): ChatAttachment[] | undefined {
-  if (!Array.isArray(atts) || atts.length === 0) return undefined;
-  const out = atts
-    .map((att) => {
-      const id = att.id?.trim() || undefined;
-      return {
-        id,
-        name: att.name?.trim() || "attachment",
-        mimeType: att.mime_type?.trim() || undefined,
-        sizeBytes: typeof att.size_bytes === "number" ? att.size_bytes : undefined,
-        text: att.text?.trim() || undefined,
-        previewUrl: att.preview_url?.trim() || undefined,
-        storagePath: att.storage_path?.trim() || undefined,
-        url: id ? attachmentRawPath(id) : undefined,
-        extractStatus: att.extract_status?.trim() || undefined,
-        pageCount: typeof att.page_count === "number" ? att.page_count : undefined,
-      };
-    })
-    .filter((att) => att.id || att.name || att.previewUrl || att.text);
-  return out.length > 0 ? out : undefined;
-}
-
-function dedupeAttachments(atts: ChatAttachment[]): ChatAttachment[] {
-  const seen = new Set<string>();
-  const out: ChatAttachment[] = [];
-  for (const att of atts) {
-    const key = att.id
-      ? `id:${att.id}`
-      : [att.name, att.sizeBytes ?? "", att.mimeType ?? "", att.storagePath ?? "", att.previewUrl ?? ""].join("|");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(att);
-  }
-  return out;
-}
-
-function mergeAttachmentLists(
-  local?: ChatAttachment[],
-  remote?: ChatAttachment[],
-): ChatAttachment[] | undefined {
-  const merged = dedupeAttachments([...(local ?? []), ...(remote ?? [])]);
-  return merged.length > 0 ? merged : undefined;
-}
-
-// rowToMessage converts a canonical server transcript row into the local
-// ChatMessage shape. Single source of truth for the mapping so the
-// session-load, switch-session, and reconnect-merge paths stay in sync -
-// notably the `seeded` flag that routes the Discuss-with-Jarvis context
-// block to DashboardContextCard instead of a plain user bubble.
-function rowToMessage(r: ServerRow): ChatMessage {
-  // Reconstruct a tool-call card from a persisted PostToolUse row so the
-  // inline ToolCallCard survives navigation/reload (the history endpoint used
-  // to omit tool events, so cards vanished on return).
-  if (r.role === "tool" && r.tool_call_id) {
-    return toolRowToMessage(
-      { ...r, tool_call_id: r.tool_call_id },
-      makeId(),
-      new Date(r.created_at).getTime() || Date.now(),
-    );
-  }
-  // Durable turn-level error (provider/API failure) replayed from mem_turns.
-  // Rebuilt into the same red error card the live WS path renders, so it
-  // survives reload / a second device instead of vanishing.
-  if (r.kind === "error") {
-    return {
-      id: makeId(),
-      role: "assistant",
-      text: "",
-      error: r.text,
-      createdAt: new Date(r.created_at).getTime() || Date.now(),
-    };
-  }
-  return {
-    id: makeId(),
-    role: r.role,
-    text: r.text,
-    attachments: rowAttachmentsToChat(r.attachments),
-    createdAt: new Date(r.created_at).getTime() || Date.now(),
-    steered: r.steered || undefined,
-    // Narration that streamed before a tool call stays folded into the
-    // ledger on reload, exactly as it was live. Without this the server's
-    // copy arrived as a plain reply and split the ledger around it.
-    interim: r.interim || undefined,
-    seeded: r.kind === "dashboard_seed" || undefined,
-    seedKind: r.seed_kind || undefined,
-    curiosityId: r.curiosity_id || undefined,
-  };
 }
 
 function readStoredSessionId(): string {
@@ -381,118 +265,6 @@ function writeCachedMessages(sessionId: string, messages: ChatMessage[]) {
   } catch {
     /* private mode / quota - caller can ignore */
   }
-}
-
-// mergeServerRows reconciles the canonical transcript from Core with the
-// optimistic local state. We keep any *pending* local messages (thinking
-// indicators, drafts in flight) and replace finalized turns with whatever
-// Core reports - Core is the source of truth for completed turns.
-//
-// This is the rehydration path used on WS reconnect: a turn the agent
-// completed while we were disconnected is in `rows` but missing locally,
-// so we append it.
-function mergeServerRows(
-  local: ChatMessage[],
-  rows: ServerRow[],
-): ChatMessage[] {
-  // Convert server rows into ChatMessage shape with stable created_at
-  // timestamps for ordering.
-  const fromServer: ChatMessage[] = rows.map(rowToMessage);
-  // PRESERVE local tool messages. The server transcript rows do NOT
-  // carry toolCall / toolResult payloads (role+text only), so a naive
-  // merge that drops local in favour of server would erase the inline
-  // approval card (SkillProposalCard / ToolCallCard awaiting Approve /
-  // Deny). Net effect from the boss's POV: "approval dialog disappears
-  // when I click away or widen the column" because a navigation /
-  // reconcile reloads from server. We keep every local tool message;
-  // they sort back into place by created_at below.
-  // De-dupe local tool cards by tool_call.id while preserving them. Without
-  // this, a single in-flight tool call that got appended more than once (the
-  // phantom-duplicate path) would survive every reconcile as N copies. Keep
-  // the first occurrence (it carries the live streaming/awaiting state).
-  const seenLocalToolIds = new Set<string>();
-  const localToolMessages: ChatMessage[] = local.filter((m) => {
-    if (m.role !== "tool" || !m.toolCall) return false;
-    const id = m.toolCall.id;
-    if (!id) return true;
-    if (seenLocalToolIds.has(id)) return false;
-    seenLocalToolIds.add(id);
-    return true;
-  });
-  // Preserve every in-flight local item, wherever it sits: the streaming
-  // tail, but ALSO an interim assistant bubble that streamed BEFORE a tool
-  // call in the same turn. The server transcript only holds a turn's FINAL
-  // text (TaskCompleted), so a tail-only rule erased that interim text on
-  // every reconnect/reconcile — the "it had a whole message, then it
-  // disappeared" report (2026-08-26). They sort back into place by time.
-  //
-  // An ERROR card is preserved on the same grounds and for a sharper reason:
-  // it carries no `pending` flag (useChat's "error" frame handler builds it
-  // settled), so it matched neither rule and every refetch deleted it. The
-  // boss saw a failure flash up and remove itself, which is the UI version of
-  // a silent-green failure - worse than never showing it, because now he
-  // cannot tell whether it happened. Some errors never reach the server
-  // transcript at all: the loop can emit one mid-stream and then recover, and
-  // only a turn that CLOSES errored gets a durable row. Local is the only
-  // copy, so local keeps it.
-  const pendingTail: ChatMessage[] = local.filter(survivesRefetch);
-  // De-dupe: drop any pending bubble whose text matches OR is a prefix of
-  // a same-role server row. The server's finalized turn always wins.
-  //
-  // The prefix check matters for voice mode: a streaming assistant bubble
-  // may sit at a partial transcript ("Good afternoon, boss. What's on
-  // your") while the server has already persisted the completed text
-  // ("…What's on your mind today?"). Without the prefix-dedupe we'd
-  // render BOTH - the orphaned streaming partial AND the canonical
-  // completed turn. The bug looked like the agent "duplicating" itself.
-  const sameRoleServer: Map<ChatRole, string[]> = new Map();
-  for (const m of fromServer) {
-    const list = sameRoleServer.get(m.role) ?? [];
-    list.push(m.text.trim());
-    sameRoleServer.set(m.role, list);
-  }
-  // The same fact must not be told twice: once a turn closes errored the
-  // server replays a durable error row, and the local card it duplicates goes.
-  const serverErrors = new Set(
-    fromServer.map((m) => (m.error ?? "").trim()).filter(Boolean),
-  );
-  const filteredPending = pendingTail.filter((m) => {
-    const err = (m.error ?? "").trim();
-    if (err) return !serverErrors.has(err);
-    const candidates = sameRoleServer.get(m.role);
-    if (!candidates) return true;
-    const local = m.text.trim();
-    if (!local) return true;
-    for (const s of candidates) {
-      if (s === local) return false;
-      if (s.startsWith(local)) return false;
-    }
-    return true;
-  });
-  // Dedup tool cards by id. Server now returns RICH tool rows (reconstructed
-  // from PostToolUse), so on reload they rebuild the cards. During a live
-  // session the local message is freshest (it has the streaming/awaiting
-  // state), so when both exist we keep the local one and drop the server copy.
-  // On a cold reload there's no local copy → the reconstructed server card is
-  // kept. This is what makes tool cards survive navigation.
-  const localToolIds = new Set(
-    localToolMessages.map((m) => m.toolCall?.id).filter(Boolean) as string[],
-  );
-  const fromServerSansTools = fromServer.filter((m) => {
-    if (m.role !== "tool") return true;
-    const id = m.toolCall?.id;
-    if (id && localToolIds.has(id)) return false; // prefer the live local card
-    return true; // reconstructed-only (reload) — keep it
-  });
-  // Sort the local tool messages into the timeline by createdAt so a
-  // tool that fired mid-session lands in the right slot relative to
-  // the server-loaded user/assistant turns around it.
-  const merged: ChatMessage[] = [
-    ...fromServerSansTools,
-    ...localToolMessages,
-    ...filteredPending,
-  ].sort((a, b) => a.createdAt - b.createdAt);
-  return merged;
 }
 
 // markTrailingAssistantInterim flags a pending assistant bubble at the tail
@@ -798,21 +570,7 @@ export function useChat() {
       if (!sessionId) return false;
       const rows = await fetchSessionMessages(sessionId, signal);
       if (!rows || rows.length === 0) return false;
-      setMessages((prev) => {
-        const next = mergeServerRows(prev, rows);
-        const remoteTail = rowToMessage(rows[rows.length - 1]);
-        for (let i = next.length - 1; i >= 0; i--) {
-          const local = next[i];
-          if (local.role !== remoteTail.role) continue;
-          if (local.text !== remoteTail.text) continue;
-          const mergedAttachments = mergeAttachmentLists(local.attachments, remoteTail.attachments);
-          if (mergedAttachments !== local.attachments) {
-            next[i] = { ...local, attachments: mergedAttachments };
-          }
-          break;
-        }
-        return next;
-      });
+      setMessages((prev) => mergeTranscript(prev, rows, makeId));
       return true;
     },
     [sessionId],
@@ -1026,37 +784,12 @@ export function useChat() {
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows) return;
-      const fromServer: ChatMessage[] = rows.map(rowToMessage);
-      setMessages((prev) => {
-        // Preserve locally-rendered steered messages not yet reflected in
-        // the server transcript. The hook pipeline is async (goroutine →
-        // Postgres INSERT), so there is a small window between the client
-        // sending a steer and the row landing in mem_observations. If the
-        // user navigates away during that window and the mount fetch resolves
-        // before the write commits, the message would otherwise vanish.
-        // Keep any steered local bubbles whose text isn't in the server rows.
-        const serverUserTexts = new Set(
-          fromServer.filter((m) => m.role === "user").map((m) => m.text.trim()),
-        );
-        const serverErrors = new Set(
-          fromServer.map((m) => (m.error ?? "").trim()).filter(Boolean),
-        );
-        // Same rule as the reconcile merge (survivesRefetch), so navigating
-        // away and back cannot lose something a reconnect would have kept.
-        // This path used to preserve steered messages ONLY, which is how an
-        // error card and a mid-turn note both vanished on return.
-        const keep = prev.filter((m) => {
-          if (!survivesRefetch(m)) return false;
-          const err = (m.error ?? "").trim();
-          if (err) return !serverErrors.has(err);
-          if (m.role === "user") return !serverUserTexts.has(m.text.trim());
-          return true;
-        });
-        if (keep.length === 0) return fromServer;
-        return [...fromServer, ...keep].sort((a, b) => a.createdAt - b.createdAt);
-      });
+      // The same merge the reconnect path uses, so navigating away and back
+      // cannot lose something a reconnect would have kept, and nothing is
+      // matched by text (lib/chat/transcript.ts).
+      setMessages((prev) => mergeTranscript(prev, rows, makeId));
       // Seeded session: fire the opening agent turn now that history is loaded.
-      if (fromServer.length === 1 && fromServer[0].seeded) {
+      if (rows.length === 1 && rows[0].kind === "dashboard_seed") {
         kickSeededRef.current(id);
       }
     });
@@ -1255,40 +988,17 @@ export function useChat() {
           break;
         }
         case "delta": {
-          setMessages((prev) => {
-            const next = closePendingThinking(prev);
-            // The bubble this delta belongs to is the pending assistant
-            // bubble of ITS turn, wherever it sits - a nested coding step
-            // or a settled row may have landed after it. Only without a
-            // turn id (an older core) does "the tail" have to do.
-            let at = -1;
-            if (turnId) {
-              for (let i = next.length - 1; i >= 0; i--) {
-                const m = next[i];
-                if (m.role === "assistant" && m.pending && m.turnId === turnId) {
-                  at = i;
-                  break;
-                }
-                if (m.role === "user" && !m.steered) break;
-              }
-            } else {
-              const last = next[next.length - 1];
-              if (last && last.role === "assistant" && last.pending) at = next.length - 1;
-            }
-            if (at === -1) {
-              next.push({
-                id: makeId(),
-                role: "assistant",
-                text: ev.text,
-                pending: true,
-                turnId,
-                createdAt: Date.now(),
-              });
-            } else {
-              next[at] = { ...next[at], text: next[at].text + ev.text };
-            }
-            return next;
-          });
+          // The bubble this text belongs to is named by the frame: the
+          // message of THAT turn with THAT index, wherever it sits. The rule
+          // lives in lib/chat/transcript.ts so it is tested, not asserted.
+          setMessages((prev) =>
+            applyDelta(
+              closePendingThinking(prev),
+              { text: ev.text, turnId, msgIndex: ev.msg_index },
+              makeId,
+              Date.now(),
+            ),
+          );
           break;
         }
         case "tool_call": {
@@ -1526,7 +1236,7 @@ export function useChat() {
           // steer, and the old inline dedupe only handled the one case that
           // could never happen in that race, so it drew the boss's message
           // twice. See lib/chat/steer.ts.
-          setMessages((prev) => reconcileSteerEcho(prev, ev.text, makeId()));
+          setMessages((prev) => reconcileSteerEcho(prev, ev.text, makeId(), Date.now(), ev.client_id));
           break;
         }
         case "error": {
@@ -1644,6 +1354,9 @@ export function useChat() {
           text: bubbleText,
           attachments: pending.length > 0 ? pending : undefined,
           steered: steering || undefined,
+          // The id rides the frame and comes back on the transcript row, so
+          // this bubble is matched to its row by identity, never by text.
+          clientId: bubbleId,
           createdAt: Date.now(),
         },
         // Optimistic "Jarvis is thinking" indicator (fresh turns only). Closes
@@ -1681,6 +1394,7 @@ export function useChat() {
         const ok = ws.send({
           type: "steer",
           session_id: sessionId,
+          client_id: bubbleId,
           content: trimmed,
           attachments: usableAttachments.map(toSendAttachment),
           // steal C: carry the boss's effort pin on the steer too, so mid-turn
@@ -1708,6 +1422,7 @@ export function useChat() {
       const ok = ws.send({
         type: "message",
         session_id: sessionId,
+        client_id: bubbleId,
         content: trimmed,
         attachments: usableAttachments.map(toSendAttachment),
         // Voice turns run the SAME Loop.Run as text; the flag just tells Core
@@ -1787,7 +1502,7 @@ export function useChat() {
     const ac = new AbortController();
     fetchSessionMessages(id, ac.signal).then((rows) => {
       if (!rows) return;
-      const restored: ChatMessage[] = rows.map(rowToMessage);
+      const restored: ChatMessage[] = rows.map((r) => rowToMessage(r, makeId));
       setMessages(restored);
       writeCachedMessages(id, restored);
       // Same seeded-session kick as the mount path: switching into a

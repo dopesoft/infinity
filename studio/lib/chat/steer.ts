@@ -35,17 +35,33 @@ import type { ChatMessage } from "@/hooks/useChat";
  * Returns `prev` unchanged when there is nothing to do, so React can skip the
  * re-render.
  *
- * @param prev    current transcript
- * @param text    the echoed text as the server saw it
- * @param newId   id to use if the echo is genuinely new (another tab, a
- *                reconnect replay) and a bubble must be appended
+ * @param prev      current transcript
+ * @param text      the echoed text as the server saw it
+ * @param newId     id to use if the echo is genuinely new (another tab, a
+ *                  reconnect replay) and a bubble must be appended
+ * @param now       clock, for the appended bubble
+ * @param clientId  the browser's own id for the message, when the server
+ *                  echoed one: the exact match, tried before any text rule
  */
 export function reconcileSteerEcho(
   prev: ChatMessage[],
   text: string,
   newId: string,
   now: number = Date.now(),
+  clientId?: string,
 ): ChatMessage[] {
+  // By identity first. A message this browser sent carries the id it minted;
+  // the server hands it back on the echo, so no text has to be compared.
+  if (clientId) {
+    for (let i = prev.length - 1; i >= 0; i--) {
+      const m = prev[i];
+      if (m.role !== "user" || m.clientId !== clientId) continue;
+      if (m.steered) return prev;
+      const next = prev.slice();
+      next[i] = { ...m, steered: true };
+      return next;
+    }
+  }
   for (let i = prev.length - 1; i >= 0; i--) {
     const m = prev[i];
     if (m.role !== "user") continue;
@@ -75,6 +91,6 @@ export function reconcileSteerEcho(
 
   return [
     ...prev,
-    { id: newId, role: "user", text, steered: true, createdAt: now },
+    { id: newId, role: "user", text, steered: true, createdAt: now, clientId },
   ];
 }

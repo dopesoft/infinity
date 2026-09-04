@@ -276,6 +276,30 @@ describe("deriveStatus", () => {
     expect(detectGated("all good").gated).toBe(false);
   });
 
+  it("a BLOCKED with no contract is a REFUSAL, red, and never a Trust link", () => {
+    // WHY (2026-09-04): the loop guard stopped a call that fired four times
+    // with identical inputs. Nothing was queued, by design - but the row went
+    // amber with "Approve in Trust tab", and the boss found the tab empty.
+    const legacy = toolMessage("mem_act", {
+      output:
+        "BLOCKED: tool mem_act requires the boss's approval before running.\n" +
+        "Reason: loop detected: mem_act with these exact inputs has fired 4 times in the last 1m0s. Stop.\n" +
+        "WARNING: this call was NOT persisted to the Trust queue (no contract id). DO NOT tell the boss it was queued - " +
+        "the gate fired but the row failed to land. Tell the boss the Trust store is misconfigured and the action was simply refused.",
+    });
+    const s = deriveStatus(legacy);
+    expect(s.status).toBe("error");
+    expect(s.refused).toBe(true);
+    expect(s.gated).toBe(false);
+    expect(s.contractId).toBeUndefined();
+    expect(describeStep(legacy.toolCall!, legacy.toolResult).kind).toBe("failure");
+
+    const current = toolMessage("mem_act", {
+      output: "NOT RUN: the call to mem_act was refused.\nloop detected: mem_act fired 4 times. Stop.\nNothing is pending and nothing needs the boss.",
+    });
+    expect(deriveStatus(current)).toMatchObject({ status: "error", refused: true, gated: false });
+  });
+
   it("never lets a stopped call read as done", () => {
     // WHY (2026-08-26): the turn ended before the result frame arrived. Nobody
     // knows whether the call did anything. Rendering it green is a lie, and
@@ -614,5 +638,17 @@ describe("splitRefusal", () => {
   it("says nothing when there is nothing to say", () => {
     expect(splitRefusal(undefined)).toEqual({ lead: "", rest: "" });
     expect(splitRefusal("   ")).toEqual({ lead: "", rest: "" });
+  });
+
+  it("strips the NOT RUN marker and the legacy Trust-store warning, which are chrome", () => {
+    const { lead, rest } = splitRefusal(
+      "NOT RUN: the call to mem_act was refused.\nloop detected: fired 4 times.\n" +
+        "WARNING: this call was NOT persisted to the Trust queue (no contract id). DO NOT tell the boss it was queued - " +
+        "the gate fired but the row failed to land. Tell the boss the Trust store is misconfigured and the action was simply refused.",
+    );
+    expect(lead).not.toContain("NOT RUN");
+    expect(lead + rest).not.toContain("Trust store");
+    expect(lead + rest).not.toContain("WARNING");
+    expect(lead).toContain("refused");
   });
 });

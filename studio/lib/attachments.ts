@@ -65,9 +65,7 @@ export async function uploadAttachments(sessionId: string, files: File[]): Promi
 }
 
 /** The raw-bytes route for an attachment id (JWT-protected; use the hook or openAttachment). */
-export function attachmentRawPath(id: string): string {
-  return `/api/attachments/${encodeURIComponent(id)}/raw`;
-}
+export { attachmentRawPath } from "./attachmentPath";
 
 function isLocalObjectUrl(url: string): boolean {
   return url.startsWith("blob:") || url.startsWith("data:");

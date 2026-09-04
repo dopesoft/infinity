@@ -46,7 +46,9 @@ export type WSTurnStatus = {
 };
 
 export type WSEvent =
-  | ({ type: "delta"; session_id: string; text: string } & WSSeq)
+  // msg_index is which assistant message of the turn this text belongs to;
+  // the persisted row carries the same number (see lib/chat/transcript.ts).
+  | ({ type: "delta"; session_id: string; text: string; msg_index?: number } & WSSeq)
   // thinking_tokens rides this frame from a brain that reports how MUCH it is
   // reasoning rather than what (Claude Code redacts the text: every delta
   // arrives empty). It is the only live evidence such a turn is alive.
@@ -86,7 +88,9 @@ export type WSEvent =
   // the input that was injected into a running turn is visible everywhere.
   // The originating tab already rendered it optimistically and ignores
   // the echo via a duplicate-id check.
-  | ({ type: "steer_received"; session_id: string; text: string } & WSSeq)
+  // client_id is the browser's own id for the echoed message, so the bubble
+  // already on screen is matched by identity rather than by text.
+  | ({ type: "steer_received"; session_id: string; text: string; client_id?: string } & WSSeq)
   // intent carries the per-turn IntentFlow classification. Emitted async
   // after the WS handler kicks off classification - arrives mid-turn or
   // after `complete` depending on Haiku latency. The IntentStream panel

@@ -876,9 +876,42 @@ export const fetchSessionsByScope = (scope: SessionScope, signal?: AbortSignal) 
   getJSON<SessionDTO[]>(`/api/sessions?kind=${encodeURIComponent(scope)}`, signal);
 
 export type SessionMessageDTO = {
-  role: "user" | "assistant";
+  // id is the row's own identity (the observation id, or "err:<turn>" for a
+  // turn-level error). turn_id + message_index name an assistant row the way
+  // its live deltas did; client_id is the browser's own id for a user message,
+  // handed back so the bubble on screen is matched by id, never by text.
+  id?: string;
+  turn_id?: string;
+  message_index?: number;
+  client_id?: string;
+  role: "user" | "assistant" | "tool";
   text: string;
   created_at: string;
+  // interim marks narration that streamed before a tool call in the same
+  // turn; the final reply is never interim.
+  interim?: boolean;
+  attachments?: {
+    id?: string;
+    name?: string;
+    mime_type?: string;
+    size_bytes?: number;
+    text?: string;
+    preview_url?: string;
+    storage_path?: string;
+    extract_status?: string;
+    page_count?: number;
+  }[];
+  // Tool-call reconstruction (role="tool"), rebuilt from the PostToolUse
+  // observation so the inline card survives navigation and reload.
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  tool_output?: string;
+  tool_is_error?: boolean;
+  tool_running?: boolean;
+  tool_interrupted?: boolean;
+  tool_awaiting_approval?: boolean;
+  tool_contract_id?: string;
   // steered marks a user message that was injected into an in-flight turn.
   // The reload transcript uses this to restore the mid-turn affordance.
   steered?: boolean;

@@ -97,6 +97,26 @@ func TestRedirectOutputNeverAsksForApproval(t *testing.T) {
 	}
 }
 
+// A loop-guard block (Allow=false, no approval wanted, no contract) is a
+// REFUSAL. It used to render as "requires the boss's approval" plus "NOT
+// persisted to the Trust queue", so the model sent the boss to a Trust tab
+// where nothing had ever been queued (2026-09-04). The words must say refused,
+// and nothing about approval or Trust.
+func TestHardRefusalNeverSendsTheBossToTheTrustTab(t *testing.T) {
+	out := formatGatedOutput("mem_act", GateDecision{
+		Allow:  false,
+		Reason: "loop detected: mem_act with these exact inputs has fired 4 times in the last 1m0s. Stop.",
+	})
+	for _, forbidden := range []string{"approval", "Trust", "misconfigured", "queued"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("a refusal must not mention %q; got:\n%s", forbidden, out)
+		}
+	}
+	if !strings.Contains(out, "refused") || !strings.Contains(out, "loop detected") {
+		t.Fatalf("a refusal must say so and carry the reason; got:\n%s", out)
+	}
+}
+
 // An ordinary Trust gate must keep its approval framing — the redirect branch
 // must not swallow the case it was carved out of.
 func TestApprovalOutputStillAsksForApproval(t *testing.T) {

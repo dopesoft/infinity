@@ -86,8 +86,14 @@ export type StepStatusInfo = {
   status: StepStatus;
   /** The gate parked the call and is still holding it (no result yet). */
   awaiting: boolean;
-  /** The call returned a synthesised "BLOCKED:" result from the gate. */
+  /** The call returned a synthesised "BLOCKED:" result WITH a Trust contract. */
   gated: boolean;
+  /**
+   * The call was refused outright and nothing was queued: the loop guard
+   * stopping a repeated call, a gate saying no. Red, never amber, and never
+   * a Trust link - there is nothing in the Trust tab to find.
+   */
+  refused: boolean;
   /** Trust contract to approve, from either path. Feeds the /trust?focus= link. */
   contractId?: string;
 };
@@ -109,6 +115,7 @@ export type ActivityItem = {
   status: StepStatus;
   awaiting: boolean;
   gated: boolean;
+  refused: boolean;
   contractId?: string;
   /** How many underlying calls folded into this row. 1 for a lone step. */
   count: number;
@@ -129,13 +136,32 @@ type Rec = Record<string, unknown>;
 /**
  * Recognise the "BLOCKED: … Trust contract: <uuid>" result the agent gate
  * synthesises when it parks a call, so a row can offer the one-tap Trust link.
+ *
+ * Gated means QUEUED: there is a contract to approve. A "BLOCKED:" with no
+ * contract is not gated, it is refused (see detectRefusal). Reading it as
+ * gated put an "Approve in Trust tab" link under a loop-guard block, and the
+ * boss went to the Trust tab and found it empty (2026-09-04) - nothing had
+ * ever been queued, by design.
  */
 const TRUST_CONTRACT_RE = /Trust contract:\s*([0-9a-fA-F-]{8,})/;
+/** The legacy gate copy that told the model the Trust store was broken. Chrome, never shown. */
+const LEGACY_TRUST_WARNING_RE = /WARNING: this call was NOT persisted to the Trust queue[\s\S]*?simply refused\.\s*/;
 
 export function detectGated(output?: string): { gated: boolean; contractId?: string } {
   if (!output || !output.startsWith("BLOCKED:")) return { gated: false };
   const m = output.match(TRUST_CONTRACT_RE);
-  return { gated: true, contractId: m?.[1] };
+  if (!m) return { gated: false };
+  return { gated: true, contractId: m[1] };
+}
+
+/**
+ * A refusal: the gate said no and queued nothing. Either the current copy
+ * ("NOT RUN: … was refused") or the old "BLOCKED:" copy with no contract.
+ */
+export function detectRefusal(output?: string): boolean {
+  if (!output) return false;
+  if (output.startsWith("NOT RUN:")) return true;
+  return output.startsWith("BLOCKED:") && !TRUST_CONTRACT_RE.test(output);
 }
 
 /**
@@ -155,8 +181,9 @@ export function splitRefusal(output?: string): { lead: string; rest: string } {
   const text = (output ?? "").trim();
   if (!text) return { lead: "", rest: "" };
   const body = text
-    .replace(/^BLOCKED\s*[:\-–—]\s*/i, "")
+    .replace(/^(BLOCKED|NOT RUN)\s*[:\-–—]\s*/i, "")
     .replace(TRUST_CONTRACT_RE, "")
+    .replace(LEGACY_TRUST_WARNING_RE, "")
     .trim();
   const cut = body.indexOf("\n\n");
   if (cut < 0) {
@@ -188,21 +215,25 @@ export function deriveStatus(message: ChatMessage): StepStatusInfo {
   const result = message.toolResult;
   const awaiting = !result && !!call?.awaiting_approval && !!call?.contract_id;
   if (awaiting) {
-    return { status: "approval", awaiting: true, gated: false, contractId: call?.contract_id };
+    return { status: "approval", awaiting: true, gated: false, refused: false, contractId: call?.contract_id };
   }
   if (!result && message.interrupted) {
-    return { status: "stopped", awaiting: false, gated: false };
+    return { status: "stopped", awaiting: false, gated: false, refused: false };
   }
   if (!result) {
     // A pending thinking / interim bubble is live work too.
-    return { status: "running", awaiting: false, gated: false };
+    return { status: "running", awaiting: false, gated: false, refused: false };
   }
   const gate = detectGated(result.output);
   if (gate.gated) {
-    return { status: "approval", awaiting: false, gated: true, contractId: gate.contractId };
+    return { status: "approval", awaiting: false, gated: true, refused: false, contractId: gate.contractId };
   }
-  if (result.is_error) return { status: "error", awaiting: false, gated: false };
-  return { status: "done", awaiting: false, gated: false };
+  // Refused outright: red, and nothing to approve anywhere.
+  if (detectRefusal(result.output)) {
+    return { status: "error", awaiting: false, gated: false, refused: true };
+  }
+  if (result.is_error) return { status: "error", awaiting: false, gated: false, refused: false };
+  return { status: "done", awaiting: false, gated: false, refused: false };
 }
 
 /** True while any row in the ledger is still working. */
@@ -828,7 +859,7 @@ export function describeStep(
   let kind = spec.kind;
   if (result) {
     if (detectGated(result.output).gated) kind = "approval";
-    else if (result.is_error) kind = "failure";
+    else if (result.is_error || detectRefusal(result.output)) kind = "failure";
   } else if (call?.awaiting_approval) {
     kind = "approval";
   }
@@ -909,8 +940,8 @@ function describeMessage(m: ChatMessage): Described {
       desc: { verb: spec.present, verbPast: spec.past, glyph: spec.glyph, meta, kind: spec.kind },
       // A pending narration / thinking bubble is live work; a settled one is done.
       status: m.pending
-        ? { status: "running", awaiting: false, gated: false }
-        : { status: "done", awaiting: false, gated: false },
+        ? { status: "running", awaiting: false, gated: false, refused: false }
+        : { status: "done", awaiting: false, gated: false, refused: false },
       key: `${spec.present} ${spec.plural}`,
       solo: false,
     };
@@ -999,6 +1030,7 @@ export function coalesce(messages: ChatMessage[]): ActivityItem[] {
       status: step.status.status,
       awaiting: step.status.awaiting,
       gated: step.status.gated,
+      refused: step.status.refused,
       contractId: step.status.contractId,
       count: 1,
       messages: [step.message],

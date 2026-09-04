@@ -672,7 +672,11 @@ func (s *Server) startTurn(_ context.Context, userID, sessionID, content string,
 	// has a clock to read.
 	journal := s.journalFor(sessionID)
 	journal.begin(turnID, model)
-	turnCtx, cancel := guardTurn(ctxWithUser, journal, turnBudgetFromEnv())
+	budget := turnBudgetFromEnv()
+	if s.budgetTick > 0 {
+		budget.tick = s.budgetTick
+	}
+	turnCtx, cancel := guardTurn(ctxWithUser, journal, budget)
 	runContent, recovered := s.buildRecoveryPrompt(turnCtx, sessionID, content)
 	send := s.turnSender(sessionID, journal)
 	state := &turnState{

@@ -97,3 +97,23 @@ describe("reconcileSteerEcho", () => {
     expect(next.find((m) => m.id === "old")?.steered).toBeUndefined();
   });
 });
+
+describe("reconcileSteerEcho by client id", () => {
+  it("upgrades the bubble the server named, even when the text differs (attachment marker)", () => {
+    const prev: ChatMessage[] = [
+      user("(attached: mockup.png)", { clientId: "cm-1" }),
+      assistant("looking"),
+    ];
+    const next = reconcileSteerEcho(prev, "(attached: mockup.png, 1 file)", "new", 5, "cm-1");
+    expect(next).toHaveLength(2);
+    expect(next[0].steered).toBe(true);
+  });
+
+  it("an echo for an id this tab never drew is appended, carrying the id", () => {
+    const prev: ChatMessage[] = [user("mine", { clientId: "cm-1", steered: true })];
+    const next = reconcileSteerEcho(prev, "from the phone", "new", 5, "cm-2");
+    expect(next).toHaveLength(2);
+    expect(next[1].clientId).toBe("cm-2");
+    expect(next[1].steered).toBe(true);
+  });
+});

@@ -293,6 +293,9 @@ type Server struct {
 	// runLoop, when set, replaces loop.Run as the thing a turn drives. Only
 	// tests set it (ws_e2e_test.go); production always runs the agent loop.
 	runLoop func(ctx context.Context, sessionID, content, model string, steer <-chan agent.Steer, events chan<- agent.RunEvent) error
+	// budgetTick, when set, overrides how often the turn budget guard looks
+	// (turn_budget.go). Tests only; production ticks every few seconds.
+	budgetTick time.Duration
 }
 
 func New(cfg Config) *Server {

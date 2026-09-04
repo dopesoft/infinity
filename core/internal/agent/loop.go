@@ -2735,6 +2735,27 @@ func formatGatedOutput(toolName string, d GateDecision) string {
 		b.WriteString("tool named above.")
 		return b.String()
 	}
+	// A plain refusal (Allow=false, no approval wanted, no contract): the
+	// loop guard stopping a call that fired four times with identical inputs,
+	// a gate saying "not this, ever". It was never queued and never will be,
+	// so it must not read as an approval request. The one time it did, the
+	// model told the boss to approve it in the Trust tab and he found the tab
+	// empty (2026-09-04, DeepSeek marking rows on a table that does not
+	// exist, four times in a minute). Same lesson as Redirect: never name the
+	// concept being ruled out.
+	if !d.WaitForApproval && d.ContractID == "" {
+		b.WriteString("NOT RUN: the call to ")
+		b.WriteString(toolName)
+		b.WriteString(" was refused.\n")
+		if d.Reason != "" {
+			b.WriteString(d.Reason)
+			b.WriteString("\n")
+		}
+		b.WriteString("Nothing is pending and nothing needs the boss. Do not repeat this call as it was. ")
+		b.WriteString("Change the input or the approach, or ask him what to do, and if you mention it at all, ")
+		b.WriteString("say only that the call was refused and why.")
+		return b.String()
+	}
 	b.WriteString("BLOCKED: tool ")
 	b.WriteString(toolName)
 	b.WriteString(" requires the boss's approval before running.\n")

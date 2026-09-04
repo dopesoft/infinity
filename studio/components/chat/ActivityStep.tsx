@@ -444,7 +444,9 @@ function StepDetail({
 
       {item.status === "approval" ? <ApprovalDetail item={item} /> : null}
 
-      {item.status === "error" ? <FailureDetail output={output} /> : null}
+      {item.status === "error" ? (
+        item.refused ? <RefusalDetail output={output} /> : <FailureDetail output={output} />
+      ) : null}
 
       {item.status !== "error" && item.status !== "approval" ? (
         // `write` suppresses the key/value grid: the preview above IS the
@@ -613,6 +615,24 @@ function ThoughtTrace({ message }: { message: ChatMessage | undefined }) {
         {prose}
       </div>
     </Inset>
+  );
+}
+
+/**
+ * A refusal: the gate said no and queued nothing. Said in the voice face like
+ * the approval copy, with the rest behind the inset, and NO Trust link - a
+ * refusal has nothing in the Trust tab, and sending the boss there is how he
+ * came back saying "there isn't anything there" (2026-09-04).
+ */
+function RefusalDetail({ output }: { output: string }) {
+  const refusal = splitRefusal(output);
+  return (
+    <>
+      <p className="font-voice text-[15.5px] leading-[1.55] text-foreground">
+        {refusal.lead || "I refused to run this one."}
+      </p>
+      {refusal.rest ? <Inset variant="plain" text={refusal.rest} /> : null}
+    </>
   );
 }
 
