@@ -81,6 +81,19 @@ const (
 	// session cannot hold a chat open forever.
 	brainMaxWait = 20 * time.Minute
 
+	// brainStartGrace is how long a launched turn may go with NO stream file
+	// at all before the turn is called dead. The launch script opens the
+	// stream file in its first millisecond (the `> out` redirection runs
+	// before claude does), so a file still missing this long after "LAUNCHED"
+	// means the process never existed: the shell that was meant to start it
+	// failed, or something reaped it. Before this guard that case was
+	// indistinguishable from a slow model - the poll said RUNNING because the
+	// status file was absent, the stream was empty because the stream file
+	// was absent, and the boss watched "thinking" for the whole 20-minute
+	// ceiling (2026-09-06: every cloud launch for a day, none of which ever
+	// ran). A brain that did not start must say so in seconds.
+	brainStartGrace = 20 * time.Second
+
 	// The read window, and the three numbers that keep one huge line from
 	// silencing an entire turn.
 	//
@@ -129,6 +142,27 @@ func brainWorkspace(b bridge.Bridge) string {
 		return brainWorkspaceCloud
 	}
 	return brainWorkspaceMac
+}
+
+// brainHome is the cwd for the launch round trip, in the spelling THAT
+// bridge resolves. The Mac bridge expands "~"; the cloud bridge does not - it
+// joins a relative path under /workspace and stats the result, so "~" became
+// "/workspace/~", the chdir failed, and the launch script never ran. The
+// bridge reported that as HTTP 200 with exit_code -1 and empty output, which
+// the launch used to accept as started (2026-09-06).
+func brainHome(b bridge.Bridge) string {
+	if b != nil && b.Name() == bridge.KindCloud {
+		return brainWorkspaceCloud
+	}
+	return bridgeHome
+}
+
+// brainBoxName is how the box is named in a sentence to the boss.
+func brainBoxName(b bridge.Bridge) string {
+	if b != nil && b.Name() == bridge.KindCloud {
+		return "the cloud box"
+	}
+	return "your Mac"
 }
 
 // BrainWiring is what Converse needs beyond the bridge: where Core is
@@ -216,12 +250,15 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 	})
 	tLaunchStart := time.Now()
 	body, code, ok := b.Post(ctx, "/bash", map[string]any{
-		"cmd": script, "cwd": bridgeHome, "timeout_sec": 30,
+		"cmd": script, "cwd": brainHome(b), "timeout_sec": 30,
 	})
 	tLaunch = time.Since(tLaunchStart)
 	if !ok || code >= 300 {
 		msg, _ := bridgeBashOutput(body)
-		return llm.Response{}, fmt.Errorf("couldn't start Claude on the Mac (bridge said %d): %s", code, strings.TrimSpace(msg))
+		return llm.Response{}, fmt.Errorf("I couldn't start Claude on %s (the bridge said %d): %s", brainBoxName(b), code, strings.TrimSpace(msg))
+	}
+	if err := brainLaunched(b, body); err != nil {
+		return llm.Response{}, err
 	}
 	brainInfoLog.Printf("claude_max: launched turn %s in %s (bridge=%s auth=%s launch=%s) resume=%q model=%q",
 		jobID, time.Since(t0).Round(time.Millisecond),
@@ -244,6 +281,25 @@ func (r *ClaudeCodeRunner) Converse(ctx context.Context, turn llm.BrainTurn, out
 	}
 	defer p.cleanup()
 	return p.wait(ctx)
+}
+
+// brainLaunched checks that the launch script actually RAN. A 200 from the
+// bridge only means the request was served; the shell it ran can still fail
+// before the first line (a cwd it cannot enter, a profile that aborts), and
+// the bridge reports that as exit_code -1 with no output. Accepting it as a
+// launch is how a turn polls a stream that will never exist for twenty
+// minutes. The script's last line is the marker, so its presence plus a zero
+// exit is proof the whole thing ran.
+func brainLaunched(b bridge.Bridge, body []byte) error {
+	shellOut, exit := bridgeBashOutput(body)
+	if exit == 0 && strings.Contains(shellOut, "LAUNCHED") {
+		return nil
+	}
+	detail := strings.TrimSpace(shellOut)
+	if detail == "" {
+		detail = "it printed nothing"
+	}
+	return fmt.Errorf("I couldn't start Claude on %s: the launch shell exited %d before Claude ran (%s). Nothing was sent.", brainBoxName(b), exit, detail)
 }
 
 // --- files -------------------------------------------------------------------
@@ -358,6 +414,12 @@ func brainLaunchScript(f brainFiles, turn llm.BrainTurn, l brainLaunch) string {
 		// subscription travels as a token. Exported for this command only -
 		// it is never written to the image, a dotfile, or the shell profile.
 		steps = append(steps, "export CLAUDE_CODE_OAUTH_TOKEN="+shellQuote(l.subToken))
+		// The cloud box runs as root, and Claude Code refuses
+		// bypassPermissions as root unless it is told it is in a sandbox.
+		// Without this line every cloud turn would exit on its first
+		// millisecond with "--dangerously-skip-permissions cannot be used
+		// with root/sudo privileges". See claudeSandboxExport.
+		steps = append(steps, claudeSandboxExport(true))
 	} else {
 		// On the Mac the sign-in is the credential, and a stray token in the
 		// environment would silently outrank it.
@@ -570,6 +632,12 @@ func (p *brainPoll) wait(ctx context.Context) (llm.Response, error) {
 			// auth failure. Read what it managed to write and report it.
 			return llm.Response{}, p.failure(ctx)
 		}
+		if strings.Contains(read.head, brainNoStreamMarker) && time.Since(p.started) > brainStartGrace {
+			// The launch said LAUNCHED and then nothing was ever written:
+			// the process never came up. Say so now, not at the ceiling.
+			return llm.Response{}, fmt.Errorf("Claude never started on %s: %s after the launch there is still no stream from it, so it died before it could say anything. Nothing was sent.",
+				brainBoxName(p.b), brainStartGrace)
+		}
 		if time.Now().After(deadline) {
 			return llm.Response{}, fmt.Errorf("Claude has been working on this for %s and hasn't finished. It's still going on the Mac; ask me again and I'll pick up the same thread.", time.Since(p.started).Round(time.Second))
 		}
@@ -635,13 +703,13 @@ head -c %d %s 2>/dev/null
 echo ""
 `, brainHeadMarker, brainInitHeadBytes, p.files.out)
 	}
-	script := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; else echo RUNNING; fi
+	script := fmt.Sprintf(`if [ -f %s ]; then echo "DONE:$(cat %s)"; elif [ -f %s ]; then echo RUNNING; else echo NOSTREAM; fi
 %secho "===LAST==="
 tail -n 1 %s 2>/dev/null | head -c %d
 echo ""
 echo "===NEW==="
 tail -n +%d %s 2>/dev/null | head -n %d | cut -c 1-%d | head -c %d`,
-		p.files.status, p.files.status,
+		p.files.status, p.files.status, p.files.out,
 		headRead,
 		p.files.out, claudeLastLineBytes,
 		p.line, p.files.out, brainLinesPerPoll, brainLineMaxCols, brainChunkBytes)
@@ -665,6 +733,10 @@ tail -n +%d %s 2>/dev/null | head -n %d | cut -c 1-%d | head -c %d`,
 
 // brainHeadMarker separates the status line from the head read in one poll.
 const brainHeadMarker = "===HEAD==="
+
+// brainNoStreamMarker is the poll's status when neither the status file nor
+// the stream file exists: the launch never produced a process.
+const brainNoStreamMarker = "NOSTREAM"
 
 // splitBrainHead separates the status line from the head read that follows
 // it. A poll without a head read comes back unchanged.

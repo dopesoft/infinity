@@ -22,6 +22,9 @@ type fakeBridge struct {
 	out  string
 	last string
 	cmds []string
+	// status is the poll's first line; empty means RUNNING (the stream file
+	// exists and the turn is still going).
+	status string
 }
 
 func (f *fakeBridge) Name() bridge.Kind { return bridge.KindCloud }
@@ -38,8 +41,12 @@ func (f *fakeBridge) Post(_ context.Context, path string, body any) ([]byte, int
 	cmd, _ := fields["cmd"].(string)
 	f.cmds = append(f.cmds, cmd)
 	// Mirror the real script's three-part shape.
+	status := f.status
+	if status == "" {
+		status = "RUNNING"
+	}
 	payload, _ := json.Marshal(map[string]any{
-		"output":    "RUNNING\n===LAST===\n" + f.last + "\n===NEW===\n" + f.out,
+		"output":    status + "\n===LAST===\n" + f.last + "\n===NEW===\n" + f.out,
 		"exit_code": 0,
 	})
 	return payload, 200, true

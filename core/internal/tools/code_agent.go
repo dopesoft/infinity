@@ -1598,6 +1598,20 @@ func (r *ClaudeCodeRunner) probeAuth(ctx context.Context, b bridge.Bridge, repo 
 	return parseClaudeAuth(out), nil
 }
 
+// claudeSandboxExport renders the line that lets Claude Code run unattended
+// on the CLOUD box. That box runs as root, and Claude Code refuses
+// `--permission-mode bypassPermissions` under root unless IS_SANDBOX=1 says
+// the process is contained (it exits at once with "--dangerously-skip-
+// permissions cannot be used with root/sudo privileges"). The Railway
+// container IS the sandbox, so the flag is true there and unset on the Mac,
+// where the boss's own user runs it and the check never fires.
+func claudeSandboxExport(cloud bool) string {
+	if cloud {
+		return "export IS_SANDBOX=1"
+	}
+	return "unset IS_SANDBOX"
+}
+
 // claudeTokenExport renders the one line that decides which credential pays.
 func claudeTokenExport(cloudToken string) string {
 	if strings.TrimSpace(cloudToken) == "" {
@@ -1651,6 +1665,9 @@ func claudeLaunchScript(f claudeJobFiles, task, model, effort, resume, cloudToke
 		// sign-in is, and a stray token would silently outrank it. One line
 		// covers both because claudeTokenExport returns the unset on the Mac.
 		claudeTokenExport(cloudToken),
+		// Root on the cloud box needs the sandbox flag or Claude refuses to
+		// run unattended at all. The token above is what makes it cloud.
+		claudeSandboxExport(strings.TrimSpace(cloudToken) != ""),
 		// Any MCP server this job loads gets a coding job's lifetime per
 		// call, not Claude Code's sixty-second default (MCPToolTimeoutMillis).
 		fmt.Sprintf("export MCP_TOOL_TIMEOUT=%d", MCPToolTimeoutMillis()),

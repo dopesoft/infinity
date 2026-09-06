@@ -339,3 +339,22 @@ func TestClaudeCodeHeldGuidance_NamesTheResetAndForbidsRetry(t *testing.T) {
 		t.Fatalf("guidance without a reset must say so plainly:\n%s", msg)
 	}
 }
+
+// The coding launch has the same root problem as the chat brain: on the cloud
+// box Claude refuses bypassPermissions as root unless IS_SANDBOX says the
+// process is contained. The token is what makes a launch cloud, so the flag
+// follows the token, and on the Mac it is cleared rather than claimed.
+func TestClaudeLaunchScript_SandboxesRootOnTheCloud(t *testing.T) {
+	f := newClaudeJobFiles("job-1")
+	cloud := claudeLaunchScript(f, "fix the build", "opus", "", "", "sk-ant-oat01-example")
+	if !strings.Contains(cloud, "export IS_SANDBOX=1") {
+		t.Error("the cloud launch does not set IS_SANDBOX; Claude exits at once as root")
+	}
+	mac := claudeLaunchScript(f, "fix the build", "opus", "", "", "")
+	if strings.Contains(mac, "export IS_SANDBOX=1") {
+		t.Error("the Mac launch claims to be sandboxed")
+	}
+	if !strings.Contains(mac, "unset IS_SANDBOX") {
+		t.Error("the Mac launch does not clear a stray IS_SANDBOX from the environment")
+	}
+}

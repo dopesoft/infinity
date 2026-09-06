@@ -1,10 +1,13 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dopesoft/infinity/core/internal/llm"
 )
@@ -363,5 +366,101 @@ func TestBrainLaunchScriptMaxTurnsIsConditional(t *testing.T) {
 	capped := brainLaunchScript(files, llm.BrainTurn{Prompt: "hi", MaxTurns: 12}, brainLaunch{workspace: brainWorkspaceMac, coreURL: "https://c", mcpToken: "t"})
 	if !strings.Contains(capped, `export INF_MAX_TURNS='12'`) {
 		t.Errorf("a capped turn lost its cap:\n%s", capped)
+	}
+}
+
+// The launch cwd has to be spelled the way THAT bridge resolves it. The cloud
+// bridge does not expand "~": it joins the path under /workspace and stats
+// "/workspace/~", the chdir fails, and the launch script never runs. That is
+// how every cloud turn on 2026-09-06 "launched" and then produced nothing.
+func TestBrainHomeFollowsTheBridge(t *testing.T) {
+	if got := brainHome(nil); got != bridgeHome {
+		t.Errorf("no bridge should launch from home on the Mac, got %q", got)
+	}
+	if got := brainHome(&fakeBridge{}); got != brainWorkspaceCloud {
+		t.Errorf("the cloud launch must start from %s, got %q (the cloud bridge cannot resolve %q)", brainWorkspaceCloud, got, bridgeHome)
+	}
+}
+
+// The cloud box runs Claude as root, and Claude refuses to run unattended as
+// root unless it is told it is sandboxed. Without the flag the turn exits in
+// its first millisecond; with it on the Mac it would be a lie about where the
+// boss's own user is running. Both directions are asserted.
+func TestBrainLaunchScriptSandboxesRootOnTheCloud(t *testing.T) {
+	files := newBrainFiles("brain-test")
+	cloud := brainLaunchScript(files, llm.BrainTurn{Prompt: "hi"}, brainLaunch{
+		workspace: brainWorkspaceCloud, coreURL: "https://c", mcpToken: "m", subToken: "tok", cloud: true,
+	})
+	if !strings.Contains(cloud, "export IS_SANDBOX=1") {
+		t.Error("the cloud launch does not set IS_SANDBOX, so Claude refuses bypassPermissions as root and exits at once")
+	}
+	mac := brainLaunchScript(files, llm.BrainTurn{Prompt: "hi"}, brainLaunch{
+		workspace: brainWorkspaceMac, coreURL: "https://c", mcpToken: "m", cloud: false,
+	})
+	if strings.Contains(mac, "export IS_SANDBOX=1") {
+		t.Error("the Mac launch claims to be sandboxed")
+	}
+}
+
+// A 200 from the bridge is not a launch. The shell it ran can fail before the
+// first line (a cwd it cannot enter), and the bridge reports that as exit -1
+// with no output. Treating that as "started" is how a turn polls a stream
+// that will never exist for twenty minutes.
+func TestBrainLaunchedRefusesAShellThatNeverRan(t *testing.T) {
+	reply := func(exit int, out string) []byte {
+		b, _ := json.Marshal(map[string]any{"exit_code": exit, "output": out})
+		return b
+	}
+	b := &fakeBridge{}
+	if err := brainLaunched(b, reply(0, "LAUNCHED\n")); err != nil {
+		t.Fatalf("a script that ran to its marker was refused: %v", err)
+	}
+	err := brainLaunched(b, reply(-1, ""))
+	if err == nil {
+		t.Fatal("a shell that exited -1 with no output was accepted as a launch")
+	}
+	for _, want := range []string{"the cloud box", "exited -1", "printed nothing"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the failure does not say %q: %v", want, err)
+		}
+	}
+	if err := brainLaunched(b, reply(0, "bash: something went wrong\n")); err == nil {
+		t.Fatal("a script that never reached its LAUNCHED line was accepted")
+	}
+}
+
+// A launch that never produced a stream file is a dead process, and the poll
+// must say so within the start grace, not at the 20-minute ceiling. Before
+// this the boss watched "thinking" for three minutes and hit Stop.
+func TestBrainWaitFailsFastWhenNoStreamEverAppears(t *testing.T) {
+	fb := &fakeBridge{status: brainNoStreamMarker}
+	p := &brainPoll{
+		b:         fb,
+		workspace: brainWorkspaceCloud,
+		files:     newBrainFiles("brain-test"),
+		line:      1,
+		// Launched longer ago than the grace: the very first poll decides.
+		started: time.Now().Add(-brainStartGrace - time.Second),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := p.wait(ctx)
+	if err == nil {
+		t.Fatal("a turn with no stream file past the grace was still being waited on")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the poll ran to the test's own deadline instead of failing fast: %v", err)
+	}
+	if !strings.Contains(err.Error(), "never started on the cloud box") {
+		t.Errorf("the failure does not name the box or the cause: %v", err)
+	}
+
+	// Inside the grace the same status is NOT a verdict: the file appears
+	// milliseconds after LAUNCHED and a slow login shell can stretch that.
+	fresh := &brainPoll{b: &fakeBridge{status: brainNoStreamMarker}, workspace: brainWorkspaceCloud, files: newBrainFiles("brain-test"), line: 1, started: time.Now()}
+	sctx, scancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer scancel()
+	if _, err := fresh.wait(sctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a launch inside its grace was written off: %v", err)
 	}
 }
